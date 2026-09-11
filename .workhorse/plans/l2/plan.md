@@ -150,6 +150,58 @@ statements into per-call `format!` allocations. True, but the same path now does
 leaf parse, which dominates a ~200-byte allocation by orders of magnitude; a macro to recover
 it would cost more in readability than it returns.
 
+## Review round 2
+
+Three of the seven were already fixed in round 1's response — the listing's chain parse (now
+`parse::cert_covers`), the tests that could not fail (rewritten to build the mislabelled row),
+and the migration not repairing labels (answered by the fast path confirming the label against
+the certificate, which is the fix that comment itself proposes). The rest were real.
+
+- **Supersession could downgrade a working certificate** (critical, confirmed). Round 1
+  narrowed supersession to certificates the arriving one fully covers, which stopped names
+  being stranded but not a serviceable certificate being replaced by a worse one.
+  `validate_upload` accepts self-signed and not-yet-valid leaves as warnings, and the serving
+  lookups filtered `not_after` but never `not_before` — so a CA-chosen SAN set could retire a
+  trusted, valid certificate in favour of one clients reject.
+
+  This is the second narrowing of the same function, which is the signal that it had no
+  articulated rule to narrow *towards*. So the rule is now written down in
+  `r[tls.cert.validation.san-coverage]` and implemented once: a certificate supersedes another
+  only when it replaces it in full — covers every hostname it serves, is inside its own
+  validity window, and is not self-signed unless the incumbent already was. Alongside it,
+  `r[tls.cert.serve]` now says a certificate outside its validity window is not served at
+  either end, which is what makes staging a cutover ahead of `notBefore` mean anything.
+
+  The function now reads the arriving certificate back from its own row instead of taking its
+  properties as arguments, so what is compared is what was actually stored — and the SAN
+  plumbing round 1 added at four call sites goes away again.
+
+- **The label invariant was documented more strongly than it is enforced.** The doc comments
+  claimed a row's `hostname` is the certificate's primary SAN, but ACME and Tailscale issuance
+  label rows with the name they issued for. What the serving lookups actually need is weaker
+  and true everywhere: the label is *a name the certificate covers*. Narrowed the wording on
+  `TlsCertificate::hostname`, `NewCertificate::hostname`, `i[tls.cert.list]`,
+  `w[routes.certificates]` and the TS type rather than relabelling the issuer paths, which
+  would change their behaviour to no end. The spec itself never claimed the stronger form.
+
+- **`StoredCert` rebuilt `CertMetadata` field by field** when `parsed.metadata` already is one.
+  A new field would have been silently dropped there while every other path carried it.
+  Collapsed to a clone.
+
+Not actioned, both below threshold and reasoned rather than dismissed:
+
+- *Wildcard certificates now take the scan path on serving lookups.* True, and a consequence of
+  binding by SAN — but not new: every manual wildcard upload has always been labelled with its
+  primary SAN and resolved this way. Making it cheap needs a persisted SAN list or a memoised
+  resolution with invalidation, which is a caching design rather than this card's bug. The scan
+  and both fast paths now use the leaf-only parse, which cuts the per-row cost meaningfully in
+  the meantime. Worth its own card.
+- *A renewal whose primary SAN differs from the incumbent's label leaves the old row active.*
+  Real but benign: resolution picks the newest covering certificate, so serving is correct and
+  the stale row is untidy history rather than an outage. Fixing it means superseding by
+  coverage rather than by label, which would also let a wildcard retire every specific
+  certificate under it — a behaviour change beyond this card.
+
 ## Noted, not actioned
 
 - `TlsCertState::Failed` is never constructed anywhere in the tree. Its mention in

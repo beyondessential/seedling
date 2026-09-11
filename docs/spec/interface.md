@@ -1079,7 +1079,7 @@ This section covers the operator interface for the ACME-DNS strategy, manual cer
 > i[tls.cert.list]
 > `/tls/certificates/list` returns all stored certificates.
 > Response `result.certificates` is an array of objects each with `id`, `hostname`, `requested_hostname`, `request_covered`, `state` (`"csr_pending"`, `"active"`, `"superseded"`, or `"failed"`), `origin` (`"manual"`, `"csr"`, or `"acme_dns"`), `key_type`, `issuer`, `not_before`, `not_after`, `serial`, `self_signed`, `note`, `acme_account_id`, `created_at`, `updated_at`.
-> `hostname` is the certificate's primary SAN, a display label only: what the certificate serves is decided by its full SAN list per [tls.cert.validation.san-coverage](runtime.md#r--tls.cert.validation.san-coverage), never by this field.
+> `hostname` is a name the certificate covers, used as a display label: for an operator upload its primary SAN, for a runtime-issued certificate the name it was issued for. What the certificate serves is decided by its full SAN list per [tls.cert.validation.san-coverage](runtime.md#r--tls.cert.validation.san-coverage), never by this field.
 > `requested_hostname` is the hostname a CSR was begun for; it is null for rows of any other origin, and on a CSR row it may differ from `hostname` when the CA signed a different name set.
 > `request_covered` reports whether the stored certificate covers that requested hostname, so that the rule is applied in one place rather than by each client. It is null where there is nothing to decide — no requested hostname, or no certificate yet — and also where the stored certificate cannot be parsed, which is not the same answer as "does not cover".
 > Private key material is never returned.

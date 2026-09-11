@@ -732,8 +732,8 @@ export type TlsKeyType = "ecdsa_p256";
 
 export interface TlsCertificate {
   id: number;
-  /** The certificate's own primary SAN. A label: what the certificate serves
-   * is decided by its full SAN list, never by this field. */
+  /** A name the certificate covers, used as its label. What the certificate
+   * serves is decided by its full SAN list, never by this field. */
   hostname: string;
   /** For CSR-derived rows, the hostname the request was made for. May differ
    * from `hostname` when the CA signed a different name set. */

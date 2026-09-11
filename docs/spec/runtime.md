@@ -1704,14 +1704,17 @@ The BSL surface is intentionally strategy-agnostic: scripts declare only that an
 > For runtime-managed certificates (ACME DNS-01, manual, and CSR-derived), the runtime must deliver certificate and key material to the ingress proxy through a mechanism that does not require including private key material in the proxy's persistent configuration or its restart-replay cache.
 > The proxy must be able to obtain the appropriate certificate by SNI hostname at TLS handshake time.
 > The serving endpoint must be a pure lookup: a stored cert returns 200 with PEM, an unknown hostname returns 204 (no content), and the runtime must never trigger an issuance flow from this path. Issuance is the issuance coordinator's job (see [tls.cert.eager-issuance](#r--tls.cert.eager-issuance)).
-> A certificate whose `notAfter` has passed must not be served, and must not take precedence over a stored certificate that is still valid and covers the hostname.
+> A certificate outside its validity window must not be served: neither one whose `notAfter` has passed, nor one whose `notBefore` has not yet arrived, and neither may take precedence over a stored certificate that is currently valid and covers the hostname.
+> Storing a certificate ahead of its `notBefore` is how an operator stages a cutover (see [tls.cert.validation.expired](#r--tls.cert.validation.expired)), so serving it early would defeat the reason it was accepted.
 > A stored certificate whose expiry is unrecorded is not treated as expired, since that cannot be distinguished from one that has not been parsed.
 
 > r[tls.cert.validation.san-coverage]
 > A certificate covers a hostname when the leaf certificate's Subject Alternative Name DNS entries either contain that hostname literally or contain a wildcard entry that covers it under RFC 6125.
 > A wildcard SAN `*.example.com` covers exactly one additional left-most label (it covers `foo.example.com` but not `example.com` and not `a.b.example.com`).
 > Coverage is the only thing that binds a certificate to a hostname.
-> However a certificate reached the runtime — operator upload, externally-signed CSR, or ACME issuance — it must be served for exactly the hostnames its own SAN set covers, and must never supersede a certificate that is serving a hostname the arriving certificate does not cover.
+> However a certificate reached the runtime — operator upload, externally-signed CSR, or ACME issuance — it must be served for exactly the hostnames its own SAN set covers.
+> A certificate supersedes another only when it is a replacement in full: it covers every hostname the other serves, it is within its own validity window, and it is not self-signed unless the one it replaces already was.
+> On the CSR path the SAN set is chosen by the issuing CA rather than the operator, so which certificates a new one is even a candidate to replace is outside the operator's control; a certificate that does not meet the bar retires nothing, and whatever is serving a hostname goes on serving it.
 > The name an operator asked for is a record of the request, never a binding: a certificate whose SAN set omits it does not acquire that hostname by having been requested under it.
 > A certificate carrying no DNS SANs covers nothing and must be rejected on operator upload.
 

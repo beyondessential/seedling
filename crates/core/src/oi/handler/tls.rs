@@ -346,9 +346,6 @@ pub(crate) fn issue_acme_dns(state: &OiState, params: IssueAcmeDnsParams) -> Han
 // r[impl tls.cert.validation.san-coverage]
 struct StoredCert {
     primary_san: String,
-    /// Every DNS name the certificate covers. What it is served for, and the
-    /// measure of which existing certificates it is entitled to replace.
-    san_dns_names: Vec<String>,
     chain_pem: String,
     metadata: CertMetadata,
 }
@@ -362,15 +359,8 @@ impl StoredCert {
                 .first()
                 .cloned()
                 .expect("validate_upload rejects empty SAN lists"),
-            san_dns_names: validated.parsed.san_dns_names.clone(),
             chain_pem: validated.parsed.chain_pem.clone(),
-            metadata: CertMetadata {
-                issuer: validated.parsed.metadata.issuer.clone(),
-                not_before: validated.parsed.metadata.not_before,
-                not_after: validated.parsed.metadata.not_after,
-                serial: validated.parsed.metadata.serial.clone(),
-                self_signed: validated.parsed.metadata.self_signed,
-            },
+            metadata: validated.parsed.metadata.clone(),
         }
     }
 }
@@ -406,7 +396,6 @@ pub(crate) fn upload_manual(state: &OiState, params: UploadManualParams) -> Hand
 
     let StoredCert {
         primary_san,
-        san_dns_names,
         chain_pem,
         metadata,
     } = StoredCert::from_validated(&validated);
@@ -421,7 +410,6 @@ pub(crate) fn upload_manual(state: &OiState, params: UploadManualParams) -> Hand
     })?;
 
     let label_for_insert = primary_san.clone();
-    let sans_for_insert = san_dns_names;
     let note_for_insert = note;
     let id = state
         .db
@@ -448,12 +436,7 @@ pub(crate) fn upload_manual(state: &OiState, params: UploadManualParams) -> Hand
             // retired; anything still serving a name this cert cannot stays
             // active, and resolution picks the most-recent active row covering
             // each hostname.
-            store::supersede_other_active_for_hostname(
-                db,
-                &label_for_insert,
-                id,
-                &sans_for_insert,
-            )?;
+            store::supersede_other_active_for_hostname(db, &label_for_insert, id)?;
             Ok(id)
         })
         .map_err(db_error)?;
@@ -676,7 +659,6 @@ pub(crate) fn csr_upload_cert(state: &OiState, params: CsrUploadCertParams) -> H
 
     let StoredCert {
         primary_san,
-        san_dns_names,
         chain_pem,
         metadata,
     } = StoredCert::from_validated(&validated);
@@ -712,7 +694,7 @@ pub(crate) fn csr_upload_cert(state: &OiState, params: CsrUploadCertParams) -> H
                 Some(&chain_pem),
                 Some(&metadata),
             )?;
-            store::supersede_other_active_for_hostname(db, &label_for_update, id, &san_dns_names)?;
+            store::supersede_other_active_for_hostname(db, &label_for_update, id)?;
             Ok(())
         })
         .map_err(db_error)?;

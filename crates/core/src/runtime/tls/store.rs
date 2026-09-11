@@ -272,7 +272,10 @@ const CERT_COLUMNS: &str = "id, hostname, requested_hostname, state, origin, cer
 /// next to each other: passed positionally they are exactly the pair a caller
 /// would swap, and telling them apart is the whole point of the second one.
 pub struct NewCertificate<'a> {
-    /// The row's primary-SAN label; see [`TlsCertificate::hostname`].
+    /// The row's label, which must be a name the certificate covers; see
+    /// [`TlsCertificate::hostname`]. A row inserted before its certificate
+    /// exists — a pending CSR — labels itself with the requested name until the
+    /// upload replaces it.
     pub hostname: &'a str,
     /// The hostname a CSR was requested for; see
     /// [`TlsCertificate::requested_hostname`]. `None` for every other origin.
@@ -390,6 +393,7 @@ pub fn find_active_for_hostname(
                 "SELECT {CERT_COLUMNS}
                  FROM tls_certificates
                  WHERE hostname = ?1 AND state = 'active'
+                   AND (not_before IS NULL OR not_before <= ?2)
                    AND (not_after IS NULL OR not_after > ?2)
                  ORDER BY id DESC LIMIT 1"
             ),
@@ -413,7 +417,8 @@ pub fn find_active_for_hostname(
         "SELECT {CERT_COLUMNS}
              FROM tls_certificates
              WHERE state = 'active'
-               AND (not_after IS NULL OR not_after > ?1)
+               AND (not_before IS NULL OR not_before <= ?1)
+           AND (not_after IS NULL OR not_after > ?1)
              ORDER BY created_at DESC, id DESC"
     ))?;
     let mut rows = stmt.query([now])?;
@@ -422,10 +427,7 @@ pub fn find_active_for_hostname(
         let Some(pem) = cert.cert_pem.as_deref() else {
             continue;
         };
-        let Ok(parsed) = super::parse::parse_chain(pem) else {
-            continue;
-        };
-        if super::parse::san_covers(&parsed.san_dns_names, hostname) {
+        if super::parse::cert_covers(pem, hostname).unwrap_or(false) {
             return Ok(Some(cert));
         }
     }
@@ -482,18 +484,28 @@ pub fn update_certificate(
 
 /// Retire the active certificates that the certificate `keep_id` replaces.
 ///
-/// Candidates are the other active rows sharing the arriving certificate's
-/// primary-SAN label, which is how a renewal finds its predecessor. Sharing a
-/// label says nothing about the rest of a candidate's SAN set, though: a
-/// candidate carrying `[example.com, shop.example.com]` shares its label with
-/// an arriving `[example.com, www.example.com]` while serving a name the
-/// arriving certificate cannot. Retiring it would leave `shop.example.com`
-/// with no active certificate at all.
+/// Replacement is a strict improvement or it does not happen. A candidate is
+/// retired only when the arriving certificate is
 ///
-/// So a candidate is retired only when the arriving certificate covers every
-/// name the candidate serves. A candidate whose certificate cannot be read is
-/// left alone: being unable to tell what it serves is not the same as knowing
-/// the arriving certificate replaces it.
+/// - **at least as broad**: it covers every name the candidate serves. Sharing
+///   a label says nothing about the rest of a candidate's SAN set — a
+///   candidate carrying `[example.com, shop.example.com]` shares its label with
+///   an arriving `[example.com, www.example.com]` while serving a name the
+///   arriving certificate cannot, and retiring it would leave
+///   `shop.example.com` with no active certificate at all.
+/// - **at least as serviceable**: the arriving certificate is inside its own
+///   validity window, and is not self-signed unless the candidate already was.
+///   A certificate staged ahead of its `notBefore` is accepted deliberately
+///   (see `tls.cert.validation.expired`) and a self-signed one is accepted with
+///   an annotation; neither is grounds for retiring a certificate clients
+///   currently accept. This matters most on the CSR path, where the SAN set —
+///   and so which certificates become candidates at all — is chosen by the
+///   external CA rather than by the operator.
+///
+/// Candidates are the other active rows sharing the arriving certificate's
+/// label, which is how a renewal finds its predecessor. A candidate whose
+/// certificate cannot be read is left alone: being unable to tell what it
+/// serves is not the same as knowing the arriving certificate replaces it.
 ///
 /// Returns the number of rows retired.
 // r[impl tls.cert.validation.san-coverage]
@@ -501,8 +513,28 @@ pub fn supersede_other_active_for_hostname(
     db: &Db,
     hostname: &str,
     keep_id: i64,
-    arriving_sans: &[String],
 ) -> rusqlite::Result<usize> {
+    // Read the arriving certificate back from the row rather than taking its
+    // properties as arguments, so what is compared is what was actually
+    // stored.
+    let Some(arriving) = get_certificate(db, keep_id)? else {
+        return Ok(0);
+    };
+    let Some(arriving_sans) = arriving
+        .cert_pem
+        .as_deref()
+        .and_then(|pem| super::parse::leaf_san_dns_names(pem).ok())
+    else {
+        return Ok(0);
+    };
+
+    let now = now_secs();
+    if arriving.not_before.is_some_and(|nb| nb > now)
+        || arriving.not_after.is_some_and(|na| na <= now)
+    {
+        return Ok(0);
+    }
+
     let candidates: Vec<TlsCertificate> = {
         let mut stmt = db.conn.prepare(&format!(
             "SELECT {CERT_COLUMNS}
@@ -513,9 +545,11 @@ pub fn supersede_other_active_for_hostname(
             .collect::<rusqlite::Result<_>>()?
     };
 
-    let now = now_secs();
     let mut retired = 0;
     for candidate in candidates {
+        if arriving.self_signed && !candidate.self_signed {
+            continue;
+        }
         let Some(pem) = candidate.cert_pem.as_deref() else {
             continue;
         };
@@ -524,7 +558,7 @@ pub fn supersede_other_active_for_hostname(
         };
         if !served
             .iter()
-            .all(|name| super::parse::san_covers(arriving_sans, name))
+            .all(|name| super::parse::san_covers(&arriving_sans, name))
         {
             continue;
         }
@@ -1216,6 +1250,20 @@ mod tests {
     /// are separate arguments so a test can build the mislabelled row this
     /// subsystem is meant to make impossible.
     fn insert_labelled_cert(db: &Db, label: &str, sans: &[&str]) -> i64 {
+        insert_cert_with(db, label, sans, |_| {})
+    }
+
+    fn insert_cert_with(
+        db: &Db,
+        label: &str,
+        sans: &[&str],
+        tweak: impl FnOnce(&mut CertMetadata),
+    ) -> i64 {
+        let mut metadata = CertMetadata {
+            not_after: Some(now_secs() + 86400),
+            ..Default::default()
+        };
+        tweak(&mut metadata);
         insert_certificate(
             db,
             NewCertificate {
@@ -1227,15 +1275,76 @@ mod tests {
                 csr_pem: None,
                 key_ciphertext: b"key",
                 key_type: KeyType::EcdsaP256,
-                metadata: CertMetadata {
-                    not_after: Some(now_secs() + 86400),
-                    ..Default::default()
-                },
+                metadata,
                 note: None,
                 acme_account_id: None,
             },
         )
         .unwrap()
+    }
+
+    /// On the CSR path the SAN set is chosen by the external CA, so which
+    /// certificates become supersession candidates is outside the operator's
+    /// control. A certificate staged ahead of its validity window is accepted
+    /// deliberately, and must not retire one clients accept today.
+    // r[verify tls.cert.validation.san-coverage]
+    #[test]
+    fn supersede_spares_an_incumbent_when_the_new_cert_is_not_yet_valid() {
+        let (db, _) = fresh_db();
+        let incumbent = insert_labelled_cert(&db, "example.com", &["example.com"]);
+        let staged = insert_cert_with(&db, "example.com", &["example.com"], |m| {
+            m.not_before = Some(now_secs() + 86_400);
+            m.not_after = Some(now_secs() + 90 * 86_400);
+        });
+
+        assert_eq!(
+            supersede_other_active_for_hostname(&db, "example.com", staged).unwrap(),
+            0
+        );
+        assert_eq!(
+            get_certificate(&db, incumbent).unwrap().unwrap().state,
+            TlsCertState::Active
+        );
+    }
+
+    /// Nor may a self-signed certificate retire one a CA issued: clients accept
+    /// the incumbent and would reject the replacement.
+    // r[verify tls.cert.validation.san-coverage]
+    #[test]
+    fn supersede_spares_a_ca_issued_incumbent_when_the_new_cert_is_self_signed() {
+        let (db, _) = fresh_db();
+        let incumbent = insert_labelled_cert(&db, "example.com", &["example.com"]);
+        let arriving = insert_cert_with(&db, "example.com", &["example.com"], |m| {
+            m.self_signed = true;
+        });
+
+        assert_eq!(
+            supersede_other_active_for_hostname(&db, "example.com", arriving).unwrap(),
+            0
+        );
+        assert_eq!(
+            get_certificate(&db, incumbent).unwrap().unwrap().state,
+            TlsCertState::Active
+        );
+    }
+
+    /// A certificate staged ahead of its `notBefore` is stored deliberately, so
+    /// it must wait rather than be served and rejected by clients.
+    // r[verify tls.cert.serve]
+    #[test]
+    fn a_not_yet_valid_cert_is_not_served() {
+        let (db, _) = fresh_db();
+        insert_cert_with(&db, "example.com", &["example.com"], |m| {
+            m.not_before = Some(now_secs() + 86_400);
+            m.not_after = Some(now_secs() + 90 * 86_400);
+        });
+
+        assert!(
+            find_active_for_hostname(&db, "example.com")
+                .unwrap()
+                .is_none(),
+            "a cert outside its validity window must not be served",
+        );
     }
 
     /// A row written before the label was made to follow the certificate: it
@@ -1281,13 +1390,7 @@ mod tests {
         let arriving =
             insert_labelled_cert(&db, "example.com", &["example.com", "www.example.com"]);
 
-        let retired = supersede_other_active_for_hostname(
-            &db,
-            "example.com",
-            arriving,
-            &["example.com".to_owned(), "www.example.com".to_owned()],
-        )
-        .unwrap();
+        let retired = supersede_other_active_for_hostname(&db, "example.com", arriving).unwrap();
 
         assert_eq!(retired, 0, "shop.example.com would have been stranded");
         assert_eq!(
@@ -1315,13 +1418,7 @@ mod tests {
         let arriving =
             insert_labelled_cert(&db, "example.com", &["example.com", "www.example.com"]);
 
-        let retired = supersede_other_active_for_hostname(
-            &db,
-            "example.com",
-            arriving,
-            &["example.com".to_owned(), "www.example.com".to_owned()],
-        )
-        .unwrap();
+        let retired = supersede_other_active_for_hostname(&db, "example.com", arriving).unwrap();
 
         assert_eq!(retired, 1);
         assert_eq!(
@@ -1382,13 +1479,7 @@ mod tests {
         let id2 = insert_test_cert(&db, "a.example.com");
         let id3 = insert_test_cert(&db, "b.example.com");
 
-        let n = supersede_other_active_for_hostname(
-            &db,
-            "a.example.com",
-            id2,
-            &["a.example.com".to_owned()],
-        )
-        .unwrap();
+        let n = supersede_other_active_for_hostname(&db, "a.example.com", id2).unwrap();
         assert_eq!(n, 1);
 
         assert_eq!(

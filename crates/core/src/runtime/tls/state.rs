@@ -349,10 +349,7 @@ fn find_active_for_hostname<'a>(
         let Some(pem) = cert.cert_pem.as_deref() else {
             continue;
         };
-        let Ok(parsed) = super::parse::parse_chain(pem) else {
-            continue;
-        };
-        if super::parse::san_covers(&parsed.san_dns_names, hostname) {
+        if super::parse::cert_covers(pem, hostname).unwrap_or(false) {
             return Some(cert);
         }
     }

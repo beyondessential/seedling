@@ -631,8 +631,8 @@ function ManualCertsSection({
   onCancelCsr,
 }: ManualCertsSectionProps) {
   // w[impl routes.certificates]
-  // Group the listing by the certificate's primary SAN (then newest expiry
-  // first within a group).
+  // Group the listing by the certificate's label (then newest expiry first
+  // within a group).
   const sorted = [...certs].sort(
     (a, b) =>
       a.hostname.localeCompare(b.hostname) || (b.not_after ?? 0) - (a.not_after ?? 0),

@@ -169,7 +169,6 @@ async fn persist(
     let metadata = parsed.metadata.clone();
     let not_after = metadata.not_after;
     let chain_pem = parsed.chain_pem.clone();
-    let sans = parsed.san_dns_names.clone();
     let hostname_owned = hostname.to_owned();
     let cert_id = db
         .call(move |db_inner| {
@@ -189,7 +188,7 @@ async fn persist(
                     acme_account_id: None,
                 },
             )?;
-            store::supersede_other_active_for_hostname(db_inner, &hostname_owned, id, &sans)?;
+            store::supersede_other_active_for_hostname(db_inner, &hostname_owned, id)?;
             Ok::<_, rusqlite::Error>(id)
         })
         .context(StorageSnafu)?;

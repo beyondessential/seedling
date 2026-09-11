@@ -80,9 +80,12 @@ impl DnsProviderKind {
 #[derive(Debug, Clone)]
 pub struct TlsCertificate {
     pub id: i64,
-    /// The certificate's primary SAN: a display label and the key
-    /// supersession is done under. Never a statement about what the row
-    /// serves — that is decided by the full SAN list at resolution time.
+    /// A name the certificate covers: a display label, and the key
+    /// supersession groups by. Operator uploads use the certificate's primary
+    /// SAN; ACME and Tailscale issuance use the name they issued for. Never a
+    /// statement about what the row serves — that is decided by the full SAN
+    /// list at resolution time, and the serving lookups confirm this label
+    /// against the certificate rather than trusting it.
     // r[impl tls.cert.validation.san-coverage]
     pub hostname: String,
     /// For `origin = Csr`: the hostname the CSR was begun for. A CA may

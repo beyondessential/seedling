@@ -36,6 +36,14 @@ separate CA, exactly as a real CA does.
       incumbent carried does retire it (verifies spec: `tls.cert.validation.san-coverage`)
 - [x] A candidate whose stored certificate cannot be parsed is left active rather than
       retired — unable to tell what it serves is not the same as knowing it is replaced
+- [x] An arriving certificate that is not yet within its validity window retires nothing:
+      staging a cutover must not retire the certificate currently serving the name
+      (verifies spec: `tls.cert.validation.san-coverage`)
+- [x] A self-signed arriving certificate does not retire a CA-issued incumbent — clients
+      accept the incumbent and would reject the replacement (verifies spec:
+      `tls.cert.validation.san-coverage`)
+- [x] A certificate whose `notBefore` has not arrived is not served (verifies spec:
+      `tls.cert.serve`)
 
 ## Serving a mislabelled row
 
@@ -86,9 +94,8 @@ separate CA, exactly as a real CA does.
       flags (verifies spec: `routes.certificates`)
 - [x] A row whose certificate does meet its request shows neither the requested name nor the
       flag, so the extra line only appears where it says something
-- [x] Stored certificates group by primary SAN, so a relabelled CSR row groups with the
-      other certificates for the name it actually covers (verifies spec:
-      `routes.certificates`)
+- [x] Stored certificates group by label, so a relabelled CSR row groups with the other
+      certificates for the name it actually covers (verifies spec: `routes.certificates`)
 - [ ] `seedling tls csr upload-cert` surfaces the `request_not_covered` warning in its
       output. Not covered: `print_result` prints the whole response JSON, so the warning
       reaches the operator, but nothing asserts it
