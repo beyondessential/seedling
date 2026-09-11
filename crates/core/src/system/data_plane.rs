@@ -14,7 +14,7 @@ use crate::system::{
 };
 
 mod nft;
-mod routes;
+pub(crate) mod routes;
 
 #[derive(Debug, Snafu)]
 pub(crate) enum DataPlaneError {
