@@ -1,3 +1,5 @@
+use std::collections::HashSet;
+
 use std::{collections::BTreeMap, time::Duration};
 
 use seedling_protocol::names::AppName;
@@ -33,6 +35,32 @@ struct DesiredGroup {
     kind_str: String,
 }
 
+/// One group per resource, from a stream of per-instance entries.
+///
+/// `desired.resources` holds an entry per *instance*, so a deployment scaled
+/// to N yielded N identical groups. Each group then expands to all N
+/// instances at lookup time, so every state change was emitted N times —
+/// N² entries for one resource, and a client driven by the event feed saw
+/// the same `resource_state_changed` repeated once per replica.
+fn dedupe_groups(
+    raw: impl Iterator<Item = (AppName, ResourceKind, Option<String>)>,
+) -> Vec<DesiredGroup> {
+    let mut seen: HashSet<(AppName, ResourceKind, Option<String>)> = HashSet::new();
+    let mut groups = Vec::new();
+    for (app, kind, res_name) in raw {
+        if !seen.insert((app.clone(), kind, res_name.clone())) {
+            continue;
+        }
+        groups.push(DesiredGroup {
+            app,
+            kind,
+            res_name,
+            kind_str: format!("{kind:?}").to_lowercase(),
+        });
+    }
+    groups
+}
+
 /// Result returned from the DB lookup.
 #[derive(Clone)]
 struct StateEntry {
@@ -46,17 +74,15 @@ struct StateEntry {
 
 impl Reconciler {
     pub(super) fn emit_state_changes(&mut self, apps: &[AppSnapshot]) {
-        let groups: Vec<DesiredGroup> = apps
-            .iter()
-            .flat_map(|app| {
-                app.desired.resources.iter().map(move |dr| DesiredGroup {
-                    app: app.name.clone(),
-                    kind: dr.instance.kind,
-                    res_name: dr.instance.name.as_deref().map(|s| s.to_owned()),
-                    kind_str: format!("{:?}", dr.instance.kind).to_lowercase(),
-                })
+        let groups = dedupe_groups(apps.iter().flat_map(|app| {
+            app.desired.resources.iter().map(move |dr| {
+                (
+                    app.name.clone(),
+                    dr.instance.kind,
+                    dr.instance.name.as_deref().map(str::to_owned),
+                )
             })
-            .collect();
+        }));
 
         let entries: Vec<StateEntry> = self.db.call(move |db| {
             let mut out = Vec::new();
@@ -301,6 +327,53 @@ fn retire_eligible(state: LifecycleState, has_observations: bool, has_terminal_o
 
 #[cfg(test)]
 mod tests {
+
+    use seedling_protocol::names::AppName;
+
+    use super::dedupe_groups;
+    use crate::defs::resource::ResourceKind;
+
+    fn app(s: &str) -> AppName {
+        AppName::new(s).expect("app name")
+    }
+
+    // i[verify event.types]
+    // `desired.resources` has one entry per instance, so a deployment scaled
+    // to 3 produced 3 identical groups; each then expanded to all 3
+    // instances, so one state change was reported three times.
+    #[test]
+    fn instances_of_one_resource_collapse_to_a_single_group() {
+        let raw = vec![
+            (app("web"), ResourceKind::Deployment, Some("api".to_owned())),
+            (app("web"), ResourceKind::Deployment, Some("api".to_owned())),
+            (app("web"), ResourceKind::Deployment, Some("api".to_owned())),
+        ];
+        let groups = dedupe_groups(raw.into_iter());
+        assert_eq!(groups.len(), 1);
+        assert_eq!(groups[0].res_name.as_deref(), Some("api"));
+        assert_eq!(groups[0].kind_str, "deployment");
+    }
+
+    // i[verify event.types]
+    #[test]
+    fn distinct_resources_stay_distinct() {
+        let raw = vec![
+            (app("web"), ResourceKind::Deployment, Some("api".to_owned())),
+            (
+                app("web"),
+                ResourceKind::Deployment,
+                Some("worker".to_owned()),
+            ),
+            (app("web"), ResourceKind::Service, Some("api".to_owned())),
+            (
+                app("other"),
+                ResourceKind::Deployment,
+                Some("api".to_owned()),
+            ),
+            (app("web"), ResourceKind::Volume, None),
+        ];
+        assert_eq!(dedupe_groups(raw.into_iter()).len(), 5);
+    }
     use super::*;
 
     // r[verify gc.instances.never-actuated]
