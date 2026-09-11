@@ -75,6 +75,9 @@ separate CA, exactly as a real CA does.
 - [x] A CA-issued certificate is served in preference to a newer self-signed one, so
       resolution cannot serve what supersession just refused to let retire anything
       (verifies spec: `tls.strategy.manual`)
+- [x] Trust ranks above specificity: a trusted wildcard takes over a hostname whose only
+      dedicated certificate is self-signed, so a wildcard obtained for one name is picked up
+      by the others it covers (verifies spec: `tls.strategy.manual`)
 - [x] With neither distinction in play, the most recently created still wins
 
 ## Staged certificates

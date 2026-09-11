@@ -20,15 +20,20 @@ pub struct Rank {
     /// would outrank the newer, valid wildcard that is actually being served,
     /// and the two sides would disagree about what answers for the hostname.
     unexpired: bool,
-    /// An exact SAN entry beats a wildcard that merely covers the name. RFC
-    /// 6125 §6.4.4 gives the exact match precedence, and without it a broader
-    /// certificate uploaded later shadows the one issued for this hostname.
-    exact: bool,
-    /// A certificate clients accept beats one they will not. Resolution and
-    /// supersession have to agree here: supersession refuses to retire a
-    /// CA-issued certificate in favour of a self-signed one, and if resolution
-    /// then served the self-signed one anyway the refusal would buy nothing.
+    /// A certificate clients accept beats one they will not, and it ranks
+    /// above specificity: a certificate clients reject is no use for the
+    /// hostname however precisely it names it. Resolution and supersession
+    /// have to agree here — supersession refuses to retire a CA-issued
+    /// certificate in favour of a self-signed one, and if resolution then
+    /// served the self-signed one anyway the refusal would buy nothing.
     trusted: bool,
+    /// Among certificates that are equally servable, an exact SAN entry beats
+    /// a wildcard that merely covers the name (RFC 6125 §6.4.4 gives the exact
+    /// match precedence), so a broad certificate arriving later does not
+    /// displace one issued for this hostname while both work. It ranks *below*
+    /// trust so that a wildcard clients accept still takes over from a
+    /// dedicated certificate they do not.
+    exact: bool,
     created_at: i64,
     id: i64,
 }
@@ -54,8 +59,8 @@ pub fn rank(
     let host_lc = hostname.to_ascii_lowercase();
     Some(Rank {
         unexpired: !not_after.is_some_and(|na| na <= now),
-        exact: sans.iter().any(|s| s.eq_ignore_ascii_case(&host_lc)),
         trusted: !self_signed,
+        exact: sans.iter().any(|s| s.eq_ignore_ascii_case(&host_lc)),
         created_at,
         id,
     })
@@ -122,6 +127,17 @@ mod tests {
         )
         .unwrap();
         assert!(trusted > ss);
+    }
+
+    /// Trust ranks above specificity: a dedicated certificate clients reject
+    /// must not hold a hostname against a wildcard they accept.
+    // r[verify tls.strategy.manual]
+    #[test]
+    fn a_trusted_wildcard_outranks_a_self_signed_exact_match() {
+        let wildcard = rank(&sans(&["*.doma.in"]), "b.doma.in", false, None, 100, 1, 0).unwrap();
+        let self_signed_exact =
+            rank(&sans(&["b.doma.in"]), "b.doma.in", true, None, 200, 2, 0).unwrap();
+        assert!(wildcard > self_signed_exact);
     }
 
     #[test]
