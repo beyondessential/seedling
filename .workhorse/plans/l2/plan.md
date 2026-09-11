@@ -541,6 +541,45 @@ Not actioned: the serving scan re-fetching the winning row after ranking it. One
 key lookup, against materialising every row's PEM and encrypted key to avoid it — and **B5**
 restructures this path anyway.
 
+## Review round 8
+
+Both criticals are consequences of earlier rounds' fixes, which by now is the pattern rather
+than an observation.
+
+- **The staged short-circuit missed the renewal path** (critical; round 6 opened it, round 7
+  bounded it without widening it). It was gated on the hostname being uncovered, but the loop is
+  reachable with an incumbent present: a renewal whose `notBefore` the local clock has not
+  reached leaves the expiring incumbent active and still due, and a successful attempt is never
+  debounced, so it reissues every tick just the same. `staged_from` is now computed
+  unconditionally and stands in wherever issuance would otherwise happen — but not in place of
+  an incumbent's own renewal schedule, which is still the right answer when nothing is due.
+
+- **Supersession checked one side of the validity window** (critical). It tested the arriving
+  certificate's window and never the candidate's, and never compared the two expiries, so
+  "replaces it in full" was half enforced: an ordinary renewal could retire a certificate staged
+  for a cutover, and re-uploading an older-but-valid certificate could retire an incumbent that
+  outlived it by months. Both guards added, both spec'd, and the expiry comparison refuses when
+  either side's expiry is unrecorded — not knowing is not grounds for retiring anything.
+
+- **The self-issuance flag was defeatable by appending a PEM block.** `self_signed` was
+  `issuer == subject && blocks.is_empty()`, so a self-signed leaf with any junk second block —
+  a duplicate of itself would do, since nothing verifies that a chain chains — reported
+  `self_signed = false`. That cleared the supersession guard, outranked the CA-issued incumbent
+  in resolution, and suppressed both the upload warning and the certificates-table chip, so
+  nothing told the operator. Derived from the leaf alone now, which is what both spec
+  requirements already said it was.
+
+- **The SAN memo did not cover its failures.** An unparseable active row fell through to the
+  per-lookup fallback, so it was re-parsed and re-warned once per hostname per tick — the memo
+  failing exactly where it was needed, and flooding the log while it did. Failures are memoised
+  as `None` and reported once per snapshot build.
+
+Not actioned, and recorded on **B5** instead: `Coordinator::run` loads a `Snapshot` per hostname
+(`issuance.rs:310`) while the reconciler calls `ensure` per hostname per tick, so the memo is
+built once per hostname there rather than once per tick. Eager indexing on that path also loses
+the early exit the scan had. Fixing it means making the snapshot a per-tick input to the
+coordinator, which is a change to how issuance is driven, not a tweak to this lookup.
+
 ## Noted, not actioned
 
 - `TlsCertState::Failed` is never constructed anywhere in the tree. Its mention in

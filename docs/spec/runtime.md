@@ -1721,7 +1721,8 @@ The BSL surface is intentionally strategy-agnostic: scripts declare only that an
 > A certificate carrying no DNS SANs covers nothing and must be rejected on operator upload.
 
 > r[tls.cert.supersede]
-> A certificate supersedes another only when it replaces it in full: it [covers](#r--tls.cert.validation.san-coverage) every hostname the other serves, it is within its own validity window, and it is not self-issued unless the one it replaces already was.
+> A certificate supersedes another only when it replaces it in full: it [covers](#r--tls.cert.validation.san-coverage) every hostname the other serves, it is within its own validity window and lasts at least as long as the other, and it is not self-issued unless the one it replaces already was.
+> A certificate staged ahead of its own validity window is not replaced at all: it was stored for a cutover, and retiring it would mean the cutover never happens with nothing left to take over.
 > The self-issuance test is the leaf's issuer against its subject, not a chain built to a trust store, so it stops an operator's self-signed upload retiring a CA-issued certificate and does not stop a certificate from an untrusted CA doing so.
 > A certificate that does not meet the bar retires nothing, and whatever is serving a hostname goes on serving it.
 > This matters most on the CSR path, where the SAN set is chosen by the issuing CA rather than by the operator, so which certificates a new one is even a candidate to replace is outside the operator's control.

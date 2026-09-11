@@ -131,11 +131,16 @@ pub struct Snapshot {
     /// snapshot is immutable for the length of those loops, so the parse
     /// belongs here.
     ///
-    /// A memo, not a source of truth: a certificate missing from the map is
-    /// parsed on the spot rather than treated as covering nothing. A snapshot
-    /// assembled without it is slower, never wrong — which is the same
+    /// Failures are memoised as `None` alongside successes, so a certificate
+    /// whose PEM will not parse is parsed and reported once per snapshot rather
+    /// than once per hostname — the memo has to cover the rows it cannot read,
+    /// or it fails precisely where it is needed and floods the log doing it.
+    ///
+    /// A memo, not a source of truth: a certificate absent from the map
+    /// entirely is parsed on the spot rather than treated as covering nothing.
+    /// A snapshot assembled without it is slower, never wrong — the same
     /// discipline this subsystem learned about the `hostname` label.
-    sans: BTreeMap<i64, Vec<String>>,
+    sans: BTreeMap<i64, Option<Vec<String>>>,
 }
 
 impl Snapshot {
@@ -161,8 +166,8 @@ impl Snapshot {
     /// H×C work out of the per-tick loops, and cloning the list back per
     /// lookup would put the same shape straight back as allocations.
     fn sans_for(&self, cert: &TlsCertificate) -> Option<Cow<'_, [String]>> {
-        if let Some(sans) = self.sans.get(&cert.id) {
-            return Some(Cow::Borrowed(sans));
+        if let Some(entry) = self.sans.get(&cert.id) {
+            return entry.as_deref().map(Cow::Borrowed);
         }
         let pem = cert.cert_pem.as_deref()?;
         match super::parse::leaf_san_dns_names(pem) {
@@ -179,17 +184,36 @@ impl Snapshot {
     }
 }
 
-/// Parse each certificate's SAN list once. Certificates that will not parse
-/// are left out, and the fallback in [`Snapshot::sans_for`] reports them per
-/// use rather than here, so the warning names the lookup that hit it.
-fn index_sans(certificates: &[TlsCertificate]) -> BTreeMap<i64, Vec<String>> {
+/// Parse each active certificate's SAN list once, recording failures as `None`
+/// so they are not retried per lookup. Reported here, once per snapshot,
+/// because an active row the runtime cannot read is unservable and nothing else
+/// will say so.
+fn index_sans(certificates: &[TlsCertificate]) -> BTreeMap<i64, Option<Vec<String>>> {
     certificates
         .iter()
         .filter(|c| c.state == TlsCertState::Active)
-        .filter_map(|c| {
-            let pem = c.cert_pem.as_deref()?;
-            let sans = super::parse::leaf_san_dns_names(pem).ok()?;
-            Some((c.id, sans))
+        .map(|c| {
+            let sans = match c.cert_pem.as_deref() {
+                None => {
+                    tracing::warn!(
+                        cert_id = c.id,
+                        "active certificate has no stored PEM; it can never be served"
+                    );
+                    None
+                }
+                Some(pem) => match super::parse::leaf_san_dns_names(pem) {
+                    Ok(sans) => Some(sans),
+                    Err(e) => {
+                        tracing::warn!(
+                            cert_id = c.id,
+                            error = %e,
+                            "stored certificate could not be parsed; it can never be served"
+                        );
+                        None
+                    }
+                },
+            };
+            (c.id, sans)
         })
         .collect()
 }
@@ -292,17 +316,14 @@ pub fn compute_state<'a>(snap: &'a Snapshot, hostname: &str) -> HostnameState<'a
     // A certificate about to start serving is not absent, and reporting
     // absence would have the coordinator issue a replacement on every tick
     // until the window opened — a successful issuance is never debounced (see
-    // `debounce_until`), so nothing else would stop it. Only a start that is
-    // imminent counts: a certificate staged weeks out leaves the hostname with
-    // no TLS in the meantime, and suppressing issuance for that whole period
-    // would be worse than the duplicate this guards against.
+    // `debounce_until`), so nothing else would stop it. This is not only the
+    // uncovered case: a renewal whose `notBefore` the local clock has not
+    // reached leaves the expiring incumbent active and still due, which reissues
+    // just as hard. Only an imminent start counts, since a certificate staged
+    // weeks out leaves the hostname with no TLS in the meantime.
     // r[impl tls.cert.serve]
-    let staged_from = if active_cert.is_none() {
-        staged_start_for_hostname(snap, hostname, snap.now)
-            .filter(|from| *from - snap.now <= STAGED_COVER_LEAD_SECS)
-    } else {
-        None
-    };
+    let staged_from = staged_start_for_hostname(snap, hostname, snap.now)
+        .filter(|from| *from - snap.now <= STAGED_COVER_LEAD_SECS);
 
     let mut last_attempt: Option<&TlsCertAttempt> = None;
     let mut last_success: Option<&TlsCertAttempt> = None;
@@ -536,34 +557,37 @@ fn decide_acme_dns(
             reason: IssueReason::ForceRetry,
         };
     }
-    // A certificate is stored and starts serving at `from`. Nothing to do
-    // until then: issuing now would be issuing against a certificate that
-    // already exists.
-    if let Some(from) = staged_from {
-        return Decision::Scheduled {
+    // Issuing against a certificate that is already stored and about to start
+    // serving produces a duplicate, so a staged start stands in for issuance
+    // wherever issuance would otherwise happen. It does not stand in for an
+    // incumbent's own renewal schedule: where nothing is due, that schedule is
+    // still the right answer.
+    let staged = |fallback: Decision| match staged_from {
+        Some(from) => Decision::Scheduled {
             next_at: from,
             source: NextSource::Fallback,
-        };
-    }
+        },
+        None => fallback,
+    };
 
     let next = active_cert.map(next_renewal_at);
     match (active_cert, next) {
         (None, _) => match debounce_until(now, last_attempt) {
             Some(until) => Decision::Debounced { until },
-            None => Decision::IssueNow {
+            None => staged(Decision::IssueNow {
                 reason: IssueReason::First,
-            },
+            }),
         },
         (Some(_), Some((next_at, source))) => {
             if now >= next_at {
                 match debounce_until(now, last_attempt) {
                     Some(until) => Decision::Debounced { until },
-                    None => Decision::IssueNow {
+                    None => staged(Decision::IssueNow {
                         reason: IssueReason::Renewal {
                             scheduled_at: next_at,
                             source,
                         },
-                    },
+                    }),
                 }
             } else {
                 Decision::Scheduled { next_at, source }
@@ -939,6 +963,43 @@ mod tests {
         match compute_state(&s, "host.example.com").decision {
             Decision::IssueNow { .. } => {}
             d => panic!("expected issuance for an uncovered hostname, got: {d:?}"),
+        }
+    }
+
+    /// The renewal path reaches the same re-issuance loop: a renewal whose
+    /// `notBefore` the local clock has not reached leaves the expiring
+    /// incumbent active and still due, so gating the staged short-circuit on
+    /// the hostname being uncovered misses it entirely.
+    // r[verify tls.cert.serve]
+    #[test]
+    fn a_staged_renewal_suppresses_reissuance_while_the_incumbent_is_due() {
+        let now = 1_000_000;
+        // Incumbent well past its renewal threshold.
+        let incumbent = fake_cert("host.example.com", 1, now - 89 * 86_400, now + 86_400);
+        let mut staged = fake_cert("host.example.com", 2, 0, now + 90 * 86_400);
+        staged.not_before = Some(now + 600);
+        staged.created_at = now;
+        let s = snap(
+            vec![policy_acme("*", "p")],
+            vec![incumbent, staged],
+            vec![attempt(
+                "host.example.com",
+                AttemptOutcome::Success,
+                now - 60,
+            )],
+            vec![],
+            vec![],
+            "ops@x",
+            now,
+        );
+        let st = compute_state(&s, "host.example.com");
+        assert!(
+            st.active_cert.is_some(),
+            "the incumbent is still what serves the hostname",
+        );
+        match st.decision {
+            Decision::Scheduled { next_at, .. } => assert_eq!(next_at, now + 600),
+            d => panic!("expected the staged start, got: {d:?}"),
         }
     }
 

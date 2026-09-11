@@ -89,7 +89,12 @@ pub fn parse_chain(pem: &str) -> Result<ParsedChain> {
 
     let issuer = cert.issuer().to_string();
     let subject = cert.subject().to_string();
-    let self_signed = issuer == subject && blocks.is_empty();
+    // The leaf alone: issuer equal to subject. Requiring an empty chain as well
+    // would make the flag defeatable by appending any second PEM block — even a
+    // duplicate of the leaf, since nothing here verifies that a chain chains —
+    // and supersession and resolution both lean on this flag to stop a
+    // self-signed upload displacing a CA-issued certificate.
+    let self_signed = issuer == subject;
     let not_before = cert.validity().not_before.timestamp();
     let not_after = cert.validity().not_after.timestamp();
     let serial = cert.tbs_certificate.raw_serial_as_string();

@@ -39,6 +39,11 @@ separate CA, exactly as a real CA does.
 - [x] An arriving certificate that is not yet within its validity window retires nothing:
       staging a cutover must not retire the certificate currently serving the name
       (verifies spec: `tls.cert.validation.san-coverage`)
+- [x] A candidate staged ahead of its own validity window is not retired: it was stored for
+      a cutover, and retiring it leaves nothing to take over (verifies spec:
+      `tls.cert.supersede`)
+- [x] A shorter-lived arrival does not retire a longer-lived incumbent, which would cost the
+      hostname its TLS at the arrival's expiry (verifies spec: `tls.cert.supersede`)
 - [x] A self-signed arriving certificate does not retire a CA-issued incumbent — clients
       accept the incumbent and would reject the replacement (verifies spec:
       `tls.cert.validation.san-coverage`)
@@ -87,6 +92,9 @@ separate CA, exactly as a real CA does.
       as absent would re-issue every tick (verifies spec: `tls.cert.serve`)
 - [x] It is still not reported as the hostname's active certificate, so the rollup does not
       claim a hostname is covered while handshakes for it fail
+- [x] A staged renewal suppresses re-issuance even while the expiring incumbent is still
+      active and due — the loop is reachable through the incumbent-present path too
+      (verifies spec: `tls.cert.serve`)
 - [x] A certificate staged far ahead does not suppress issuance: the hostname has no TLS in
       the meantime, so it needs one now and the staged certificate takes over later
       (verifies spec: `tls.cert.serve`)

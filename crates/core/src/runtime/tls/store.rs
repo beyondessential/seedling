@@ -511,6 +511,16 @@ fn unreadable(message: String) -> rusqlite::Error {
     rusqlite::Error::ToSqlConversionFailure(message.into())
 }
 
+/// Just the fields supersession compares, for a certificate that might be
+/// replaced.
+struct Candidate {
+    id: i64,
+    self_signed: bool,
+    cert_pem: Option<String>,
+    not_before: Option<i64>,
+    not_after: Option<i64>,
+}
+
 /// Just the fields supersession compares, so reading the arriving certificate
 /// back does not pull its encrypted key and CSR along with it.
 struct ArrivingCert {
@@ -533,7 +543,11 @@ struct ArrivingCert {
 ///   arriving certificate cannot, and retiring it would leave
 ///   `shop.example.com` with no active certificate at all.
 /// - **at least as serviceable**: the arriving certificate is inside its own
-///   validity window, and is not self-issued unless the candidate already was.
+///   validity window and lasts at least as long as the candidate, and is not
+///   self-issued unless the candidate already was. The window is checked on
+///   both sides: a candidate staged ahead of its own `notBefore` was put there
+///   for a cutover, and a shorter-lived arrival replacing a longer-lived
+///   incumbent would cost the hostname its TLS at the arrival's expiry.
 ///   A certificate staged ahead of its `notBefore` is accepted deliberately
 ///   (see `tls.cert.validation.expired`) and a self-signed one is accepted with
 ///   an annotation; neither is grounds for retiring a certificate an operator
@@ -624,27 +638,48 @@ pub fn supersede_other_active_for_hostname(db: &Db, keep_id: i64) -> rusqlite::R
     }
 
     // Only what the decision reads — not every candidate's encrypted key.
-    let candidates: Vec<(i64, bool, Option<String>)> = {
-        let mut stmt = db.conn.prepare(
-            "SELECT id, self_signed, cert_pem
+    let candidates: Vec<Candidate> = {
+        let mut stmt = db.conn.prepare_cached(
+            "SELECT id, self_signed, cert_pem, not_before, not_after
              FROM tls_certificates
              WHERE hostname = ?1 AND state = 'active' AND id != ?2",
         )?;
         stmt.query_map(params![arriving.hostname, keep_id], |row| {
             let self_signed: i64 = row.get(1)?;
-            Ok((row.get(0)?, self_signed != 0, row.get(2)?))
+            Ok(Candidate {
+                id: row.get(0)?,
+                self_signed: self_signed != 0,
+                cert_pem: row.get(2)?,
+                not_before: row.get(3)?,
+                not_after: row.get(4)?,
+            })
         })?
         .collect::<rusqlite::Result<_>>()?
     };
 
     let mut retired = 0;
-    for (candidate_id, candidate_self_signed, candidate_pem) in candidates {
-        if arriving.self_signed && !candidate_self_signed {
+    for candidate in candidates {
+        if arriving.self_signed && !candidate.self_signed {
             continue;
         }
-        let Some(pem) = candidate_pem.as_deref() else {
+        // A candidate staged ahead of its own window was put there on purpose
+        // for a cutover; retiring it means that cutover never happens and
+        // nothing is left to take over.
+        if candidate.not_before.is_some_and(|nb| nb > now) {
+            continue;
+        }
+        // Nor does a shorter-lived certificate replace a longer-lived one: the
+        // hostname would lose TLS at the arrival's expiry while the
+        // certificate that would have covered it sat superseded. Where either
+        // expiry is unrecorded the comparison cannot be made, and not knowing
+        // is not grounds for retiring anything.
+        match (candidate.not_after, arriving.not_after) {
+            (Some(candidate_end), Some(arriving_end)) if arriving_end >= candidate_end => {}
+            _ => continue,
+        }
+        let Some(pem) = candidate.cert_pem.as_deref() else {
             tracing::warn!(
-                cert_id = candidate_id,
+                cert_id = candidate.id,
                 "active certificate has no stored PEM; leaving it active rather than retiring it"
             );
             continue;
@@ -653,7 +688,7 @@ pub fn supersede_other_active_for_hostname(db: &Db, keep_id: i64) -> rusqlite::R
             Ok(served) => served,
             Err(e) => {
                 tracing::warn!(
-                    cert_id = candidate_id,
+                    cert_id = candidate.id,
                     error = %e,
                     "stored certificate could not be parsed; leaving it active rather than \
                      retiring it"
@@ -673,7 +708,7 @@ pub fn supersede_other_active_for_hostname(db: &Db, keep_id: i64) -> rusqlite::R
         }
         retired += db.conn.execute(
             "UPDATE tls_certificates SET state = 'superseded', updated_at = ?1 WHERE id = ?2",
-            params![now, candidate_id],
+            params![now, candidate.id],
         )?;
     }
     Ok(retired)
@@ -1503,6 +1538,52 @@ mod tests {
                 .expect("shop.example.com still has a certificate")
                 .id,
             incumbent
+        );
+    }
+
+    /// A certificate staged for a cutover was put there deliberately. Retiring
+    /// it means the cutover never happens and nothing is left to take over.
+    // r[verify tls.cert.supersede]
+    #[test]
+    fn supersede_spares_a_candidate_staged_for_a_cutover() {
+        let (db, _) = fresh_db();
+        let staged = insert_cert_with(&db, "example.com", &["example.com"], |m| {
+            m.not_before = Some(now_secs() + 7 * 86_400);
+            m.not_after = Some(now_secs() + 365 * 86_400);
+        });
+        let arriving = insert_labelled_cert(&db, "example.com", &["example.com"]);
+
+        assert_eq!(
+            supersede_other_active_for_hostname(&db, arriving).unwrap(),
+            0
+        );
+        assert_eq!(
+            get_certificate(&db, staged).unwrap().unwrap().state,
+            TlsCertState::Active
+        );
+    }
+
+    /// Nor does a shorter-lived certificate replace a longer-lived one: the
+    /// hostname would lose TLS at the arrival's expiry while the certificate
+    /// that would have covered it sat superseded.
+    // r[verify tls.cert.supersede]
+    #[test]
+    fn supersede_spares_a_candidate_that_outlives_the_arrival() {
+        let (db, _) = fresh_db();
+        let long_lived = insert_cert_with(&db, "example.com", &["example.com"], |m| {
+            m.not_after = Some(now_secs() + 300 * 86_400);
+        });
+        let short_lived = insert_cert_with(&db, "example.com", &["example.com"], |m| {
+            m.not_after = Some(now_secs() + 3 * 86_400);
+        });
+
+        assert_eq!(
+            supersede_other_active_for_hostname(&db, short_lived).unwrap(),
+            0
+        );
+        assert_eq!(
+            get_certificate(&db, long_lived).unwrap().unwrap().state,
+            TlsCertState::Active
         );
     }
 
