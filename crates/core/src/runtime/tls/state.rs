@@ -485,6 +485,7 @@ mod tests {
         TlsCertificate {
             id,
             hostname: hostname.to_owned(),
+            requested_hostname: None,
             state: TlsCertState::Active,
             origin: TlsCertOrigin::AcmeDns,
             cert_pem: Some("PEM".to_owned()),
@@ -555,6 +556,39 @@ mod tests {
                 None
             },
         }
+    }
+
+    /// The in-memory matcher shares the store matcher's rules, including the
+    /// exact-label fast path — which is only sound while a row's label is its
+    /// certificate's own primary SAN. A row labelled with a name its
+    /// certificate does not carry would shadow the certificate that does.
+    // r[verify tls.cert.validation.san-coverage]
+    #[test]
+    fn find_active_for_hostname_does_not_hand_out_a_non_covering_cert() {
+        fn real_cert(label: &str, sans: &[&str], created_at: i64) -> TlsCertificate {
+            let key =
+                rcgen::KeyPair::generate_for(&rcgen::PKCS_ECDSA_P256_SHA256).expect("keypair");
+            let mut params = rcgen::CertificateParams::new(
+                sans.iter().map(|s| (*s).to_owned()).collect::<Vec<_>>(),
+            )
+            .expect("params");
+            params.distinguished_name = rcgen::DistinguishedName::new();
+            let mut cert = fake_cert(label, 1, 0, i64::MAX);
+            cert.cert_pem = Some(params.self_signed(&key).expect("self-sign").pem());
+            cert.created_at = created_at;
+            cert
+        }
+
+        let mut covering = real_cert("www.example.com", &["www.example.com"], 100);
+        covering.id = 1;
+        // Newer, so it would win the newest-first scan if it were consulted.
+        let mut other = real_cert("example.com", &["example.com"], 200);
+        other.id = 2;
+
+        let certs = [covering, other];
+        let found = find_active_for_hostname(&certs, "www.example.com")
+            .expect("a certificate covers www.example.com");
+        assert_eq!(found.id, 1);
     }
 
     #[test]

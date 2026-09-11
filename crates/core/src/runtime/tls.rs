@@ -80,7 +80,17 @@ impl DnsProviderKind {
 #[derive(Debug, Clone)]
 pub struct TlsCertificate {
     pub id: i64,
+    /// The certificate's primary SAN: a display label and the key
+    /// supersession is done under. Never a statement about what the row
+    /// serves — that is decided by the full SAN list at resolution time.
+    // r[impl tls.cert.validation.san-coverage]
     pub hostname: String,
+    /// For `origin = Csr`: the hostname the CSR was begun for. A CA may
+    /// sign a name set other than the one requested, so this records what
+    /// was asked for and is not necessarily covered by the certificate
+    /// that arrived. `None` for every other origin.
+    // r[impl tls.csr.flow]
+    pub requested_hostname: Option<String>,
     pub state: TlsCertState,
     pub origin: TlsCertOrigin,
     /// PEM-encoded leaf chain; populated for `Active` and `Superseded`.

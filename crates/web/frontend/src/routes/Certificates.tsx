@@ -631,7 +631,8 @@ function ManualCertsSection({
   onCancelCsr,
 }: ManualCertsSectionProps) {
   // w[impl routes.certificates]
-  // Group the listing by hostname (then newest expiry first within a group).
+  // Group the listing by the certificate's primary SAN (then newest expiry
+  // first within a group).
   const sorted = [...certs].sort(
     (a, b) =>
       a.hostname.localeCompare(b.hostname) || (b.not_after ?? 0) - (a.not_after ?? 0),
@@ -698,7 +699,22 @@ function ManualCertsSection({
                 return (
                   <TableRow key={c.id} hover>
                     <TableCell sx={{ fontFamily: "monospace" }}>{c.id}</TableCell>
-                    <TableCell sx={{ fontFamily: "monospace" }}>{c.hostname}</TableCell>
+                    <TableCell sx={{ fontFamily: "monospace" }}>
+                      {c.hostname}
+                      {/* w[impl routes.certificates] */}
+                      {/* Only worth showing where the CA signed something
+                          other than what was asked for; otherwise it repeats
+                          the primary SAN. */}
+                      {c.requested_hostname !== null &&
+                        c.requested_hostname !== c.hostname && (
+                          <Typography
+                            variant="caption"
+                            sx={{ color: "text.secondary", display: "block" }}
+                          >
+                            requested {c.requested_hostname}
+                          </Typography>
+                        )}
+                    </TableCell>
                     <TableCell>
                       <Chip label={c.origin} size="small" variant="outlined" />
                     </TableCell>
@@ -718,6 +734,15 @@ function ManualCertsSection({
                         />
                         {c.self_signed && (
                           <Chip label="self-signed" size="small" color="warning" variant="outlined" />
+                        )}
+                        {/* w[impl routes.certificates] */}
+                        {c.request_covered === false && (
+                          <Chip
+                            label="request not covered"
+                            size="small"
+                            color="warning"
+                            variant="outlined"
+                          />
                         )}
                         {expired && (
                           <Chip label="expired" size="small" color="error" />

@@ -1,4 +1,7 @@
-use rcgen::{CertificateParams, DistinguishedName, KeyPair, PKCS_ECDSA_P256_SHA256};
+use rcgen::{
+    CertificateParams, CertificateSigningRequestParams, DistinguishedName, DnType, Issuer, KeyPair,
+    PKCS_ECDSA_P256_SHA256,
+};
 use serde_json::json;
 
 use crate::oi::test_support::TestOi;
@@ -188,6 +191,248 @@ fn policy_set_list_clear_roundtrip() {
             .unwrap()["ok"],
         true
     );
+}
+
+/// Sign a certificate over the public key inside `csr_pem`, carrying exactly
+/// `sans`.
+///
+/// Stands in for a CA that signs a name set of its own choosing rather than
+/// the one the CSR asked for — the case the runtime cannot control and must
+/// not mistake for the requested name. The CSR's private key never leaves the
+/// runtime, so the test signs over its public key just as a real CA does.
+fn ca_signed_for_csr(
+    csr_pem: &str,
+    sans: &[&str],
+    tweak: impl FnOnce(&mut CertificateParams),
+) -> String {
+    let csr = CertificateSigningRequestParams::from_pem(csr_pem).expect("parse csr");
+
+    let ca_key = KeyPair::generate_for(&PKCS_ECDSA_P256_SHA256).expect("ca keypair");
+    let mut ca_params = CertificateParams::new(Vec::<String>::new()).expect("ca params");
+    ca_params.distinguished_name = DistinguishedName::new();
+    ca_params
+        .distinguished_name
+        .push(DnType::CommonName, "Test CA");
+    ca_params.is_ca = rcgen::IsCa::Ca(rcgen::BasicConstraints::Unconstrained);
+    let issuer = Issuer::new(ca_params, ca_key);
+
+    let mut leaf = CertificateParams::new(sans.iter().map(|s| (*s).to_owned()).collect::<Vec<_>>())
+        .expect("leaf params");
+    leaf.distinguished_name = DistinguishedName::new();
+    tweak(&mut leaf);
+    leaf.signed_by(&csr.public_key, &issuer)
+        .expect("ca signs csr")
+        .pem()
+}
+
+/// Begin a CSR for `hostname`, returning its row id and CSR PEM.
+fn begin_csr(oi: &TestOi, hostname: &str) -> (i64, String) {
+    let begun = oi
+        .call(
+            "/tls/certificates/csr/begin",
+            json!({ "hostname": hostname }),
+        )
+        .expect("csr begin succeeds");
+    (
+        begun["id"].as_i64().unwrap(),
+        begun["csr_pem"].as_str().unwrap().to_owned(),
+    )
+}
+
+fn cert_row(oi: &TestOi, id: i64) -> serde_json::Value {
+    let listed = oi.call("/tls/certificates/list", json!({})).unwrap();
+    listed["certificates"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|c| c["id"] == json!(id))
+        .unwrap_or_else(|| panic!("certificate {id} is in the listing"))
+        .clone()
+}
+
+fn warnings(response: &serde_json::Value) -> Vec<String> {
+    response["warnings"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|w| w.as_str().unwrap().to_owned())
+        .collect()
+}
+
+// i[verify tls.cert.csr.upload-cert]
+// i[verify tls.cert.list]
+// r[verify tls.cert.validation.san-coverage]
+// r[verify tls.csr.flow]
+#[test]
+fn csr_upload_binds_to_the_issued_san_and_spares_the_requested_hostname() {
+    let oi = TestOi::new();
+
+    // A certificate is already serving www.example.com.
+    let (incumbent_pem, incumbent_key) = self_signed("www.example.com");
+    let incumbent = oi
+        .call(
+            "/tls/certificates/upload-manual",
+            json!({ "cert_pem": incumbent_pem, "key_pem": incumbent_key }),
+        )
+        .unwrap();
+    let incumbent_id = incumbent["id"].as_i64().unwrap();
+
+    // An operator begins a CSR for the same hostname, and the CA signs for a
+    // different name entirely.
+    let (csr_id, csr_pem) = begin_csr(&oi, "www.example.com");
+    let signed = ca_signed_for_csr(&csr_pem, &["example.com"], |_| {});
+    let uploaded = oi
+        .call(
+            "/tls/certificates/csr/upload-cert",
+            json!({ "id": csr_id, "cert_pem": signed }),
+        )
+        .expect("a certificate for the CSR's key is accepted");
+
+    // Accepted, but bound to what it carries rather than what was asked for.
+    assert_eq!(uploaded["primary_san"], "example.com");
+    assert_eq!(uploaded["san_dns_names"], json!(["example.com"]));
+    assert!(
+        warnings(&uploaded).contains(&"request_not_covered".to_owned()),
+        "{uploaded}"
+    );
+
+    let row = cert_row(&oi, csr_id);
+    assert_eq!(row["state"], "active");
+    assert_eq!(row["hostname"], "example.com");
+    assert_eq!(row["requested_hostname"], "www.example.com");
+
+    // The certificate that does cover www.example.com is untouched: a cert
+    // that does not cover a hostname must not retire the one that does.
+    let incumbent_row = cert_row(&oi, incumbent_id);
+    assert_eq!(incumbent_row["state"], "active");
+    assert_eq!(incumbent_row["hostname"], "www.example.com");
+    assert_eq!(incumbent_row["requested_hostname"], json!(null));
+}
+
+// r[verify tls.cert.validation.san-coverage]
+#[test]
+fn csr_upload_accepts_a_wildcard_that_covers_the_request() {
+    let oi = TestOi::new();
+
+    let (id, csr_pem) = begin_csr(&oi, "foo.example.com");
+    let signed = ca_signed_for_csr(&csr_pem, &["*.example.com"], |_| {});
+    let uploaded = oi
+        .call(
+            "/tls/certificates/csr/upload-cert",
+            json!({ "id": id, "cert_pem": signed }),
+        )
+        .unwrap();
+
+    assert_eq!(uploaded["primary_san"], "*.example.com");
+    assert!(
+        !warnings(&uploaded).contains(&"request_not_covered".to_owned()),
+        "a wildcard covering the requested name meets the request: {uploaded}"
+    );
+    assert_eq!(cert_row(&oi, id)["hostname"], "*.example.com");
+}
+
+// r[verify tls.cert.validation.san-coverage]
+#[test]
+fn csr_upload_warns_when_a_wildcard_is_one_label_short() {
+    let oi = TestOi::new();
+
+    // A wildcard covers exactly one extra left-most label, so *.example.com
+    // does not reach a.b.example.com.
+    let (id, csr_pem) = begin_csr(&oi, "a.b.example.com");
+    let signed = ca_signed_for_csr(&csr_pem, &["*.example.com"], |_| {});
+    let uploaded = oi
+        .call(
+            "/tls/certificates/csr/upload-cert",
+            json!({ "id": id, "cert_pem": signed }),
+        )
+        .unwrap();
+
+    assert!(
+        warnings(&uploaded).contains(&"request_not_covered".to_owned()),
+        "{uploaded}"
+    );
+}
+
+// r[verify tls.cert.validation.san-coverage]
+#[test]
+fn csr_upload_supersedes_only_under_its_own_primary_san() {
+    let oi = TestOi::new();
+
+    let (old_pem, old_key) = self_signed("app.example.com");
+    let old_id = oi
+        .call(
+            "/tls/certificates/upload-manual",
+            json!({ "cert_pem": old_pem, "key_pem": old_key }),
+        )
+        .unwrap()["id"]
+        .as_i64()
+        .unwrap();
+
+    let (new_id, csr_pem) = begin_csr(&oi, "app.example.com");
+    let signed = ca_signed_for_csr(&csr_pem, &["app.example.com"], |_| {});
+    let uploaded = oi
+        .call(
+            "/tls/certificates/csr/upload-cert",
+            json!({ "id": new_id, "cert_pem": signed }),
+        )
+        .unwrap();
+
+    assert!(
+        !warnings(&uploaded).contains(&"request_not_covered".to_owned()),
+        "{uploaded}"
+    );
+    assert_eq!(cert_row(&oi, old_id)["state"], "superseded");
+    assert_eq!(cert_row(&oi, new_id)["state"], "active");
+}
+
+// i[verify tls.cert.csr.upload-cert]
+#[test]
+fn csr_upload_rejections_leave_the_row_and_the_incumbent_untouched() {
+    let oi = TestOi::new();
+
+    let (incumbent_pem, incumbent_key) = self_signed("www.example.com");
+    let incumbent_id = oi
+        .call(
+            "/tls/certificates/upload-manual",
+            json!({ "cert_pem": incumbent_pem, "key_pem": incumbent_key }),
+        )
+        .unwrap()["id"]
+        .as_i64()
+        .unwrap();
+
+    let (id, csr_pem) = begin_csr(&oi, "www.example.com");
+
+    // A certificate for somebody else's key.
+    let (other_pem, _) = self_signed("www.example.com");
+    let (code, _) = oi
+        .call(
+            "/tls/certificates/csr/upload-cert",
+            json!({ "id": id, "cert_pem": other_pem }),
+        )
+        .unwrap_err();
+    assert_eq!(code, "requirements_invalid");
+
+    // A certificate for the right key that has already expired.
+    let expired = ca_signed_for_csr(&csr_pem, &["www.example.com"], |p| {
+        p.not_before = time::OffsetDateTime::from_unix_timestamp(1).unwrap();
+        p.not_after = time::OffsetDateTime::from_unix_timestamp(2).unwrap();
+    });
+    let (code, _) = oi
+        .call(
+            "/tls/certificates/csr/upload-cert",
+            json!({ "id": id, "cert_pem": expired }),
+        )
+        .unwrap_err();
+    assert_eq!(code, "requirements_invalid");
+
+    // Both the pending row and the serving certificate are as they were, so a
+    // failed upload costs the operator nothing.
+    let row = cert_row(&oi, id);
+    assert_eq!(row["state"], "csr_pending");
+    assert_eq!(row["requested_hostname"], "www.example.com");
+    oi.call("/tls/certificates/csr/get", json!({ "id": id }))
+        .expect("the CSR is still retrievable");
+    assert_eq!(cert_row(&oi, incumbent_id)["state"], "active");
 }
 
 // i[verify tls.cert.upload-manual]

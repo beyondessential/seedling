@@ -242,16 +242,19 @@ pub async fn issue(
         .call(move |db_inner| -> rusqlite::Result<i64> {
             let id = store::insert_certificate(
                 db_inner,
-                &hostname_owned,
-                TlsCertState::Active,
-                TlsCertOrigin::AcmeDns,
-                Some(&chain_pem),
-                None,
-                &key_ct,
-                KeyType::EcdsaP256,
-                metadata,
-                None,
-                Some(account_id),
+                store::NewCertificate {
+                    hostname: &hostname_owned,
+                    requested_hostname: None,
+                    state: TlsCertState::Active,
+                    origin: TlsCertOrigin::AcmeDns,
+                    cert_pem: Some(&chain_pem),
+                    csr_pem: None,
+                    key_ciphertext: &key_ct,
+                    key_type: KeyType::EcdsaP256,
+                    metadata,
+                    note: None,
+                    acme_account_id: Some(account_id),
+                },
             )?;
             store::supersede_other_active_for_hostname(db_inner, &hostname_owned, id)?;
             Ok(id)

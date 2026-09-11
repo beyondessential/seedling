@@ -298,7 +298,7 @@ mod tests {
     use crate::runtime::db::Db;
     use crate::runtime::tls::{
         KeyType, TlsCertOrigin, TlsCertState,
-        store::{CertMetadata, insert_certificate},
+        store::{CertMetadata, NewCertificate, insert_certificate},
     };
     use secrecy::SecretString;
 
@@ -316,22 +316,27 @@ mod tests {
         db.call(move |db_inner: &Db| -> i64 {
             insert_certificate(
                 db_inner,
-                &host,
-                TlsCertState::Active,
-                TlsCertOrigin::Manual,
-                Some("-----BEGIN CERTIFICATE-----\nMIIBcert\n-----END CERTIFICATE-----\n"),
-                None,
-                &key_ct,
-                KeyType::EcdsaP256,
-                CertMetadata {
-                    issuer: Some("CN=Test".to_owned()),
-                    not_before: Some(1_700_000_000),
-                    not_after: Some(1_800_000_000),
-                    serial: Some("01".to_owned()),
-                    self_signed: false,
+                NewCertificate {
+                    hostname: &host,
+                    requested_hostname: None,
+                    state: TlsCertState::Active,
+                    origin: TlsCertOrigin::Manual,
+                    cert_pem: Some(
+                        "-----BEGIN CERTIFICATE-----\nMIIBcert\n-----END CERTIFICATE-----\n",
+                    ),
+                    csr_pem: None,
+                    key_ciphertext: &key_ct,
+                    key_type: KeyType::EcdsaP256,
+                    metadata: CertMetadata {
+                        issuer: Some("CN=Test".to_owned()),
+                        not_before: Some(1_700_000_000),
+                        not_after: Some(1_800_000_000),
+                        serial: Some("01".to_owned()),
+                        self_signed: false,
+                    },
+                    note: None,
+                    acme_account_id: None,
                 },
-                None,
-                None,
             )
             .unwrap()
         })

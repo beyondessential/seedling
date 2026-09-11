@@ -174,16 +174,19 @@ async fn persist(
         .call(move |db_inner| {
             let id = store::insert_certificate(
                 db_inner,
-                &hostname_owned,
-                TlsCertState::Active,
-                TlsCertOrigin::Tailscale,
-                Some(&chain_pem),
-                None,
-                &key_ct,
-                KeyType::EcdsaP256,
-                metadata,
-                None,
-                None,
+                store::NewCertificate {
+                    hostname: &hostname_owned,
+                    requested_hostname: None,
+                    state: TlsCertState::Active,
+                    origin: TlsCertOrigin::Tailscale,
+                    cert_pem: Some(&chain_pem),
+                    csr_pem: None,
+                    key_ciphertext: &key_ct,
+                    key_type: KeyType::EcdsaP256,
+                    metadata,
+                    note: None,
+                    acme_account_id: None,
+                },
             )?;
             store::supersede_other_active_for_hostname(db_inner, &hostname_owned, id)?;
             Ok::<_, rusqlite::Error>(id)

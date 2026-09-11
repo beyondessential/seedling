@@ -60,34 +60,58 @@ mechanism the code had already abandoned — the same stale assumption in spec f
 - [x] Update `w[routes.certificates]`: group by primary SAN, surface the requested hostname
       on CSR-origin rows, flag an uncovered request with the same treatment as the
       self-signed and near-expiry flags
-- [ ] Migration 56: add `requested_hostname` to `tls_certificates`, nullable, as a new
-      `version < N` block at the bottom of `db.rs` — never edit a shipped block
-- [ ] Backfill `requested_hostname = hostname WHERE origin = 'csr'` in the same migration.
+- [x] Migration 56: add `requested_hostname` to `tls_certificates`, nullable, as a new
+      block at the bottom of `db.rs` — no shipped block edited
+- [x] Backfill `requested_hostname = hostname WHERE origin = 'csr'` in the same migration.
       Accurate by construction: before this change nothing ever rewrote `hostname` on a CSR
       row, so the pre-migration value *is* the requested name. Leaving it null would discard
       information the runtime holds
-- [ ] Persist `requested_hostname` on `csr_begin`; carry it through `row_to_certificate`,
+- [x] Persist `requested_hostname` on `csr_begin`; carry it through `row_to_certificate`,
       the `TlsCertificate` struct, and `tls.cert.list`
-- [ ] Extract the shared "store a validated operator certificate" step (primary SAN, metadata,
-      chain PEM, supersede-on-primary-SAN) and route both `upload_manual` and
+- [x] Extract the shared "store a validated operator certificate" step (primary SAN, metadata,
+      chain PEM) as `StoredCert::from_validated`, and route both `upload_manual` and
       `csr_upload_cert` through it
-- [ ] `csr_upload_cert`: rewrite `hostname` to the issued cert's primary SAN on activation,
-      supersede on that, and delete the incorrect comment at `tls.rs:605-608`
-- [ ] Add the post-hoc `parse::san_covers(&issued_sans, &requested)` check emitting
+- [x] `csr_upload_cert`: rewrite `hostname` to the issued cert's primary SAN on activation,
+      supersede on that, and delete the incorrect comment about SPKI implying SAN coverage
+- [x] Add the post-hoc `parse::san_covers(&issued_sans, &requested)` check emitting
       `request_not_covered`
-- [ ] `Certificates.tsx`: surface `requested_hostname` on CSR-origin rows and flag an
+- [x] `Certificates.tsx`: surface `requested_hostname` on CSR-origin rows and flag an
       uncovered request alongside the existing self-signed / near-expiry flags, so the row
-      has one flag vocabulary rather than two. Grouping is by primary SAN, which for
-      relabelled CSR rows is a visible change
-- [ ] Tracey annotations on the new code; `tracey query status` clean
-- [ ] `cargo clippy`, `cargo fmt`
+      has one flag vocabulary rather than two
+- [x] Tracey annotations on the new code; `tracey query status` clean
+- [x] `cargo clippy`, `cargo fmt`, full workspace tests, frontend `tsc -b` and vitest
+
+## Done beyond the original checklist
+
+Each of these came out of the work rather than being planned, and each is recorded here
+rather than left for a reader to find in the diff.
+
+- **`CERT_COLUMNS`.** The certificate column list was written out by hand in four queries,
+  read positionally by one function. Adding a column to three of the four would have shifted
+  every index silently. Written once now.
+- **`NewCertificate`.** `insert_certificate` took eleven positional arguments behind an
+  `#[expect(clippy::too_many_arguments)]`, four of them `Option`s. A twelfth adjacent
+  optional name — `requested_hostname`, right next to `hostname` — is precisely the pair a
+  positional call gets the wrong way round, so the arguments became a struct. Nine call
+  sites updated.
+- **`request_covered` on `tls.cert.list`.** The web UI has to flag an uncovered request, and
+  the listing did not carry enough to decide it. Returning the SAN list instead would have
+  put a second implementation of the RFC 6125 wildcard rule in TypeScript, so the runtime
+  decides it. Null where there is nothing to decide, and also where the stored PEM will not
+  parse — which is not the same answer as "does not cover". Spec updated to match.
+- **rcgen `x509-parser` feature, dev-dependency only.** Signing over a CSR's public key needs
+  rcgen's CSR parser, which is feature-gated. Added under `[dev-dependencies]`, so under
+  resolver 3 the production build is unchanged. No new external dependency: the crate
+  already depends on `x509-parser` directly.
+- **Schema-version assertions.** Two `runtime::db::tests` pin the migration count; bumped
+  from 55 to 56.
 
 ## Noted, not actioned
 
-- `TlsCertState::Failed` is never constructed anywhere in the tree, and
-  `update_certificate`'s doc comment still claims CSR validation failure transitions
-  pending → failed. This change does not introduce the state either. Worth a sweep, but it
-  is not this card's.
+- `TlsCertState::Failed` is never constructed anywhere in the tree. Its mention in
+  `update_certificate`'s doc comment is gone — that function's contract is now written to
+  what it does — but the variant itself, and the `CHECK` constraint admitting it, are left
+  alone. Worth a sweep, but it is not this card's.
 - `i[tls.policy.list]` still documents a `"manual"` strategy carrying `cert_id`, which
   `store.rs:203-206` drops on read. A pre-existing spec/code divergence, and deciding
   whether manual policies exist at all is larger than this card.

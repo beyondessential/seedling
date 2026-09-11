@@ -151,22 +151,25 @@ mod tests {
     fn insert_cert(db: &Db, hostname: &str, origin: TlsCertOrigin, not_after: i64) -> i64 {
         store::insert_certificate(
             db,
-            hostname,
-            TlsCertState::Active,
-            origin,
-            Some(&self_signed_cert_pem(hostname)),
-            None,
-            b"key",
-            KeyType::EcdsaP256,
-            CertMetadata {
-                issuer: Some("test".to_owned()),
-                not_before: Some(not_after - 90 * 86400),
-                not_after: Some(not_after),
-                serial: Some("01".to_owned()),
-                self_signed: true,
+            store::NewCertificate {
+                hostname,
+                requested_hostname: None,
+                state: TlsCertState::Active,
+                origin,
+                cert_pem: Some(&self_signed_cert_pem(hostname)),
+                csr_pem: None,
+                key_ciphertext: b"key",
+                key_type: KeyType::EcdsaP256,
+                metadata: CertMetadata {
+                    issuer: Some("test".to_owned()),
+                    not_before: Some(not_after - 90 * 86400),
+                    not_after: Some(not_after),
+                    serial: Some("01".to_owned()),
+                    self_signed: true,
+                },
+                note: None,
+                acme_account_id: None,
             },
-            None,
-            None,
         )
         .unwrap()
     }

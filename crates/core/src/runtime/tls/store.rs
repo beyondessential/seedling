@@ -259,42 +259,59 @@ pub fn clear_policy(db: &Db, hostname: &str) -> rusqlite::Result<bool> {
 // Certificates
 // ---------------------------------------------------------------------------
 
-#[expect(clippy::too_many_arguments, reason = "cert rows have many fields")]
-pub fn insert_certificate(
-    db: &Db,
-    hostname: &str,
-    state: TlsCertState,
-    origin: TlsCertOrigin,
-    cert_pem: Option<&str>,
-    csr_pem: Option<&str>,
-    key_ciphertext: &[u8],
-    key_type: KeyType,
-    metadata: CertMetadata,
-    note: Option<&str>,
-    acme_account_id: Option<i64>,
-) -> rusqlite::Result<i64> {
+/// Every column [`row_to_certificate`] reads, in the order it reads them.
+/// Written once so a new column cannot be added to some of the four
+/// certificate queries and forgotten in the others, which would shift the
+/// positional indices the reader depends on.
+const CERT_COLUMNS: &str = "id, hostname, requested_hostname, state, origin, cert_pem, csr_pem, \
+     key_ciphertext, key_type, issuer, not_before, not_after, serial, self_signed, note, \
+     acme_account_id, ari_window_start, ari_window_end, ari_polled_at, created_at, updated_at";
+
+/// The fields of a new certificate row. A struct rather than a parameter list
+/// because `hostname` and `requested_hostname` are both bare hostnames sitting
+/// next to each other: passed positionally they are exactly the pair a caller
+/// would swap, and telling them apart is the whole point of the second one.
+pub struct NewCertificate<'a> {
+    /// The row's primary-SAN label; see [`TlsCertificate::hostname`].
+    pub hostname: &'a str,
+    /// The hostname a CSR was requested for; see
+    /// [`TlsCertificate::requested_hostname`]. `None` for every other origin.
+    pub requested_hostname: Option<&'a str>,
+    pub state: TlsCertState,
+    pub origin: TlsCertOrigin,
+    pub cert_pem: Option<&'a str>,
+    pub csr_pem: Option<&'a str>,
+    pub key_ciphertext: &'a [u8],
+    pub key_type: KeyType,
+    pub metadata: CertMetadata,
+    pub note: Option<&'a str>,
+    pub acme_account_id: Option<i64>,
+}
+
+pub fn insert_certificate(db: &Db, new: NewCertificate<'_>) -> rusqlite::Result<i64> {
     let now = now_secs();
     db.conn.execute(
         "INSERT INTO tls_certificates (
-            hostname, state, origin, cert_pem, csr_pem, key_ciphertext,
-            key_type, issuer, not_before, not_after, serial, self_signed,
-            note, acme_account_id, created_at, updated_at
-        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?15)",
+            hostname, requested_hostname, state, origin, cert_pem, csr_pem,
+            key_ciphertext, key_type, issuer, not_before, not_after, serial,
+            self_signed, note, acme_account_id, created_at, updated_at
+        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?16)",
         params![
-            hostname,
-            state.as_str(),
-            origin.as_str(),
-            cert_pem,
-            csr_pem,
-            key_ciphertext,
-            key_type.as_str(),
-            metadata.issuer,
-            metadata.not_before,
-            metadata.not_after,
-            metadata.serial,
-            metadata.self_signed as i64,
-            note,
-            acme_account_id,
+            new.hostname,
+            new.requested_hostname,
+            new.state.as_str(),
+            new.origin.as_str(),
+            new.cert_pem,
+            new.csr_pem,
+            new.key_ciphertext,
+            new.key_type.as_str(),
+            new.metadata.issuer,
+            new.metadata.not_before,
+            new.metadata.not_after,
+            new.metadata.serial,
+            new.metadata.self_signed as i64,
+            new.note,
+            new.acme_account_id,
             now,
         ],
     )?;
@@ -313,11 +330,7 @@ pub struct CertMetadata {
 pub fn get_certificate(db: &Db, id: i64) -> rusqlite::Result<Option<TlsCertificate>> {
     db.conn
         .query_row(
-            "SELECT id, hostname, state, origin, cert_pem, csr_pem, key_ciphertext,
-                    key_type, issuer, not_before, not_after, serial, self_signed,
-                    note, acme_account_id, ari_window_start, ari_window_end,
-                    ari_polled_at, created_at, updated_at
-             FROM tls_certificates WHERE id = ?1",
+            &format!("SELECT {CERT_COLUMNS} FROM tls_certificates WHERE id = ?1"),
             [id],
             row_to_certificate,
         )
@@ -325,13 +338,9 @@ pub fn get_certificate(db: &Db, id: i64) -> rusqlite::Result<Option<TlsCertifica
 }
 
 pub fn list_certificates(db: &Db) -> rusqlite::Result<Vec<TlsCertificate>> {
-    let mut stmt = db.conn.prepare(
-        "SELECT id, hostname, state, origin, cert_pem, csr_pem, key_ciphertext,
-                key_type, issuer, not_before, not_after, serial, self_signed,
-                note, acme_account_id, ari_window_start, ari_window_end,
-                ari_polled_at, created_at, updated_at
-         FROM tls_certificates ORDER BY id DESC",
-    )?;
+    let mut stmt = db.conn.prepare(&format!(
+        "SELECT {CERT_COLUMNS} FROM tls_certificates ORDER BY id DESC"
+    ))?;
     stmt.query_map([], row_to_certificate)?.collect()
 }
 
@@ -369,14 +378,13 @@ pub fn find_active_for_hostname(
     if let Some(cert) = db
         .conn
         .query_row(
-            "SELECT id, hostname, state, origin, cert_pem, csr_pem, key_ciphertext,
-                    key_type, issuer, not_before, not_after, serial, self_signed,
-                    note, acme_account_id, ari_window_start, ari_window_end,
-                    ari_polled_at, created_at, updated_at
-             FROM tls_certificates
-             WHERE hostname = ?1 AND state = 'active'
-               AND (not_after IS NULL OR not_after > ?2)
-             ORDER BY id DESC LIMIT 1",
+            &format!(
+                "SELECT {CERT_COLUMNS}
+                 FROM tls_certificates
+                 WHERE hostname = ?1 AND state = 'active'
+                   AND (not_after IS NULL OR not_after > ?2)
+                 ORDER BY id DESC LIMIT 1"
+            ),
             rusqlite::params![hostname, now],
             row_to_certificate,
         )
@@ -389,16 +397,13 @@ pub fn find_active_for_hostname(
     // first whose SAN list covers the hostname. Cost is one PEM parse
     // per active row; in operator-scale databases (<<1000 active rows)
     // this is microseconds.
-    let mut stmt = db.conn.prepare(
-        "SELECT id, hostname, state, origin, cert_pem, csr_pem, key_ciphertext,
-                key_type, issuer, not_before, not_after, serial, self_signed,
-                note, acme_account_id, ari_window_start, ari_window_end,
-                ari_polled_at, created_at, updated_at
-         FROM tls_certificates
-         WHERE state = 'active'
-           AND (not_after IS NULL OR not_after > ?1)
-         ORDER BY created_at DESC, id DESC",
-    )?;
+    let mut stmt = db.conn.prepare(&format!(
+        "SELECT {CERT_COLUMNS}
+             FROM tls_certificates
+             WHERE state = 'active'
+               AND (not_after IS NULL OR not_after > ?1)
+             ORDER BY created_at DESC, id DESC"
+    ))?;
     let mut rows = stmt.query([now])?;
     while let Some(row) = rows.next()? {
         let cert = row_to_certificate(row)?;
@@ -415,15 +420,21 @@ pub fn find_active_for_hostname(
     Ok(None)
 }
 
-/// Transition a cert to a new state, optionally updating cert PEM and parsed
-/// metadata. Used by:
+/// Transition a cert to a new state, optionally updating its primary-SAN
+/// label, cert PEM, and parsed metadata. Used by:
 ///
-/// - CSR upload: pending → active, supplying cert_pem + parsed metadata.
+/// - CSR upload: pending → active, supplying the label the signed certificate
+///   turned out to carry, plus cert_pem + parsed metadata.
 /// - ACME renewal: active → superseded for the old row.
-/// - Validation failure on CSR upload: pending → failed.
+///
+/// `hostname` is the row's primary SAN, so a caller that supplies a new
+/// certificate supplies the label from that certificate rather than leaving
+/// a label the new certificate may not cover.
+// r[impl tls.cert.validation.san-coverage]
 pub fn update_certificate(
     db: &Db,
     id: i64,
+    hostname: Option<&str>,
     state: TlsCertState,
     cert_pem: Option<&str>,
     metadata: Option<&CertMetadata>,
@@ -431,16 +442,18 @@ pub fn update_certificate(
     let now = now_secs();
     db.conn.execute(
         "UPDATE tls_certificates SET
-            state = ?1,
-            cert_pem = COALESCE(?2, cert_pem),
-            issuer = COALESCE(?3, issuer),
-            not_before = COALESCE(?4, not_before),
-            not_after = COALESCE(?5, not_after),
-            serial = COALESCE(?6, serial),
-            self_signed = COALESCE(?7, self_signed),
-            updated_at = ?8
-         WHERE id = ?9",
+            hostname = COALESCE(?1, hostname),
+            state = ?2,
+            cert_pem = COALESCE(?3, cert_pem),
+            issuer = COALESCE(?4, issuer),
+            not_before = COALESCE(?5, not_before),
+            not_after = COALESCE(?6, not_after),
+            serial = COALESCE(?7, serial),
+            self_signed = COALESCE(?8, self_signed),
+            updated_at = ?9
+         WHERE id = ?10",
         params![
+            hostname,
             state.as_str(),
             cert_pem,
             metadata.and_then(|m| m.issuer.as_deref()),
@@ -455,9 +468,15 @@ pub fn update_certificate(
     Ok(())
 }
 
-/// Mark all currently-active certs for `hostname` (other than `keep_id`) as
-/// superseded. Called after a successful renewal/upload so handshakes pick up
-/// the new cert and the old one moves to history.
+/// Mark all currently-active certs labelled `hostname` (other than `keep_id`)
+/// as superseded. Called after a successful renewal/upload so handshakes pick
+/// up the new cert and the old one moves to history.
+///
+/// `hostname` is a primary-SAN label, so this only ever retires certificates
+/// that share the arriving certificate's own primary SAN. Passing a name the
+/// arriving certificate does not carry would retire a certificate that is
+/// still serving that name, leaving the hostname with nothing behind it.
+// r[impl tls.cert.validation.san-coverage]
 pub fn supersede_other_active_for_hostname(
     db: &Db,
     hostname: &str,
@@ -479,32 +498,34 @@ pub fn delete_certificate(db: &Db, id: i64) -> rusqlite::Result<bool> {
     Ok(n > 0)
 }
 
+/// Reads the columns of [`CERT_COLUMNS`], positionally and in that order.
 fn row_to_certificate(row: &rusqlite::Row<'_>) -> rusqlite::Result<TlsCertificate> {
-    let state_str: String = row.get(2)?;
-    let origin_str: String = row.get(3)?;
-    let key_type_str: String = row.get(7)?;
-    let self_signed_int: i64 = row.get(12)?;
+    let state_str: String = row.get(3)?;
+    let origin_str: String = row.get(4)?;
+    let key_type_str: String = row.get(8)?;
+    let self_signed_int: i64 = row.get(13)?;
     Ok(TlsCertificate {
         id: row.get(0)?,
         hostname: row.get(1)?,
+        requested_hostname: row.get(2)?,
         state: TlsCertState::parse(&state_str).ok_or(rusqlite::Error::InvalidQuery)?,
         origin: TlsCertOrigin::parse(&origin_str).ok_or(rusqlite::Error::InvalidQuery)?,
-        cert_pem: row.get(4)?,
-        csr_pem: row.get(5)?,
-        key_ciphertext: row.get(6)?,
+        cert_pem: row.get(5)?,
+        csr_pem: row.get(6)?,
+        key_ciphertext: row.get(7)?,
         key_type: KeyType::parse(&key_type_str).ok_or(rusqlite::Error::InvalidQuery)?,
-        issuer: row.get(8)?,
-        not_before: row.get(9)?,
-        not_after: row.get(10)?,
-        serial: row.get(11)?,
+        issuer: row.get(9)?,
+        not_before: row.get(10)?,
+        not_after: row.get(11)?,
+        serial: row.get(12)?,
         self_signed: self_signed_int != 0,
-        note: row.get(13)?,
-        acme_account_id: row.get(14)?,
-        ari_window_start: row.get(15)?,
-        ari_window_end: row.get(16)?,
-        ari_polled_at: row.get(17)?,
-        created_at: row.get(18)?,
-        updated_at: row.get(19)?,
+        note: row.get(14)?,
+        acme_account_id: row.get(15)?,
+        ari_window_start: row.get(16)?,
+        ari_window_end: row.get(17)?,
+        ari_polled_at: row.get(18)?,
+        created_at: row.get(19)?,
+        updated_at: row.get(20)?,
     })
 }
 
@@ -1058,22 +1079,27 @@ mod tests {
     fn insert_test_cert(db: &Db, hostname: &str) -> i64 {
         insert_certificate(
             db,
-            hostname,
-            TlsCertState::Active,
-            TlsCertOrigin::Manual,
-            Some("-----BEGIN CERTIFICATE-----\nMIIBdummy\n-----END CERTIFICATE-----\n"),
-            None,
-            b"encrypted-key-bytes",
-            KeyType::EcdsaP256,
-            CertMetadata {
-                issuer: Some("CN=Test CA".to_string()),
-                not_before: Some(1_700_000_000),
-                not_after: Some(1_800_000_000),
-                serial: Some("01".to_string()),
-                self_signed: false,
+            NewCertificate {
+                hostname,
+                requested_hostname: None,
+                state: TlsCertState::Active,
+                origin: TlsCertOrigin::Manual,
+                cert_pem: Some(
+                    "-----BEGIN CERTIFICATE-----\nMIIBdummy\n-----END CERTIFICATE-----\n",
+                ),
+                csr_pem: None,
+                key_ciphertext: b"encrypted-key-bytes",
+                key_type: KeyType::EcdsaP256,
+                metadata: CertMetadata {
+                    issuer: Some("CN=Test CA".to_string()),
+                    not_before: Some(1_700_000_000),
+                    not_after: Some(1_800_000_000),
+                    serial: Some("01".to_string()),
+                    self_signed: false,
+                },
+                note: None,
+                acme_account_id: None,
             },
-            None,
-            None,
         )
         .unwrap()
     }
@@ -1096,22 +1122,27 @@ mod tests {
     fn insert_test_cert_expiring(db: &Db, hostname: &str, not_after: Option<i64>) -> i64 {
         insert_certificate(
             db,
-            hostname,
-            TlsCertState::Active,
-            TlsCertOrigin::Manual,
-            Some("-----BEGIN CERTIFICATE-----\nMIIBdummy\n-----END CERTIFICATE-----\n"),
-            None,
-            b"encrypted-key-bytes",
-            KeyType::EcdsaP256,
-            CertMetadata {
-                issuer: Some("CN=Test CA".to_string()),
-                not_before: Some(1_600_000_000),
-                not_after,
-                serial: Some("01".to_string()),
-                self_signed: false,
+            NewCertificate {
+                hostname,
+                requested_hostname: None,
+                state: TlsCertState::Active,
+                origin: TlsCertOrigin::Manual,
+                cert_pem: Some(
+                    "-----BEGIN CERTIFICATE-----\nMIIBdummy\n-----END CERTIFICATE-----\n",
+                ),
+                csr_pem: None,
+                key_ciphertext: b"encrypted-key-bytes",
+                key_type: KeyType::EcdsaP256,
+                metadata: CertMetadata {
+                    issuer: Some("CN=Test CA".to_string()),
+                    not_before: Some(1_600_000_000),
+                    not_after,
+                    serial: Some("01".to_string()),
+                    self_signed: false,
+                },
+                note: None,
+                acme_account_id: None,
             },
-            None,
-            None,
         )
         .unwrap()
     }
@@ -1127,6 +1158,61 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(found.id, id2);
+    }
+
+    /// A real certificate carrying exactly `sans`, so the SAN-coverage scan
+    /// has something it can parse.
+    fn real_cert_pem(sans: &[&str]) -> String {
+        let key = rcgen::KeyPair::generate_for(&rcgen::PKCS_ECDSA_P256_SHA256).expect("keypair");
+        let mut params =
+            rcgen::CertificateParams::new(sans.iter().map(|s| (*s).to_owned()).collect::<Vec<_>>())
+                .expect("params");
+        params.distinguished_name = rcgen::DistinguishedName::new();
+        params.self_signed(&key).expect("self-sign").pem()
+    }
+
+    fn insert_real_cert(db: &Db, label: &str, sans: &[&str]) -> i64 {
+        insert_certificate(
+            db,
+            NewCertificate {
+                hostname: label,
+                requested_hostname: None,
+                state: TlsCertState::Active,
+                origin: TlsCertOrigin::Manual,
+                cert_pem: Some(&real_cert_pem(sans)),
+                csr_pem: None,
+                key_ciphertext: b"key",
+                key_type: KeyType::EcdsaP256,
+                metadata: CertMetadata {
+                    not_after: Some(now_secs() + 86400),
+                    ..Default::default()
+                },
+                note: None,
+                acme_account_id: None,
+            },
+        )
+        .unwrap()
+    }
+
+    /// The fast path matches on the `hostname` column, so it is only sound
+    /// while that column is the certificate's own primary SAN. A row labelled
+    /// with a name its certificate does not carry would be handed out for that
+    /// name — a TLS name mismatch — in preference to the certificate that does
+    /// cover it.
+    // r[verify tls.cert.validation.san-coverage]
+    // r[verify tls.cert.serve]
+    #[test]
+    fn find_active_for_hostname_does_not_hand_out_a_non_covering_cert() {
+        let (db, _) = fresh_db();
+        let covering = insert_real_cert(&db, "www.example.com", &["www.example.com"]);
+        // Newer, and would win the newest-first scan if it were consulted.
+        let _other = insert_real_cert(&db, "example.com", &["example.com"]);
+
+        let found = find_active_for_hostname(&db, "www.example.com")
+            .unwrap()
+            .expect("a certificate covers www.example.com");
+        assert_eq!(found.id, covering);
+        assert_eq!(found.hostname, "www.example.com");
     }
 
     // r[verify tls.cert.serve]
@@ -1203,24 +1289,30 @@ mod tests {
         let (db, _) = fresh_db();
         let id = insert_certificate(
             &db,
-            "foo.example.com",
-            TlsCertState::CsrPending,
-            TlsCertOrigin::Csr,
-            None,
-            Some(
-                "-----BEGIN CERTIFICATE REQUEST-----\nMIICSR\n-----END CERTIFICATE REQUEST-----\n",
-            ),
-            b"key",
-            KeyType::EcdsaP256,
-            CertMetadata::default(),
-            None,
-            None,
+            NewCertificate {
+                hostname: "www.example.com",
+                requested_hostname: Some("www.example.com"),
+                state: TlsCertState::CsrPending,
+                origin: TlsCertOrigin::Csr,
+                cert_pem: None,
+                csr_pem: Some(
+                    "-----BEGIN CERTIFICATE REQUEST-----\nMIICSR\n-----END CERTIFICATE REQUEST-----\n",
+                ),
+                key_ciphertext: b"key",
+                key_type: KeyType::EcdsaP256,
+                metadata: CertMetadata::default(),
+                note: None,
+                acme_account_id: None,
+            },
         )
         .unwrap();
 
+        // The CA signed a different name than the CSR asked for, so the row is
+        // relabelled to what arrived while the request stays on the record.
         update_certificate(
             &db,
             id,
+            Some("example.com"),
             TlsCertState::Active,
             Some("-----BEGIN CERTIFICATE-----\ndata\n-----END CERTIFICATE-----\n"),
             Some(&CertMetadata {
@@ -1233,6 +1325,8 @@ mod tests {
 
         let row = get_certificate(&db, id).unwrap().unwrap();
         assert_eq!(row.state, TlsCertState::Active);
+        assert_eq!(row.hostname, "example.com");
+        assert_eq!(row.requested_hostname.as_deref(), Some("www.example.com"));
         assert!(row.cert_pem.unwrap().contains("BEGIN CERTIFICATE"));
         assert_eq!(row.issuer.as_deref(), Some("CN=Issuer"));
         assert_eq!(row.not_after, Some(1_900_000_000));
