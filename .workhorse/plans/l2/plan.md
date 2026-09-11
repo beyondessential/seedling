@@ -580,6 +580,39 @@ built once per hostname there rather than once per tick. Eager indexing on that 
 the early exit the scan had. Fixing it means making the snapshot a per-tick input to the
 coordinator, which is a change to how issuance is driven, not a tweak to this lookup.
 
+## Review round 9
+
+- **The `self_signed` correction did not reach existing rows** (critical). Round 8 fixed how the
+  flag is derived, but every consumer reads the stored column, and rows written earlier hold the
+  old answer: a self-signed leaf with any second PEM block was persisted as not self-issued. So
+  exactly the row round 8 was about still cleared the supersession guard and still outranked a
+  CA-issued certificate in resolution.
+
+  This is the card's own lesson in a third place — a stored claim about a certificate, trusted
+  rather than confirmed — so the fix is the same one: `parse::leaf_facts` returns the SAN list
+  and self-issuance from one parse, and both decision sites read it from the certificate. Both
+  already parsed the PEM, so it costs nothing. The column stays for display, where being stale
+  on a legacy row of that shape is cosmetic rather than load-bearing.
+
+  A test fixture was caught lying by this: `supersede_spares_a_ca_issued_incumbent...` set
+  `self_signed` in the column while its certificate was genuinely self-signed, so it had been
+  passing on a contradiction. It now uses `test_support::ca_signed_pem`, a leaf signed by a
+  separate CA.
+
+- **The serving scan gained a sound early exit.** Walking newest-first, a candidate that is
+  unexpired, not self-issued and an exact SAN match cannot be beaten by anything remaining —
+  everything later is older and loses the recency tie-break. So the ordinary case stops at the
+  first cover instead of ranking the whole active set.
+
+  The reviewer's suggested `hostname = ?1 OR hostname LIKE '*.%'` pre-filter is **not** sound and
+  should not be attempted: a label is the certificate's primary SAN, so filtering candidates by
+  label skips exactly the multi-name certificates this card exists to serve. Bounding a miss
+  needs an index over SAN entries, which is **B5**.
+
+Not actioned, recorded on **B5**: `Coordinator::run` loading a snapshot per hostname, and the
+listing's per-row parse. Both are the same resolution-cost question, and both want a design
+rather than a tenth round of patching.
+
 ## Noted, not actioned
 
 - `TlsCertState::Failed` is never constructed anywhere in the tree. Its mention in

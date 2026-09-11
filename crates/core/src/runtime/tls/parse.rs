@@ -159,6 +159,51 @@ fn san_dns_names(cert: &x509_parser::certificate::X509Certificate<'_>) -> Vec<St
     names
 }
 
+/// What the resolution and supersession rules need to know about a leaf,
+/// from one parse.
+pub struct LeafFacts {
+    pub san_dns_names: Vec<String>,
+    /// Issuer equal to subject. Derived here rather than read from the stored
+    /// `self_signed` column: rows written before that column's derivation was
+    /// corrected hold the old answer, and a stored claim about a certificate
+    /// that nothing re-checks is the defect this subsystem exists to have
+    /// fixed. The column remains for display.
+    pub self_issued: bool,
+}
+
+/// [`leaf_san_dns_names`] plus whether the leaf is self-issued, without a
+/// second pass over the PEM.
+// r[impl tls.cert.supersede]
+// r[impl tls.strategy.manual]
+pub fn leaf_facts(pem: &str) -> Result<LeafFacts> {
+    let cert = leaf_of(pem)?;
+    let (_, cert) =
+        x509_parser::certificate::X509Certificate::from_der(cert.contents()).map_err(|e| {
+            X509Snafu {
+                message: e.to_string(),
+            }
+            .build()
+        })?;
+    Ok(LeafFacts {
+        san_dns_names: san_dns_names(&cert),
+        self_issued: cert.issuer() == cert.subject(),
+    })
+}
+
+/// The first CERTIFICATE block in a PEM blob.
+fn leaf_of(pem: &str) -> Result<pem::Pem> {
+    pem::parse_many(pem.as_bytes())
+        .map_err(|e| {
+            PemSnafu {
+                message: e.to_string(),
+            }
+            .build()
+        })?
+        .into_iter()
+        .find(|b| b.tag() == "CERTIFICATE")
+        .ok_or_else(|| NoCertBlockSnafu.build())
+}
+
 /// The DNS names in the leaf certificate of a PEM chain.
 ///
 /// [`parse_chain`] returns these too, but on the way it re-encodes the whole
@@ -168,16 +213,7 @@ fn san_dns_names(cert: &x509_parser::certificate::X509Certificate<'_>) -> Vec<St
 /// a path that reads the leaf and stops.
 // r[impl tls.cert.validation.san-coverage]
 pub fn leaf_san_dns_names(pem: &str) -> Result<Vec<String>> {
-    let block = pem::parse_many(pem.as_bytes())
-        .map_err(|e| {
-            PemSnafu {
-                message: e.to_string(),
-            }
-            .build()
-        })?
-        .into_iter()
-        .find(|b| b.tag() == "CERTIFICATE")
-        .ok_or_else(|| NoCertBlockSnafu.build())?;
+    let block = leaf_of(pem)?;
 
     let (_, cert) =
         x509_parser::certificate::X509Certificate::from_der(block.contents()).map_err(|e| {

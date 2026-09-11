@@ -55,6 +55,14 @@ separate CA, exactly as a real CA does.
 - [x] A certificate the runtime cannot read back after storing it reports a failure rather
       than a count of nothing retired (verifies spec: `tls.cert.supersede`)
 
+## Stale stored claims
+
+- [x] Supersession reads self-issuance from the certificate, not the stored column, so a row
+      written before that column's derivation was corrected cannot clear the guard and retire
+      a CA-issued certificate (verifies spec: `tls.cert.supersede`)
+- [x] Resolution does the same, so such a row cannot outrank the CA-issued certificate
+      covering the hostname (verifies spec: `tls.strategy.manual`)
+
 ## Serving a mislabelled row
 
 - [x] A row labelled `www.example.com` whose certificate carries only `example.com` — the

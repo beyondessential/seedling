@@ -70,6 +70,18 @@ pub fn rank(
     })
 }
 
+impl Rank {
+    /// Whether nothing ranked later can beat this.
+    ///
+    /// Lets a caller walking candidates newest-first stop at the first one
+    /// that is unexpired, not self-issued and an exact SAN match: every
+    /// remaining candidate is older, so it loses the recency tie-break even
+    /// where it ties on everything above.
+    pub fn is_best_possible(&self) -> bool {
+        self.unexpired && self.not_self_issued && self.exact
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -356,11 +356,18 @@ pub fn list_certificates(db: &Db) -> rusqlite::Result<Vec<TlsCertificate>> {
 /// only a claim about a certificate, and a row whose label outran its
 /// certificate was served for a name it could not carry.
 ///
-/// Every covering candidate is ranked rather than the first one returned,
-/// because the tie-breaks cannot be expressed in SQL: whether a SAN matches
-/// exactly is only knowable once the certificate is parsed. The scan reads
-/// just what ranking needs and re-fetches the winner, so walking the table
-/// does not mean materialising every stored PEM and encrypted key.
+/// Candidates are ranked rather than the first cover returned, because the
+/// tie-breaks cannot be expressed in SQL: whether a SAN matches exactly is only
+/// knowable once the certificate is parsed. Walking newest-first lets the scan
+/// stop at an unbeatable rank, which is the ordinary case — a current,
+/// CA-issued certificate naming the hostname — so the whole table is only read
+/// when nothing better exists, and the rows read carry just what ranking needs
+/// rather than every stored PEM and encrypted key.
+///
+/// A miss still costs a pass over the active set. Bounding that needs an index
+/// over SAN entries rather than over labels, which is its own piece of work: a
+/// label is a certificate's primary SAN, so filtering candidates by label would
+/// skip exactly the multi-name certificates this rule exists to serve.
 ///
 /// Rows outside their validity window are excluded at either end, but a row
 /// with no recorded expiry is kept: unparsed and expired are not the same
@@ -381,7 +388,8 @@ pub fn find_active_for_hostname(
              FROM tls_certificates
              WHERE state = 'active'
                AND (not_before IS NULL OR not_before <= ?1)
-               AND (not_after IS NULL OR not_after > ?1)",
+               AND (not_after IS NULL OR not_after > ?1)
+             ORDER BY created_at DESC, id DESC",
         )?;
         let mut rows = stmt.query([now])?;
         while let Some(row) = rows.next()? {
@@ -389,11 +397,10 @@ pub fn find_active_for_hostname(
             let Some(pem): Option<String> = row.get(1)? else {
                 continue;
             };
-            let self_signed: i64 = row.get(2)?;
             let created_at: i64 = row.get(3)?;
             let not_after: Option<i64> = row.get(4)?;
-            let sans = match super::parse::leaf_san_dns_names(&pem) {
-                Ok(sans) => sans,
+            let facts = match super::parse::leaf_facts(&pem) {
+                Ok(facts) => facts,
                 // Unreadable is not "does not cover", and the row is active,
                 // so nothing else will report that it can never be served.
                 Err(e) => {
@@ -407,16 +414,22 @@ pub fn find_active_for_hostname(
                 }
             };
             if let Some(rank) = super::resolve::rank(
-                &sans,
+                &facts.san_dns_names,
                 hostname,
-                self_signed != 0,
+                facts.self_issued,
                 not_after,
                 created_at,
                 id,
                 now,
             ) && best.as_ref().is_none_or(|(best_rank, _)| rank > *best_rank)
             {
+                // Newest-first, so an unbeatable rank cannot be improved on by
+                // anything still to come: stop rather than parse the rest.
+                let done = rank.is_best_possible();
                 best = Some((rank, id));
+                if done {
+                    break;
+                }
             }
         }
     }
@@ -603,12 +616,8 @@ pub fn supersede_other_active_for_hostname(db: &Db, keep_id: i64) -> rusqlite::R
             "certificate {keep_id} could not be read back for supersession"
         )));
     };
-    let arriving_sans = match arriving
-        .cert_pem
-        .as_deref()
-        .map(super::parse::leaf_san_dns_names)
-    {
-        Some(Ok(sans)) => sans,
+    let arriving_facts = match arriving.cert_pem.as_deref().map(super::parse::leaf_facts) {
+        Some(Ok(facts)) => facts,
         Some(Err(e)) => {
             tracing::warn!(
                 cert_id = keep_id,
@@ -659,9 +668,6 @@ pub fn supersede_other_active_for_hostname(db: &Db, keep_id: i64) -> rusqlite::R
 
     let mut retired = 0;
     for candidate in candidates {
-        if arriving.self_signed && !candidate.self_signed {
-            continue;
-        }
         // A candidate staged ahead of its own window was put there on purpose
         // for a cutover; retiring it means that cutover never happens and
         // nothing is left to take over.
@@ -684,8 +690,8 @@ pub fn supersede_other_active_for_hostname(db: &Db, keep_id: i64) -> rusqlite::R
             );
             continue;
         };
-        let served = match super::parse::leaf_san_dns_names(pem) {
-            Ok(served) => served,
+        let candidate_facts = match super::parse::leaf_facts(pem) {
+            Ok(facts) => facts,
             Err(e) => {
                 tracing::warn!(
                     cert_id = candidate.id,
@@ -699,10 +705,18 @@ pub fn supersede_other_active_for_hostname(db: &Db, keep_id: i64) -> rusqlite::R
         // `all` over an empty set is vacuously true, which would retire a
         // candidate on the strength of a SAN set that was never read. The
         // decision is only ever made from names actually found.
+        // Self-issuance from the certificates themselves. The stored column
+        // holds whatever formula was current when the row was written, and a
+        // row predating the correction reports a self-signed leaf as not
+        // self-issued — which would clear this very guard.
+        if arriving_facts.self_issued && !candidate_facts.self_issued {
+            continue;
+        }
+        let served = &candidate_facts.san_dns_names;
         if served.is_empty()
             || !served
                 .iter()
-                .all(|name| super::parse::san_covers(&arriving_sans, name))
+                .all(|name| super::parse::san_covers(&arriving_facts.san_dns_names, name))
         {
             continue;
         }
@@ -1396,6 +1410,15 @@ mod tests {
         sans: &[&str],
         tweak: impl FnOnce(&mut CertMetadata),
     ) -> i64 {
+        insert_pem(
+            db,
+            label,
+            &super::super::test_support::self_signed_pem(sans),
+            tweak,
+        )
+    }
+
+    fn insert_pem(db: &Db, label: &str, pem: &str, tweak: impl FnOnce(&mut CertMetadata)) -> i64 {
         let mut metadata = CertMetadata {
             not_after: Some(now_secs() + 86400),
             ..Default::default()
@@ -1408,7 +1431,7 @@ mod tests {
                 requested_hostname: None,
                 state: TlsCertState::Active,
                 origin: TlsCertOrigin::Manual,
-                cert_pem: Some(&super::super::test_support::self_signed_pem(sans)),
+                cert_pem: Some(pem),
                 csr_pem: None,
                 key_ciphertext: b"key",
                 key_type: KeyType::EcdsaP256,
@@ -1447,10 +1470,15 @@ mod tests {
     #[test]
     fn supersede_spares_a_ca_issued_incumbent_when_the_new_cert_is_self_signed() {
         let (db, _) = fresh_db();
-        let incumbent = insert_labelled_cert(&db, "example.com", &["example.com"]);
-        let arriving = insert_cert_with(&db, "example.com", &["example.com"], |m| {
-            m.self_signed = true;
-        });
+        let incumbent = insert_pem(
+            &db,
+            "example.com",
+            &super::super::test_support::ca_signed_pem(&["example.com"]),
+            |_| {},
+        );
+        // Self-signed in the certificate, not merely in a column: the guard
+        // reads the certificate.
+        let arriving = insert_labelled_cert(&db, "example.com", &["example.com"]);
 
         assert_eq!(
             supersede_other_active_for_hostname(&db, arriving).unwrap(),
@@ -1538,6 +1566,68 @@ mod tests {
                 .expect("shop.example.com still has a certificate")
                 .id,
             incumbent
+        );
+    }
+
+    /// A row written before `self_signed`'s derivation was corrected holds the
+    /// old answer — a self-signed leaf with any second PEM block was recorded
+    /// as not self-issued. Reading the column would let exactly that row clear
+    /// the guard and retire the CA-issued certificate it covers.
+    // r[verify tls.cert.supersede]
+    #[test]
+    fn supersede_reads_self_issuance_from_the_certificate_not_the_column() {
+        let (db, _) = fresh_db();
+        let incumbent = insert_pem(
+            &db,
+            "example.com",
+            &super::super::test_support::ca_signed_pem(&["example.com"]),
+            |_| {},
+        );
+        // Self-signed certificate, column says otherwise — the shape a legacy
+        // row of this kind has on disk.
+        let arriving = insert_pem(
+            &db,
+            "example.com",
+            &super::super::test_support::self_signed_pem(&["example.com"]),
+            |m| m.self_signed = false,
+        );
+
+        assert_eq!(
+            supersede_other_active_for_hostname(&db, arriving).unwrap(),
+            0
+        );
+        assert_eq!(
+            get_certificate(&db, incumbent).unwrap().unwrap().state,
+            TlsCertState::Active
+        );
+    }
+
+    /// Resolution reads it from the certificate for the same reason: a legacy
+    /// row must not outrank the CA-issued certificate covering the hostname.
+    // r[verify tls.strategy.manual]
+    #[test]
+    fn resolution_reads_self_issuance_from_the_certificate_not_the_column() {
+        let (db, _) = fresh_db();
+        let ca_issued = insert_pem(
+            &db,
+            "example.com",
+            &super::super::test_support::ca_signed_pem(&["example.com"]),
+            |_| {},
+        );
+        let _legacy = insert_pem(
+            &db,
+            "example.com",
+            &super::super::test_support::self_signed_pem(&["example.com"]),
+            |m| m.self_signed = false,
+        );
+
+        assert_eq!(
+            find_active_for_hostname(&db, "example.com")
+                .unwrap()
+                .expect("a certificate covers example.com")
+                .id,
+            ca_issued,
+            "a self-signed leaf must not outrank a CA-issued one on a stale column",
         );
     }
 
