@@ -494,6 +494,53 @@ the endpoint is token-gated, so arbitrary remote SNI never reaches the lookup. I
 performance card, and its shape — a `tls_cert_sans` index that narrows candidates but is
 confirmed against the certificate before anything is served — is written down there.
 
+## Review round 7
+
+- **A test stopped running, and it was mine that stopped it** (critical). Clippy flagged a
+  duplicated `#[test]` when round 6's staged-certificate test went in; the attribute I removed
+  was `recent_failure_debounces_first_issuance`'s own, leaving it a plain unused function inside
+  `mod tests`. Of everything to silence, that was the worst: round 6 added the `staged_from`
+  short-circuit directly ahead of the debounce branch it covers. Restored.
+
+- **A staged certificate could suppress issuance indefinitely** (critical, and a hole round 6
+  opened). The short-circuit was written for clock skew — minutes — but nothing bounded how far
+  ahead a staged certificate could sit. An operator staging a cutover weeks out left every
+  hostname it covered with no servable certificate *and* no issuance for the whole period.
+  Suppression is now bounded by `STAGED_COVER_LEAD_SECS`, tied to the retry debounce because
+  that is the soonest another attempt would run anyway: inside it, issuing buys nothing; beyond
+  it, the hostname needs a certificate now and the staged one takes over when its time comes.
+  `staged_start_for_hostname` also returns the *earliest* staged start rather than the
+  best-ranked candidate's — the question is when the hostname starts being served at all.
+
+- **`trusted` claimed a property nothing enforces** (critical, and the item flagged as open
+  since round 5). It is `issuer DN != subject DN`; no chain is built and no trust store is
+  consulted, so a leaf from any private CA ranks exactly as one from a public CA. Round 5 made
+  it load-bearing in two places and the spec called it trust. Renamed to `not_self_issued`, with
+  the rank doc, the supersession doc and both spec requirements saying what the test actually
+  is: it stops an operator's own self-signed upload retiring a CA-issued certificate, and does
+  not stop a certificate from an untrusted CA doing so. Real chain validation is a feature, not
+  a wording fix, and is not in this card.
+
+- **`update_certificate` had no callers** once CSR activation moved to `activate_pending_csr`.
+  Deleted.
+
+- **The snapshot memo was cloning on every hit**, which put back the H×C allocation shape it was
+  added to remove. `sans_for` returns `Cow`, borrowed from the memo and owned only on the parse
+  fallback.
+
+- **`host_lc` in `rank` bought nothing** — `eq_ignore_ascii_case` is already case-insensitive, so
+  the allocation was pure waste and the comment justifying it was wrong about where the per-SAN
+  lowercasing happens (it is in `san_covers`). Dropped.
+
+- **Two more reads narrowed**: the serving scan's statement is cached rather than re-prepared per
+  lookup, and supersession reads the arriving row through a five-column query instead of pulling
+  its encrypted key and CSR. A candidate row with no stored PEM now warns like every sibling
+  "cannot tell" branch instead of being skipped in silence.
+
+Not actioned: the serving scan re-fetching the winning row after ranking it. One indexed primary
+key lookup, against materialising every row's PEM and encrypted key to avoid it — and **B5**
+restructures this path anyway.
+
 ## Noted, not actioned
 
 - `TlsCertState::Failed` is never constructed anywhere in the tree. Its mention in

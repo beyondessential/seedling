@@ -1668,8 +1668,9 @@ The BSL surface is intentionally strategy-agnostic: scripts declare only that an
 > Operators may upload a PEM-encoded certificate chain and matching private key.
 > The runtime must auto-bind the uploaded cert to every hostname its SubjectAlternativeName list covers — literally for exact entries, and per RFC 6125 single-label rules for wildcard SANs — and cause the proxy to serve that exact pair for TLS handshakes whose SNI matches a covered hostname.
 > Auto-binding requires no per-hostname operator action: a `*.example.com` cert covers `foo.example.com` and `bar.example.com` as soon as it is uploaded; further hostnames added later are picked up automatically.
-> When more than one stored cert covers the same hostname, precedence goes first to a certificate inside its validity window, then to a CA-issued certificate over a self-signed one, then to one whose SAN list names the hostname exactly over one that only covers it by wildcard (RFC 6125 §6.4.4), and only then to the most recently created.
-> Trust ranks above specificity because a certificate clients reject is no use for the hostname however precisely it names it: a wildcard clients accept must be able to take over from a dedicated certificate they do not.
+> When more than one stored cert covers the same hostname, precedence goes first to a certificate inside its validity window, then to one that is not self-issued over one that is, then to one whose SAN list names the hostname exactly over one that only covers it by wildcard (RFC 6125 §6.4.4), and only then to the most recently created.
+> Self-issuance ranks above specificity because a certificate clients reject is no use for the hostname however precisely it names it: a wildcard they accept must be able to take over from a dedicated certificate they do not.
+> Self-issued means the leaf's issuer and subject are the same; the runtime builds no chain and consults no trust store, so this distinguishes a certificate an operator self-signed from one some CA issued, and says nothing about whether that CA is one any client trusts.
 > A wildcard accordingly serves every name it covers that has no better certificate of its own, so a wildcard obtained for one hostname is picked up by the others it covers without further operator action.
 > Were trust not ranked here at all, resolution would serve a certificate that [supersession](#r--tls.cert.supersede) had just refused to let retire anything, and the refusal would buy nothing.
 > The runtime does not auto-renew manual certs on its own; however, if an `acme_dns` policy applies to a covered hostname and the manual cert is past its renewal threshold, the runtime must initiate the normal ACME-DNS issuance flow so a renewable cert can take over before the manual cert expires.
@@ -1720,7 +1721,8 @@ The BSL surface is intentionally strategy-agnostic: scripts declare only that an
 > A certificate carrying no DNS SANs covers nothing and must be rejected on operator upload.
 
 > r[tls.cert.supersede]
-> A certificate supersedes another only when it replaces it in full: it [covers](#r--tls.cert.validation.san-coverage) every hostname the other serves, it is within its own validity window, and it is not self-signed unless the one it replaces already was.
+> A certificate supersedes another only when it replaces it in full: it [covers](#r--tls.cert.validation.san-coverage) every hostname the other serves, it is within its own validity window, and it is not self-issued unless the one it replaces already was.
+> The self-issuance test is the leaf's issuer against its subject, not a chain built to a trust store, so it stops an operator's self-signed upload retiring a CA-issued certificate and does not stop a certificate from an untrusted CA doing so.
 > A certificate that does not meet the bar retires nothing, and whatever is serving a hostname goes on serving it.
 > This matters most on the CSR path, where the SAN set is chosen by the issuing CA rather than by the operator, so which certificates a new one is even a candidate to replace is outside the operator's control.
 > Where the runtime cannot read back the certificate it has just stored, it must report the failure rather than a count of nothing retired: the two are not the same outcome, and treating them alike leaves a replaced certificate active alongside its replacement with nothing said.

@@ -20,13 +20,20 @@ pub struct Rank {
     /// would outrank the newer, valid wildcard that is actually being served,
     /// and the two sides would disagree about what answers for the hostname.
     unexpired: bool,
-    /// A certificate clients accept beats one they will not, and it ranks
-    /// above specificity: a certificate clients reject is no use for the
-    /// hostname however precisely it names it. Resolution and supersession
-    /// have to agree here — supersession refuses to retire a CA-issued
-    /// certificate in favour of a self-signed one, and if resolution then
-    /// served the self-signed one anyway the refusal would buy nothing.
-    trusted: bool,
+    /// A leaf that is not self-issued beats one that is, and it ranks above
+    /// specificity: a certificate clients reject is no use for the hostname
+    /// however precisely it names it. Resolution and supersession have to
+    /// agree here — supersession refuses to retire a not-self-issued
+    /// certificate in favour of a self-issued one, and if resolution then
+    /// served the self-issued one anyway the refusal would buy nothing.
+    ///
+    /// **Not a trust decision.** It is `issuer DN != subject DN` and nothing
+    /// more: no chain is built and no trust store is consulted. A leaf from
+    /// any private CA ranks here exactly as one from a public CA does. It
+    /// catches the case an operator actually hits — a self-signed certificate
+    /// uploaded for testing — and must not be read as a guarantee that what
+    /// outranks is something clients will accept.
+    not_self_issued: bool,
     /// Among certificates that are equally servable, an exact SAN entry beats
     /// a wildcard that merely covers the name (RFC 6125 §6.4.4 gives the exact
     /// match precedence), so a broad certificate arriving later does not
@@ -54,13 +61,10 @@ pub fn rank(
     if !parse::san_covers(sans, hostname) {
         return None;
     }
-    // One lowercase pass over the hostname rather than one per SAN entry:
-    // ranking runs once per active certificate per lookup.
-    let host_lc = hostname.to_ascii_lowercase();
     Some(Rank {
         unexpired: !not_after.is_some_and(|na| na <= now),
-        trusted: !self_signed,
-        exact: sans.iter().any(|s| s.eq_ignore_ascii_case(&host_lc)),
+        not_self_issued: !self_signed,
+        exact: sans.iter().any(|s| s.eq_ignore_ascii_case(hostname)),
         created_at,
         id,
     })
@@ -105,7 +109,7 @@ mod tests {
 
     // r[verify tls.strategy.manual]
     #[test]
-    fn a_trusted_cert_outranks_a_newer_self_signed_one() {
+    fn a_ca_issued_cert_outranks_a_newer_self_issued_one() {
         let trusted = rank(
             &sans(&["auto.example.com"]),
             "auto.example.com",
@@ -133,7 +137,7 @@ mod tests {
     /// must not hold a hostname against a wildcard they accept.
     // r[verify tls.strategy.manual]
     #[test]
-    fn a_trusted_wildcard_outranks_a_self_signed_exact_match() {
+    fn a_ca_issued_wildcard_outranks_a_self_issued_exact_match() {
         let wildcard = rank(&sans(&["*.doma.in"]), "b.doma.in", false, None, 100, 1, 0).unwrap();
         let self_signed_exact =
             rank(&sans(&["b.doma.in"]), "b.doma.in", true, None, 200, 2, 0).unwrap();

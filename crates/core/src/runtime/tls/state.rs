@@ -16,6 +16,7 @@
 //! function. The functions here are pure over a [`Snapshot`] of DB
 //! state; the snapshot is loaded once and reused per call.
 
+use std::borrow::Cow;
 use std::collections::BTreeMap;
 
 use jiff::Timestamp;
@@ -34,6 +35,22 @@ use crate::runtime::db::Db;
 /// issuance for the same hostname. Operator-driven force-retries bypass
 /// this; manual issue calls (`tls.cert.issue-acme-dns`) bypass it too.
 pub const AUTO_RETRY_DEBOUNCE_SECS: i64 = 60 * 60;
+
+/// How far ahead a stored-but-not-yet-valid certificate may stand in for a
+/// servable one.
+///
+/// A certificate whose `notBefore` has not arrived is not serving, so a
+/// hostname whose only cover is staged has no TLS right now. Treating that as
+/// "covered" stops the runtime issuing one that would work. The case worth
+/// suppressing is the narrow one: a certificate just issued whose `notBefore`
+/// the local clock has not reached, where issuing again would only produce a
+/// duplicate. Beyond that window — an operator staging a cutover weeks out —
+/// the hostname needs a certificate now, and the staged one takes over when
+/// its time comes.
+///
+/// Tied to the retry debounce because that is the soonest another attempt
+/// would run anyway: inside it, issuing now buys nothing.
+const STAGED_COVER_LEAD_SECS: i64 = AUTO_RETRY_DEBOUNCE_SECS;
 
 /// Fixed-fraction renewal threshold used when the CA hasn't supplied
 /// ARI advice. Renew when remaining lifetime drops below this fraction
@@ -140,13 +157,16 @@ impl Snapshot {
 
     /// The certificate's SAN list, from the memo when it is there and by
     /// parsing when it is not.
-    fn sans_for(&self, cert: &TlsCertificate) -> Option<Vec<String>> {
+    /// Borrowed on a memo hit, so a hit costs nothing: the memo exists to take
+    /// H×C work out of the per-tick loops, and cloning the list back per
+    /// lookup would put the same shape straight back as allocations.
+    fn sans_for(&self, cert: &TlsCertificate) -> Option<Cow<'_, [String]>> {
         if let Some(sans) = self.sans.get(&cert.id) {
-            return Some(sans.clone());
+            return Some(Cow::Borrowed(sans));
         }
         let pem = cert.cert_pem.as_deref()?;
         match super::parse::leaf_san_dns_names(pem) {
-            Ok(sans) => Some(sans),
+            Ok(sans) => Some(Cow::Owned(sans)),
             Err(e) => {
                 tracing::warn!(
                     cert_id = cert.id,
@@ -269,14 +289,17 @@ pub fn compute_state<'a>(snap: &'a Snapshot, hostname: &str) -> HostnameState<'a
     // Coverage-only lookup, the same rule the serving path applies.
     let active_cert = find_active_for_hostname(snap, hostname, snap.now);
 
-    // A certificate staged ahead of its `notBefore` is not serving, so it is
-    // not `active_cert` — but it is not absent either, and reporting absence
-    // would have the coordinator issue a replacement on every tick until the
-    // window opened. A successful issuance is never debounced (see
-    // `debounce_until`), so nothing else would stop it.
+    // A certificate about to start serving is not absent, and reporting
+    // absence would have the coordinator issue a replacement on every tick
+    // until the window opened — a successful issuance is never debounced (see
+    // `debounce_until`), so nothing else would stop it. Only a start that is
+    // imminent counts: a certificate staged weeks out leaves the hostname with
+    // no TLS in the meantime, and suppressing issuance for that whole period
+    // would be worse than the duplicate this guards against.
     // r[impl tls.cert.serve]
     let staged_from = if active_cert.is_none() {
         staged_start_for_hostname(snap, hostname, snap.now)
+            .filter(|from| *from - snap.now <= STAGED_COVER_LEAD_SECS)
     } else {
         None
     };
@@ -422,14 +445,15 @@ fn find_active_for_hostname<'a>(
     best.map(|(_, cert)| cert)
 }
 
-/// When a certificate that covers `hostname` starts serving, if one is stored
-/// but not yet inside its validity window.
+/// The earliest moment a stored certificate covering `hostname` starts
+/// serving, if one is staged ahead of its validity window.
 ///
-/// Ranked the same way as [`find_active_for_hostname`], so the answer concerns
-/// the certificate that will actually be served once the window opens.
+/// The earliest rather than the best-ranked: the question is when the hostname
+/// starts being served at all, and a later-starting certificate that would
+/// outrank it once both are valid does not change that answer.
 // r[impl tls.cert.serve]
 fn staged_start_for_hostname(snap: &Snapshot, hostname: &str, now: i64) -> Option<i64> {
-    let mut best: Option<(super::resolve::Rank, i64)> = None;
+    let mut earliest: Option<i64> = None;
     for cert in snap
         .certificates
         .iter()
@@ -438,20 +462,14 @@ fn staged_start_for_hostname(snap: &Snapshot, hostname: &str, now: i64) -> Optio
         let Some(sans) = snap.sans_for(cert) else {
             continue;
         };
-        if let Some(rank) = super::resolve::rank(
-            &sans,
-            hostname,
-            cert.self_signed,
-            cert.not_after,
-            cert.created_at,
-            cert.id,
-            now,
-        ) && best.as_ref().is_none_or(|(best_rank, _)| rank > *best_rank)
-        {
-            best = Some((rank, cert.not_before.unwrap_or(now)));
+        // Coverage only — ranking decides which certificate wins once several
+        // are servable, which is not the question here.
+        if super::parse::san_covers(&sans, hostname) {
+            let from = cert.not_before.unwrap_or(now);
+            earliest = Some(earliest.map_or(from, |e: i64| e.min(from)));
         }
     }
-    best.map(|(_, from)| from)
+    earliest
 }
 
 #[expect(
@@ -900,6 +918,31 @@ mod tests {
         }
     }
 
+    /// A certificate staged weeks out is not cover: the hostname has no TLS in
+    /// the meantime, so suppressing issuance for the whole staging period
+    /// would be worse than the duplicate the short-circuit guards against.
+    // r[verify tls.cert.serve]
+    #[test]
+    fn a_distantly_staged_cert_does_not_suppress_issuance() {
+        let now = 1_000_000;
+        let mut staged = fake_cert("host.example.com", 1, 0, now + 365 * 86_400);
+        staged.not_before = Some(now + 30 * 86_400);
+        let s = snap(
+            vec![policy_acme("*", "p")],
+            vec![staged],
+            vec![],
+            vec![],
+            vec![],
+            "ops@x",
+            now,
+        );
+        match compute_state(&s, "host.example.com").decision {
+            Decision::IssueNow { .. } => {}
+            d => panic!("expected issuance for an uncovered hostname, got: {d:?}"),
+        }
+    }
+
+    #[test]
     fn recent_failure_debounces_first_issuance() {
         let now = 1_000_000;
         let last_failed_at = now - 60; // well within 1h debounce

@@ -87,6 +87,9 @@ separate CA, exactly as a real CA does.
       as absent would re-issue every tick (verifies spec: `tls.cert.serve`)
 - [x] It is still not reported as the hostname's active certificate, so the rollup does not
       claim a hostname is covered while handshakes for it fail
+- [x] A certificate staged far ahead does not suppress issuance: the hostname has no TLS in
+      the meantime, so it needs one now and the staged certificate takes over later
+      (verifies spec: `tls.cert.serve`)
 
 ## Requested hostname
 

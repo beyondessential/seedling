@@ -375,7 +375,8 @@ pub fn find_active_for_hostname(
     let now = now_secs();
     let mut best: Option<(super::resolve::Rank, i64)> = None;
     {
-        let mut stmt = db.conn.prepare(
+        // Cached: this runs per certificate-serving lookup.
+        let mut stmt = db.conn.prepare_cached(
             "SELECT id, cert_pem, self_signed, created_at, not_after
              FROM tls_certificates
              WHERE state = 'active'
@@ -424,45 +425,6 @@ pub fn find_active_for_hostname(
         Some((_, id)) => get_certificate(db, id),
         None => Ok(None),
     }
-}
-
-/// Transition a cert to a new state, optionally updating cert PEM and parsed
-/// metadata. Used by ACME renewal to move a superseded row along.
-///
-/// Activating a pending CSR goes through [`activate_pending_csr`] instead,
-/// which has a precondition this cannot express.
-pub fn update_certificate(
-    db: &Db,
-    id: i64,
-    state: TlsCertState,
-    cert_pem: Option<&str>,
-    metadata: Option<&CertMetadata>,
-) -> rusqlite::Result<()> {
-    let now = now_secs();
-    db.conn.execute(
-        "UPDATE tls_certificates SET
-            state = ?1,
-            cert_pem = COALESCE(?2, cert_pem),
-            issuer = COALESCE(?3, issuer),
-            not_before = COALESCE(?4, not_before),
-            not_after = COALESCE(?5, not_after),
-            serial = COALESCE(?6, serial),
-            self_signed = COALESCE(?7, self_signed),
-            updated_at = ?8
-         WHERE id = ?9",
-        params![
-            state.as_str(),
-            cert_pem,
-            metadata.and_then(|m| m.issuer.as_deref()),
-            metadata.and_then(|m| m.not_before),
-            metadata.and_then(|m| m.not_after),
-            metadata.and_then(|m| m.serial.as_deref()),
-            metadata.map(|m| m.self_signed as i64),
-            now,
-            id,
-        ],
-    )?;
-    Ok(())
 }
 
 /// Store a new certificate and retire what it replaces, atomically.
@@ -549,6 +511,16 @@ fn unreadable(message: String) -> rusqlite::Error {
     rusqlite::Error::ToSqlConversionFailure(message.into())
 }
 
+/// Just the fields supersession compares, so reading the arriving certificate
+/// back does not pull its encrypted key and CSR along with it.
+struct ArrivingCert {
+    hostname: String,
+    cert_pem: Option<String>,
+    not_before: Option<i64>,
+    not_after: Option<i64>,
+    self_signed: bool,
+}
+
 /// Retire the active certificates that the certificate `keep_id` replaces.
 ///
 /// Replacement is a strict improvement or it does not happen. A candidate is
@@ -561,11 +533,13 @@ fn unreadable(message: String) -> rusqlite::Error {
 ///   arriving certificate cannot, and retiring it would leave
 ///   `shop.example.com` with no active certificate at all.
 /// - **at least as serviceable**: the arriving certificate is inside its own
-///   validity window, and is not self-signed unless the candidate already was.
+///   validity window, and is not self-issued unless the candidate already was.
 ///   A certificate staged ahead of its `notBefore` is accepted deliberately
 ///   (see `tls.cert.validation.expired`) and a self-signed one is accepted with
-///   an annotation; neither is grounds for retiring a certificate clients
-///   currently accept. This matters most on the CSR path, where the SAN set —
+///   an annotation; neither is grounds for retiring a certificate an operator
+///   has working. The self-issuance test is issuer DN against subject DN, not
+///   a chain built to a trust store — it catches an operator's own
+///   self-signed upload, not a certificate from an untrusted CA. This matters most on the CSR path, where the SAN set —
 ///   and so which certificates become candidates at all — is chosen by the
 ///   external CA rather than by the operator.
 ///
@@ -588,7 +562,25 @@ pub fn supersede_other_active_for_hostname(db: &Db, keep_id: i64) -> rusqlite::R
     // also what a clean pass that legitimately retired nothing returns. The
     // caller would carry on reporting success while the certificate it
     // replaced stayed active beside it.
-    let Some(arriving) = get_certificate(db, keep_id)? else {
+    let arriving = db
+        .conn
+        .query_row(
+            "SELECT hostname, cert_pem, not_before, not_after, self_signed
+             FROM tls_certificates WHERE id = ?1",
+            [keep_id],
+            |row| {
+                let self_signed: i64 = row.get(4)?;
+                Ok(ArrivingCert {
+                    hostname: row.get(0)?,
+                    cert_pem: row.get(1)?,
+                    not_before: row.get(2)?,
+                    not_after: row.get(3)?,
+                    self_signed: self_signed != 0,
+                })
+            },
+        )
+        .optional()?;
+    let Some(arriving) = arriving else {
         tracing::warn!(
             cert_id = keep_id,
             "certificate vanished before supersession"
@@ -651,6 +643,10 @@ pub fn supersede_other_active_for_hostname(db: &Db, keep_id: i64) -> rusqlite::R
             continue;
         }
         let Some(pem) = candidate_pem.as_deref() else {
+            tracing::warn!(
+                cert_id = candidate_id,
+                "active certificate has no stored PEM; leaving it active rather than retiring it"
+            );
             continue;
         };
         let served = match super::parse::leaf_san_dns_names(pem) {
