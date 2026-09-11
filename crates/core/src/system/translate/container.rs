@@ -235,7 +235,25 @@ pub fn spec_hash(spec: &ContainerSpec) -> String {
     use sha2::{Digest, Sha256};
     let mut hashable = spec.clone();
     hashable.labels.remove("seedling.spec-hash");
-    let args = podman_args(&hashable);
+    let mut args = podman_args(&hashable);
+
+    // `stop_signal` and `stop_timeout_secs` are applied as systemd unit
+    // properties, not podman flags, so hashing the argv alone missed them:
+    // `r[update.spec-hash]` wants the full configuration, and changing either
+    // left the reconciler seeing a running instance as up to date, so the new
+    // stop behaviour never reached it.
+    //
+    // Appended only when set, so a container that does not use them keeps the
+    // hash it already has and is not restarted for this change alone. The
+    // ones that do use them had a hash that was wrong, and get re-evaluated
+    // once.
+    if let Some(signal) = &hashable.stop_signal {
+        args.push(format!("--seedling-stop-signal={signal}"));
+    }
+    if let Some(secs) = hashable.stop_timeout_secs {
+        args.push(format!("--seedling-stop-timeout={secs}"));
+    }
+
     let digest = Sha256::digest(args.join("\x00").as_bytes());
     use std::fmt::Write as FmtWrite;
     let mut hex = String::with_capacity(64);

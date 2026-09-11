@@ -1160,3 +1160,58 @@ fn ipv6_clients_are_counted_per_64_and_ipv4_per_address() {
     // one bucket and let one of them exhaust everyone else's budget.
     assert!(zone["ipv4_prefix"].is_null());
 }
+
+// r[verify actuate.ingress.plaintext]
+// Caddy refuses a config where two servers bind one address, and the admin
+// POST is all-or-nothing — so a single conflicting pair used to invalidate
+// every route and cert policy on the node, not just the offending ingress.
+#[test]
+fn a_port_declared_as_both_plaintext_and_tls_is_reported() {
+    use crate::system::caddy::config::conflicting_listener_ports;
+    use crate::system::types::{ProxyListener, ProxyListenerProto};
+
+    let config = ProxyConfig {
+        listeners: vec![
+            ProxyListener {
+                port: 8443,
+                proto: ProxyListenerProto::Http,
+            },
+            ProxyListener {
+                port: 8443,
+                proto: ProxyListenerProto::Https,
+            },
+            ProxyListener {
+                port: 80,
+                proto: ProxyListenerProto::Http,
+            },
+        ],
+        ..Default::default()
+    };
+    assert_eq!(conflicting_listener_ports(&config), vec![8443]);
+}
+
+// r[verify actuate.ingress.plaintext]
+#[test]
+fn distinct_ports_per_protocol_do_not_conflict() {
+    use crate::system::caddy::config::conflicting_listener_ports;
+    use crate::system::types::{ProxyListener, ProxyListenerProto};
+
+    let config = ProxyConfig {
+        listeners: vec![
+            ProxyListener {
+                port: 80,
+                proto: ProxyListenerProto::Http,
+            },
+            ProxyListener {
+                port: 443,
+                proto: ProxyListenerProto::Https,
+            },
+            ProxyListener {
+                port: 443,
+                proto: ProxyListenerProto::Quic,
+            },
+        ],
+        ..Default::default()
+    };
+    assert!(conflicting_listener_ports(&config).is_empty());
+}

@@ -66,6 +66,22 @@ pub(crate) struct PodmanRuntime {
     client: PodmanRestClient,
 }
 
+/// Whether a `repo_tags` entry is podman's placeholder for "untagged".
+///
+/// Different podman and libpod versions spell it `<none>:<none>`, a bare
+/// `<none>`, or `<none>` in one half. Only the first was filtered, so the
+/// others reached callers as real tags.
+fn is_untagged_sentinel(tag: &str) -> bool {
+    const NONE: &str = "<none>";
+    if tag == NONE || tag == "<none>:<none>" {
+        return true;
+    }
+    match tag.rsplit_once(':') {
+        Some((name, version)) => name == NONE || version == NONE,
+        None => false,
+    }
+}
+
 impl PodmanRuntime {
     pub(crate) async fn new() -> Result<Self, PodmanError> {
         let client = PodmanRestClient::new(Config {
@@ -470,7 +486,8 @@ impl PodmanRuntime {
             .await
         {
             Ok(_) => Ok(true),
-            Err(ref e) if is_not_found(e) => Ok(false),
+            // Gone and not-running are both "skipped" per `l[rt.signal]`.
+            Err(ref e) if is_not_found(e) || is_not_running(e) => Ok(false),
             Err(e) => Err(map_api_err(e)),
         }
     }
@@ -530,11 +547,16 @@ impl PodmanRuntime {
                 Some(id) if !id.is_empty() => id,
                 _ => continue,
             };
+            // Untagged images are reported differently across podman
+            // versions: `<none>:<none>`, a bare `<none>`, or `<none>` in
+            // either half. Matching only the fully-qualified sentinel let a
+            // bare `<none>` through as though it were a real tag, so an
+            // untagged image looked tagged.
             let tags: Vec<String> = s
                 .repo_tags
                 .unwrap_or_default()
                 .into_iter()
-                .filter(|t| !t.is_empty() && t != "<none>:<none>")
+                .filter(|t| !t.is_empty() && !is_untagged_sentinel(t))
                 .collect();
             let digests: Vec<String> = s
                 .repo_digests
@@ -781,6 +803,42 @@ impl AsyncWrite for AsyncPtyHalf {
 
 fn map_api_err(e: podman_rest_client::Error) -> PodmanError {
     ApiSnafu.into_error(Box::new(e))
+}
+
+/// Whether the error says the container exists but is not running.
+///
+/// `l[rt.signal]` says instances that are not running are "silently skipped
+/// (no error)". Podman answers a kill against a `created` or `exited`
+/// container with 409 "container is not running", which is neither a 404 nor
+/// a "no such container" 500 — so it took the error path, logging a warning
+/// for something the spec defines as a silent skip.
+/// Build the `podman exec` argv.
+///
+/// The `--` separator ends option parsing, so the container name cannot be
+/// read as a flag however it is spelt. Podman already stops parsing options
+/// after the container name, so the command arguments were never at risk;
+/// the name is the positional that arrives after the `--env` flags, and it
+/// is only safe today because name validation forbids a leading dash. This
+/// makes it safe by construction instead of by a rule enforced elsewhere.
+fn exec_argv(name: &str, argv: &[String], extra_env: &[(String, String)]) -> Vec<String> {
+    let mut out = vec!["exec".to_owned()];
+    for (k, v) in extra_env {
+        out.push("--env".to_owned());
+        out.push(format!("{k}={v}"));
+    }
+    out.push("--".to_owned());
+    out.push(name.to_owned());
+    out.extend(argv.iter().cloned());
+    out
+}
+
+fn is_not_running(e: &podman_rest_client::Error) -> bool {
+    match e {
+        podman_rest_client::Error::Api { code, body } => {
+            code.as_u16() == 409 && body.to_string().contains("is not running")
+        }
+        _ => false,
+    }
 }
 
 fn is_not_found(e: &podman_rest_client::Error) -> bool {
@@ -1030,14 +1088,7 @@ impl ContainerRuntime for PodmanRuntime {
             // libpod REST exec/start endpoint upgrades to a streaming protocol
             // we don't need; subprocess avoids parsing it.
             let mut cmd = tokio::process::Command::new("podman");
-            cmd.arg("exec");
-            for (k, v) in extra_env {
-                cmd.args(["--env", &format!("{k}={v}")]);
-            }
-            cmd.arg(name);
-            for a in argv {
-                cmd.arg(a);
-            }
+            cmd.args(exec_argv(name, argv, extra_env));
             let status = cmd.status().await.map_err(|e| -> BoxError {
                 ProtocolSnafu {
                     message: format!("podman exec spawn failed: {e}"),
@@ -1111,5 +1162,88 @@ mod status_tests {
         ] {
             assert_eq!(parse_container_status(input), expected, "{input}");
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{exec_argv, is_not_found, is_not_running, is_untagged_sentinel};
+
+    fn api_err(code: u16, body: &str) -> podman_rest_client::Error {
+        podman_rest_client::Error::Api {
+            code: http::StatusCode::from_u16(code).expect("status"),
+            body: bytes::Bytes::from(body.to_owned()).into(),
+        }
+    }
+
+    // l[verify rt.signal]
+    // `l[rt.signal]` says a non-running instance is silently skipped. Podman
+    // answers a kill against a stopped container with 409 "container is not
+    // running", which took the error path and logged a warning instead.
+    #[test]
+    fn a_stopped_container_is_a_skip_not_an_error() {
+        assert!(is_not_running(&api_err(
+            409,
+            "container abc is not running"
+        )));
+        assert!(!is_not_found(&api_err(409, "container abc is not running")));
+    }
+
+    // l[verify rt.signal]
+    #[test]
+    fn other_conflicts_are_still_errors() {
+        assert!(!is_not_running(&api_err(409, "some other conflict")));
+        assert!(!is_not_running(&api_err(500, "boom")));
+    }
+
+    // i[verify image.list]
+    // Untagged images are spelt differently across podman versions; only the
+    // fully-qualified sentinel was filtered, so a bare `<none>` reached
+    // callers as though it were a real tag.
+    #[test]
+    fn every_untagged_spelling_is_filtered() {
+        for tag in ["<none>", "<none>:<none>", "<none>:v1", "ghcr.io/x:<none>"] {
+            assert!(is_untagged_sentinel(tag), "should filter {tag:?}");
+        }
+    }
+
+    // i[verify image.list]
+    #[test]
+    fn a_real_tag_is_kept() {
+        for tag in ["ghcr.io/x:1", "docker.io/library/nginx:latest", "x:none"] {
+            assert!(!is_untagged_sentinel(tag), "should keep {tag:?}");
+        }
+    }
+
+    // l[verify rt.exec]
+    // The container name is the positional that follows the `--env` flags,
+    // so it is only safe from being read as a flag because name validation
+    // forbids a leading dash. `--` makes that structural.
+    #[test]
+    fn the_argv_ends_option_parsing_before_the_container_name() {
+        let env = vec![("A".to_owned(), "1".to_owned())];
+        let argv = vec!["sh".to_owned(), "-c".to_owned(), "echo hi".to_owned()];
+        assert_eq!(
+            exec_argv("app-web", &argv, &env),
+            vec![
+                "exec".to_owned(),
+                "--env".to_owned(),
+                "A=1".to_owned(),
+                "--".to_owned(),
+                "app-web".to_owned(),
+                "sh".to_owned(),
+                "-c".to_owned(),
+                "echo hi".to_owned(),
+            ]
+        );
+    }
+
+    // l[verify rt.exec]
+    #[test]
+    fn the_argv_is_well_formed_with_no_env_and_no_command() {
+        assert_eq!(
+            exec_argv("app-web", &[], &[]),
+            vec!["exec".to_owned(), "--".to_owned(), "app-web".to_owned()]
+        );
     }
 }

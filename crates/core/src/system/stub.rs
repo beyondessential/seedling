@@ -27,6 +27,44 @@ use super::{
     types::{ActiveState, UnitExit},
 };
 
+/// The image reference in a `podman run` argv.
+///
+/// The image is the first positional argument: `podman_args` emits every
+/// flag first, then the image, then entrypoint and command arguments. This
+/// used to take the *last* element containing `/` or `:`, which is a command
+/// argument whenever one has either — `["sh", "-c", "a/b"]` or
+/// `["node", "server/index.js"]` — so a command argument was recorded as the
+/// image and a phantom `StubImage` minted for it. Taking the first such
+/// element is no better: a volume mount like `-v /host:/ctr` comes earlier.
+///
+/// So skip flags properly. A `-`-prefixed element is a flag; if it carries
+/// `=` its value is attached, otherwise the next element is its value.
+fn image_from_run_argv(argv: &[String]) -> Option<String> {
+    let mut it = argv.iter().peekable();
+    // `podman run`
+    while let Some(a) = it.peek() {
+        if a.as_str() == "run" {
+            it.next();
+            break;
+        }
+        it.next();
+    }
+    while let Some(a) = it.next() {
+        if let Some(flag) = a.strip_prefix('-') {
+            if !flag.contains('=') {
+                // Separate value form: consume it, unless the next element is
+                // itself a flag (a boolean flag such as `--rm`).
+                if it.peek().is_some_and(|n| !n.starts_with('-')) {
+                    it.next();
+                }
+            }
+            continue;
+        }
+        return Some(a.clone());
+    }
+    None
+}
+
 /// Stub `ContainerRuntime`. Pretends every started container is healthy and
 /// running; tracks just enough state to answer the queries the reconciler
 /// makes between actuation ticks.
@@ -488,12 +526,7 @@ impl ProcessManager for StubProcessManager {
                 .unwrap_or(&spec.name)
                 .to_owned();
 
-            let image = spec
-                .exec_start
-                .iter()
-                .rev()
-                .find(|a| a.contains('/') || a.contains(':'))
-                .cloned()
+            let image = image_from_run_argv(&spec.exec_start)
                 .unwrap_or_else(|| "stub.local/none:latest".to_owned());
 
             {
@@ -705,5 +738,61 @@ impl DataPlane for StubDataPlane {
 
     fn clear_all<'a>(&'a self) -> BoxFuture<'a, Result<(), BoxError>> {
         async { Ok(()) }.boxed()
+    }
+}
+
+#[cfg(test)]
+mod image_argv_tests {
+    use super::image_from_run_argv;
+
+    fn argv(parts: &[&str]) -> Vec<String> {
+        parts.iter().map(|s| (*s).to_owned()).collect()
+    }
+
+    // Taking the last element containing `/` or `:` picked up a command
+    // argument whenever one had either, minting a phantom image for it.
+    #[test]
+    fn a_command_argument_is_not_mistaken_for_the_image() {
+        let a = argv(&[
+            "podman",
+            "run",
+            "--rm",
+            "--log-driver=none",
+            "ghcr.io/acme/app:1.2",
+            "node",
+            "server/index.js",
+        ]);
+        assert_eq!(
+            image_from_run_argv(&a).as_deref(),
+            Some("ghcr.io/acme/app:1.2")
+        );
+    }
+
+    // Taking the first such element instead is no better: a volume mount
+    // comes earlier and contains both characters.
+    #[test]
+    fn a_volume_mount_is_not_mistaken_for_the_image() {
+        let a = argv(&[
+            "podman",
+            "run",
+            "--rm",
+            "-v",
+            "/host/data:/data",
+            "--entrypoint",
+            "[]",
+            "docker.io/library/nginx:latest",
+            "sh",
+            "-c",
+            "exec nginx -g 'daemon off;'",
+        ]);
+        assert_eq!(
+            image_from_run_argv(&a).as_deref(),
+            Some("docker.io/library/nginx:latest")
+        );
+    }
+
+    #[test]
+    fn an_argv_with_no_image_yields_nothing() {
+        assert_eq!(image_from_run_argv(&argv(&["podman", "run", "--rm"])), None);
     }
 }

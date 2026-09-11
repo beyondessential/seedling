@@ -117,6 +117,26 @@ async fn has_default_v4_route(handle: &rtnetlink::Handle) -> Result<bool, rtnetl
         if !matches!(route.header.kind, RouteType::Unicast) {
             continue;
         }
+        // The dump returns every table. A default route living in a
+        // policy-routing table is not this host's egress path, and
+        // docs/networking.md specifies the main table, but these probes
+        // accepted a `/0` from anywhere — so a host with a policy-routed
+        // default reported egress it does not have.
+        if crate::system::data_plane::routes::effective_table(&route)
+            != crate::system::data_plane::routes::MAIN_ROUTE_TABLE
+        {
+            continue;
+        }
+        // The dump returns every table. A default route living in a
+        // policy-routing table is not this host's egress path, and
+        // docs/networking.md specifies the main table, but these probes
+        // accepted a `/0` from anywhere — so a host with a policy-routed
+        // default reported egress it does not have.
+        if crate::system::data_plane::routes::effective_table(&route)
+            != crate::system::data_plane::routes::MAIN_ROUTE_TABLE
+        {
+            continue;
+        }
         let dest_is_default = !route
             .attributes
             .iter()

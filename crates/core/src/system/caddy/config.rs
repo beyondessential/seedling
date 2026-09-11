@@ -6,6 +6,35 @@ use crate::system::types::{
     VirtualHost,
 };
 
+/// Ports declared for both a plaintext and a TLS listener.
+///
+/// The HTTP and HTTPS servers are built independently from the listener set,
+/// and nothing stopped both from listing `:P`. Caddy refuses a config where
+/// two servers bind the same address, and `POST /config/` is all-or-nothing —
+/// so one such pair invalidated every route and every cert policy on the
+/// node, not just the ingress that caused it.
+///
+/// Reported rather than quietly resolved: dropping one side would silently
+/// serve an ingress on a protocol its author did not ask for.
+// r[impl actuate.ingress.plaintext]
+pub(crate) fn conflicting_listener_ports(config: &ProxyConfig) -> Vec<u16> {
+    use std::collections::BTreeSet;
+
+    let mut plaintext: BTreeSet<u16> = BTreeSet::new();
+    let mut tls: BTreeSet<u16> = BTreeSet::new();
+    for l in &config.listeners {
+        match l.proto {
+            ProxyListenerProto::Http => {
+                plaintext.insert(l.port);
+            }
+            ProxyListenerProto::Https | ProxyListenerProto::Quic => {
+                tls.insert(l.port);
+            }
+        }
+    }
+    plaintext.intersection(&tls).copied().collect()
+}
+
 pub(crate) fn build_caddy_config(config: &ProxyConfig) -> Value {
     let http_ports: Vec<u16> = config
         .listeners

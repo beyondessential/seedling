@@ -200,6 +200,14 @@ const OBS_KINDS: &[&str] = &[
     "container_exited",
     "container_removed",
     "health_check_pass",
+    // These three are persisted by `ObservationFact::to_obs_kinds` but were
+    // absent here, so their rows could not be interned and the restart seed
+    // dropped them: a container unhealthy across a restart had a duplicate
+    // `health_check_fail` appended with a fresh timestamp on every boot, and
+    // the same for a start-limit-hit unit and a mismatched volume backend.
+    "health_check_fail",
+    "unit_start_limit_hit",
+    "volume_backend_mismatch",
     "image_pull_started",
     "stop_sent",
     "unit_failed",
@@ -1770,6 +1778,59 @@ impl Reconciler {
 
 #[cfg(test)]
 mod tests {
+
+    // r[verify observe.persist]
+    // `OBS_KINDS` exists to intern what `to_obs_kinds` persists, so a kind in
+    // one and not the other silently defeats the restart seed: the row is
+    // read from the DB, fails to intern, and the observation is re-written
+    // with a fresh timestamp on every boot. Three kinds had drifted out.
+    #[test]
+    fn every_persisted_obs_kind_can_be_interned() {
+        use crate::system::types::{ObservationFact, UnitExit};
+
+        let facts = [
+            ObservationFact::ContainerMissing,
+            ObservationFact::ContainerCreated,
+            ObservationFact::ContainerRunning { pid: 1 },
+            ObservationFact::ContainerExited { exit_code: 0 },
+            ObservationFact::ContainerHealthy,
+            ObservationFact::ContainerUnhealthy,
+            ObservationFact::ContainerPresentIndeterminate,
+            ObservationFact::ContainerSpecHash("h".into()),
+            ObservationFact::NetworkPresent,
+            ObservationFact::NetworkMissing,
+            ObservationFact::VolumePresent,
+            ObservationFact::VolumeMissing,
+            ObservationFact::VolumeBackendMismatch,
+            ObservationFact::UnitActive,
+            ObservationFact::UnitInactive,
+            ObservationFact::UnitFailed,
+            ObservationFact::UnitStartLimitHit,
+            ObservationFact::UnitGone,
+            ObservationFact::UnitRestartCounter {
+                count: 1,
+                exit: None::<UnitExit>,
+            },
+            ObservationFact::ProxyReachable,
+            ObservationFact::ProxyUnreachable,
+            ObservationFact::RoutePresent {
+                hostname: "h".into(),
+            },
+            ObservationFact::RouteAbsent {
+                hostname: "h".into(),
+            },
+        ];
+
+        for fact in &facts {
+            for (kind, _payload) in fact.to_obs_kinds() {
+                assert!(
+                    OBS_KINDS.contains(&kind),
+                    "{kind:?} is persisted but missing from OBS_KINDS, so the \
+                     restart seed cannot intern it",
+                );
+            }
+        }
+    }
 
     fn unit(name: &str) -> UnitSummary {
         UnitSummary {
