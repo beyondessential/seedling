@@ -347,79 +347,43 @@ pub fn list_certificates(db: &Db) -> rusqlite::Result<Vec<TlsCertificate>> {
     stmt.query_map([], row_to_certificate)?.collect()
 }
 
-/// Returns the most-recent unexpired active cert covering `hostname`, if any.
+/// Returns the most-recently-created active cert covering `hostname`, if any.
 ///
-/// Resolution rules:
+/// Coverage is the only rule: the newest active certificate whose SAN list
+/// covers the hostname per RFC 6125 wins, and a row's `hostname` label takes
+/// no part in the decision. There was once an exact-label fast path in front
+/// of this, on the theory that a label match saves a parse — but a label is
+/// only a claim about a certificate, and a row whose label outran its
+/// certificate was served for a name it could not carry. Confirming the claim
+/// costs the parse the fast path existed to avoid, and leaves two orderings
+/// answering one question: the label path preferred a label match over a
+/// newer covering certificate, contradicting
+/// [tls.strategy.manual](../../../../docs/spec/runtime.md), which gives the
+/// most recently created row. One scan, one answer.
 ///
-/// - Exact match on the cert's primary `hostname` column wins (this is
-///   the fast path for ACME-DNS certs, whose row is always created
-///   for the hostname they were issued for).
-/// - Otherwise, scan every active cert and pick the most-recent one
-///   whose SubjectAlternativeName list covers `hostname` per RFC 6125
-///   (literal match or single-label wildcard). This auto-binds manual
-///   uploads — including wildcard certs — without requiring the
-///   operator to re-declare the binding per host.
-///
-/// Both paths skip rows whose `not_after` has passed. Without that the
-/// exact-hostname fast path returned an expired row in preference to a
-/// still-valid cert that covered the same hostname by SAN, so the proxy
-/// served the expired one and nothing on the serve path noticed. A row with
-/// no recorded `not_after` is kept: unparsed and expired are not the same
+/// Rows outside their validity window are excluded at either end, but a row
+/// with no recorded expiry is kept: unparsed and expired are not the same
 /// thing, and treating them alike would stop serving a usable cert.
 ///
-/// The sibling matcher in [`super::state`] deliberately does *not* filter on
-/// expiry — the renewal scheduler has to see an expiring cert in order to
-/// renew it — so the two are not interchangeable despite the shared rules.
+/// The sibling matcher in [`super::state`] applies the same rule over an
+/// in-memory snapshot, but deliberately does *not* filter on expiry — the
+/// renewal scheduler has to see an expiring cert in order to renew it — so the
+/// two are not interchangeable despite the shared coverage rule.
 // r[impl tls.strategy.manual]
 // r[impl tls.cert.serve]
+// r[impl tls.cert.validation.san-coverage]
 pub fn find_active_for_hostname(
     db: &Db,
     hostname: &str,
 ) -> rusqlite::Result<Option<TlsCertificate>> {
     let now = now_secs();
-
-    // The label is an index hint, not an answer. A row whose label says one
-    // thing while its certificate covers another would otherwise be handed out
-    // for a name it cannot serve — a TLS name mismatch — in preference to the
-    // certificate that does cover it. Rows written before the label was made
-    // to follow the certificate can be exactly that, so the hint is confirmed
-    // against the certificate before it is trusted, and falls through to the
-    // scan when it does not hold.
-    // r[impl tls.cert.validation.san-coverage]
-    if let Some(cert) = db
-        .conn
-        .query_row(
-            &format!(
-                "SELECT {CERT_COLUMNS}
-                 FROM tls_certificates
-                 WHERE hostname = ?1 AND state = 'active'
-                   AND (not_before IS NULL OR not_before <= ?2)
-                   AND (not_after IS NULL OR not_after > ?2)
-                 ORDER BY id DESC LIMIT 1"
-            ),
-            rusqlite::params![hostname, now],
-            row_to_certificate,
-        )
-        .optional()?
-        && cert
-            .cert_pem
-            .as_deref()
-            .is_some_and(|pem| super::parse::cert_covers(pem, hostname).unwrap_or(false))
-    {
-        return Ok(Some(cert));
-    }
-
-    // SAN-coverage scan: walk active certs newest-first and return the
-    // first whose SAN list covers the hostname. Cost is one PEM parse
-    // per active row; in operator-scale databases (<<1000 active rows)
-    // this is microseconds.
     let mut stmt = db.conn.prepare(&format!(
         "SELECT {CERT_COLUMNS}
-             FROM tls_certificates
-             WHERE state = 'active'
-               AND (not_before IS NULL OR not_before <= ?1)
+         FROM tls_certificates
+         WHERE state = 'active'
+           AND (not_before IS NULL OR not_before <= ?1)
            AND (not_after IS NULL OR not_after > ?1)
-             ORDER BY created_at DESC, id DESC"
+         ORDER BY created_at DESC, id DESC"
     ))?;
     let mut rows = stmt.query([now])?;
     while let Some(row) = rows.next()? {
@@ -427,28 +391,30 @@ pub fn find_active_for_hostname(
         let Some(pem) = cert.cert_pem.as_deref() else {
             continue;
         };
-        if super::parse::cert_covers(pem, hostname).unwrap_or(false) {
-            return Ok(Some(cert));
+        match super::parse::cert_covers(pem, hostname) {
+            Ok(true) => return Ok(Some(cert)),
+            Ok(false) => {}
+            // An unreadable certificate is skipped rather than treated as
+            // not covering, and said out loud: the row is active, so nothing
+            // else will report that it can never be served.
+            Err(e) => tracing::warn!(
+                cert_id = cert.id,
+                error = %e,
+                "stored certificate could not be parsed; skipping it when resolving a hostname"
+            ),
         }
     }
     Ok(None)
 }
 
-/// Transition a cert to a new state, optionally updating its primary-SAN
-/// label, cert PEM, and parsed metadata. Used by:
+/// Transition a cert to a new state, optionally updating cert PEM and parsed
+/// metadata. Used by ACME renewal to move a superseded row along.
 ///
-/// - CSR upload: pending → active, supplying the label the signed certificate
-///   turned out to carry, plus cert_pem + parsed metadata.
-/// - ACME renewal: active → superseded for the old row.
-///
-/// `hostname` is the row's primary SAN, so a caller that supplies a new
-/// certificate supplies the label from that certificate rather than leaving
-/// a label the new certificate may not cover.
-// r[impl tls.cert.validation.san-coverage]
+/// Activating a pending CSR goes through [`activate_pending_csr`] instead,
+/// which has a precondition this cannot express.
 pub fn update_certificate(
     db: &Db,
     id: i64,
-    hostname: Option<&str>,
     state: TlsCertState,
     cert_pem: Option<&str>,
     metadata: Option<&CertMetadata>,
@@ -456,18 +422,16 @@ pub fn update_certificate(
     let now = now_secs();
     db.conn.execute(
         "UPDATE tls_certificates SET
-            hostname = COALESCE(?1, hostname),
-            state = ?2,
-            cert_pem = COALESCE(?3, cert_pem),
-            issuer = COALESCE(?4, issuer),
-            not_before = COALESCE(?5, not_before),
-            not_after = COALESCE(?6, not_after),
-            serial = COALESCE(?7, serial),
-            self_signed = COALESCE(?8, self_signed),
-            updated_at = ?9
-         WHERE id = ?10",
+            state = ?1,
+            cert_pem = COALESCE(?2, cert_pem),
+            issuer = COALESCE(?3, issuer),
+            not_before = COALESCE(?4, not_before),
+            not_after = COALESCE(?5, not_after),
+            serial = COALESCE(?6, serial),
+            self_signed = COALESCE(?7, self_signed),
+            updated_at = ?8
+         WHERE id = ?9",
         params![
-            hostname,
             state.as_str(),
             cert_pem,
             metadata.and_then(|m| m.issuer.as_deref()),
@@ -480,6 +444,66 @@ pub fn update_certificate(
         ],
     )?;
     Ok(())
+}
+
+/// Activate a pending CSR row with the certificate that came back for it, and
+/// retire what that certificate replaces.
+///
+/// `Ok(false)` means the row was no longer `csr_pending` — cancelled, or
+/// activated by a concurrent upload — and nothing was written. The caller read
+/// the row, decrypted its key and validated the certificate before getting
+/// here, all outside any transaction, so the precondition is rechecked as part
+/// of the write rather than trusted from that earlier read. Without it a
+/// cancellation landing in the window would leave the update matching no rows
+/// while the supersession still retired the incumbents, stranding their
+/// hostnames and reporting success.
+///
+/// `created_at` moves to now. The row was created when the CSR was begun, but
+/// no certificate existed then, and resolution ranks certificates by when they
+/// came into being — a certificate that arrived today must not lose to one
+/// stored yesterday because its request predates it.
+// r[impl tls.csr.flow]
+// r[impl tls.cert.validation.san-coverage]
+pub fn activate_pending_csr(
+    db: &Db,
+    id: i64,
+    label: &str,
+    cert_pem: &str,
+    metadata: &CertMetadata,
+) -> rusqlite::Result<bool> {
+    let tx = db.conn.unchecked_transaction()?;
+    let now = now_secs();
+    let updated = tx.execute(
+        "UPDATE tls_certificates SET
+            hostname = ?1,
+            state = 'active',
+            cert_pem = ?2,
+            issuer = ?3,
+            not_before = ?4,
+            not_after = ?5,
+            serial = ?6,
+            self_signed = ?7,
+            created_at = ?8,
+            updated_at = ?8
+         WHERE id = ?9 AND state = 'csr_pending'",
+        params![
+            label,
+            cert_pem,
+            metadata.issuer,
+            metadata.not_before,
+            metadata.not_after,
+            metadata.serial,
+            metadata.self_signed as i64,
+            now,
+            id,
+        ],
+    )?;
+    if updated == 0 {
+        return Ok(false);
+    }
+    supersede_other_active_for_hostname(db, label, id)?;
+    tx.commit()?;
+    Ok(true)
 }
 
 /// Retire the active certificates that the certificate `keep_id` replaces.
@@ -553,12 +577,25 @@ pub fn supersede_other_active_for_hostname(
         let Some(pem) = candidate.cert_pem.as_deref() else {
             continue;
         };
-        let Ok(served) = super::parse::leaf_san_dns_names(pem) else {
-            continue;
+        let served = match super::parse::leaf_san_dns_names(pem) {
+            Ok(served) => served,
+            Err(e) => {
+                tracing::warn!(
+                    cert_id = candidate.id,
+                    error = %e,
+                    "stored certificate could not be parsed; leaving it active rather than \
+                     retiring it"
+                );
+                continue;
+            }
         };
-        if !served
-            .iter()
-            .all(|name| super::parse::san_covers(&arriving_sans, name))
+        // `all` over an empty set is vacuously true, which would retire a
+        // candidate on the strength of a SAN set that was never read. The
+        // decision is only ever made from names actually found.
+        if served.is_empty()
+            || !served
+                .iter()
+                .all(|name| super::parse::san_covers(&arriving_sans, name))
         {
             continue;
         }
@@ -1497,7 +1534,7 @@ mod tests {
     }
 
     #[test]
-    fn update_certificate_transitions_state_and_metadata() {
+    fn activate_pending_csr_relabels_and_keeps_the_request() {
         let (db, _) = fresh_db();
         let id = insert_certificate(
             &db,
@@ -1521,19 +1558,21 @@ mod tests {
 
         // The CA signed a different name than the CSR asked for, so the row is
         // relabelled to what arrived while the request stays on the record.
-        update_certificate(
-            &db,
-            id,
-            Some("example.com"),
-            TlsCertState::Active,
-            Some("-----BEGIN CERTIFICATE-----\ndata\n-----END CERTIFICATE-----\n"),
-            Some(&CertMetadata {
-                issuer: Some("CN=Issuer".to_string()),
-                not_after: Some(1_900_000_000),
-                ..Default::default()
-            }),
-        )
-        .unwrap();
+        let metadata = CertMetadata {
+            issuer: Some("CN=Issuer".to_string()),
+            not_after: Some(1_900_000_000),
+            ..Default::default()
+        };
+        assert!(
+            activate_pending_csr(
+                &db,
+                id,
+                "example.com",
+                &real_cert_pem(&["example.com"]),
+                &metadata,
+            )
+            .unwrap()
+        );
 
         let row = get_certificate(&db, id).unwrap().unwrap();
         assert_eq!(row.state, TlsCertState::Active);
@@ -1542,6 +1581,70 @@ mod tests {
         assert!(row.cert_pem.unwrap().contains("BEGIN CERTIFICATE"));
         assert_eq!(row.issuer.as_deref(), Some("CN=Issuer"));
         assert_eq!(row.not_after, Some(1_900_000_000));
+
+        // A second activation of the same row finds nothing pending, so it
+        // writes nothing rather than retiring whatever the first one left.
+        assert!(
+            !activate_pending_csr(
+                &db,
+                id,
+                "example.com",
+                &real_cert_pem(&["example.com"]),
+                &metadata,
+            )
+            .unwrap()
+        );
+    }
+
+    /// A cancellation landing between the handler's read and its write must
+    /// leave the incumbents alone: without the precondition the update matches
+    /// no rows while the supersession still runs, stranding their hostnames.
+    // r[verify tls.csr.flow]
+    #[test]
+    fn activating_a_cancelled_csr_retires_nothing() {
+        let (db, _) = fresh_db();
+        let incumbent = insert_labelled_cert(&db, "example.com", &["example.com"]);
+        let pending = insert_certificate(
+            &db,
+            NewCertificate {
+                hostname: "example.com",
+                requested_hostname: Some("example.com"),
+                state: TlsCertState::CsrPending,
+                origin: TlsCertOrigin::Csr,
+                cert_pem: None,
+                csr_pem: Some(
+                    "-----BEGIN CERTIFICATE REQUEST-----\nx\n-----END CERTIFICATE REQUEST-----\n",
+                ),
+                key_ciphertext: b"key",
+                key_type: KeyType::EcdsaP256,
+                metadata: CertMetadata::default(),
+                note: None,
+                acme_account_id: None,
+            },
+        )
+        .unwrap();
+
+        // The operator cancels while an upload is mid-flight.
+        assert!(delete_certificate(&db, pending).unwrap());
+
+        assert!(
+            !activate_pending_csr(
+                &db,
+                pending,
+                "example.com",
+                &real_cert_pem(&["example.com"]),
+                &CertMetadata {
+                    not_after: Some(now_secs() + 86_400),
+                    ..Default::default()
+                },
+            )
+            .unwrap()
+        );
+        assert_eq!(
+            get_certificate(&db, incumbent).unwrap().unwrap().state,
+            TlsCertState::Active,
+            "the incumbent must not be retired for a row that no longer exists",
+        );
     }
 
     #[test]

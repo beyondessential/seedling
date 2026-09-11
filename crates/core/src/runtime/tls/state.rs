@@ -310,47 +310,37 @@ pub fn is_caddy_internal(hostname: &str) -> bool {
     )
 }
 
-/// Find the most-recent active certificate that covers `hostname`.
+/// Find the most-recently-created active certificate that covers `hostname`.
 ///
-/// Match rules mirror [`super::store::find_active_for_hostname`]: a
-/// cert whose primary `hostname` column equals the target wins (the
-/// fast path for ACME-DNS rows). Otherwise, the first active cert
-/// whose SAN list covers `hostname` per RFC 6125 wins, picked in
-/// newest-first order.
+/// Coverage is the only rule, matching [`super::store::find_active_for_hostname`]:
+/// the newest active certificate whose SAN list covers `hostname` per RFC 6125
+/// wins, and a row's label takes no part in it.
+///
+/// Unlike the store matcher this does not filter on expiry, because the
+/// renewal scheduler has to see an expiring cert in order to renew it.
+// r[impl tls.strategy.manual]
+// r[impl tls.cert.validation.san-coverage]
 fn find_active_for_hostname<'a>(
     certs: &'a [TlsCertificate],
     hostname: &str,
 ) -> Option<&'a TlsCertificate> {
-    // Fast path: exact-label match, confirmed against the certificate. The
-    // label is an index hint; a row whose label says one thing while its
-    // certificate covers another must not be picked in preference to the
-    // certificate that does cover the hostname.
-    // r[impl tls.cert.validation.san-coverage]
-    let exact = certs
-        .iter()
-        .filter(|c| c.state == TlsCertState::Active && c.hostname == hostname)
-        .max_by_key(|c| c.created_at);
-    if let Some(cert) = exact
-        && cert
-            .cert_pem
-            .as_deref()
-            .is_some_and(|pem| super::parse::cert_covers(pem, hostname).unwrap_or(false))
-    {
-        return Some(cert);
-    }
-
-    // SAN-coverage scan, newest-first.
     let mut active: Vec<&TlsCertificate> = certs
         .iter()
         .filter(|c| c.state == TlsCertState::Active)
         .collect();
-    active.sort_by_key(|c| std::cmp::Reverse(c.created_at));
+    active.sort_by_key(|c| std::cmp::Reverse((c.created_at, c.id)));
     for cert in active {
         let Some(pem) = cert.cert_pem.as_deref() else {
             continue;
         };
-        if super::parse::cert_covers(pem, hostname).unwrap_or(false) {
-            return Some(cert);
+        match super::parse::cert_covers(pem, hostname) {
+            Ok(true) => return Some(cert),
+            Ok(false) => {}
+            Err(e) => tracing::warn!(
+                cert_id = cert.id,
+                error = %e,
+                "stored certificate could not be parsed; skipping it when resolving a hostname"
+            ),
         }
     }
     None

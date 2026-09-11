@@ -683,21 +683,23 @@ pub(crate) fn csr_upload_cert(state: &OiState, params: CsrUploadCertParams) -> H
     }
 
     let label_for_update = primary_san.clone();
-    state
+    let activated = state
         .db
-        .call(move |db| -> rusqlite::Result<()> {
-            store::update_certificate(
-                db,
-                id,
-                Some(&label_for_update),
-                TlsCertState::Active,
-                Some(&chain_pem),
-                Some(&metadata),
-            )?;
-            store::supersede_other_active_for_hostname(db, &label_for_update, id)?;
-            Ok(())
+        .call(move |db| {
+            store::activate_pending_csr(db, id, &label_for_update, &chain_pem, &metadata)
         })
         .map_err(db_error)?;
+
+    // The row was read, its key decrypted and the certificate validated before
+    // this point, none of it under a lock. A cancellation landing in that
+    // window means there is nothing to activate, and saying so beats reporting
+    // a certificate stored that was not.
+    if !activated {
+        return Err(OiError::new(
+            ErrorCode::RequirementsInvalid,
+            format!("certificate {id} is no longer awaiting a CSR upload"),
+        ));
+    }
 
     Ok(json!({
         "id": id,

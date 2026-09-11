@@ -55,6 +55,14 @@ separate CA, exactly as a real CA does.
 - [x] Both matchers are covered: `store::find_active_for_hostname` and the in-memory
       `state::find_active_for_hostname`
 
+## CSR activation is atomic
+
+- [x] Activating a row that was cancelled mid-upload writes nothing and retires no incumbent —
+      without the precondition the update matches no rows while supersession still runs
+      (verifies spec: `tls.csr.flow`)
+- [x] A second activation of an already-active row reports that nothing was pending rather
+      than relabelling and superseding again
+
 ## Requested hostname
 
 - [x] `tls.cert.list` reports `requested_hostname` for a CSR-origin row, and it survives the

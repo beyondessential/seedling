@@ -1575,7 +1575,7 @@ function CsrUploadCertDialog({
             minRows={8}
             value={certPem}
             onChange={setCertPem}
-            helperText="The runtime checks that this cert's public key matches the CSR's stored private key, plus SAN coverage and validity."
+            helperText="The runtime checks this cert's public key matches the CSR's stored private key, and that it is valid. It binds to the domains its own SANs cover, which may not be the one you requested."
           />
           {warnings && (
             <Alert severity="warning">

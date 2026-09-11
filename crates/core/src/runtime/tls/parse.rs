@@ -94,31 +94,17 @@ pub fn parse_chain(pem: &str) -> Result<ParsedChain> {
     let not_after = cert.validity().not_after.timestamp();
     let serial = cert.tbs_certificate.raw_serial_as_string();
 
-    // Walk parsed extensions and pull both the SAN DNS names and the
-    // AKI keyIdentifier in one pass. Using the parsed-extension stream
-    // (rather than `subject_alternative_name()`) avoids x509-parser's
-    // duplicate-extension error path silently masking a present SAN —
-    // we just take whichever SAN extension we find first.
-    let mut san_dns_names = Vec::new();
+    let san_dns_names = san_dns_names(&cert);
     // r[impl tls.cert.ari]
     // AKI keyIdentifier octet-string contents (not the TLV wrapper);
     // RFC 9773 § 4.1 takes those bytes base64url-encoded.
     let mut leaf_aki_der = None;
     for ext in cert.extensions() {
-        match ext.parsed_extension() {
-            x509_parser::extensions::ParsedExtension::SubjectAlternativeName(san) => {
-                for name in &san.general_names {
-                    if let x509_parser::extensions::GeneralName::DNSName(dns) = name {
-                        san_dns_names.push((*dns).to_owned());
-                    }
-                }
-            }
-            x509_parser::extensions::ParsedExtension::AuthorityKeyIdentifier(aki) => {
-                if let Some(kid) = &aki.key_identifier {
-                    leaf_aki_der = Some(kid.0.to_vec());
-                }
-            }
-            _ => {}
+        if let x509_parser::extensions::ParsedExtension::AuthorityKeyIdentifier(aki) =
+            ext.parsed_extension()
+            && let Some(kid) = &aki.key_identifier
+        {
+            leaf_aki_der = Some(kid.0.to_vec());
         }
     }
 
@@ -151,6 +137,31 @@ pub fn parse_chain(pem: &str) -> Result<ParsedChain> {
 /// lookup, per listed certificate, and per supersession candidate — so it gets
 /// a path that reads the leaf and stops.
 // r[impl tls.cert.validation.san-coverage]
+/// The DNS names in a parsed leaf's SubjectAlternativeName extension.
+///
+/// The single definition of what "the DNS names in this leaf" means, so that
+/// the full parse and the SAN-only parse cannot come to different answers —
+/// which would put the listing and validation at odds over the same
+/// certificate. Uses the parsed-extension stream rather than
+/// `subject_alternative_name()` so x509-parser's duplicate-extension error
+/// path cannot silently mask a present SAN; whichever SAN extension comes
+/// first is taken.
+fn san_dns_names(cert: &x509_parser::certificate::X509Certificate<'_>) -> Vec<String> {
+    let mut names = Vec::new();
+    for ext in cert.extensions() {
+        if let x509_parser::extensions::ParsedExtension::SubjectAlternativeName(san) =
+            ext.parsed_extension()
+        {
+            for name in &san.general_names {
+                if let x509_parser::extensions::GeneralName::DNSName(dns) = name {
+                    names.push((*dns).to_owned());
+                }
+            }
+        }
+    }
+    names
+}
+
 pub fn leaf_san_dns_names(pem: &str) -> Result<Vec<String>> {
     let block = pem::parse_many(pem.as_bytes())
         .map_err(|e| {
@@ -171,19 +182,7 @@ pub fn leaf_san_dns_names(pem: &str) -> Result<Vec<String>> {
             .build()
         })?;
 
-    let mut names = Vec::new();
-    for ext in cert.extensions() {
-        if let x509_parser::extensions::ParsedExtension::SubjectAlternativeName(san) =
-            ext.parsed_extension()
-        {
-            for name in &san.general_names {
-                if let x509_parser::extensions::GeneralName::DNSName(dns) = name {
-                    names.push((*dns).to_owned());
-                }
-            }
-        }
-    }
-    Ok(names)
+    Ok(san_dns_names(&cert))
 }
 
 /// Whether the certificate in `pem` covers `hostname`.

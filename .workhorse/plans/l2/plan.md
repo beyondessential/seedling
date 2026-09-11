@@ -202,6 +202,62 @@ Not actioned, both below threshold and reasoned rather than dismissed:
   coverage rather than by label, which would also let a wildcard retire every specific
   certificate under it — a behaviour change beyond this card.
 
+## Review round 3
+
+Fourteen suggestions, no criticals. The falling severity is the useful signal, but the
+recurring location is the more useful one: every round has landed on the same thing. Round 1,
+supersession trusted the row label. Round 2, the label invariant was documented more strongly
+than any path enforced it, and the serving fast path trusted the label. Round 3, the fast path
+is redundant dispatch with its own ordering. That is one defect being approached from three
+sides, not three defects, so this round removes the thing rather than narrowing it again.
+
+- **The exact-label fast path is gone from both matchers.** It existed to skip a parse; once it
+  had to confirm the label against the certificate it no longer skipped anything on a miss, and
+  it re-parsed on the way to a scan that parsed again. Worse, it was a second policy: it ordered
+  by `id DESC` and preferred a label match over a *newer covering* certificate, contradicting
+  `r[tls.strategy.manual]`'s "the most recently created active row wins". Two orderings for one
+  question is where the next mislabelling hides. Both matchers are now a single newest-first
+  coverage scan, and a row's label takes no part in deciding what is served — which is what this
+  card has been about from the start.
+
+  The cost is that every lookup scans rather than hitting an index. That is the trade the repo's
+  own rule asks for ("a subsystem with a central decision function admits no dispatch before the
+  decision"), the scan uses the leaf-only parse, and the rows are operator-scale. Making it fast
+  again means a persisted SAN list or a memoised resolution — still worth its own card, now more
+  so.
+
+- **CSR activation is transactional and rechecks its precondition.** The handler reads the row,
+  decrypts its key and validates the certificate outside any transaction, then wrote in a second
+  call. A `csr/cancel` landing in that window left the update matching no rows while the
+  supersession still ran — retiring incumbents for a row that no longer existed, and returning
+  success. `store::activate_pending_csr` now does the update guarded on `state = 'csr_pending'`,
+  supersedes only if it matched, and commits; the handler reports `requirements_invalid` when it
+  did not. The same guard closes the concurrent-double-upload window. With CSR activation owning
+  its own function, `update_certificate` drops the label parameter round 2 added to it.
+
+- **`created_at` moves to activation time.** A CSR row is created when the request is begun, but
+  no certificate exists then. With resolution ranking by `created_at`, a certificate that arrived
+  today would otherwise lose to one stored yesterday because its request predates it.
+
+- **One definition of "the DNS names in this leaf".** The SAN-only parse added in round 2 copied
+  `parse_chain`'s extension walk, so a fix to one would silently miss the other and the listing
+  and validation could disagree about the same certificate. Both now call a private
+  `san_dns_names`.
+
+- **Two silent "could not tell" branches spoken out loud.** A candidate whose certificate cannot
+  be parsed is skipped by supersession and by resolution; an active row in that state is both
+  un-retirable and unservable, with nothing saying why. Both branches now `warn!`. And
+  `served.iter().all(...)` was vacuously true for an empty SAN set, retiring a candidate on the
+  strength of names never read — guarded.
+
+- **CSR upload dialog copy.** It still told the operator the runtime checks "SAN coverage", which
+  is no longer a check that rejects. It now says the certificate binds to the domains its own
+  SANs cover, which may not be the one requested.
+
+Not actioned: `request_covered` collapsing "nothing to decide" and "could not parse" into null.
+The spec added this round already says so explicitly, both mean "no flag" to the operator, and
+the unparseable case now warns in the log where it is actionable.
+
 ## Noted, not actioned
 
 - `TlsCertState::Failed` is never constructed anywhere in the tree. Its mention in
