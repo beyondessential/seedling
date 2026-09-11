@@ -309,19 +309,19 @@ pub fn is_caddy_internal(hostname: &str) -> bool {
     )
 }
 
-/// Find the most-recently-created active certificate that covers `hostname`.
+/// Find the active certificate that answers for `hostname`.
 ///
-/// Coverage is the only rule, matching [`super::store::find_active_for_hostname`]:
-/// the newest active certificate whose SAN list covers `hostname` per RFC 6125
-/// wins, and a row's label takes no part in it.
+/// Ranking is [`super::resolve`]'s, shared with the serving lookup in
+/// [`super::store::find_active_for_hostname`] so the two cannot disagree about
+/// what a hostname is served.
 ///
 /// A certificate staged ahead of its `notBefore` is skipped, because the
-/// serving path will not hand it out either (see [`tls.cert.serve`]) and
-/// reporting it as the hostname's active certificate would say the hostname is
-/// covered while handshakes for it fail — with nothing scheduling a fix.
-///
-/// Expiry is deliberately *not* filtered here, unlike in the store matcher:
-/// the renewal scheduler has to see an expiring cert in order to renew it.
+/// serving path will not hand it out either and reporting it as the hostname's
+/// active certificate would say the hostname is covered while handshakes for
+/// it fail. Expiry is deliberately *not* filtered, unlike in the serving
+/// lookup: the renewal scheduler has to see an expiring cert in order to renew
+/// it. That difference is the only one, and it lives in this pre-filter rather
+/// than in the ranking.
 // r[impl tls.strategy.manual]
 // r[impl tls.cert.validation.san-coverage]
 // r[impl tls.cert.serve]
@@ -330,26 +330,33 @@ fn find_active_for_hostname<'a>(
     hostname: &str,
     now: i64,
 ) -> Option<&'a TlsCertificate> {
-    let mut active: Vec<&TlsCertificate> = certs
+    let mut best: Option<(super::resolve::Rank, &TlsCertificate)> = None;
+    for cert in certs
         .iter()
         .filter(|c| c.state == TlsCertState::Active && !c.not_before.is_some_and(|nb| nb > now))
-        .collect();
-    active.sort_by_key(|c| std::cmp::Reverse((c.created_at, c.id)));
-    for cert in active {
+    {
         let Some(pem) = cert.cert_pem.as_deref() else {
             continue;
         };
-        match super::parse::cert_covers(pem, hostname) {
-            Ok(true) => return Some(cert),
-            Ok(false) => {}
-            Err(e) => tracing::warn!(
-                cert_id = cert.id,
-                error = %e,
-                "stored certificate could not be parsed; skipping it when resolving a hostname"
-            ),
+        let sans = match super::parse::leaf_san_dns_names(pem) {
+            Ok(sans) => sans,
+            Err(e) => {
+                tracing::warn!(
+                    cert_id = cert.id,
+                    error = %e,
+                    "stored certificate could not be parsed; skipping it when resolving a hostname"
+                );
+                continue;
+            }
+        };
+        if let Some(rank) =
+            super::resolve::rank(&sans, hostname, cert.self_signed, cert.created_at, cert.id)
+            && best.as_ref().is_none_or(|(best_rank, _)| rank > *best_rank)
+        {
+            best = Some((rank, cert));
         }
     }
-    None
+    best.map(|(_, cert)| cert)
 }
 
 fn decide(

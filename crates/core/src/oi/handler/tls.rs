@@ -414,7 +414,7 @@ pub(crate) fn upload_manual(state: &OiState, params: UploadManualParams) -> Hand
     let id = state
         .db
         .call(move |db| -> rusqlite::Result<i64> {
-            let id = store::insert_certificate(
+            store::insert_and_supersede(
                 db,
                 store::NewCertificate {
                     hostname: &label_for_insert,
@@ -429,15 +429,7 @@ pub(crate) fn upload_manual(state: &OiState, params: UploadManualParams) -> Hand
                     note: note_for_insert.as_deref(),
                     acme_account_id: None,
                 },
-            )?;
-            // Retire the prior active cert this one replaces
-            // (renewal-of-same-cert flow) so serving picks the new one up
-            // immediately. Only certs whose whole SAN set this one covers are
-            // retired; anything still serving a name this cert cannot stays
-            // active, and resolution picks the most-recent active row covering
-            // each hostname.
-            store::supersede_other_active_for_hostname(db, &label_for_insert, id)?;
-            Ok(id)
+            )
         })
         .map_err(db_error)?;
 

@@ -68,6 +68,15 @@ separate CA, exactly as a real CA does.
 - [x] A second activation of an already-active row reports that nothing was pending rather
       than relabelling and superseding again
 
+## Resolution precedence
+
+- [x] A certificate whose SAN names the hostname exactly is served in preference to a newer
+      wildcard that merely covers it (verifies spec: `tls.strategy.manual`)
+- [x] A CA-issued certificate is served in preference to a newer self-signed one, so
+      resolution cannot serve what supersession just refused to let retire anything
+      (verifies spec: `tls.strategy.manual`)
+- [x] With neither distinction in play, the most recently created still wins
+
 ## Requested hostname
 
 - [x] `tls.cert.list` reports `requested_hostname` for a CSR-origin row, and it survives the

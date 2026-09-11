@@ -329,8 +329,11 @@ mod tests {
                     key_type: KeyType::EcdsaP256,
                     metadata: CertMetadata {
                         issuer: Some("CN=Test".to_owned()),
-                        not_before: Some(1_700_000_000),
-                        not_after: Some(1_800_000_000),
+                        // Relative to now: the serving lookup gates on the
+                        // validity window, so a fixed expiry would turn this
+                        // red on the day it passed.
+                        not_before: Some(jiff::Timestamp::now().as_second() - 86_400),
+                        not_after: Some(jiff::Timestamp::now().as_second() + 365 * 86_400),
                         serial: Some("01".to_owned()),
                         self_signed: false,
                     },

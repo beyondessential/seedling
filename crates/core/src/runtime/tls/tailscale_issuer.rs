@@ -172,7 +172,7 @@ async fn persist(
     let hostname_owned = hostname.to_owned();
     let cert_id = db
         .call(move |db_inner| {
-            let id = store::insert_certificate(
+            let id = store::insert_and_supersede(
                 db_inner,
                 store::NewCertificate {
                     hostname: &hostname_owned,
@@ -188,7 +188,6 @@ async fn persist(
                     acme_account_id: None,
                 },
             )?;
-            store::supersede_other_active_for_hostname(db_inner, &hostname_owned, id)?;
             Ok::<_, rusqlite::Error>(id)
         })
         .context(StorageSnafu)?;

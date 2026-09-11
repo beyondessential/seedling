@@ -1668,7 +1668,8 @@ The BSL surface is intentionally strategy-agnostic: scripts declare only that an
 > Operators may upload a PEM-encoded certificate chain and matching private key.
 > The runtime must auto-bind the uploaded cert to every hostname its SubjectAlternativeName list covers — literally for exact entries, and per RFC 6125 single-label rules for wildcard SANs — and cause the proxy to serve that exact pair for TLS handshakes whose SNI matches a covered hostname.
 > Auto-binding requires no per-hostname operator action: a `*.example.com` cert covers `foo.example.com` and `bar.example.com` as soon as it is uploaded; further hostnames added later are picked up automatically.
-> When more than one stored cert covers the same hostname, the most recently created active row wins.
+> When more than one stored cert covers the same hostname, precedence goes to a certificate whose SAN list names the hostname exactly over one that only covers it by wildcard (RFC 6125 §6.4.4), then to a CA-issued certificate over a self-signed one, and only then to the most recently created.
+> Without the first rule a broad certificate uploaded later would shadow the one issued for the hostname; without the second, resolution would serve a certificate that [supersession](#r--tls.cert.supersede) had just refused to let retire anything, and the refusal would buy nothing.
 > The runtime does not auto-renew manual certs on its own; however, if an `acme_dns` policy applies to a covered hostname and the manual cert is past its renewal threshold, the runtime must initiate the normal ACME-DNS issuance flow so a renewable cert can take over before the manual cert expires.
 
 > r[tls.csr.flow]

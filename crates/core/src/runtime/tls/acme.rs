@@ -240,7 +240,7 @@ pub async fn issue(
 
     let cert_id = db
         .call(move |db_inner| -> rusqlite::Result<i64> {
-            let id = store::insert_certificate(
+            let id = store::insert_and_supersede(
                 db_inner,
                 store::NewCertificate {
                     hostname: &hostname_owned,
@@ -256,7 +256,6 @@ pub async fn issue(
                     acme_account_id: Some(account_id),
                 },
             )?;
-            store::supersede_other_active_for_hostname(db_inner, &hostname_owned, id)?;
             Ok(id)
         })
         .context(StorageSnafu)?;

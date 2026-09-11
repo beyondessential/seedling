@@ -302,6 +302,85 @@ Not actioned:
   by the leaf-only parse; the rest is the pruning-superseded-history question, which is its own
   card.
 
+## Review round 5 — and the pattern across rounds
+
+Fixed this round, all confirmed against the branch:
+
+- **Resolution and supersession disagreed about trust** (critical). Supersession refuses to
+  retire a CA-issued certificate for a self-signed one; resolution took the newest covering
+  certificate with no such test. So a self-signed `*.example.com` upload retired nothing — the
+  guard worked — and was then served for every subdomain anyway, shadowing a valid ACME
+  certificate that stayed active and never got handed out. The exact-label fast path used to
+  make this impossible, so this is a regression from removing it in round 3.
+
+  `r[tls.strategy.manual]`'s precedence sentence now states the full rule and
+  `runtime::tls::resolve` implements it once for both matchers: an exact SAN beats a wildcard
+  (RFC 6125 §6.4.4), a CA-issued certificate beats a self-signed one, and only then does the
+  newest win. None of it reads the row label. Ranking every candidate rather than taking the
+  first means the serving scan now selects only what ranking needs and re-fetches the winner,
+  so walking the table no longer materialises every stored PEM and encrypted key.
+
+- **Insert-then-supersede was atomic on one path of four.** `activate_pending_csr` got a
+  transaction in round 3; `upload_manual`, ACME and Tailscale issuance did not, and supersession
+  can now fail outright rather than merely retiring nothing. The insert would commit, the
+  retirement would not, and the caller would report failure — on the ACME path getting the
+  attempt recorded failed and the coordinator re-issuing against the CA. `insert_and_supersede`
+  now wraps all three.
+
+- **Supersession took a label it already had.** It reads the arriving row back precisely so what
+  is compared is what was stored, then took `hostname` as a parameter anyway — two sources of
+  truth, and a caller passing anything else would retire rows under a label the certificate does
+  not carry. Dropped; it uses `arriving.hostname`.
+
+- **A 2027 time bomb.** `insert_test_cert` and the `serve` fixture hard-code
+  `not_after: 1_800_000_000` (15 Jan 2027). Harmless until this PR put a validity gate on
+  supersession and resolution; now those tests would have gone red on that date. Both are
+  relative to now.
+
+- **Doc and annotation placement in `parse.rs`** — the block describing the public PEM entry
+  point, and the `r[impl]` with it, were stacked on the private extension walk, leaving
+  `leaf_san_dns_names` undocumented. Moved.
+
+### The pattern, and why it should stop here
+
+Five rounds, and each round's critical has been caused by the previous round's fix:
+
+| Round | Critical | Caused by |
+|---|---|---|
+| 1 | supersession strands names | the original bug |
+| 2 | supersession downgrades a working cert | round 1's narrowing |
+| 3 | *(none)* | — |
+| 4 | control plane ignores the validity window | round 2's `notBefore` serving filter |
+| 5 | a self-signed cert shadows a valid one | round 3's fast-path removal |
+
+Every finding has been correct, and each fix has been right for the defect in front of it. But a
+card filed to add one missing `san_covers` check has ended up rewriting TLS resolution
+precedence, supersession semantics, the serving validity window, and the control-plane matcher —
+and each of those is load-bearing for serving, renewal, the rollup and issuance at once. The
+scope grew because each round's finding was genuinely a defect, not because any round was wrong
+to raise it.
+
+The remaining open items are no longer local bug fixes. They need a decision about how much of
+the TLS resolution path this card should own, which is the user's call, not the reviewer's and
+not mine:
+
+- **The serving lookup is an unfiltered scan on a remotely-driven path.** Raised three times now,
+  most recently framed as an amplification vector: unknown SNI is the most expensive case, and
+  nothing memoises it. Bounding it means a resolution cache with invalidation on certificate
+  writes, or SQL pre-filtering — a caching design, not a bug fix.
+- **`compute_state` now parses per hostname per tick.** `renewal::due_hostnames`,
+  `expiring::compute_desired` and the OI rollup each loop over hostnames calling it, so the cost
+  is H×C leaf parses. The fix is to parse each certificate's SAN list once per snapshot, which
+  means changing `Snapshot`.
+- **Skipping not-yet-valid certificates can drive repeated ACME issuance.** A freshly issued
+  certificate whose `notBefore` has not arrived on this host's clock reads as uncovered, so the
+  coordinator issues again. Either a skew tolerance (a number to be chosen, not derived) or
+  `decide` distinguishing "staged" from "absent".
+- **The self-signed guard does not catch a private CA.** `self_signed` is issuer DN == subject
+  DN, so a certificate from an untrusted internal CA passes it and can retire a publicly trusted
+  incumbent. Real chain validation against a trust store is a feature in its own right; the
+  alternative is narrowing the spec wording to what is actually enforced.
+
 ## Noted, not actioned
 
 - `TlsCertState::Failed` is never constructed anywhere in the tree. Its mention in

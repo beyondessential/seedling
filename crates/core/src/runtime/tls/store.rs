@@ -347,28 +347,24 @@ pub fn list_certificates(db: &Db) -> rusqlite::Result<Vec<TlsCertificate>> {
     stmt.query_map([], row_to_certificate)?.collect()
 }
 
-/// Returns the most-recently-created active cert covering `hostname`, if any.
+/// Returns the active certificate that answers for `hostname`, if any.
 ///
-/// Coverage is the only rule: the newest active certificate whose SAN list
-/// covers the hostname per RFC 6125 wins, and a row's `hostname` label takes
-/// no part in the decision. There was once an exact-label fast path in front
-/// of this, on the theory that a label match saves a parse — but a label is
+/// Ranking is [`super::resolve`]'s, shared with the control-plane matcher: an
+/// exact SAN beats a wildcard, a CA-issued certificate beats a self-signed
+/// one, and only then does the newest win. A row's `hostname` label takes no
+/// part in it — there was once an exact-label fast path here, but a label is
 /// only a claim about a certificate, and a row whose label outran its
-/// certificate was served for a name it could not carry. Confirming the claim
-/// costs the parse the fast path existed to avoid, and leaves two orderings
-/// answering one question: the label path preferred a label match over a
-/// newer covering certificate, contradicting
-/// [tls.strategy.manual](../../../../docs/spec/runtime.md), which gives the
-/// most recently created row. One scan, one answer.
+/// certificate was served for a name it could not carry.
+///
+/// Every covering candidate is ranked rather than the first one returned,
+/// because the tie-breaks cannot be expressed in SQL: whether a SAN matches
+/// exactly is only knowable once the certificate is parsed. The scan reads
+/// just what ranking needs and re-fetches the winner, so walking the table
+/// does not mean materialising every stored PEM and encrypted key.
 ///
 /// Rows outside their validity window are excluded at either end, but a row
 /// with no recorded expiry is kept: unparsed and expired are not the same
 /// thing, and treating them alike would stop serving a usable cert.
-///
-/// The sibling matcher in [`super::state`] applies the same rule over an
-/// in-memory snapshot, but deliberately does *not* filter on expiry — the
-/// renewal scheduler has to see an expiring cert in order to renew it — so the
-/// two are not interchangeable despite the shared coverage rule.
 // r[impl tls.strategy.manual]
 // r[impl tls.cert.serve]
 // r[impl tls.cert.validation.san-coverage]
@@ -377,34 +373,50 @@ pub fn find_active_for_hostname(
     hostname: &str,
 ) -> rusqlite::Result<Option<TlsCertificate>> {
     let now = now_secs();
-    let mut stmt = db.conn.prepare(&format!(
-        "SELECT {CERT_COLUMNS}
-         FROM tls_certificates
-         WHERE state = 'active'
-           AND (not_before IS NULL OR not_before <= ?1)
-           AND (not_after IS NULL OR not_after > ?1)
-         ORDER BY created_at DESC, id DESC"
-    ))?;
-    let mut rows = stmt.query([now])?;
-    while let Some(row) = rows.next()? {
-        let cert = row_to_certificate(row)?;
-        let Some(pem) = cert.cert_pem.as_deref() else {
-            continue;
-        };
-        match super::parse::cert_covers(pem, hostname) {
-            Ok(true) => return Ok(Some(cert)),
-            Ok(false) => {}
-            // An unreadable certificate is skipped rather than treated as
-            // not covering, and said out loud: the row is active, so nothing
-            // else will report that it can never be served.
-            Err(e) => tracing::warn!(
-                cert_id = cert.id,
-                error = %e,
-                "stored certificate could not be parsed; skipping it when resolving a hostname"
-            ),
+    let mut best: Option<(super::resolve::Rank, i64)> = None;
+    {
+        let mut stmt = db.conn.prepare(
+            "SELECT id, cert_pem, self_signed, created_at
+             FROM tls_certificates
+             WHERE state = 'active'
+               AND (not_before IS NULL OR not_before <= ?1)
+               AND (not_after IS NULL OR not_after > ?1)",
+        )?;
+        let mut rows = stmt.query([now])?;
+        while let Some(row) = rows.next()? {
+            let id: i64 = row.get(0)?;
+            let Some(pem): Option<String> = row.get(1)? else {
+                continue;
+            };
+            let self_signed: i64 = row.get(2)?;
+            let created_at: i64 = row.get(3)?;
+            let sans = match super::parse::leaf_san_dns_names(&pem) {
+                Ok(sans) => sans,
+                // Unreadable is not "does not cover", and the row is active,
+                // so nothing else will report that it can never be served.
+                Err(e) => {
+                    tracing::warn!(
+                        cert_id = id,
+                        error = %e,
+                        "stored certificate could not be parsed; skipping it when resolving a \
+                         hostname"
+                    );
+                    continue;
+                }
+            };
+            if let Some(rank) =
+                super::resolve::rank(&sans, hostname, self_signed != 0, created_at, id)
+                && best.as_ref().is_none_or(|(best_rank, _)| rank > *best_rank)
+            {
+                best = Some((rank, id));
+            }
         }
     }
-    Ok(None)
+
+    match best {
+        Some((_, id)) => get_certificate(db, id),
+        None => Ok(None),
+    }
 }
 
 /// Transition a cert to a new state, optionally updating cert PEM and parsed
@@ -444,6 +456,24 @@ pub fn update_certificate(
         ],
     )?;
     Ok(())
+}
+
+/// Store a new certificate and retire what it replaces, atomically.
+///
+/// The write and the retirement are one transaction because they are one
+/// decision: a failed supersession must not leave a stored certificate active
+/// beside the one it was meant to replace, with the caller told the whole
+/// operation failed. That matters more now supersession can fail outright
+/// rather than merely retiring nothing — on the ACME path a spurious failure
+/// gets the attempt recorded failed and the coordinator re-issuing against the
+/// CA, which is a rate limit waiting to happen.
+// r[impl tls.cert.supersede]
+pub fn insert_and_supersede(db: &Db, new: NewCertificate<'_>) -> rusqlite::Result<i64> {
+    let tx = db.conn.unchecked_transaction()?;
+    let id = insert_certificate(db, new)?;
+    supersede_other_active_for_hostname(db, id)?;
+    tx.commit()?;
+    Ok(id)
 }
 
 /// Activate a pending CSR row with the certificate that came back for it, and
@@ -501,7 +531,7 @@ pub fn activate_pending_csr(
     if updated == 0 {
         return Ok(false);
     }
-    supersede_other_active_for_hostname(db, label, id)?;
+    supersede_other_active_for_hostname(db, id)?;
     tx.commit()?;
     Ok(true)
 }
@@ -532,18 +562,16 @@ fn unreadable(message: String) -> rusqlite::Error {
 ///   and so which certificates become candidates at all — is chosen by the
 ///   external CA rather than by the operator.
 ///
-/// Candidates are the other active rows sharing the arriving certificate's
-/// label, which is how a renewal finds its predecessor. A candidate whose
+/// Candidates are the other active rows sharing the arriving certificate's own
+/// label, read from its row rather than passed in — a caller that passed a
+/// different string would retire rows under a label the certificate does not
+/// carry. That is how a renewal finds its predecessor. A candidate whose
 /// certificate cannot be read is left alone: being unable to tell what it
 /// serves is not the same as knowing the arriving certificate replaces it.
 ///
 /// Returns the number of rows retired.
 // r[impl tls.cert.supersede]
-pub fn supersede_other_active_for_hostname(
-    db: &Db,
-    hostname: &str,
-    keep_id: i64,
-) -> rusqlite::Result<usize> {
+pub fn supersede_other_active_for_hostname(db: &Db, keep_id: i64) -> rusqlite::Result<usize> {
     // Read the arriving certificate back from the row rather than taking its
     // properties as arguments, so what is compared is what was actually
     // stored.
@@ -602,7 +630,7 @@ pub fn supersede_other_active_for_hostname(
              FROM tls_certificates
              WHERE hostname = ?1 AND state = 'active' AND id != ?2"
         ))?;
-        stmt.query_map(params![hostname, keep_id], row_to_certificate)?
+        stmt.query_map(params![arriving.hostname, keep_id], row_to_certificate)?
             .collect::<rusqlite::Result<_>>()?
     };
 
@@ -1243,8 +1271,12 @@ mod tests {
                 key_type: KeyType::EcdsaP256,
                 metadata: CertMetadata {
                     issuer: Some("CN=Test CA".to_string()),
-                    not_before: Some(1_700_000_000),
-                    not_after: Some(1_800_000_000),
+                    // Relative to now, not a fixed date: supersession and
+                    // resolution both gate on the validity window, so a
+                    // hard-coded expiry would quietly turn these tests red on
+                    // the day it passed.
+                    not_before: Some(now_secs() - 86_400),
+                    not_after: Some(now_secs() + 365 * 86_400),
                     serial: Some("01".to_string()),
                     self_signed: false,
                 },
@@ -1360,10 +1392,7 @@ mod tests {
             m.not_after = Some(now_secs() + 90 * 86_400);
         });
 
-        assert_eq!(
-            supersede_other_active_for_hostname(&db, "example.com", staged).unwrap(),
-            0
-        );
+        assert_eq!(supersede_other_active_for_hostname(&db, staged).unwrap(), 0);
         assert_eq!(
             get_certificate(&db, incumbent).unwrap().unwrap().state,
             TlsCertState::Active
@@ -1382,7 +1411,7 @@ mod tests {
         });
 
         assert_eq!(
-            supersede_other_active_for_hostname(&db, "example.com", arriving).unwrap(),
+            supersede_other_active_for_hostname(&db, arriving).unwrap(),
             0
         );
         assert_eq!(
@@ -1453,7 +1482,7 @@ mod tests {
         let arriving =
             insert_labelled_cert(&db, "example.com", &["example.com", "www.example.com"]);
 
-        let retired = supersede_other_active_for_hostname(&db, "example.com", arriving).unwrap();
+        let retired = supersede_other_active_for_hostname(&db, arriving).unwrap();
 
         assert_eq!(retired, 0, "shop.example.com would have been stranded");
         assert_eq!(
@@ -1481,7 +1510,7 @@ mod tests {
         let arriving =
             insert_labelled_cert(&db, "example.com", &["example.com", "www.example.com"]);
 
-        let retired = supersede_other_active_for_hostname(&db, "example.com", arriving).unwrap();
+        let retired = supersede_other_active_for_hostname(&db, arriving).unwrap();
 
         assert_eq!(retired, 1);
         assert_eq!(
@@ -1542,7 +1571,7 @@ mod tests {
         let id2 = insert_test_cert(&db, "a.example.com");
         let id3 = insert_test_cert(&db, "b.example.com");
 
-        let n = supersede_other_active_for_hostname(&db, "a.example.com", id2).unwrap();
+        let n = supersede_other_active_for_hostname(&db, id2).unwrap();
         assert_eq!(n, 1);
 
         assert_eq!(

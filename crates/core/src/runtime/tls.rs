@@ -20,6 +20,7 @@ pub mod issuance;
 pub mod keypair;
 pub mod parse;
 pub mod renewal;
+pub mod resolve;
 pub mod serve;
 pub mod state;
 pub mod store;

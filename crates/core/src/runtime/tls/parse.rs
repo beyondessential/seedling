@@ -129,14 +129,6 @@ pub fn parse_chain(pem: &str) -> Result<ParsedChain> {
     })
 }
 
-/// The DNS names in the leaf certificate's SubjectAlternativeName extension.
-///
-/// [`parse_chain`] returns these too, but on the way it re-encodes the whole
-/// chain into a fresh string and allocates the SPKI, serial and AKI bytes. A
-/// coverage check wants none of that, and coverage is checked per serving
-/// lookup, per listed certificate, and per supersession candidate — so it gets
-/// a path that reads the leaf and stops.
-// r[impl tls.cert.validation.san-coverage]
 /// The DNS names in a parsed leaf's SubjectAlternativeName extension.
 ///
 /// The single definition of what "the DNS names in this leaf" means, so that
@@ -162,6 +154,14 @@ fn san_dns_names(cert: &x509_parser::certificate::X509Certificate<'_>) -> Vec<St
     names
 }
 
+/// The DNS names in the leaf certificate of a PEM chain.
+///
+/// [`parse_chain`] returns these too, but on the way it re-encodes the whole
+/// chain into a fresh string and allocates the SPKI, serial and AKI bytes. A
+/// coverage check wants none of that, and coverage is checked per serving
+/// lookup, per listed certificate, and per supersession candidate — so it gets
+/// a path that reads the leaf and stops.
+// r[impl tls.cert.validation.san-coverage]
 pub fn leaf_san_dns_names(pem: &str) -> Result<Vec<String>> {
     let block = pem::parse_many(pem.as_bytes())
         .map_err(|e| {
