@@ -1677,7 +1677,10 @@ The BSL surface is intentionally strategy-agnostic: scripts declare only that an
 >
 > - Generate the keypair on the server, store the private key encrypted at rest using the [secret key](#r--secret.key), and never expose it via any operator interface.
 > - Produce a PEM-encoded CSR whose Subject Alternative Name set covers the target hostname, and make the CSR retrievable via the operator interface for as long as the request is pending.
-> - Accept a signed certificate uploaded later, verify it matches the stored private key and satisfies [SAN coverage](#r--tls.cert.validation.san-coverage), and on success transition the hostname's strategy to manual using the uploaded certificate paired with the held private key.
+> - Record the hostname the request was made for and retain it once a certificate arrives, so an operator can see what was asked for alongside what was issued.
+> - Accept a signed certificate uploaded later, provided it matches the stored private key and passes the same validation as a manual upload.
+> - Bind that certificate to the hostnames its own SAN set covers, per [SAN coverage](#r--tls.cert.validation.san-coverage). A CA is free to sign a name set other than the one requested, so the requested hostname does not determine what the accepted certificate serves or what it supersedes.
+> - Report an unmet request: when the issued certificate does not cover the requested hostname, the upload must warn that the request was not met, and the requested hostname must go on appearing in the [per-hostname rollup](#r--tls.cert.hostname-view) as having no active certificate for as long as an ingress declares it.
 > - Permit cancellation of a pending CSR by the operator, which must destroy the stored private key.
 
 > r[tls.dns-provider.lifecycle]
@@ -1705,9 +1708,12 @@ The BSL surface is intentionally strategy-agnostic: scripts declare only that an
 > A stored certificate whose expiry is unrecorded is not treated as expired, since that cannot be distinguished from one that has not been parsed.
 
 > r[tls.cert.validation.san-coverage]
-> Whenever the runtime accepts an operator-supplied certificate (manual upload or CSR cert upload), it must validate that the leaf certificate's Subject Alternative Name DNS entries either contain the target hostname literally or contain a wildcard entry that covers it under RFC 6125.
+> A certificate covers a hostname when the leaf certificate's Subject Alternative Name DNS entries either contain that hostname literally or contain a wildcard entry that covers it under RFC 6125.
 > A wildcard SAN `*.example.com` covers exactly one additional left-most label (it covers `foo.example.com` but not `example.com` and not `a.b.example.com`).
-> Uploads that fail this check must be rejected and must not alter any existing policy or certificate.
+> Coverage is the only thing that binds a certificate to a hostname.
+> However a certificate reached the runtime — operator upload, externally-signed CSR, or ACME issuance — it must be served for exactly the hostnames its own SAN set covers, and must never supersede a certificate that is serving a hostname the arriving certificate does not cover.
+> The name an operator asked for is a record of the request, never a binding: a certificate whose SAN set omits it does not acquire that hostname by having been requested under it.
+> A certificate carrying no DNS SANs covers nothing and must be rejected on operator upload.
 
 > r[tls.cert.validation.self-signed]
 > The runtime must accept a self-signed leaf certificate (issuer DN equal to subject DN, no chain) on operator upload, but must annotate the stored certificate so that the operator interface can flag it.

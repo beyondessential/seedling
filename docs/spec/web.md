@@ -251,7 +251,8 @@ Absent specification bugs, anything not defined here is either defined in anothe
 >
 > - **Per-hostname policies**: list, add (binding a hostname or wildcard to ACME-DNS via a configured provider), and clear.
 > - **Settings**: view and edit the ACME contact email and certificate profile used for issuance.
-> - **Stored certificates**: list grouped by hostname, surfacing state, origin, issuer, expiry, and serial; certificates within fourteen days of expiry and self-signed certificates must be visually flagged.
+> - **Stored certificates**: list grouped by the certificate's primary SAN, surfacing state, origin, issuer, expiry, and serial; certificates within fourteen days of expiry and self-signed certificates must be visually flagged.
+>   A certificate obtained through the CSR flow also surfaces the hostname the request was made for, and carries the same visual flagging as the two cases above when the issued certificate does not cover it.
 > - **DNS providers**: list (without credentials), add (Route 53), and delete (refused while a policy references the provider).
 >
 > Private key material, ACME account keys, and DNS-provider credentials must never be returned to the client.

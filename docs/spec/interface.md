@@ -1078,7 +1078,9 @@ This section covers the operator interface for the ACME-DNS strategy, manual cer
 
 > i[tls.cert.list]
 > `/tls/certificates/list` returns all stored certificates.
-> Response `result.certificates` is an array of objects each with `id`, `hostname`, `state` (`"csr_pending"`, `"active"`, `"superseded"`, or `"failed"`), `origin` (`"manual"`, `"csr"`, or `"acme_dns"`), `key_type`, `issuer`, `not_before`, `not_after`, `serial`, `self_signed`, `note`, `acme_account_id`, `created_at`, `updated_at`.
+> Response `result.certificates` is an array of objects each with `id`, `hostname`, `requested_hostname`, `state` (`"csr_pending"`, `"active"`, `"superseded"`, or `"failed"`), `origin` (`"manual"`, `"csr"`, or `"acme_dns"`), `key_type`, `issuer`, `not_before`, `not_after`, `serial`, `self_signed`, `note`, `acme_account_id`, `created_at`, `updated_at`.
+> `hostname` is the certificate's primary SAN, a display label only: what the certificate serves is decided by its full SAN list per [tls.cert.validation.san-coverage](runtime.md#r--tls.cert.validation.san-coverage), never by this field.
+> `requested_hostname` is the hostname a CSR was begun for; it is null for rows of any other origin, and on a CSR row it may differ from `hostname` when the CA signed a different name set.
 > Private key material is never returned.
 
 > i[tls.cert.upload-manual]
@@ -1104,8 +1106,10 @@ This section covers the operator interface for the ACME-DNS strategy, manual cer
 
 > i[tls.cert.csr.upload-cert]
 > `/tls/certificates/csr/upload-cert { id, cert_pem }` accepts the externally-signed certificate for a pending CSR.
-> The runtime verifies the leaf cert's `SubjectPublicKeyInfo` matches the stored private key and runs the standard SAN-coverage / expiry checks; on success the row transitions to `active` and supersedes any prior active certificate for the same hostname.
-> Validation rejections return `requirements_invalid`; non-fatal warnings (`self_signed`, `not_yet_valid`) come back in the response `warnings` array.
+> The runtime verifies the leaf cert's `SubjectPublicKeyInfo` matches the stored private key and applies the same validation as [`tls.cert.upload-manual`](#i--tls.cert.upload-manual).
+> On success the row transitions to `active`, binds to the hostnames the issued certificate's SAN list covers per [tls.cert.validation.san-coverage](runtime.md#r--tls.cert.validation.san-coverage), and supersedes any prior active certificate whose primary SAN matches the issued certificate's.
+> The hostname the CSR was requested for is retained on the row and reported by [`tls.cert.list`](#i--tls.cert.list).
+> Validation rejections return `requirements_invalid`; non-fatal warnings come back in the response `warnings` array: `self_signed`, `not_yet_valid`, and `request_not_covered` when the issued certificate does not cover the requested hostname.
 
 > i[tls.cert.csr.cancel]
 > `/tls/certificates/csr/cancel { id }` cancels a pending CSR row, deleting the stored private key.
