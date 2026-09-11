@@ -32,6 +32,13 @@ pub enum ParamValidationError {
     /// One or more schema fields failed the requirements check
     /// (missing-required / invalid-email / weak-password / ...).
     Requirements { messages: Vec<String> },
+    /// A schema-declared param was supplied as something other than a
+    /// string (a JSON number or bool, say).
+    ///
+    /// It used to be skipped as though absent, so the value was either
+    /// silently replaced by the field's default or reported as a missing
+    /// required field — in both cases naming the wrong problem.
+    NotAString { key: String },
     /// A `kind: "volume"` param's value was not a string.
     VolumeNotString { key: String },
     /// A required `kind: "volume"` param was absent.
@@ -56,6 +63,9 @@ impl std::fmt::Display for ParamValidationError {
                 "param key {key:?} is reserved (keys ending in _volume or _filename are reserved)"
             ),
             Self::Requirements { messages } => write!(f, "{}", messages.join("; ")),
+            Self::NotAString { key } => {
+                write!(f, "param {key:?}: value must be a string")
+            }
             Self::VolumeNotString { key } => {
                 write!(f, "param {key:?}: volume reference must be a string")
             }
@@ -101,15 +111,23 @@ pub fn apply_schema(
         return Ok(());
     }
 
-    let submitted: BTreeMap<String, String> = schema
-        .keys()
-        .filter_map(|k| {
-            params
-                .get(k.as_str())
-                .and_then(|v| v.as_str())
-                .map(|s| (k.as_str().to_owned(), s.to_owned()))
-        })
-        .collect();
+    // A schema field supplied as a non-string is an error, not an absence.
+    // Skipping it here meant a submitted JSON number or bool was either
+    // overwritten by the field's default or reported as "required field is
+    // missing" — the caller was told the value was absent when it was
+    // present and merely the wrong type.
+    let mut submitted: BTreeMap<String, String> = BTreeMap::new();
+    for k in schema.keys() {
+        let Some(value) = params.get(k.as_str()) else {
+            continue;
+        };
+        let Some(s) = value.as_str() else {
+            return Err(ParamValidationError::NotAString {
+                key: k.as_str().to_owned(),
+            });
+        };
+        submitted.insert(k.as_str().to_owned(), s.to_owned());
+    }
 
     let filled = run_requirements(schema, &submitted)?;
     for (k, v) in filled {
@@ -246,4 +264,76 @@ pub(crate) fn is_valid_email(email: &str) -> bool {
 // i[impl action.invoke.install.validation]
 pub(crate) fn is_strong_password(password: &str) -> bool {
     zxcvbn::zxcvbn(password, &[]).score() >= zxcvbn::Score::Three
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::BTreeMap;
+
+    use seedling_protocol::names::ParamName;
+
+    use super::{ParamValidationError, apply_schema};
+    use crate::defs::install::{ParamDef, ParamKind};
+
+    fn text_with_default(default: &str) -> ParamDef {
+        ParamDef {
+            kind: ParamKind::Text,
+            required: false,
+            default_value: Some(default.to_owned()),
+            description: None,
+            secret: false,
+        }
+    }
+
+    fn schema(name: &str, def: ParamDef) -> BTreeMap<ParamName, ParamDef> {
+        let mut m = BTreeMap::new();
+        m.insert(ParamName::new(name).expect("param name"), def);
+        m
+    }
+
+    // l[verify action.option-params]
+    // A non-string used to be skipped as absent, so a submitted value was
+    // silently replaced by the field's default — the caller believed the
+    // value they sent had been taken.
+    #[test]
+    fn a_non_string_value_is_refused_rather_than_defaulted() {
+        let sch = schema("count", text_with_default("fallback"));
+
+        let mut params = serde_json::Map::new();
+        params.insert("count".to_owned(), serde_json::json!(42));
+
+        let err = apply_schema(&sch, &mut params).expect_err("42 is not a string");
+        assert_eq!(
+            err,
+            ParamValidationError::NotAString {
+                key: "count".to_owned()
+            }
+        );
+        assert_eq!(
+            params["count"],
+            serde_json::json!(42),
+            "a rejected call must not have rewritten the value"
+        );
+    }
+
+    // l[verify action.option-params]
+    #[test]
+    fn an_absent_field_still_takes_its_default() {
+        let sch = schema("name", text_with_default("fallback"));
+
+        let mut params = serde_json::Map::new();
+        apply_schema(&sch, &mut params).expect("absent is fine when a default exists");
+        assert_eq!(params["name"], serde_json::json!("fallback"));
+    }
+
+    // l[verify action.option-params]
+    #[test]
+    fn a_string_value_is_taken_as_given() {
+        let sch = schema("name", text_with_default("fallback"));
+
+        let mut params = serde_json::Map::new();
+        params.insert("name".to_owned(), serde_json::json!("given"));
+        apply_schema(&sch, &mut params).expect("a string is fine");
+        assert_eq!(params["name"], serde_json::json!("given"));
+    }
 }
