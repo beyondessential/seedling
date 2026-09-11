@@ -812,6 +812,26 @@ fn map_api_err(e: podman_rest_client::Error) -> PodmanError {
 /// container with 409 "container is not running", which is neither a 404 nor
 /// a "no such container" 500 — so it took the error path, logging a warning
 /// for something the spec defines as a silent skip.
+/// Build the `podman exec` argv.
+///
+/// The `--` separator ends option parsing, so the container name cannot be
+/// read as a flag however it is spelt. Podman already stops parsing options
+/// after the container name, so the command arguments were never at risk;
+/// the name is the positional that arrives after the `--env` flags, and it
+/// is only safe today because name validation forbids a leading dash. This
+/// makes it safe by construction instead of by a rule enforced elsewhere.
+fn exec_argv(name: &str, argv: &[String], extra_env: &[(String, String)]) -> Vec<String> {
+    let mut out = vec!["exec".to_owned()];
+    for (k, v) in extra_env {
+        out.push("--env".to_owned());
+        out.push(format!("{k}={v}"));
+    }
+    out.push("--".to_owned());
+    out.push(name.to_owned());
+    out.extend(argv.iter().cloned());
+    out
+}
+
 fn is_not_running(e: &podman_rest_client::Error) -> bool {
     match e {
         podman_rest_client::Error::Api { code, body } => {
@@ -1068,14 +1088,7 @@ impl ContainerRuntime for PodmanRuntime {
             // libpod REST exec/start endpoint upgrades to a streaming protocol
             // we don't need; subprocess avoids parsing it.
             let mut cmd = tokio::process::Command::new("podman");
-            cmd.arg("exec");
-            for (k, v) in extra_env {
-                cmd.args(["--env", &format!("{k}={v}")]);
-            }
-            cmd.arg(name);
-            for a in argv {
-                cmd.arg(a);
-            }
+            cmd.args(exec_argv(name, argv, extra_env));
             let status = cmd.status().await.map_err(|e| -> BoxError {
                 ProtocolSnafu {
                     message: format!("podman exec spawn failed: {e}"),
@@ -1154,7 +1167,7 @@ mod status_tests {
 
 #[cfg(test)]
 mod tests {
-    use super::{is_not_found, is_not_running, is_untagged_sentinel};
+    use super::{exec_argv, is_not_found, is_not_running, is_untagged_sentinel};
 
     fn api_err(code: u16, body: &str) -> podman_rest_client::Error {
         podman_rest_client::Error::Api {
@@ -1200,5 +1213,37 @@ mod tests {
         for tag in ["ghcr.io/x:1", "docker.io/library/nginx:latest", "x:none"] {
             assert!(!is_untagged_sentinel(tag), "should keep {tag:?}");
         }
+    }
+
+    // l[verify rt.exec]
+    // The container name is the positional that follows the `--env` flags,
+    // so it is only safe from being read as a flag because name validation
+    // forbids a leading dash. `--` makes that structural.
+    #[test]
+    fn the_argv_ends_option_parsing_before_the_container_name() {
+        let env = vec![("A".to_owned(), "1".to_owned())];
+        let argv = vec!["sh".to_owned(), "-c".to_owned(), "echo hi".to_owned()];
+        assert_eq!(
+            exec_argv("app-web", &argv, &env),
+            vec![
+                "exec".to_owned(),
+                "--env".to_owned(),
+                "A=1".to_owned(),
+                "--".to_owned(),
+                "app-web".to_owned(),
+                "sh".to_owned(),
+                "-c".to_owned(),
+                "echo hi".to_owned(),
+            ]
+        );
+    }
+
+    // l[verify rt.exec]
+    #[test]
+    fn the_argv_is_well_formed_with_no_env_and_no_command() {
+        assert_eq!(
+            exec_argv("app-web", &[], &[]),
+            vec!["exec".to_owned(), "--".to_owned(), "app-web".to_owned()]
+        );
     }
 }
