@@ -486,7 +486,8 @@ impl PodmanRuntime {
             .await
         {
             Ok(_) => Ok(true),
-            Err(ref e) if is_not_found(e) => Ok(false),
+            // Gone and not-running are both "skipped" per `l[rt.signal]`.
+            Err(ref e) if is_not_found(e) || is_not_running(e) => Ok(false),
             Err(e) => Err(map_api_err(e)),
         }
     }
@@ -802,6 +803,22 @@ impl AsyncWrite for AsyncPtyHalf {
 
 fn map_api_err(e: podman_rest_client::Error) -> PodmanError {
     ApiSnafu.into_error(Box::new(e))
+}
+
+/// Whether the error says the container exists but is not running.
+///
+/// `l[rt.signal]` says instances that are not running are "silently skipped
+/// (no error)". Podman answers a kill against a `created` or `exited`
+/// container with 409 "container is not running", which is neither a 404 nor
+/// a "no such container" 500 — so it took the error path, logging a warning
+/// for something the spec defines as a silent skip.
+fn is_not_running(e: &podman_rest_client::Error) -> bool {
+    match e {
+        podman_rest_client::Error::Api { code, body } => {
+            code.as_u16() == 409 && body.to_string().contains("is not running")
+        }
+        _ => false,
+    }
 }
 
 fn is_not_found(e: &podman_rest_client::Error) -> bool {
@@ -1137,7 +1154,34 @@ mod status_tests {
 
 #[cfg(test)]
 mod tests {
-    use super::is_untagged_sentinel;
+    use super::{is_not_found, is_not_running, is_untagged_sentinel};
+
+    fn api_err(code: u16, body: &str) -> podman_rest_client::Error {
+        podman_rest_client::Error::Api {
+            code: http::StatusCode::from_u16(code).expect("status"),
+            body: bytes::Bytes::from(body.to_owned()).into(),
+        }
+    }
+
+    // l[verify rt.signal]
+    // `l[rt.signal]` says a non-running instance is silently skipped. Podman
+    // answers a kill against a stopped container with 409 "container is not
+    // running", which took the error path and logged a warning instead.
+    #[test]
+    fn a_stopped_container_is_a_skip_not_an_error() {
+        assert!(is_not_running(&api_err(
+            409,
+            "container abc is not running"
+        )));
+        assert!(!is_not_found(&api_err(409, "container abc is not running")));
+    }
+
+    // l[verify rt.signal]
+    #[test]
+    fn other_conflicts_are_still_errors() {
+        assert!(!is_not_running(&api_err(409, "some other conflict")));
+        assert!(!is_not_running(&api_err(500, "boom")));
+    }
 
     // i[verify image.list]
     // Untagged images are spelt differently across podman versions; only the
