@@ -66,6 +66,22 @@ pub(crate) struct PodmanRuntime {
     client: PodmanRestClient,
 }
 
+/// Whether a `repo_tags` entry is podman's placeholder for "untagged".
+///
+/// Different podman and libpod versions spell it `<none>:<none>`, a bare
+/// `<none>`, or `<none>` in one half. Only the first was filtered, so the
+/// others reached callers as real tags.
+fn is_untagged_sentinel(tag: &str) -> bool {
+    const NONE: &str = "<none>";
+    if tag == NONE || tag == "<none>:<none>" {
+        return true;
+    }
+    match tag.rsplit_once(':') {
+        Some((name, version)) => name == NONE || version == NONE,
+        None => false,
+    }
+}
+
 impl PodmanRuntime {
     pub(crate) async fn new() -> Result<Self, PodmanError> {
         let client = PodmanRestClient::new(Config {
@@ -530,11 +546,16 @@ impl PodmanRuntime {
                 Some(id) if !id.is_empty() => id,
                 _ => continue,
             };
+            // Untagged images are reported differently across podman
+            // versions: `<none>:<none>`, a bare `<none>`, or `<none>` in
+            // either half. Matching only the fully-qualified sentinel let a
+            // bare `<none>` through as though it were a real tag, so an
+            // untagged image looked tagged.
             let tags: Vec<String> = s
                 .repo_tags
                 .unwrap_or_default()
                 .into_iter()
-                .filter(|t| !t.is_empty() && t != "<none>:<none>")
+                .filter(|t| !t.is_empty() && !is_untagged_sentinel(t))
                 .collect();
             let digests: Vec<String> = s
                 .repo_digests
@@ -1110,6 +1131,30 @@ mod status_tests {
             ("dead", ContainerStatus::Exited),
         ] {
             assert_eq!(parse_container_status(input), expected, "{input}");
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_untagged_sentinel;
+
+    // i[verify image.list]
+    // Untagged images are spelt differently across podman versions; only the
+    // fully-qualified sentinel was filtered, so a bare `<none>` reached
+    // callers as though it were a real tag.
+    #[test]
+    fn every_untagged_spelling_is_filtered() {
+        for tag in ["<none>", "<none>:<none>", "<none>:v1", "ghcr.io/x:<none>"] {
+            assert!(is_untagged_sentinel(tag), "should filter {tag:?}");
+        }
+    }
+
+    // i[verify image.list]
+    #[test]
+    fn a_real_tag_is_kept() {
+        for tag in ["ghcr.io/x:1", "docker.io/library/nginx:latest", "x:none"] {
+            assert!(!is_untagged_sentinel(tag), "should keep {tag:?}");
         }
     }
 }
