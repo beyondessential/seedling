@@ -439,6 +439,61 @@ as criticals rather than suggestions:
 Also still open from round 5 and unchanged: `compute_state` parsing per hostname per tick, and
 the self-signed guard not catching a private CA.
 
+## Round 6 follow-up: the CA-chosen SAN question, settled
+
+The reviewer read a CSR certificate binding by the CA's SAN set as the CA controlling which
+hostnames this host serves. Two things close it.
+
+**Nothing serves a name no ingress declares.** `build_policy` gives Caddy an explicit `subjects`
+list — ingress-declared TLS vhosts plus warm-cert hostnames — with `on_demand: false`, so Caddy
+never asks for a certificate for a name outside that set, and the serving endpoint is token-gated
+besides. A substituted SAN for an undeclared name is an unused row, not a served certificate.
+This also deflates the amplification framing of the serving-scan critical: random SNI does not
+reach the lookup, so the scan is bounded by declared hostnames rather than by attacker input.
+
+**The remaining case is the intended behaviour, confirmed by the user.** A CSR begun for
+`a.doma.in` that comes back as `*.doma.in` should be taken up by every name it covers —
+`b.doma.in` included. That is auto-binding working, not a substitution attack.
+
+Checking that against the ranking turned up a defect in round 5's fix that no review round had
+reported: `Rank` ordered `exact` above `trusted`, so a **self-signed certificate naming the
+hostname exactly outranked a trusted wildcard** — round 5's critical in a new shape, and it
+would have stopped exactly the takeover the user wants. Trust now ranks above specificity: a
+certificate clients reject is no use for a hostname however precisely it names it, so a wildcard
+they accept has to be able to take over from a dedicated certificate they do not. Spec
+precedence reordered to match.
+
+Where a hostname still holds a valid, trusted, dedicated certificate, that one goes on serving
+and the wildcard takes over when it expires — `unexpired` ranks top. That is the wanted
+behaviour in both directions.
+
+Spawned **A5**: renewing a CSR certificate starts from the original request rather than from
+what the CA issued, so an operator who received a wildcard retypes the name that did not get
+issued last time. Depends on W4 for multi-SAN certificates, and carries an open choice between
+re-requesting the issued set and re-requesting the needed set.
+
+## The resolution-cost split
+
+The control-plane half is done here; the serving half is **B5**.
+
+`state::Snapshot` now parses each active certificate's SAN list once when it is built, and both
+in-memory matchers read through that. Resolution is per hostname and every caller loops over
+hostnames — renewal over due certificates, the expiry sweep over ingress targets, the operator
+rollup over the whole set — so parsing inside the matcher cost one X.509 parse per hostname per
+certificate, per tick. The snapshot is immutable for the length of those loops, so the parse
+belongs to the snapshot.
+
+The memo is not a source of truth. A certificate missing from the map is parsed on the spot, so
+a snapshot assembled without it is slower and never wrong — the same discipline this subsystem
+learned the hard way about the `hostname` label, applied before rather than after.
+
+**B5** covers the serving lookup, which still scans. Its card records the thing worth not
+losing: an earlier round argued the scan as a remote denial-of-service vector, and that framing
+does not hold. Caddy is configured with an explicit `subjects` list and `on_demand: false`, and
+the endpoint is token-gated, so arbitrary remote SNI never reaches the lookup. It is a
+performance card, and its shape — a `tls_cert_sans` index that narrows candidates but is
+confirmed against the certificate before anything is served — is written down there.
+
 ## Noted, not actioned
 
 - `TlsCertState::Failed` is never constructed anywhere in the tree. Its mention in

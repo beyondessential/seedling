@@ -16,6 +16,8 @@
 //! function. The functions here are pure over a [`Snapshot`] of DB
 //! state; the snapshot is loaded once and reused per call.
 
+use std::collections::BTreeMap;
+
 use jiff::Timestamp;
 use seedling_protocol::names::AppName;
 
@@ -103,21 +105,73 @@ pub struct Snapshot {
     pub force_retries: Vec<TlsCertForceRetry>,
     pub settings: TlsSettings,
     pub now: i64,
+    /// SAN list per certificate id, parsed once when the snapshot is built.
+    ///
+    /// Resolution is per hostname and every caller loops over hostnames —
+    /// renewal over due certs, the expiry sweep over ingress targets, the
+    /// operator rollup over the whole hostname set — so parsing inside the
+    /// matcher costs one X.509 parse per hostname per certificate. The
+    /// snapshot is immutable for the length of those loops, so the parse
+    /// belongs here.
+    ///
+    /// A memo, not a source of truth: a certificate missing from the map is
+    /// parsed on the spot rather than treated as covering nothing. A snapshot
+    /// assembled without it is slower, never wrong — which is the same
+    /// discipline this subsystem learned about the `hostname` label.
+    sans: BTreeMap<i64, Vec<String>>,
 }
 
 impl Snapshot {
     /// Load a fresh snapshot of TLS state from the DB.
     pub fn load(db: &Db) -> rusqlite::Result<Self> {
+        let certificates = store::list_certificates(db)?;
+        let sans = index_sans(&certificates);
         Ok(Self {
             policies: store::list_policies(db)?,
-            certificates: store::list_certificates(db)?,
+            certificates,
             attempts: store::list_attempts(db, None, 1000)?,
             retry_blocks: store::list_retry_blocks(db)?,
             force_retries: store::list_force_retries(db)?,
             settings: store::get_settings(db)?,
             now: Timestamp::now().as_second(),
+            sans,
         })
     }
+
+    /// The certificate's SAN list, from the memo when it is there and by
+    /// parsing when it is not.
+    fn sans_for(&self, cert: &TlsCertificate) -> Option<Vec<String>> {
+        if let Some(sans) = self.sans.get(&cert.id) {
+            return Some(sans.clone());
+        }
+        let pem = cert.cert_pem.as_deref()?;
+        match super::parse::leaf_san_dns_names(pem) {
+            Ok(sans) => Some(sans),
+            Err(e) => {
+                tracing::warn!(
+                    cert_id = cert.id,
+                    error = %e,
+                    "stored certificate could not be parsed; skipping it when resolving a hostname"
+                );
+                None
+            }
+        }
+    }
+}
+
+/// Parse each certificate's SAN list once. Certificates that will not parse
+/// are left out, and the fallback in [`Snapshot::sans_for`] reports them per
+/// use rather than here, so the warning names the lookup that hit it.
+fn index_sans(certificates: &[TlsCertificate]) -> BTreeMap<i64, Vec<String>> {
+    certificates
+        .iter()
+        .filter(|c| c.state == TlsCertState::Active)
+        .filter_map(|c| {
+            let pem = c.cert_pem.as_deref()?;
+            let sans = super::parse::leaf_san_dns_names(pem).ok()?;
+            Some((c.id, sans))
+        })
+        .collect()
 }
 
 /// Resolved per-hostname state. Borrows from the [`Snapshot`] it was
@@ -213,7 +267,7 @@ pub fn compute_state<'a>(snap: &'a Snapshot, hostname: &str) -> HostnameState<'a
     let policy = resolve_policy(&snap.policies, hostname);
 
     // Coverage-only lookup, the same rule the serving path applies.
-    let active_cert = find_active_for_hostname(&snap.certificates, hostname, snap.now);
+    let active_cert = find_active_for_hostname(snap, hostname, snap.now);
 
     // A certificate staged ahead of its `notBefore` is not serving, so it is
     // not `active_cert` — but it is not absent either, and reporting absence
@@ -222,7 +276,7 @@ pub fn compute_state<'a>(snap: &'a Snapshot, hostname: &str) -> HostnameState<'a
     // `debounce_until`), so nothing else would stop it.
     // r[impl tls.cert.serve]
     let staged_from = if active_cert.is_none() {
-        staged_start_for_hostname(&snap.certificates, hostname, snap.now)
+        staged_start_for_hostname(snap, hostname, snap.now)
     } else {
         None
     };
@@ -339,28 +393,18 @@ pub fn is_caddy_internal(hostname: &str) -> bool {
 // r[impl tls.cert.validation.san-coverage]
 // r[impl tls.cert.serve]
 fn find_active_for_hostname<'a>(
-    certs: &'a [TlsCertificate],
+    snap: &'a Snapshot,
     hostname: &str,
     now: i64,
 ) -> Option<&'a TlsCertificate> {
     let mut best: Option<(super::resolve::Rank, &TlsCertificate)> = None;
-    for cert in certs
+    for cert in snap
+        .certificates
         .iter()
         .filter(|c| c.state == TlsCertState::Active && !c.not_before.is_some_and(|nb| nb > now))
     {
-        let Some(pem) = cert.cert_pem.as_deref() else {
+        let Some(sans) = snap.sans_for(cert) else {
             continue;
-        };
-        let sans = match super::parse::leaf_san_dns_names(pem) {
-            Ok(sans) => sans,
-            Err(e) => {
-                tracing::warn!(
-                    cert_id = cert.id,
-                    error = %e,
-                    "stored certificate could not be parsed; skipping it when resolving a hostname"
-                );
-                continue;
-            }
         };
         if let Some(rank) = super::resolve::rank(
             &sans,
@@ -384,16 +428,14 @@ fn find_active_for_hostname<'a>(
 /// Ranked the same way as [`find_active_for_hostname`], so the answer concerns
 /// the certificate that will actually be served once the window opens.
 // r[impl tls.cert.serve]
-fn staged_start_for_hostname(certs: &[TlsCertificate], hostname: &str, now: i64) -> Option<i64> {
+fn staged_start_for_hostname(snap: &Snapshot, hostname: &str, now: i64) -> Option<i64> {
     let mut best: Option<(super::resolve::Rank, i64)> = None;
-    for cert in certs
+    for cert in snap
+        .certificates
         .iter()
         .filter(|c| c.state == TlsCertState::Active && c.not_before.is_some_and(|nb| nb > now))
     {
-        let Some(pem) = cert.cert_pem.as_deref() else {
-            continue;
-        };
-        let Ok(sans) = super::parse::leaf_san_dns_names(pem) else {
+        let Some(sans) = snap.sans_for(cert) else {
             continue;
         };
         if let Some(rank) = super::resolve::rank(
@@ -595,6 +637,7 @@ mod tests {
         contact_email: &str,
         now: i64,
     ) -> Snapshot {
+        let sans = index_sans(&certs);
         Snapshot {
             policies,
             certificates: certs,
@@ -607,7 +650,15 @@ mod tests {
                 updated_at: now,
             },
             now,
+            sans,
         }
+    }
+
+    /// A snapshot carrying only certificates, for the matcher tests. Goes
+    /// through `snap` so the SAN memo is built the same way it is in
+    /// production.
+    fn certs_snap(certs: Vec<TlsCertificate>, now: i64) -> Snapshot {
+        snap(vec![], certs, vec![], vec![], vec![], "ops@x", now)
     }
 
     fn policy_acme(hostname: &str, provider: &str) -> TlsPolicyRow {
@@ -650,14 +701,15 @@ mod tests {
         staged.not_before = Some(now + 86_400);
 
         assert!(
-            find_active_for_hostname(&[staged.clone()], "example.com", now).is_none(),
+            find_active_for_hostname(&certs_snap(vec![staged.clone()], now), "example.com", now)
+                .is_none(),
             "a staged cert must not be reported as serving",
         );
 
         // The certificate it was staged to replace is still the active one.
         let mut incumbent = fake_cert("example.com", 2, 0, i64::MAX);
         incumbent.created_at = now - 100;
-        let certs = [staged, incumbent];
+        let certs = certs_snap(vec![staged, incumbent], now);
         assert_eq!(
             find_active_for_hostname(&certs, "example.com", now)
                 .expect("the incumbent still covers the hostname")
@@ -681,18 +733,22 @@ mod tests {
         }
 
         // Labelled www.example.com, carries only example.com.
-        let mislabelled = [labelled(1, "www.example.com", &["example.com"], 200)];
+        let mislabelled = vec![labelled(1, "www.example.com", &["example.com"], 200)];
         assert!(
-            find_active_for_hostname(&mislabelled, "www.example.com", 1_000).is_none(),
+            find_active_for_hostname(&certs_snap(mislabelled, 1_000), "www.example.com", 1_000)
+                .is_none(),
             "the label must not stand in for coverage",
         );
 
         // The certificate that does cover the name wins, despite being older
         // and despite the mislabelled row matching the label exactly.
-        let certs = [
-            labelled(1, "www.example.com", &["example.com"], 200),
-            labelled(2, "example.com", &["www.example.com"], 100),
-        ];
+        let certs = certs_snap(
+            vec![
+                labelled(1, "www.example.com", &["example.com"], 200),
+                labelled(2, "example.com", &["www.example.com"], 100),
+            ],
+            1_000,
+        );
         let found = find_active_for_hostname(&certs, "www.example.com", 1_000)
             .expect("a certificate covers www.example.com");
         assert_eq!(found.id, 2);
