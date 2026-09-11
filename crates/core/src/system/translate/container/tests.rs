@@ -913,3 +913,40 @@ fn no_user_flag_when_unset() {
         "an unset user leaves the image's default in place"
     );
 }
+
+// r[verify update.spec-hash]
+// These are applied as systemd unit properties rather than podman flags, so
+// hashing the argv alone missed them: changing either left the reconciler
+// seeing the running instance as up to date, and the new stop behaviour
+// never reached it.
+#[test]
+fn spec_hash_covers_the_stop_signal_and_timeout() {
+    let base = bare_spec();
+
+    let mut with_signal = bare_spec();
+    with_signal.stop_signal = Some("SIGUSR1".to_string());
+
+    let mut with_other_signal = bare_spec();
+    with_other_signal.stop_signal = Some("SIGQUIT".to_string());
+
+    let mut with_timeout = bare_spec();
+    with_timeout.stop_timeout_secs = Some(90);
+
+    assert_ne!(spec_hash(&base), spec_hash(&with_signal));
+    assert_ne!(spec_hash(&with_signal), spec_hash(&with_other_signal));
+    assert_ne!(spec_hash(&base), spec_hash(&with_timeout));
+}
+
+// r[verify update.spec-hash]
+// Appended only when set, so a container that uses neither keeps the hash it
+// already has and is not restarted just for this change.
+#[test]
+fn spec_hash_is_unchanged_when_neither_is_set() {
+    use sha2::{Digest, Sha256};
+
+    let spec = bare_spec();
+    assert!(spec.stop_signal.is_none() && spec.stop_timeout_secs.is_none());
+    let digest = Sha256::digest(podman_args(&spec).join("\x00").as_bytes());
+    let expected: String = digest.iter().map(|b| format!("{b:02x}")).collect();
+    assert_eq!(spec_hash(&spec), expected);
+}
