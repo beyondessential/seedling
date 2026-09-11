@@ -106,6 +106,50 @@ rather than left for a reader to find in the diff.
 - **Schema-version assertions.** Two `runtime::db::tests` pin the migration count; bumped
   from 55 to 56.
 
+## Review round 1
+
+Three things came back, two of them real defects in this card's own work.
+
+- **Supersession compared labels, not SAN sets** (critical, confirmed). Retiring every active
+  row sharing the arriving certificate's primary SAN strands any name those rows carried and
+  the arriving one does not: a CSR for `www.example.com` signed as
+  `[example.com, www.example.com]` would retire an incumbent carrying
+  `[example.com, shop.example.com]`, leaving `shop.example.com` with nothing. This is exactly
+  what the clause added to `r[tls.cert.validation.san-coverage]` this round forbids, so the
+  code contradicted the spec written alongside it, and the doc comment asserting the
+  guarantee was simply wrong. `supersede_other_active_for_hostname` now takes the arriving
+  SAN set and retires a candidate only when it covers every name that candidate serves. Fixed
+  in the store rather than at the four call sites, so ACME and Tailscale issuance — which had
+  the same hazard against a manual cert with extra SANs — are covered too.
+
+- **The serving fast path trusted the label** (root cause behind the flagged test). The
+  reviewer was right that the serving tests never built the row they were written to guard
+  against, and the reason they could not is that the fast path had no defence to test: it
+  matched the `hostname` column and returned. Making the write path label rows correctly does
+  nothing for rows written before this change, which a database upgraded from an affected
+  deployment still holds. The label is now an index hint confirmed against the certificate
+  before it is trusted, falling through to the coverage scan when it does not hold. That
+  satisfies the spec's serving clause unconditionally, and heals legacy mislabelled rows at
+  read time — which is why no label-repair migration was added: such a row is no longer
+  served for a name it cannot carry, and `request_covered` surfaces it as
+  "request not covered" in the listing so an operator can see it.
+
+- **Chain parse per listed row** (suggestion). `parse_chain` re-encodes the whole chain and
+  allocates SPKI, serial and AKI bytes to answer a coverage question that needs none of them.
+  Added `parse::leaf_san_dns_names` and `parse::cert_covers`, which read the leaf and stop,
+  and routed the listing, both serving matchers, and supersession through them. Coverage is
+  computed rather than persisted: a stored boolean would be derived state able to drift from
+  the certificate it describes.
+
+Test fixtures across `store`, `state` and `serve` carried placeholder PEMs like `"PEM"`. Now
+that a row's label is confirmed against its certificate, those rows are unservable by
+construction, so the fixtures build real certificates for the name they are stored under.
+
+Not actioned: the below-threshold note that `CERT_COLUMNS` turned four `&'static str`
+statements into per-call `format!` allocations. True, but the same path now does an X.509
+leaf parse, which dominates a ~200-byte allocation by orders of magnitude; a macro to recover
+it would cost more in readability than it returns.
+
 ## Noted, not actioned
 
 - `TlsCertState::Failed` is never constructed anywhere in the tree. Its mention in

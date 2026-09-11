@@ -321,13 +321,22 @@ fn find_active_for_hostname<'a>(
     certs: &'a [TlsCertificate],
     hostname: &str,
 ) -> Option<&'a TlsCertificate> {
-    // Fast path: exact-hostname-column match.
+    // Fast path: exact-label match, confirmed against the certificate. The
+    // label is an index hint; a row whose label says one thing while its
+    // certificate covers another must not be picked in preference to the
+    // certificate that does cover the hostname.
+    // r[impl tls.cert.validation.san-coverage]
     let exact = certs
         .iter()
         .filter(|c| c.state == TlsCertState::Active && c.hostname == hostname)
         .max_by_key(|c| c.created_at);
-    if exact.is_some() {
-        return exact;
+    if let Some(cert) = exact
+        && cert
+            .cert_pem
+            .as_deref()
+            .is_some_and(|pem| super::parse::cert_covers(pem, hostname).unwrap_or(false))
+    {
+        return Some(cert);
     }
 
     // SAN-coverage scan, newest-first.
@@ -481,6 +490,16 @@ mod tests {
         TlsPolicy,
     };
 
+    /// A real self-signed certificate for `hostname`. The matcher confirms a
+    /// row's label against its certificate, so a placeholder PEM would make
+    /// every fixture unservable for the name it is supposed to be about.
+    fn cert_pem_for(hostname: &str) -> String {
+        let key = rcgen::KeyPair::generate_for(&rcgen::PKCS_ECDSA_P256_SHA256).expect("keypair");
+        let mut params = rcgen::CertificateParams::new(vec![hostname.to_owned()]).expect("params");
+        params.distinguished_name = rcgen::DistinguishedName::new();
+        params.self_signed(&key).expect("self-sign").pem()
+    }
+
     fn fake_cert(hostname: &str, id: i64, not_before: i64, not_after: i64) -> TlsCertificate {
         TlsCertificate {
             id,
@@ -488,7 +507,7 @@ mod tests {
             requested_hostname: None,
             state: TlsCertState::Active,
             origin: TlsCertOrigin::AcmeDns,
-            cert_pem: Some("PEM".to_owned()),
+            cert_pem: Some(cert_pem_for(hostname)),
             csr_pem: None,
             key_ciphertext: vec![0u8; 32],
             key_type: KeyType::EcdsaP256,
@@ -559,13 +578,13 @@ mod tests {
     }
 
     /// The in-memory matcher shares the store matcher's rules, including the
-    /// exact-label fast path — which is only sound while a row's label is its
-    /// certificate's own primary SAN. A row labelled with a name its
-    /// certificate does not carry would shadow the certificate that does.
+    /// exact-label fast path. A row written before the label was made to follow
+    /// the certificate claims a name its certificate does not carry, and must
+    /// not be served for it.
     // r[verify tls.cert.validation.san-coverage]
     #[test]
     fn find_active_for_hostname_does_not_hand_out_a_non_covering_cert() {
-        fn real_cert(label: &str, sans: &[&str], created_at: i64) -> TlsCertificate {
+        fn labelled(id: i64, label: &str, sans: &[&str], created_at: i64) -> TlsCertificate {
             let key =
                 rcgen::KeyPair::generate_for(&rcgen::PKCS_ECDSA_P256_SHA256).expect("keypair");
             let mut params = rcgen::CertificateParams::new(
@@ -573,22 +592,28 @@ mod tests {
             )
             .expect("params");
             params.distinguished_name = rcgen::DistinguishedName::new();
-            let mut cert = fake_cert(label, 1, 0, i64::MAX);
+            let mut cert = fake_cert(label, id, 0, i64::MAX);
             cert.cert_pem = Some(params.self_signed(&key).expect("self-sign").pem());
             cert.created_at = created_at;
             cert
         }
 
-        let mut covering = real_cert("www.example.com", &["www.example.com"], 100);
-        covering.id = 1;
-        // Newer, so it would win the newest-first scan if it were consulted.
-        let mut other = real_cert("example.com", &["example.com"], 200);
-        other.id = 2;
+        // Labelled www.example.com, carries only example.com.
+        let mislabelled = [labelled(1, "www.example.com", &["example.com"], 200)];
+        assert!(
+            find_active_for_hostname(&mislabelled, "www.example.com").is_none(),
+            "the label must not stand in for coverage",
+        );
 
-        let certs = [covering, other];
+        // The certificate that does cover the name wins, despite being older
+        // and despite the mislabelled row matching the label exactly.
+        let certs = [
+            labelled(1, "www.example.com", &["example.com"], 200),
+            labelled(2, "example.com", &["www.example.com"], 100),
+        ];
         let found = find_active_for_hostname(&certs, "www.example.com")
             .expect("a certificate covers www.example.com");
-        assert_eq!(found.id, 1);
+        assert_eq!(found.id, 2);
     }
 
     #[test]

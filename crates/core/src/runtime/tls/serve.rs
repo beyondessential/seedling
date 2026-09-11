@@ -308,6 +308,15 @@ mod tests {
         (db, cipher)
     }
 
+    /// The serving lookup confirms a row's label against its certificate, so
+    /// fixtures carry a real certificate for the name they are stored under.
+    fn real_cert_pem(hostname: &str) -> String {
+        let key = rcgen::KeyPair::generate_for(&rcgen::PKCS_ECDSA_P256_SHA256).expect("keypair");
+        let mut params = rcgen::CertificateParams::new(vec![hostname.to_owned()]).expect("params");
+        params.distinguished_name = rcgen::DistinguishedName::new();
+        params.self_signed(&key).expect("self-sign").pem()
+    }
+
     fn insert_active(db: &DbHandle, cipher: &Cipher, hostname: &str, key_pem: &str) -> i64 {
         let host = hostname.to_owned();
         let key_ct = cipher
@@ -321,9 +330,7 @@ mod tests {
                     requested_hostname: None,
                     state: TlsCertState::Active,
                     origin: TlsCertOrigin::Manual,
-                    cert_pem: Some(
-                        "-----BEGIN CERTIFICATE-----\nMIIBcert\n-----END CERTIFICATE-----\n",
-                    ),
+                    cert_pem: Some(&real_cert_pem(&host)),
                     csr_pem: None,
                     key_ciphertext: &key_ct,
                     key_type: KeyType::EcdsaP256,

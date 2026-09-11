@@ -375,6 +375,14 @@ pub fn find_active_for_hostname(
 ) -> rusqlite::Result<Option<TlsCertificate>> {
     let now = now_secs();
 
+    // The label is an index hint, not an answer. A row whose label says one
+    // thing while its certificate covers another would otherwise be handed out
+    // for a name it cannot serve — a TLS name mismatch — in preference to the
+    // certificate that does cover it. Rows written before the label was made
+    // to follow the certificate can be exactly that, so the hint is confirmed
+    // against the certificate before it is trusted, and falls through to the
+    // scan when it does not hold.
+    // r[impl tls.cert.validation.san-coverage]
     if let Some(cert) = db
         .conn
         .query_row(
@@ -389,6 +397,10 @@ pub fn find_active_for_hostname(
             row_to_certificate,
         )
         .optional()?
+        && cert
+            .cert_pem
+            .as_deref()
+            .is_some_and(|pem| super::parse::cert_covers(pem, hostname).unwrap_or(false))
     {
         return Ok(Some(cert));
     }
@@ -468,27 +480,60 @@ pub fn update_certificate(
     Ok(())
 }
 
-/// Mark all currently-active certs labelled `hostname` (other than `keep_id`)
-/// as superseded. Called after a successful renewal/upload so handshakes pick
-/// up the new cert and the old one moves to history.
+/// Retire the active certificates that the certificate `keep_id` replaces.
 ///
-/// `hostname` is a primary-SAN label, so this only ever retires certificates
-/// that share the arriving certificate's own primary SAN. Passing a name the
-/// arriving certificate does not carry would retire a certificate that is
-/// still serving that name, leaving the hostname with nothing behind it.
+/// Candidates are the other active rows sharing the arriving certificate's
+/// primary-SAN label, which is how a renewal finds its predecessor. Sharing a
+/// label says nothing about the rest of a candidate's SAN set, though: a
+/// candidate carrying `[example.com, shop.example.com]` shares its label with
+/// an arriving `[example.com, www.example.com]` while serving a name the
+/// arriving certificate cannot. Retiring it would leave `shop.example.com`
+/// with no active certificate at all.
+///
+/// So a candidate is retired only when the arriving certificate covers every
+/// name the candidate serves. A candidate whose certificate cannot be read is
+/// left alone: being unable to tell what it serves is not the same as knowing
+/// the arriving certificate replaces it.
+///
+/// Returns the number of rows retired.
 // r[impl tls.cert.validation.san-coverage]
 pub fn supersede_other_active_for_hostname(
     db: &Db,
     hostname: &str,
     keep_id: i64,
+    arriving_sans: &[String],
 ) -> rusqlite::Result<usize> {
+    let candidates: Vec<TlsCertificate> = {
+        let mut stmt = db.conn.prepare(&format!(
+            "SELECT {CERT_COLUMNS}
+             FROM tls_certificates
+             WHERE hostname = ?1 AND state = 'active' AND id != ?2"
+        ))?;
+        stmt.query_map(params![hostname, keep_id], row_to_certificate)?
+            .collect::<rusqlite::Result<_>>()?
+    };
+
     let now = now_secs();
-    let n = db.conn.execute(
-        "UPDATE tls_certificates SET state = 'superseded', updated_at = ?1
-         WHERE hostname = ?2 AND state = 'active' AND id != ?3",
-        params![now, hostname, keep_id],
-    )?;
-    Ok(n)
+    let mut retired = 0;
+    for candidate in candidates {
+        let Some(pem) = candidate.cert_pem.as_deref() else {
+            continue;
+        };
+        let Ok(served) = super::parse::leaf_san_dns_names(pem) else {
+            continue;
+        };
+        if !served
+            .iter()
+            .all(|name| super::parse::san_covers(arriving_sans, name))
+        {
+            continue;
+        }
+        retired += db.conn.execute(
+            "UPDATE tls_certificates SET state = 'superseded', updated_at = ?1 WHERE id = ?2",
+            params![now, candidate.id],
+        )?;
+    }
+    Ok(retired)
 }
 
 pub fn delete_certificate(db: &Db, id: i64) -> rusqlite::Result<bool> {
@@ -1076,6 +1121,17 @@ mod tests {
         );
     }
 
+    /// A real self-signed certificate carrying exactly `sans`, so the coverage
+    /// checks have something they can parse.
+    fn real_cert_pem(sans: &[&str]) -> String {
+        let key = rcgen::KeyPair::generate_for(&rcgen::PKCS_ECDSA_P256_SHA256).expect("keypair");
+        let mut params =
+            rcgen::CertificateParams::new(sans.iter().map(|s| (*s).to_owned()).collect::<Vec<_>>())
+                .expect("params");
+        params.distinguished_name = rcgen::DistinguishedName::new();
+        params.self_signed(&key).expect("self-sign").pem()
+    }
+
     fn insert_test_cert(db: &Db, hostname: &str) -> i64 {
         insert_certificate(
             db,
@@ -1084,9 +1140,7 @@ mod tests {
                 requested_hostname: None,
                 state: TlsCertState::Active,
                 origin: TlsCertOrigin::Manual,
-                cert_pem: Some(
-                    "-----BEGIN CERTIFICATE-----\nMIIBdummy\n-----END CERTIFICATE-----\n",
-                ),
+                cert_pem: Some(&real_cert_pem(&[hostname])),
                 csr_pem: None,
                 key_ciphertext: b"encrypted-key-bytes",
                 key_type: KeyType::EcdsaP256,
@@ -1127,9 +1181,7 @@ mod tests {
                 requested_hostname: None,
                 state: TlsCertState::Active,
                 origin: TlsCertOrigin::Manual,
-                cert_pem: Some(
-                    "-----BEGIN CERTIFICATE-----\nMIIBdummy\n-----END CERTIFICATE-----\n",
-                ),
+                cert_pem: Some(&real_cert_pem(&[hostname])),
                 csr_pem: None,
                 key_ciphertext: b"encrypted-key-bytes",
                 key_type: KeyType::EcdsaP256,
@@ -1160,18 +1212,10 @@ mod tests {
         assert_eq!(found.id, id2);
     }
 
-    /// A real certificate carrying exactly `sans`, so the SAN-coverage scan
-    /// has something it can parse.
-    fn real_cert_pem(sans: &[&str]) -> String {
-        let key = rcgen::KeyPair::generate_for(&rcgen::PKCS_ECDSA_P256_SHA256).expect("keypair");
-        let mut params =
-            rcgen::CertificateParams::new(sans.iter().map(|s| (*s).to_owned()).collect::<Vec<_>>())
-                .expect("params");
-        params.distinguished_name = rcgen::DistinguishedName::new();
-        params.self_signed(&key).expect("self-sign").pem()
-    }
-
-    fn insert_real_cert(db: &Db, label: &str, sans: &[&str]) -> i64 {
+    /// A row labelled `label` whose certificate carries exactly `sans`. The two
+    /// are separate arguments so a test can build the mislabelled row this
+    /// subsystem is meant to make impossible.
+    fn insert_labelled_cert(db: &Db, label: &str, sans: &[&str]) -> i64 {
         insert_certificate(
             db,
             NewCertificate {
@@ -1194,25 +1238,96 @@ mod tests {
         .unwrap()
     }
 
-    /// The fast path matches on the `hostname` column, so it is only sound
-    /// while that column is the certificate's own primary SAN. A row labelled
-    /// with a name its certificate does not carry would be handed out for that
-    /// name — a TLS name mismatch — in preference to the certificate that does
-    /// cover it.
+    /// A row written before the label was made to follow the certificate: it
+    /// claims `www.example.com` while carrying a certificate for
+    /// `example.com`. Serving it for the name on the label would be a TLS name
+    /// mismatch, so the lookup must not prefer it to the certificate that does
+    /// cover that name — nor return it when no other does.
     // r[verify tls.cert.validation.san-coverage]
     // r[verify tls.cert.serve]
     #[test]
     fn find_active_for_hostname_does_not_hand_out_a_non_covering_cert() {
         let (db, _) = fresh_db();
-        let covering = insert_real_cert(&db, "www.example.com", &["www.example.com"]);
-        // Newer, and would win the newest-first scan if it were consulted.
-        let _other = insert_real_cert(&db, "example.com", &["example.com"]);
+        let mislabelled = insert_labelled_cert(&db, "www.example.com", &["example.com"]);
 
+        assert!(
+            find_active_for_hostname(&db, "www.example.com")
+                .unwrap()
+                .is_none(),
+            "a row labelled www.example.com whose cert covers only example.com \
+             must not be served for www.example.com",
+        );
+
+        // And once a certificate that really does cover the name exists, that
+        // is the one handed out, even though the mislabelled row is newer.
+        let covering = insert_labelled_cert(&db, "example.com", &["www.example.com"]);
         let found = find_active_for_hostname(&db, "www.example.com")
             .unwrap()
             .expect("a certificate covers www.example.com");
         assert_eq!(found.id, covering);
-        assert_eq!(found.hostname, "www.example.com");
+        assert_ne!(found.id, mislabelled);
+    }
+
+    /// An arriving certificate replaces what it can serve in full, and nothing
+    /// else. A candidate sharing its label may still carry names it does not
+    /// cover; retiring that candidate would leave those names with no active
+    /// certificate at all.
+    // r[verify tls.cert.validation.san-coverage]
+    #[test]
+    fn supersede_spares_a_cert_serving_a_name_the_new_one_does_not_cover() {
+        let (db, _) = fresh_db();
+        let incumbent =
+            insert_labelled_cert(&db, "example.com", &["example.com", "shop.example.com"]);
+        let arriving =
+            insert_labelled_cert(&db, "example.com", &["example.com", "www.example.com"]);
+
+        let retired = supersede_other_active_for_hostname(
+            &db,
+            "example.com",
+            arriving,
+            &["example.com".to_owned(), "www.example.com".to_owned()],
+        )
+        .unwrap();
+
+        assert_eq!(retired, 0, "shop.example.com would have been stranded");
+        assert_eq!(
+            get_certificate(&db, incumbent).unwrap().unwrap().state,
+            TlsCertState::Active
+        );
+        // ...and it is still what shop.example.com is served.
+        assert_eq!(
+            find_active_for_hostname(&db, "shop.example.com")
+                .unwrap()
+                .expect("shop.example.com still has a certificate")
+                .id,
+            incumbent
+        );
+    }
+
+    /// The renewal case the supersession exists for: the arriving certificate
+    /// covers everything the incumbent did, so the incumbent moves to history.
+    // r[verify tls.cert.validation.san-coverage]
+    #[test]
+    fn supersede_retires_a_cert_the_new_one_fully_covers() {
+        let (db, _) = fresh_db();
+        let incumbent =
+            insert_labelled_cert(&db, "example.com", &["example.com", "www.example.com"]);
+        let arriving =
+            insert_labelled_cert(&db, "example.com", &["example.com", "www.example.com"]);
+
+        let retired = supersede_other_active_for_hostname(
+            &db,
+            "example.com",
+            arriving,
+            &["example.com".to_owned(), "www.example.com".to_owned()],
+        )
+        .unwrap();
+
+        assert_eq!(retired, 1);
+        assert_eq!(
+            get_certificate(&db, incumbent).unwrap().unwrap().state,
+            TlsCertState::Superseded
+        );
     }
 
     // r[verify tls.cert.serve]
@@ -1267,7 +1382,13 @@ mod tests {
         let id2 = insert_test_cert(&db, "a.example.com");
         let id3 = insert_test_cert(&db, "b.example.com");
 
-        let n = supersede_other_active_for_hostname(&db, "a.example.com", id2).unwrap();
+        let n = supersede_other_active_for_hostname(
+            &db,
+            "a.example.com",
+            id2,
+            &["a.example.com".to_owned()],
+        )
+        .unwrap();
         assert_eq!(n, 1);
 
         assert_eq!(

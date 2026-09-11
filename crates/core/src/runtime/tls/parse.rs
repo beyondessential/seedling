@@ -143,6 +143,59 @@ pub fn parse_chain(pem: &str) -> Result<ParsedChain> {
     })
 }
 
+/// The DNS names in the leaf certificate's SubjectAlternativeName extension.
+///
+/// [`parse_chain`] returns these too, but on the way it re-encodes the whole
+/// chain into a fresh string and allocates the SPKI, serial and AKI bytes. A
+/// coverage check wants none of that, and coverage is checked per serving
+/// lookup, per listed certificate, and per supersession candidate — so it gets
+/// a path that reads the leaf and stops.
+// r[impl tls.cert.validation.san-coverage]
+pub fn leaf_san_dns_names(pem: &str) -> Result<Vec<String>> {
+    let block = pem::parse_many(pem.as_bytes())
+        .map_err(|e| {
+            PemSnafu {
+                message: e.to_string(),
+            }
+            .build()
+        })?
+        .into_iter()
+        .find(|b| b.tag() == "CERTIFICATE")
+        .ok_or_else(|| NoCertBlockSnafu.build())?;
+
+    let (_, cert) =
+        x509_parser::certificate::X509Certificate::from_der(block.contents()).map_err(|e| {
+            X509Snafu {
+                message: e.to_string(),
+            }
+            .build()
+        })?;
+
+    let mut names = Vec::new();
+    for ext in cert.extensions() {
+        if let x509_parser::extensions::ParsedExtension::SubjectAlternativeName(san) =
+            ext.parsed_extension()
+        {
+            for name in &san.general_names {
+                if let x509_parser::extensions::GeneralName::DNSName(dns) = name {
+                    names.push((*dns).to_owned());
+                }
+            }
+        }
+    }
+    Ok(names)
+}
+
+/// Whether the certificate in `pem` covers `hostname`.
+///
+/// An error means the certificate could not be read, which is not the same
+/// answer as "does not cover" — callers must decide what to do about not
+/// knowing rather than treating it as a negative.
+// r[impl tls.cert.validation.san-coverage]
+pub fn cert_covers(pem: &str, hostname: &str) -> Result<bool> {
+    Ok(san_covers(&leaf_san_dns_names(pem)?, hostname))
+}
+
 /// Returns true if any DNS name in `sans` covers `hostname`. Wildcard rules
 /// per RFC 6125: `*.example.com` covers exactly one extra left-most label,
 /// matches `foo.example.com` but not `example.com` and not `a.b.example.com`.

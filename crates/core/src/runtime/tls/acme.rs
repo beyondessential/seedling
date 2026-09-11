@@ -237,6 +237,7 @@ pub async fn issue(
     let not_after = metadata.not_after.unwrap_or(0);
     let hostname_owned = params.hostname.to_owned();
     let chain_pem = parsed.chain_pem.clone();
+    let sans = parsed.san_dns_names.clone();
 
     let cert_id = db
         .call(move |db_inner| -> rusqlite::Result<i64> {
@@ -256,7 +257,7 @@ pub async fn issue(
                     acme_account_id: Some(account_id),
                 },
             )?;
-            store::supersede_other_active_for_hostname(db_inner, &hostname_owned, id)?;
+            store::supersede_other_active_for_hostname(db_inner, &hostname_owned, id, &sans)?;
             Ok(id)
         })
         .context(StorageSnafu)?;
