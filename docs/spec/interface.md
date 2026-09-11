@@ -273,7 +273,7 @@ Absent specification bugs, anything that is not defined here is either defined i
 >   for `volume`: `{ readonly, tmpfs, writes, exported, export_description }`.
 >   `container` has fields `image`, `command`, `args`, `env`, `volume_mounts`, `on_exit`, `memory`, `cpus`, `extra_caps`, `writable_rootfs`, `pids_limit`.
 >   `pod` has fields `service_mounts`, `http_bindings`, `tcp_bindings`, `udp_bindings` (each an array of strings).
->   `routes` is an array of objects with fields `prefix`, `compress`, and `balance`, one per HTTP route the service is served through, sorted by `prefix` for stable diffing. It is `null` for a service with no HTTP surface.
+>   `routes` is an array of objects with fields `prefix`, `compress`, `balance`, `rate_limit`, `headers`, and `served`, one per HTTP route the service is served through, sorted by `prefix` for stable diffing. It is `null` for a service with no HTTP surface.
 > - `params`: array of objects with fields `name`, `value`, `is_set`, `secret`, `kind`, `required`, `description`, and `default_value`.
 >   `is_set` is `true` when the parameter has a stored value.
 >   `value` is the string value if the parameter is set and not secret; `null` if the parameter is unset or if it is secret.
@@ -291,6 +291,10 @@ Absent specification bugs, anything that is not defined here is either defined i
 > `balance` is an object with fields `policy` (string), `try_duration`, and `interval` (the latter two in seconds).
 > `rate_limit` is `null` when the route is not rate limited, and otherwise an object with fields `max_events` (integer), `window` (seconds), and `shared` (boolean).
 > `shared` is true when the limit was declared on the service, so the route counts against a budget common to every route inheriting it; without it two routes reporting the same numbers could not be told apart from two routes holding one budget each.
+
+> `headers` is an object with fields `request` and `response`, each an object with fields `replace` and `add` (maps of header name to array of values) and `remove` (an array of header names).
+> A value is reported as an array whichever form the app declared it in, and a direction with no operations reports its three members empty rather than null, so a reader compares like with like across routes.
+> Because header operations resolve [per header name](language.md#l--service.http.proxy-settings.resolution), a route reports the operations in force on it whether it or the service declared them.
 >
 > A service whose backing pods declare no HTTP route bindings reports the single `/` route it is served through, so the array is never empty for an HTTP service.
 >

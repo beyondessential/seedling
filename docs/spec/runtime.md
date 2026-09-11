@@ -266,9 +266,24 @@ Absent specification bugs, anything that is not defined here is either defined i
 > Requests differing only in those respects are therefore counted against the same route, and a stricter limit on a nested prefix cannot be evaded by varying them.
 > Normalisation is the proxy's own and may be broader than a backend's, so where the two disagree a request is counted against the more specific prefix while the backend treats it as belonging to a less specific one — the direction that over-applies the stricter limit rather than escaping it.
 
+> r[service.http.route.headers]
+> Every reverse-proxy route the runtime emits must apply its resolved [header operations](language.md#l--service.http.headers) to the traffic it carries: the request operations to each request before it is proxied, and the response operations to each response before it is returned to the client.
+>
+> A request operation must reach the upstream, so a route replacing `Host` addresses its pods by the name the operation set, whatever hostname the client used to reach the ingress.
+> `Host` names the message's destination rather than travelling as an ordinary header, so a route that appears to set it while the pods still observe the client's hostname has not applied the operation at all.
+>
+> A response operation must be applied to every response the route serves, whether the upstream produced it or the proxy produced it in the upstream's place: a [rate-limit rejection](#r--service.http.route.rate-limiting), or a failure to reach any upstream.
+> A route declaring that nothing under it may be cached would otherwise go unhonoured for exactly the responses least worth caching.
+>
+> Operations must be applied as declared, without interpretation.
+> A header carrying several values must reach the other side carrying several, rather than folded into one.
+>
+> Header manipulation applies to reverse-proxy routes alone.
+> Redirect responses and non-HTTP forwarding must be emitted without it.
+
 > r[service.http.route.proxy-settings.visibility]
-> The compression, balancing, and rate-limit settings in force on a service and on each of its routes, after resolution, must be readable when inspecting the app that declares the service, as [app.describe.proxy-settings](interface.md#i--app.describe.proxy-settings) defines.
-> An operator diagnosing an uncompressed response, a failed request, or an unexpected 429 can then establish what the proxy was told to do without reading the app's script.
+> The compression, balancing, rate-limit, and header settings in force on a service and on each of its routes, after resolution, must be readable when inspecting the app that declares the service, as [app.describe.proxy-settings](interface.md#i--app.describe.proxy-settings) defines.
+> An operator diagnosing an uncompressed response, a failed request, an unexpected 429, or a header the pods did not send can then establish what the proxy was told to do without reading the app's script.
 >
 > These settings are declared by the app. The runtime provides no means to change them on a running app.
 
@@ -951,6 +966,15 @@ Some internal operations (for example [backup.list](#r--backup.list), [backup.re
 >
 > A hostname may carry both plaintext and TLS-terminating ingresses on different ports.
 > Each must be served from the listener matching its own termination, and the presence of a TLS-terminating ingress must not cause a plaintext ingress on the same hostname to be dropped or served only over TLS.
+
+> r[ingress.persistent-connections]
+> An HTTP/1.1 connection to an ingress must be persistent: the proxy must serve successive requests on the connection it was given rather than closing it after each exchange, and must hold an idle connection open long enough for a client to reuse it.
+>
+> This is a property of the platform rather than something an app declares.
+> HTTP/2 and HTTP/3 carry many requests over one connection by their own design, and a persistent HTTP/1.1 connection reaches the same reuse; a client is not made to pay a connection per request for speaking the older protocol.
+>
+> The proxy must reach this without emitting connection-management headers of its own onto responses, which are forbidden on HTTP/2 and HTTP/3 and would render a response there ill-formed.
+> An app therefore never needs to ask for keep-alive, and [cannot declare it](language.md#l--service.http.headers.fields) as a header operation.
 
 > r[actuate.ingress.warm-certs]
 > When an action closure invokes [`rt.warm_certs`](#l--rt.warm-certs) with a selection that contains TLS-terminating ingresses, the runtime must initiate certificate acquisition for those ingresses' hostnames without exposing the ingresses to live traffic.
