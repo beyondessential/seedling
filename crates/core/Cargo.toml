@@ -42,7 +42,7 @@ wildmatch.workspace = true
 zbus = { version = "5.16.0", features = ["tokio"] }
 zxcvbn = "3.1.1"
 whoami.workspace = true
-orion = "0.17.15"
+orion = "0.18.0"
 secrecy = "0.10.3"
 instant-acme = { version = "0.8.5", features = ["time"] }
 rcgen = "0.14.8"
