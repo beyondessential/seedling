@@ -87,14 +87,33 @@ pub struct HeadersSummary {
     pub response: HeaderOpsSummary,
 }
 
-/// The operations in one direction, as grouped in the defs layer.
+/// The operations in one direction.
 ///
-/// Reported directly rather than copied into a summary struct of its own: the
-/// two would be field-for-field identical in the same layer, and the copy
-/// could only drift from what it mirrors. A value declared as a bare string
-/// reports as a one-element array, so the shape does not vary with how it was
-/// written.
-pub type HeaderOpsSummary = crate::defs::service::GroupedHeaderOps;
+/// An explicit copy of the defs layer's grouping rather than a re-export of
+/// it, as every sibling summary here is. These field names are the documented
+/// `app.describe` interface; re-exporting would let a rename made for the
+/// proxy emitter's convenience change that interface with nothing in the way.
+/// The copy is what forces such a change to be deliberate, and to reach
+/// `interface.md` and `types.ts` with it.
+///
+/// A value declared as a bare string reports as a one-element array, so the
+/// shape does not vary with how it was written.
+#[derive(Serialize, Debug, PartialEq, Default)]
+pub struct HeaderOpsSummary {
+    pub replace: BTreeMap<String, Vec<String>>,
+    pub add: BTreeMap<String, Vec<String>>,
+    pub remove: Vec<String>,
+}
+
+impl From<crate::defs::service::GroupedHeaderOps> for HeaderOpsSummary {
+    fn from(grouped: crate::defs::service::GroupedHeaderOps) -> Self {
+        Self {
+            replace: grouped.replace,
+            add: grouped.add,
+            remove: grouped.remove,
+        }
+    }
+}
 
 #[derive(Serialize, Debug, PartialEq)]
 pub struct RateLimitSummary {
@@ -358,8 +377,8 @@ fn route_summaries(
                     shared: rl.scope == RateLimitScope::Service,
                 }),
                 headers: HeadersSummary {
-                    request: resolved.headers.request.into_grouped(),
-                    response: resolved.headers.response.into_grouped(),
+                    request: resolved.headers.request.into_grouped().into(),
+                    response: resolved.headers.response.into_grouped().into(),
                 },
             }
         })

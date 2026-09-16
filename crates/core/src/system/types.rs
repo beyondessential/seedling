@@ -489,7 +489,7 @@ pub struct RouteProxy {
     /// startup, so a document written before header manipulation existed must
     /// still load rather than stranding the cache.
     // r[impl service.http.route.headers]
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "RouteHeaders::is_empty")]
     pub headers: RouteHeaders,
 }
 
@@ -510,13 +510,13 @@ pub struct RouteHeaders {
 pub struct RouteHeaderOps {
     /// Header name to the values it is set to, discarding whatever the message
     /// carried.
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub replace: BTreeMap<String, Vec<String>>,
     /// Header name to values added alongside whatever the message carried.
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub add: BTreeMap<String, Vec<String>>,
     /// Header names discarded entirely.
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub remove: Vec<String>,
 }
 

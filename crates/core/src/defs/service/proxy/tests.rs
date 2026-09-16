@@ -721,7 +721,7 @@ fn one_name_may_not_carry_two_operations() {
 fn a_name_keeps_the_spelling_it_was_given() {
     let h = headers(r#"#{ response: #{ remove: ["X-Powered-By"] } }"#);
     assert_eq!(
-        h.response.grouped().remove,
+        h.response.clone().into_grouped().remove,
         vec!["X-Powered-By".to_string()]
     );
 }
@@ -788,7 +788,16 @@ fn an_override_is_recognised_whatever_the_case() {
         Some(HeaderOp::Replace(vec!["b".into()]))
     );
     // The spelling reported is the one that won, not the one it displaced.
-    assert_eq!(r.request.grouped().replace.keys().next().unwrap(), "host");
+    assert_eq!(
+        r.request
+            .clone()
+            .into_grouped()
+            .replace
+            .keys()
+            .next()
+            .unwrap(),
+        "host"
+    );
 }
 
 // l[verify service.http.proxy-settings.resolution]
@@ -818,4 +827,93 @@ fn headers_do_not_disturb_the_other_settings() {
     assert_eq!(r.rate_limit.expect("inherited").settings.max_events, 10);
     assert_eq!(r.compress.expect("inherited").minimum_length, 2048);
     assert_eq!(op(&r.headers.response, "server"), Some(HeaderOp::Remove));
+}
+
+// l[verify service.http.headers.fields]
+#[test]
+fn the_encoding_the_proxy_applied_is_refused() {
+    // The handler's response operations run after compression has named the
+    // encoding, so a route renaming or removing it would ship a compressed
+    // body advertised as something no client can decode.
+    for script in [
+        r#"#{ response: #{ replace: #{ "Content-Encoding": "identity" } } }"#,
+        r#"#{ response: #{ remove: ["content-encoding"] } }"#,
+    ] {
+        let e = headers_err(script);
+        assert!(e.contains("belongs to the proxy"), "{e}");
+    }
+    // Content-Type is the app's to set: the proxy reads it to decide what to
+    // compress but does not own it.
+    assert!(
+        headers(r#"#{ response: #{ replace: #{ "Content-Type": "text/plain" } } }"#)
+            .response
+            .len()
+            == 1
+    );
+}
+
+// l[verify service.http.headers.fields]
+#[test]
+fn an_empty_operation_map_is_refused() {
+    // As much a no-op as an empty `remove`, which already throws: a
+    // declaration that looks like it shapes headers must not do nothing.
+    for script in [
+        r#"#{ response: #{ replace: #{} } }"#,
+        r#"#{ response: #{ add: #{} } }"#,
+    ] {
+        let e = headers_err(script);
+        assert!(e.contains("must not be empty"), "{e}");
+    }
+}
+
+// l[verify service.http.headers.fields]
+#[test]
+fn a_name_past_the_length_bound_is_refused() {
+    let name = |n: usize| format!(r#"#{{ response: #{{ remove: ["{}"] }} }}"#, "x".repeat(n));
+    assert_eq!(headers(&name(MAX_HEADER_NAME_CHARS)).response.len(), 1);
+    let e = headers_err(&name(MAX_HEADER_NAME_CHARS + 1));
+    assert!(e.contains("at most"), "{e}");
+}
+
+// l[verify service.http.headers.fields]
+#[test]
+fn an_operation_past_the_value_count_bound_is_refused() {
+    // The operation count alone does not bound the declaration: one name may
+    // carry an array, so the array is bounded too.
+    let values = |n: usize| {
+        let vs: Vec<String> = (0..n).map(|i| format!(r#""v{i}""#)).collect();
+        format!(
+            r#"#{{ response: #{{ add: #{{ "Set-Cookie": [{}] }} }} }}"#,
+            vs.join(", ")
+        )
+    };
+    assert_eq!(headers(&values(MAX_HEADER_VALUES_PER_OP)).response.len(), 1);
+    let e = headers_err(&values(MAX_HEADER_VALUES_PER_OP + 1));
+    assert!(e.contains("one header may carry"), "{e}");
+}
+
+// l[verify service.http.headers]
+#[test]
+fn layering_lets_a_later_declaration_add_without_discarding() {
+    // What a second `headers()` call does. Per name the later one wins; the
+    // headers it does not name survive.
+    let mut settings =
+        headers(r#"#{ response: #{ replace: #{ "Cache-Control": "no-store", "X-Keep": "1" } } }"#);
+    settings.layer_over(headers(
+        r#"#{
+            response: #{ replace: #{ "Cache-Control": "public" } },
+            request: #{ remove: ["X-Internal"] },
+        }"#,
+    ));
+    assert_eq!(
+        op(&settings.response, "cache-control"),
+        Some(HeaderOp::Replace(vec!["public".into()]))
+    );
+    assert_eq!(
+        op(&settings.response, "x-keep"),
+        Some(HeaderOp::Replace(vec!["1".into()]))
+    );
+    // A direction only the later call named is added rather than replacing
+    // the other direction's operations.
+    assert_eq!(op(&settings.request, "x-internal"), Some(HeaderOp::Remove));
 }

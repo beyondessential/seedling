@@ -443,7 +443,8 @@ impl CustomType for HttpService {
                 "headers",
                 |this: &mut Self, config: Map| -> Result<Self, Box<EvalAltResult>> {
                     let settings = proxy::parse_headers(config)?;
-                    this.service.with_http_def(|d| d.headers = settings)?;
+                    this.service
+                        .with_http_def(|d| d.headers.layer_over(settings))?;
                     Ok(this.clone())
                 },
             )
@@ -547,7 +548,7 @@ impl CustomType for HttpServiceRoute {
                 "headers",
                 |this: &mut Self, config: Map| -> Result<Self, Box<EvalAltResult>> {
                     let settings = proxy::parse_headers(config)?;
-                    this.with_route_settings(|s| s.headers = settings)?;
+                    this.with_route_settings(|s| s.headers.layer_over(settings))?;
                     Ok(this.clone())
                 },
             );

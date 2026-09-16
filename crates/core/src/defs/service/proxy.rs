@@ -10,7 +10,6 @@
 use std::{cmp::Ordering, collections::BTreeMap};
 
 use rhai::{Dynamic, EvalAltResult, Map};
-use serde::Serialize;
 
 /// Caddy's own defaults, read from the source of the pinned proxy image so the
 /// emitter can leave a field out whenever it still holds its default.
@@ -33,14 +32,20 @@ pub const MIN_WINDOW_SECS: f64 = 0.001;
 pub const MAX_WINDOW_SECS: f64 = 3_600.0;
 pub const MAX_MAX_EVENTS: u64 = 1_000;
 
-/// Bounds on a direction's header operations.
+/// Bounds on one direction of one header declaration.
 ///
-/// Sanity ceilings like the rate-limit ones above, and for the same reason: a
-/// service's operations are copied onto every route inheriting them, held in
-/// the cached proxy configuration, and pushed through the admin API of a proxy
-/// every app on the host shares. A declaration past what an app could
-/// plausibly mean is refused rather than multiplied into that shared document.
+/// Sanity ceilings like the rate-limit ones above: a declaration far outside
+/// anything an app could mean is refused where the error still names the
+/// script that wrote it, rather than being copied onto every inheriting route
+/// and into the configuration of a proxy every app on the host shares.
+///
+/// They bound a declaration and not the result of resolving one. A service and
+/// a route each naming different headers exceed them between them, and that is
+/// deliberate: resolution runs outside script evaluation, where a throw could
+/// no longer name the line that caused it.
 pub const MAX_HEADER_OPS: usize = 64;
+pub const MAX_HEADER_NAME_CHARS: usize = 256;
+pub const MAX_HEADER_VALUES_PER_OP: usize = 16;
 pub const MAX_HEADER_VALUE_CHARS: usize = 4_096;
 pub const DEFAULT_TRY_DURATION_SECS: f64 = 5.0;
 pub const DEFAULT_INTERVAL_SECS: f64 = 0.25;
@@ -282,6 +287,13 @@ impl HeaderName {
         if name.is_empty() {
             return Err("a header name must not be empty".into());
         }
+        if name.chars().count() > MAX_HEADER_NAME_CHARS {
+            return Err(format!(
+                "a header name must be at most {MAX_HEADER_NAME_CHARS} characters, got {}",
+                name.chars().count()
+            )
+            .into());
+        }
         // RFC 9110 token characters. A name outside them cannot go on the wire
         // at all, so it is refused where the error still names the script that
         // wrote it rather than emitted for the proxy to reject at load.
@@ -298,7 +310,8 @@ impl HeaderName {
         // reach every header.
         if name.contains('*') {
             return Err(format!(
-                "header name `{name}` contains '*'; header names are matched exactly and                  there is no wildcard form"
+                "header name `{name}` contains '*'; header names are matched exactly \
+                 and there is no wildcard form"
             )
             .into());
         }
@@ -335,6 +348,14 @@ fn proxy_owned(name: &str) -> Option<&'static str> {
     }
     if name.eq_ignore_ascii_case("content-length") {
         return Some("the message's framing");
+    }
+    // The headers handler sits outermost in the chain with its response
+    // operations deferred, so they run after `encode` has compressed the body
+    // and named the encoding. A route renaming or removing it would ship a
+    // compressed body advertised as something no client can decode. Which
+    // encoding is applied is chosen through `compress`, not here.
+    if name.eq_ignore_ascii_case("content-encoding") {
+        return Some("the encoding the proxy applied");
     }
     None
 }
@@ -434,6 +455,15 @@ impl HeaderRules {
             )
             .into());
         }
+        // Checked here rather than once the direction is parsed, so an
+        // oversized declaration is refused before the rest of it is built.
+        if self.0.len() >= MAX_HEADER_OPS {
+            return Err(format!(
+                "headers `{direction}` declares more than the {MAX_HEADER_OPS} operations \
+                 a direction may carry"
+            )
+            .into());
+        }
         self.0.insert(name, op);
         Ok(())
     }
@@ -445,15 +475,10 @@ impl HeaderRules {
     /// under another would make the description a description of something
     /// else. Each name appears in exactly one group, because resolution leaves
     /// it carrying exactly one operation.
-    pub fn grouped(&self) -> GroupedHeaderOps {
-        self.clone().into_grouped()
-    }
-
-    /// [`grouped`], consuming the rules so the names and values are moved
-    /// rather than copied. This is the path the proxy configuration is built
-    /// on, which runs for every route on every reconciliation tick.
     ///
-    /// [`grouped`]: HeaderRules::grouped
+    /// Consuming, so the names and values are moved rather than copied: both
+    /// callers own the rules by this point, and this runs for every route on
+    /// every reconciliation tick.
     pub fn into_grouped(self) -> GroupedHeaderOps {
         let mut out = GroupedHeaderOps::default();
         for (name, op) in self.0 {
@@ -478,7 +503,7 @@ impl HeaderRules {
 /// spelling and so order by it, where `remove` keeps the case-insensitive
 /// order the rules themselves are keyed in; the two are not in step with each
 /// other, and neither is load-bearing.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct GroupedHeaderOps {
     pub replace: BTreeMap<String, Vec<String>>,
     pub add: BTreeMap<String, Vec<String>>,
@@ -491,6 +516,21 @@ pub struct GroupedHeaderOps {
 pub struct HeaderSettings {
     pub request: HeaderRules,
     pub response: HeaderRules,
+}
+
+impl HeaderSettings {
+    /// Lay `later` over these, by header name.
+    ///
+    /// What a second `headers()` call on one service or route does. Assigning
+    /// instead would discard everything the first call declared, which for a
+    /// map-shaped surface reads as a collection being added to rather than
+    /// replaced. Per name, the later call wins — the same rule that settles a
+    /// route against its service.
+    // l[impl service.http.headers]
+    pub fn layer_over(&mut self, later: HeaderSettings) {
+        self.request = layer_headers(&self.request, &later.request);
+        self.response = layer_headers(&self.response, &later.response);
+    }
 }
 
 impl Default for ResolvedRouteProxy {
@@ -882,14 +922,6 @@ fn parse_direction(
     if let Some(value) = remove {
         collect_removals(value, direction, &mut rules)?;
     }
-    if rules.len() > MAX_HEADER_OPS {
-        return Err(format!(
-            "headers `{direction}` declares {} operations, more than the {MAX_HEADER_OPS} \
-             a direction may carry",
-            rules.len()
-        )
-        .into());
-    }
     Ok(rules)
 }
 
@@ -907,6 +939,9 @@ fn collect_valued(
         )
         .into());
     };
+    if map.is_empty() {
+        return Err(format!("headers `{direction}.{op}` must not be empty").into());
+    }
     for (name, value) in map {
         let name = HeaderName::parse(&name)?;
         let values = parse_values(value, direction, op, &name)?;
@@ -942,6 +977,14 @@ fn parse_values(
         if array.is_empty() {
             return Err(format!(
                 "{at} must not be an empty array; use `remove` to discard a header"
+            )
+            .into());
+        }
+        if array.len() > MAX_HEADER_VALUES_PER_OP {
+            return Err(format!(
+                "{at} carries {} values, more than the {MAX_HEADER_VALUES_PER_OP} \
+                 one header may carry",
+                array.len()
             )
             .into());
         }

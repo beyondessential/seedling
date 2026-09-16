@@ -20,6 +20,10 @@ the document Seedling emits, not what Caddy does with it.
 - [x] A value containing any control character other than horizontal tab is refused; tab and non-ASCII stay acceptable (verifies spec: `service.http.headers.fields`)
 - [x] A value containing `{` is refused, so the proxy cannot substitute its own state into it (verifies spec: `service.http.headers.fields`)
 - [x] A direction past the operation bound, and a value past the length bound, are refused; both bounds themselves are accepted (verifies spec: `service.http.headers.fields`)
+- [x] A name past the length bound, and an operation past the value-count bound, are refused (verifies spec: `service.http.headers.fields`)
+- [x] `Content-Encoding` is refused, since the handler runs after compression named it; `Content-Type` stays the app's to set (verifies spec: `service.http.headers.fields`)
+- [x] An empty `replace` or `add` map is refused, as an empty `remove` already was (verifies spec: `service.http.headers.fields`)
+- [x] A second `headers()` call layers over the first rather than discarding it, both in resolution and from a script (verifies spec: `service.http.headers`)
 - [x] Every proxy-owned header is refused: the eight connection headers and `Content-Length` (verifies spec: `service.http.headers.fields`)
 - [x] One name under two operations in a direction is refused, including when the two spellings differ in case (verifies spec: `service.http.headers.fields`)
 - [x] A name is reported back with the spelling the app used (verifies spec: `service.http.headers.fields`)
@@ -42,6 +46,7 @@ the document Seedling emits, not what Caddy does with it.
 - [x] A direction with no operations is left out, and a route with no headers carries no handler at all (verifies spec: `service.http.route.headers`)
 - [x] `http.handlers.headers` is exercised by the image fixture, so it is caught if missing from the image (verifies spec: `infra.proxy.image.modules`)
 - [x] A config cached before header manipulation existed still deserialises (verifies spec: `infra.proxy.upgrade.cache`)
+- [x] A route with no headers serialises as it did before the field existed, and one with headers round-trips (verifies spec: `infra.proxy.upgrade.cache`)
 
 ## Visibility
 

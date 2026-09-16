@@ -5,10 +5,8 @@ use crate::system::types::{
     RouteRateLimit, RouteZone, VirtualHost,
 };
 
-fn default_proxy() -> Box<crate::system::types::RouteProxy> {
-    Box::new(crate::system::types::RouteProxy::unlimited(
-        crate::defs::service::ResolvedRouteProxy::default(),
-    ))
+fn default_proxy() -> crate::system::types::RouteProxy {
+    crate::system::types::RouteProxy::unlimited(crate::defs::service::ResolvedRouteProxy::default())
 }
 
 fn http_vhost(hostname: &str, upstream: &str) -> VirtualHost {
@@ -20,7 +18,7 @@ fn http_vhost(hostname: &str, upstream: &str) -> VirtualHost {
             prefix: "/".to_string(),
             handler: ProxyRouteHandler::ReverseProxy {
                 upstreams: vec![format!("http://{upstream}")],
-                proxy: default_proxy(),
+                proxy: Box::new(default_proxy()),
             },
         }],
     }
@@ -38,7 +36,7 @@ fn https_vhost(hostname: &str, upstream: &str) -> VirtualHost {
             prefix: "/".to_string(),
             handler: ProxyRouteHandler::ReverseProxy {
                 upstreams: vec![format!("http://{upstream}")],
-                proxy: default_proxy(),
+                proxy: Box::new(default_proxy()),
             },
         }],
     }
@@ -124,7 +122,7 @@ fn tls_acme_subjects_appear_in_automation() {
                 prefix: "/".to_string(),
                 handler: ProxyRouteHandler::ReverseProxy {
                     upstreams: vec!["http://[fd5e::1]:3000".to_string()],
-                    proxy: default_proxy(),
+                    proxy: Box::new(default_proxy()),
                 },
             }],
         }],
@@ -176,7 +174,7 @@ fn warm_cert_skipped_when_already_routed() {
                 prefix: "/".to_string(),
                 handler: ProxyRouteHandler::ReverseProxy {
                     upstreams: vec!["http://[fd5e::1]:3000".to_string()],
-                    proxy: default_proxy(),
+                    proxy: Box::new(default_proxy()),
                 },
             }],
         }],
@@ -223,7 +221,7 @@ fn dial_strips_http_scheme() {
                 prefix: "/".to_string(),
                 handler: ProxyRouteHandler::ReverseProxy {
                     upstreams: vec!["http://[fd5e:ed12:3456:0100::3]:3000".to_string()],
-                    proxy: default_proxy(),
+                    proxy: Box::new(default_proxy()),
                 },
             }],
         }],
@@ -258,7 +256,7 @@ fn https_server_includes_quic_listener() {
                 prefix: "/".to_string(),
                 handler: ProxyRouteHandler::ReverseProxy {
                     upstreams: vec!["http://[fd5e::1]:3000".to_string()],
-                    proxy: default_proxy(),
+                    proxy: Box::new(default_proxy()),
                 },
             }],
         }],
@@ -409,14 +407,14 @@ fn vhost_with_multiple_prefixes_emits_per_prefix_routes_longest_first() {
                     prefix: "/".to_string(),
                     handler: ProxyRouteHandler::ReverseProxy {
                         upstreams: vec!["http://[fd5e::1]:3000".to_string()],
-                        proxy: default_proxy(),
+                        proxy: Box::new(default_proxy()),
                     },
                 },
                 ProxyRoute {
                     prefix: "/api".to_string(),
                     handler: ProxyRouteHandler::ReverseProxy {
                         upstreams: vec!["http://[fd5e::2]:3000".to_string()],
-                        proxy: default_proxy(),
+                        proxy: Box::new(default_proxy()),
                     },
                 },
             ],
@@ -609,7 +607,7 @@ fn service_upstream(port: u16) -> crate::system::translate::proxy::ServiceUpstre
         routes: vec![],
         service_ip: "fd5e:ed12:3456:200::1".parse().unwrap(),
         service_port: port,
-        proxy: *default_proxy(),
+        proxy: default_proxy(),
     }
 }
 
@@ -1455,4 +1453,42 @@ fn no_server_takes_away_the_proxys_default_keep_alive() {
             );
         }
     }
+}
+
+// r[verify infra.proxy.upgrade.cache]
+#[test]
+fn a_route_with_no_headers_serialises_as_it_did_before() {
+    // The config is cached as JSON and compared on startup. A route declaring
+    // no headers must serialise exactly as it did before the field existed,
+    // so an upgrade does not rewrite every cached route to say nothing.
+    let config = vhost_with("app.example.com", vec![limited_route("/", None)]);
+    let json = serde_json::to_value(&config).expect("serialises");
+    let route = &json["virtual_hosts"][0]["routes"][0]["handler"]["ReverseProxy"]["proxy"];
+    assert!(
+        route.get("headers").is_none(),
+        "an empty header set must not be written into the cached config: {route}"
+    );
+
+    // One that does declare them still round-trips.
+    let config = vhost_with(
+        "app.example.com",
+        vec![headed_route(
+            "/",
+            crate::system::types::RouteHeaders {
+                request: Default::default(),
+                response: ops(&[("Cache-Control", &["no-store"])], &[], &[]),
+            },
+            None,
+        )],
+    );
+    let json = serde_json::to_string(&config).expect("serialises");
+    let back: ProxyConfig = serde_json::from_str(&json).expect("round-trips");
+    let ProxyRouteHandler::ReverseProxy { proxy, .. } = &back.virtual_hosts[0].routes[0].handler
+    else {
+        panic!("expected reverse proxy")
+    };
+    assert_eq!(
+        proxy.headers.response.replace.get("Cache-Control"),
+        Some(&vec!["no-store".to_string()])
+    );
 }

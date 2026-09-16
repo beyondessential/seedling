@@ -468,6 +468,8 @@ This is currently the only value.
 > `request` operations shape the request as the service's pods receive it, and `response` operations shape the response as the client receives it.
 > A `config` naming neither must throw, since it declares nothing.
 >
+> A second `headers()` call on the same service or route layers over the first by header name, rather than discarding what it declared: the later call's operation wins for the headers it names, and the earlier one's stands for the rest.
+>
 > Header manipulation is a property of traffic proxied to the service's pods.
 > [Redirect](#l--ingress.redirect) responses and non-HTTP forwarding carry no header operations.
 
@@ -478,7 +480,7 @@ This is currently the only value.
 > - `add`: a map of header name to value, adding that value and keeping whatever the message already carried.
 > - `remove`: an array of header names, discarding those headers entirely.
 >
-> A map naming none of the three, and an empty `remove` array, must each throw.
+> A map naming none of the three, an empty `remove` array, and an empty `replace` or `add` map, must each throw.
 >
 > A value in `replace` or `add` is either a string, or an array of strings where the header is to carry several values.
 > `Set-Cookie` is the case that requires the array form, since several cookies cannot be folded into one header.
@@ -495,10 +497,12 @@ This is currently the only value.
 > A proxy may read a braced word as a placeholder naming its own state and substitute it, so a value carrying one would reach the other side as something other than what was declared — and the state it names may be the proxy's environment rather than anything belonging to the app.
 > Refusing the character is what keeps a value literal, and is refused where the error can still name the script that wrote it.
 >
-> A direction may carry at most 64 operations, and a value at most 4096 characters.
-> These are sanity bounds rather than tuning, as for a [rate limit](#l--service.http.rate-limit.fields): a service's operations are copied onto every route that inherits them, and the result is held in the configuration of a proxy every app on the host shares. A declaration far outside what an app could plausibly mean is refused rather than multiplied into that shared document.
+> A direction may carry at most 64 operations, a name at most 256 characters, an operation at most 16 values, and a value at most 4096 characters.
+> These bound one declaration rather than the result of resolving it: a service and a route each naming different headers may exceed them between them, and that is not refused.
+> They are plausibility bounds like a [rate limit](#l--service.http.rate-limit.fields)'s rather than a guarantee about the size of the shared configuration — a declaration far outside anything an app could mean is refused where the error can still name the script that wrote it.
 >
-> Naming a header that describes the connection rather than the message must throw: `Connection`, `Keep-Alive`, `Proxy-Authenticate`, `Proxy-Authorization`, `TE`, `Trailer`, `Transfer-Encoding`, and `Upgrade`, along with `Content-Length`, which describes the message's framing.
+> Naming a header that describes the connection rather than the message must throw: `Connection`, `Keep-Alive`, `Proxy-Authenticate`, `Proxy-Authorization`, `TE`, `Trailer`, `Transfer-Encoding`, and `Upgrade`.
+> `Content-Length`, which describes the message's framing, and `Content-Encoding`, which names the [compression](#l--service.http.compress) the proxy applied, must throw for the same reason: a response whose encoding is renamed or removed cannot be decoded by the client it reaches.
 > The proxy holds the connection to the client and the connection to the pod as two separate things, and owns the headers describing each; an app setting them corrupts the exchange rather than shaping it.
 > [Persistent connections](runtime.md#r--ingress.persistent-connections), the reason an app would otherwise reach for `Connection`, are served without being asked for.
 >

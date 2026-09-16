@@ -531,7 +531,10 @@ fn http_service_and_route_accept_headers() {
 
     let grouped = |prefix: &str| {
         let r = defs::service::resolve(&service_level, http.routes.get(prefix));
-        (r.headers.request.grouped(), r.headers.response.grouped())
+        (
+            r.headers.request.into_grouped(),
+            r.headers.response.into_grouped(),
+        )
     };
 
     // The prefix with a cache policy of its own keeps the service's `Host`
@@ -633,4 +636,30 @@ fn service_summary_reports_resolved_headers() {
         assets.headers.response.add.get("Set-Cookie"),
         Some(&vec!["a=1".to_string(), "b=2".to_string()])
     );
+}
+
+// l[verify service.http.headers]
+#[test]
+fn a_second_headers_call_layers_over_the_first() {
+    let app = run_test_script_app(
+        r#"
+        let web = app.service("web").http(80)
+            .headers(#{ response: #{ remove: ["Server"] } })
+            .headers(#{ response: #{ replace: #{ "Cache-Control": "no-store" } } });
+    "#,
+    );
+    let def = app.def.load();
+    let svc = def
+        .resources
+        .values()
+        .find_map(|r| match r {
+            defs::resource::Resource::Service(s) if &*s.name == "web" => Some(s.clone()),
+            _ => None,
+        })
+        .expect("web service");
+    let http = svc.def.lock().http.clone().expect("http def");
+    let grouped = http.headers.response.clone().into_grouped();
+    // The second call added its header without discarding the first's.
+    assert_eq!(grouped.remove, vec!["Server".to_string()]);
+    assert!(grouped.replace.contains_key("Cache-Control"));
 }
