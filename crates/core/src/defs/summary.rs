@@ -71,6 +71,48 @@ pub struct RouteSummary {
     pub balance: BalanceSummary,
     /// `null` when this route is not rate limited.
     pub rate_limit: Option<RateLimitSummary>,
+    /// The header operations in force, resolved per header name against the
+    /// service's, so a route reports what applies to it whether it or the
+    /// service declared it.
+    pub headers: HeadersSummary,
+}
+
+/// Reported in both directions always, each with its three operations
+/// present. A direction with nothing declared reports them empty rather than
+/// null, so a reader compares like with like across routes instead of telling
+/// "no operations" from "no such field".
+#[derive(Serialize, Debug, PartialEq, Default)]
+pub struct HeadersSummary {
+    pub request: HeaderOpsSummary,
+    pub response: HeaderOpsSummary,
+}
+
+/// The operations in one direction.
+///
+/// An explicit copy of the defs layer's grouping rather than a re-export of
+/// it, as every sibling summary here is. These field names are the documented
+/// `app.describe` interface; re-exporting would let a rename made for the
+/// proxy emitter's convenience change that interface with nothing in the way.
+/// The copy is what forces such a change to be deliberate, and to reach
+/// `interface.md` and `types.ts` with it.
+///
+/// A value declared as a bare string reports as a one-element array, so the
+/// shape does not vary with how it was written.
+#[derive(Serialize, Debug, PartialEq, Default)]
+pub struct HeaderOpsSummary {
+    pub replace: BTreeMap<String, Vec<String>>,
+    pub add: BTreeMap<String, Vec<String>>,
+    pub remove: Vec<String>,
+}
+
+impl From<crate::defs::service::GroupedHeaderOps> for HeaderOpsSummary {
+    fn from(grouped: crate::defs::service::GroupedHeaderOps) -> Self {
+        Self {
+            replace: grouped.replace,
+            add: grouped.add,
+            remove: grouped.remove,
+        }
+    }
 }
 
 #[derive(Serialize, Debug, PartialEq)]
@@ -334,6 +376,10 @@ fn route_summaries(
                     window: rl.settings.window_secs,
                     shared: rl.scope == RateLimitScope::Service,
                 }),
+                headers: HeadersSummary {
+                    request: resolved.headers.request.into_grouped().into(),
+                    response: resolved.headers.response.into_grouped().into(),
+                },
             }
         })
         .collect()

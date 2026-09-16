@@ -414,13 +414,17 @@ This is currently the only value.
 
 > l[service.http.proxy-settings.resolution]
 > [compression](#l--service.http.compress) is declared on an HTTP Service, [balancing](#l--service.balance) on the Service itself, and either may be overridden on an individual HTTP Service Route.
-> [Rate limiting](#l--service.http.rate-limit) is likewise declared on an HTTP Service or an individual HTTP Service Route.
+> [Rate limiting](#l--service.http.rate-limit) and [header manipulation](#l--service.http.headers) are likewise declared on an HTTP Service or an individual HTTP Service Route.
 >
 > Compression and balancing resolve field by field: the route's value if the route set that field, otherwise the service's value if the service set it, otherwise the field's default.
-> A route setting some fields therefore keeps the service's values for the fields it left unset, and setting any one of `compress`, `balance`, or `rate_limit` never disturbs the others.
+> A route setting some fields therefore keeps the service's values for the fields it left unset, and setting any one of `compress`, `balance`, `rate_limit`, or `headers` never disturbs the others.
 >
 > Rate limiting resolves as a whole rather than field by field: the route's declaration if the route made one, otherwise the service's, otherwise no limit.
 > It has no default, so a service and route that both leave it unmentioned are not rate limited, and a route declaring `rate_limit(false)` is not rate limited even where the service declared a limit.
+>
+> Header manipulation resolves per header name, independently within each direction: a header the route names takes the route's operation, and a header only the service names takes the service's.
+> A route therefore adds to the headers the service declared and overrides only those it names, without restating the rest.
+> Because each header name resolves to exactly one operation, the order in which operations are applied is not observable.
 >
 > A Service with no HTTP Service Routes is served through a single `/` route, which takes the service's values.
 
@@ -455,6 +459,55 @@ This is currently the only value.
 >
 > An unrecognised field, and either field outside its range, must each throw.
 > The ranges are sanity bounds rather than tuning: a limit is charged to a proxy every app on the host shares, holding per-client state sized by `max_events` until the window has elapsed, so a declaration sets both how large that state is and how long it is held. How many clients are tracked is decided by whoever sends the traffic, so the size of each is held to something an app could plausibly mean, and a declaration outside that is refused where the error still names the script that made it.
+
+> l[service.http.headers]
+> `headers(config: map)` is a builder method declaring manipulations of the headers carried by requests and responses passing through the proxy.
+> It is available on an [HTTP Service](#l--service.http) and on an [HTTP Service Route](#l--service.http.route).
+>
+> The `config` map carries two optional fields, `request` and `response`, each a map of the operations applied in that direction.
+> `request` operations shape the request as the service's pods receive it, and `response` operations shape the response as the client receives it.
+> A `config` naming neither must throw, since it declares nothing.
+>
+> A second `headers()` call on the same service or route layers over the first by header name, rather than discarding what it declared: the later call's operation wins for the headers it names, and the earlier one's stands for the rest.
+>
+> Header manipulation is a property of traffic proxied to the service's pods.
+> [Redirect](#l--ingress.redirect) responses and non-HTTP forwarding carry no header operations.
+
+> l[service.http.headers.fields]
+> The `request` and `response` maps each carry three optional fields, naming the operation applied to a header:
+>
+> - `replace`: a map of header name to value, setting the header to that value and discarding whatever the message already carried.
+> - `add`: a map of header name to value, adding that value and keeping whatever the message already carried.
+> - `remove`: an array of header names, discarding those headers entirely.
+>
+> A map naming none of the three, an empty `remove` array, and an empty `replace` or `add` map, must each throw.
+>
+> A value in `replace` or `add` is either a string, or an array of strings where the header is to carry several values.
+> `Set-Cookie` is the case that requires the array form, since several cookies cannot be folded into one header.
+> A value that is neither form, and an empty array, must each throw.
+>
+> Header names are compared case-insensitively, as HTTP defines them, and are matched exactly: there is no wildcard form, because a pattern could not be resolved against the named headers of an enclosing service.
+> A name must be a valid HTTP field name, and must additionally not contain `*`, which the grammar permits but which a proxy may read as a wildcard; a declaration meaning one header must not be able to reach every header.
+> A name appearing under more than one operation in the same direction at the same level must throw, whatever its case, since those operations contradict each other.
+>
+> A value must be a valid HTTP field value: printable characters, spaces, and horizontal tabs.
+> A control character must throw, a carriage return or line feed above all, since those would end the value's own header and begin another of the declaration's choosing.
+>
+> A value must also not contain `{`, which must throw.
+> A proxy may read a braced word as a placeholder naming its own state and substitute it, so a value carrying one would reach the other side as something other than what was declared — and the state it names may be the proxy's environment rather than anything belonging to the app.
+> Refusing the character is what keeps a value literal, and is refused where the error can still name the script that wrote it.
+>
+> A direction may carry at most 64 operations, a name at most 256 characters, an operation at most 16 values, and a value at most 4096 characters.
+> These bound one declaration rather than the result of resolving it: a service and a route each naming different headers may exceed them between them, and that is not refused.
+> They are plausibility bounds like a [rate limit](#l--service.http.rate-limit.fields)'s rather than a guarantee about the size of the shared configuration — a declaration far outside anything an app could mean is refused where the error can still name the script that wrote it.
+>
+> Naming a header that describes the connection rather than the message must throw: `Connection`, `Keep-Alive`, `Proxy-Authenticate`, `Proxy-Authorization`, `TE`, `Trailer`, `Transfer-Encoding`, and `Upgrade`.
+> `Content-Length`, which describes the message's framing, and `Content-Encoding`, which names the [compression](#l--service.http.compress) the proxy applied, must throw for the same reason: a response whose encoding is renamed or removed cannot be decoded by the client it reaches.
+> The proxy holds the connection to the client and the connection to the pod as two separate things, and owns the headers describing each; an app setting them corrupts the exchange rather than shaping it.
+> [Persistent connections](runtime.md#r--ingress.persistent-connections), the reason an app would otherwise reach for `Connection`, are served without being asked for.
+>
+> Removing a header the message does not carry, and replacing one it does not yet carry, are both well-formed.
+> An operation describes the message as the other side is to receive it, rather than a change to one in hand.
 
 > l[service.exported]
 > `service.exported(options?: #{ description?: string })` is a builder method which marks the service as exported. Exported services are advertised to the control plane and operators.
