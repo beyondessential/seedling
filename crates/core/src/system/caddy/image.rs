@@ -154,7 +154,7 @@ mod tests {
     /// fixture and its module unchecked.
     fn rate_limited_proxy() -> Box<crate::system::types::RouteProxy> {
         let mut headers = crate::defs::service::HeaderSettings::default();
-        headers.response.0.insert(
+        headers.response.set(
             crate::defs::service::HeaderName::parse("Cache-Control").expect("a valid header name"),
             crate::defs::service::HeaderOp::Replace(vec!["no-store".to_string()]),
         );

@@ -532,9 +532,8 @@ impl RouteHeaderOps {
     }
 }
 
-impl From<&crate::defs::service::HeaderRules> for RouteHeaderOps {
-    fn from(rules: &crate::defs::service::HeaderRules) -> Self {
-        let grouped = rules.grouped();
+impl From<crate::defs::service::GroupedHeaderOps> for RouteHeaderOps {
+    fn from(grouped: crate::defs::service::GroupedHeaderOps) -> Self {
         Self {
             replace: grouped.replace,
             add: grouped.add,
@@ -634,9 +633,11 @@ impl RouteProxy {
                 max_events: rl.settings.max_events,
                 window_secs: rl.settings.window_secs,
             }),
+            // Moved rather than copied: this runs for every route on every
+            // reconciliation tick.
             headers: RouteHeaders {
-                request: (&resolved.headers.request).into(),
-                response: (&resolved.headers.response).into(),
+                request: resolved.headers.request.into_grouped().into(),
+                response: resolved.headers.response.into_grouped().into(),
             },
         }
     }

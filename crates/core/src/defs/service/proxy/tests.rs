@@ -503,7 +503,6 @@ fn headers_err(script: &str) -> String {
 
 fn op(rules: &HeaderRules, name: &str) -> Option<HeaderOp> {
     rules
-        .0
         .iter()
         .find(|(k, _)| k.as_str().eq_ignore_ascii_case(name))
         .map(|(_, v)| v.clone())
@@ -585,12 +584,92 @@ fn an_empty_array_is_refused_rather_than_read_as_a_removal() {
 fn a_value_carrying_a_line_ending_is_refused() {
     // Otherwise the value ends its own header and begins another of the
     // declaration's choosing, which is header injection by declaration.
-    for value in [r#""a\r\nX-Evil: yes""#, r#""a\nX-Evil: yes""#] {
+    for (value, named) in [
+        (r#""a\r\nX-Evil: yes""#, "carriage return"),
+        (r#""a\nX-Evil: yes""#, "line feed"),
+    ] {
         let e = headers_err(&format!(
             r#"#{{ response: #{{ replace: #{{ "X-Thing": {value} }} }} }}"#
         ));
-        assert!(e.contains("carriage return or line feed"), "{e}");
+        assert!(e.contains(named), "{e}");
     }
+}
+
+// l[verify service.http.headers.fields]
+#[test]
+fn a_value_carrying_any_other_control_character_is_refused() {
+    // The line endings are the injection vector, but the rest are no more
+    // writable onto the wire: whatever writes the message rejects or mangles
+    // them, long after the declaration was accepted.
+    for c in ['\0', '\x0b', '\x0c', '\x1f', '\x7f'] {
+        let value = format!("a{c}b");
+        assert!(
+            header_value(value, "at").is_err(),
+            "{c:?} must not be accepted in a header value"
+        );
+    }
+    // A horizontal tab is part of a field value, so it stays acceptable.
+    assert!(header_value("a\tb".to_string(), "at").is_ok());
+    // As does anything above ASCII, which is obs-text.
+    assert!(header_value("café".to_string(), "at").is_ok());
+}
+
+// l[verify service.http.headers.fields]
+#[test]
+fn a_value_carrying_a_brace_is_refused() {
+    // The proxy substitutes a braced word naming its own state — including
+    // its environment — so a value carrying one would reach the other side as
+    // something other than what was declared.
+    for value in ["{env.SECRET}", "{http.request.header.Authorization}", "a{b"] {
+        let e = headers_err(&format!(
+            r#"#{{ response: #{{ replace: #{{ "X-Thing": "{value}" }} }} }}"#
+        ));
+        assert!(e.contains("placeholder"), "{value}: {e}");
+    }
+}
+
+// l[verify service.http.headers.fields]
+#[test]
+fn a_wildcard_in_a_name_is_refused() {
+    // `*` is a token character, so it passes the field-name grammar, but a
+    // proxy reads it in a removal as a wildcard: `*` alone would discard every
+    // header on the message, including the ones refused by name above.
+    for name in ["*", "X-*", "*-Suffix"] {
+        for script in [
+            format!(r#"#{{ response: #{{ remove: ["{name}"] }} }}"#),
+            format!(r#"#{{ response: #{{ replace: #{{ "{name}": "x" }} }} }}"#),
+        ] {
+            let e = headers_err(&script);
+            assert!(e.contains("no wildcard form"), "{name}: {e}");
+        }
+    }
+}
+
+// l[verify service.http.headers.fields]
+#[test]
+fn a_direction_past_the_operation_bound_is_refused() {
+    let ops = |n: usize| {
+        let names: Vec<String> = (0..n).map(|i| format!(r#""X-H{i}""#)).collect();
+        format!(r#"#{{ response: #{{ remove: [{}] }} }}"#, names.join(", "))
+    };
+    // The bound itself is still a declaration an app could mean.
+    assert_eq!(headers(&ops(MAX_HEADER_OPS)).response.len(), MAX_HEADER_OPS);
+    let e = headers_err(&ops(MAX_HEADER_OPS + 1));
+    assert!(e.contains("more than the"), "{e}");
+}
+
+// l[verify service.http.headers.fields]
+#[test]
+fn a_value_past_the_length_bound_is_refused() {
+    let value = |n: usize| {
+        format!(
+            r#"#{{ response: #{{ replace: #{{ "X-Thing": "{}" }} }} }}"#,
+            "a".repeat(n)
+        )
+    };
+    assert!(headers(&value(MAX_HEADER_VALUE_CHARS)).response.len() == 1);
+    let e = headers_err(&value(MAX_HEADER_VALUE_CHARS + 1));
+    assert!(e.contains("at most"), "{e}");
 }
 
 // l[verify service.http.headers.fields]
@@ -703,7 +782,7 @@ fn an_override_is_recognised_whatever_the_case() {
     let service = with_headers(headers(r#"#{ request: #{ replace: #{ "Host": "a" } } }"#));
     let route = with_headers(headers(r#"#{ request: #{ replace: #{ "host": "b" } } }"#));
     let r = resolve(&service, Some(&route)).headers;
-    assert_eq!(r.request.0.len(), 1);
+    assert_eq!(r.request.len(), 1);
     assert_eq!(
         op(&r.request, "host"),
         Some(HeaderOp::Replace(vec!["b".into()]))

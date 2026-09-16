@@ -485,8 +485,18 @@ This is currently the only value.
 > A value that is neither form, and an empty array, must each throw.
 >
 > Header names are compared case-insensitively, as HTTP defines them, and are matched exactly: there is no wildcard form, because a pattern could not be resolved against the named headers of an enclosing service.
-> A name must be a valid HTTP field name, and a value must not contain a carriage return or line feed, which would otherwise let a declaration smuggle in a header of its own.
+> A name must be a valid HTTP field name, and must additionally not contain `*`, which the grammar permits but which a proxy may read as a wildcard; a declaration meaning one header must not be able to reach every header.
 > A name appearing under more than one operation in the same direction at the same level must throw, whatever its case, since those operations contradict each other.
+>
+> A value must be a valid HTTP field value: printable characters, spaces, and horizontal tabs.
+> A control character must throw, a carriage return or line feed above all, since those would end the value's own header and begin another of the declaration's choosing.
+>
+> A value must also not contain `{`, which must throw.
+> A proxy may read a braced word as a placeholder naming its own state and substitute it, so a value carrying one would reach the other side as something other than what was declared — and the state it names may be the proxy's environment rather than anything belonging to the app.
+> Refusing the character is what keeps a value literal, and is refused where the error can still name the script that wrote it.
+>
+> A direction may carry at most 64 operations, and a value at most 4096 characters.
+> These are sanity bounds rather than tuning, as for a [rate limit](#l--service.http.rate-limit.fields): a service's operations are copied onto every route that inherits them, and the result is held in the configuration of a proxy every app on the host shares. A declaration far outside what an app could plausibly mean is refused rather than multiplied into that shared document.
 >
 > Naming a header that describes the connection rather than the message must throw: `Connection`, `Keep-Alive`, `Proxy-Authenticate`, `Proxy-Authorization`, `TE`, `Trailer`, `Transfer-Encoding`, and `Upgrade`, along with `Content-Length`, which describes the message's framing.
 > The proxy holds the connection to the client and the connection to the pod as two separate things, and owns the headers describing each; an app setting them corrupts the exchange rather than shaping it.

@@ -10,6 +10,7 @@
 use std::{cmp::Ordering, collections::BTreeMap};
 
 use rhai::{Dynamic, EvalAltResult, Map};
+use serde::Serialize;
 
 /// Caddy's own defaults, read from the source of the pinned proxy image so the
 /// emitter can leave a field out whenever it still holds its default.
@@ -31,6 +32,16 @@ pub const DEFAULT_MINIMUM_LENGTH: u64 = 512;
 pub const MIN_WINDOW_SECS: f64 = 0.001;
 pub const MAX_WINDOW_SECS: f64 = 3_600.0;
 pub const MAX_MAX_EVENTS: u64 = 1_000;
+
+/// Bounds on a direction's header operations.
+///
+/// Sanity ceilings like the rate-limit ones above, and for the same reason: a
+/// service's operations are copied onto every route inheriting them, held in
+/// the cached proxy configuration, and pushed through the admin API of a proxy
+/// every app on the host shares. A declaration past what an app could
+/// plausibly mean is refused rather than multiplied into that shared document.
+pub const MAX_HEADER_OPS: usize = 64;
+pub const MAX_HEADER_VALUE_CHARS: usize = 4_096;
 pub const DEFAULT_TRY_DURATION_SECS: f64 = 5.0;
 pub const DEFAULT_INTERVAL_SECS: f64 = 0.25;
 
@@ -280,6 +291,17 @@ impl HeaderName {
             )
             .into());
         }
+        // `*` is a token character, so the check above lets it through, but a
+        // proxy reads it in a removal as a wildcard: `*` alone would discard
+        // every header on the message, including the ones `proxy_owned`
+        // refuses by name. A declaration naming one header must not be able to
+        // reach every header.
+        if name.contains('*') {
+            return Err(format!(
+                "header name `{name}` contains '*'; header names are matched exactly and                  there is no wildcard form"
+            )
+            .into());
+        }
         if let Some(what) = proxy_owned(name) {
             return Err(format!(
                 "`{name}` describes {what} rather than the message, and belongs to the proxy, \
@@ -358,12 +380,62 @@ pub enum HeaderOp {
 }
 
 /// The operations declared in one direction, keyed by header name.
+///
+/// The map is private because [`HeaderName`] compares case-insensitively over
+/// a spelling that is still read back: `BTreeMap::insert` keeps the key
+/// already present, so inserting `cache-control` over `Cache-Control` would
+/// report the displaced spelling against the winning operation. [`set`] is the
+/// only way in, so that trap lives in one place rather than at each call site.
+///
+/// [`set`]: HeaderRules::set
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct HeaderRules(pub BTreeMap<HeaderName, HeaderOp>);
+pub struct HeaderRules(BTreeMap<HeaderName, HeaderOp>);
 
 impl HeaderRules {
     pub fn is_empty(&self) -> bool {
         self.0.is_empty()
+    }
+
+    pub fn len(&self) -> usize {
+        self.0.len()
+    }
+
+    pub fn iter(&self) -> impl Iterator<Item = (&HeaderName, &HeaderOp)> {
+        self.0.iter()
+    }
+
+    /// Give `name` this operation, replacing any it already had.
+    ///
+    /// Removes before inserting so the name keeps the spelling that came with
+    /// the winning operation rather than the one it displaced.
+    pub fn set(&mut self, name: HeaderName, op: HeaderOp) {
+        self.0.remove(&name);
+        self.0.insert(name, op);
+    }
+
+    /// Give `name` this operation, refusing a name that already has one.
+    ///
+    /// A name takes one operation per direction. Two contradict each other and
+    /// resolution has no order to settle them by, so the declaration is
+    /// refused rather than one of them silently winning.
+    // l[impl service.http.headers.fields]
+    fn set_unique(
+        &mut self,
+        name: HeaderName,
+        op: HeaderOp,
+        direction: &str,
+    ) -> Result<(), Box<EvalAltResult>> {
+        if self.0.contains_key(&name) {
+            return Err(format!(
+                "headers `{direction}` gives `{}` more than one operation; \
+                 a header takes one operation per direction, and names are \
+                 compared without regard to case",
+                name.as_str()
+            )
+            .into());
+        }
+        self.0.insert(name, op);
+        Ok(())
     }
 
     /// The operations grouped by which one they are, which is how both the
@@ -374,15 +446,24 @@ impl HeaderRules {
     /// else. Each name appears in exactly one group, because resolution leaves
     /// it carrying exactly one operation.
     pub fn grouped(&self) -> GroupedHeaderOps {
+        self.clone().into_grouped()
+    }
+
+    /// [`grouped`], consuming the rules so the names and values are moved
+    /// rather than copied. This is the path the proxy configuration is built
+    /// on, which runs for every route on every reconciliation tick.
+    ///
+    /// [`grouped`]: HeaderRules::grouped
+    pub fn into_grouped(self) -> GroupedHeaderOps {
         let mut out = GroupedHeaderOps::default();
-        for (name, op) in &self.0 {
-            let name = name.as_str().to_owned();
+        for (name, op) in self.0 {
+            let name = name.0;
             match op {
                 HeaderOp::Replace(values) => {
-                    out.replace.insert(name, values.clone());
+                    out.replace.insert(name, values);
                 }
                 HeaderOp::Add(values) => {
-                    out.add.insert(name, values.clone());
+                    out.add.insert(name, values);
                 }
                 HeaderOp::Remove => out.remove.push(name),
             }
@@ -393,10 +474,11 @@ impl HeaderRules {
 
 /// [`HeaderRules`] grouped by operation.
 ///
-/// Names keep the spelling the app used, and stay in the case-insensitive
-/// order the rules are keyed by, so two routes declaring the same headers
-/// report and emit them identically however each spelled them.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+/// Names keep the spelling the app used. `replace` and `add` are keyed by that
+/// spelling and so order by it, where `remove` keeps the case-insensitive
+/// order the rules themselves are keyed in; the two are not in step with each
+/// other, and neither is load-bearing.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
 pub struct GroupedHeaderOps {
     pub replace: BTreeMap<String, Vec<String>>,
     pub add: BTreeMap<String, Vec<String>>,
@@ -409,12 +491,6 @@ pub struct GroupedHeaderOps {
 pub struct HeaderSettings {
     pub request: HeaderRules,
     pub response: HeaderRules,
-}
-
-impl HeaderSettings {
-    pub fn is_empty(&self) -> bool {
-        self.request.is_empty() && self.response.is_empty()
-    }
 }
 
 impl Default for ResolvedRouteProxy {
@@ -486,12 +562,8 @@ fn resolve_headers(service: &HeaderSettings, route: Option<&HeaderSettings>) -> 
 
 fn layer_headers(service: &HeaderRules, route: &HeaderRules) -> HeaderRules {
     let mut out = service.clone();
-    for (name, op) in &route.0 {
-        // Removed before inserting: inserting over an equal key keeps the key
-        // already present, which would report the service's spelling of a
-        // header whose operation came from the route.
-        out.0.remove(name);
-        out.0.insert(name.clone(), op.clone());
+    for (name, op) in route.iter() {
+        out.set(name.clone(), op.clone());
     }
     out
 }
@@ -810,6 +882,14 @@ fn parse_direction(
     if let Some(value) = remove {
         collect_removals(value, direction, &mut rules)?;
     }
+    if rules.len() > MAX_HEADER_OPS {
+        return Err(format!(
+            "headers `{direction}` declares {} operations, more than the {MAX_HEADER_OPS} \
+             a direction may carry",
+            rules.len()
+        )
+        .into());
+    }
     Ok(rules)
 }
 
@@ -830,7 +910,7 @@ fn collect_valued(
     for (name, value) in map {
         let name = HeaderName::parse(&name)?;
         let values = parse_values(value, direction, op, &name)?;
-        insert_unique(into, name, build(values), direction)?;
+        into.set_unique(name, build(values), direction)?;
     }
     Ok(())
 }
@@ -850,8 +930,11 @@ fn parse_values(
 
     // take: dispatch — string first, then array, then throw. Neither arm
     // accepts a value of the other shape, so a script type error still fails
-    // where the script that made it can be named.
-    if let Ok(single) = value.clone().into_string() {
+    // where the script that made it can be named. The string case is tested
+    // rather than attempted, because attempting it would deep-copy a whole
+    // array only to discard the copy and re-cast the original below.
+    if value.is_string() {
+        let single = value.into_string().expect("checked immediately above");
         return Ok(vec![header_value(single, &at)?]);
     }
 
@@ -879,12 +962,42 @@ fn parse_values(
     .into())
 }
 
-/// The proxy writes a value onto the wire as given, so one carrying CR or LF
-/// would end the header and begin another of the declaration's choosing.
+/// An HTTP field value is printable characters, spaces and horizontal tabs.
+///
+/// A control character is refused rather than written onto the wire: CR and LF
+/// would end the value's own header and begin another of the declaration's
+/// choosing, and the rest are rejected or mangled further down by whatever
+/// writes the message, long after the declaration was accepted.
+///
+/// `{` is refused for a different reason. The proxy substitutes a braced word
+/// naming its own state — this repo relies on that for the redirect handler's
+/// `Location` — and the names it answers to include its own environment. A
+/// value carrying one would reach the other side as something other than what
+/// the app declared, which is the opposite of applying it as declared.
 // l[impl service.http.headers.fields]
 fn header_value(value: String, at: &str) -> Result<String, Box<EvalAltResult>> {
-    if value.contains(['\r', '\n']) {
-        return Err(format!("{at} must not contain a carriage return or line feed").into());
+    if let Some(c) = value.chars().find(|c| c.is_ascii_control() && *c != '\t') {
+        let named = match c {
+            '\r' => "a carriage return".to_string(),
+            '\n' => "a line feed".to_string(),
+            c => format!("the control character {:?}", c),
+        };
+        return Err(format!("{at} must not contain {named}").into());
+    }
+    if value.contains('{') {
+        return Err(format!(
+            "{at} must not contain '{{': the proxy reads a braced word as a placeholder \
+             naming its own state and would substitute it, so the value would not reach \
+             the other side as it was declared"
+        )
+        .into());
+    }
+    if value.chars().count() > MAX_HEADER_VALUE_CHARS {
+        return Err(format!(
+            "{at} must be at most {MAX_HEADER_VALUE_CHARS} characters, got {}",
+            value.chars().count()
+        )
+        .into());
     }
     Ok(value)
 }
@@ -909,31 +1022,8 @@ fn collect_removals(
             format!("headers `{direction}.remove` must be an array of header names, got {t}").into()
         })?;
         let name = HeaderName::parse(&name)?;
-        insert_unique(into, name, HeaderOp::Remove, direction)?;
+        into.set_unique(name, HeaderOp::Remove, direction)?;
     }
-    Ok(())
-}
-
-/// A name takes one operation per direction. Two contradict each other and
-/// resolution has no order to settle them by, so the declaration is refused
-/// rather than one of them silently winning.
-// l[impl service.http.headers.fields]
-fn insert_unique(
-    into: &mut HeaderRules,
-    name: HeaderName,
-    op: HeaderOp,
-    direction: &str,
-) -> Result<(), Box<EvalAltResult>> {
-    if into.0.contains_key(&name) {
-        return Err(format!(
-            "headers `{direction}` gives `{}` more than one operation; \
-             a header takes one operation per direction, and names are \
-             compared without regard to case",
-            name.as_str()
-        )
-        .into());
-    }
-    into.0.insert(name, op);
     Ok(())
 }
 

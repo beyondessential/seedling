@@ -87,26 +87,14 @@ pub struct HeadersSummary {
     pub response: HeaderOpsSummary,
 }
 
-#[derive(Serialize, Debug, PartialEq, Default)]
-pub struct HeaderOpsSummary {
-    /// Header name to the values it is set to. A value declared as a bare
-    /// string is reported as a one-element array, so the shape does not vary
-    /// with how it was written.
-    pub replace: BTreeMap<String, Vec<String>>,
-    pub add: BTreeMap<String, Vec<String>>,
-    pub remove: Vec<String>,
-}
-
-impl From<&crate::defs::service::HeaderRules> for HeaderOpsSummary {
-    fn from(rules: &crate::defs::service::HeaderRules) -> Self {
-        let grouped = rules.grouped();
-        Self {
-            replace: grouped.replace,
-            add: grouped.add,
-            remove: grouped.remove,
-        }
-    }
-}
+/// The operations in one direction, as grouped in the defs layer.
+///
+/// Reported directly rather than copied into a summary struct of its own: the
+/// two would be field-for-field identical in the same layer, and the copy
+/// could only drift from what it mirrors. A value declared as a bare string
+/// reports as a one-element array, so the shape does not vary with how it was
+/// written.
+pub type HeaderOpsSummary = crate::defs::service::GroupedHeaderOps;
 
 #[derive(Serialize, Debug, PartialEq)]
 pub struct RateLimitSummary {
@@ -370,8 +358,8 @@ fn route_summaries(
                     shared: rl.scope == RateLimitScope::Service,
                 }),
                 headers: HeadersSummary {
-                    request: (&resolved.headers.request).into(),
-                    response: (&resolved.headers.response).into(),
+                    request: resolved.headers.request.into_grouped(),
+                    response: resolved.headers.response.into_grouped(),
                 },
             }
         })
