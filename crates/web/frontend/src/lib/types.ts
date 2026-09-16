@@ -732,7 +732,15 @@ export type TlsKeyType = "ecdsa_p256";
 
 export interface TlsCertificate {
   id: number;
+  /** A name the certificate covers, used as its label. What the certificate
+   * serves is decided by its full SAN list, never by this field. */
   hostname: string;
+  /** For CSR-derived rows, the hostname the request was made for. May differ
+   * from `hostname` when the CA signed a different name set. */
+  requested_hostname: string | null;
+  /** Whether the stored certificate covers `requested_hostname`. Null when
+   * there is nothing to decide, or when the runtime could not tell. */
+  request_covered: boolean | null;
   state: TlsCertState;
   origin: TlsCertOrigin;
   key_type: TlsKeyType;

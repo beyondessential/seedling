@@ -164,6 +164,21 @@ mod tests {
         time::OffsetDateTime::from_unix_timestamp(seconds).expect("in-range timestamp")
     }
 
+    /// A certificate with no DNS SANs covers nothing, so there is no hostname
+    /// it could ever be served for.
+    // r[verify tls.cert.validation.san-coverage]
+    #[test]
+    fn rejects_a_cert_with_no_dns_sans() {
+        let key = KeyPair::generate_for(&PKCS_ECDSA_P256_SHA256).expect("keypair");
+        let mut params = CertificateParams::new(Vec::<String>::new()).expect("params");
+        params.distinguished_name = DistinguishedName::new();
+        let cert = params.self_signed(&key).expect("self-sign").pem();
+        let key_pem = SecretString::new(key.serialize_pem().into());
+
+        let err = validate_upload(&cert, &key_pem).unwrap_err();
+        assert!(matches!(err, ValidateError::NoSans { .. }), "{err:?}");
+    }
+
     #[test]
     fn rejects_expired_cert() {
         let (cert, key) = key_and_cert("foo.example.com", |p| {

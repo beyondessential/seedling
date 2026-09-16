@@ -1078,7 +1078,10 @@ This section covers the operator interface for the ACME-DNS strategy, manual cer
 
 > i[tls.cert.list]
 > `/tls/certificates/list` returns all stored certificates.
-> Response `result.certificates` is an array of objects each with `id`, `hostname`, `state` (`"csr_pending"`, `"active"`, `"superseded"`, or `"failed"`), `origin` (`"manual"`, `"csr"`, or `"acme_dns"`), `key_type`, `issuer`, `not_before`, `not_after`, `serial`, `self_signed`, `note`, `acme_account_id`, `created_at`, `updated_at`.
+> Response `result.certificates` is an array of objects each with `id`, `hostname`, `requested_hostname`, `request_covered`, `state` (`"csr_pending"`, `"active"`, `"superseded"`, or `"failed"`), `origin` (`"manual"`, `"csr"`, or `"acme_dns"`), `key_type`, `issuer`, `not_before`, `not_after`, `serial`, `self_signed`, `note`, `acme_account_id`, `created_at`, `updated_at`.
+> `hostname` is a name the certificate covers, used as a display label: for an operator upload its primary SAN, for a runtime-issued certificate the name it was issued for. What the certificate serves is decided by its full SAN list per [tls.cert.validation.san-coverage](runtime.md#r--tls.cert.validation.san-coverage), never by this field.
+> `requested_hostname` is the hostname a CSR was begun for; it is null for rows of any other origin, and on a CSR row it may differ from `hostname` when the CA signed a different name set.
+> `request_covered` reports whether the stored certificate covers that requested hostname, so that the rule is applied in one place rather than by each client. It is null where there is nothing to decide — no requested hostname, or no certificate yet — and also where the stored certificate cannot be parsed, which is not the same answer as "does not cover".
 > Private key material is never returned.
 
 > i[tls.cert.upload-manual]
@@ -1087,7 +1090,7 @@ This section covers the operator interface for the ACME-DNS strategy, manual cer
 > The runtime validates the upload per [tls.cert.validation.self-signed](runtime.md#r--tls.cert.validation.self-signed) and [tls.cert.validation.expired](runtime.md#r--tls.cert.validation.expired), additionally rejects the upload when the leaf carries no DNS SANs (nothing to bind to), and rejects when the supplied private key's public key does not match the leaf certificate's `SubjectPublicKeyInfo`.
 > Validation rejections return `requirements_invalid` with a message describing the failed rule.
 > On success the cert is stored with the private key encrypted at rest using the [secret key](runtime.md#r--secret.key); the response `warnings` array contains `"self_signed"` when the leaf is self-signed and/or `"not_yet_valid"` when `not_before` is in the future.
-> No per-hostname binding step is required: the runtime auto-binds the cert to every hostname its SAN list covers per [tls.strategy.manual](runtime.md#r--tls.strategy.manual). The new row supersedes any prior active certificate whose primary SAN matches.
+> No per-hostname binding step is required: the runtime auto-binds the cert to every hostname its SAN list covers per [tls.strategy.manual](runtime.md#r--tls.strategy.manual). The new row retires any prior active certificate it fully replaces, per [tls.cert.supersede](runtime.md#r--tls.cert.supersede).
 
 > i[tls.cert.delete]
 > `/tls/certificates/delete { id }` removes a stored certificate.
@@ -1103,9 +1106,12 @@ This section covers the operator interface for the ACME-DNS strategy, manual cer
 > Returns `not_found` when the id is unknown, and `requirements_invalid` once the row has been transitioned away from `csr_pending` (cert uploaded or row cancelled).
 
 > i[tls.cert.csr.upload-cert]
-> `/tls/certificates/csr/upload-cert { id, cert_pem }` accepts the externally-signed certificate for a pending CSR.
-> The runtime verifies the leaf cert's `SubjectPublicKeyInfo` matches the stored private key and runs the standard SAN-coverage / expiry checks; on success the row transitions to `active` and supersedes any prior active certificate for the same hostname.
-> Validation rejections return `requirements_invalid`; non-fatal warnings (`self_signed`, `not_yet_valid`) come back in the response `warnings` array.
+> `/tls/certificates/csr/upload-cert { id, cert_pem }` accepts the externally-signed certificate for a pending CSR, returning `{ id, primary_san, san_dns_names, warnings }`.
+> The runtime verifies the leaf cert's `SubjectPublicKeyInfo` matches the stored private key and applies the same validation as [`tls.cert.upload-manual`](#i--tls.cert.upload-manual).
+> On success the row transitions to `active`, binds to the hostnames the issued certificate's SAN list covers per [tls.cert.validation.san-coverage](runtime.md#r--tls.cert.validation.san-coverage), and retires any prior active certificate it fully replaces, per [tls.cert.supersede](runtime.md#r--tls.cert.supersede).
+> A CSR that is cancelled before its certificate is uploaded cannot then be activated: the upload returns `requirements_invalid` and nothing is stored or retired.
+> The hostname the CSR was requested for is retained on the row and reported by [`tls.cert.list`](#i--tls.cert.list).
+> Validation rejections return `requirements_invalid`; non-fatal warnings come back in the response `warnings` array: `self_signed`, `not_yet_valid`, and `request_not_covered` when the issued certificate does not cover the requested hostname.
 
 > i[tls.cert.csr.cancel]
 > `/tls/certificates/csr/cancel { id }` cancels a pending CSR row, deleting the stored private key.
@@ -1117,7 +1123,7 @@ This section covers the operator interface for the ACME-DNS strategy, manual cer
 > Contact email and directory come from the global [TLS settings](#i--tls.settings.set); if no contact email is configured, the call returns `internal` with a descriptive message.
 > The call blocks for the full duration of the ACME flow (typically tens of seconds) and returns `{ cert_id, not_after }` on success.
 > Failure returns `internal` with a message identifying the stage that failed.
-> The newly-issued certificate supersedes any prior active certificate for the same hostname.
+> The newly-issued certificate retires any prior active certificate it fully replaces, per [tls.cert.supersede](runtime.md#r--tls.cert.supersede).
 
 > i[tls.cert.retry]
 > `/tls/certificates/retry { hostname }` queues a retry for `hostname` and returns immediately.

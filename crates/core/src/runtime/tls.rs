@@ -20,10 +20,13 @@ pub mod issuance;
 pub mod keypair;
 pub mod parse;
 pub mod renewal;
+pub mod resolve;
 pub mod serve;
 pub mod state;
 pub mod store;
 pub mod tailscale_issuer;
+#[cfg(test)]
+pub mod test_support;
 pub mod validate;
 
 use secrecy::SecretString;
@@ -80,7 +83,20 @@ impl DnsProviderKind {
 #[derive(Debug, Clone)]
 pub struct TlsCertificate {
     pub id: i64,
+    /// A name the certificate covers: a display label, and the key
+    /// supersession groups by. Operator uploads use the certificate's primary
+    /// SAN; ACME and Tailscale issuance use the name they issued for. Never a
+    /// statement about what the row serves — that is decided by the full SAN
+    /// list at resolution time, and the serving lookups confirm this label
+    /// against the certificate rather than trusting it.
+    // r[impl tls.cert.validation.san-coverage]
     pub hostname: String,
+    /// For `origin = Csr`: the hostname the CSR was begun for. A CA may
+    /// sign a name set other than the one requested, so this records what
+    /// was asked for and is not necessarily covered by the certificate
+    /// that arrived. `None` for every other origin.
+    // r[impl tls.csr.flow]
+    pub requested_hostname: Option<String>,
     pub state: TlsCertState,
     pub origin: TlsCertOrigin,
     /// PEM-encoded leaf chain; populated for `Active` and `Superseded`.

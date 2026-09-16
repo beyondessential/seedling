@@ -133,6 +133,7 @@ const SQL_V53: &str = include_str!("db/migrations/v53.sql");
 // r[impl autonomous.restart.rate.settings]
 const SQL_V54: &str = include_str!("db/migrations/v54.sql");
 const SQL_V55: &str = include_str!("db/migrations/v55.sql");
+const SQL_V56: &str = include_str!("db/migrations/v56.sql");
 
 const MIGRATIONS: &[Migration] = &[
     Migration {
@@ -403,6 +404,11 @@ const MIGRATIONS: &[Migration] = &[
     Migration {
         version: 55,
         sql: SQL_V55,
+        custom_run: None,
+    },
+    Migration {
+        version: 56,
+        sql: SQL_V56,
         custom_run: None,
     },
 ];

@@ -89,36 +89,27 @@ pub fn parse_chain(pem: &str) -> Result<ParsedChain> {
 
     let issuer = cert.issuer().to_string();
     let subject = cert.subject().to_string();
-    let self_signed = issuer == subject && blocks.is_empty();
+    // The leaf alone: issuer equal to subject. Requiring an empty chain as well
+    // would make the flag defeatable by appending any second PEM block — even a
+    // duplicate of the leaf, since nothing here verifies that a chain chains —
+    // and supersession and resolution both lean on this flag to stop a
+    // self-signed upload displacing a CA-issued certificate.
+    let self_signed = issuer == subject;
     let not_before = cert.validity().not_before.timestamp();
     let not_after = cert.validity().not_after.timestamp();
     let serial = cert.tbs_certificate.raw_serial_as_string();
 
-    // Walk parsed extensions and pull both the SAN DNS names and the
-    // AKI keyIdentifier in one pass. Using the parsed-extension stream
-    // (rather than `subject_alternative_name()`) avoids x509-parser's
-    // duplicate-extension error path silently masking a present SAN —
-    // we just take whichever SAN extension we find first.
-    let mut san_dns_names = Vec::new();
+    let san_dns_names = san_dns_names(&cert);
     // r[impl tls.cert.ari]
     // AKI keyIdentifier octet-string contents (not the TLV wrapper);
     // RFC 9773 § 4.1 takes those bytes base64url-encoded.
     let mut leaf_aki_der = None;
     for ext in cert.extensions() {
-        match ext.parsed_extension() {
-            x509_parser::extensions::ParsedExtension::SubjectAlternativeName(san) => {
-                for name in &san.general_names {
-                    if let x509_parser::extensions::GeneralName::DNSName(dns) = name {
-                        san_dns_names.push((*dns).to_owned());
-                    }
-                }
-            }
-            x509_parser::extensions::ParsedExtension::AuthorityKeyIdentifier(aki) => {
-                if let Some(kid) = &aki.key_identifier {
-                    leaf_aki_der = Some(kid.0.to_vec());
-                }
-            }
-            _ => {}
+        if let x509_parser::extensions::ParsedExtension::AuthorityKeyIdentifier(aki) =
+            ext.parsed_extension()
+            && let Some(kid) = &aki.key_identifier
+        {
+            leaf_aki_der = Some(kid.0.to_vec());
         }
     }
 
@@ -141,6 +132,108 @@ pub fn parse_chain(pem: &str) -> Result<ParsedChain> {
         leaf_aki_der,
         leaf_serial_der,
     })
+}
+
+/// The DNS names in a parsed leaf's SubjectAlternativeName extension.
+///
+/// The single definition of what "the DNS names in this leaf" means, so that
+/// the full parse and the SAN-only parse cannot come to different answers —
+/// which would put the listing and validation at odds over the same
+/// certificate. Uses the parsed-extension stream rather than
+/// `subject_alternative_name()` so x509-parser's duplicate-extension error
+/// path cannot silently mask a present SAN; whichever SAN extension comes
+/// first is taken.
+fn san_dns_names(cert: &x509_parser::certificate::X509Certificate<'_>) -> Vec<String> {
+    let mut names = Vec::new();
+    for ext in cert.extensions() {
+        if let x509_parser::extensions::ParsedExtension::SubjectAlternativeName(san) =
+            ext.parsed_extension()
+        {
+            for name in &san.general_names {
+                if let x509_parser::extensions::GeneralName::DNSName(dns) = name {
+                    names.push((*dns).to_owned());
+                }
+            }
+        }
+    }
+    names
+}
+
+/// What the resolution and supersession rules need to know about a leaf,
+/// from one parse.
+pub struct LeafFacts {
+    pub san_dns_names: Vec<String>,
+    /// Issuer equal to subject. Derived here rather than read from the stored
+    /// `self_signed` column: rows written before that column's derivation was
+    /// corrected hold the old answer, and a stored claim about a certificate
+    /// that nothing re-checks is the defect this subsystem exists to have
+    /// fixed. The column remains for display.
+    pub self_issued: bool,
+}
+
+/// [`leaf_san_dns_names`] plus whether the leaf is self-issued, without a
+/// second pass over the PEM.
+// r[impl tls.cert.supersede]
+// r[impl tls.strategy.manual]
+pub fn leaf_facts(pem: &str) -> Result<LeafFacts> {
+    let cert = leaf_of(pem)?;
+    let (_, cert) =
+        x509_parser::certificate::X509Certificate::from_der(cert.contents()).map_err(|e| {
+            X509Snafu {
+                message: e.to_string(),
+            }
+            .build()
+        })?;
+    Ok(LeafFacts {
+        san_dns_names: san_dns_names(&cert),
+        self_issued: cert.issuer() == cert.subject(),
+    })
+}
+
+/// The first CERTIFICATE block in a PEM blob.
+fn leaf_of(pem: &str) -> Result<pem::Pem> {
+    pem::parse_many(pem.as_bytes())
+        .map_err(|e| {
+            PemSnafu {
+                message: e.to_string(),
+            }
+            .build()
+        })?
+        .into_iter()
+        .find(|b| b.tag() == "CERTIFICATE")
+        .ok_or_else(|| NoCertBlockSnafu.build())
+}
+
+/// The DNS names in the leaf certificate of a PEM chain.
+///
+/// [`parse_chain`] returns these too, but on the way it re-encodes the whole
+/// chain into a fresh string and allocates the SPKI, serial and AKI bytes. A
+/// coverage check wants none of that, and coverage is checked per serving
+/// lookup, per listed certificate, and per supersession candidate — so it gets
+/// a path that reads the leaf and stops.
+// r[impl tls.cert.validation.san-coverage]
+pub fn leaf_san_dns_names(pem: &str) -> Result<Vec<String>> {
+    let block = leaf_of(pem)?;
+
+    let (_, cert) =
+        x509_parser::certificate::X509Certificate::from_der(block.contents()).map_err(|e| {
+            X509Snafu {
+                message: e.to_string(),
+            }
+            .build()
+        })?;
+
+    Ok(san_dns_names(&cert))
+}
+
+/// Whether the certificate in `pem` covers `hostname`.
+///
+/// An error means the certificate could not be read, which is not the same
+/// answer as "does not cover" — callers must decide what to do about not
+/// knowing rather than treating it as a negative.
+// r[impl tls.cert.validation.san-coverage]
+pub fn cert_covers(pem: &str, hostname: &str) -> Result<bool> {
+    Ok(san_covers(&leaf_san_dns_names(pem)?, hostname))
 }
 
 /// Returns true if any DNS name in `sans` covers `hostname`. Wildcard rules

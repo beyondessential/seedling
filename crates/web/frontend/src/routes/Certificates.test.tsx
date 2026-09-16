@@ -34,6 +34,8 @@ const settings: TlsSettings = {
 const manualCert: TlsCertificate = {
   id: 3,
   hostname: "shop.example.com",
+  requested_hostname: null,
+  request_covered: null,
   state: "active",
   origin: "manual",
   key_type: "ecdsa_p256",
@@ -51,6 +53,8 @@ const manualCert: TlsCertificate = {
 const pendingCsr: TlsCertificate = {
   id: 5,
   hostname: "csr.example.com",
+  requested_hostname: "csr.example.com",
+  request_covered: null,
   state: "csr_pending",
   origin: "csr",
   key_type: "ecdsa_p256",
@@ -69,6 +73,8 @@ const pendingCsr: TlsCertificate = {
 const acmeCert: TlsCertificate = {
   id: 8,
   hostname: "auto.example.com",
+  requested_hostname: null,
+  request_covered: null,
   state: "active",
   origin: "acme_dns",
   key_type: "ecdsa_p256",
@@ -188,6 +194,46 @@ describe("Certificates", () => {
     // The healthy cert shows no expiry flag.
     const healthy = rowFor("shop.example.com");
     expect(within(healthy).queryByText(/expire/)).toBeNull();
+  });
+
+  // w[verify routes.certificates]
+  it("shows what a CSR asked for when the CA signed something else", async () => {
+    const rewritten: TlsCertificate = {
+      ...manualCert,
+      id: 12,
+      hostname: "example.com",
+      requested_hostname: "www.example.com",
+      request_covered: false,
+      origin: "csr",
+      serial: "0e16",
+      self_signed: false,
+    };
+    const asRequested: TlsCertificate = {
+      ...manualCert,
+      id: 13,
+      hostname: "api.example.com",
+      requested_hostname: "api.example.com",
+      request_covered: true,
+      origin: "csr",
+      serial: "0e17",
+      self_signed: false,
+    };
+    renderWithSession(<Certificates />, {
+      fixtures: baseFixtures({
+        "/tls/certificates/list": { certificates: [rewritten, asRequested] },
+      }),
+    });
+
+    await screen.findByText("requested www.example.com");
+    const rewrittenRow = rowFor("0e16");
+    expect(within(rewrittenRow).getByText("requested www.example.com")).toBeTruthy();
+    expect(within(rewrittenRow).getByText("request not covered")).toBeTruthy();
+
+    // A request the certificate does meet says nothing extra: the requested
+    // name would only repeat the primary SAN.
+    const metRow = rowFor("0e17");
+    expect(within(metRow).queryByText(/^requested /)).toBeNull();
+    expect(within(metRow).queryByText("request not covered")).toBeNull();
   });
 
   it("renders the empty states", async () => {

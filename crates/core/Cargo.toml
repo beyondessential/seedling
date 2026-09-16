@@ -60,5 +60,6 @@ bytes = "1.12.1"
 miette = "7.6.0"
 
 [dev-dependencies]
+rcgen = { version = "0.14.8", features = ["x509-parser"] }
 time = "0.3.47"
 tokio = { workspace = true, features = ["test-util"] }

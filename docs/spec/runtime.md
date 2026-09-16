@@ -1668,7 +1668,11 @@ The BSL surface is intentionally strategy-agnostic: scripts declare only that an
 > Operators may upload a PEM-encoded certificate chain and matching private key.
 > The runtime must auto-bind the uploaded cert to every hostname its SubjectAlternativeName list covers — literally for exact entries, and per RFC 6125 single-label rules for wildcard SANs — and cause the proxy to serve that exact pair for TLS handshakes whose SNI matches a covered hostname.
 > Auto-binding requires no per-hostname operator action: a `*.example.com` cert covers `foo.example.com` and `bar.example.com` as soon as it is uploaded; further hostnames added later are picked up automatically.
-> When more than one stored cert covers the same hostname, the most recently created active row wins.
+> When more than one stored cert covers the same hostname, precedence goes first to a certificate inside its validity window, then to one that is not self-issued over one that is, then to one whose SAN list names the hostname exactly over one that only covers it by wildcard (RFC 6125 §6.4.4), and only then to the most recently created.
+> Self-issuance ranks above specificity because a certificate clients reject is no use for the hostname however precisely it names it: a wildcard they accept must be able to take over from a dedicated certificate they do not.
+> Self-issued means the leaf's issuer and subject are the same; the runtime builds no chain and consults no trust store, so this distinguishes a certificate an operator self-signed from one some CA issued, and says nothing about whether that CA is one any client trusts.
+> A wildcard accordingly serves every name it covers that has no better certificate of its own, so a wildcard obtained for one hostname is picked up by the others it covers without further operator action.
+> Were trust not ranked here at all, resolution would serve a certificate that [supersession](#r--tls.cert.supersede) had just refused to let retire anything, and the refusal would buy nothing.
 > The runtime does not auto-renew manual certs on its own; however, if an `acme_dns` policy applies to a covered hostname and the manual cert is past its renewal threshold, the runtime must initiate the normal ACME-DNS issuance flow so a renewable cert can take over before the manual cert expires.
 
 > r[tls.csr.flow]
@@ -1677,7 +1681,10 @@ The BSL surface is intentionally strategy-agnostic: scripts declare only that an
 >
 > - Generate the keypair on the server, store the private key encrypted at rest using the [secret key](#r--secret.key), and never expose it via any operator interface.
 > - Produce a PEM-encoded CSR whose Subject Alternative Name set covers the target hostname, and make the CSR retrievable via the operator interface for as long as the request is pending.
-> - Accept a signed certificate uploaded later, verify it matches the stored private key and satisfies [SAN coverage](#r--tls.cert.validation.san-coverage), and on success transition the hostname's strategy to manual using the uploaded certificate paired with the held private key.
+> - Record the hostname the request was made for and retain it once a certificate arrives, so an operator can see what was asked for alongside what was issued.
+> - Accept a signed certificate uploaded later, provided it matches the stored private key and passes the same validation as a manual upload.
+> - Bind that certificate to the hostnames its own SAN set covers, per [SAN coverage](#r--tls.cert.validation.san-coverage). A CA is free to sign a name set other than the one requested, so the requested hostname does not determine what the accepted certificate serves or what it supersedes.
+> - Report an unmet request: when the issued certificate does not cover the requested hostname, the upload must warn that the request was not met, and the requested hostname must go on appearing in the [per-hostname rollup](#r--tls.cert.hostname-view) as having no active certificate for as long as an ingress declares it.
 > - Permit cancellation of a pending CSR by the operator, which must destroy the stored private key.
 
 > r[tls.dns-provider.lifecycle]
@@ -1701,13 +1708,25 @@ The BSL surface is intentionally strategy-agnostic: scripts declare only that an
 > For runtime-managed certificates (ACME DNS-01, manual, and CSR-derived), the runtime must deliver certificate and key material to the ingress proxy through a mechanism that does not require including private key material in the proxy's persistent configuration or its restart-replay cache.
 > The proxy must be able to obtain the appropriate certificate by SNI hostname at TLS handshake time.
 > The serving endpoint must be a pure lookup: a stored cert returns 200 with PEM, an unknown hostname returns 204 (no content), and the runtime must never trigger an issuance flow from this path. Issuance is the issuance coordinator's job (see [tls.cert.eager-issuance](#r--tls.cert.eager-issuance)).
-> A certificate whose `notAfter` has passed must not be served, and must not take precedence over a stored certificate that is still valid and covers the hostname.
+> A certificate outside its validity window must not be served: neither one whose `notAfter` has passed, nor one whose `notBefore` has not yet arrived, and neither may take precedence over a stored certificate that is currently valid and covers the hostname.
+> Storing a certificate ahead of its `notBefore` is how an operator stages a cutover (see [tls.cert.validation.expired](#r--tls.cert.validation.expired)), so serving it early would defeat the reason it was accepted.
 > A stored certificate whose expiry is unrecorded is not treated as expired, since that cannot be distinguished from one that has not been parsed.
 
 > r[tls.cert.validation.san-coverage]
-> Whenever the runtime accepts an operator-supplied certificate (manual upload or CSR cert upload), it must validate that the leaf certificate's Subject Alternative Name DNS entries either contain the target hostname literally or contain a wildcard entry that covers it under RFC 6125.
+> A certificate covers a hostname when the leaf certificate's Subject Alternative Name DNS entries either contain that hostname literally or contain a wildcard entry that covers it under RFC 6125.
 > A wildcard SAN `*.example.com` covers exactly one additional left-most label (it covers `foo.example.com` but not `example.com` and not `a.b.example.com`).
-> Uploads that fail this check must be rejected and must not alter any existing policy or certificate.
+> Coverage is the only thing that binds a certificate to a hostname.
+> However a certificate reached the runtime — operator upload, externally-signed CSR, or ACME issuance — it must be served for exactly the hostnames its own SAN set covers.
+> The name an operator asked for is a record of the request, never a binding: a certificate whose SAN set omits it does not acquire that hostname by having been requested under it.
+> A certificate carrying no DNS SANs covers nothing and must be rejected on operator upload.
+
+> r[tls.cert.supersede]
+> A certificate supersedes another only when it replaces it in full: it [covers](#r--tls.cert.validation.san-coverage) every hostname the other serves, it is within its own validity window and lasts at least as long as the other, and it is not self-issued unless the one it replaces already was.
+> A certificate staged ahead of its own validity window is not replaced at all: it was stored for a cutover, and retiring it would mean the cutover never happens with nothing left to take over.
+> The self-issuance test is the leaf's issuer against its subject, not a chain built to a trust store, so it stops an operator's self-signed upload retiring a CA-issued certificate and does not stop a certificate from an untrusted CA doing so.
+> A certificate that does not meet the bar retires nothing, and whatever is serving a hostname goes on serving it.
+> This matters most on the CSR path, where the SAN set is chosen by the issuing CA rather than by the operator, so which certificates a new one is even a candidate to replace is outside the operator's control.
+> Where the runtime cannot read back the certificate it has just stored, it must report the failure rather than a count of nothing retired: the two are not the same outcome, and treating them alike leaves a replaced certificate active alongside its replacement with nothing said.
 
 > r[tls.cert.validation.self-signed]
 > The runtime must accept a self-signed leaf certificate (issuer DN equal to subject DN, no chain) on operator upload, but must annotate the stored certificate so that the operator interface can flag it.
