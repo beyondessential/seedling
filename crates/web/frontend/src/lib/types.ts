@@ -136,6 +136,14 @@ export interface RouteSummary {
   rate_limit: RateLimitSummary | null;
   /** Header operations in force, resolved against the service's. */
   headers: HeadersSummary;
+  /** What this route redirects to, or null when it is proxied to a pod. */
+  redirect: RouteRedirectSummary | null;
+}
+
+export interface RouteRedirectSummary {
+  /** The target as declared, with `<tail>` and `<query>` still spelled out. */
+  to: string;
+  code: number;
 }
 
 export interface HeaderOpsSummary {

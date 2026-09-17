@@ -69,6 +69,12 @@ let svc = app.service("name")
 let http_svc = svc.http(80);          // specialise; port defaults to 80
 let route = http_svc.route("/api");   // HTTP path prefix routing
 
+// A route can answer with a redirect instead of being served by a pod.
+// The positional forms carry the path tail and query over; the map form
+// spells out exactly what carries, using <tail> and <query>.
+http_svc.route("/v1/login").redirect("/api/login", 308);
+http_svc.route("/old").redirect(#{ to: "https://example.com/new", code: 301 });
+
 // Ingresses are keyed by (hostname, port); one service can have many.
 // .tls(terminate, output) declares both what's terminated at the edge
 // and what protocol is handed to the bound Service. Without it, the

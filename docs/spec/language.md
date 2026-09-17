@@ -394,6 +394,51 @@ This is currently the only value.
 > The URL prefix is _not_ stripped for the pod: `GET /api/books` routed through a `route("/api")` will appear as `GET /api/books` to the container.
 >
 > Prefix-matching is done by length: for any given URL, the longest matching prefix is selected. If more complicated logic is required, an application should embed an HTTP "reverse proxy" container of its choice.
+>
+> A trailing `/` carries no meaning in a prefix, so `route("/v1/login/")` and `route("/v1/login")` are one route and not two.
+> Every spelling of the root is the root, `//` among them.
+
+> l[service.http.route.redirect]
+> The `route.redirect(to: string)`, `route.redirect(to: string, code: number)`, and `route.redirect(config: map)` builder methods declare that an [HTTP Service Route](#l--service.http.route) answers with an HTTP redirect instead of being served by a pod.
+> They are available on the routes of an app-declared Service and of an [External Service](#l--service.external) alike, and a redirect route needs no pod bound to it.
+>
+> The `to` target is either a path beginning with `/`, which redirects within the hostname the request arrived on, or an absolute URL beginning with `http://` or `https://`, which redirects to another host.
+> Any other target throws.
+> The `code` defaults to 307 and must be one of 301, 302, 307, or 308; any other value throws.
+> A permanent move of an endpoint that accepts a request body wants 308, since 301 and 302 permit a client to reissue the request as a `GET` and so lose the body.
+>
+> The map form carries `to` and an optional `code` and no other field; an unrecognised field throws.
+>
+> A target may name the parts of the incoming request that carry over to it:
+>
+> - `<tail>`: the part of the request path following the matched prefix, carrying its leading `/`. Empty when the request path is exactly the prefix.
+> - `<query>`: the request's query string, carrying its leading `?`. Empty when the request carries none.
+>
+> A target naming no token is literal: every request under the prefix redirects to exactly that target, whatever followed the prefix.
+> An unrecognised token throws, rather than reaching the client as part of the target.
+> So does a stray `<`, a character a URL carries percent-encoded rather than as itself, so there is nothing for it to have meant.
+>
+> The two positional forms are the map form with `<tail><query>` appended to the target, which is the common case of moving a prefix while keeping everything under it.
+> A positional target naming a token itself throws, rather than carrying that part of the request twice: naming one is writing the target out in full, which is the map form.
+> `route("/v1/login").redirect("/api/login")` therefore sends `/v1/login/reset?token=x` to `/api/login/reset?token=x`, where `redirect(#{ to: "/api/login" })` sends it to `/api/login`.
+>
+> The tokens are those named here, and are translated by the runtime.
+> A target must not be written in the proxy's own placeholder syntax: the proxy substitutes a braced word naming its own state, its environment among it, and the target reaches the client as a `Location` header, where a [header value](#l--service.http.headers.fields) refuses a brace for that same reason.
+>
+> A path target whose second character is `/` or `\\` throws: it names another host while opening with the `/` that says "within the hostname the request arrived on", and the absolute form says so plainly.
+> A target carrying a tab throws for the same reason, a client stripping one before reading the target.
+>
+> Each token carries its own leading separator, so a target must not end a literal with that separator immediately before the token: `/` before `<tail>` and `?` before `<query>` throw.
+> Left to compose, a target of `/` followed by `<tail>` reaches the client as `//` and whatever the request carried, which is the other host above assembled at request time.
+>
+> A redirect must not be declared on the root prefix, which would answer for the whole hostname; retiring a hostname is a [site ingress redirect attachment](runtime.md#r--ingress.site.attachment), an operator's to make rather than an app's.
+> A prefix declared as a redirect and also bound by a pod through `deployment.http(pod_port, svc.route(prefix))` throws: a prefix is either redirected or proxied.
+> A second `redirect()` on the same route replaces the first.
+>
+> [Compression](#l--service.http.compress), [balancing](#l--service.balance), and [rate limiting](#l--service.http.rate-limit) have nothing to act on in a redirect, which reaches no pod: declaring one on a redirect route throws, where the error still names the line that wrote it.
+> The same setting declared on the Service and inherited by the route is ignored instead, so a service-wide declaration need not be written around the service's redirect routes.
+> [Header](#l--service.http.headers) `response` operations do apply, a redirect being a response the route serves; a `request` operation on a redirect route throws, having no onward request to shape.
+> A `response` operation naming `Location` on a redirect route throws, since it would displace the target the redirect computed and the route would then not serve what `to` declares.
 
 > l[service.http.compress]
 > `compress(enabled: bool)` and `compress(config: map)` are builder methods declaring compression of responses served through the proxy.
@@ -401,7 +446,7 @@ This is currently the only value.
 >
 > `compress(false)` disables compression. `compress(true)` enables it with the default settings below, as does the map form, which additionally sets whichever fields it names.
 >
-> Compression is a property of responses proxied to the service's pods. [Redirect](#l--ingress.redirect) responses are never compressed.
+> Compression is a property of responses proxied to the service's pods. Redirect responses, whether from an [ingress redirect](#l--ingress.redirect) or a [route redirect](#l--service.http.route.redirect), are never compressed.
 
 > l[service.http.compress.fields]
 > All fields of the `config` map are optional:
@@ -449,7 +494,7 @@ This is currently the only value.
 >
 > The map form declares a limit carrying the fields below; `rate_limit(false)` declares no limit at this level, which at a route also suppresses a limit the service declared.
 > A limit applies to requests proxied to the service's pods, and is opt-in: a service that never declares one is not rate limited.
-> [Redirect](#l--ingress.redirect) responses and non-HTTP forwarding are never rate limited.
+> Redirect responses, whether from an [ingress redirect](#l--ingress.redirect) or a [route redirect](#l--service.http.route.redirect), and non-HTTP forwarding are never rate limited.
 
 > l[service.http.rate-limit.fields]
 > Both fields of the `config` map are required, since a limit has no meaning without either:
@@ -471,7 +516,8 @@ This is currently the only value.
 > A second `headers()` call on the same service or route layers over the first by header name, rather than discarding what it declared: the later call's operation wins for the headers it names, and the earlier one's stands for the rest.
 >
 > Header manipulation is a property of traffic proxied to the service's pods.
-> [Redirect](#l--ingress.redirect) responses and non-HTTP forwarding carry no header operations.
+> [Ingress redirect](#l--ingress.redirect) responses and non-HTTP forwarding carry no header operations.
+> A [route redirect](#l--service.http.route.redirect) carries the `response` operations alone, those being the ones a response it serves can bear.
 
 > l[service.http.headers.fields]
 > The `request` and `response` maps each carry three optional fields, naming the operation applied to a header:

@@ -7,14 +7,17 @@ use crate::{
         ingress::IngressDef,
         pod::PodDef,
         resource::{Resource, ResourceKind},
-        service::{HttpServiceDef, ProxySettings, RateLimitScope, resolve},
+        service::{
+            HttpServiceDef, ProxySettings, REDIRECT_OWNED_HEADER, RateLimitScope, RouteDecl,
+            RouteKind, resolve,
+        },
     },
     runtime::{
         InstanceRegistry, desired::DesiredState, identity::ResourceInstance,
         lifecycle::LifecycleState, registry::RegistryError,
     },
     system::{
-        translate::proxy::{HttpForwardRoute, ServiceUpstream, instance_ipv6},
+        translate::proxy::{HttpForwardRoute, HttpRedirectRoute, ServiceUpstream, instance_ipv6},
         types::{L4Proto, L4Route, RouteProxy, RouteZone},
     },
 };
@@ -45,6 +48,8 @@ pub(super) fn collect(
         Vec::new();
     let mut pairs: Vec<(IngressDef, ServiceUpstream)> = Vec::new();
     let mut l4_routes: Vec<L4Route> = Vec::new();
+    let mut service_defs: std::collections::HashMap<String, ServiceProxyDef> =
+        std::collections::HashMap::new();
 
     for resource in snapshot.resources.values() {
         let ingress = match resource {
@@ -112,20 +117,34 @@ pub(super) fn collect(
 
         ready_observations.push((ingress_instance, "ingress_ready", serde_json::json!({})));
 
+        // One scan and one clone per distinct service rather than per
+        // ingress: several ingresses commonly hang off one service (the
+        // `:80` + `:443` pair, or one per hostname), and this runs on every
+        // reconciliation tick.
+        let service_def = service_defs
+            .entry(svc_name.to_owned())
+            .or_insert_with(|| service_proxy_def(snapshot, svc_name));
+
         // r[impl service.http.route.routing]
         // Per-prefix routes derived from pod http_bindings. Caddy will
         // longest-prefix match these; the service IP fallback below only
         // kicks in if the service has no http_bindings at all (e.g. an
         // HTTPS-fronted TCP service).
-        let routes = collect_http_routes(snapshot, svc_name, running_pods);
+        let routes = collect_http_routes(snapshot, svc_name, running_pods, service_def);
+
+        // r[impl service.http.route.redirect]
+        // Read from the service's own declaration rather than from the pods,
+        // there being no pod behind a redirect to read it from.
+        let redirects = collect_redirect_routes(service_def);
 
         pairs.push((
             def,
             ServiceUpstream {
                 routes,
+                redirects,
                 service_ip,
                 service_port: upstream_port,
-                proxy: service_level_proxy(snapshot, svc_name),
+                proxy: service_level_proxy(snapshot, svc_name, service_def),
             },
         ));
     }
@@ -213,30 +232,52 @@ fn scan_pod_for_port(pod: &PodDef, service_name: &str) -> Option<u16> {
     None
 }
 
+/// Everything the emitters need from one service's declaration.
+///
+/// Read in a single pass under a single lock, and handed to each collector,
+/// rather than each of them finding the service for itself: they run per
+/// ingress on every reconciliation tick, and each walk was a scan of the
+/// app's whole resource map to reach the same `HttpServiceDef`.
+#[derive(Default)]
+pub(super) struct ServiceProxyDef {
+    /// The service's own settings, which its routes resolve against.
+    pub service: ProxySettings,
+    /// Every prefix the service declared, and what each is.
+    pub routes: RouteMap,
+}
+
+type RouteMap = std::collections::BTreeMap<String, RouteDecl>;
+
+impl ServiceProxyDef {
+    /// What one prefix declared for itself, for resolution against the
+    /// service's own values.
+    fn settings(&self, prefix: &str) -> Option<&ProxySettings> {
+        self.routes.get(prefix).map(|r| &r.settings)
+    }
+}
+
 /// The `HttpServiceDef` an app declared for `service_name`, if any. Both the
 /// app's own services and external-service slots can back an HTTP route.
-fn proxy_settings_for(snapshot: &AppDef, service_name: &str) -> (ProxySettings, RouteMap) {
+pub(super) fn service_proxy_def(snapshot: &AppDef, service_name: &str) -> ServiceProxyDef {
+    let gather = |settings: ProxySettings, http: Option<&HttpServiceDef>| ServiceProxyDef {
+        service: settings,
+        routes: http.map(|h| h.routes.clone()).unwrap_or_default(),
+    };
     snapshot
         .resources
         .values()
         .find_map(|r| match r {
             Resource::Service(s) if s.name.as_str() == service_name => {
                 let def = s.def.lock();
-                Some((def.proxy_settings(), routes_of(def.http.as_ref())))
+                Some(gather(def.proxy_settings(), def.http.as_ref()))
             }
             Resource::ExternalService(e) if e.name.as_str() == service_name => {
                 let def = e.def.lock();
-                Some((def.proxy_settings(), routes_of(def.http.as_ref())))
+                Some(gather(def.proxy_settings(), def.http.as_ref()))
             }
             _ => None,
         })
         .unwrap_or_default()
-}
-
-type RouteMap = std::collections::BTreeMap<String, ProxySettings>;
-
-fn routes_of(http: Option<&HttpServiceDef>) -> RouteMap {
-    http.map(|h| h.routes.clone()).unwrap_or_default()
 }
 
 /// Settings for the synthesised `/` route, which a service is served through
@@ -244,13 +285,17 @@ fn routes_of(http: Option<&HttpServiceDef>) -> RouteMap {
 /// even so, and they are what that route takes.
 // r[impl service.http.route.compression]
 // r[impl service.http.route.balancing]
-pub(super) fn service_level_proxy(snapshot: &AppDef, service_name: &str) -> RouteProxy {
-    let (service, routes) = proxy_settings_for(snapshot, service_name);
+pub(super) fn service_level_proxy(
+    snapshot: &AppDef,
+    service_name: &str,
+    def: &ServiceProxyDef,
+) -> RouteProxy {
+    let service = &def.service;
     // These settings are used for the synthesised `/` route, which is a real
     // route the service may have declared settings for even when no pod is
     // bound to it yet. Resolving against `None` would ignore those and, worse,
     // apply a service-level limit to a `/` that opted out of it.
-    let resolved = resolve(&service, routes.get("/"));
+    let resolved = resolve(service, def.settings("/"));
     let scope = resolved.rate_limit.map(|rl| rl.scope);
     RouteProxy::from_resolved(resolved, || {
         zone_for(
@@ -301,6 +346,7 @@ pub(super) fn collect_http_routes(
     snapshot: &AppDef,
     service_name: &str,
     running_pods: &[RunningPod],
+    def: &ServiceProxyDef,
 ) -> Vec<HttpForwardRoute> {
     use std::collections::BTreeMap;
 
@@ -358,11 +404,10 @@ pub(super) fn collect_http_routes(
     // r[impl service.http.route.balancing]
     // Every emitted route carries settings, so a service that declared none
     // still gets the defaults rather than a bare proxy handler.
-    let (service, routes) = proxy_settings_for(snapshot, service_name);
     by_prefix
         .into_iter()
         .map(|(prefix, upstreams)| {
-            let resolved = resolve(&service, routes.get(&prefix));
+            let resolved = resolve(&def.service, def.settings(&prefix));
             let scope = resolved.rate_limit.map(|rl| rl.scope);
             let proxy = RouteProxy::from_resolved(resolved, || {
                 zone_for(
@@ -376,6 +421,48 @@ pub(super) fn collect_http_routes(
                 prefix,
                 upstreams,
                 proxy,
+            }
+        })
+        .collect()
+}
+
+/// The redirect routes a service declares.
+///
+/// Unlike [`collect_http_routes`] this reads the service rather than the pods:
+/// a redirect answers for itself, so there is no binding to derive it from and
+/// no running pod for it to wait on.
+// r[impl service.http.route.redirect]
+pub(super) fn collect_redirect_routes(def: &ServiceProxyDef) -> Vec<HttpRedirectRoute> {
+    def.routes
+        .iter()
+        .filter_map(|(prefix, decl)| match &decl.kind {
+            RouteKind::Redirect(redirect) => Some((prefix, decl, redirect)),
+            RouteKind::Proxied { .. } => None,
+        })
+        .map(|(prefix, decl, redirect)| {
+            let resolved = resolve(&def.service, Some(&decl.settings));
+            HttpRedirectRoute {
+                prefix: prefix.clone(),
+                target: redirect.target.iter().map(Into::into).collect(),
+                code: redirect.code,
+                // r[impl service.http.route.headers]
+                // The response direction alone: a redirect sends no request
+                // onward, and a request operation the service declared is
+                // ignored on a redirect route rather than refused, so a
+                // service-wide declaration need not be written around it.
+                //
+                // `Location` is dropped by the same rule. The route may not
+                // declare an operation on it, but the service may — for its
+                // proxied routes — and layering that over a redirect would
+                // displace the target the redirect computed, sending every
+                // request under the prefix somewhere other than what `to`
+                // declares.
+                headers: resolved
+                    .headers
+                    .response
+                    .without(REDIRECT_OWNED_HEADER)
+                    .into_grouped()
+                    .into(),
             }
         })
         .collect()

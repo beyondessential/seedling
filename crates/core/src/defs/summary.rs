@@ -24,8 +24,8 @@ use super::{
     pod::{HttpBinding, PodDef, TcpUdpBinding},
     resource::Resource,
     service::{
-        ExternalService, HttpServiceDef, ProxySettings, RateLimitScope, ResolvedBalance, Service,
-        default_content_types, resolve,
+        ExternalService, HttpServiceDef, ProxySettings, REDIRECT_OWNED_HEADER, RateLimitScope,
+        ResolvedBalance, Service, default_content_types, resolve,
     },
     volume::{ExternalVolume, Volume},
 };
@@ -75,6 +75,22 @@ pub struct RouteSummary {
     /// service's, so a route reports what applies to it whether it or the
     /// service declared it.
     pub headers: HeadersSummary,
+    /// The redirect this route answers with, or `null` when it is proxied to
+    /// a pod.
+    // i[impl app.describe.proxy-settings]
+    // r[impl service.http.route.redirect]
+    pub redirect: Option<RouteRedirectSummary>,
+}
+
+/// What a redirect route answers with.
+// i[impl app.describe.proxy-settings]
+#[derive(Serialize, Debug, PartialEq)]
+pub struct RouteRedirectSummary {
+    /// The target as the app declared it, with the parts of the request that
+    /// carry over still spelled as tokens: what each expands to is a property
+    /// of the request, not of the declaration.
+    pub to: String,
+    pub code: u16,
 }
 
 /// Reported in both directions always, each with its three operations
@@ -356,30 +372,73 @@ fn route_summaries(
         http.routes.keys().map(String::as_str).collect()
     };
 
+    // A service no pod binds a prefix on is still served through `/`, whether
+    // or not it also declares a redirect: the redirect answers for its own
+    // prefix and the fallback answers for the rest.
+    let fallback_serves = bound.is_empty();
+
     prefixes
         .into_iter()
         .map(|prefix| {
-            let resolved = resolve(service_level, http.routes.get(prefix));
+            let redirect = http.redirect(prefix);
+            let resolved = resolve(service_level, http.settings(prefix));
             RouteSummary {
                 // The synthesised `/` route is served whenever it is the only
                 // one, which is the case exactly when nothing was bound.
-                served: bound.is_empty() || bound.contains(prefix),
+                served: redirect.is_some() || fallback_serves || bound.contains(prefix),
                 prefix: prefix.to_owned(),
-                compress: resolved.compress.map(|c| CompressSummary {
-                    encodings: c.encodings.iter().map(|e| e.as_str().to_owned()).collect(),
-                    content_types: c.content_types.unwrap_or_else(default_content_types),
-                    minimum_length: c.minimum_length,
+                // r[impl service.http.route.redirect]
+                // Reported as nothing on a redirect route rather than as what
+                // the service declared: a redirect reaches no pod, so a limit
+                // inherited from the service is ignored on it, and reporting
+                // one would read as a control that is in force.
+                compress: resolved.compress.filter(|_| redirect.is_none()).map(|c| {
+                    CompressSummary {
+                        encodings: c.encodings.iter().map(|e| e.as_str().to_owned()).collect(),
+                        content_types: c.content_types.unwrap_or_else(default_content_types),
+                        minimum_length: c.minimum_length,
+                    }
                 }),
                 balance: balance_summary(&resolved.balance),
-                rate_limit: resolved.rate_limit.map(|rl| RateLimitSummary {
-                    max_events: rl.settings.max_events,
-                    window: rl.settings.window_secs,
-                    shared: rl.scope == RateLimitScope::Service,
-                }),
+                rate_limit: resolved
+                    .rate_limit
+                    .filter(|_| redirect.is_none())
+                    .map(|rl| RateLimitSummary {
+                        max_events: rl.settings.max_events,
+                        window: rl.settings.window_secs,
+                        shared: rl.scope == RateLimitScope::Service,
+                    }),
                 headers: HeadersSummary {
-                    request: resolved.headers.request.into_grouped().into(),
-                    response: resolved.headers.response.into_grouped().into(),
+                    // r[impl service.http.route.redirect]
+                    // A redirect sends no request onward, so a request
+                    // operation it inherited from the service applies to
+                    // nothing and is reported as applying to nothing.
+                    request: if redirect.is_some() {
+                        HeaderOpsSummary::default()
+                    } else {
+                        resolved.headers.request.into_grouped().into()
+                    },
+                    // r[impl service.http.route.redirect]
+                    // `Location` is dropped on a redirect route for the same
+                    // reason the runtime drops it: the redirect computes that
+                    // header, so an operation the service declared for its
+                    // proxied routes is not in force here, and reporting it
+                    // would read as one that is.
+                    response: if redirect.is_some() {
+                        resolved
+                            .headers
+                            .response
+                            .without(REDIRECT_OWNED_HEADER)
+                            .into_grouped()
+                            .into()
+                    } else {
+                        resolved.headers.response.into_grouped().into()
+                    },
                 },
+                redirect: redirect.map(|r| RouteRedirectSummary {
+                    to: r.target_text(),
+                    code: r.code,
+                }),
             }
         })
         .collect()

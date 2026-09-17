@@ -299,6 +299,10 @@ Absent specification bugs, anything that is not defined here is either defined i
 > A service whose backing pods declare no HTTP route bindings reports the single `/` route it is served through, so the array is never empty for an HTTP service.
 >
 > Each route reports `served`, whether a pod binds its prefix and the proxy is therefore told to serve it. A declared prefix that nothing binds reports its settings but does not carry them: requests under it are answered by whichever bound prefix matches, under that route's settings. Without this a rate limit on an unbound route would read as a control in force.
+>
+> `redirect` is `null` on a route proxied to a pod, and otherwise an object with fields `to` (string) and `code` (integer), describing a [route redirect](language.md#l--service.http.route.redirect).
+> `to` is the target as the app declared it, with the parts of the request that carry over still spelled as tokens, since what each expands to is a property of the request rather than of the declaration.
+> A redirect route is `served` without a pod binding it, and reports `compress` and `rate_limit` null and its request header operations empty, those being the settings a redirect leaves nothing to act on. Its `balance` is the service's, no pool being selected from.
 
 > i[app.describe.param-secret]
 > When a param's effective `secret` flag is `true`, its `value` must be `null` in the response regardless of whether a value is stored. Clients must use `is_set` to distinguish an unset secret from a set-but-redacted secret.

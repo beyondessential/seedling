@@ -425,6 +425,24 @@ impl HeaderRules {
         self.0.iter()
     }
 
+    /// Whether an operation is declared for this header, compared without
+    /// regard to case as header names are everywhere else here.
+    pub fn names(&self, name: &str) -> bool {
+        self.0.keys().any(|n| n.as_str().eq_ignore_ascii_case(name))
+    }
+
+    /// Drop any operation on this header.
+    ///
+    /// For a header a route computes for itself: an operation the route
+    /// declared on one is refused, but an operation it inherited from the
+    /// service is ignored rather than refused, and ignoring it means taking
+    /// it back out here.
+    // l[impl service.http.route.redirect]
+    pub fn without(mut self, name: &str) -> Self {
+        self.0.retain(|n, _| !n.as_str().eq_ignore_ascii_case(name));
+        self
+    }
+
     /// Give `name` this operation, replacing any it already had.
     ///
     /// Removes before inserting so the name keeps the spelling that came with
@@ -1098,6 +1116,358 @@ fn as_number(value: Dynamic, what: &str, key: &str) -> Result<f64, Box<EvalAltRe
         value.type_name()
     )
     .into())
+}
+
+// ---------------------------------------------------------------------------
+// Route redirects
+// ---------------------------------------------------------------------------
+
+/// The parts of the incoming request a target may name.
+///
+/// Our own spelling rather than the proxy's placeholder syntax: the target is
+/// served as a `Location`, and a braced word there is substituted from the
+/// proxy's own state — see [`header_value`], which refuses one for the same
+/// reason. Angle brackets rather than `${...}` because that is rhai's own
+/// interpolation inside a backtick string, so a script reaching for backticks
+/// out of habit would have the token evaluated as a variable before it ever
+/// reached us.
+const TAIL_TOKEN: &str = "<tail>";
+const QUERY_TOKEN: &str = "<query>";
+
+/// The code a redirect takes when it names none.
+pub const DEFAULT_REDIRECT_CODE: u16 = 307;
+
+/// The codes a redirect may carry.
+///
+/// 303 and the rest of the 3xx range are left out deliberately: they are not
+/// what an app moving one of its own paths means, and a target it does mean is
+/// one of these four.
+const REDIRECT_CODES: [i64; 4] = [301, 302, 307, 308];
+
+/// One piece of a redirect target: text the app wrote, or a part of the
+/// request that carries over into it.
+// l[impl service.http.route.redirect]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RedirectSegment {
+    Literal(String),
+    /// The request path following the matched prefix, carrying its leading
+    /// `/`, and empty when the path is exactly the prefix.
+    Tail,
+    /// The request's query string, carrying its leading `?`, and empty when
+    /// the request carries none.
+    Query,
+}
+
+/// A redirect declared on one route of a service.
+///
+/// The target is held parsed rather than as the string the app wrote, so a
+/// token that names nothing is settled where the error still names the line
+/// that wrote it instead of reaching a client as literal text.
+// l[impl service.http.route.redirect]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RouteRedirect {
+    pub target: Vec<RedirectSegment>,
+    pub code: u16,
+}
+
+impl RouteRedirect {
+    /// The target written back out as the app wrote it, tokens and all.
+    ///
+    /// What a token expands to is a property of each request, so the
+    /// declaration is what there is to report.
+    // l[impl service.http.route.redirect]
+    pub fn target_text(&self) -> String {
+        self.target
+            .iter()
+            .map(|segment| match segment {
+                RedirectSegment::Literal(text) => text.as_str(),
+                RedirectSegment::Tail => TAIL_TOKEN,
+                RedirectSegment::Query => QUERY_TOKEN,
+            })
+            .collect()
+    }
+}
+
+// l[impl service.http.route.redirect]
+fn redirect_code(code: i64) -> Result<u16, Box<EvalAltResult>> {
+    if !REDIRECT_CODES.contains(&code) {
+        return Err(
+            format!("redirect `code` must be one of 301, 302, 307, or 308, got {code}").into(),
+        );
+    }
+    Ok(code as u16)
+}
+
+/// The two positional forms, which are the map form with the tail and query
+/// appended.
+///
+/// Moving a prefix and keeping everything under it is the common case, and
+/// spelling the tokens out on every such call would be ceremony around the
+/// thing almost every redirect means.
+// l[impl service.http.route.redirect]
+pub(super) fn parse_redirect_positional(
+    to: &str,
+    code: Option<i64>,
+) -> Result<RouteRedirect, Box<EvalAltResult>> {
+    let code = match code {
+        Some(code) => redirect_code(code)?,
+        None => DEFAULT_REDIRECT_CODE,
+    };
+    // Appending to a target that already names a part of the request would
+    // carry that part twice, silently. A target naming one is a target being
+    // written out in full, which is the map form.
+    if to.contains('<') {
+        return Err(format!(
+            "redirect `to` names a part of the request, which this form appends for itself. \
+             Write the target out in full as `redirect(#{{ to: \"…\" }})`, got `{to}`"
+        )
+        .into());
+    }
+    build_redirect(&format!("{to}{TAIL_TOKEN}{QUERY_TOKEN}"), to, code)
+}
+
+// l[impl service.http.route.redirect]
+pub(super) fn parse_redirect_map(mut map: Map) -> Result<RouteRedirect, Box<EvalAltResult>> {
+    let to = map.remove("to");
+    let code = map.remove("code");
+
+    // Before the required-field check: with both known keys already taken,
+    // whatever is left is a key the caller invented, and reporting `too:` as a
+    // missing `to` would name everything except the typo.
+    reject_unknown(&map, "redirect")?;
+
+    let Some(to) = to else {
+        return Err("redirect requires `to`".into());
+    };
+    let to = crate::defs::take::take_string("redirect `to`", to)?;
+
+    let code = match code {
+        None => DEFAULT_REDIRECT_CODE,
+        Some(value) => {
+            let n = value.as_int().map_err(|t| -> Box<EvalAltResult> {
+                format!("redirect `code` must be an integer status code, got {t}").into()
+            })?;
+            redirect_code(n)?
+        }
+    };
+
+    build_redirect(&to, &to, code)
+}
+
+/// Settle a target into segments, checking it against what a `Location` may
+/// carry.
+///
+/// `written` is the target as the app wrote it, which the positional forms
+/// append to before parsing: an error naming the appended tokens would report
+/// text the script never contained.
+// l[impl service.http.route.redirect]
+fn build_redirect(to: &str, written: &str, code: u16) -> Result<RouteRedirect, Box<EvalAltResult>> {
+    // Checked ahead of `header_value`'s own refusal so the error names the
+    // tokens that do carry a request part over, rather than leaving a script
+    // that reached for the proxy's syntax with nothing to reach for instead.
+    if to.contains('{') {
+        return Err(format!(
+            "redirect `to` must not contain `{{`: the proxy reads a braced word as a \
+             placeholder naming its own state, its environment among it, and the target \
+             is served as a `Location` header. Name `{TAIL_TOKEN}` and `{QUERY_TOKEN}` for \
+             the parts of the request that carry over, got `{written}`"
+        )
+        .into());
+    }
+    // The target is a header value, and is held to what one may carry.
+    header_value(to.to_owned(), "redirect `to`")?;
+    // A header value may carry a horizontal tab, and a URL may not: browsers
+    // strip one before parsing, so `/<tab>/host` reaches the same place
+    // `//host` does and would walk past the check below.
+    if to.contains('\t') {
+        return Err(format!(
+            "redirect `to` contains a tab, which a URL carries as `%09` if at all: a client \
+             strips one before reading the target, so what it reaches is not what was \
+             declared. Got `{written}`"
+        )
+        .into());
+    }
+
+    let target = parse_redirect_target(to, written)?;
+
+    let leading = match target.first() {
+        Some(RedirectSegment::Literal(text))
+            if text.starts_with('/')
+                || text.starts_with("http://")
+                || text.starts_with("https://") =>
+        {
+            text
+        }
+        _ => {
+            return Err(format!(
+                "redirect `to` must be a path starting with `/` or an absolute URL starting \
+                 with `http://` or `https://`, got `{written}`"
+            )
+            .into());
+        }
+    };
+
+    // A path whose second character is a slash is a protocol-relative URL
+    // naming a host the app did not write, while reading as the `/` that says
+    // "within the hostname the request arrived on". A backslash is the same
+    // thing: browsers normalise one to a slash in that position.
+    if leading.starts_with('/') && matches!(leading.as_bytes().get(1), Some(b'/' | b'\\')) {
+        return Err(format!(
+            "redirect `to` names another host rather than a path within this one: a second \
+             `/` or a `\\` after the first `/` is read as the start of a hostname. Write the \
+             scheme out as `https://…`, got `{written}`"
+        )
+        .into());
+    }
+
+    // Each token brings its own separator, so a literal running into one must
+    // not end with that separator too. Left alone, a target of `/` followed by
+    // the tail composes into `//` plus whatever the request carried — the same
+    // protocol-relative URL as above, assembled at request time where no
+    // declaration check can see it.
+    for (i, segment) in target.iter().enumerate() {
+        let RedirectSegment::Literal(text) = segment else {
+            continue;
+        };
+        let doubled = match target.get(i + 1) {
+            Some(RedirectSegment::Tail) => text.ends_with('/').then_some(('/', TAIL_TOKEN)),
+            Some(RedirectSegment::Query) => text.ends_with('?').then_some(('?', QUERY_TOKEN)),
+            _ => None,
+        };
+        if let Some((separator, token)) = doubled {
+            return Err(format!(
+                "redirect `to` ends a literal with `{separator}` immediately before `{token}`, \
+                 which carries its own leading `{separator}`: the two would compose into a \
+                 doubled `{separator}`, and at the start of a path a doubled `/` reads as the \
+                 beginning of a hostname. Drop the trailing `{separator}`, got `{written}`"
+            )
+            .into());
+        }
+    }
+
+    Ok(RouteRedirect { target, code })
+}
+
+/// Split a target into literal text and the request parts named in it.
+// l[impl service.http.route.redirect]
+fn parse_redirect_target(
+    to: &str,
+    written: &str,
+) -> Result<Vec<RedirectSegment>, Box<EvalAltResult>> {
+    let mut segments: Vec<RedirectSegment> = Vec::new();
+    let mut literal = String::new();
+    let mut rest = to;
+
+    while let Some(open) = rest.find('<') {
+        literal.push_str(&rest[..open]);
+        let at_token = &rest[open..];
+
+        let segment = if let Some(after) = at_token.strip_prefix(TAIL_TOKEN) {
+            rest = after;
+            RedirectSegment::Tail
+        } else if let Some(after) = at_token.strip_prefix(QUERY_TOKEN) {
+            rest = after;
+            RedirectSegment::Query
+        } else {
+            // A URL carries no unescaped `<`, so there is nothing here to let
+            // through as literal text: whatever this is, it is a mistake, and
+            // serving it to a client would hide that.
+            let named: String = at_token
+                .chars()
+                .take(32)
+                .take_while(|c| *c != '>')
+                .collect();
+            return Err(format!(
+                "redirect `to` names `{named}>`, which is not a part of the request it can \
+                 carry over; the parts a target may name are `{TAIL_TOKEN}` and \
+                 `{QUERY_TOKEN}`, and a literal `<` is written `%3C`. Got `{written}`"
+            )
+            .into());
+        };
+
+        if !literal.is_empty() {
+            segments.push(RedirectSegment::Literal(std::mem::take(&mut literal)));
+        }
+        segments.push(segment);
+    }
+
+    literal.push_str(rest);
+    if !literal.is_empty() {
+        segments.push(RedirectSegment::Literal(literal));
+    }
+    Ok(segments)
+}
+
+/// The header a redirect computes for itself.
+///
+/// One name for one wire contract: the declaration refuses an operation on it,
+/// the reconciler takes an inherited one back out, and the emitter writes the
+/// redirect's own value under it. Two of those agreeing by coincidence is how
+/// a service-level operation ends up displacing a redirect target.
+// l[impl service.http.route.redirect]
+pub const REDIRECT_OWNED_HEADER: &str = "Location";
+
+/// Refuse a setting declared on a route that is about to become a redirect.
+///
+/// The mirror of [`refuse_on_redirect`], for the declaration order that puts
+/// the setting first. Both directions refuse, so a route reads the same
+/// whichever end of the chain the redirect sits at.
+// l[impl service.http.route.redirect]
+pub(super) fn refuse_settings_for_redirect(
+    prefix: &str,
+    settings: &ProxySettings,
+) -> Result<(), Box<EvalAltResult>> {
+    for (declared, setting) in [
+        (settings.compress.is_some(), "compress"),
+        (settings.balance != BalanceSettings::default(), "balance"),
+        (settings.rate_limit.is_some(), "rate_limit"),
+    ] {
+        if declared {
+            return Err(refuse_on_redirect(prefix, setting));
+        }
+    }
+    if !settings.headers.request.is_empty() {
+        return Err(refuse_request_headers_on_redirect(prefix));
+    }
+    if settings.headers.response.names(REDIRECT_OWNED_HEADER) {
+        return Err(refuse_location_on_redirect(prefix));
+    }
+    Ok(())
+}
+
+/// Refuse a setting a redirect leaves nothing to act on.
+///
+/// Declared on the service the same setting is ignored rather than refused, so
+/// a service-wide declaration need not be written around the service's
+/// redirect routes; written on the redirect itself it is a mistake worth
+/// naming, and naming it here is what keeps the line that wrote it in the
+/// error.
+// l[impl service.http.route.redirect]
+pub(super) fn refuse_on_redirect(prefix: &str, setting: &str) -> Box<EvalAltResult> {
+    format!(
+        "`{setting}` has nothing to act on at `{prefix}`, which is declared as a redirect \
+         and reaches no pod. Declare it on the service, where a redirect route ignores it."
+    )
+    .into()
+}
+
+// l[impl service.http.route.redirect]
+pub(super) fn refuse_request_headers_on_redirect(prefix: &str) -> Box<EvalAltResult> {
+    format!(
+        "headers `request` has nothing to shape at `{prefix}`, which is declared as a \
+         redirect and sends no request onward. Its `response` operations do apply."
+    )
+    .into()
+}
+
+// l[impl service.http.route.redirect]
+pub(super) fn refuse_location_on_redirect(prefix: &str) -> Box<EvalAltResult> {
+    format!(
+        "headers `response` operates on `{REDIRECT_OWNED_HEADER}` at `{prefix}`, which is declared as a \
+         redirect: that header is the target the redirect computed, and the route would \
+         then not serve what `to` declares"
+    )
+    .into()
 }
 
 fn reject_unknown(map: &Map, what: &str) -> Result<(), Box<EvalAltResult>> {
