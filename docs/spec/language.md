@@ -222,6 +222,20 @@ This is currently the only value.
 >
 > Actions are invocable handles, not resources: `ResourceType.Action` exists for action-log identity, but resource collections such as `col(app)` and `app.select(...)` do not include actions, so selecting by `ResourceType.Action` yields an empty collection. Action invocation goes through [`Action.invoke`](#l--action.call).
 
+## Priority
+
+`Priority` describes how important a [Deployment](#l--deployment.type)'s workload is relative to other workloads when the host is under resource pressure. It is an expression of intent, not a platform tuning value: the runtime maps each level onto the host's own priority mechanism, and the same definition carries across platforms whose mechanisms differ (see [priority.actuation](runtime.md#r--priority.actuation)).
+
+> l[const.priority.enum]
+> `Priority` is an opaque enum type, and in the script scope, is a constant object map of names to opaque values of type `Priority`.
+>
+> - `Critical` — among the last workloads to be shed when the host runs out of memory, and given the largest share of contended CPU and I/O. For a workload whose loss takes the app down, such as its request-serving API.
+> - `Elevated` — favoured over ordinary workloads but yields to `Critical`. For supporting workloads that matter but can survive brief starvation, such as background or sync workers.
+> - `Normal` — the default. No preferential treatment.
+> - `Low` — the first workloads to be shed under memory pressure, and yields contended CPU and I/O to every higher level. For batch or best-effort work that should give way to everything else.
+>
+> The levels are totally ordered: `Critical` > `Elevated` > `Normal` > `Low`.
+
 # App global
 
 > l[app.var]
@@ -728,6 +742,14 @@ This is currently the only value.
 > - `"monitor"`: no automatic replacement. The container is observed and routing decisions account for its health (see [lifecycle.service](runtime.md#r--lifecycle.service)), but the runtime does not spawn replacements. Recovery is operator-driven.
 >
 > `on_failure` does not affect whether the container is considered Ready — an unhealthy container is not Ready regardless of the policy.
+
+> l[deployment.priority]
+> The `deployment.priority(level: Priority)` builder method declares the Deployment's [priority](#l--const.priority.enum): its claim on host resources relative to other workloads when the host is under memory, CPU, or I/O pressure.
+> The default is [`Priority.Normal`](#l--const.priority.enum).
+>
+> Priority is declared on Deployments only. The method is not registered on [Jobs](#l--job.type), so calling it on a Job is a BSL evaluation error, and every workload that is not a Deployment runs at `Normal`.
+>
+> The level expresses intent; how it is realised is a runtime concern. The order in which workloads are shed under memory pressure is defined by [priority.kill-order](runtime.md#r--priority.kill-order), and how contended CPU and I/O are divided by [priority.scheduling](runtime.md#r--priority.scheduling). A Deployment's priority composes with the operator-set [app priority](runtime.md#r--priority.app) of the app it belongs to: comparisons are app-major, so a Deployment in a higher-priority app outranks one in a lower-priority app whatever either Deployment's own level.
 
 # Job
 

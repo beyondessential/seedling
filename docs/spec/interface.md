@@ -345,6 +345,23 @@ Absent specification bugs, anything that is not defined here is either defined i
 > `/apps/show` includes, for each Deployment resource, a `scale` object with fields `low` (lower bound), `high` (upper bound), and `current` (the effective scale).
 > `current` is the stored scaling decision clamped to the declared bounds, or the lower bound if no decision has been stored.
 
+# App Priority
+
+> i[app.priority.set]
+> `/apps/priority { app, priority }` sets the [app priority](runtime.md#r--priority.app) of an installed app.
+> `priority` is one of `high`, `normal`, or `low`; any other value returns `invalid_request`.
+> The app must be registered; otherwise `not_found` is returned.
+> The change takes effect on the app's running workloads without a restart or redeploy, and is stored durably, per [priority.settings](runtime.md#r--priority.settings).
+> On success, the response contains `priority` (the new value).
+
+> i[app.priority.reset-on-uninstall]
+> When an app is uninstalled, its stored app priority is discarded.
+> After reinstallation the app priority reverts to `normal`.
+
+> i[app.priority.describe]
+> `/apps/show` includes a top-level `priority` field carrying the app's current app priority, and `/apps/list` includes a `priority` field on each app summary.
+> `/apps/show` includes, for each Deployment resource, a `priority` field carrying the [priority](language.md#l--deployment.priority) declared for it in the current AppDef, defaulting to `normal` where the definition declares none.
+
 # Deployment Restart
 
 > i[deployment.restart]
