@@ -53,23 +53,43 @@ as an undefined variable before the target ever reached us.
 
 ## Build steps
 
-- [ ] `Redirect` carried on the declaration: a redirect arm on `ProxySettings` (or a
+- [x] `Redirect` carried on the declaration: a redirect arm on `ProxySettings` (or a
       sibling map on `HttpServiceDef`) so a prefix can hold a redirect instead of
       proxy settings
-- [ ] `redirect()` on `HttpServiceRoute` in three forms, with target and code
+- [x] `redirect()` on `HttpServiceRoute` in three forms, with target and code
       validation, token parsing, and the `/`-prefix refusal
-- [ ] Refuse a prefix that is both a redirect and a pod binding. Note the ordering
+- [x] Refuse a prefix that is both a redirect and a pod binding. Note the ordering
       trap: the binding may be declared after the redirect or before it, so the check
       needs to fire from both sides
-- [ ] Refuse route-level compress / balance / rate_limit, and request-direction
+- [x] Refuse route-level compress / balance / rate_limit, and request-direction
       headers, on a redirect route; ignore the same settings when inherited from the
       service. Refuse a `Location` response operation on a redirect route
-- [ ] Carry redirect routes through `ServiceUpstream` into `build_proxy_config`
+- [x] Carry redirect routes through `ServiceUpstream` into `build_proxy_config`
       independently of pod bindings, and stop the empty-bindings `/` fallback firing
       for a service that has them
-- [ ] Emit the strip-prefix + redirect chain, and keep the ingress-level HTTP→HTTPS
+- [x] Emit the strip-prefix + redirect chain, and keep the ingress-level HTTP→HTTPS
       redirect ahead of redirect routes on the plaintext vhost
-- [ ] Surface redirect routes in `app.describe` alongside the proxy settings
+- [x] Surface redirect routes in `app.describe` alongside the proxy settings
       (`r[service.http.route.proxy-settings.visibility]` covers settings; a redirect
       route reports a target and code instead)
-- [ ] Tracey annotations on each of the above, and `tracey query status` clean
+- [x] Tracey annotations on each of the above, and `tracey query status` clean
+
+## What landed
+
+The handler's vocabulary did grow after all: a route redirect carries a parsed
+target and the route's response header operations, so it is a variant of its
+own (`ProxyRouteHandler::RouteRedirect`) rather than the site-ingress
+`Redirect` reused. The site-ingress one answers for a whole hostname with a URL
+fixed at declaration and preserves the path through `{http.request.uri}` without
+stripping anything; neither half of that fits a prefix-bound redirect.
+
+The query needed a third handler. Caddy offers the query without its leading
+`?` and no way to test it inline, so a target naming `<query>` other than
+directly after `<tail>` emits a `map` handler that defines the leading `?` only
+when there is a query. `<tail><query>` adjacent collapses to
+`{http.request.uri}`, which is what the positional forms produce, so the
+production case costs one strip-prefix handler and nothing else.
+
+`http.handlers.rewrite` and `http.handlers.map` were added to
+`docker/caddy/required-modules.txt`. Both are stock, so the pinned image
+already provides them and no image tag moves.

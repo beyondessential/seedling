@@ -413,12 +413,15 @@ This is currently the only value.
 >
 > A target naming no token is literal: every request under the prefix redirects to exactly that target, whatever followed the prefix.
 > An unrecognised token throws, rather than reaching the client as part of the target.
+> So does a stray `<`, a character a URL carries percent-encoded rather than as itself, so there is nothing for it to have meant.
 >
 > The two positional forms are the map form with `<tail><query>` appended to the target, which is the common case of moving a prefix while keeping everything under it.
 > `route("/v1/login").redirect("/api/login")` therefore sends `/v1/login/reset?token=x` to `/api/login/reset?token=x`, where `redirect(#{ to: "/api/login" })` sends it to `/api/login`.
 >
 > The tokens are those named here, and are translated by the runtime.
 > A target must not be written in the proxy's own placeholder syntax: the proxy substitutes a braced word naming its own state, its environment among it, and the target reaches the client as a `Location` header, where a [header value](#l--service.http.headers.fields) refuses a brace for that same reason.
+>
+> A target beginning `//` throws: it names another host while opening with the `/` that says "within the hostname the request arrived on", and the absolute form says so plainly.
 >
 > A redirect must not be declared on the `/` prefix, which would answer for the whole hostname; retiring a hostname is a [site ingress redirect attachment](runtime.md#r--ingress.site.attachment), an operator's to make rather than an app's.
 > A prefix declared as a redirect and also bound by a pod through `deployment.http(pod_port, svc.route(prefix))` throws: a prefix is either redirected or proxied.

@@ -2,8 +2,8 @@ use serde_json::{Value, json};
 
 use crate::runtime::tls::state::is_caddy_internal;
 use crate::system::types::{
-    L4Proto, ProxyConfig, ProxyListenerProto, RouteBalance, RouteCompress, RouteHeaderOps,
-    RouteHeaders, RouteRateLimit, VirtualHost,
+    L4Proto, ProxyConfig, ProxyListenerProto, RedirectSegment, RouteBalance, RouteCompress,
+    RouteHeaderOps, RouteHeaders, RouteRateLimit, VirtualHost,
 };
 
 /// Ports declared for both a plaintext and a TLS listener.
@@ -321,6 +321,44 @@ fn proxy_routes_for_vhost(vh: &VirtualHost) -> Vec<Value> {
                     }));
                     Value::Array(chain)
                 }
+                // r[impl service.http.route.redirect]
+                crate::system::types::ProxyRouteHandler::RouteRedirect {
+                    target,
+                    code,
+                    headers,
+                } => {
+                    let (location, needs_query) = redirect_location(target);
+
+                    let mut chain: Vec<Value> = Vec::with_capacity(4);
+                    // r[impl service.http.route.headers]
+                    // First, as on a proxied route: its response operations
+                    // are deferred to when the headers are written, which is
+                    // what puts them on the response this route serves.
+                    if !headers.is_empty() {
+                        chain.push(headers_handler(&RouteHeaders {
+                            request: RouteHeaderOps::default(),
+                            response: headers.clone(),
+                        }));
+                    }
+                    if target.contains(&RedirectSegment::Tail) {
+                        // The proxy has no placeholder for the path remaining
+                        // after a matched prefix, so the prefix is taken off
+                        // the request and the remainder read back off it.
+                        chain.push(json!({
+                            "handler": "rewrite",
+                            "strip_path_prefix": route.prefix,
+                        }));
+                    }
+                    if needs_query {
+                        chain.push(query_var_handler());
+                    }
+                    chain.push(json!({
+                        "handler": "static_response",
+                        "status_code": code,
+                        "headers": { "Location": [location] },
+                    }));
+                    Value::Array(chain)
+                }
                 // r[impl ingress.site.attachment]
                 crate::system::types::ProxyRouteHandler::Redirect {
                     url,
@@ -463,6 +501,61 @@ fn load_balancing(balance: &RouteBalance) -> Value {
 /// fractional-second intervals the BSL allows.
 fn secs_to_nanos(secs: f64) -> i64 {
     (secs * 1_000_000_000.0).round() as i64
+}
+
+/// The placeholder the query handler below defines, carrying the leading `?`
+/// when there is a query and nothing at all when there is not.
+const QUERY_VAR: &str = "{seedling.redirect.query}";
+
+/// Build the `Location` template for a route redirect, and say whether it
+/// needs the query placeholder defined.
+///
+/// A tail immediately followed by a query is the whole of the request line
+/// after the prefix, which the proxy already spells in one placeholder, so
+/// the common case costs no extra handler.
+// r[impl service.http.route.redirect]
+fn redirect_location(target: &[RedirectSegment]) -> (String, bool) {
+    let mut location = String::new();
+    let mut needs_query = false;
+    let mut i = 0;
+    while i < target.len() {
+        match &target[i] {
+            // Safe to inline: a braced word is refused in a declared target,
+            // so nothing here is read back as a placeholder of its own.
+            RedirectSegment::Literal(text) => location.push_str(text),
+            RedirectSegment::Tail => {
+                if matches!(target.get(i + 1), Some(RedirectSegment::Query)) {
+                    location.push_str("{http.request.uri}");
+                    i += 1;
+                } else {
+                    location.push_str("{http.request.uri.path}");
+                }
+            }
+            RedirectSegment::Query => {
+                location.push_str(QUERY_VAR);
+                needs_query = true;
+            }
+        }
+        i += 1;
+    }
+    (location, needs_query)
+}
+
+/// Define [`QUERY_VAR`] for the handlers after it.
+///
+/// A query string carries a leading `?` only when it is not empty, and the
+/// proxy offers the query without one and no way to test it inline. Mapping
+/// the empty query to the empty string and everything else to `?` plus itself
+/// is that test, expressed where the proxy can evaluate it.
+// r[impl service.http.route.redirect]
+fn query_var_handler() -> Value {
+    json!({
+        "handler": "map",
+        "source": "{http.request.uri.query}",
+        "destinations": [QUERY_VAR],
+        "mappings": [{ "input": "", "outputs": [""] }],
+        "defaults": ["?{http.request.uri.query}"],
+    })
 }
 
 fn redirect_route(hostname: &str, code: u16, https_ports: &[u16]) -> Value {

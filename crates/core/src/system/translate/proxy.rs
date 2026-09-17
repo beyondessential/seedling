@@ -11,7 +11,7 @@ use crate::{
     runtime::identity::ResourceInstance,
     system::types::{
         HttpRedirect, ProxyConfig, ProxyListener, ProxyListenerProto, ProxyRoute,
-        ProxyRouteHandler, RouteProxy, VirtualHost,
+        ProxyRouteHandler, RedirectSegment, RouteHeaderOps, RouteProxy, VirtualHost,
     },
 };
 
@@ -30,6 +30,11 @@ use crate::{
 /// legacy single-`/` route through the service IP is emitted.
 pub struct ServiceUpstream {
     pub routes: Vec<HttpForwardRoute>,
+    /// The prefixes this service answers with a redirect rather than
+    /// proxying. Declared on the service, so unlike `routes` these do not
+    /// depend on a pod binding them.
+    // r[impl service.http.route.redirect]
+    pub redirects: Vec<HttpRedirectRoute>,
     pub service_ip: Ipv6Addr,
     pub service_port: u16,
     /// Settings for the synthesised `/` route used when `routes` is empty.
@@ -47,6 +52,20 @@ pub struct HttpForwardRoute {
     pub upstreams: Vec<String>,
     /// Compression and balancing resolved for this prefix.
     pub proxy: RouteProxy,
+}
+
+/// One redirect route on a service: the URL prefix declared in BSL, and what
+/// the route answers requests under it with.
+// r[impl service.http.route.redirect]
+#[derive(Debug, Clone)]
+pub struct HttpRedirectRoute {
+    pub prefix: String,
+    pub target: Vec<RedirectSegment>,
+    pub code: u16,
+    /// The route's resolved response header operations. A redirect sends no
+    /// request onward, so the request direction has nowhere to apply.
+    // r[impl service.http.route.headers]
+    pub headers: RouteHeaderOps,
 }
 
 /// Resolved redirect target for a site-ingress attachment. Used in place of
@@ -170,7 +189,25 @@ pub fn build_proxy_config(
         // back to a single "/" route through the service IP when the service
         // has no http_bindings (TCP-only services fronted by an HTTPS
         // ingress, or a transient state where no pod has bound yet).
-        if upstream.routes.is_empty() {
+        // r[impl service.http.route.redirect]
+        // Emitted whether or not a pod binds anything: a redirect route is
+        // declared on the service and answers for itself.
+        for redirect in &upstream.redirects {
+            vhost.routes.push(ProxyRoute {
+                prefix: redirect.prefix.clone(),
+                handler: ProxyRouteHandler::RouteRedirect {
+                    target: redirect.target.clone(),
+                    code: redirect.code,
+                    headers: redirect.headers.clone(),
+                },
+            });
+        }
+        // r[impl service.http.route.redirect]
+        // A service carrying a redirect is not a service with no routes, so
+        // the fallback must not fire for it: a `/` catch-all through the
+        // service IP would shadow nothing but would proxy every path the
+        // redirects do not claim to a pool that may hold no pod at all.
+        if upstream.routes.is_empty() && upstream.redirects.is_empty() {
             let upstream_url =
                 format!("http://[{}]:{}", upstream.service_ip, upstream.service_port);
             vhost.routes.push(ProxyRoute {
@@ -437,12 +474,70 @@ mod tests {
     fn upstream(port: u16) -> ServiceUpstream {
         ServiceUpstream {
             routes: vec![],
+            redirects: vec![],
             service_ip: "fd5e:ed12:3456:200::1".parse().unwrap(),
             service_port: port,
             proxy: crate::system::types::RouteProxy::unlimited(
                 crate::defs::service::ResolvedRouteProxy::default(),
             ),
         }
+    }
+
+    // r[verify service.http.route.redirect]
+    // A `/` catch-all through the service IP would proxy every path the
+    // redirects do not claim to a pool that may hold no pod at all.
+    #[test]
+    fn a_service_whose_only_routes_are_redirects_does_not_take_the_fallback() {
+        let mut upstream = upstream(8080);
+        upstream.redirects.push(HttpRedirectRoute {
+            prefix: "/v1/login".to_owned(),
+            target: vec![
+                RedirectSegment::Literal("/api/login".to_owned()),
+                RedirectSegment::Tail,
+            ],
+            code: 308,
+            headers: RouteHeaderOps::default(),
+        });
+
+        let config =
+            build_proxy_config(&[(ing("app.example.com", 443, true, true), upstream)], &[]);
+        let routes = &config.virtual_hosts[0].routes;
+        assert_eq!(routes.len(), 1);
+        assert_eq!(routes[0].prefix, "/v1/login");
+        assert!(matches!(
+            routes[0].handler,
+            ProxyRouteHandler::RouteRedirect { code: 308, .. }
+        ));
+    }
+
+    // r[verify service.http.route.redirect]
+    #[test]
+    fn a_redirect_is_emitted_alongside_the_prefixes_a_pod_binds() {
+        let mut upstream = upstream(8080);
+        upstream.routes.push(HttpForwardRoute {
+            prefix: "/".to_owned(),
+            upstreams: vec!["[fd5e::9]:3000".to_owned()],
+            proxy: crate::system::types::RouteProxy::unlimited(
+                crate::defs::service::ResolvedRouteProxy::default(),
+            ),
+        });
+        upstream.redirects.push(HttpRedirectRoute {
+            prefix: "/v1/login".to_owned(),
+            target: vec![RedirectSegment::Literal("/api/login".to_owned())],
+            code: 308,
+            headers: RouteHeaderOps::default(),
+        });
+
+        let config =
+            build_proxy_config(&[(ing("app.example.com", 443, true, true), upstream)], &[]);
+        let prefixes: Vec<&str> = config.virtual_hosts[0]
+            .routes
+            .iter()
+            .map(|r| r.prefix.as_str())
+            .collect();
+        // One path within the hostname redirects while the hostname
+        // otherwise proxies, which is the whole of what this is for.
+        assert_eq!(prefixes, vec!["/v1/login", "/"]);
     }
 
     fn has(cfg: &ProxyConfig, port: u16, proto: ProxyListenerProto) -> bool {

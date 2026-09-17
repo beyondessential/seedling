@@ -75,6 +75,22 @@ pub struct RouteSummary {
     /// service's, so a route reports what applies to it whether it or the
     /// service declared it.
     pub headers: HeadersSummary,
+    /// The redirect this route answers with, or `null` when it is proxied to
+    /// a pod.
+    // i[impl app.describe.proxy-settings]
+    // r[impl service.http.route.redirect]
+    pub redirect: Option<RouteRedirectSummary>,
+}
+
+/// What a redirect route answers with.
+// i[impl app.describe.proxy-settings]
+#[derive(Serialize, Debug, PartialEq)]
+pub struct RouteRedirectSummary {
+    /// The target as the app declared it, with the parts of the request that
+    /// carry over still spelled as tokens: what each expands to is a property
+    /// of the request, not of the declaration.
+    pub to: String,
+    pub code: u16,
 }
 
 /// Reported in both directions always, each with its three operations
@@ -356,30 +372,58 @@ fn route_summaries(
         http.routes.keys().map(String::as_str).collect()
     };
 
+    // r[impl service.http.route.redirect]
+    // A redirect answers for itself and stops the `/` fallback being emitted,
+    // so a prefix that nothing binds alongside one is served by nothing.
+    let fallback_serves = bound.is_empty() && http.redirects.is_empty();
+
     prefixes
         .into_iter()
         .map(|prefix| {
+            let redirect = http.redirects.get(prefix);
             let resolved = resolve(service_level, http.routes.get(prefix));
             RouteSummary {
                 // The synthesised `/` route is served whenever it is the only
                 // one, which is the case exactly when nothing was bound.
-                served: bound.is_empty() || bound.contains(prefix),
+                served: redirect.is_some() || fallback_serves || bound.contains(prefix),
                 prefix: prefix.to_owned(),
-                compress: resolved.compress.map(|c| CompressSummary {
-                    encodings: c.encodings.iter().map(|e| e.as_str().to_owned()).collect(),
-                    content_types: c.content_types.unwrap_or_else(default_content_types),
-                    minimum_length: c.minimum_length,
+                // r[impl service.http.route.redirect]
+                // Reported as nothing on a redirect route rather than as what
+                // the service declared: a redirect reaches no pod, so a limit
+                // inherited from the service is ignored on it, and reporting
+                // one would read as a control that is in force.
+                compress: resolved.compress.filter(|_| redirect.is_none()).map(|c| {
+                    CompressSummary {
+                        encodings: c.encodings.iter().map(|e| e.as_str().to_owned()).collect(),
+                        content_types: c.content_types.unwrap_or_else(default_content_types),
+                        minimum_length: c.minimum_length,
+                    }
                 }),
                 balance: balance_summary(&resolved.balance),
-                rate_limit: resolved.rate_limit.map(|rl| RateLimitSummary {
-                    max_events: rl.settings.max_events,
-                    window: rl.settings.window_secs,
-                    shared: rl.scope == RateLimitScope::Service,
-                }),
+                rate_limit: resolved
+                    .rate_limit
+                    .filter(|_| redirect.is_none())
+                    .map(|rl| RateLimitSummary {
+                        max_events: rl.settings.max_events,
+                        window: rl.settings.window_secs,
+                        shared: rl.scope == RateLimitScope::Service,
+                    }),
                 headers: HeadersSummary {
-                    request: resolved.headers.request.into_grouped().into(),
+                    // r[impl service.http.route.redirect]
+                    // A redirect sends no request onward, so a request
+                    // operation it inherited from the service applies to
+                    // nothing and is reported as applying to nothing.
+                    request: if redirect.is_some() {
+                        HeaderOpsSummary::default()
+                    } else {
+                        resolved.headers.request.into_grouped().into()
+                    },
                     response: resolved.headers.response.into_grouped().into(),
                 },
+                redirect: redirect.map(|r| RouteRedirectSummary {
+                    to: r.target_text(),
+                    code: r.code,
+                }),
             }
         })
         .collect()

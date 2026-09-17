@@ -7,14 +7,14 @@ use crate::{
         ingress::IngressDef,
         pod::PodDef,
         resource::{Resource, ResourceKind},
-        service::{HttpServiceDef, ProxySettings, RateLimitScope, resolve},
+        service::{HttpServiceDef, ProxySettings, RateLimitScope, RouteRedirect, resolve},
     },
     runtime::{
         InstanceRegistry, desired::DesiredState, identity::ResourceInstance,
         lifecycle::LifecycleState, registry::RegistryError,
     },
     system::{
-        translate::proxy::{HttpForwardRoute, ServiceUpstream, instance_ipv6},
+        translate::proxy::{HttpForwardRoute, HttpRedirectRoute, ServiceUpstream, instance_ipv6},
         types::{L4Proto, L4Route, RouteProxy, RouteZone},
     },
 };
@@ -119,10 +119,16 @@ pub(super) fn collect(
         // HTTPS-fronted TCP service).
         let routes = collect_http_routes(snapshot, svc_name, running_pods);
 
+        // r[impl service.http.route.redirect]
+        // Read from the service's own declaration rather than from the pods,
+        // there being no pod behind a redirect to read it from.
+        let redirects = collect_redirect_routes(snapshot, svc_name);
+
         pairs.push((
             def,
             ServiceUpstream {
                 routes,
+                redirects,
                 service_ip,
                 service_port: upstream_port,
                 proxy: service_level_proxy(snapshot, svc_name),
@@ -379,6 +385,56 @@ pub(super) fn collect_http_routes(
             }
         })
         .collect()
+}
+
+/// The redirect routes `service_name` declares.
+///
+/// Unlike [`collect_http_routes`] this walks the service rather than the pods:
+/// a redirect answers for itself, so there is no binding to derive it from and
+/// no running pod for it to wait on.
+// r[impl service.http.route.redirect]
+pub(super) fn collect_redirect_routes(
+    snapshot: &AppDef,
+    service_name: &str,
+) -> Vec<HttpRedirectRoute> {
+    let (service, routes) = proxy_settings_for(snapshot, service_name);
+    redirects_of(snapshot, service_name)
+        .into_iter()
+        .map(|(prefix, redirect)| {
+            // r[impl service.http.route.headers]
+            // The response direction alone: a redirect sends no request
+            // onward, and a request operation the service declared is ignored
+            // on a redirect route rather than refused, so a service-wide
+            // declaration need not be written around it.
+            let resolved = resolve(&service, routes.get(&prefix));
+            HttpRedirectRoute {
+                target: redirect.target.iter().map(Into::into).collect(),
+                code: redirect.code,
+                headers: resolved.headers.response.into_grouped().into(),
+                prefix,
+            }
+        })
+        .collect()
+}
+
+fn redirects_of(
+    snapshot: &AppDef,
+    service_name: &str,
+) -> std::collections::BTreeMap<String, RouteRedirect> {
+    snapshot
+        .resources
+        .values()
+        .find_map(|r| match r {
+            Resource::Service(s) if s.name.as_str() == service_name => {
+                Some(s.def.lock().http.as_ref().map(|h| h.redirects.clone()))
+            }
+            Resource::ExternalService(e) if e.name.as_str() == service_name => {
+                Some(e.def.lock().http.as_ref().map(|h| h.redirects.clone()))
+            }
+            _ => None,
+        })
+        .flatten()
+        .unwrap_or_default()
 }
 
 #[cfg(test)]

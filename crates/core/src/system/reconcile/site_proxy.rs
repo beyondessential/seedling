@@ -323,9 +323,16 @@ fn resolve_forward_upstream(
         .map(Vec::as_slice)
         .unwrap_or(&empty);
     let routes = super::proxy::collect_http_routes(&snapshot.app_def, svc_name_str, target_running);
+    // r[impl service.http.route.redirect]
+    // A redirect route is a property of the service by the same argument the
+    // comment above makes for prefix routing: a path that redirects when
+    // reached through the app's own ingress redirects when reached through a
+    // site ingress attached to the same service.
+    let redirects = super::proxy::collect_redirect_routes(&snapshot.app_def, svc_name_str);
 
     Ok(ServiceUpstream {
         routes,
+        redirects,
         service_ip,
         service_port: upstream_port,
         // Resolved against the app that declares the service, not the site,
@@ -502,6 +509,7 @@ mod tests {
     fn upstream() -> ServiceUpstream {
         ServiceUpstream {
             routes: Vec::new(),
+            redirects: Vec::new(),
             service_ip: Ipv6Addr::from([0xfd, 0x5e, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1]),
             service_port: 8080,
             proxy: crate::system::types::RouteProxy::unlimited(

@@ -668,6 +668,30 @@ pub enum ProxyRouteHandler {
         // r[impl service.http.route.balancing]
         proxy: Box<RouteProxy>,
     },
+    /// Answer with a redirect built from the request, as one route of a
+    /// service that serves its other prefixes normally.
+    ///
+    /// Distinct from [`ProxyRouteHandler::Redirect`], which answers for a
+    /// whole hostname with a URL fixed at declaration: this one is bound to a
+    /// prefix, builds its target out of the request that arrived, and carries
+    /// the response header operations of the route it belongs to.
+    // r[impl service.http.route.redirect]
+    RouteRedirect {
+        /// The target, already settled into literal text and the parts of the
+        /// request that carry over into it.
+        target: Vec<RedirectSegment>,
+        /// HTTP status code (301 / 302 / 307 / 308).
+        code: u16,
+        /// Response header operations in force on this route. A redirect
+        /// sends no request onward, so there are no request operations to
+        /// carry.
+        ///
+        /// Defaulted on the wire like the rest of the route settings: the
+        /// config is cached as JSON and read back on startup.
+        // r[impl service.http.route.headers]
+        #[serde(default, skip_serializing_if = "RouteHeaderOps::is_empty")]
+        headers: RouteHeaderOps,
+    },
     /// Answer with a static HTTP redirect to a fixed URL. Used by
     /// site-ingress redirect attachments to migrate hostnames without
     /// shipping an app.
@@ -682,6 +706,36 @@ pub enum ProxyRouteHandler {
         /// URL so paths and query strings carry over.
         preserve_path: bool,
     },
+}
+
+/// One piece of a route redirect's target.
+///
+/// A copy of the defs layer's [`RedirectSegment`] rather than a re-export of
+/// it, as every other wire type here is a copy of the declaration it carries:
+/// this one is serialised into the cached proxy document, so a rename made for
+/// the declaration surface's convenience must not silently change what a
+/// cached document has to deserialise as.
+///
+/// [`RedirectSegment`]: crate::defs::service::RedirectSegment
+// r[impl service.http.route.redirect]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum RedirectSegment {
+    Literal(String),
+    /// The request path following the matched prefix, carrying its leading `/`.
+    Tail,
+    /// The request's query string, carrying its leading `?`.
+    Query,
+}
+
+impl From<&crate::defs::service::RedirectSegment> for RedirectSegment {
+    fn from(segment: &crate::defs::service::RedirectSegment) -> Self {
+        use crate::defs::service::RedirectSegment as Declared;
+        match segment {
+            Declared::Literal(text) => Self::Literal(text.clone()),
+            Declared::Tail => Self::Tail,
+            Declared::Query => Self::Query,
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------

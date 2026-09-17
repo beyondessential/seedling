@@ -2,7 +2,7 @@ use super::config::build_caddy_config;
 use crate::system::translate::proxy::build_proxy_config;
 use crate::system::types::{
     HttpRedirect, ProxyConfig, ProxyListener, ProxyListenerProto, ProxyRoute, ProxyRouteHandler,
-    RouteRateLimit, RouteZone, VirtualHost,
+    RedirectSegment, RouteRateLimit, RouteZone, VirtualHost,
 };
 
 fn default_proxy() -> crate::system::types::RouteProxy {
@@ -605,6 +605,7 @@ fn plaintext_ingress(hostname: &str, port: u16) -> crate::defs::ingress::Ingress
 fn service_upstream(port: u16) -> crate::system::translate::proxy::ServiceUpstream {
     crate::system::translate::proxy::ServiceUpstream {
         routes: vec![],
+        redirects: vec![],
         service_ip: "fd5e:ed12:3456:200::1".parse().unwrap(),
         service_port: port,
         proxy: default_proxy(),
@@ -1491,4 +1492,264 @@ fn a_route_with_no_headers_serialises_as_it_did_before() {
         proxy.headers.response.replace.get("Cache-Control"),
         Some(&vec!["no-store".to_string()])
     );
+}
+
+// ---------------------------------------------------------------------------
+// Route redirects
+// ---------------------------------------------------------------------------
+
+fn redirect_route_at(prefix: &str, target: Vec<RedirectSegment>, code: u16) -> ProxyRoute {
+    ProxyRoute {
+        prefix: prefix.to_string(),
+        handler: ProxyRouteHandler::RouteRedirect {
+            target,
+            code,
+            headers: Default::default(),
+        },
+    }
+}
+
+fn handlers(json: &serde_json::Value, index: usize) -> Vec<String> {
+    json["apps"]["http"]["servers"]["seedling_http"]["routes"][index]["handle"]
+        .as_array()
+        .expect("route has a handler chain")
+        .iter()
+        .map(|h| h["handler"].as_str().unwrap_or_default().to_string())
+        .collect()
+}
+
+fn location(json: &serde_json::Value, index: usize, handler: usize) -> String {
+    json["apps"]["http"]["servers"]["seedling_http"]["routes"][index]["handle"][handler]["headers"]
+        ["Location"][0]
+        .as_str()
+        .expect("a Location is set")
+        .to_string()
+}
+
+// r[verify service.http.route.redirect]
+// The production case: a prefix moves and everything under it comes along.
+// The tail and the query together are the whole of the request line after the
+// prefix, which the proxy already spells in one placeholder, so this costs one
+// handler to take the prefix off and nothing more.
+#[test]
+fn a_tail_carrying_redirect_strips_the_prefix_and_carries_the_rest() {
+    let config = vhost_with(
+        "app.example.com",
+        vec![redirect_route_at(
+            "/v1/login",
+            vec![
+                RedirectSegment::Literal("/api/login".into()),
+                RedirectSegment::Tail,
+                RedirectSegment::Query,
+            ],
+            308,
+        )],
+    );
+    let json = build_caddy_config(&config);
+    assert_eq!(handlers(&json, 0), vec!["rewrite", "static_response"]);
+    let route = &json["apps"]["http"]["servers"]["seedling_http"]["routes"][0];
+    assert_eq!(route["handle"][0]["strip_path_prefix"], "/v1/login");
+    assert_eq!(route["handle"][1]["status_code"], 308);
+    assert_eq!(location(&json, 0, 1), "/api/login{http.request.uri}");
+    assert_eq!(route["match"][0]["path"][0], "/v1/login*");
+    assert_eq!(route["terminal"], true);
+}
+
+// r[verify service.http.route.redirect]
+#[test]
+fn a_target_naming_nothing_is_one_handler_serving_it_as_declared() {
+    let config = vhost_with(
+        "app.example.com",
+        vec![redirect_route_at(
+            "/old",
+            vec![RedirectSegment::Literal("https://example.com/new".into())],
+            307,
+        )],
+    );
+    let json = build_caddy_config(&config);
+    // No prefix to take off and no query to map: the request contributes
+    // nothing to the target, so nothing is emitted to read it.
+    assert_eq!(handlers(&json, 0), vec!["static_response"]);
+    assert_eq!(location(&json, 0, 0), "https://example.com/new");
+}
+
+// r[verify service.http.route.redirect]
+// The query carries its leading `?` only when there is one, and the proxy
+// offers the query without it and no way to test it inline.
+#[test]
+fn a_query_carried_on_its_own_is_mapped_so_an_absent_one_adds_nothing() {
+    let config = vhost_with(
+        "app.example.com",
+        vec![redirect_route_at(
+            "/search",
+            vec![
+                RedirectSegment::Literal("/find".into()),
+                RedirectSegment::Query,
+            ],
+            307,
+        )],
+    );
+    let json = build_caddy_config(&config);
+    assert_eq!(handlers(&json, 0), vec!["map", "static_response"]);
+    let map = &json["apps"]["http"]["servers"]["seedling_http"]["routes"][0]["handle"][0];
+    assert_eq!(map["source"], "{http.request.uri.query}");
+    assert_eq!(map["mappings"][0]["input"], "");
+    assert_eq!(map["mappings"][0]["outputs"][0], "");
+    assert_eq!(map["defaults"][0], "?{http.request.uri.query}");
+    assert_eq!(location(&json, 0, 1), "/find{seedling.redirect.query}");
+}
+
+// r[verify service.http.route.redirect]
+// A tail on its own drops the query rather than smuggling it through the
+// placeholder that spells path and query together.
+#[test]
+fn a_tail_carried_on_its_own_leaves_the_query_behind() {
+    let config = vhost_with(
+        "app.example.com",
+        vec![redirect_route_at(
+            "/v1",
+            vec![
+                RedirectSegment::Literal("/api".into()),
+                RedirectSegment::Tail,
+            ],
+            307,
+        )],
+    );
+    let json = build_caddy_config(&config);
+    assert_eq!(location(&json, 0, 1), "/api{http.request.uri.path}");
+}
+
+// r[verify service.http.route.headers]
+// r[verify service.http.route.redirect]
+#[test]
+fn a_redirect_route_carries_its_response_header_operations_first() {
+    let mut route = redirect_route_at(
+        "/v1/login",
+        vec![
+            RedirectSegment::Literal("/api/login".into()),
+            RedirectSegment::Tail,
+        ],
+        308,
+    );
+    let ProxyRouteHandler::RouteRedirect { headers, .. } = &mut route.handler else {
+        panic!("expected a route redirect")
+    };
+    *headers = ops(&[("Cache-Control", &["no-store"])], &[], &[]);
+
+    let json = build_caddy_config(&vhost_with("app.example.com", vec![route]));
+    // Ahead of everything else, because its operations are deferred to when
+    // the response headers are written: that is what puts them on the
+    // response this route itself serves.
+    assert_eq!(
+        handlers(&json, 0),
+        vec!["headers", "rewrite", "static_response"]
+    );
+    let handler = &json["apps"]["http"]["servers"]["seedling_http"]["routes"][0]["handle"][0];
+    assert_eq!(handler["response"]["deferred"], true);
+    assert_eq!(handler["response"]["set"]["Cache-Control"][0], "no-store");
+}
+
+// r[verify service.http.route.redirect]
+// r[verify service.http.route.routing]
+#[test]
+fn a_redirect_takes_its_place_in_the_longest_prefix_ordering() {
+    let config = vhost_with(
+        "app.example.com",
+        vec![
+            limited_route("/", None),
+            redirect_route_at(
+                "/v1/login",
+                vec![RedirectSegment::Literal("/api/login".into())],
+                308,
+            ),
+        ],
+    );
+    let json = build_caddy_config(&config);
+    // The redirect answers for its own path while the shorter proxied prefix
+    // serves the rest, which is the whole of what this card is for.
+    assert_eq!(handlers(&json, 0), vec!["static_response"]);
+    assert_eq!(handlers(&json, 1), vec!["reverse_proxy"]);
+}
+
+// r[verify service.http.route.redirect]
+// A plaintext request under a redirect route's prefix is sent to HTTPS first
+// and meets the redirect on arrival, rather than being handed a target it
+// would reach without ever having been moved to TLS.
+#[test]
+fn an_ingress_redirect_answers_ahead_of_a_redirect_route_on_the_plaintext_vhost() {
+    let config = ProxyConfig {
+        listeners: vec![
+            ProxyListener {
+                port: 443,
+                proto: ProxyListenerProto::Https,
+            },
+            ProxyListener {
+                port: 80,
+                proto: ProxyListenerProto::Http,
+            },
+        ],
+        virtual_hosts: vec![VirtualHost {
+            hostname: "app.example.com".to_string(),
+            tls_acme: true,
+            redirect: Some(HttpRedirect {
+                from_port: 80,
+                code: 308,
+            }),
+            routes: vec![redirect_route_at(
+                "/v1/login",
+                vec![RedirectSegment::Literal("/api/login".into())],
+                308,
+            )],
+        }],
+        l4_routes: vec![],
+        warm_cert_hostnames: Default::default(),
+        cert_endpoint_url: None,
+    };
+    let json = build_caddy_config(&config);
+
+    let http = json["apps"]["http"]["servers"]["seedling_http"]["routes"]
+        .as_array()
+        .expect("the plaintext server has routes");
+    assert_eq!(http.len(), 1, "the redirect route must not be emitted here");
+    assert_eq!(
+        http[0]["handle"][0]["headers"]["Location"][0],
+        "https://{http.request.host}{http.request.uri}"
+    );
+    assert!(
+        http[0]["match"][0]["path"].is_null(),
+        "the ingress redirect answers every path"
+    );
+
+    // It is served on the TLS side, where the client arrives after the hop.
+    let https = json["apps"]["http"]["servers"]["seedling_https"]["routes"]
+        .as_array()
+        .expect("the TLS server has routes");
+    assert_eq!(https[0]["match"][0]["path"][0], "/v1/login*");
+}
+
+// r[verify service.http.route.redirect]
+#[test]
+fn a_redirect_route_round_trips_through_the_cached_document() {
+    let config = vhost_with(
+        "app.example.com",
+        vec![redirect_route_at(
+            "/v1/login",
+            vec![
+                RedirectSegment::Literal("/api/login".into()),
+                RedirectSegment::Tail,
+                RedirectSegment::Query,
+            ],
+            308,
+        )],
+    );
+    let json = serde_json::to_string(&config).expect("serialises");
+    let back: ProxyConfig = serde_json::from_str(&json).expect("round-trips");
+    let ProxyRouteHandler::RouteRedirect { target, code, .. } =
+        &back.virtual_hosts[0].routes[0].handler
+    else {
+        panic!("expected a route redirect")
+    };
+    assert_eq!(*code, 308);
+    assert_eq!(target.len(), 3);
+    assert_eq!(target[1], RedirectSegment::Tail);
 }
