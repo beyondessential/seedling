@@ -1213,6 +1213,16 @@ pub(super) fn parse_redirect_positional(
         Some(code) => redirect_code(code)?,
         None => DEFAULT_REDIRECT_CODE,
     };
+    // Appending to a target that already names a part of the request would
+    // carry that part twice, silently. A target naming one is a target being
+    // written out in full, which is the map form.
+    if to.contains('<') {
+        return Err(format!(
+            "redirect `to` names a part of the request, which this form appends for itself. \
+             Write the target out in full as `redirect(#{{ to: \"…\" }})`, got `{to}`"
+        )
+        .into());
+    }
     build_redirect(&format!("{to}{TAIL_TOKEN}{QUERY_TOKEN}"), to, code)
 }
 
@@ -1266,6 +1276,17 @@ fn build_redirect(to: &str, written: &str, code: u16) -> Result<RouteRedirect, B
     }
     // The target is a header value, and is held to what one may carry.
     header_value(to.to_owned(), "redirect `to`")?;
+    // A header value may carry a horizontal tab, and a URL may not: browsers
+    // strip one before parsing, so `/<tab>/host` reaches the same place
+    // `//host` does and would walk past the check below.
+    if to.contains('\t') {
+        return Err(format!(
+            "redirect `to` contains a tab, which a URL carries as `%09` if at all: a client \
+             strips one before reading the target, so what it reaches is not what was \
+             declared. Got `{written}`"
+        )
+        .into());
+    }
 
     let target = parse_redirect_target(to, written)?;
 
@@ -1299,21 +1320,26 @@ fn build_redirect(to: &str, written: &str, code: u16) -> Result<RouteRedirect, B
         .into());
     }
 
-    // The tail brings its own leading `/`, so a literal running into it must
-    // not end with one. Left alone, a target of `/` followed by the tail
-    // composes into `//` plus whatever the request carried — the same
+    // Each token brings its own separator, so a literal running into one must
+    // not end with that separator too. Left alone, a target of `/` followed by
+    // the tail composes into `//` plus whatever the request carried — the same
     // protocol-relative URL as above, assembled at request time where no
     // declaration check can see it.
     for (i, segment) in target.iter().enumerate() {
         let RedirectSegment::Literal(text) = segment else {
             continue;
         };
-        if matches!(target.get(i + 1), Some(RedirectSegment::Tail)) && text.ends_with('/') {
+        let doubled = match target.get(i + 1) {
+            Some(RedirectSegment::Tail) => text.ends_with('/').then_some(('/', TAIL_TOKEN)),
+            Some(RedirectSegment::Query) => text.ends_with('?').then_some(('?', QUERY_TOKEN)),
+            _ => None,
+        };
+        if let Some((separator, token)) = doubled {
             return Err(format!(
-                "redirect `to` ends a literal with `/` immediately before `{TAIL_TOKEN}`, which \
-                 carries its own leading `/`: the two would compose into a doubled slash, and \
-                 at the start of a path that reads as the beginning of a hostname. Drop the \
-                 trailing `/`, got `{written}`"
+                "redirect `to` ends a literal with `{separator}` immediately before `{token}`, \
+                 which carries its own leading `{separator}`: the two would compose into a \
+                 doubled `{separator}`, and at the start of a path a doubled `/` reads as the \
+                 beginning of a hostname. Drop the trailing `{separator}`, got `{written}`"
             )
             .into());
         }
@@ -1372,9 +1398,14 @@ fn parse_redirect_target(
     Ok(segments)
 }
 
-/// The header a redirect computes for itself, and so the one a route
-/// declaring a redirect may not operate on.
-const LOCATION: &str = "Location";
+/// The header a redirect computes for itself.
+///
+/// One name for one wire contract: the declaration refuses an operation on it,
+/// the reconciler takes an inherited one back out, and the emitter writes the
+/// redirect's own value under it. Two of those agreeing by coincidence is how
+/// a service-level operation ends up displacing a redirect target.
+// l[impl service.http.route.redirect]
+pub const REDIRECT_OWNED_HEADER: &str = "Location";
 
 /// Refuse a setting declared on a route that is about to become a redirect.
 ///
@@ -1398,7 +1429,7 @@ pub(super) fn refuse_settings_for_redirect(
     if !settings.headers.request.is_empty() {
         return Err(refuse_request_headers_on_redirect(prefix));
     }
-    if settings.headers.response.names(LOCATION) {
+    if settings.headers.response.names(REDIRECT_OWNED_HEADER) {
         return Err(refuse_location_on_redirect(prefix));
     }
     Ok(())
@@ -1432,7 +1463,7 @@ pub(super) fn refuse_request_headers_on_redirect(prefix: &str) -> Box<EvalAltRes
 // l[impl service.http.route.redirect]
 pub(super) fn refuse_location_on_redirect(prefix: &str) -> Box<EvalAltResult> {
     format!(
-        "headers `response` operates on `{LOCATION}` at `{prefix}`, which is declared as a \
+        "headers `response` operates on `{REDIRECT_OWNED_HEADER}` at `{prefix}`, which is declared as a \
          redirect: that header is the target the redirect computed, and the route would \
          then not serve what `to` declares"
     )

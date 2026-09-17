@@ -203,11 +203,14 @@ pub fn build_proxy_config(
             });
         }
         // r[impl service.http.route.redirect]
-        // A service carrying a redirect is not a service with no routes, so
-        // the fallback must not fire for it: a `/` catch-all through the
-        // service IP would shadow nothing but would proxy every path the
-        // redirects do not claim to a pool that may hold no pod at all.
-        if upstream.routes.is_empty() && upstream.redirects.is_empty() {
+        // Gated on the pod-bound routes alone. A redirect route sits above
+        // this fallback rather than in place of it: routes are emitted
+        // longest-prefix-first and terminal, and a redirect can never be
+        // declared at `/`, so the fallback cannot shadow one. Suppressing it
+        // because a redirect exists would take the catch-all away from a
+        // service that is served through its routing pool — every path but
+        // the redirected one would stop being answered.
+        if upstream.routes.is_empty() {
             let upstream_url =
                 format!("http://[{}]:{}", upstream.service_ip, upstream.service_port);
             vhost.routes.push(ProxyRoute {
@@ -484,10 +487,11 @@ mod tests {
     }
 
     // r[verify service.http.route.redirect]
-    // A `/` catch-all through the service IP would proxy every path the
-    // redirects do not claim to a pool that may hold no pod at all.
+    // A redirect sits above the fallback rather than in place of it: a
+    // service served through its routing pool keeps answering every path the
+    // redirect does not claim.
     #[test]
-    fn a_service_whose_only_routes_are_redirects_does_not_take_the_fallback() {
+    fn a_redirect_does_not_take_the_fallback_away_from_a_service_with_no_bindings() {
         let mut upstream = upstream(8080);
         upstream.redirects.push(HttpRedirectRoute {
             prefix: "/v1/login".to_owned(),
@@ -502,11 +506,17 @@ mod tests {
         let config =
             build_proxy_config(&[(ing("app.example.com", 443, true, true), upstream)], &[]);
         let routes = &config.virtual_hosts[0].routes;
-        assert_eq!(routes.len(), 1);
-        assert_eq!(routes[0].prefix, "/v1/login");
+        let prefixes: Vec<&str> = routes.iter().map(|r| r.prefix.as_str()).collect();
+        assert_eq!(prefixes, vec!["/v1/login", "/"]);
         assert!(matches!(
             routes[0].handler,
             ProxyRouteHandler::RouteRedirect { code: 308, .. }
+        ));
+        // Emitted longest-prefix-first and terminal, so the catch-all cannot
+        // shadow the redirect however the two are ordered here.
+        assert!(matches!(
+            routes[1].handler,
+            ProxyRouteHandler::ReverseProxy { .. }
         ));
     }
 

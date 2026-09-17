@@ -282,7 +282,7 @@ fn proxy_routes_for_vhost(vh: &VirtualHost) -> Vec<Value> {
                     let prefix = redirect_prefix(&route.prefix);
                     json!({
                         "host": [&vh.hostname],
-                        "path": [prefix.clone(), format!("{prefix}/*")],
+                        "path": [prefix, format!("{prefix}/*")],
                     })
                 }
                 _ if route.prefix == "/" => json!({ "host": [&vh.hostname] }),
@@ -514,10 +514,13 @@ const QUERY_VAR: &str = "{seedling.redirect.query}";
 
 /// The prefix a redirect route matches and measures its tail from.
 ///
-/// Trailing slashes are dropped so `route("/v1/")` and `route("/v1")` claim
-/// the same requests and hand the tail the same leading `/`.
+/// The declaration layer already normalises a prefix to this spelling, so this
+/// only has work to do for a configuration cached before it did. Trimming here
+/// as well keeps the matcher and the extraction agreeing with each other
+/// whatever the document holds.
 fn redirect_prefix(prefix: &str) -> &str {
-    prefix.trim_end_matches('/')
+    let trimmed = prefix.trim_end_matches('/');
+    if trimmed.is_empty() { "/" } else { trimmed }
 }
 
 /// Build the `Location` template for a route redirect, and say whether it
@@ -565,12 +568,23 @@ fn request_parts_handler(prefix: &str) -> Value {
         "source": "{http.request.uri}",
         "destinations": [TAIL_VAR, QUERY_VAR],
         "mappings": [{
-            "input_regexp": format!("^{prefix}([^?]*)(\\?.*)?$"),
+            // Case-insensitive because the path matcher that chose this route
+            // is: left case-sensitive, a request for `/V1/Login/reset` would
+            // match the route, miss here, and be redirected to the bare target
+            // with its path remainder and query dropped silently.
+            //
+            // Braces are excluded from both captures. The proxy substitutes a
+            // braced word from its own state, its environment among it, which
+            // is why a declared target may not carry one — and the request
+            // line is written by a client rather than by the app. Excluding
+            // them means a brace-carrying request falls to the defaults below
+            // instead of putting client text where a placeholder is read.
+            "input_regexp": format!("(?i)^{prefix}([^?{{}}]*)(\\?[^{{}}]*)?$"),
             "outputs": ["${1}", "${2}"],
         }],
-        // A request whose escaped form does not begin with the prefix, its
-        // decoded path having been what the route matched, contributes
-        // nothing rather than contributing something nothing checked.
+        // A request that does not match — its escaped form not beginning with
+        // the prefix, or carrying a brace — contributes nothing, rather than
+        // contributing something nothing checked.
         "defaults": ["", ""],
     })
 }

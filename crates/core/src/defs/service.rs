@@ -14,9 +14,9 @@ use super::{
 pub use proxy::{
     BalanceSettings, CompressDecl, CompressSettings, DEFAULT_REDIRECT_CODE, Encoding,
     GroupedHeaderOps, HeaderName, HeaderOp, HeaderRules, HeaderSettings, LbPolicy, ProxySettings,
-    RateLimitDecl, RateLimitScope, RateLimitSettings, RedirectSegment, ResolvedBalance,
-    ResolvedCompress, ResolvedRateLimit, ResolvedRouteProxy, RouteRedirect, default_content_types,
-    resolve,
+    REDIRECT_OWNED_HEADER, RateLimitDecl, RateLimitScope, RateLimitSettings, RedirectSegment,
+    ResolvedBalance, ResolvedCompress, ResolvedRateLimit, ResolvedRouteProxy, RouteRedirect,
+    default_content_types, resolve,
 };
 
 mod proxy;
@@ -282,8 +282,7 @@ impl BoundService {
     // l[impl service.http.route.redirect]
     fn is_redirect(&self, prefix: &str) -> bool {
         let declared = |def: &Option<HttpServiceDef>| {
-            def.as_ref()
-                .is_some_and(|h| h.redirects.contains_key(prefix))
+            def.as_ref().is_some_and(|h| h.redirect(prefix).is_some())
         };
         match self {
             Self::App(s) => declared(&s.def.lock().http),
@@ -300,24 +299,25 @@ impl BoundService {
     /// [`register_route`]: Self::register_route
     // l[impl service.http.route.redirect]
     fn record_binding(&mut self, prefix: &str) -> Result<(), Box<EvalAltResult>> {
-        if self.is_redirect(prefix) {
-            return Err(format!(
-                "`{prefix}` is declared as a redirect on service `{}`, so a pod cannot \
-                 also be bound to it: a prefix is either redirected or proxied",
-                self.name()
-            )
-            .into());
-        }
-        let record = |def: &mut Option<HttpServiceDef>| {
-            def.get_or_insert_default()
-                .bound_prefixes
-                .insert(prefix.to_owned());
+        let service = self.name().to_string();
+        let record = |def: &mut Option<HttpServiceDef>| -> Result<(), Box<EvalAltResult>> {
+            let decl = def
+                .get_or_insert_default()
+                .routes
+                .entry(prefix.to_owned())
+                .or_default();
+            match &mut decl.kind {
+                RouteKind::Proxied { bound } => {
+                    *bound = true;
+                    Ok(())
+                }
+                RouteKind::Redirect(_) => Err(refuse_prefix_serves_both(prefix, &service)),
+            }
         };
         match self {
             Self::App(s) => record(&mut s.def.lock().http),
             Self::External(e) => record(&mut e.def.lock().http),
         }
-        Ok(())
     }
 
     /// Mutate the `HttpServiceDef` of whichever service backs this view,
@@ -380,25 +380,106 @@ pub struct HttpServiceDef {
     /// which a route may override for the headers it names.
     // l[impl service.http.headers]
     pub headers: HeaderSettings,
-    /// Every URL prefix this service is served through, with whatever
-    /// settings the app declared on it. An entry with default settings is
-    /// still a route: registering the prefix is how the service knows which
-    /// routes exist without having to walk the pods that bind them.
-    pub routes: std::collections::BTreeMap<String, ProxySettings>,
-    /// The prefixes answered with a redirect rather than proxied to a pod.
-    ///
-    /// Keyed by the same prefixes as `routes`, and disjoint from
-    /// `bound_prefixes`: a prefix is either redirected or proxied.
+    /// Every URL prefix this service is served through, with what the app
+    /// declared on it. An entry carrying nothing is still a route:
+    /// registering the prefix is how the service knows which routes exist
+    /// without having to walk the pods that bind them.
+    pub routes: std::collections::BTreeMap<String, RouteDecl>,
+}
+
+/// What one declared prefix is, and what was declared on it.
+#[derive(Debug, Default, Clone)]
+pub struct RouteDecl {
+    /// What the app declared for this prefix. A redirect is refused most of
+    /// these, having nothing for them to act on, but still carries the
+    /// response header operations of a response it serves.
+    pub settings: ProxySettings,
+    pub kind: RouteKind,
+}
+
+/// Whether a prefix is served by a pod or answered with a redirect.
+///
+/// One value rather than a second map keyed the same way: "a prefix is either
+/// redirected or proxied" is then something the type cannot express otherwise,
+/// rather than an invariant each entry point has to defend for itself. The
+/// binding sits in the proxied arm for the same reason — a bound prefix
+/// cannot become a redirect by construction, rather than by check.
+// l[impl service.http.route.redirect]
+#[derive(Debug, Clone)]
+pub enum RouteKind {
+    /// Served by whichever pods bind the prefix. `bound` records that at
+    /// least one `http(pod_port, route)` named it, which is what makes a
+    /// redirect on the same prefix a contradiction rather than a preference.
+    Proxied {
+        bound: bool,
+    },
+    Redirect(RouteRedirect),
+}
+
+impl Default for RouteKind {
+    fn default() -> Self {
+        Self::Proxied { bound: false }
+    }
+}
+
+/// The canonical spelling of a route prefix.
+///
+/// A trailing slash carries no meaning in a prefix — `/v1/login/` claims the
+/// same requests as `/v1/login` — so it is dropped once, here, where the
+/// prefix becomes a map key. Normalising at emission instead would let two
+/// spellings pass the "either redirected or proxied" check as different
+/// prefixes and then emit two routes claiming the same requests.
+// l[impl service.http.route]
+pub fn normalise_prefix(prefix: &str) -> String {
+    let trimmed = prefix.trim_end_matches('/');
+    if trimmed.is_empty() {
+        // Every spelling of the root is the root, `//` among them: left as it
+        // was written it would trim to nothing at emission and match every
+        // request on the hostname.
+        "/".to_owned()
+    } else {
+        trimmed.to_owned()
+    }
+}
+
+/// Refuse a prefix asked to be both redirected and proxied.
+///
+/// One wording for both declaration orders: the clash is the same fact
+/// whichever of the two was written first.
+// l[impl service.http.route.redirect]
+fn refuse_prefix_serves_both(prefix: &str, service: &str) -> Box<EvalAltResult> {
+    format!(
+        "`{prefix}` on service `{service}` is asked to be both a redirect and a prefix a pod \
+         is bound to; a prefix is either redirected or proxied"
+    )
+    .into()
+}
+
+impl HttpServiceDef {
+    /// What the app declared for one prefix, whatever serves it.
+    pub fn settings(&self, prefix: &str) -> Option<&ProxySettings> {
+        self.routes.get(prefix).map(|r| &r.settings)
+    }
+
+    /// The redirect declared on one prefix, if that is what it is.
     // l[impl service.http.route.redirect]
-    pub redirects: std::collections::BTreeMap<String, RouteRedirect>,
-    /// The prefixes a pod binds through `http(pod_port, route)`.
-    ///
-    /// Recorded here so a redirect declared after the binding is refused by
-    /// the same rule as one declared before it. The reconciler still derives
-    /// the routes it emits from the pods themselves; this is the service's
-    /// own view of which of its prefixes are spoken for.
+    pub fn redirect(&self, prefix: &str) -> Option<&RouteRedirect> {
+        match &self.routes.get(prefix)?.kind {
+            RouteKind::Redirect(redirect) => Some(redirect),
+            RouteKind::Proxied { .. } => None,
+        }
+    }
+
+    /// Every prefix this service answers with a redirect.
     // l[impl service.http.route.redirect]
-    pub bound_prefixes: std::collections::BTreeSet<String>,
+    pub fn redirects(&self) -> impl Iterator<Item = (&String, &RouteRedirect)> {
+        self.routes
+            .iter()
+            .filter_map(|(prefix, decl)| match &decl.kind {
+                RouteKind::Redirect(redirect) => Some((prefix, redirect)),
+                RouteKind::Proxied { .. } => None,
+            })
+    }
 }
 
 impl ServiceDef {
@@ -428,10 +509,14 @@ impl CustomType for HttpService {
                             "route prefix must be a non-empty string starting with '/'".into()
                         );
                     }
-                    this.service.register_route(prefix);
+                    // Canonical from here on: every map key, clash check and
+                    // matcher downstream reads this spelling, so they agree on
+                    // what one prefix is.
+                    let prefix = normalise_prefix(prefix);
+                    this.service.register_route(&prefix);
                     Ok(HttpServiceRoute {
                         http: this.clone(),
-                        prefix: prefix.into(),
+                        prefix,
                     })
                 },
             )
@@ -555,9 +640,8 @@ impl CustomType for HttpServiceRoute {
             .with_fn(
                 "compress",
                 |this: &mut Self, enabled: bool| -> Result<Self, Box<EvalAltResult>> {
-                    this.refuse_if_redirect("compress")?;
                     let decl = compress_decl(enabled);
-                    this.with_route_settings(|s| s.compress = Some(decl))?;
+                    this.with_route_settings(Some("compress"), |s| s.compress = Some(decl))?;
                     Ok(this.clone())
                 },
             )
@@ -565,9 +649,8 @@ impl CustomType for HttpServiceRoute {
             .with_fn(
                 "compress",
                 |this: &mut Self, config: Map| -> Result<Self, Box<EvalAltResult>> {
-                    this.refuse_if_redirect("compress")?;
                     let settings = proxy::parse_compress(config)?;
-                    this.with_route_settings(|s| {
+                    this.with_route_settings(Some("compress"), |s| {
                         s.compress = Some(CompressDecl::Enabled(settings))
                     })?;
                     Ok(this.clone())
@@ -577,9 +660,8 @@ impl CustomType for HttpServiceRoute {
             .with_fn(
                 "balance",
                 |this: &mut Self, config: Map| -> Result<Self, Box<EvalAltResult>> {
-                    this.refuse_if_redirect("balance")?;
                     let settings = proxy::parse_balance(config)?;
-                    this.with_route_settings(|s| s.balance = settings)?;
+                    this.with_route_settings(Some("balance"), |s| s.balance = settings)?;
                     Ok(this.clone())
                 },
             )
@@ -587,9 +669,8 @@ impl CustomType for HttpServiceRoute {
             .with_fn(
                 "rate_limit",
                 |this: &mut Self, config: Map| -> Result<Self, Box<EvalAltResult>> {
-                    this.refuse_if_redirect("rate_limit")?;
                     let settings = proxy::parse_rate_limit(config)?;
-                    this.with_route_settings(|s| {
+                    this.with_route_settings(Some("rate_limit"), |s| {
                         s.rate_limit = Some(RateLimitDecl::Enabled(settings))
                     })?;
                     Ok(this.clone())
@@ -599,9 +680,8 @@ impl CustomType for HttpServiceRoute {
             .with_fn(
                 "rate_limit",
                 |this: &mut Self, enabled: bool| -> Result<Self, Box<EvalAltResult>> {
-                    this.refuse_if_redirect("rate_limit")?;
                     let decl = rate_limit_decl(enabled)?;
-                    this.with_route_settings(|s| s.rate_limit = Some(decl))?;
+                    this.with_route_settings(Some("rate_limit"), |s| s.rate_limit = Some(decl))?;
                     Ok(this.clone())
                 },
             )
@@ -617,11 +697,11 @@ impl CustomType for HttpServiceRoute {
                         if !settings.request.is_empty() {
                             return Err(proxy::refuse_request_headers_on_redirect(&this.prefix));
                         }
-                        if settings.response.names("Location") {
+                        if settings.response.names(REDIRECT_OWNED_HEADER) {
                             return Err(proxy::refuse_location_on_redirect(&this.prefix));
                         }
                     }
-                    this.with_route_settings(|s| s.headers.layer_over(settings))?;
+                    this.with_route_settings(None, |s| s.headers.layer_over(settings))?;
                     Ok(this.clone())
                 },
             )
@@ -688,15 +768,6 @@ impl HttpServiceRoute {
         self.http.service.record_binding(&prefix)
     }
 
-    /// Refuse a setting a redirect has nothing to act on.
-    // l[impl service.http.route.redirect]
-    fn refuse_if_redirect(&self, setting: &str) -> Result<(), Box<EvalAltResult>> {
-        if self.http.service.is_redirect(&self.prefix) {
-            return Err(proxy::refuse_on_redirect(&self.prefix, setting));
-        }
-        Ok(())
-    }
-
     /// Record a redirect on this route, refusing the prefixes and the
     /// neighbouring settings a redirect cannot live alongside.
     ///
@@ -714,30 +785,42 @@ impl HttpServiceRoute {
         }
 
         let prefix = self.prefix.clone();
+        let service = self.http.service.name().to_string();
         self.http.service.with_http_def(|d| {
-            if d.bound_prefixes.contains(&prefix) {
-                return Err(format!(
-                    "a pod is bound to `{prefix}`, so it cannot also be declared as a \
-                     redirect: a prefix is either redirected or proxied"
-                )
-                .into());
+            let decl = d.routes.entry(prefix.clone()).or_default();
+            if let RouteKind::Proxied { bound: true } = decl.kind {
+                return Err(refuse_prefix_serves_both(&prefix, &service));
             }
-            if let Some(settings) = d.routes.get(&prefix) {
-                proxy::refuse_settings_for_redirect(&prefix, settings)?;
-            }
-            d.redirects.insert(prefix.clone(), redirect);
+            // The one enumeration of what a redirect leaves nothing to act
+            // on, for the declaration order that wrote the setting first.
+            // `with_route_settings` refuses the other order.
+            proxy::refuse_settings_for_redirect(&prefix, &decl.settings)?;
+            decl.kind = RouteKind::Redirect(redirect);
             Ok(())
         })?
     }
 
+    /// Apply a route-level setting, refusing it on a route that is a redirect.
+    ///
+    /// Every route setting goes through here, so `setting` naming one is what
+    /// refuses it: a setting added later cannot reach a redirect route without
+    /// its author having decided which it is. `None` is for the settings a
+    /// redirect does carry — header operations, which a response it serves can
+    /// bear — and those check themselves for what a redirect cannot take.
+    // l[impl service.http.route.redirect]
     fn with_route_settings<R>(
         &mut self,
+        setting: Option<&str>,
         f: impl FnOnce(&mut ProxySettings) -> R,
     ) -> Result<R, Box<EvalAltResult>> {
         let prefix = self.prefix.clone();
-        self.http
-            .service
-            .with_http_def(|d| f(d.routes.entry(prefix).or_default()))
+        self.http.service.with_http_def(|d| {
+            let decl = d.routes.entry(prefix.clone()).or_default();
+            if let (RouteKind::Redirect(_), Some(setting)) = (&decl.kind, setting) {
+                return Err(proxy::refuse_on_redirect(&prefix, setting));
+            }
+            Ok(f(&mut decl.settings))
+        })?
     }
 }
 

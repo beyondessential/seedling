@@ -24,8 +24,8 @@ use super::{
     pod::{HttpBinding, PodDef, TcpUdpBinding},
     resource::Resource,
     service::{
-        ExternalService, HttpServiceDef, ProxySettings, RateLimitScope, ResolvedBalance, Service,
-        default_content_types, resolve,
+        ExternalService, HttpServiceDef, ProxySettings, REDIRECT_OWNED_HEADER, RateLimitScope,
+        ResolvedBalance, Service, default_content_types, resolve,
     },
     volume::{ExternalVolume, Volume},
 };
@@ -372,16 +372,16 @@ fn route_summaries(
         http.routes.keys().map(String::as_str).collect()
     };
 
-    // r[impl service.http.route.redirect]
-    // A redirect answers for itself and stops the `/` fallback being emitted,
-    // so a prefix that nothing binds alongside one is served by nothing.
-    let fallback_serves = bound.is_empty() && http.redirects.is_empty();
+    // A service no pod binds a prefix on is still served through `/`, whether
+    // or not it also declares a redirect: the redirect answers for its own
+    // prefix and the fallback answers for the rest.
+    let fallback_serves = bound.is_empty();
 
     prefixes
         .into_iter()
         .map(|prefix| {
-            let redirect = http.redirects.get(prefix);
-            let resolved = resolve(service_level, http.routes.get(prefix));
+            let redirect = http.redirect(prefix);
+            let resolved = resolve(service_level, http.settings(prefix));
             RouteSummary {
                 // The synthesised `/` route is served whenever it is the only
                 // one, which is the case exactly when nothing was bound.
@@ -418,7 +418,22 @@ fn route_summaries(
                     } else {
                         resolved.headers.request.into_grouped().into()
                     },
-                    response: resolved.headers.response.into_grouped().into(),
+                    // r[impl service.http.route.redirect]
+                    // `Location` is dropped on a redirect route for the same
+                    // reason the runtime drops it: the redirect computes that
+                    // header, so an operation the service declared for its
+                    // proxied routes is not in force here, and reporting it
+                    // would read as one that is.
+                    response: if redirect.is_some() {
+                        resolved
+                            .headers
+                            .response
+                            .without(REDIRECT_OWNED_HEADER)
+                            .into_grouped()
+                            .into()
+                    } else {
+                        resolved.headers.response.into_grouped().into()
+                    },
                 },
                 redirect: redirect.map(|r| RouteRedirectSummary {
                     to: r.target_text(),

@@ -204,24 +204,23 @@ fn http_service_accepts_compress_and_balance() {
     );
     assert!(http.compress.is_some());
     assert_eq!(
-        http.routes
-            .get("/api")
+        http.settings("/api")
             .and_then(|r| r.balance.try_duration_secs),
         Some(10.0)
     );
     assert_eq!(
-        http.routes.get("/v1").and_then(|r| r.compress.clone()),
+        http.settings("/v1").and_then(|r| r.compress.clone()),
         Some(defs::service::CompressDecl::Disabled)
     );
 
     // The route that named only a try duration keeps the service's policy.
-    let api = defs::service::resolve(&service_level, http.routes.get("/api"));
+    let api = defs::service::resolve(&service_level, http.settings("/api"));
     assert_eq!(api.balance.policy, defs::service::LbPolicy::LeastConn);
     assert_eq!(api.balance.try_duration_secs, 10.0);
     assert_eq!(api.compress.expect("on").minimum_length, 1024);
 
     // The route that switched compression off keeps the service's policy too.
-    let v1 = defs::service::resolve(&service_level, http.routes.get("/v1"));
+    let v1 = defs::service::resolve(&service_level, http.settings("/v1"));
     assert!(v1.compress.is_none());
     assert_eq!(v1.balance.policy, defs::service::LbPolicy::LeastConn);
 }
@@ -360,19 +359,19 @@ fn http_service_and_routes_accept_rate_limit() {
     let service_level = service_def.proxy_settings();
 
     // The service's limit reaches a route that declared none.
-    let v1 = defs::service::resolve(&service_level, http.routes.get("/v1"));
+    let v1 = defs::service::resolve(&service_level, http.settings("/v1"));
     let v1_limit = v1.rate_limit.expect("service limit carries to the route");
     assert_eq!(v1_limit.settings.max_events, 1000);
 
     // The tighter route limit replaces it outright.
-    let login = defs::service::resolve(&service_level, http.routes.get("/api/login"));
+    let login = defs::service::resolve(&service_level, http.settings("/api/login"));
     assert_eq!(
         login.rate_limit.expect("route limit").settings.max_events,
         10
     );
 
     // And a route can opt out of the service's limit entirely.
-    let health = defs::service::resolve(&service_level, http.routes.get("/health"));
+    let health = defs::service::resolve(&service_level, http.settings("/health"));
     assert_eq!(health.rate_limit, None);
 }
 
@@ -391,7 +390,7 @@ fn rate_limit_is_off_unless_declared() {
         .expect("web service");
     let service_def = svc.def.lock().clone();
     let http = service_def.http.clone().expect("http def");
-    let resolved = defs::service::resolve(&service_def.proxy_settings(), http.routes.get("/api"));
+    let resolved = defs::service::resolve(&service_def.proxy_settings(), http.settings("/api"));
     assert_eq!(resolved.rate_limit, None);
 }
 
@@ -530,7 +529,7 @@ fn http_service_and_route_accept_headers() {
     let service_level = service_def.proxy_settings();
 
     let grouped = |prefix: &str| {
-        let r = defs::service::resolve(&service_level, http.routes.get(prefix));
+        let r = defs::service::resolve(&service_level, http.settings(prefix));
         (
             r.headers.request.into_grouped(),
             r.headers.response.into_grouped(),
@@ -686,8 +685,7 @@ fn http_def(app: &defs::app::App, service: &str) -> defs::service::HttpServiceDe
 
 fn redirect_of(app: &defs::app::App, service: &str, prefix: &str) -> defs::service::RouteRedirect {
     http_def(app, service)
-        .redirects
-        .get(prefix)
+        .redirect(prefix)
         .cloned()
         .unwrap_or_else(|| panic!("`{prefix}` is declared as a redirect"))
 }
@@ -949,7 +947,9 @@ fn a_redirect_route_takes_response_header_operations_and_no_others() {
     "#,
     );
     let http = http_def(&app, "web");
-    let grouped = http.routes["/v1/login"]
+    let grouped = http
+        .settings("/v1/login")
+        .expect("the route is declared")
         .headers
         .response
         .clone()
@@ -1021,4 +1021,145 @@ fn a_redirect_route_reports_its_target_and_carries_no_settings() {
     let root = routes.iter().find(|r| r.prefix == "/").expect("root route");
     assert!(root.redirect.is_none());
     assert!(root.rate_limit.is_some());
+}
+
+// l[verify service.http.route.redirect]
+// The `/` a path target opens with says "within the hostname the request
+// arrived on". A second slash after it says the opposite, and a browser reads
+// a backslash there as a slash.
+#[test]
+fn a_target_composing_into_another_host_is_refused() {
+    // Written as rhai source: the backslash case needs it escaped there too.
+    for target in [r#""//evil.example.com""#, r#""/\\evil.example.com""#] {
+        let e = run_test_script_err(&format!(
+            r#"app.service("web").http(80).route("/v1").redirect(#{{ to: {target} }});"#
+        ))
+        .to_string();
+        assert!(e.contains("names another host"), "{target}: {e}");
+    }
+
+    // A tab is stripped by a client before the target is read, so `/<tab>/host`
+    // reaches where `//host` does while walking past the check above.
+    let e = run_test_script_err(
+        r#"app.service("web").http(80).route("/v1").redirect(#{ to: "/\tevil.example.com" });"#,
+    )
+    .to_string();
+    assert!(e.contains("tab"), "{e}");
+}
+
+// l[verify service.http.route.redirect]
+// Each token brings its own separator. `/` followed by the tail composes into
+// `//` plus whatever the request carried — the same protocol-relative URL,
+// assembled where no declaration check can see it.
+#[test]
+fn a_literal_running_into_a_tokens_own_separator_is_refused() {
+    let slash = run_test_script_err(
+        r#"app.service("web").http(80).route("/v1").redirect(#{ to: "/<tail>" });"#,
+    )
+    .to_string();
+    assert!(slash.contains("doubled `/`"), "{slash}");
+
+    let nested = run_test_script_err(
+        r#"app.service("web").http(80).route("/v1").redirect(#{ to: "/api/<tail>" });"#,
+    )
+    .to_string();
+    assert!(nested.contains("doubled `/`"), "{nested}");
+
+    let query = run_test_script_err(
+        r#"app.service("web").http(80).route("/v1").redirect(#{ to: "/api?<query>" });"#,
+    )
+    .to_string();
+    assert!(query.contains("doubled `?`"), "{query}");
+}
+
+// l[verify service.http.route.redirect]
+// The positional forms append the tail and query for themselves, so a target
+// naming one would carry it twice without saying so.
+#[test]
+fn the_positional_form_refuses_a_target_that_names_a_request_part() {
+    let e = run_test_script_err(
+        r#"app.service("web").http(80).route("/v1").redirect("/api/login<tail>");"#,
+    )
+    .to_string();
+    assert!(e.contains("names a part of the request"), "{e}");
+    assert!(e.contains("to:"), "the error points at the map form: {e}");
+}
+
+// l[verify service.http.route]
+// l[verify service.http.route.redirect]
+// A trailing slash carries no meaning in a prefix, so two spellings of one
+// prefix must not pass the either-redirected-or-proxied check as two prefixes
+// and then emit two routes claiming the same requests.
+#[test]
+fn a_prefix_is_the_same_prefix_however_its_trailing_slash_is_written() {
+    let app = run_test_script_app(
+        r#"
+        let web = app.service("web").http(80);
+        web.route("/v1/login/").redirect("/api/login", 308);
+    "#,
+    );
+    assert_eq!(redirect_of(&app, "web", "/v1/login").code, 308);
+
+    let clash = run_test_script_err(
+        r#"
+        let web = app.service("web").http(80);
+        web.route("/v1/login/").redirect("/api/login");
+        app.deployment("api").image("ghcr.io/example/api:1").http(8080, web.route("/v1/login"));
+    "#,
+    )
+    .to_string();
+    assert!(clash.contains("either redirected or proxied"), "{clash}");
+}
+
+// l[verify service.http.route.redirect]
+// `//` trims to nothing, which as a matcher answers every request on the
+// hostname — the whole-hostname redirect this rule reserves for an operator.
+#[test]
+fn every_spelling_of_the_root_is_refused_a_redirect() {
+    for prefix in ["/", "//", "///"] {
+        let e = run_test_script_err(&format!(
+            r#"app.service("web").http(80).route("{prefix}").redirect("/api");"#
+        ))
+        .to_string();
+        assert!(e.contains("whole hostname"), "{prefix}: {e}");
+    }
+}
+
+// r[verify service.http.route.redirect]
+// A service may declare a `Location` operation for its proxied routes. Layered
+// over a redirect it would displace the target the redirect computed, so it is
+// ignored there rather than refused on the service.
+#[test]
+fn a_service_level_location_operation_does_not_reach_a_redirect_route() {
+    let app = run_test_script_app(
+        r#"
+        let web = app.service("web").http(80)
+            .headers(#{ response: #{ replace: #{ "Location": "https://elsewhere.example" } } });
+        web.route("/v1/login").redirect("/api/login", 308);
+        app.deployment("api").image("ghcr.io/example/api:1").http(8080, web.route("/"));
+    "#,
+    );
+    let def = app.def.load();
+    let summary = def
+        .resources
+        .values()
+        .find_map(|r| match r {
+            defs::resource::Resource::Service(s) if *s.name == *"web" => Some(s.summary(&def)),
+            _ => None,
+        })
+        .expect("web service");
+    let routes = summary.routes.expect("http service reports routes");
+
+    let login = routes
+        .iter()
+        .find(|r| r.prefix == "/v1/login")
+        .expect("the redirect route is reported");
+    assert!(
+        !login.headers.response.replace.contains_key("Location"),
+        "a redirect route reports no operation on the header it computes"
+    );
+
+    // The proxied route alongside it still carries it.
+    let root = routes.iter().find(|r| r.prefix == "/").expect("root route");
+    assert!(root.headers.response.replace.contains_key("Location"));
 }

@@ -218,19 +218,26 @@ Absent specification bugs, anything that is not defined here is either defined i
 > Concretely: for every `deployment.http(pod_port, svc.route(prefix))` binding on a pod backing the ingress's target service, the runtime emits one ingress route at `prefix` with upstreams set to the running backend pods that hold that binding. The proxy must select the longest matching prefix for each incoming request.
 >
 > When the backing service has no `http_bindings` at all (e.g. an HTTPS-fronted TCP-only service), the runtime falls back to a single `/` route through the Service's general routing pool.
-> A [redirect route](#r--service.http.route.redirect) is declared on the Service rather than bound by a pod, and counts as a route for this purpose: a Service carrying one is not a Service with no bindings, and must not take the fallback.
+> A [redirect route](#r--service.http.route.redirect) is declared on the Service rather than bound by a pod, and does not stand in for that fallback: a Service with no bindings takes it whether or not it also declares a redirect, so the redirect answers for its own prefix and the fallback answers for the rest.
 
 > r[service.http.route.redirect]
 > A route the app declared as a [redirect](language.md#l--service.http.route.redirect) must be emitted at its prefix as a route answering with the declared status code and a `Location` built from the declared target, rather than as a reverse proxy to any pod.
 >
 > A redirect route is declared on the Service and does not depend on a pod binding it, unlike the proxied routes alongside it.
-> A Service whose only routes are redirects must therefore emit those routes, rather than the `/` fallback a Service with no route bindings takes.
+> A Service whose only routes are redirects must therefore emit those routes, alongside whatever else it is served through.
 >
 > The target's `<tail>` is the request path with the matched prefix removed, and its `<query>` the request's query string; a target naming neither is served as it was declared.
 > Both are taken from the request as it arrived, so what a redirect carries over is not disturbed by any [header operation](#r--service.http.route.headers) the route applies to the response.
 >
 > Redirect routes take their place in the [longest-prefix ordering](#r--service.http.route.routing) alongside proxied ones, and are terminal as those are.
 > A redirect on a longer prefix therefore answers for its own traffic while a proxied route on a shorter prefix serves the rest, which is what lets one path within a hostname redirect while the hostname otherwise proxies.
+>
+> A redirect route claims its prefix on segment boundaries, unlike a proxied one: it claims the prefix exactly, and paths below it, and nothing that merely begins with the same characters.
+> The tail reaches a client as part of a URL, so a request the prefix only spells the start of would contribute a tail that is not a path — and against a target naming another host, one the client chose rather than the app.
+> Matching, and the tail and query taken from it, must agree on which requests were claimed and must not disagree over the case of the request, so that a request the route answers is one the target was built from.
+>
+> A tail and a query are taken from the request line as it arrived, in the form it arrived in, so that what reaches the client is what the client sent rather than a re-encoding of it.
+> A request carrying text that the proxy would read as naming its own state contributes no tail and no query, the same as one the prefix does not claim: what a client writes must never reach the place a [header value](language.md#l--service.http.headers.fields) refuses a brace for.
 >
 > On the plaintext virtual host of an ingress declaring an [HTTP redirect](language.md#l--ingress.redirect), that redirect answers every request whatever its path, and a redirect route must not displace it.
 > A plaintext request under a redirect route's prefix is therefore sent to HTTPS first and meets the redirect route on arrival.

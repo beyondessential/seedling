@@ -80,16 +80,52 @@ The handler's vocabulary did grow after all: a route redirect carries a parsed
 target and the route's response header operations, so it is a variant of its
 own (`ProxyRouteHandler::RouteRedirect`) rather than the site-ingress
 `Redirect` reused. The site-ingress one answers for a whole hostname with a URL
-fixed at declaration and preserves the path through `{http.request.uri}` without
-stripping anything; neither half of that fits a prefix-bound redirect.
+fixed at declaration and preserves the path through `{http.request.uri}`
+without stripping anything; neither half of that fits a prefix-bound redirect.
 
-The query needed a third handler. Caddy offers the query without its leading
-`?` and no way to test it inline, so a target naming `<query>` other than
-directly after `<tail>` emits a `map` handler that defines the leading `?` only
-when there is a query. `<tail><query>` adjacent collapses to
-`{http.request.uri}`, which is what the positional forms produce, so the
-production case costs one strip-prefix handler and nothing else.
+### The strip-prefix approach was abandoned
 
-`http.handlers.rewrite` and `http.handlers.map` were added to
-`docker/caddy/required-modules.txt`. Both are stock, so the pinned image
-already provides them and no image tag moves.
+The first cut took the prefix off the request with a `rewrite`
+(`strip_path_prefix`) and read the remainder back as `{http.request.uri}`. That
+is wrong for the second-most-common request there is: one for exactly the
+prefix. Caddy's `changePath` leaves the path empty, then `canonicalizePath`
+re-anchors it, so `/v1/login` under prefix `/v1/login` reports a path of `/`
+rather than nothing, and the target gains a trailing slash the spec says it
+must not have. Reading the tail off `{http.request.uri.path}` had a second
+fault: that placeholder is the *decoded* path, so a `%3F` in a path segment
+would reach the client as the `?` that starts a query.
+
+Both are fixed by cutting the tail and the query straight out of the escaped
+request line with one `map` handler, anchored on the prefix. It is also one
+handler rather than two, and it defines both tokens at once because they are
+one cut of one string. Only `http.handlers.map` is required; `rewrite` is not
+used.
+
+The pattern is case-insensitive, because the path matcher that selects the
+route is, and excludes braces from both captures, because the request line is
+written by a client and a braced word in a `Location` is read as naming the
+proxy's own state.
+
+### A prefix is one prefix
+
+`HttpServiceDef` keys one map on the prefix, to a `RouteDecl` carrying the
+declared settings and a `RouteKind` of `Proxied { bound }` or `Redirect`. An
+earlier cut had three prefix-keyed collections (`routes`, `redirects`,
+`bound_prefixes`) whose disjointness four separate checks had to defend. The
+prefix is normalised once, at `route()`, so the declaration checks and the
+emitted matcher agree on what one prefix is — without that, `/v1/login/` and
+`/v1/login` passed the either-redirected-or-proxied check as two prefixes and
+then claimed the same requests, and `//` slipped past the root guard to match
+every request on the hostname.
+
+`with_route_settings` is the one place a route-level setting is applied, so a
+setting added later cannot reach a redirect route without its author saying
+which it is.
+
+### The `/` fallback stays
+
+A redirect sits above the fallback rather than in place of it. Suppressing the
+fallback because a redirect exists took the catch-all away from a service
+served through its routing pool, leaving every path but the redirected one
+unanswered. Routes are emitted longest-prefix-first and terminal and a redirect
+can never be declared at the root, so the fallback cannot shadow one.

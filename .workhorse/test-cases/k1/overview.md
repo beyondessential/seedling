@@ -13,7 +13,12 @@ on a service whose `/` is served by a pod.
 - [x] A redirect is declarable on an external service's routes
 - [x] A second `redirect()` on the same route replaces the first
 - [x] A target that is neither a path nor an absolute URL throws
-- [x] A target beginning `//` throws, naming another host while reading as a path
+- [x] A path target whose second character is `/` or `\` throws, naming another host while reading as a path
+- [x] A target carrying a tab throws, a client stripping one before reading it
+- [x] A literal ending in `/` before `<tail>`, or in `?` before `<query>`, throws
+- [x] A positional target that names a token itself throws rather than carrying that part twice
+- [x] `route("/v1/login/")` and `route("/v1/login")` are one prefix, and clash with a pod binding on either spelling
+- [x] Every spelling of the root, `//` among them, is refused a redirect
 - [x] A target containing `{` throws, and the error names `<tail>` / `<query>`
 - [x] An unrecognised token throws and names it; a stray `<` throws and points at `%3C`
 - [x] A code outside 301 / 302 / 307 / 308 throws
@@ -37,8 +42,13 @@ on a service whose `/` is served by a pod.
 - [x] A tail carried without a query drops the query rather than smuggling it through the combined placeholder
 - [x] A query carried on its own maps to nothing when the request has none, and to `?` plus itself when it does
 - [x] A redirect route's response header operations are emitted first, deferred (verifies spec: `r[service.http.route.headers]`)
+- [x] A service-level `Location` operation reaches neither the emitted redirect nor what `app.describe` reports for it
+- [x] The request-parts pattern is case-insensitive, matching what the path matcher claimed
+- [x] The request-parts pattern excludes braces from both captures, so client text cannot reach a placeholder position
+- [x] A prefix carrying pattern metacharacters is matched literally
+- [x] A redirect route matches its prefix on segment boundaries, not as a bare character prefix
 - [x] A redirect on a longer prefix is emitted ahead of a proxied route on a shorter one, and is terminal
-- [x] A service whose only routes are redirects does not take the `/` fallback
+- [x] A service with no pod bindings keeps its `/` fallback alongside a redirect, the redirect answering only for its own prefix
 - [x] A redirect is emitted alongside the prefixes a pod binds
 - [x] On the plaintext vhost of an ingress declaring an HTTP redirect, that redirect answers every path and the redirect route is not emitted there
 - [x] A cached proxy document carrying a redirect route round-trips
@@ -53,4 +63,5 @@ on a service whose `/` is served by a pod.
 - [ ] Against a real proxy image: `/v1/login/reset?token=x` under `redirect("/api/login")` arrives at `/api/login/reset?token=x`
 - [ ] Against a real proxy image: a request to exactly `/v1/login` arrives at `/api/login`
 - [ ] Against a real proxy image: `<query>` on its own adds no bare `?` when the request carries no query
+- [ ] Against a real proxy image: a request under a redirect prefix differing only in case keeps its tail and query
 - [ ] A plaintext request to `http://host/v1/login` is moved to HTTPS first, then redirected

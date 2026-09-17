@@ -1528,11 +1528,8 @@ fn location(json: &serde_json::Value, index: usize, handler: usize) -> String {
 
 // r[verify service.http.route.redirect]
 // The production case: a prefix moves and everything under it comes along.
-// The tail and the query together are the whole of the request line after the
-// prefix, which the proxy already spells in one placeholder, so this costs one
-// handler to take the prefix off and nothing more.
 #[test]
-fn a_tail_carrying_redirect_strips_the_prefix_and_carries_the_rest() {
+fn a_tail_carrying_redirect_cuts_the_rest_of_the_request_line_into_the_target() {
     let config = vhost_with(
         "app.example.com",
         vec![redirect_route_at(
@@ -1546,13 +1543,81 @@ fn a_tail_carrying_redirect_strips_the_prefix_and_carries_the_rest() {
         )],
     );
     let json = build_caddy_config(&config);
-    assert_eq!(handlers(&json, 0), vec!["rewrite", "static_response"]);
+    assert_eq!(handlers(&json, 0), vec!["map", "static_response"]);
     let route = &json["apps"]["http"]["servers"]["seedling_http"]["routes"][0];
-    assert_eq!(route["handle"][0]["strip_path_prefix"], "/v1/login");
     assert_eq!(route["handle"][1]["status_code"], 308);
-    assert_eq!(location(&json, 0, 1), "/api/login{http.request.uri}");
-    assert_eq!(route["match"][0]["path"][0], "/v1/login*");
+    assert_eq!(
+        location(&json, 0, 1),
+        "/api/login{seedling.redirect.tail}{seedling.redirect.query}"
+    );
+
+    // Matched on segment boundaries, so `/v1/login.example.net` is not a
+    // request under this prefix and contributes no tail to the target.
+    assert_eq!(route["match"][0]["path"][0], "/v1/login");
+    assert_eq!(route["match"][0]["path"][1], "/v1/login/*");
     assert_eq!(route["terminal"], true);
+
+    let map = &route["handle"][0];
+    assert_eq!(map["source"], "{http.request.uri}");
+    assert_eq!(
+        map["destinations"],
+        serde_json::json!(["{seedling.redirect.tail}", "{seedling.redirect.query}"])
+    );
+    assert_eq!(map["defaults"], serde_json::json!(["", ""]));
+}
+
+// r[verify service.http.route.redirect]
+// The request line is read in its escaped form, and only where it is the shape
+// the route claimed: a request the pattern does not match contributes nothing
+// rather than contributing text nothing checked.
+#[test]
+fn the_request_parts_pattern_is_case_insensitive_and_refuses_braces() {
+    let config = vhost_with(
+        "app.example.com",
+        vec![redirect_route_at(
+            "/v1/login",
+            vec![
+                RedirectSegment::Literal("/api/login".into()),
+                RedirectSegment::Tail,
+            ],
+            308,
+        )],
+    );
+    let json = build_caddy_config(&config);
+    let pattern = json["apps"]["http"]["servers"]["seedling_http"]["routes"][0]["handle"][0]
+        ["mappings"][0]["input_regexp"]
+        .as_str()
+        .expect("the mapping carries a pattern");
+
+    // The path matcher that chose this route compares without regard to case,
+    // so a pattern that did not would match the route and drop the tail.
+    assert!(pattern.starts_with("(?i)"), "{pattern}");
+    // A braced word in a `Location` is substituted from the proxy's own
+    // state, and the request line is written by a client.
+    assert!(pattern.contains("[^?{}]"), "{pattern}");
+    assert!(pattern.contains(r"(\?[^{}]*)?"), "{pattern}");
+}
+
+// r[verify service.http.route.redirect]
+#[test]
+fn a_prefix_carrying_pattern_metacharacters_is_matched_literally() {
+    let config = vhost_with(
+        "app.example.com",
+        vec![redirect_route_at(
+            "/v1.0/log+in",
+            vec![
+                RedirectSegment::Literal("/api".into()),
+                RedirectSegment::Tail,
+            ],
+            308,
+        )],
+    );
+    let json = build_caddy_config(&config);
+    let pattern = json["apps"]["http"]["servers"]["seedling_http"]["routes"][0]["handle"][0]
+        ["mappings"][0]["input_regexp"]
+        .as_str()
+        .expect("the mapping carries a pattern");
+    assert!(pattern.contains(r"\/v1\.0\/log\+in"), "{pattern}");
 }
 
 // r[verify service.http.route.redirect]
@@ -1592,10 +1657,10 @@ fn a_query_carried_on_its_own_is_mapped_so_an_absent_one_adds_nothing() {
     let json = build_caddy_config(&config);
     assert_eq!(handlers(&json, 0), vec!["map", "static_response"]);
     let map = &json["apps"]["http"]["servers"]["seedling_http"]["routes"][0]["handle"][0];
-    assert_eq!(map["source"], "{http.request.uri.query}");
-    assert_eq!(map["mappings"][0]["input"], "");
-    assert_eq!(map["mappings"][0]["outputs"][0], "");
-    assert_eq!(map["defaults"][0], "?{http.request.uri.query}");
+    // The query is cut out carrying its `?`, so a request without one
+    // contributes nothing rather than a bare `?`.
+    assert_eq!(map["mappings"][0]["outputs"][1], "${2}");
+    assert_eq!(map["defaults"][1], "");
     assert_eq!(location(&json, 0, 1), "/find{seedling.redirect.query}");
 }
 
@@ -1616,7 +1681,7 @@ fn a_tail_carried_on_its_own_leaves_the_query_behind() {
         )],
     );
     let json = build_caddy_config(&config);
-    assert_eq!(location(&json, 0, 1), "/api{http.request.uri.path}");
+    assert_eq!(location(&json, 0, 1), "/api{seedling.redirect.tail}");
 }
 
 // r[verify service.http.route.headers]
@@ -1642,7 +1707,7 @@ fn a_redirect_route_carries_its_response_header_operations_first() {
     // response this route itself serves.
     assert_eq!(
         handlers(&json, 0),
-        vec!["headers", "rewrite", "static_response"]
+        vec!["headers", "map", "static_response"]
     );
     let handler = &json["apps"]["http"]["servers"]["seedling_http"]["routes"][0]["handle"][0];
     assert_eq!(handler["response"]["deferred"], true);
@@ -1724,7 +1789,7 @@ fn an_ingress_redirect_answers_ahead_of_a_redirect_route_on_the_plaintext_vhost(
     let https = json["apps"]["http"]["servers"]["seedling_https"]["routes"]
         .as_array()
         .expect("the TLS server has routes");
-    assert_eq!(https[0]["match"][0]["path"][0], "/v1/login*");
+    assert_eq!(https[0]["match"][0]["path"][0], "/v1/login");
 }
 
 // r[verify service.http.route.redirect]

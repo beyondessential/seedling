@@ -394,6 +394,9 @@ This is currently the only value.
 > The URL prefix is _not_ stripped for the pod: `GET /api/books` routed through a `route("/api")` will appear as `GET /api/books` to the container.
 >
 > Prefix-matching is done by length: for any given URL, the longest matching prefix is selected. If more complicated logic is required, an application should embed an HTTP "reverse proxy" container of its choice.
+>
+> A trailing `/` carries no meaning in a prefix, so `route("/v1/login/")` and `route("/v1/login")` are one route and not two.
+> Every spelling of the root is the root, `//` among them.
 
 > l[service.http.route.redirect]
 > The `route.redirect(to: string)`, `route.redirect(to: string, code: number)`, and `route.redirect(config: map)` builder methods declare that an [HTTP Service Route](#l--service.http.route) answers with an HTTP redirect instead of being served by a pod.
@@ -416,14 +419,19 @@ This is currently the only value.
 > So does a stray `<`, a character a URL carries percent-encoded rather than as itself, so there is nothing for it to have meant.
 >
 > The two positional forms are the map form with `<tail><query>` appended to the target, which is the common case of moving a prefix while keeping everything under it.
+> A positional target naming a token itself throws, rather than carrying that part of the request twice: naming one is writing the target out in full, which is the map form.
 > `route("/v1/login").redirect("/api/login")` therefore sends `/v1/login/reset?token=x` to `/api/login/reset?token=x`, where `redirect(#{ to: "/api/login" })` sends it to `/api/login`.
 >
 > The tokens are those named here, and are translated by the runtime.
 > A target must not be written in the proxy's own placeholder syntax: the proxy substitutes a braced word naming its own state, its environment among it, and the target reaches the client as a `Location` header, where a [header value](#l--service.http.headers.fields) refuses a brace for that same reason.
 >
-> A target beginning `//` throws: it names another host while opening with the `/` that says "within the hostname the request arrived on", and the absolute form says so plainly.
+> A path target whose second character is `/` or `\\` throws: it names another host while opening with the `/` that says "within the hostname the request arrived on", and the absolute form says so plainly.
+> A target carrying a tab throws for the same reason, a client stripping one before reading the target.
 >
-> A redirect must not be declared on the `/` prefix, which would answer for the whole hostname; retiring a hostname is a [site ingress redirect attachment](runtime.md#r--ingress.site.attachment), an operator's to make rather than an app's.
+> Each token carries its own leading separator, so a target must not end a literal with that separator immediately before the token: `/` before `<tail>` and `?` before `<query>` throw.
+> Left to compose, a target of `/` followed by `<tail>` reaches the client as `//` and whatever the request carried, which is the other host above assembled at request time.
+>
+> A redirect must not be declared on the root prefix, which would answer for the whole hostname; retiring a hostname is a [site ingress redirect attachment](runtime.md#r--ingress.site.attachment), an operator's to make rather than an app's.
 > A prefix declared as a redirect and also bound by a pod through `deployment.http(pod_port, svc.route(prefix))` throws: a prefix is either redirected or proxied.
 > A second `redirect()` on the same route replaces the first.
 >
