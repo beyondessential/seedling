@@ -270,10 +270,23 @@ fn proxy_routes_for_vhost(vh: &VirtualHost) -> Vec<Value> {
     routes
         .iter()
         .map(|route| {
-            let match_expr = if route.prefix == "/" {
-                json!({ "host": [&vh.hostname] })
-            } else {
-                json!({ "host": [&vh.hostname], "path": [format!("{}*", route.prefix)] })
+            let match_expr = match &route.handler {
+                // r[impl service.http.route.redirect]
+                // Matched on segment boundaries, unlike a proxied prefix. The
+                // tail is spliced into a `Location`, so a request that merely
+                // begins with the prefix — `/v1/login.example.net` under
+                // `/v1/login` — would contribute a tail that is not a path at
+                // all, and against an absolute-URL target would name a host
+                // the caller chose rather than the app.
+                crate::system::types::ProxyRouteHandler::RouteRedirect { .. } => {
+                    let prefix = redirect_prefix(&route.prefix);
+                    json!({
+                        "host": [&vh.hostname],
+                        "path": [prefix.clone(), format!("{prefix}/*")],
+                    })
+                }
+                _ if route.prefix == "/" => json!({ "host": [&vh.hostname] }),
+                _ => json!({ "host": [&vh.hostname], "path": [format!("{}*", route.prefix)] }),
             };
 
             let handle = match &route.handler {
@@ -327,9 +340,9 @@ fn proxy_routes_for_vhost(vh: &VirtualHost) -> Vec<Value> {
                     code,
                     headers,
                 } => {
-                    let (location, needs_query) = redirect_location(target);
+                    let (location, needs_request_parts) = redirect_location(target);
 
-                    let mut chain: Vec<Value> = Vec::with_capacity(4);
+                    let mut chain: Vec<Value> = Vec::with_capacity(3);
                     // r[impl service.http.route.headers]
                     // First, as on a proxied route: its response operations
                     // are deferred to when the headers are written, which is
@@ -340,17 +353,8 @@ fn proxy_routes_for_vhost(vh: &VirtualHost) -> Vec<Value> {
                             response: headers.clone(),
                         }));
                     }
-                    if target.contains(&RedirectSegment::Tail) {
-                        // The proxy has no placeholder for the path remaining
-                        // after a matched prefix, so the prefix is taken off
-                        // the request and the remainder read back off it.
-                        chain.push(json!({
-                            "handler": "rewrite",
-                            "strip_path_prefix": route.prefix,
-                        }));
-                    }
-                    if needs_query {
-                        chain.push(query_var_handler());
+                    if needs_request_parts {
+                        chain.push(request_parts_handler(&route.prefix));
                     }
                     chain.push(json!({
                         "handler": "static_response",
@@ -503,59 +507,87 @@ fn secs_to_nanos(secs: f64) -> i64 {
     (secs * 1_000_000_000.0).round() as i64
 }
 
-/// The placeholder the query handler below defines, carrying the leading `?`
-/// when there is a query and nothing at all when there is not.
+/// The placeholders [`request_parts_handler`] defines, each empty when the
+/// request carries no such part.
+const TAIL_VAR: &str = "{seedling.redirect.tail}";
 const QUERY_VAR: &str = "{seedling.redirect.query}";
 
-/// Build the `Location` template for a route redirect, and say whether it
-/// needs the query placeholder defined.
+/// The prefix a redirect route matches and measures its tail from.
 ///
-/// A tail immediately followed by a query is the whole of the request line
-/// after the prefix, which the proxy already spells in one placeholder, so
-/// the common case costs no extra handler.
+/// Trailing slashes are dropped so `route("/v1/")` and `route("/v1")` claim
+/// the same requests and hand the tail the same leading `/`.
+fn redirect_prefix(prefix: &str) -> &str {
+    prefix.trim_end_matches('/')
+}
+
+/// Build the `Location` template for a route redirect, and say whether it
+/// names any part of the request.
 // r[impl service.http.route.redirect]
 fn redirect_location(target: &[RedirectSegment]) -> (String, bool) {
     let mut location = String::new();
-    let mut needs_query = false;
-    let mut i = 0;
-    while i < target.len() {
-        match &target[i] {
+    let mut names_request_parts = false;
+    for segment in target {
+        match segment {
             // Safe to inline: a braced word is refused in a declared target,
             // so nothing here is read back as a placeholder of its own.
             RedirectSegment::Literal(text) => location.push_str(text),
             RedirectSegment::Tail => {
-                if matches!(target.get(i + 1), Some(RedirectSegment::Query)) {
-                    location.push_str("{http.request.uri}");
-                    i += 1;
-                } else {
-                    location.push_str("{http.request.uri.path}");
-                }
+                location.push_str(TAIL_VAR);
+                names_request_parts = true;
             }
             RedirectSegment::Query => {
                 location.push_str(QUERY_VAR);
-                needs_query = true;
+                names_request_parts = true;
             }
         }
-        i += 1;
     }
-    (location, needs_query)
+    (location, names_request_parts)
 }
 
-/// Define [`QUERY_VAR`] for the handlers after it.
+/// Define [`TAIL_VAR`] and [`QUERY_VAR`] for the handlers after it.
 ///
-/// A query string carries a leading `?` only when it is not empty, and the
-/// proxy offers the query without one and no way to test it inline. Mapping
-/// the empty query to the empty string and everything else to `?` plus itself
-/// is that test, expressed where the proxy can evaluate it.
+/// Both are cut out of the request line in its escaped form, which is the
+/// form a `Location` has to carry. Reading the tail off the decoded path
+/// instead would let a `%3F` in a path segment arrive at the client as the
+/// `?` that starts a query.
+///
+/// Taking the prefix off the request with a rewrite and reading the remainder
+/// back would be the obvious alternative, and is not equivalent: a request
+/// for exactly the prefix leaves an empty path, which the proxy reports as
+/// `/` rather than as nothing, so the tail would never be empty.
+///
+/// The two are defined together because they are one cut of one string.
 // r[impl service.http.route.redirect]
-fn query_var_handler() -> Value {
+fn request_parts_handler(prefix: &str) -> Value {
+    let prefix = regexp_literal(redirect_prefix(prefix));
     json!({
         "handler": "map",
-        "source": "{http.request.uri.query}",
-        "destinations": [QUERY_VAR],
-        "mappings": [{ "input": "", "outputs": [""] }],
-        "defaults": ["?{http.request.uri.query}"],
+        "source": "{http.request.uri}",
+        "destinations": [TAIL_VAR, QUERY_VAR],
+        "mappings": [{
+            "input_regexp": format!("^{prefix}([^?]*)(\\?.*)?$"),
+            "outputs": ["${1}", "${2}"],
+        }],
+        // A request whose escaped form does not begin with the prefix, its
+        // decoded path having been what the route matched, contributes
+        // nothing rather than contributing something nothing checked.
+        "defaults": ["", ""],
     })
+}
+
+/// Escape a literal for the proxy's regular-expression syntax.
+///
+/// Only ASCII punctuation is escaped: the syntax rejects a backslash before a
+/// character outside ASCII, and such a character is a literal already.
+fn regexp_literal(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    for ch in text.chars() {
+        if ch.is_ascii() && !ch.is_ascii_alphanumeric() && ch != '_' {
+            out.push('\\');
+        }
+        out.push(ch);
+    }
+    out
 }
 
 fn redirect_route(hostname: &str, code: u16, https_ports: &[u16]) -> Value {

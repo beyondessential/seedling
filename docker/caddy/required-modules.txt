@@ -20,10 +20,8 @@ http.handlers.rate_limit
 http.handlers.encode
 http.handlers.headers
 
-# A route redirect carrying the request's path tail takes the matched prefix
-# off the request to read the remainder back, and one carrying the query maps
-# it to a value that holds the leading `?` only when there is a query.
-http.handlers.rewrite
+# A route redirect naming a part of the request cuts that part out of the
+# request line, which is a mapping from one to the other.
 http.handlers.map
 
 # Response encodings offered by the compression handler.

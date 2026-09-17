@@ -431,6 +431,18 @@ impl HeaderRules {
         self.0.keys().any(|n| n.as_str().eq_ignore_ascii_case(name))
     }
 
+    /// Drop any operation on this header.
+    ///
+    /// For a header a route computes for itself: an operation the route
+    /// declared on one is refused, but an operation it inherited from the
+    /// service is ignored rather than refused, and ignoring it means taking
+    /// it back out here.
+    // l[impl service.http.route.redirect]
+    pub fn without(mut self, name: &str) -> Self {
+        self.0.retain(|n, _| !n.as_str().eq_ignore_ascii_case(name));
+        self
+    }
+
     /// Give `name` this operation, replacing any it already had.
     ///
     /// Removes before inserting so the name keeps the spelling that came with
@@ -1257,26 +1269,51 @@ fn build_redirect(to: &str, written: &str, code: u16) -> Result<RouteRedirect, B
 
     let target = parse_redirect_target(to, written)?;
 
-    // `//host` is a URL naming another host while beginning with the `/` that
-    // says "within the hostname the request arrived on", so it is refused
-    // rather than quietly meaning the opposite of what it reads as.
-    if to.starts_with("//") {
-        return Err(format!(
-            "redirect `to` starts with `//`, which names another host rather than a path \
-             within this one; write the scheme out as `https://…`, got `{written}`"
-        )
-        .into());
-    }
-
-    match target.first() {
+    let leading = match target.first() {
         Some(RedirectSegment::Literal(text))
             if text.starts_with('/')
                 || text.starts_with("http://")
-                || text.starts_with("https://") => {}
+                || text.starts_with("https://") =>
+        {
+            text
+        }
         _ => {
             return Err(format!(
                 "redirect `to` must be a path starting with `/` or an absolute URL starting \
                  with `http://` or `https://`, got `{written}`"
+            )
+            .into());
+        }
+    };
+
+    // A path whose second character is a slash is a protocol-relative URL
+    // naming a host the app did not write, while reading as the `/` that says
+    // "within the hostname the request arrived on". A backslash is the same
+    // thing: browsers normalise one to a slash in that position.
+    if leading.starts_with('/') && matches!(leading.as_bytes().get(1), Some(b'/' | b'\\')) {
+        return Err(format!(
+            "redirect `to` names another host rather than a path within this one: a second \
+             `/` or a `\\` after the first `/` is read as the start of a hostname. Write the \
+             scheme out as `https://…`, got `{written}`"
+        )
+        .into());
+    }
+
+    // The tail brings its own leading `/`, so a literal running into it must
+    // not end with one. Left alone, a target of `/` followed by the tail
+    // composes into `//` plus whatever the request carried — the same
+    // protocol-relative URL as above, assembled at request time where no
+    // declaration check can see it.
+    for (i, segment) in target.iter().enumerate() {
+        let RedirectSegment::Literal(text) = segment else {
+            continue;
+        };
+        if matches!(target.get(i + 1), Some(RedirectSegment::Tail)) && text.ends_with('/') {
+            return Err(format!(
+                "redirect `to` ends a literal with `/` immediately before `{TAIL_TOKEN}`, which \
+                 carries its own leading `/`: the two would compose into a doubled slash, and \
+                 at the start of a path that reads as the beginning of a hostname. Drop the \
+                 trailing `/`, got `{written}`"
             )
             .into());
         }
