@@ -39,11 +39,21 @@ Working notes from the spec interview. The acceptance criteria live in the trace
   operator setting that takes effect without a runtime restart).
 - **Interface + ctl.** `/apps/priority` OI endpoint (`i[app.priority.set]`), surfaced in
   `/apps/show` and `/apps/list` (`i[app.priority.describe]`). Add the matching `ctl` subcommand —
-  per AGENTS.md, anything in the OI needs a CLI command. Web UI surface is out of this card's specs
-  (no `web` spec change) unless we decide otherwise.
+  per AGENTS.md, anything in the OI needs a CLI command.
+- **Web UI.** In scope (`w[routes.apps.priority]`, `w[routes.apps.priority-indicator]`).
+  App priority is a control on `frontend/src/routes/AppDetail.tsx` plus a chip in the apps table
+  (`frontend/src/routes/Apps.tsx` — follow the `w[impl routes.apps.fault-count]` chip already there,
+  around Apps.tsx:181). Deployment priority is a read-only indicator per Deployment resource on the
+  app detail page, next to the healthcheck indicator in the resources table. Both colour scales come
+  from the existing status palette. Live update on change without a reload, consistent with the
+  held-volumes badge.
 
 ## Open / to confirm
 
 - Whether `Priority` is an enum constant (`Priority.Critical`) as specced, or a plain string —
   specced as an enum to match `OnExit`/`OnUpdate`.
 - Whether app priority also wants a Canopy-remote path later (this card is local OI + ctl only).
+- Whether the UI should also visualise the *combined* app-major shed order across all apps
+  ("what goes first if this host runs out of memory"). Deliberately not specced: useful, but a
+  bigger surface than exposing the two levers, and it belongs to a fleet/host view rather than the
+  app detail page.

@@ -107,7 +107,7 @@ Absent specification bugs, anything not defined here is either defined in anothe
 
 > w[routes.apps]
 > The web interface exposes the full app management surface of the OI:
-> listing registered apps and their statuses; showing detailed app status including resources, faults, params, install requirements, and actions; registering new apps with a BSL script; updating an app's BSL script; deregistering apps; setting and unsetting parameters; scaling deployments; viewing generation history; planning proposed changes; invoking lifecycle actions; and invoking the install action with its requirements.
+> listing registered apps and their statuses; showing detailed app status including resources, faults, params, install requirements, and actions; registering new apps with a BSL script; updating an app's BSL script; deregistering apps; setting and unsetting parameters; scaling deployments; setting an app's priority; viewing generation history; planning proposed changes; invoking lifecycle actions; and invoking the install action with its requirements.
 
 > w[routes.apps.fault-count]
 > The apps table on the home route must surface, per app, how many active faults are currently filed against it.
@@ -124,6 +124,18 @@ Absent specification bugs, anything not defined here is either defined in anothe
 >
 > The indicator's colour must align with the existing status palette: a healthy state uses the success colour, a failing state uses the error colour, and the start-period state uses the warning or neutral colour.
 > Hovering or focusing the indicator must reveal the declared `kind`, `on_failure`, and (for `kind: "command"`) a truncated form of the `cmd`.
+
+> w[routes.apps.priority]
+> The app detail page must show the app's [app priority](interface.md#i--app.priority.set) and let the operator set it to any of the levels the OI accepts.
+> The apps table on the home route must surface an app whose priority is not `normal` with a chip in its status column, alongside the existing status and fault chips. An app at `normal` shows no chip, so the table draws the eye only where an operator has deliberately changed an app's standing.
+> The chip must distinguish a raised priority from a lowered one by colour, following the status palette used elsewhere in the UI.
+> A priority change takes effect on the running app without a redeploy, so the new value must be reflected in both the detail page and the apps table without requiring a page reload.
+
+> w[routes.apps.priority-indicator]
+> The app detail page must show, for each Deployment resource declaring a [priority](language.md#l--deployment.priority) other than `normal`, an indicator of the declared level alongside the resource's lifecycle state.
+> The indicator must read as declared configuration rather than as a control: a Deployment's priority comes from the app's BSL definition, so changing it means changing that definition and installing it.
+> The indicator's colour must follow the same scale as the app priority chip, so a raised level reads the same way in both places.
+> The indicator must convey standing within the app rather than across apps: [kill order](runtime.md#r--priority.kill-order) is app-major, so a `Critical` Deployment in a `low`-priority app is shed before any workload of a `high`-priority one.
 
 > w[routes.logs]
 > The web interface exposes log streaming for app workload containers and infrastructure components.
