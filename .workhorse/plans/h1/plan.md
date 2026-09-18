@@ -57,5 +57,5 @@ Working notes from the spec interview. The acceptance criteria live in the trace
   ("what goes first if this host runs out of memory"). Deliberately not specced: useful, but a
   bigger surface than exposing the two levers, and it belongs to a fleet/host view rather than the
   app detail page.
-  - Answer: 
+  - Answer: let's make a low-prio card for this.
   
