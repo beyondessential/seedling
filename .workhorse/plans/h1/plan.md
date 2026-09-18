@@ -54,7 +54,7 @@ Working notes from the spec interview. The acceptance criteria live in the trace
   specced as an enum to match `OnExit`/`OnUpdate`.
   - Probably an enum
 - Whether app priority also wants a Canopy-remote path later (this card is local OI + ctl only).
-  -  not in scope
+  -  Answer: not in scope
 - Whether the UI should also visualise the *combined* app-major shed order across all apps
   ("what goes first if this host runs out of memory"). Deliberately not specced: useful, but a
   bigger surface than exposing the two levers, and it belongs to a fleet/host view rather than the
