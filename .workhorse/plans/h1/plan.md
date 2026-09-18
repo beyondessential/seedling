@@ -52,7 +52,7 @@ Working notes from the spec interview. The acceptance criteria live in the trace
 
 - Whether `Priority` is an enum constant (`Priority.Critical`) as specced, or a plain string —
   specced as an enum to match `OnExit`/`OnUpdate`.
-  - Probably an enum
+  - Answer: Probably an enum
 - Whether app priority also wants a Canopy-remote path later (this card is local OI + ctl only).
   -  Answer: not in scope
 - Whether the UI should also visualise the *combined* app-major shed order across all apps
