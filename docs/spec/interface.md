@@ -375,7 +375,7 @@ Absent specification bugs, anything that is not defined here is either defined i
 
 > i[resource.stop]
 > `/apps/resource/stop { app, kind, name }` turns off a named resource within an installed app without changing its declared configuration.
-> `kind` must be one of `deployment`, `job`, or `ingress`; other kinds (`service`, `volume`, `externalvolume`) return `invalid_request`.
+> `kind` must be one of `deployment`, `job`, or `ingress`; any other kind returns `requirements_invalid`.
 > The app must be registered and the named resource must exist in the current AppDef; otherwise `not_found` is returned.
 > Stopping a deployment scales its running instances to zero without modifying the declared scale bounds; unstopping later restores the declared effective scale.
 > Stopping a job or ingress marks it as unscheduled without removing its definition.

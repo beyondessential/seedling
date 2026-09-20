@@ -424,6 +424,16 @@ fn stop_resource_rejects_unstoppable_kind_and_unknown_resource() {
     assert_eq!(code, "requirements_invalid");
     assert!(message.contains("cannot be stopped"), "message: {message}");
 
+    // A kind that names nothing at all is rejected the same way: the endpoint
+    // takes deployment, job and ingress, and refuses everything else.
+    let (code, _) = oi
+        .call(
+            "/apps/resource/stop",
+            json!({ "app": "demo", "kind": "wombat", "name": "web" }),
+        )
+        .unwrap_err();
+    assert_eq!(code, "requirements_invalid");
+
     let (code, _) = oi
         .call(
             "/apps/resource/stop",
