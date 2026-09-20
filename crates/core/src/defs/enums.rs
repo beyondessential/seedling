@@ -57,6 +57,66 @@ impl OnExit {
     }
 }
 
+/// A Deployment's claim on host resources relative to other workloads when the
+/// host is under memory, CPU, or I/O pressure. Declared in BSL; the runtime
+/// owns how each level is realised (see `r[priority.actuation]`).
+///
+/// Totally ordered: `Critical > Elevated > Normal > Low`.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub enum Priority {
+    // l[impl const.priority.enum]
+    Critical,
+    Elevated,
+    #[default]
+    Normal,
+    Low,
+}
+
+impl Priority {
+    /// Register the `Priority` constant object map in the script scope.
+    pub fn rhai_constant() -> Map {
+        let mut map = Map::new();
+        map.insert("Critical".into(), Dynamic::from(Self::Critical));
+        map.insert("Elevated".into(), Dynamic::from(Self::Elevated));
+        map.insert("Normal".into(), Dynamic::from(Self::Normal));
+        map.insert("Low".into(), Dynamic::from(Self::Low));
+        map
+    }
+
+    /// Rank on the total order, higher meaning a stronger claim. Used to order
+    /// levels; the concrete number is not otherwise meaningful.
+    pub fn rank(self) -> u8 {
+        match self {
+            Self::Low => 0,
+            Self::Normal => 1,
+            Self::Elevated => 2,
+            Self::Critical => 3,
+        }
+    }
+
+    /// Lower-case wire form used in `/apps/*` responses and event payloads.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Critical => "critical",
+            Self::Elevated => "elevated",
+            Self::Normal => "normal",
+            Self::Low => "low",
+        }
+    }
+}
+
+impl PartialOrd for Priority {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for Priority {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.rank().cmp(&other.rank())
+    }
+}
+
 /// What an Ingress terminates at the edge. Pairs with [`Output`] to
 /// describe what the ingress actually does with traffic; not every
 /// `(Terminate, Output)` combination is valid (see

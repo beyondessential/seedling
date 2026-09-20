@@ -35,6 +35,7 @@ fn deployment_summary_with_image(image: Option<&str>, scale: (u16, u16)) -> Depl
         },
         on_update: "rolling",
         on_terminate: "recreate",
+        priority: "normal",
         description: None,
     }
 }

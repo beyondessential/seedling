@@ -25,6 +25,7 @@ pub mod lifecycle;
 pub mod nat64_prefix;
 pub mod probe;
 pub mod registries;
+pub mod priority;
 pub mod registry;
 pub mod restart_gens;
 pub mod restarts;

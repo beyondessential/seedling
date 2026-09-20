@@ -96,6 +96,12 @@ pub(super) enum AppsCommand {
         #[command(subcommand)]
         direction: ScaleDirection,
     },
+    /// Set an app's priority (high, normal, or low)
+    Priority {
+        app: AppName,
+        /// Priority level: high, normal, or low
+        priority: String,
+    },
     /// Restart a deployment (follows its update strategy without changing config)
     Restart { app: AppName, deployment: String },
     /// Stop a resource (scale deployments to zero, unschedule jobs/ingresses)
@@ -493,6 +499,16 @@ pub(super) async fn dispatch(client: &OiClient, cmd: AppsCommand) {
                     .request(
                         "/apps/scale",
                         serde_json::json!({ "app": app, "deployment": deployment, "scale": scale }),
+                    )
+                    .await,
+            );
+        }
+        AppsCommand::Priority { app, priority } => {
+            print_result(
+                client
+                    .request(
+                        "/apps/priority",
+                        serde_json::json!({ "app": app, "priority": priority }),
                     )
                     .await,
             );

@@ -64,6 +64,8 @@ pub(crate) fn resource_static_json(
             "low": dep_def.scale.start,
             "high": dep_def.scale.end,
         });
+        // i[impl app.priority.describe]
+        obj["priority"] = json!(dep_def.priority.as_str());
     }
     if let Resource::Volume(vol) = resource {
         let vol_def = vol.def.lock();
