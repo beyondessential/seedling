@@ -73,14 +73,21 @@ import {
   parseFaultTargets,
 } from "../lib/faultTargets";
 import { isStrongPassword, passwordScore } from "../lib/passwordStrength";
-import { statusColor, statusLabel } from "../lib/status";
+import {
+  appPriorityColor,
+  deploymentPriorityColor,
+  statusColor,
+  statusLabel,
+} from "../lib/status";
 import type {
   ActionSchedule,
   AppAction,
   AppDetail,
   AppParam,
+  AppPriority,
   AppResource,
   AppStatus,
+  DeploymentPriority,
   DiscoverResponse,
   ExternalMapping,
   FaultRecord,
@@ -127,6 +134,56 @@ function RestartIndicator({
         to={`/restarts?instance=${instanceId}`}
         clickable
       />
+    </Tooltip>
+  );
+}
+
+// w[impl routes.apps.priority]
+/** The app's standing against the other apps on the host. A control rather
+ *  than an indicator: the operator sets it, and it takes effect on the running
+ *  app without a redeploy. */
+function AppPriorityControl({
+  appName,
+  priority,
+  onChanged,
+}: {
+  appName: string;
+  priority: AppPriority;
+  onChanged: () => void;
+}) {
+  const { execute, loading } = useOiAction();
+  const change = async (next: AppPriority) => {
+    if (next === priority) return;
+    const result = await execute("/apps/priority", {
+      app: appName,
+      priority: next,
+    });
+    if (result === null) return;
+    onChanged();
+  };
+  return (
+    <Tooltip title="Standing against other apps when the host runs short of memory, CPU or I/O">
+      <FormControl size="small" variant="standard" disabled={loading}>
+        <Select
+          value={priority}
+          onChange={(e) => change(e.target.value as AppPriority)}
+          renderValue={(v) => (
+            <Chip
+              label={`${v} priority`}
+              size="small"
+              color={appPriorityColor(v as AppPriority)}
+              variant="outlined"
+            />
+          )}
+          disableUnderline
+        >
+          {(["high", "normal", "low"] as const).map((level) => (
+            <MenuItem key={level} value={level}>
+              {level}
+            </MenuItem>
+          ))}
+        </Select>
+      </FormControl>
     </Tooltip>
   );
 }
@@ -206,6 +263,39 @@ function HealthcheckIndicator({
       <Chip
         label={label}
         color={healthcheckChipColor(state)}
+        size="small"
+        variant="outlined"
+        sx={{
+          fontSize: "0.65rem",
+          height: 18,
+          "& .MuiChip-label": { px: 0.75 },
+        }}
+      />
+    </Tooltip>
+  );
+}
+
+// w[impl routes.apps.priority-indicator]
+/** The level a Deployment declares in the app's definition. Read-only: this
+ *  comes from the BSL script, so changing it means changing the definition and
+ *  installing it. Standing is within the app — kill order is app-major, so a
+ *  critical Deployment in a low-priority app still goes before any workload of
+ *  a high-priority one. */
+function DeploymentPriorityIndicator({
+  priority,
+}: {
+  priority: DeploymentPriority;
+}) {
+  const tooltip = [
+    `declared priority: ${priority}`,
+    "set in the app's definition, not here",
+    "ranked within this app; apps are compared first",
+  ].join("\n");
+  return (
+    <Tooltip title={<span style={{ whiteSpace: "pre-line" }}>{tooltip}</span>}>
+      <Chip
+        label={priority}
+        color={deploymentPriorityColor(priority)}
         size="small"
         variant="outlined"
         sx={{
@@ -839,6 +929,15 @@ function ResourcesSection({
                             alignItems: "center",
                           }}
                         >
+                          {/* w[impl routes.apps.priority-indicator] */}
+                          {/* Only a level other than normal is worth showing:
+                              the default says nothing an operator needs. */}
+                          {r.priority !== undefined &&
+                            r.priority !== "normal" && (
+                              <DeploymentPriorityIndicator
+                                priority={r.priority}
+                              />
+                            )}
                           {containerHealthcheck(r.def) && (
                             <HealthcheckIndicator
                               hc={containerHealthcheck(r.def)!}
@@ -2638,6 +2737,7 @@ const APP_DETAIL_EVENTS: Set<string> = new Set([
   "FaultFiled",
   "FaultCleared",
   "ScaleChanged",
+  "AppPriorityChanged",
   "DeploymentRestarted",
   "ResourceStopped",
   "ResourceUnstopped",
@@ -2761,6 +2861,12 @@ export default function AppDetail() {
                 )}
                 color={statusColor(data.status)}
                 size="small"
+              />
+              {/* w[impl routes.apps.priority] */}
+              <AppPriorityControl
+                appName={name!}
+                priority={data.priority ?? "normal"}
+                onChanged={refetch}
               />
               <Typography
                 variant="caption"

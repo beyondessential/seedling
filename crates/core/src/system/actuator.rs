@@ -14,13 +14,14 @@ use snafu::{IntoError, ResultExt, Snafu};
 use crate::{
     defs::{
         container::VolumeMount,
-        enums::OnExit,
+        enums::{OnExit, Priority},
         resource::{Resource, ResourceKind},
     },
     runtime::{
         db::DbHandle,
         external_volume_mappings,
         identity::{ResourceInstance, VolumeName},
+        priority::WorkloadStanding,
         registry::InstanceRegistry,
         restart_gens, site_volumes,
     },
@@ -220,11 +221,24 @@ impl Actuator {
                         restart_gens::load_restart_gen(db, &app_name, &dep_name).unwrap_or(0)
                     })
                 };
-                let (kill_signal, timeout_stop_secs) = {
+                let (kill_signal, timeout_stop_secs, declared_priority) = {
                     let def = dep.def.lock();
+                    let priority = def.priority;
                     let pod = def.pod.lock();
                     let c = pod.container.lock();
-                    (c.stop_signal.clone(), c.stop_timeout_secs)
+                    (c.stop_signal.clone(), c.stop_timeout_secs, priority)
+                };
+                // r[impl priority.kill-order]
+                // Read fresh rather than cached: the operator can change the
+                // app priority at any point, and a workload starting now must
+                // take the standing in force now.
+                let standing = {
+                    let app_name = instance.app.clone();
+                    let app_priority = self.db.call(move |db| {
+                        crate::runtime::priority::effective_app_priority(db, &app_name)
+                            .unwrap_or_default()
+                    });
+                    WorkloadStanding::new(app_priority, declared_priority)
                 };
                 self.start_pod_instance(
                     instance,
@@ -234,6 +248,7 @@ impl Actuator {
                     &vols,
                     kill_signal,
                     timeout_stop_secs,
+                    standing,
                     |net_name, net_prefix, mounts| {
                         let guard = dep.def.lock();
                         let spec = deployment_spec(
@@ -299,6 +314,17 @@ impl Actuator {
                     let c = pod.container.lock();
                     (c.stop_signal.clone(), c.stop_timeout_secs)
                 };
+                // l[impl deployment.priority]
+                // Priority is declared on Deployments only; every other
+                // workload stands at Normal within its app.
+                let standing = {
+                    let app_name = instance.app.clone();
+                    let app_priority = self.db.call(move |db| {
+                        crate::runtime::priority::effective_app_priority(db, &app_name)
+                            .unwrap_or_default()
+                    });
+                    WorkloadStanding::new(app_priority, Priority::Normal)
+                };
                 self.start_pod_instance(
                     instance,
                     &image,
@@ -307,6 +333,7 @@ impl Actuator {
                     &vols,
                     kill_signal,
                     timeout_stop_secs,
+                    standing,
                     |net_name, net_prefix, mounts| {
                         let guard = job.def.lock();
                         let spec = job_spec(

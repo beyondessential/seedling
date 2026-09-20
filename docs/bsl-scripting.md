@@ -126,6 +126,7 @@ app.deployment("worker")
     .scale(2)                         // fixed replicas (Deployment only)
     .scale(1..8)                      // scalable range (Deployment only)
     .on_update(OnUpdate.Rolling)      // default; or OnUpdate.Replace
+    .priority(Priority.Critical)      // claim on host resources (Deployment only)
     .on_exit(OnExit.Restart)          // default for Deployment; Terminate for Job
     .healthcheck(#{                   // see "Healthchecks" below — Deployment only
         kind: "command",
@@ -231,6 +232,10 @@ col.select(#{ name_patterns: ["worker-*"] })
 - `OnExit.Restart`: Always restart on exit
 - `OnExit.Terminate`: Stop container on exit
 - `OnExit.RestartOnFailure`: Restart on non-zero exit, terminate otherwise
+- `Priority.Critical`: Among the last workloads shed under memory pressure, and given the largest share of contended CPU and I/O
+- `Priority.Elevated`: Favoured over ordinary workloads but yields to `Critical`
+- `Priority.Normal`: The default; no preferential treatment
+- `Priority.Low`: First shed under memory pressure, and yields contended CPU and I/O to every higher level
 - `Terminate.Tls`: Edge terminates TLS over TCP
 - `Terminate.Dtls`: Edge terminates DTLS over UDP
 - `Terminate.Https`: Edge terminates HTTPS (HTTP/1.1, HTTP/2, HTTP/3)
@@ -398,6 +403,40 @@ app.deployment("postgres")
 `stop_signal` accepts canonical (`"SIGTERM"`) or bare (`"TERM"`) forms; unknown signal names are a script-evaluation error. `stop_timeout` is in whole seconds and must be positive. The defaults match systemd's `TimeoutStopSec`.
 
 A common pairing: PostgreSQL with `SIGINT` (fast shutdown) — the default `SIGTERM` triggers smart shutdown which waits for clients to disconnect and frequently exceeds the stop deadline.
+
+## Resource priority
+
+`deployment.priority(level)` declares how important a Deployment's workload is
+when the host runs short of memory, CPU or I/O. It is an expression of intent:
+the runtime decides how each level is realised, and the same definition carries
+across platforms whose mechanisms differ.
+
+```rhai
+app.deployment("api")
+    .image("ghcr.io/example/api:v1")
+    .priority(Priority.Critical);   // last to be shed; largest share of contention
+
+app.deployment("reports")
+    .image("ghcr.io/example/reports:v1")
+    .priority(Priority.Low);        // first to give way
+```
+
+Priority is declared on Deployments only. Calling it on a Job is an evaluation
+error, and every workload that is not a Deployment runs at `Priority.Normal`.
+
+There is a second lever the definition does not control: each installed app
+carries an **app priority** (`high`, `normal`, `low`) that an operator sets with
+`ctl apps priority <app> <level>` or from the web interface. The relative
+standing of apps sharing a host is an operational decision, not one any single
+definition can make for itself.
+
+The two compose **app-major**: the app comparison decides first, and the
+declared level only orders workloads belonging to equally-ranked apps. A
+`Priority.Critical` Deployment in a `low`-priority app is therefore shed before a
+`Priority.Normal` Deployment in a `high`-priority app. Both levers are relative —
+they decide how contention is resolved, not how much a workload may use when
+capacity is free. For hard per-container ceilings use `container.memory` and
+`container.cpus`.
 
 ## Sending signals: `rt.signal`
 

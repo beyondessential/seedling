@@ -1258,6 +1258,12 @@ pub(crate) fn register_app(
 
     validate_name(name)?;
 
+    // r[impl priority.groups-owned]
+    // Creation only: a name the daemon claims is refused here, never on update
+    // or delete, so an app registered before the reservation stays manageable.
+    crate::reserved::check_app_name(&params.app)
+        .map_err(|e| OiError::new(ErrorCode::RequirementsInvalid, e.to_string()))?;
+
     {
         let reg = state.registry.read();
         if reg.is_registered(name) {
@@ -1937,9 +1943,10 @@ pub(crate) fn set_priority(
 
     // Reject an unknown level before touching the registry or the store, so a
     // typo changes nothing. Mirrors stop_resource's handling of a bad kind.
-    let priority: AppPriority = params.priority.parse().map_err(|e| {
-        OiError::new(ErrorCode::RequirementsInvalid, format!("{e}"))
-    })?;
+    let priority: AppPriority = params
+        .priority
+        .parse()
+        .map_err(|e| OiError::new(ErrorCode::RequirementsInvalid, format!("{e}")))?;
 
     let reg = state.registry.read();
     let entry = reg

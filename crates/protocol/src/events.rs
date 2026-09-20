@@ -1385,8 +1385,12 @@ impl EventSenderWithActor {
 
     // i[impl app.priority.set]
     pub fn app_priority_changed(&self, app: &AppName, priority: &str, previous_priority: &str) {
-        self.inner
-            .app_priority_changed(app, priority, previous_priority, Some(Arc::clone(&self.actor)));
+        self.inner.app_priority_changed(
+            app,
+            priority,
+            previous_priority,
+            Some(Arc::clone(&self.actor)),
+        );
     }
 
     pub fn scale(

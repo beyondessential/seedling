@@ -8,12 +8,19 @@ export type AppStatus =
   | "degraded"
   | "faulted";
 
+/// Operator-set standing of an app against the other apps on the host.
+export type AppPriority = "high" | "normal" | "low";
+
+/// Level a Deployment declares in its app's definition.
+export type DeploymentPriority = "critical" | "elevated" | "normal" | "low";
+
 export interface AppSummary {
   name: string;
   status: AppStatus;
   action_name?: string;
   has_stopped_resources?: boolean;
   fault_count?: number;
+  priority?: AppPriority;
   description?: string | null;
 }
 
@@ -184,6 +191,8 @@ export interface AppResource {
   instances: ResourceInstance[];
   faults: FaultRecord[];
   scale?: ScaleBounds;
+  /** Level the Deployment declares in the app's definition. Deployments only. */
+  priority?: DeploymentPriority;
   def?: ResourceDef;
   stopped?: boolean;
   /** True for entries returned via `dynamic_resources` (jobs / volumes etc.
@@ -251,6 +260,8 @@ export interface InstallRequirement {
 export interface AppDetail {
   status: AppStatus;
   generation: number;
+  /** Operator-set standing of this app against the others on the host. */
+  priority?: AppPriority;
   /** Free-form description set via `app.description(...)` in the BSL script. */
   description?: string | null;
   faults: FaultRecord[];
@@ -322,6 +333,9 @@ export interface SeedlingEvent {
   previous_scale?: number;
   bounds_low?: number;
   bounds_high?: number;
+  // AppPriorityChanged
+  priority?: AppPriority;
+  previous_priority?: AppPriority;
   // ShellStarted / ShellExited
   session_id?: string;
   exit_code?: number;

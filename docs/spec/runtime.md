@@ -1216,7 +1216,9 @@ Two levers set how a workload competes for host resources under pressure. Each D
 > App priority expresses relative standing only: it orders apps against each other under contention and places no hard ceiling on what an app may consume.
 
 > r[priority.settings]
-> The app priority is operator-visible and operator-settable, and a change takes effect without restarting the runtime and without redeploying the app: the runtime re-derives the resource ordering of the app's running workloads in place.
+> The app priority is operator-visible and operator-settable, and a change takes effect without restarting the runtime and without redeploying the app: the runtime re-derives the resource ordering of the app's running workloads and applies what it can to them in place.
+> The division of contended CPU and I/O changes for the running workloads as soon as the ordering is re-derived, because it is a property of the group they sit in rather than of the processes themselves.
+> A workload's place in the kill order is fixed when its processes start, so a change reaches every workload started after it, and reaches those already running as they are next restarted.
 > The setting is stored durably and survives process restarts. When an app is uninstalled its stored app priority is discarded, so a later reinstall starts again at `normal`.
 
 > r[priority.kill-order]

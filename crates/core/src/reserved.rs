@@ -21,7 +21,7 @@
 //! `tailscale.rs` knew nothing about each other or about the creation
 //! handlers — which is exactly how the gap opened.
 
-use seedling_protocol::names::{SiteIngressName, SiteVolumeName};
+use seedling_protocol::names::{AppName, SiteIngressName, SiteVolumeName};
 
 /// Site-volume name prefixes the daemon claims.
 ///
@@ -33,6 +33,14 @@ pub const RESERVED_SITE_VOLUME_PREFIXES: &[&str] =
 /// Site-ingress names the daemon claims.
 pub const RESERVED_SITE_INGRESS_NAMES: &[&str] =
     &[crate::runtime::tailscale::TAILSCALE_INGRESS_NAME];
+
+/// App names the daemon claims.
+///
+/// An app's workloads are placed in a slice named after the app, so an app name
+/// that realises the slice component the daemon keeps for its own
+/// infrastructure would have its containers share — and reweight — the slice
+/// holding the proxy and the resolver.
+pub const RESERVED_APP_NAMES: &[&str] = &[crate::runtime::priority::INFRA_COMPONENT];
 
 /// A name that belongs to the daemon.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -81,6 +89,24 @@ pub fn check_site_ingress_name(name: &SiteIngressName) -> Result<(), ReservedNam
     Ok(())
 }
 
+/// Reject an app name the daemon claims.
+///
+/// Creation only, for the same reason as above: an operator whose app predates
+/// the reservation must still be able to manage it out of existence.
+// r[impl priority.groups-owned]
+// r[impl namespace.reserved]
+pub fn check_app_name(name: &AppName) -> Result<(), ReservedName> {
+    if RESERVED_APP_NAMES.contains(&name.as_str()) {
+        return Err(ReservedName {
+            name: name.as_str().to_owned(),
+            reason: "this app name would collide with the resource-control group the daemon \
+                     keeps for its own infrastructure"
+                .to_owned(),
+        });
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -96,6 +122,15 @@ mod tests {
         // the front of the namespace is the daemon's.
         let contains = SiteVolumeName::new("my-backup-snap-thing").unwrap();
         assert!(check_site_volume_name(&contains).is_ok());
+    }
+
+    // r[verify priority.groups-owned]
+    #[test]
+    fn the_infra_slice_app_name_is_reserved() {
+        let reserved = AppName::new(crate::runtime::priority::INFRA_COMPONENT).unwrap();
+        assert!(check_app_name(&reserved).is_err());
+        let ordinary = AppName::new("infra-tools").unwrap();
+        assert!(check_app_name(&ordinary).is_ok());
     }
 
     // r[verify namespace.reserved]

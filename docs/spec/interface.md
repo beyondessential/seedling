@@ -349,7 +349,7 @@ Absent specification bugs, anything that is not defined here is either defined i
 
 > i[app.priority.set]
 > `/apps/priority { app, priority }` sets the [app priority](runtime.md#r--priority.app) of an installed app.
-> `priority` is one of `high`, `normal`, or `low`; any other value returns `invalid_request`.
+> `priority` is one of `high`, `normal`, or `low`; any other value returns `requirements_invalid` and leaves the stored priority untouched.
 > The app must be registered; otherwise `not_found` is returned.
 > The change takes effect on the app's running workloads without a restart or redeploy, and is stored durably, per [priority.settings](runtime.md#r--priority.settings).
 > On success, the response contains `priority` (the new value).

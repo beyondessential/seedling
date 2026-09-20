@@ -1,5 +1,5 @@
 use std::{
-    collections::{BTreeMap, HashMap, HashSet},
+    collections::{BTreeMap, BTreeSet, HashMap, HashSet},
     net::{Ipv4Addr, Ipv6Addr},
     path::PathBuf,
     sync::Arc,
@@ -14,7 +14,7 @@ use tokio::sync::RwLock as AsyncRwLock;
 use tracing::{error, warn};
 
 use crate::{
-    defs::{app::AppDef, resource::Resource},
+    defs::{app::AppDef, enums::Priority, resource::Resource},
     oi::shells::ShellRegistry,
     runtime::{
         AppPhase, InstanceRegistry,
@@ -23,6 +23,7 @@ use crate::{
         desired::{DesiredState, EffectiveScales, compute, compute_uninstalling},
         identity::InstanceId,
         lifecycle::LifecycleState,
+        priority::{self, AppPriority},
         scaling,
         site_services::{resolve::ResolveCtx, resolver::SiteServiceResolver},
         stopped,
@@ -33,7 +34,7 @@ use crate::{
         caddy,
         observer::Observer,
         resolver,
-        types::{DataPlaneRules, UnitSummary},
+        types::{DataPlaneRules, SliceSpec, UnitSummary},
     },
 };
 
@@ -340,6 +341,10 @@ struct AppSnapshot {
     /// per-deployment state such as the replace-loop guard.
     // r[impl autonomous.healthcheck-replace.guard]
     current_generation: u64,
+    /// The operator-set app priority, read fresh this tick so a change takes
+    /// effect without a redeploy.
+    // r[impl priority.settings]
+    app_priority: AppPriority,
 }
 
 /// Single global reconciler that processes all installed apps each tick.
@@ -397,6 +402,11 @@ pub struct Reconciler {
     /// subsequent tick triggers a reset of `replace_failed` for that app.
     // r[impl autonomous.healthcheck-replace.guard]
     last_seen_generation: HashMap<AppName, u64>,
+    /// Weights last successfully applied to each slice, so a tick that changes
+    /// nothing does no supervisor work. An entry is dropped when its apply
+    /// fails, so the next tick retries rather than assuming it landed.
+    // r[impl priority.actuation]
+    applied_slices: BTreeMap<String, SliceSpec>,
     /// Whether seedling is providing its own NAT64 translator.
     nat64_active: bool,
     /// Whether the jool translator instance is currently installed on
@@ -525,6 +535,7 @@ impl Reconciler {
             crash_looped: HashSet::new(),
             event_tx,
             prev_states: BTreeMap::new(),
+            applied_slices: BTreeMap::new(),
             rolling_updates: HashSet::new(),
             unhealthy_replace_deployments: HashSet::new(),
             replace_failed: HashSet::new(),
@@ -645,6 +656,13 @@ impl Reconciler {
                 .map(|p| p.warm_cert_hostnames.clone())
                 .unwrap_or_default();
             let current_generation = entry.current_generation;
+            // r[impl priority.settings]
+            let app_priority = {
+                let name_for_priority = name.clone();
+                self.db.call(move |db| {
+                    priority::effective_app_priority(db, &name_for_priority).unwrap_or_default()
+                })
+            };
             snapshots.push(AppSnapshot {
                 name,
                 desired,
@@ -653,11 +671,130 @@ impl Reconciler {
                 phase_handle: Arc::clone(&entry.phase),
                 warm_cert_hostnames,
                 current_generation,
+                app_priority,
             });
         }
         (snapshots, skipped)
     }
+}
 
+/// The slices the running workloads need, with the weights each should carry.
+///
+/// Pure so the derivation can be checked without a supervisor: applying it is
+/// [`Reconciler::reconcile_slices`].
+// r[impl priority.actuation]
+// r[impl priority.scheduling]
+fn desired_slices(apps: &[AppSnapshot]) -> BTreeMap<String, SliceSpec> {
+    let mut desired: BTreeMap<String, SliceSpec> = BTreeMap::new();
+
+    // r[impl priority.kill-order]
+    desired.insert(
+        priority::INFRA_SLICE.to_owned(),
+        SliceSpec {
+            name: priority::INFRA_SLICE.to_owned(),
+            description: "seedling infrastructure".to_owned(),
+            cpu_weight: priority::INFRA_WEIGHT,
+            io_weight: priority::INFRA_WEIGHT,
+        },
+    );
+
+    for app in apps {
+        let app_slice = priority::app_slice(&app.name);
+        let weight = priority::app_weight(app.app_priority);
+        desired.insert(
+            app_slice.clone(),
+            SliceSpec {
+                name: app_slice,
+                description: format!("seedling app {}", app.name),
+                cpu_weight: weight,
+                io_weight: weight,
+            },
+        );
+
+        // Every app needs the Normal tier: Jobs and any other workload that is
+        // not a Deployment stand there.
+        let mut tiers: BTreeSet<Priority> = BTreeSet::new();
+        tiers.insert(Priority::Normal);
+        for resource in app.app_def.resources.values() {
+            if let Resource::Deployment(deployment) = resource {
+                tiers.insert(deployment.def.lock().priority);
+            }
+        }
+        for tier in tiers {
+            let name = priority::tier_slice(&app.name, tier);
+            let weight = priority::deployment_weight(tier);
+            desired.insert(
+                name.clone(),
+                SliceSpec {
+                    name,
+                    description: format!("seedling app {} at {}", app.name, tier.as_str()),
+                    cpu_weight: weight,
+                    io_weight: weight,
+                },
+            );
+        }
+    }
+
+    desired
+}
+
+impl Reconciler {
+    /// Bring the resource-control slices into step with the app priorities and
+    /// the declared Deployment levels.
+    ///
+    /// Runs before actuation so a workload started this tick joins a slice that
+    /// already carries the right weights, and reweights the slices of workloads
+    /// that are already running, which is what makes an app priority change
+    /// take effect without a redeploy.
+    // r[impl priority.actuation]
+    async fn reconcile_slices(&mut self, apps: &[AppSnapshot], dropped_apps: usize) {
+        let desired = desired_slices(apps);
+
+        for (name, spec) in &desired {
+            if self.applied_slices.get(name) == Some(spec) {
+                continue;
+            }
+            match self.driver.process.ensure_slice(spec.clone()).await {
+                Ok(()) => {
+                    self.applied_slices.insert(name.clone(), spec.clone());
+                }
+                Err(e) => {
+                    // Dropped rather than left stale, so the next tick retries
+                    // instead of taking an apply that never landed as done.
+                    self.applied_slices.remove(name);
+                    warn!(slice = %name, error = %e, "failed to apply slice weights");
+                }
+            }
+        }
+
+        // r[impl reconciliation.absolute-state]
+        // A slice missing from `desired` means its app is gone only when every
+        // app computed its desired state. An app dropped by a transient error
+        // is absent from `apps` while its workloads keep running, and removing
+        // its slice would take the weights off a live cgroup.
+        if dropped_apps > 0 {
+            return;
+        }
+        let stale: Vec<String> = self
+            .applied_slices
+            .keys()
+            .filter(|name| !desired.contains_key(*name))
+            .cloned()
+            .collect();
+        for name in stale {
+            match self.driver.process.remove_slice(&name).await {
+                Ok(()) => {
+                    self.applied_slices.remove(&name);
+                }
+                Err(e) => {
+                    warn!(slice = %name, error = %e, "failed to remove slice");
+                }
+            }
+        }
+    }
+}
+
+impl Reconciler {
     /// Build the effective-scale map for every Deployment in an app.
     // r[impl update.rolling.over-provision]
     fn compute_effective_scales(&self, app_name: &AppName, app_def: &AppDef) -> EffectiveScales {
@@ -769,6 +906,8 @@ impl Reconciler {
             return false;
         }
         let app_coverage = Coverage::of(dropped_apps);
+
+        self.reconcile_slices(&apps, dropped_apps).await;
 
         // r[impl infra.nat64.translator.lifecycle]
         // Wake-from-idle: ensure NAT64 translator is installed before any
@@ -1952,7 +2091,144 @@ mod tests {
             phase_handle: Arc::new(Mutex::new(AppPhase::Installed)),
             warm_cert_hostnames: Default::default(),
             current_generation: 1,
+            app_priority: AppPriority::default(),
         }
+    }
+
+    fn snapshot_with_priorities(
+        name: &str,
+        app_priority: AppPriority,
+        script: &str,
+    ) -> AppSnapshot {
+        let app_name = AppName::new(name).unwrap();
+        let (app, err) = crate::runtime::apps::evaluate_script(
+            &app_name,
+            script,
+            &std::collections::BTreeMap::new(),
+            &crate::ScriptLimits::default(),
+        );
+        assert!(err.is_none(), "test script must evaluate: {err:?}");
+        let app_def = (*app.def.load_full()).clone();
+        AppSnapshot {
+            name: app_name,
+            desired: DesiredState::default(),
+            app_def,
+            phase: AppPhase::Installed,
+            phase_handle: Arc::new(Mutex::new(AppPhase::Installed)),
+            warm_cert_hostnames: Default::default(),
+            current_generation: 1,
+            app_priority,
+        }
+    }
+
+    // r[verify priority.actuation]
+    #[test]
+    fn each_declared_level_gets_a_tier_slice_under_its_app() {
+        let apps = vec![snapshot_with_priorities(
+            "demo",
+            AppPriority::Normal,
+            r#"
+            app.deployment("api")
+                .image("docker.io/library/nginx:1")
+                .priority(Priority.Critical);
+            app.deployment("batch")
+                .image("docker.io/library/nginx:1")
+                .priority(Priority.Low);
+            "#,
+        )];
+        let slices = desired_slices(&apps);
+
+        assert!(slices.contains_key("seedling-demo.slice"));
+        assert!(slices.contains_key("seedling-demo-critical.slice"));
+        assert!(slices.contains_key("seedling-demo-low.slice"));
+        // Always present: Jobs and other non-Deployment workloads stand here.
+        assert!(slices.contains_key("seedling-demo-normal.slice"));
+        // Not declared by any Deployment, so not created.
+        assert!(!slices.contains_key("seedling-demo-elevated.slice"));
+    }
+
+    // r[verify priority.scheduling]
+    #[test]
+    fn the_app_slice_carries_the_app_weight_and_the_tier_slice_the_tier_weight() {
+        let apps = vec![snapshot_with_priorities(
+            "demo",
+            AppPriority::High,
+            r#"
+            app.deployment("api")
+                .image("docker.io/library/nginx:1")
+                .priority(Priority.Critical);
+            "#,
+        )];
+        let slices = desired_slices(&apps);
+
+        let app_slice = &slices["seedling-demo.slice"];
+        assert_eq!(
+            app_slice.cpu_weight,
+            priority::app_weight(AppPriority::High)
+        );
+        assert_eq!(app_slice.io_weight, priority::app_weight(AppPriority::High));
+
+        let tier = &slices["seedling-demo-critical.slice"];
+        assert_eq!(
+            tier.cpu_weight,
+            priority::deployment_weight(Priority::Critical)
+        );
+    }
+
+    // r[verify priority.settings]
+    // The same definition at a different app priority must produce a different
+    // app-slice weight: that difference is what a reweight applies.
+    #[test]
+    fn changing_the_app_priority_changes_the_app_slice_weight() {
+        let script = r#"app.deployment("api").image("docker.io/library/nginx:1");"#;
+        let high = desired_slices(&[snapshot_with_priorities("demo", AppPriority::High, script)]);
+        let low = desired_slices(&[snapshot_with_priorities("demo", AppPriority::Low, script)]);
+        assert_ne!(
+            high["seedling-demo.slice"].cpu_weight,
+            low["seedling-demo.slice"].cpu_weight
+        );
+        // The tier slices are unchanged: the app term lives on the app slice.
+        assert_eq!(
+            high["seedling-demo-normal.slice"].cpu_weight,
+            low["seedling-demo-normal.slice"].cpu_weight
+        );
+    }
+
+    // r[verify priority.kill-order]
+    #[test]
+    fn the_infra_slice_is_always_present_and_outweighs_every_app() {
+        let slices = desired_slices(&[]);
+        let infra = &slices[priority::INFRA_SLICE];
+        assert_eq!(infra.cpu_weight, priority::INFRA_WEIGHT);
+
+        let apps = vec![snapshot_with_priorities(
+            "demo",
+            AppPriority::High,
+            r#"app.deployment("api").image("docker.io/library/nginx:1");"#,
+        )];
+        let with_app = desired_slices(&apps);
+        assert!(
+            with_app[priority::INFRA_SLICE].cpu_weight > with_app["seedling-demo.slice"].cpu_weight
+        );
+    }
+
+    // r[verify priority.groups-owned]
+    // Two apps whose names differ only by a hyphen must not share a slice, nor
+    // nest one inside the other.
+    #[test]
+    fn hyphenated_app_names_get_their_own_slice_trees() {
+        let script = r#"app.deployment("api").image("docker.io/library/nginx:1");"#;
+        let apps = vec![
+            snapshot_with_priorities("app", AppPriority::Normal, script),
+            snapshot_with_priorities("app-two", AppPriority::High, script),
+        ];
+        let slices = desired_slices(&apps);
+        assert!(slices.contains_key("seedling-app.slice"));
+        assert!(slices.contains_key("seedling-app_two.slice"));
+        assert_ne!(
+            slices["seedling-app.slice"].cpu_weight,
+            slices["seedling-app_two.slice"].cpu_weight
+        );
     }
 
     // r[verify reconciliation.absolute-state]

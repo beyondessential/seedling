@@ -5,8 +5,8 @@ use sha2::{Digest, Sha256};
 
 use crate::system::types::{
     ContainerFilter, ContainerSpec, ContainerState, ContainerSummary, DataPlaneRules, ExecHandle,
-    ImageSummary, NetworkSummary, ProxyConfig, ServiceRoute, TransientUnitSpec, UnitState,
-    UnitSummary,
+    ImageSummary, NetworkSummary, ProxyConfig, ServiceRoute, SliceSpec, TransientUnitSpec,
+    UnitState, UnitSummary,
 };
 
 pub mod actuator;
@@ -62,7 +62,8 @@ pub use types::{
     ExecHandle as SystemExecHandle, ForwardProto, HealthCheckSpec, HttpRedirect, IngressRule,
     Mount, MountRule, MountSource, ObservationFact, ProxyConfig as SystemProxyConfig,
     ProxyListener, ProxyListenerProto, ProxyRoute, ResolvedExternalMount,
-    ServiceRoute as SystemServiceRoute, TransientRestart, VirtualHost,
+    ServiceRoute as SystemServiceRoute, SliceSpec as SystemSliceSpec, TransientRestart,
+    VirtualHost,
 };
 
 // ---------------------------------------------------------------------------
@@ -198,6 +199,14 @@ pub trait ProcessManager: Send + Sync + 'static {
         &'a self,
         prefix: &'a str,
     ) -> BoxFuture<'a, Result<Vec<UnitSummary>, BoxError>>;
+
+    // Resource-control slices — the grouping the runtime owns.
+    /// Create the slice if absent and apply its weights, live where the unit
+    /// already exists.
+    // r[impl priority.actuation]
+    fn ensure_slice<'a>(&'a self, spec: SliceSpec) -> BoxFuture<'a, Result<(), BoxError>>;
+    /// Stop and remove a slice. Idempotent.
+    fn remove_slice<'a>(&'a self, name: &'a str) -> BoxFuture<'a, Result<(), BoxError>>;
 
     // Persistent units — written to the unit drop-in path.
     fn write_unit<'a>(

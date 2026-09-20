@@ -9,8 +9,8 @@ use zbus::{
 use crate::system::{
     BoxError, BoxFuture, ProcessManager,
     types::{
-        ActiveState, TransientRestart, TransientUnitSpec, UnitExit, UnitExitKind, UnitState,
-        UnitSummary,
+        ActiveState, SliceSpec, TransientRestart, TransientUnitSpec, UnitExit, UnitExitKind,
+        UnitState, UnitSummary,
     },
 };
 
@@ -146,6 +146,16 @@ trait Systemd1Manager {
     ) -> zbus::Result<OwnedObjectPath>;
 
     fn stop_unit(&self, name: &str, mode: &str) -> zbus::Result<OwnedObjectPath>;
+
+    /// Change properties of an existing unit. `runtime` true applies the change
+    /// without writing a drop-in. Only properties the supervisor can act on
+    /// live are accepted; exec-time settings are rejected.
+    fn set_unit_properties(
+        &self,
+        name: &str,
+        runtime: bool,
+        properties: Vec<UnitProperty<'_>>,
+    ) -> zbus::Result<()>;
 
     fn reset_failed_unit(&self, name: &str) -> zbus::Result<()>;
 
@@ -323,6 +333,25 @@ impl SystemdManager {
                 value: Value::from(burst),
             });
         }
+        // r[impl priority.actuation]
+        // The unit joins the slice its app and declared level resolve to; the
+        // slice itself carries the CPU and I/O weights.
+        if let Some(slice) = &spec.slice {
+            validate_unit_name(slice)?;
+            props.push(UnitProperty {
+                name: "Slice",
+                value: Value::from(slice.as_str()),
+            });
+        }
+        // r[impl priority.kill-order]
+        // Set here rather than adjusted later because the supervisor applies it
+        // when it spawns the process and cannot change it afterwards.
+        if let Some(adj) = spec.oom_score_adjust {
+            props.push(UnitProperty {
+                name: "OOMScoreAdjust",
+                value: Value::from(adj),
+            });
+        }
         // r[impl actuate.container.journal-metadata]
         // r[impl actuate.infra.journal-metadata]
         if !spec.log_extra_fields.is_empty() {
@@ -370,6 +399,59 @@ impl SystemdManager {
             .await
             .context(DBusSnafu)?;
 
+        Ok(())
+    }
+
+    // r[impl priority.actuation]
+    /// Create the slice if it is absent, and apply its weights.
+    ///
+    /// The weights are pushed with `SetUnitProperties` as well as written into
+    /// the unit, because a slice that already exists is the common case: an app
+    /// priority change reweights live, and only a fresh slice needs starting.
+    #[tracing::instrument(skip_all, fields(slice = %spec.name))]
+    async fn ensure_slice_impl(&self, spec: SliceSpec) -> Result<(), SystemdError> {
+        validate_unit_name(&spec.name)?;
+
+        let content = format!(
+            "[Unit]\nDescription={}\nBefore=slices.target\n\n\
+             [Slice]\nCPUWeight={}\nIOWeight={}\n",
+            spec.description, spec.cpu_weight, spec.io_weight
+        );
+        self.write_unit_impl(&spec.name, &content).await?;
+        self.daemon_reload_impl().await?;
+        self.start_unit_impl(&spec.name).await?;
+
+        // r[impl priority.settings]
+        // Applied to the live cgroup so an app priority change takes effect on
+        // the running workloads without waiting for them to restart.
+        let proxy = Systemd1ManagerProxy::new(&self.conn)
+            .await
+            .context(DBusSnafu)?;
+        proxy
+            .set_unit_properties(
+                &spec.name,
+                true,
+                vec![
+                    UnitProperty {
+                        name: "CPUWeight",
+                        value: Value::from(spec.cpu_weight),
+                    },
+                    UnitProperty {
+                        name: "IOWeight",
+                        value: Value::from(spec.io_weight),
+                    },
+                ],
+            )
+            .await
+            .context(DBusSnafu)?;
+        Ok(())
+    }
+
+    async fn remove_slice_impl(&self, name: &str) -> Result<(), SystemdError> {
+        validate_unit_name(name)?;
+        self.stop_unit_impl(name).await?;
+        self.remove_unit_impl(name).await?;
+        self.daemon_reload_impl().await?;
         Ok(())
     }
 
@@ -696,6 +778,14 @@ impl ProcessManager for SystemdManager {
 
     fn stop_unit<'a>(&'a self, name: &'a str) -> BoxFuture<'a, Result<(), BoxError>> {
         Box::pin(async move { self.stop_unit_impl(name).await.map_err(Into::into) })
+    }
+
+    fn ensure_slice<'a>(&'a self, spec: SliceSpec) -> BoxFuture<'a, Result<(), BoxError>> {
+        Box::pin(async move { self.ensure_slice_impl(spec).await.map_err(Into::into) })
+    }
+
+    fn remove_slice<'a>(&'a self, name: &'a str) -> BoxFuture<'a, Result<(), BoxError>> {
+        Box::pin(async move { self.remove_slice_impl(name).await.map_err(Into::into) })
     }
 
     fn reset_failed_unit<'a>(&'a self, name: &'a str) -> BoxFuture<'a, Result<(), BoxError>> {
