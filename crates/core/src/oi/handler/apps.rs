@@ -1957,7 +1957,7 @@ pub(crate) fn set_priority(
     let previous = state.db.call(move |db| -> Result<_, OiError> {
         let current = priority::effective_app_priority(db, &name_owned)
             .map_err(|e| OiError::new(ErrorCode::ScriptError, format!("db error: {e}")))?;
-        // i[impl priority.settings]
+        // r[impl priority.settings]
         priority::save_app_priority(db, &name_owned, priority)
             .map_err(|e| OiError::new(ErrorCode::ScriptError, format!("db error: {e}")))?;
         Ok(current)

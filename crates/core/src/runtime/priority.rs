@@ -114,7 +114,7 @@ pub fn save_app_priority(db: &Db, app: &AppName, priority: AppPriority) -> rusql
     Ok(())
 }
 
-// r[impl app.priority.reset-on-uninstall]
+// i[impl app.priority.reset-on-uninstall]
 /// Discard the stored app priority for an app (on uninstall or deregister), so
 /// a later reinstall starts again at `normal`.
 pub fn delete_app_priority_for_app(db: &Db, app: &AppName) -> rusqlite::Result<()> {
@@ -312,7 +312,7 @@ mod tests {
         );
     }
 
-    // r[verify app.priority.reset-on-uninstall]
+    // i[verify app.priority.reset-on-uninstall]
     #[test]
     fn delete_removes_the_decision() {
         let db = Db::open_in_memory().unwrap();
