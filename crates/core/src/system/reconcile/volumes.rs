@@ -10,6 +10,7 @@ use crate::{
         desired::{DesiredResource, DesiredState},
         identity::ResourceInstance,
         lifecycle::LifecycleState,
+        priority::AppPriority,
     },
     system::{actuator::Actuator, observer::Observer, types::ObservationFact},
 };
@@ -33,6 +34,7 @@ async fn process_one_volume(
     actuator: &Actuator,
     db: &DbHandle,
     dr: &DesiredResource,
+    app_priority: AppPriority,
 ) -> VolumeInstanceResult {
     let mut result = VolumeInstanceResult {
         observations: Vec::new(),
@@ -106,7 +108,7 @@ async fn process_one_volume(
                 "volume_recreate_after_migration",
                 "After holding mismatched volume, creating replacement with current backend",
             );
-            let create_outcome = match actuator.start(&dr.instance, &dr.definition).await {
+            let create_outcome = match actuator.start(&dr.instance, &dr.definition, app_priority).await {
                 Ok(_) => "ok".to_owned(),
                 Err(e) => {
                     error!(
@@ -129,7 +131,7 @@ async fn process_one_volume(
                 "volume_create",
                 "Volume desired=Ready but absent on disk; creating",
             );
-            let outcome = match actuator.start(&dr.instance, &dr.definition).await {
+            let outcome = match actuator.start(&dr.instance, &dr.definition, app_priority).await {
                 Ok(_) => "ok".to_owned(),
                 Err(e) => {
                     error!(
@@ -181,12 +183,13 @@ pub(super) async fn observe_and_actuate(
     actuator: &Actuator,
     db: &DbHandle,
     desired: &DesiredState,
+    app_priority: AppPriority,
 ) -> VolumeActuationUpdate {
     let futures: Vec<_> = desired
         .resources
         .iter()
         .filter(|dr| matches!(&dr.definition, Resource::Volume(_)))
-        .map(|dr| process_one_volume(observer, actuator, db, dr))
+        .map(|dr| process_one_volume(observer, actuator, db, dr, app_priority))
         .collect();
 
     let results = join_all(futures).await;

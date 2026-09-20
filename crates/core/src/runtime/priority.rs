@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::fmt;
 use std::str::FromStr;
 
@@ -128,6 +129,28 @@ pub fn delete_app_priority_for_app(db: &Db, app: &AppName) -> rusqlite::Result<(
 /// stored.
 pub fn effective_app_priority(db: &Db, app: &AppName) -> rusqlite::Result<AppPriority> {
     Ok(load_app_priority(db, app)?.unwrap_or_default())
+}
+
+// r[impl priority.app]
+/// Every stored app priority, in one read.
+///
+/// Callers that need the standing of many apps at once — the reconcile tick and
+/// `/apps/list` — use this rather than a query per app. An app absent from the
+/// map has no stored decision and stands at `normal`; an error means the
+/// standings could not be read at all, which is not the same thing.
+pub fn load_all_app_priorities(db: &Db) -> rusqlite::Result<HashMap<AppName, AppPriority>> {
+    let mut stmt = db.conn.prepare("SELECT app, priority FROM app_priorities")?;
+    let rows = stmt.query_map([], |row| {
+        let app: AppName = row.get(0)?;
+        let stored: String = row.get(1)?;
+        Ok((app, stored.parse().unwrap_or_default()))
+    })?;
+    let mut out = HashMap::new();
+    for row in rows {
+        let (app, priority) = row?;
+        out.insert(app, priority);
+    }
+    Ok(out)
 }
 
 // ---------------------------------------------------------------------------
@@ -459,6 +482,23 @@ mod tests {
         // exists to prevent, so the two cannot drift apart.
         let infra = AppName::new(INFRA_COMPONENT).unwrap();
         assert_eq!(app_slice(&infra), INFRA_SLICE);
+    }
+
+    // r[verify priority.app]
+    #[test]
+    fn bulk_read_returns_every_stored_decision_and_omits_the_rest() {
+        let db = Db::open_in_memory().unwrap();
+        let other = AppName::new("other").unwrap();
+        save_app_priority(&db, &app(), AppPriority::High).unwrap();
+        save_app_priority(&db, &other, AppPriority::Low).unwrap();
+
+        let all = load_all_app_priorities(&db).unwrap();
+        assert_eq!(all.get(&app()), Some(&AppPriority::High));
+        assert_eq!(all.get(&other), Some(&AppPriority::Low));
+        // An app with no stored decision is absent rather than present as
+        // `normal`: the caller supplies the default, so "never set" and
+        // "set to normal" stay distinguishable here.
+        assert!(!all.contains_key(&AppName::new("unset").unwrap()));
     }
 
     #[test]

@@ -21,7 +21,7 @@ use crate::{
         db::DbHandle,
         external_volume_mappings,
         identity::{ResourceInstance, VolumeName},
-        priority::WorkloadStanding,
+        priority::{AppPriority, WorkloadStanding},
         registry::InstanceRegistry,
         restart_gens, site_volumes,
     },
@@ -167,10 +167,16 @@ impl Actuator {
     // r[impl actuate.deployment.start]
     /// Ensure all primitives for this instance exist and are running.
     #[tracing::instrument(skip_all, fields(instance = %instance.display_name))]
+    /// `app_priority` is the standing the reconciler resolved for this app on
+    /// this tick. Passed in rather than read here so the weights the slices were
+    /// given and the kill preference baked into the unit come from one read, and
+    /// so a failed read is decided once per tick instead of once per instance.
+    // r[impl priority.kill-order]
     pub async fn start(
         &self,
         instance: &ResourceInstance,
         resource: &Resource,
+        app_priority: AppPriority,
     ) -> Result<Option<String>, ActuateError> {
         match resource {
             Resource::Deployment(dep) => {
@@ -228,18 +234,7 @@ impl Actuator {
                     let c = pod.container.lock();
                     (c.stop_signal.clone(), c.stop_timeout_secs, priority)
                 };
-                // r[impl priority.kill-order]
-                // Read fresh rather than cached: the operator can change the
-                // app priority at any point, and a workload starting now must
-                // take the standing in force now.
-                let standing = {
-                    let app_name = instance.app.clone();
-                    let app_priority = self.db.call(move |db| {
-                        crate::runtime::priority::effective_app_priority(db, &app_name)
-                            .unwrap_or_default()
-                    });
-                    WorkloadStanding::new(app_priority, declared_priority)
-                };
+                let standing = WorkloadStanding::new(app_priority, declared_priority);
                 self.start_pod_instance(
                     instance,
                     &image,
@@ -317,14 +312,7 @@ impl Actuator {
                 // l[impl deployment.priority]
                 // Priority is declared on Deployments only; every other
                 // workload stands at Normal within its app.
-                let standing = {
-                    let app_name = instance.app.clone();
-                    let app_priority = self.db.call(move |db| {
-                        crate::runtime::priority::effective_app_priority(db, &app_name)
-                            .unwrap_or_default()
-                    });
-                    WorkloadStanding::new(app_priority, Priority::Normal)
-                };
+                let standing = WorkloadStanding::new(app_priority, Priority::Normal);
                 self.start_pod_instance(
                     instance,
                     &image,

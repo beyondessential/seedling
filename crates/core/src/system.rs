@@ -201,12 +201,18 @@ pub trait ProcessManager: Send + Sync + 'static {
     ) -> BoxFuture<'a, Result<Vec<UnitSummary>, BoxError>>;
 
     // Resource-control slices — the grouping the runtime owns.
-    /// Create the slice if absent and apply its weights, live where the unit
-    /// already exists.
+    /// Create any of `specs` that are absent and apply their weights, live
+    /// where the slice already exists.
+    ///
+    /// Batched because creating a slice needs the supervisor to re-read its
+    /// unit files, which is global work: one call for the whole set costs a
+    /// single re-read rather than one per slice.
     // r[impl priority.actuation]
-    fn ensure_slice<'a>(&'a self, spec: SliceSpec) -> BoxFuture<'a, Result<(), BoxError>>;
-    /// Stop and remove a slice. Idempotent.
-    fn remove_slice<'a>(&'a self, name: &'a str) -> BoxFuture<'a, Result<(), BoxError>>;
+    fn ensure_slices<'a>(&'a self, specs: Vec<SliceSpec>) -> BoxFuture<'a, Result<(), BoxError>>;
+    /// Forget the named slices, leaving anything still running in them alone.
+    /// Idempotent.
+    // r[impl priority.actuation]
+    fn remove_slices<'a>(&'a self, names: Vec<String>) -> BoxFuture<'a, Result<(), BoxError>>;
 
     // Persistent units — written to the unit drop-in path.
     fn write_unit<'a>(

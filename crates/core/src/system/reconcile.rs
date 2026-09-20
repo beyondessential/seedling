@@ -1,9 +1,9 @@
 use std::{
-    collections::{BTreeMap, BTreeSet, HashMap, HashSet},
+    collections::{BTreeMap, HashMap, HashSet},
     net::{Ipv4Addr, Ipv6Addr},
     path::PathBuf,
     sync::Arc,
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 use ipnet::Ipv6Net;
@@ -52,6 +52,18 @@ mod state;
 /// check — must fit within this; overrunning it is reported as a bring-up
 /// timeout for that component and the tick moves on.
 const INFRA_ENSURE_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// Back-off for reapplying the resource-control slices after the supervisor
+/// refuses them. Capped rather than terminal: a host that recovers picks the
+/// slices up again without an operator touching anything.
+// r[impl priority.actuation]
+const SLICE_BACKOFF_BASE: Duration = Duration::from_secs(10);
+const SLICE_BACKOFF_CAP: Duration = Duration::from_secs(300);
+
+/// Consecutive failures before the operator is told. Below this the retry is
+/// quiet: a slice apply that fails once and succeeds on the next tick is not
+/// worth a fault.
+const SLICE_FAULT_THRESHOLD: u32 = 5;
 
 /// Enumerate hostnames from the site-ingress snapshot that need TLS this
 /// tick. A hostname is only emitted when its parent ingress is non-stale,
@@ -407,6 +419,11 @@ pub struct Reconciler {
     /// fails, so the next tick retries rather than assuming it landed.
     // r[impl priority.actuation]
     applied_slices: BTreeMap<String, SliceSpec>,
+    /// Paces retries when the supervisor refuses the slice set, so a host with
+    /// a read-only unit directory is not asked to re-read its units every tick.
+    /// Keyed by unit so the gate is shared by the whole batch.
+    // r[impl priority.actuation]
+    slice_retry: crate::runtime::retry::RetryGates<()>,
     /// Whether seedling is providing its own NAT64 translator.
     nat64_active: bool,
     /// Whether the jool translator instance is currently installed on
@@ -477,11 +494,19 @@ pub struct Reconciler {
 /// question the recorded identities cannot answer when there are none of them:
 /// is there anything at all that might still be this app's?
 // r[impl app.uninstall.scope]
+/// Workload units that could belong to `app`, as candidates only — the caller
+/// decides by matching exactly against recorded identity.
+///
+/// Restricted to services because the question is whether a *workload* is still
+/// loaded. The runtime also owns slices under this same prefix
+/// (`seedling-{app}-{tier}.slice`), and those outlive every workload in them by
+/// design, so counting one as evidence of a live workload would leave an app
+/// with no recorded instances unable to ever finish tearing down.
 fn units_possibly_of<'a>(units: &'a [UnitSummary], app: &AppName) -> Vec<&'a UnitSummary> {
     let prefix = format!("seedling-{app}-");
     units
         .iter()
-        .filter(|u| u.name.starts_with(&prefix))
+        .filter(|u| u.name.ends_with(".service") && u.name.starts_with(&prefix))
         .collect()
 }
 
@@ -536,6 +561,10 @@ impl Reconciler {
             event_tx,
             prev_states: BTreeMap::new(),
             applied_slices: BTreeMap::new(),
+            slice_retry: crate::runtime::retry::RetryGates::new(
+                SLICE_BACKOFF_BASE,
+                SLICE_BACKOFF_CAP,
+            ),
             rolling_updates: HashSet::new(),
             unhealthy_replace_deployments: HashSet::new(),
             replace_failed: HashSet::new(),
@@ -572,6 +601,26 @@ impl Reconciler {
         let reg = self.app_registry.read();
         let mut snapshots = Vec::new();
         let mut skipped = 0usize;
+        // r[impl priority.settings]
+        // One read of every app's standing for the whole tick, rather than a
+        // round trip per app. A failure is not an answer: the standings decide
+        // both the slice weights and the kill preference baked into any unit
+        // started this tick, so rather than substituting a level nobody chose,
+        // every app is reported as dropped and the tick holds what is running.
+        let priorities = match self
+            .db
+            .call(|db| priority::load_all_app_priorities(db))
+        {
+            Ok(p) => p,
+            Err(e) => {
+                error!(
+                    error = %e,
+                    "could not read app priorities; holding this tick rather than actuating \
+                     workloads at a standing nobody chose"
+                );
+                return (Vec::new(), reg.list().len().max(1));
+            }
+        };
         for (name, status) in reg.list() {
             let entry = match reg.get(name.as_str()) {
                 Some(e) => e,
@@ -657,12 +706,9 @@ impl Reconciler {
                 .unwrap_or_default();
             let current_generation = entry.current_generation;
             // r[impl priority.settings]
-            let app_priority = {
-                let name_for_priority = name.clone();
-                self.db.call(move |db| {
-                    priority::effective_app_priority(db, &name_for_priority).unwrap_or_default()
-                })
-            };
+            // Read once for the whole tick above; an app with no stored
+            // decision stands at the default.
+            let app_priority = priorities.get(&name).copied().unwrap_or_default();
             snapshots.push(AppSnapshot {
                 name,
                 desired,
@@ -711,16 +757,18 @@ fn desired_slices(apps: &[AppSnapshot]) -> BTreeMap<String, SliceSpec> {
             },
         );
 
-        // Every app needs the Normal tier: Jobs and any other workload that is
-        // not a Deployment stand there.
-        let mut tiers: BTreeSet<Priority> = BTreeSet::new();
-        tiers.insert(Priority::Normal);
-        for resource in app.app_def.resources.values() {
-            if let Resource::Deployment(deployment) = resource {
-                tiers.insert(deployment.def.lock().priority);
-            }
-        }
-        for tier in tiers {
+        // Every level gets a slice, whether or not the current definition
+        // declares it. Deriving the set from the declared levels instead would
+        // drop a tier out of the desired set the moment a Deployment's level
+        // changed, while that Deployment's previous-generation instances were
+        // still running in it — and the tier would then be collected out from
+        // under them. The unused ones cost an empty group each.
+        for tier in [
+            Priority::Critical,
+            Priority::Elevated,
+            Priority::Normal,
+            Priority::Low,
+        ] {
             let name = priority::tier_slice(&app.name, tier);
             let weight = priority::deployment_weight(tier);
             desired.insert(
@@ -750,19 +798,43 @@ impl Reconciler {
     async fn reconcile_slices(&mut self, apps: &[AppSnapshot], dropped_apps: usize) {
         let desired = desired_slices(apps);
 
-        for (name, spec) in &desired {
-            if self.applied_slices.get(name) == Some(spec) {
-                continue;
-            }
-            match self.driver.process.ensure_slice(spec.clone()).await {
-                Ok(()) => {
-                    self.applied_slices.insert(name.clone(), spec.clone());
-                }
-                Err(e) => {
-                    // Dropped rather than left stale, so the next tick retries
-                    // instead of taking an apply that never landed as done.
-                    self.applied_slices.remove(name);
-                    warn!(slice = %name, error = %e, "failed to apply slice weights");
+        // r[impl priority.actuation]
+        // Only what has actually changed is offered to the supervisor, so a
+        // steady tick does no work at all here.
+        let pending: Vec<SliceSpec> = desired
+            .iter()
+            .filter(|(name, spec)| self.applied_slices.get(*name) != Some(*spec))
+            .map(|(_, spec)| spec.clone())
+            .collect();
+
+        if !pending.is_empty() {
+            let now = Instant::now();
+            if self.slice_retry.should_attempt(&(), now) {
+                match self.driver.process.ensure_slices(pending.clone()).await {
+                    Ok(()) => {
+                        for spec in pending {
+                            self.applied_slices.insert(spec.name.clone(), spec);
+                        }
+                        self.slice_retry.record_success(&());
+                        self.clear_system_fault("slice_apply_failed");
+                    }
+                    Err(e) => {
+                        // Nothing is recorded as applied: a failed batch must
+                        // not read as done on the next tick.
+                        let failures = self.slice_retry.record_failure((), now);
+                        warn!(error = %e, failures, "failed to apply resource-control slices");
+                        if failures >= SLICE_FAULT_THRESHOLD {
+                            self.file_system_fault(
+                                "slice_apply_failed",
+                                &format!(
+                                    "could not apply the resource-control groups that carry \
+                                     workload priority, after {failures} attempts; workloads run \
+                                     without their configured CPU and I/O shares until this \
+                                     clears. Last error: {e}"
+                                ),
+                            );
+                        }
+                    }
                 }
             }
         }
@@ -770,8 +842,8 @@ impl Reconciler {
         // r[impl reconciliation.absolute-state]
         // A slice missing from `desired` means its app is gone only when every
         // app computed its desired state. An app dropped by a transient error
-        // is absent from `apps` while its workloads keep running, and removing
-        // its slice would take the weights off a live cgroup.
+        // is absent from `apps` while its workloads keep running, and forgetting
+        // its slice would lose the weights they are running under.
         if dropped_apps > 0 {
             return;
         }
@@ -781,14 +853,17 @@ impl Reconciler {
             .filter(|name| !desired.contains_key(*name))
             .cloned()
             .collect();
-        for name in stale {
-            match self.driver.process.remove_slice(&name).await {
-                Ok(()) => {
+        if stale.is_empty() {
+            return;
+        }
+        match self.driver.process.remove_slices(stale.clone()).await {
+            Ok(()) => {
+                for name in stale {
                     self.applied_slices.remove(&name);
                 }
-                Err(e) => {
-                    warn!(slice = %name, error = %e, "failed to remove slice");
-                }
+            }
+            Err(e) => {
+                warn!(error = %e, "failed to remove resource-control slices");
             }
         }
     }
@@ -2003,6 +2078,26 @@ mod tests {
             units_possibly_of(&units, &app).is_empty(),
             "an app registered but never scheduled has no rows and no units, and must still be \
              able to finish uninstalling"
+        );
+    }
+
+    // r[verify app.uninstall.scope]
+    // r[verify priority.groups-owned]
+    // The runtime's own slices sit under the same prefix and outlive the
+    // workloads in them, so counting one as a live workload would strand an app
+    // that has no recorded instances in uninstalling forever.
+    #[test]
+    fn the_runtimes_own_slices_are_not_mistaken_for_live_workloads() {
+        let units = [
+            unit("seedling-app.slice"),
+            unit("seedling-app-critical.slice"),
+            unit("seedling-app-normal.slice"),
+        ];
+        let app = AppName::new_unchecked("app");
+        assert!(
+            units_possibly_of(&units, &app).is_empty(),
+            "slices are the grouping, not the workload; an app whose units are all gone must \
+             still be able to finish uninstalling while its slices are still loaded"
         );
     }
 

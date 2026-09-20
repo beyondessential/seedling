@@ -46,6 +46,7 @@ pub(super) async fn run_pods_phase(
                 driver,
                 db,
                 &app.desired,
+                app.app_priority,
                 node_prefix,
                 written_obs,
                 started_jobs,
@@ -69,7 +70,8 @@ pub(super) async fn run_volumes_phase(
         .iter()
         .filter(|app| app.phase != AppPhase::Uninstalling)
         .map(|app| async move {
-            let update = volumes::observe_and_actuate(observer, actuator, db, &app.desired).await;
+            let update = volumes::observe_and_actuate(observer, actuator, db, &app.desired, app.app_priority)
+                    .await;
             (app.name.clone(), update)
         })
         .collect();

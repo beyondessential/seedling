@@ -611,17 +611,23 @@ impl ProcessManager for StubProcessManager {
         .boxed()
     }
 
-    fn ensure_slice<'a>(&'a self, spec: SliceSpec) -> BoxFuture<'a, Result<(), BoxError>> {
+    fn ensure_slices<'a>(&'a self, specs: Vec<SliceSpec>) -> BoxFuture<'a, Result<(), BoxError>> {
         async move {
-            self.state.lock().slices.insert(spec.name.clone(), spec);
+            let mut s = self.state.lock();
+            for spec in specs {
+                s.slices.insert(spec.name.clone(), spec);
+            }
             Ok(())
         }
         .boxed()
     }
 
-    fn remove_slice<'a>(&'a self, name: &'a str) -> BoxFuture<'a, Result<(), BoxError>> {
+    fn remove_slices<'a>(&'a self, names: Vec<String>) -> BoxFuture<'a, Result<(), BoxError>> {
         async move {
-            self.state.lock().slices.remove(name);
+            let mut s = self.state.lock();
+            for name in &names {
+                s.slices.remove(name);
+            }
             Ok(())
         }
         .boxed()

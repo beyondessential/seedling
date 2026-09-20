@@ -189,11 +189,11 @@ impl ProcessManager for UnavailableProcessManager {
         Box::pin(async { Err(unavailable()) })
     }
 
-    fn ensure_slice<'a>(&'a self, spec: SliceSpec) -> BoxFuture<'a, Result<(), BoxError>> {
+    fn ensure_slices<'a>(&'a self, specs: Vec<SliceSpec>) -> BoxFuture<'a, Result<(), BoxError>> {
         Box::pin(async { Err(unavailable()) })
     }
 
-    fn remove_slice<'a>(&'a self, name: &'a str) -> BoxFuture<'a, Result<(), BoxError>> {
+    fn remove_slices<'a>(&'a self, names: Vec<String>) -> BoxFuture<'a, Result<(), BoxError>> {
         Box::pin(async { Err(unavailable()) })
     }
 

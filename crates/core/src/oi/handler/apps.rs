@@ -421,6 +421,12 @@ pub(crate) fn serialize_param_schema(
 pub(crate) fn list_apps(state: &OiState) -> HandlerResult {
     let reg = state.registry.read();
     let apps = reg.list();
+    // i[impl app.priority.describe]
+    // One read for every app's standing, rather than a round trip per app on
+    // top of the per-app fault count this endpoint already pays.
+    let priorities = state
+        .db
+        .call(|db| priority::load_all_app_priorities(db).unwrap_or_default());
     let result: Vec<Value> = apps
         .into_iter()
         .map(|(name, base_status)| {
@@ -442,13 +448,6 @@ pub(crate) fn list_apps(state: &OiState) -> HandlerResult {
                     faults::count_active_faults_for_app(db, &name_clone).unwrap_or(0)
                 })
             };
-            // i[impl app.priority.describe]
-            let app_priority = {
-                let name_clone = name.clone();
-                state.db.call(move |db| {
-                    priority::effective_app_priority(db, &name_clone).unwrap_or_default()
-                })
-            };
             // l[impl app.description]
             let description = reg
                 .get(name.as_str())
@@ -458,7 +457,7 @@ pub(crate) fn list_apps(state: &OiState) -> HandlerResult {
                 "status": status.name(),
                 "has_stopped_resources": has_stopped,
                 "fault_count": fault_count,
-                "priority": app_priority.as_str(),
+                "priority": priorities.get(&name).copied().unwrap_or_default().as_str(),
                 "description": description,
             });
             if let AppStatus::Operating { action_name } = &status {
