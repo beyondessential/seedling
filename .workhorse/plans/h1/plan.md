@@ -141,4 +141,12 @@ Working notes from the spec interview. The acceptance criteria live in the trace
   bigger surface than exposing the two levers, and it belongs to a fleet/host view rather than the
   app detail page.
   - Answer: let's make a low-prio card for this.
+- Whether an app priority change should update the kill order of workloads that are *already
+  running*. systemd applies `OOMScoreAdjust` when it spawns a process and refuses it through
+  `SetUnitProperties`, so reaching a running workload would mean walking its cgroup and rewriting
+  each `/proc/<pid>/oom_score_adj` — awkward against podman's cgroup layout, and fragile.
+  - Answer: don't do it. The kill preference is fixed at spawn and reaches running workloads as
+    they next restart; CPU and I/O shares still reweight live, because those are properties of the
+    slice rather than of the processes. `r[priority.settings]` states this, so the spec and the
+    implementation agree and no follow-up card is owed.
   
