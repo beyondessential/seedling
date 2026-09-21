@@ -419,9 +419,9 @@ pub struct Reconciler {
     last_seen_generation: HashMap<AppName, u64>,
     /// Paces retries when the supervisor refuses the slice set, so a host with
     /// a read-only unit directory is not asked to re-read its units every tick.
-    /// Keyed by unit so the gate is shared by the whole batch.
+    /// One gate, not one per slice: the set is synced as a whole.
     // r[impl priority.actuation]
-    slice_retry: crate::runtime::retry::RetryGates<()>,
+    slice_retry: crate::runtime::retry::RetryGate,
     /// Whether seedling is providing its own NAT64 translator.
     nat64_active: bool,
     /// Whether the jool translator instance is currently installed on
@@ -558,7 +558,7 @@ impl Reconciler {
             crash_looped: HashSet::new(),
             event_tx,
             prev_states: BTreeMap::new(),
-            slice_retry: crate::runtime::retry::RetryGates::new(
+            slice_retry: crate::runtime::retry::RetryGate::new(
                 SLICE_BACKOFF_BASE,
                 SLICE_BACKOFF_CAP,
             ),
@@ -812,7 +812,7 @@ impl Reconciler {
     // r[impl priority.actuation]
     async fn reconcile_slices(&mut self, apps: &[AppSnapshot], dropped_apps: usize) {
         let now = Instant::now();
-        if !self.slice_retry.should_attempt(&(), now) {
+        if !self.slice_retry.should_attempt(now) {
             return;
         }
 
@@ -832,7 +832,7 @@ impl Reconciler {
 
         match synced {
             Ok(Ok(())) => {
-                self.slice_retry.record_success(&());
+                self.slice_retry.record_success();
                 self.clear_system_fault("slice_sync_failed");
             }
             Ok(Err(e)) => self.record_slice_failure(now, &e.to_string()),
@@ -847,7 +847,8 @@ impl Reconciler {
     /// give-up state: the next tick past the back-off tries again.
     // r[impl priority.actuation]
     fn record_slice_failure(&mut self, now: Instant, error: &str) {
-        let failures = self.slice_retry.record_failure((), now);
+        self.slice_retry.record_failure(now);
+        let failures = self.slice_retry.failures();
         warn!(error, failures, "failed to sync resource-control slices");
         if failures >= SLICE_FAULT_THRESHOLD {
             self.file_system_fault(

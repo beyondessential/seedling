@@ -123,7 +123,12 @@ pub fn oom_score_adjust(app: AppPriority, deployment: Priority) -> i32 {
         Priority::Normal => 0,
         Priority::Low => 2 * TIER_OOM_STEP,
     };
-    (app_base + tier_offset).clamp(-1000, 1000)
+    // Bounded by construction: the widest sum these two steps can produce is
+    // ±700, well inside the kernel's ±1000. Left unclamped deliberately — a
+    // clamp here would silently saturate a mis-set constant into a valid-looking
+    // value, where `every_kill_preference_is_within_the_kernel_range` fails
+    // loudly instead.
+    app_base + tier_offset
 }
 
 /// Where one workload stands against every other on the host: its app's

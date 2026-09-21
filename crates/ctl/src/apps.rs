@@ -1,6 +1,6 @@
 use std::{collections::HashMap, path::PathBuf};
 
-use clap::Subcommand;
+use clap::{Subcommand, ValueEnum};
 use seedling_protocol::client::OiClient;
 use seedling_protocol::names::{ActionName, AppName};
 
@@ -96,11 +96,11 @@ pub(super) enum AppsCommand {
         #[command(subcommand)]
         direction: ScaleDirection,
     },
-    /// Set an app's priority (high, normal, or low)
+    /// Set an app's priority
     Priority {
         app: AppName,
-        /// Priority level: high, normal, or low
-        priority: String,
+        /// Standing against other apps when the host is under pressure
+        priority: PriorityLevel,
     },
     /// Restart a deployment (follows its update strategy without changing config)
     Restart { app: AppName, deployment: String },
@@ -186,6 +186,26 @@ pub(super) enum VolumesCommand {
         /// External volume name
         external_volume: String,
     },
+}
+
+/// The levels `/apps/priority` accepts. Spelled out here so a typo is refused
+/// by the parser with the alternatives listed, rather than making a round trip
+/// to the daemon to come back as `requirements_invalid`.
+#[derive(Clone, Copy, Debug, ValueEnum)]
+pub(super) enum PriorityLevel {
+    High,
+    Normal,
+    Low,
+}
+
+impl PriorityLevel {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::High => "high",
+            Self::Normal => "normal",
+            Self::Low => "low",
+        }
+    }
 }
 
 #[derive(Subcommand)]
@@ -508,7 +528,7 @@ pub(super) async fn dispatch(client: &OiClient, cmd: AppsCommand) {
                 client
                     .request(
                         "/apps/priority",
-                        serde_json::json!({ "app": app, "priority": priority }),
+                        serde_json::json!({ "app": app, "priority": priority.as_str() }),
                     )
                     .await,
             );
