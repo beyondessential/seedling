@@ -13,6 +13,7 @@ use crate::{
         desired::{DesiredResource, DesiredState},
         identity::{InstanceId, ResourceInstance},
         lifecycle::LifecycleState,
+        priority::AppPriority,
     },
     system::{
         System, actuator::Actuator, observer::Observer, translate::proxy::pod_network_prefix,
@@ -375,6 +376,7 @@ async fn observe_one_pod<'a>(
 async fn actuate_one_pod(
     actuator: &Actuator,
     db: &DbHandle,
+    app_priority: AppPriority,
     mut obs: ObservedInstance<'_>,
     inhibit_stop: bool,
     written_obs: &HashSet<(InstanceId, &'static str)>,
@@ -552,7 +554,10 @@ async fn actuate_one_pod(
             // r[impl autonomous.scale]
             let rule = "instance in desired state but not running; r[autonomous.restart] / r[autonomous.scale] requires (re)start";
             let op = autonomous_ops::record(db, &dr.instance, "start", rule);
-            let outcome = match actuator.start(&dr.instance, &dr.definition).await {
+            let outcome = match actuator
+                .start(&dr.instance, &dr.definition, app_priority)
+                .await
+            {
                 Ok(Some(_)) | Ok(None) => {
                     if let Some(img) = image_ref {
                         result.image_pull_success = Some((dr.instance.clone(), img));
@@ -772,6 +777,7 @@ pub(super) async fn observe_and_actuate(
     driver: &Arc<System>,
     db: &DbHandle,
     desired: &DesiredState,
+    app_priority: AppPriority,
     node_prefix: &Ipv6Net,
     written_obs: &HashSet<(InstanceId, &'static str)>,
     started_jobs: &HashSet<InstanceId>,
@@ -860,6 +866,7 @@ pub(super) async fn observe_and_actuate(
         actuate_futures.push(actuate_one_pod(
             actuator,
             db,
+            app_priority,
             obs,
             inhibit,
             written_obs,

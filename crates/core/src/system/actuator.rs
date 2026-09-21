@@ -14,18 +14,20 @@ use snafu::{IntoError, ResultExt, Snafu};
 use crate::{
     defs::{
         container::VolumeMount,
-        enums::OnExit,
+        enums::{OnExit, Priority},
         resource::{Resource, ResourceKind},
     },
     runtime::{
         db::DbHandle,
         external_volume_mappings,
         identity::{ResourceInstance, VolumeName},
+        priority::AppPriority,
         registry::InstanceRegistry,
         restart_gens, site_volumes,
     },
     system::{
         System,
+        priority::WorkloadStanding,
         translate::{
             container::{deployment_spec, job_spec, podman_args, spec_hash},
             proxy::pod_network_prefix,
@@ -166,10 +168,16 @@ impl Actuator {
     // r[impl actuate.deployment.start]
     /// Ensure all primitives for this instance exist and are running.
     #[tracing::instrument(skip_all, fields(instance = %instance.display_name))]
+    /// `app_priority` is the standing the reconciler resolved for this app on
+    /// this tick. Passed in rather than read here so the weights the slices were
+    /// given and the kill preference baked into the unit come from one read, and
+    /// so a failed read is decided once per tick instead of once per instance.
+    // r[impl priority.kill-order]
     pub async fn start(
         &self,
         instance: &ResourceInstance,
         resource: &Resource,
+        app_priority: AppPriority,
     ) -> Result<Option<String>, ActuateError> {
         match resource {
             Resource::Deployment(dep) => {
@@ -220,12 +228,14 @@ impl Actuator {
                         restart_gens::load_restart_gen(db, &app_name, &dep_name).unwrap_or(0)
                     })
                 };
-                let (kill_signal, timeout_stop_secs) = {
+                let (kill_signal, timeout_stop_secs, declared_priority) = {
                     let def = dep.def.lock();
+                    let priority = def.priority;
                     let pod = def.pod.lock();
                     let c = pod.container.lock();
-                    (c.stop_signal.clone(), c.stop_timeout_secs)
+                    (c.stop_signal.clone(), c.stop_timeout_secs, priority)
                 };
+                let standing = WorkloadStanding::new(app_priority, declared_priority);
                 self.start_pod_instance(
                     instance,
                     &image,
@@ -234,6 +244,7 @@ impl Actuator {
                     &vols,
                     kill_signal,
                     timeout_stop_secs,
+                    standing,
                     |net_name, net_prefix, mounts| {
                         let guard = dep.def.lock();
                         let spec = deployment_spec(
@@ -299,6 +310,10 @@ impl Actuator {
                     let c = pod.container.lock();
                     (c.stop_signal.clone(), c.stop_timeout_secs)
                 };
+                // l[impl deployment.priority]
+                // Priority is declared on Deployments only; every other
+                // workload stands at Normal within its app.
+                let standing = WorkloadStanding::new(app_priority, Priority::Normal);
                 self.start_pod_instance(
                     instance,
                     &image,
@@ -307,6 +322,7 @@ impl Actuator {
                     &vols,
                     kill_signal,
                     timeout_stop_secs,
+                    standing,
                     |net_name, net_prefix, mounts| {
                         let guard = job.def.lock();
                         let spec = job_spec(
@@ -325,6 +341,20 @@ impl Actuator {
                 )
                 .await
             }
+            // Everything else has no unit and so no standing to carry.
+            other => self.start_volume(instance, other).await,
+        }
+    }
+
+    /// Start a resource that is not backed by a supervised unit, and so has
+    /// no standing to carry: volumes, and the kinds that exist only as
+    /// declarations.
+    pub async fn start_volume(
+        &self,
+        instance: &ResourceInstance,
+        resource: &Resource,
+    ) -> Result<Option<String>, ActuateError> {
+        match resource {
             // r[impl actuate.volume.start]
             Resource::Volume(vol) => {
                 let (tmpfs, writes) = {
@@ -399,6 +429,12 @@ impl Actuator {
             Resource::ExternalVolume(_) | Resource::ExternalService(_) => Ok(None),
             Resource::Service(_) => Ok(None),
             Resource::Ingress(_) => Ok(None),
+            // A pod-backed workload is started through `start`, which
+            // carries the standing its unit needs.
+            Resource::Deployment(_) | Resource::Job(_) => UnsupportedKindSnafu {
+                kind: instance.kind,
+            }
+            .fail(),
         }
     }
 

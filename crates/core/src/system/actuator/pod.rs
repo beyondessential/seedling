@@ -14,6 +14,7 @@ use crate::{
     },
     system::{
         System,
+        priority::WorkloadStanding,
         translate::proxy::{instance_ipv6, pod_network_prefix},
         types::{ActiveState, TransientRestart, TransientUnitSpec},
     },
@@ -274,6 +275,7 @@ impl Actuator {
         volumes: &[ContainerVolume],
         kill_signal: Option<String>,
         timeout_stop_secs: Option<u32>,
+        standing: WorkloadStanding,
         build_argv: impl FnOnce(String, Ipv6Net, &[(u16, std::net::Ipv6Addr, u16)]) -> Vec<String>,
     ) -> Result<Option<String>, ActuateError> {
         self.ensure_image_available(image).await?;
@@ -346,6 +348,12 @@ impl Actuator {
                 restart,
                 kill_signal,
                 timeout_stop_secs,
+                // r[impl priority.actuation]
+                // The tier slice carries the Deployment weight and nests under
+                // the app slice, which carries the app weight.
+                slice: Some(standing.slice(&instance.app)),
+                // r[impl priority.kill-order]
+                oom_score_adjust: Some(standing.oom_score_adjust()),
                 // r[impl autonomous.restart.backoff]
                 // Pod containers: 5 second pause between restarts, and a
                 // 10-minute / 10-attempt window before systemd gives up. The

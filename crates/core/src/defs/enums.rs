@@ -57,6 +57,47 @@ impl OnExit {
     }
 }
 
+/// A Deployment's claim on host resources relative to other workloads when the
+/// host is under memory, CPU, or I/O pressure. Declared in BSL; the runtime
+/// owns how each level is realised (see `r[priority.actuation]`).
+///
+/// Totally ordered: `Critical > Elevated > Normal > Low`. The ordering is
+/// derived rather than spelled out, and is relied on to keep the per-app set of
+/// declared levels in a stable order.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum Priority {
+    // l[impl const.priority.enum]
+    // Declared weakest-claim first so the derived ordering is the documented
+    // one: `Critical > Elevated > Normal > Low`.
+    Low,
+    #[default]
+    Normal,
+    Elevated,
+    Critical,
+}
+
+impl Priority {
+    /// Register the `Priority` constant object map in the script scope.
+    pub fn rhai_constant() -> Map {
+        let mut map = Map::new();
+        map.insert("Critical".into(), Dynamic::from(Self::Critical));
+        map.insert("Elevated".into(), Dynamic::from(Self::Elevated));
+        map.insert("Normal".into(), Dynamic::from(Self::Normal));
+        map.insert("Low".into(), Dynamic::from(Self::Low));
+        map
+    }
+
+    /// Lower-case wire form used in `/apps/*` responses and event payloads.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Critical => "critical",
+            Self::Elevated => "elevated",
+            Self::Normal => "normal",
+            Self::Low => "low",
+        }
+    }
+}
+
 /// What an Ingress terminates at the edge. Pairs with [`Output`] to
 /// describe what the ingress actually does with traffic; not every
 /// `(Terminate, Output)` combination is valid (see

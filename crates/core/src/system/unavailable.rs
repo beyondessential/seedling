@@ -11,7 +11,7 @@ use crate::system::{
     BoxError, BoxFuture, ContainerRuntime, ProcessManager,
     types::{
         ContainerFilter, ContainerSpec, ContainerState, ContainerSummary, ExecHandle, ImageSummary,
-        NetworkSummary, TransientUnitSpec, UnitState, UnitSummary,
+        NetworkSummary, SliceSpec, TransientUnitSpec, UnitState, UnitSummary,
     },
 };
 
@@ -186,6 +186,14 @@ impl ProcessManager for UnavailableProcessManager {
         &'a self,
         prefix: &'a str,
     ) -> BoxFuture<'a, Result<Vec<UnitSummary>, BoxError>> {
+        Box::pin(async { Err(unavailable()) })
+    }
+
+    fn sync_slices<'a>(
+        &'a self,
+        desired: Vec<SliceSpec>,
+        prune: bool,
+    ) -> BoxFuture<'a, Result<(), BoxError>> {
         Box::pin(async { Err(unavailable()) })
     }
 

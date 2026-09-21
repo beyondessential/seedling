@@ -247,6 +247,31 @@ pub struct TransientUnitSpec {
     /// leaves systemd's default (5).
     // r[impl autonomous.restart.backoff]
     pub start_limit_burst: Option<u32>,
+    /// Resource-control slice the unit joins. Maps to `Slice=`. `None` leaves
+    /// the unit in the supervisor's default slice.
+    // r[impl priority.actuation]
+    pub slice: Option<String>,
+    /// How strongly the kernel should prefer this unit's processes as
+    /// out-of-memory victims. Maps to `OOMScoreAdjust=`. `None` inherits.
+    ///
+    /// Applied when the unit's processes are spawned: unlike the slice weights,
+    /// the supervisor cannot change it on a process that is already running.
+    // r[impl priority.kill-order]
+    pub oom_score_adjust: Option<i32>,
+}
+
+/// A resource-control slice the runtime owns, with the weights it should carry.
+// r[impl priority.actuation]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SliceSpec {
+    /// Full unit name, e.g. `seedling-myapp-critical.slice`.
+    pub name: String,
+    pub description: String,
+    /// Share of contended capacity this slice claims, relative to its
+    /// siblings. Fans out to both `CPUWeight=` and `IOWeight=`: a workload's
+    /// standing is one thing, and nothing in the mapping distinguishes its
+    /// claim on CPU from its claim on I/O.
+    pub weight: u64,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

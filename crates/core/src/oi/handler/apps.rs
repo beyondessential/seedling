@@ -20,6 +20,7 @@ use crate::{
         history::{find_instances_for_group, query_observations},
         identity::{InstanceId, InstanceVariant, ResourceInstance},
         lifecycle::LifecycleState,
+        priority::{self, AppPriority},
         restart_gens, restarts, scaling,
         stopped::{self, kind_str, parse_kind},
         transition_phase,
@@ -81,6 +82,12 @@ pub(crate) struct ScaleParams {
     pub app: AppName,
     pub deployment: String,
     pub scale: u16,
+}
+
+#[derive(Deserialize)]
+pub(crate) struct PriorityParams {
+    pub app: AppName,
+    pub priority: String,
 }
 
 #[derive(Deserialize)]
@@ -414,6 +421,21 @@ pub(crate) fn serialize_param_schema(
 pub(crate) fn list_apps(state: &OiState) -> HandlerResult {
     let reg = state.registry.read();
     let apps = reg.list();
+    // i[impl app.priority.describe]
+    // One read for every app's standing, rather than a round trip per app on
+    // top of the per-app fault count this endpoint already pays. A failed read
+    // is surfaced rather than defaulted: reporting every app as `normal` is
+    // indistinguishable from nobody having set one, and would tell an operator
+    // asking why their `high` app is being shed exactly the wrong thing.
+    let priorities = state
+        .db
+        .call(priority::load_all_app_priorities)
+        .map_err(|e| {
+            OiError::new(
+                ErrorCode::Internal,
+                format!("could not read app priorities: {e}"),
+            )
+        })?;
     let result: Vec<Value> = apps
         .into_iter()
         .map(|(name, base_status)| {
@@ -444,6 +466,7 @@ pub(crate) fn list_apps(state: &OiState) -> HandlerResult {
                 "status": status.name(),
                 "has_stopped_resources": has_stopped,
                 "fault_count": fault_count,
+                "priority": priorities.get(&name).copied().unwrap_or_default().as_str(),
                 "description": description,
             });
             if let AppStatus::Operating { action_name } = &status {
@@ -824,10 +847,26 @@ pub(crate) fn describe_app(state: &OiState, params: AppParams) -> HandlerResult 
         .map(|(k, n)| json!({ "kind": kind_str(*k), "name": n }))
         .collect();
 
+    // i[impl app.priority.describe]
+    // Surfaced rather than defaulted, for the same reason as `/apps/list`.
+    let app_priority = {
+        let name_clone = params.app.clone();
+        state
+            .db
+            .call(move |db| priority::effective_app_priority(db, &name_clone))
+            .map_err(|e| {
+                OiError::new(
+                    ErrorCode::Internal,
+                    format!("could not read app priority: {e}"),
+                )
+            })?
+    };
+
     let mut desc = json!({
         "status": status.name(),
         "generation": generation,
         "description": def.description,
+        "priority": app_priority.as_str(),
         "faults": app_faults_json,
         "resources": resources_json,
         "dynamic_resources": dynamic_resources_json,
@@ -1234,6 +1273,12 @@ pub(crate) fn register_app(
 
     validate_name(name)?;
 
+    // r[impl priority.groups-owned]
+    // Creation only: a name the daemon claims is refused here, never on update
+    // or delete, so an app registered before the reservation stays manageable.
+    crate::reserved::check_app_name(&params.app)
+        .map_err(|e| OiError::new(ErrorCode::RequirementsInvalid, e.to_string()))?;
+
     {
         let reg = state.registry.read();
         if reg.is_registered(name) {
@@ -1373,6 +1418,10 @@ pub(crate) fn deregister_app(
             if let Err(e) = scaling::delete_scaling_decisions_for_app(db, &name_owned) {
                 tracing::warn!(app = %name_owned, "failed to clean up scaling decisions during deregister: {e}");
             }
+            // i[impl app.priority.reset-on-uninstall]
+            if let Err(e) = priority::delete_app_priority_for_app(db, &name_owned) {
+                tracing::warn!(app = %name_owned, "failed to clean up app priority during deregister: {e}");
+            }
             if let Err(e) = restart_gens::delete_restart_gens_for_app(db, &name_owned) {
                 tracing::warn!(app = %name_owned, "failed to clean up restart generations during deregister: {e}");
             }
@@ -1426,6 +1475,10 @@ pub(crate) fn uninstall_app(state: &OiState, params: AppParams) -> HandlerResult
         // i[impl scale.reset-on-uninstall]
         if let Err(e) = scaling::delete_scaling_decisions_for_app(db, &name_owned) {
             tracing::warn!(app = %name_owned, "failed to clear scaling decisions on uninstall: {e}");
+        }
+        // i[impl app.priority.reset-on-uninstall]
+        if let Err(e) = priority::delete_app_priority_for_app(db, &name_owned) {
+            tracing::warn!(app = %name_owned, "failed to clear app priority on uninstall: {e}");
         }
         if let Err(e) = restart_gens::delete_restart_gens_for_app(db, &name_owned) {
             tracing::warn!(app = %name_owned, "failed to clear restart generations on uninstall: {e}");
@@ -1893,6 +1946,47 @@ pub(crate) fn scale_app(state: &OiState, params: ScaleParams, ctx: &RequestCtx) 
         "scale": new_scale,
         "bounds": { "low": low, "high": high },
     }))
+}
+
+// i[impl app.priority.set]
+pub(crate) fn set_priority(
+    state: &OiState,
+    params: PriorityParams,
+    ctx: &RequestCtx,
+) -> HandlerResult {
+    let name = params.app.as_str();
+
+    // Reject an unknown level before touching the registry or the store, so a
+    // typo changes nothing. Mirrors stop_resource's handling of a bad kind.
+    let priority: AppPriority = params
+        .priority
+        .parse()
+        .map_err(|e| OiError::new(ErrorCode::RequirementsInvalid, format!("{e}")))?;
+
+    let reg = state.registry.read();
+    let entry = reg
+        .get(name)
+        .ok_or_else(|| OiError::not_found(format!("app not found: {name}")))?;
+
+    let name_owned = params.app.clone();
+    let previous = state.db.call(move |db| -> Result<_, OiError> {
+        let current = priority::effective_app_priority(db, &name_owned)
+            .map_err(|e| OiError::new(ErrorCode::ScriptError, format!("db error: {e}")))?;
+        // r[impl priority.settings]
+        priority::save_app_priority(db, &name_owned, priority)
+            .map_err(|e| OiError::new(ErrorCode::ScriptError, format!("db error: {e}")))?;
+        Ok(current)
+    })?;
+
+    // r[impl priority.settings]
+    // Wake the reconcile loop so the running workloads are re-weighted this
+    // tick, without a redeploy or runtime restart.
+    entry.tick_notify.notify_one();
+
+    ctx.events
+        .app_priority_changed(&params.app, priority.as_str(), previous.as_str());
+
+    Ok(json!({ "priority": priority.as_str() }))
 }
 
 fn resource_kind_from_debug_str(s: &str) -> Option<ResourceKind> {

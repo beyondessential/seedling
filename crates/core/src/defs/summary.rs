@@ -181,6 +181,8 @@ pub struct DeploymentSummary {
     pub scale: ScaleSummary,
     pub on_update: &'static str,
     pub on_terminate: &'static str,
+    // l[impl deployment.priority]
+    pub priority: &'static str,
     pub description: Option<String>,
 }
 
@@ -499,6 +501,8 @@ impl Deployment {
             on_terminate: match def.on_terminate {
                 OnTerminate::Recreate => "recreate",
             },
+            // l[impl deployment.priority]
+            priority: def.priority.as_str(),
             description: def.description.clone(),
         }
     }

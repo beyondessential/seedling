@@ -24,7 +24,7 @@ use super::{
     ContainerState, ContainerStatus, ContainerSummary, DataPlane, DataPlaneRules, ExecHandle,
     ImageSummary, NetworkProxy, NetworkSummary, ProcessManager, ProxyConfig, ServiceRoute,
     TransientUnitSpec, UnitState, UnitSummary,
-    types::{ActiveState, UnitExit},
+    types::{ActiveState, SliceSpec, UnitExit},
 };
 
 /// The image reference in a `podman run` argv.
@@ -471,11 +471,18 @@ pub struct StubProcessManager {
 struct UnitState_ {
     units: BTreeMap<String, UnitRecord>,
     persistent_units: BTreeMap<String, String>,
+    /// Slices ensured so far, by unit name. Overwritten on reweight, so the
+    /// map always holds the weights last applied.
+    slices: BTreeMap<String, SliceSpec>,
 }
 
 struct UnitRecord {
     state: ActiveState,
     sub: String,
+    /// The slice the unit joined and the kill preference it was started with,
+    /// as the spec carried them.
+    slice: Option<String>,
+    oom_score_adjust: Option<i32>,
     /// Mirrors systemd's `NRestarts`: monotonic while the unit lives, reset
     /// when the unit is recreated. Driven directly by tests.
     restarts: u32,
@@ -507,6 +514,20 @@ impl StubProcessManager {
         if let Some(u) = self.state.lock().units.get_mut(unit) {
             u.restarts = count;
         }
+    }
+
+    /// The slices ensured so far, carrying the weights last applied to each.
+    pub fn slices(&self) -> BTreeMap<String, SliceSpec> {
+        self.state.lock().slices.clone()
+    }
+
+    /// The slice a unit joined and the kill preference it was started with.
+    pub fn placement(&self, unit: &str) -> Option<(Option<String>, Option<i32>)> {
+        self.state
+            .lock()
+            .units
+            .get(unit)
+            .map(|u| (u.slice.clone(), u.oom_score_adjust))
     }
 }
 
@@ -578,11 +599,33 @@ impl ProcessManager for StubProcessManager {
                 UnitRecord {
                     state: ActiveState::Active,
                     sub: "running".to_owned(),
+                    slice: spec.slice.clone(),
+                    oom_score_adjust: spec.oom_score_adjust,
                     restarts: 0,
                     last_exit: None,
                 },
             );
             drop(spec);
+            Ok(())
+        }
+        .boxed()
+    }
+
+    fn sync_slices<'a>(
+        &'a self,
+        desired: Vec<SliceSpec>,
+        prune: bool,
+    ) -> BoxFuture<'a, Result<(), BoxError>> {
+        async move {
+            let mut s = self.state.lock();
+            if prune {
+                let wanted: std::collections::HashSet<&str> =
+                    desired.iter().map(|spec| spec.name.as_str()).collect();
+                s.slices.retain(|name, _| wanted.contains(name.as_str()));
+            }
+            for spec in desired {
+                s.slices.insert(spec.name.clone(), spec);
+            }
             Ok(())
         }
         .boxed()
@@ -693,6 +736,8 @@ impl ProcessManager for StubProcessManager {
             s.units.entry(name.to_owned()).or_insert(UnitRecord {
                 state: ActiveState::Active,
                 sub: "running".to_owned(),
+                slice: None,
+                oom_score_adjust: None,
                 restarts: 0,
                 last_exit: None,
             });

@@ -7,7 +7,7 @@ use crate::runtime::barrier::runtime::is_in_action_closure;
 use super::{
     Freezable, Holder,
     container::parse_healthcheck,
-    enums::{OnTerminate, OnUpdate},
+    enums::{OnTerminate, OnUpdate, Priority},
     pod::PodDef,
     resource::{ResourceId, ResourceKind, ResourceName},
     take::take_int_in_range,
@@ -20,6 +20,8 @@ pub struct DeploymentDef {
     pub scale: Range<u16>,
     pub on_update: OnUpdate,
     pub on_terminate: OnTerminate,
+    // l[impl deployment.priority]
+    pub priority: Priority,
     // l[impl bsl.resource.description]
     pub description: Option<String>,
 }
@@ -31,6 +33,7 @@ impl Default for DeploymentDef {
             scale: 1..1,
             on_update: OnUpdate::default(),
             on_terminate: OnTerminate::default(),
+            priority: Priority::default(),
             description: None,
         }
     }
@@ -127,6 +130,15 @@ impl CustomType for Deployment {
                  -> Result<Deployment, Box<EvalAltResult>> {
                     this.ensure_unfrozen()?;
                     this.def.lock().on_terminate = strategy;
+                    Ok(this.clone())
+                },
+            )
+            // l[impl deployment.priority]
+            .with_fn(
+                "priority",
+                |this: &mut Self, level: Priority| -> Result<Deployment, Box<EvalAltResult>> {
+                    this.ensure_unfrozen()?;
+                    this.def.lock().priority = level;
                     Ok(this.clone())
                 },
             )

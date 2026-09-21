@@ -214,6 +214,15 @@ pub enum OiEvent {
         #[serde(skip_serializing_if = "Option::is_none")]
         actor: Option<Arc<Actor>>,
     },
+    // i[impl app.priority.set]
+    AppPriorityChanged {
+        timestamp: Timestamp,
+        app: AppName,
+        priority: String,
+        previous_priority: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        actor: Option<Arc<Actor>>,
+    },
     // i[impl deployment.restart]
     DeploymentRestarted {
         timestamp: Timestamp,
@@ -607,6 +616,24 @@ impl EventSender {
             timestamp: now(),
             app: app.clone(),
             phase: phase.to_owned(),
+            actor,
+        });
+    }
+
+    // i[impl app.priority.set]
+    /// Emit an app-priority-change event.
+    pub fn app_priority_changed(
+        &self,
+        app: &AppName,
+        priority: &str,
+        previous_priority: &str,
+        actor: Option<Arc<Actor>>,
+    ) {
+        self.emit(OiEvent::AppPriorityChanged {
+            timestamp: now(),
+            app: app.clone(),
+            priority: priority.to_owned(),
+            previous_priority: previous_priority.to_owned(),
             actor,
         });
     }
@@ -1354,6 +1381,16 @@ impl EventSenderWithActor {
     pub fn app_phase_changed(&self, app: &AppName, phase: &str) {
         self.inner
             .app_phase_changed(app, phase, Some(Arc::clone(&self.actor)));
+    }
+
+    // i[impl app.priority.set]
+    pub fn app_priority_changed(&self, app: &AppName, priority: &str, previous_priority: &str) {
+        self.inner.app_priority_changed(
+            app,
+            priority,
+            previous_priority,
+            Some(Arc::clone(&self.actor)),
+        );
     }
 
     pub fn scale(

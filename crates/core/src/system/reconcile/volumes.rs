@@ -106,7 +106,7 @@ async fn process_one_volume(
                 "volume_recreate_after_migration",
                 "After holding mismatched volume, creating replacement with current backend",
             );
-            let create_outcome = match actuator.start(&dr.instance, &dr.definition).await {
+            let create_outcome = match actuator.start_volume(&dr.instance, &dr.definition).await {
                 Ok(_) => "ok".to_owned(),
                 Err(e) => {
                     error!(
@@ -129,7 +129,7 @@ async fn process_one_volume(
                 "volume_create",
                 "Volume desired=Ready but absent on disk; creating",
             );
-            let outcome = match actuator.start(&dr.instance, &dr.definition).await {
+            let outcome = match actuator.start_volume(&dr.instance, &dr.definition).await {
                 Ok(_) => "ok".to_owned(),
                 Err(e) => {
                     error!(

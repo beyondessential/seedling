@@ -424,6 +424,16 @@ fn stop_resource_rejects_unstoppable_kind_and_unknown_resource() {
     assert_eq!(code, "requirements_invalid");
     assert!(message.contains("cannot be stopped"), "message: {message}");
 
+    // A kind that names nothing at all is rejected the same way: the endpoint
+    // takes deployment, job and ingress, and refuses everything else.
+    let (code, _) = oi
+        .call(
+            "/apps/resource/stop",
+            json!({ "app": "demo", "kind": "wombat", "name": "web" }),
+        )
+        .unwrap_err();
+    assert_eq!(code, "requirements_invalid");
+
     let (code, _) = oi
         .call(
             "/apps/resource/stop",
@@ -630,4 +640,164 @@ fn failed_registration_leaves_nothing_behind() {
         )
         .expect("retry after a transient persistence failure must succeed");
     assert_eq!(result["generation"], 1);
+}
+
+// i[verify app.priority.set]
+// i[verify app.priority.describe]
+#[test]
+fn priority_persists_and_is_described() {
+    let oi = TestOi::with_app("demo");
+    let result = oi
+        .call(
+            "/apps/priority",
+            json!({ "app": "demo", "priority": "high" }),
+        )
+        .unwrap();
+    assert_eq!(result["priority"], "high");
+
+    let desc = oi.call("/apps/show", json!({ "app": "demo" })).unwrap();
+    assert_eq!(desc["priority"], "high");
+
+    let list = oi.call("/apps/list", json!({})).unwrap();
+    assert_eq!(list[0]["priority"], "high");
+}
+
+// i[verify app.priority.describe]
+#[test]
+fn an_app_that_was_never_set_describes_as_normal() {
+    let oi = TestOi::with_app("demo");
+    let desc = oi.call("/apps/show", json!({ "app": "demo" })).unwrap();
+    assert_eq!(desc["priority"], "normal");
+    let list = oi.call("/apps/list", json!({})).unwrap();
+    assert_eq!(list[0]["priority"], "normal");
+}
+
+// i[verify app.priority.describe]
+// The per-Deployment field carries the level the definition declares, which is
+// a different thing from the app's operator-set priority.
+#[test]
+fn show_carries_the_declared_deployment_priority() {
+    let oi = TestOi::new();
+    oi.call(
+        "/apps/create",
+        json!({
+            "app": "demo",
+            "script": r#"
+                app.deployment("api")
+                    .image("docker.io/library/nginx:1.29")
+                    .priority(Priority.Critical);
+                app.deployment("batch")
+                    .image("docker.io/library/nginx:1.29");
+            "#,
+        }),
+    )
+    .unwrap();
+
+    let desc = oi.call("/apps/show", json!({ "app": "demo" })).unwrap();
+    let by_name: std::collections::BTreeMap<String, String> = desc["resources"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|r| {
+            (
+                r["name"].as_str().unwrap().to_owned(),
+                r["priority"].as_str().unwrap_or_default().to_owned(),
+            )
+        })
+        .collect();
+    assert_eq!(by_name["api"], "critical");
+    assert_eq!(by_name["batch"], "normal");
+}
+
+// i[verify app.priority.set]
+#[test]
+fn priority_rejects_an_unknown_level_and_leaves_the_stored_value() {
+    let oi = TestOi::with_app("demo");
+    oi.call(
+        "/apps/priority",
+        json!({ "app": "demo", "priority": "low" }),
+    )
+    .unwrap();
+
+    let (code, _) = oi
+        .call(
+            "/apps/priority",
+            json!({ "app": "demo", "priority": "urgent" }),
+        )
+        .unwrap_err();
+    assert_eq!(code, "requirements_invalid");
+
+    let desc = oi.call("/apps/show", json!({ "app": "demo" })).unwrap();
+    assert_eq!(desc["priority"], "low");
+}
+
+// i[verify app.priority.set]
+#[test]
+fn priority_on_an_unregistered_app_is_not_found() {
+    let oi = TestOi::new();
+    let (code, _) = oi
+        .call(
+            "/apps/priority",
+            json!({ "app": "ghost", "priority": "high" }),
+        )
+        .unwrap_err();
+    assert_eq!(code, "not_found");
+}
+
+// i[verify app.priority.set]
+#[test]
+fn every_accepted_level_round_trips() {
+    let oi = TestOi::with_app("demo");
+    for level in ["high", "normal", "low"] {
+        let result = oi
+            .call(
+                "/apps/priority",
+                json!({ "app": "demo", "priority": level }),
+            )
+            .unwrap();
+        assert_eq!(result["priority"], level);
+        let desc = oi.call("/apps/show", json!({ "app": "demo" })).unwrap();
+        assert_eq!(desc["priority"], level);
+    }
+}
+
+// i[verify app.priority.reset-on-uninstall]
+#[test]
+fn uninstall_discards_the_stored_priority() {
+    let oi = TestOi::with_app("demo");
+    oi.install("demo");
+    oi.call(
+        "/apps/priority",
+        json!({ "app": "demo", "priority": "high" }),
+    )
+    .unwrap();
+
+    oi.call("/apps/uninstall", json!({ "app": "demo" }))
+        .unwrap();
+
+    let desc = oi.call("/apps/show", json!({ "app": "demo" })).unwrap();
+    assert_eq!(desc["priority"], "normal");
+}
+
+// r[verify priority.groups-owned]
+// An app named for the infrastructure slice component would have its workloads
+// share the group holding the proxy and the resolver.
+#[test]
+fn an_app_cannot_be_registered_into_the_infra_slice() {
+    let oi = TestOi::new();
+    let (code, message) = oi
+        .call(
+            "/apps/create",
+            json!({ "app": "infra", "script": crate::oi::test_support::MINIMAL_SCRIPT }),
+        )
+        .unwrap_err();
+    assert_eq!(code, "requirements_invalid");
+    assert!(message.contains("reserved"), "got: {message}");
+
+    // A name that merely contains it is an ordinary app.
+    oi.call(
+        "/apps/create",
+        json!({ "app": "infra-tools", "script": crate::oi::test_support::MINIMAL_SCRIPT }),
+    )
+    .unwrap();
 }

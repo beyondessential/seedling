@@ -236,6 +236,9 @@ pub fn scope() -> (Scope<'static>, app::App) {
     // l[impl const.on-exit.restart-on-failure]
     scope.push_constant("OnExit", enums::OnExit::rhai_constant());
 
+    // l[impl const.priority.enum]
+    scope.push_constant("Priority", enums::Priority::rhai_constant());
+
     // l[impl const.resource-type.enum]
     scope.push_constant("ResourceType", resource::ResourceKind::rhai_constant());
 

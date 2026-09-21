@@ -5,14 +5,15 @@ use sha2::{Digest, Sha256};
 
 use crate::system::types::{
     ContainerFilter, ContainerSpec, ContainerState, ContainerSummary, DataPlaneRules, ExecHandle,
-    ImageSummary, NetworkSummary, ProxyConfig, ServiceRoute, TransientUnitSpec, UnitState,
-    UnitSummary,
+    ImageSummary, NetworkSummary, ProxyConfig, ServiceRoute, SliceSpec, TransientUnitSpec,
+    UnitState, UnitSummary,
 };
 
 pub mod actuator;
 pub mod nat64;
 pub mod netinfo;
 pub mod observer;
+pub mod priority;
 pub mod reconcile;
 pub mod translate;
 pub mod types;
@@ -62,7 +63,8 @@ pub use types::{
     ExecHandle as SystemExecHandle, ForwardProto, HealthCheckSpec, HttpRedirect, IngressRule,
     Mount, MountRule, MountSource, ObservationFact, ProxyConfig as SystemProxyConfig,
     ProxyListener, ProxyListenerProto, ProxyRoute, ResolvedExternalMount,
-    ServiceRoute as SystemServiceRoute, TransientRestart, VirtualHost,
+    ServiceRoute as SystemServiceRoute, SliceSpec as SystemSliceSpec, TransientRestart,
+    VirtualHost,
 };
 
 // ---------------------------------------------------------------------------
@@ -198,6 +200,25 @@ pub trait ProcessManager: Send + Sync + 'static {
         &'a self,
         prefix: &'a str,
     ) -> BoxFuture<'a, Result<Vec<UnitSummary>, BoxError>>;
+
+    // Resource-control slices — the grouping the runtime owns.
+    /// Make the set of slices this runtime owns match `desired`, creating,
+    /// reweighting and forgetting as needed.
+    ///
+    /// Takes the whole set rather than one slice at a time because the
+    /// supervisor re-reads its unit files as global work: deciding once for the
+    /// batch costs a single re-read instead of one per slice. The implementation
+    /// compares against what already exists, so a call that changes nothing
+    /// costs nothing.
+    ///
+    /// `prune` is false when the caller could not account for every app this
+    /// tick, so a short `desired` set never forgets a live app's slice.
+    // r[impl priority.actuation]
+    fn sync_slices<'a>(
+        &'a self,
+        desired: Vec<SliceSpec>,
+        prune: bool,
+    ) -> BoxFuture<'a, Result<(), BoxError>>;
 
     // Persistent units — written to the unit drop-in path.
     fn write_unit<'a>(

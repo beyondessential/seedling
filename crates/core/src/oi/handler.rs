@@ -198,6 +198,8 @@ fn parse_and_dispatch(state: &Arc<OiState>, buf: &[u8], ctx: &RequestCtx) -> Han
         "/apps/update" => apps::update_app(state, parse_params(req.params)?, ctx),
         // i[scale.set]
         "/apps/scale" => apps::scale_app(state, parse_params(req.params)?, ctx),
+        // i[app.priority.set]
+        "/apps/priority" => apps::set_priority(state, parse_params(req.params)?, ctx),
         // i[deployment.restart]
         "/apps/restart" => apps::restart_deployment(state, parse_params(req.params)?, ctx),
         // i[resource.stop]

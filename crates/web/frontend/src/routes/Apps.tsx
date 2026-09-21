@@ -30,13 +30,14 @@ import { OiErrorAlert } from "../components/OiErrorAlert";
 import { useOiAction } from "../hooks/useOiAction";
 import { useOiQuery } from "../hooks/useOi";
 import { useEventRefresh } from "../hooks/useEventRefresh";
-import { statusColor, statusLabel } from "../lib/status";
+import { appPriorityColor, statusColor, statusLabel } from "../lib/status";
 import type { Actor, AppSummary, ConnectedClients, SeedlingEvent } from "../lib/types";
 
 const APP_LIST_EVENTS: Set<string> = new Set([
   "AppRegistered", "AppDeregistered", "AppUpdated", "AppPhaseChanged",
   "OperationStarted", "OperationCompleted", "OperationFailed",
   "FaultFiled", "FaultCleared", "ResourceStopped", "ResourceUnstopped",
+  "AppPriorityChanged",
 ]);
 
 const SESSION_EVENTS: Set<string> = new Set([
@@ -184,6 +185,17 @@ export default function Apps() {
                           label={`${app.fault_count} fault${app.fault_count === 1 ? "" : "s"}`}
                           size="small"
                           color="error"
+                          variant="outlined"
+                        />
+                      )}
+                      {/* w[impl routes.apps.priority] */}
+                      {/* Only a deliberately changed standing draws the eye;
+                          an app at normal shows nothing. */}
+                      {app.priority !== undefined && app.priority !== "normal" && (
+                        <Chip
+                          label={`${app.priority} priority`}
+                          size="small"
+                          color={appPriorityColor(app.priority)}
                           variant="outlined"
                         />
                       )}

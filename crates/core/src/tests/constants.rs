@@ -1,5 +1,7 @@
 use super::*;
 
+use crate::defs::{enums::Priority, resource::Resource};
+
 // l[verify const.available-threads]
 #[test]
 fn available_threads_is_positive() {
@@ -296,4 +298,100 @@ fn resource_type_enum_variants_accessible() {
         let _a = ResourceType.Action;
     "#,
     );
+}
+
+// l[verify const.priority.enum]
+#[test]
+fn priority_exposes_the_four_levels() {
+    run_test_script_app(
+        r#"
+        for level in ["Critical", "Elevated", "Normal", "Low"] {
+            if !Priority.contains(level) {
+                throw "Priority is missing " + level;
+            }
+        }
+    "#,
+    );
+}
+
+// l[verify deployment.priority]
+#[test]
+fn deployment_accepts_every_priority_level() {
+    let app = run_test_script_app(
+        r#"
+        app.deployment("api").image("docker.io/library/nginx:1").priority(Priority.Critical);
+        app.deployment("sync").image("docker.io/library/nginx:1").priority(Priority.Elevated);
+        app.deployment("web").image("docker.io/library/nginx:1").priority(Priority.Normal);
+        app.deployment("batch").image("docker.io/library/nginx:1").priority(Priority.Low);
+    "#,
+    );
+    let def = app.def.load();
+    let levels: std::collections::BTreeMap<String, Priority> = def
+        .resources
+        .iter()
+        .filter_map(|(id, r)| match r {
+            Resource::Deployment(d) => Some((id.name.as_str().to_owned(), d.def.lock().priority)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(levels["api"], Priority::Critical);
+    assert_eq!(levels["sync"], Priority::Elevated);
+    assert_eq!(levels["web"], Priority::Normal);
+    assert_eq!(levels["batch"], Priority::Low);
+}
+
+// l[verify deployment.priority]
+#[test]
+fn a_deployment_that_declares_no_priority_is_normal() {
+    let app = run_test_script_app(r#"app.deployment("web").image("docker.io/library/nginx:1");"#);
+    let def = app.def.load();
+    let (_, resource) = def
+        .resources
+        .iter()
+        .find(|(id, _)| id.name.as_str() == "web")
+        .expect("deployment should exist");
+    let Resource::Deployment(d) = resource else {
+        panic!("expected a deployment");
+    };
+    assert_eq!(d.def.lock().priority, Priority::Normal);
+}
+
+// l[verify deployment.priority]
+// Priority is declared on Deployments only, so the method does not exist on a
+// Job and calling it is an evaluation error rather than a silent no-op.
+#[test]
+fn priority_is_not_available_on_a_job() {
+    let err = run_test_script_err(
+        r#"app.job("migrate").image("docker.io/library/nginx:1").priority(Priority.Critical);"#,
+    );
+    let msg = err.to_string();
+    assert!(
+        msg.contains("priority") && msg.contains("Job"),
+        "error should name the unavailable method and the type it is missing from, got: {msg}"
+    );
+}
+
+// l[verify deployment.priority]
+#[test]
+fn priority_is_chainable_with_other_builders() {
+    let app = run_test_script_app(
+        r#"
+        app.deployment("api")
+            .image("docker.io/library/nginx:1")
+            .priority(Priority.Critical)
+            .scale(2);
+    "#,
+    );
+    let def = app.def.load();
+    let (_, resource) = def
+        .resources
+        .iter()
+        .find(|(id, _)| id.name.as_str() == "api")
+        .expect("deployment should exist");
+    let Resource::Deployment(d) = resource else {
+        panic!("expected a deployment");
+    };
+    let d = d.def.lock();
+    assert_eq!(d.priority, Priority::Critical);
+    assert_eq!(d.scale.start, 2);
 }

@@ -46,6 +46,7 @@ pub(super) async fn run_pods_phase(
                 driver,
                 db,
                 &app.desired,
+                app.app_priority,
                 node_prefix,
                 written_obs,
                 started_jobs,

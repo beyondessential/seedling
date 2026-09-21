@@ -9,8 +9,8 @@ use zbus::{
 use crate::system::{
     BoxError, BoxFuture, ProcessManager,
     types::{
-        ActiveState, TransientRestart, TransientUnitSpec, UnitExit, UnitExitKind, UnitState,
-        UnitSummary,
+        ActiveState, SliceSpec, TransientRestart, TransientUnitSpec, UnitExit, UnitExitKind,
+        UnitState, UnitSummary,
     },
 };
 
@@ -146,6 +146,16 @@ trait Systemd1Manager {
     ) -> zbus::Result<OwnedObjectPath>;
 
     fn stop_unit(&self, name: &str, mode: &str) -> zbus::Result<OwnedObjectPath>;
+
+    /// Change properties of an existing unit. `runtime` true applies the change
+    /// without writing a drop-in. Only properties the supervisor can act on
+    /// live are accepted; exec-time settings are rejected.
+    fn set_unit_properties(
+        &self,
+        name: &str,
+        runtime: bool,
+        properties: Vec<UnitProperty<'_>>,
+    ) -> zbus::Result<()>;
 
     fn reset_failed_unit(&self, name: &str) -> zbus::Result<()>;
 
@@ -323,6 +333,25 @@ impl SystemdManager {
                 value: Value::from(burst),
             });
         }
+        // r[impl priority.actuation]
+        // The unit joins the slice its app and declared level resolve to; the
+        // slice itself carries the CPU and I/O weights.
+        if let Some(slice) = &spec.slice {
+            validate_unit_name(slice)?;
+            props.push(UnitProperty {
+                name: "Slice",
+                value: Value::from(slice.as_str()),
+            });
+        }
+        // r[impl priority.kill-order]
+        // Set here rather than adjusted later because the supervisor applies it
+        // when it spawns the process and cannot change it afterwards.
+        if let Some(adj) = spec.oom_score_adjust {
+            props.push(UnitProperty {
+                name: "OOMScoreAdjust",
+                value: Value::from(adj),
+            });
+        }
         // r[impl actuate.container.journal-metadata]
         // r[impl actuate.infra.journal-metadata]
         if !spec.log_extra_fields.is_empty() {
@@ -370,6 +399,145 @@ impl SystemdManager {
             .await
             .context(DBusSnafu)?;
 
+        Ok(())
+    }
+
+    /// Unit-file text for a slice. The weight lives here so it survives a
+    /// supervisor restart; it is also pushed live when it changes.
+    fn slice_unit_content(spec: &SliceSpec) -> String {
+        format!(
+            "[Unit]\nDescription={}\n\n[Slice]\nCPUWeight={}\nIOWeight={}\n",
+            spec.description, spec.weight, spec.weight
+        )
+    }
+
+    /// Whether `name` is a slice this runtime owns, and so may write or unlink.
+    ///
+    /// The unit directory is shared with the operator and with every other
+    /// package on the host. Generated names all have this shape, and the only
+    /// names offered for removal are ones read back out of the directory, so
+    /// this is what keeps a malformed or unexpected entry from being unlinked.
+    // r[impl priority.groups-owned]
+    fn is_owned_slice(name: &str) -> bool {
+        name.starts_with("seedling-") && name.ends_with(".slice")
+    }
+
+    /// Names of the slices this runtime owns that currently exist on disk.
+    async fn existing_owned_slices(&self) -> Result<Vec<String>, SystemdError> {
+        let mut found = Vec::new();
+        let mut dir = match tokio::fs::read_dir(UNIT_DIR).await {
+            Ok(d) => d,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(found),
+            Err(e) => return Err(IoSnafu.into_error(e)),
+        };
+        while let Some(entry) = dir.next_entry().await.map_err(|e| IoSnafu.into_error(e))? {
+            let name = entry.file_name().to_string_lossy().into_owned();
+            if Self::is_owned_slice(&name) {
+                found.push(name);
+            }
+        }
+        Ok(found)
+    }
+
+    // r[impl priority.actuation]
+    /// Bring the set of owned slices on this host into line with `desired`.
+    ///
+    /// The unit directory is the state, not any record this process keeps: what
+    /// is written is decided by comparing against the files that are actually
+    /// there. That is what makes the first pass after a restart free — the files
+    /// already match, so nothing is written, the supervisor is not asked to
+    /// re-read its units, and no slice is contacted over the bus — and it is
+    /// what lets a slice left behind by an app that went away while this process
+    /// was not running still be collected.
+    ///
+    /// `prune` is false when the caller could not account for every app, so a
+    /// short desired set never unlinks a live app's slice.
+    async fn sync_slices_impl(
+        &self,
+        desired: Vec<SliceSpec>,
+        prune: bool,
+    ) -> Result<(), SystemdError> {
+        for spec in &desired {
+            validate_unit_name(&spec.name)?;
+            if !Self::is_owned_slice(&spec.name) {
+                return Err(InvalidUnitNameSnafu {
+                    name: spec.name.clone(),
+                }
+                .build());
+            }
+        }
+
+        let existing = self.existing_owned_slices().await?;
+
+        // Write only what differs, and remember which slices actually changed:
+        // those are the ones whose weights have to be pushed to the live group.
+        let mut changed = Vec::new();
+        for spec in &desired {
+            let wanted = Self::slice_unit_content(spec);
+            let path = std::path::Path::new(UNIT_DIR).join(&spec.name);
+            let current = tokio::fs::read_to_string(&path).await.ok();
+            if current.as_deref() != Some(wanted.as_str()) {
+                self.write_unit_impl(&spec.name, &wanted).await?;
+                changed.push(spec);
+            }
+        }
+
+        // Unlink rather than stop. Stopping a slice stops every unit still
+        // inside it, which would kill running workloads outright, bypassing
+        // their stop signal and timeout. Unlinking releases an empty slice and
+        // leaves a slice that still has members running.
+        let mut unlinked = false;
+        if prune {
+            let wanted: std::collections::HashSet<&str> =
+                desired.iter().map(|s| s.name.as_str()).collect();
+            for name in &existing {
+                if wanted.contains(name.as_str()) {
+                    continue;
+                }
+                let path = std::path::Path::new(UNIT_DIR).join(name);
+                match tokio::fs::remove_file(&path).await {
+                    Ok(()) => unlinked = true,
+                    Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                    Err(e) => return Err(IoSnafu.into_error(e)),
+                }
+            }
+        }
+
+        if changed.is_empty() && !unlinked {
+            return Ok(());
+        }
+        self.daemon_reload_impl().await?;
+
+        let proxy = Systemd1ManagerProxy::new(&self.conn)
+            .await
+            .context(DBusSnafu)?;
+        for spec in changed {
+            proxy
+                .start_unit(&spec.name, "replace")
+                .await
+                .context(DBusSnafu)?;
+            // r[impl priority.settings]
+            // Pushed to the live group as well as written to the file, so an
+            // app priority change reweights the workloads already running
+            // rather than waiting for them to restart.
+            proxy
+                .set_unit_properties(
+                    &spec.name,
+                    true,
+                    vec![
+                        UnitProperty {
+                            name: "CPUWeight",
+                            value: Value::from(spec.weight),
+                        },
+                        UnitProperty {
+                            name: "IOWeight",
+                            value: Value::from(spec.weight),
+                        },
+                    ],
+                )
+                .await
+                .context(DBusSnafu)?;
+        }
         Ok(())
     }
 
@@ -696,6 +864,18 @@ impl ProcessManager for SystemdManager {
 
     fn stop_unit<'a>(&'a self, name: &'a str) -> BoxFuture<'a, Result<(), BoxError>> {
         Box::pin(async move { self.stop_unit_impl(name).await.map_err(Into::into) })
+    }
+
+    fn sync_slices<'a>(
+        &'a self,
+        desired: Vec<SliceSpec>,
+        prune: bool,
+    ) -> BoxFuture<'a, Result<(), BoxError>> {
+        Box::pin(async move {
+            self.sync_slices_impl(desired, prune)
+                .await
+                .map_err(Into::into)
+        })
     }
 
     fn reset_failed_unit<'a>(&'a self, name: &'a str) -> BoxFuture<'a, Result<(), BoxError>> {

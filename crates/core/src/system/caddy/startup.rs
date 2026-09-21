@@ -9,6 +9,7 @@ use snafu::{ResultExt, Snafu};
 
 use super::config::build_caddy_config;
 use super::proxy::{CaddyAddrs, CaddyProxy};
+use crate::system::priority;
 use crate::system::{
     ContainerRuntime, NetworkProxy, ProcessManager,
     types::{ContainerStatus, ProxyConfig, TransientRestart, TransientUnitSpec},
@@ -264,6 +265,12 @@ async fn start_slot(
             log_extra_fields: vec![("SEEDLING_INFRA".to_owned(), "proxy".to_owned())],
             kill_signal: None,
             timeout_stop_secs: None,
+            // r[impl priority.kill-order]
+            // Infrastructure ranks above every app workload: a host under
+            // memory pressure must not lose the components that route to
+            // whatever survives.
+            slice: Some(priority::INFRA_SLICE.to_owned()),
+            oom_score_adjust: Some(priority::INFRA_OOM_SCORE_ADJUST),
             restart_sec: Some(5),
             start_limit_interval_sec: Some(600),
             start_limit_burst: Some(10),
