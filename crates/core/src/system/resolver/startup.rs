@@ -9,7 +9,7 @@ use ipnet::Ipv6Net;
 use rusqlite::OptionalExtension;
 use snafu::{ResultExt, Snafu};
 
-use crate::runtime::priority;
+use crate::system::priority;
 use crate::system::{
     ContainerRuntime, ProcessManager,
     types::{ContainerStatus, TransientRestart, TransientUnitSpec},

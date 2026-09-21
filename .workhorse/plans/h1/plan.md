@@ -72,8 +72,8 @@ Working notes from the spec interview. The acceptance criteria live in the trace
 - [x] Slice naming: `seedling.slice` → `seedling-<app>.slice` (app weight) → `seedling-<app>-<tier>.slice` (tier weight) → unit. `-` in the app component maps onto `_` rather than the `\x2d` escape first sketched: the escape carries a backslash, which `validate_unit_name` rejects as a path-traversal guard, and `_` cannot occur in an `AppName` so the mapping is collision-free without weakening that guard. Infra: `seedling-infra.slice`.
 - [x] `reserved.rs`: reserve the slice-name scheme; reject a resource whose realised unit collides (creation only). Annotate `r[impl priority.groups-owned]`.
 - [x] `TransientUnitSpec`: add `slice: Option<String>`, `oom_score_adjust: Option<i32>`; emit `Slice=` + `OOMScoreAdjust=` in `systemd.rs`. Annotate `r[impl priority.actuation]`.
-- [x] `ProcessManager`: `ensure_slice(name, cpu_weight, io_weight)` (StartTransientUnit create / SetUnitProperties reweight), `remove_slice`. Impl in `systemd.rs`, `stub.rs`, `unavailable.rs`.
-- [x] Reconcile pass: each tick, derive desired slices for running workloads, create/reweight (live CPU/IO), GC empty. Thread `(app_prio, dep_prio)` into `start_pod_instance` for `Slice=`/`OOMScoreAdjust=`. App-priority read fresh per tick like `compute_effective_scales`.
+- [x] `ProcessManager`: `sync_slices(desired, prune)` — one call reconciles the whole owned set against the unit files on disk, writing only differences and pushing weights live for those. Impl in `systemd.rs`, `stub.rs`, `unavailable.rs`. (Started as per-slice `ensure_slice`/`remove_slice`; see "Settled during review".)
+- [x] Reconcile pass: each tick, derive desired slices from the app set, sync against disk (create/reweight live, forget orphans), bounded by a timeout with capped back-off and a fault past a threshold. Thread `(app_prio, dep_prio)` into `start_pod_instance` for `Slice=`/`OOMScoreAdjust=`. App-priority read fresh per tick like `compute_effective_scales`.
 - [x] Infra: caddy + resolver startup join `seedling-infra.slice` with protective OOM.
 
 ### 5. Web UI (in scope)
@@ -102,6 +102,32 @@ Working notes from the spec interview. The acceptance criteria live in the trace
   a Canopy relay code and is not in the OI's `wire.error-codes` vocabulary; the
   spec was corrected to match the vocabulary and the sibling `stop_resource`
   handler.
+
+## Settled during review
+
+- **Slice state is derived from disk, not from memory.** The first cut kept an
+  in-memory `applied_slices` mirror of what had been written. Three review
+  rounds each found a different divergence between that mirror and reality —
+  orphaned unit files after a restart, a full re-apply on every cold start, a
+  fault that could latch with nothing to clear it. The mirror was the defect, so
+  it is gone: `sync_slices` compares the desired set against the unit files
+  actually present and writes only the difference. A pass that changes nothing
+  costs nothing, and a slice left behind while the daemon was down is collected
+  on the next pass.
+- **Forgetting a slice unlinks its unit file; it never stops it.** Stopping a
+  systemd slice stops every unit inside it, which would kill running workloads
+  outright, bypassing their stop signal and timeout. Because removal is
+  non-destructive, the tier set can follow the declared levels rather than
+  materialising all four per app.
+- **The infrastructure slice is inserted last.** An app registered before the
+  name reservation shipped realises the same slice name, and would otherwise
+  reweight the group holding the proxy and the resolver to its own standing.
+- **A failed priority read is never answered as `normal`.** It halts the tick
+  (with a fault, since nothing else advances either) and is surfaced by
+  `/apps/list` and `/apps/show` rather than defaulted — "never set" and "could
+  not be read" are different answers.
+- **`Priority` derives its ordering** from a weakest-first declaration order,
+  rather than a hand-written `Ord` over a `rank()` nothing else called.
 
 ## Open / to confirm
 

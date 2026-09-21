@@ -13,6 +13,7 @@ pub mod actuator;
 pub mod nat64;
 pub mod netinfo;
 pub mod observer;
+pub mod priority;
 pub mod reconcile;
 pub mod translate;
 pub mod types;
@@ -201,18 +202,23 @@ pub trait ProcessManager: Send + Sync + 'static {
     ) -> BoxFuture<'a, Result<Vec<UnitSummary>, BoxError>>;
 
     // Resource-control slices — the grouping the runtime owns.
-    /// Create any of `specs` that are absent and apply their weights, live
-    /// where the slice already exists.
+    /// Make the set of slices this runtime owns match `desired`, creating,
+    /// reweighting and forgetting as needed.
     ///
-    /// Batched because creating a slice needs the supervisor to re-read its
-    /// unit files, which is global work: one call for the whole set costs a
-    /// single re-read rather than one per slice.
+    /// Takes the whole set rather than one slice at a time because the
+    /// supervisor re-reads its unit files as global work: deciding once for the
+    /// batch costs a single re-read instead of one per slice. The implementation
+    /// compares against what already exists, so a call that changes nothing
+    /// costs nothing.
+    ///
+    /// `prune` is false when the caller could not account for every app this
+    /// tick, so a short `desired` set never forgets a live app's slice.
     // r[impl priority.actuation]
-    fn ensure_slices<'a>(&'a self, specs: Vec<SliceSpec>) -> BoxFuture<'a, Result<(), BoxError>>;
-    /// Forget the named slices, leaving anything still running in them alone.
-    /// Idempotent.
-    // r[impl priority.actuation]
-    fn remove_slices<'a>(&'a self, names: Vec<String>) -> BoxFuture<'a, Result<(), BoxError>>;
+    fn sync_slices<'a>(
+        &'a self,
+        desired: Vec<SliceSpec>,
+        prune: bool,
+    ) -> BoxFuture<'a, Result<(), BoxError>>;
 
     // Persistent units — written to the unit drop-in path.
     fn write_unit<'a>(

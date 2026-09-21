@@ -61,15 +61,19 @@ impl OnExit {
 /// host is under memory, CPU, or I/O pressure. Declared in BSL; the runtime
 /// owns how each level is realised (see `r[priority.actuation]`).
 ///
-/// Totally ordered: `Critical > Elevated > Normal > Low`.
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+/// Totally ordered: `Critical > Elevated > Normal > Low`. The ordering is
+/// derived rather than spelled out, and is relied on to keep the per-app set of
+/// declared levels in a stable order.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Priority {
     // l[impl const.priority.enum]
-    Critical,
-    Elevated,
+    // Declared weakest-claim first so the derived ordering is the documented
+    // one: `Critical > Elevated > Normal > Low`.
+    Low,
     #[default]
     Normal,
-    Low,
+    Elevated,
+    Critical,
 }
 
 impl Priority {
@@ -83,17 +87,6 @@ impl Priority {
         map
     }
 
-    /// Rank on the total order, higher meaning a stronger claim. Used to order
-    /// levels; the concrete number is not otherwise meaningful.
-    pub fn rank(self) -> u8 {
-        match self {
-            Self::Low => 0,
-            Self::Normal => 1,
-            Self::Elevated => 2,
-            Self::Critical => 3,
-        }
-    }
-
     /// Lower-case wire form used in `/apps/*` responses and event payloads.
     pub fn as_str(self) -> &'static str {
         match self {
@@ -102,18 +95,6 @@ impl Priority {
             Self::Normal => "normal",
             Self::Low => "low",
         }
-    }
-}
-
-impl PartialOrd for Priority {
-    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
-        Some(self.cmp(other))
-    }
-}
-
-impl Ord for Priority {
-    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-        self.rank().cmp(&other.rank())
     }
 }
 

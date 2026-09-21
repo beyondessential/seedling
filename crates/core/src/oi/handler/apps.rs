@@ -423,10 +423,19 @@ pub(crate) fn list_apps(state: &OiState) -> HandlerResult {
     let apps = reg.list();
     // i[impl app.priority.describe]
     // One read for every app's standing, rather than a round trip per app on
-    // top of the per-app fault count this endpoint already pays.
+    // top of the per-app fault count this endpoint already pays. A failed read
+    // is surfaced rather than defaulted: reporting every app as `normal` is
+    // indistinguishable from nobody having set one, and would tell an operator
+    // asking why their `high` app is being shed exactly the wrong thing.
     let priorities = state
         .db
-        .call(|db| priority::load_all_app_priorities(db).unwrap_or_default());
+        .call(priority::load_all_app_priorities)
+        .map_err(|e| {
+            OiError::new(
+                ErrorCode::Internal,
+                format!("could not read app priorities: {e}"),
+            )
+        })?;
     let result: Vec<Value> = apps
         .into_iter()
         .map(|(name, base_status)| {
@@ -839,11 +848,18 @@ pub(crate) fn describe_app(state: &OiState, params: AppParams) -> HandlerResult 
         .collect();
 
     // i[impl app.priority.describe]
+    // Surfaced rather than defaulted, for the same reason as `/apps/list`.
     let app_priority = {
         let name_clone = params.app.clone();
         state
             .db
-            .call(move |db| priority::effective_app_priority(db, &name_clone).unwrap_or_default())
+            .call(move |db| priority::effective_app_priority(db, &name_clone))
+            .map_err(|e| {
+                OiError::new(
+                    ErrorCode::Internal,
+                    format!("could not read app priority: {e}"),
+                )
+            })?
     };
 
     let mut desc = json!({

@@ -40,7 +40,7 @@ pub const RESERVED_SITE_INGRESS_NAMES: &[&str] =
 /// that realises the slice component the daemon keeps for its own
 /// infrastructure would have its containers share — and reweight — the slice
 /// holding the proxy and the resolver.
-pub const RESERVED_APP_NAMES: &[&str] = &[crate::runtime::priority::INFRA_COMPONENT];
+pub const RESERVED_APP_NAMES: &[&str] = &[crate::system::priority::INFRA_COMPONENT];
 
 /// A name that belongs to the daemon.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -127,7 +127,7 @@ mod tests {
     // r[verify priority.groups-owned]
     #[test]
     fn the_infra_slice_app_name_is_reserved() {
-        let reserved = AppName::new(crate::runtime::priority::INFRA_COMPONENT).unwrap();
+        let reserved = AppName::new(crate::system::priority::INFRA_COMPONENT).unwrap();
         assert!(check_app_name(&reserved).is_err());
         let ordinary = AppName::new("infra-tools").unwrap();
         assert!(check_app_name(&ordinary).is_ok());

@@ -554,7 +554,10 @@ async fn actuate_one_pod(
             // r[impl autonomous.scale]
             let rule = "instance in desired state but not running; r[autonomous.restart] / r[autonomous.scale] requires (re)start";
             let op = autonomous_ops::record(db, &dr.instance, "start", rule);
-            let outcome = match actuator.start(&dr.instance, &dr.definition, app_priority).await {
+            let outcome = match actuator
+                .start(&dr.instance, &dr.definition, app_priority)
+                .await
+            {
                 Ok(Some(_)) | Ok(None) => {
                     if let Some(img) = image_ref {
                         result.image_pull_success = Some((dr.instance.clone(), img));

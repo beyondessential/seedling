@@ -267,10 +267,11 @@ pub struct SliceSpec {
     /// Full unit name, e.g. `seedling-myapp-critical.slice`.
     pub name: String,
     pub description: String,
-    /// Share of contended CPU. Maps to `CPUWeight=`.
-    pub cpu_weight: u64,
-    /// Share of contended I/O. Maps to `IOWeight=`.
-    pub io_weight: u64,
+    /// Share of contended capacity this slice claims, relative to its
+    /// siblings. Fans out to both `CPUWeight=` and `IOWeight=`: a workload's
+    /// standing is one thing, and nothing in the mapping distinguishes its
+    /// claim on CPU from its claim on I/O.
+    pub weight: u64,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

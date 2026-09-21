@@ -402,46 +402,116 @@ impl SystemdManager {
         Ok(())
     }
 
-    /// Unit-file text for a slice. The weights live here so they survive a
-    /// supervisor restart; they are also pushed live below.
+    /// Unit-file text for a slice. The weight lives here so it survives a
+    /// supervisor restart; it is also pushed live when it changes.
     fn slice_unit_content(spec: &SliceSpec) -> String {
         format!(
             "[Unit]\nDescription={}\n\n[Slice]\nCPUWeight={}\nIOWeight={}\n",
-            spec.description, spec.cpu_weight, spec.io_weight
+            spec.description, spec.weight, spec.weight
         )
     }
 
-    // r[impl priority.actuation]
-    /// Create any absent slices and apply every slice's weights.
+    /// Whether `name` is a slice this runtime owns, and so may write or unlink.
     ///
-    /// A unit file is written only where its content would actually change, and
-    /// the supervisor is asked to re-read its units at most once for the whole
-    /// batch. That matters on the first tick after a restart, when the caller's
-    /// record of what it has applied is empty and every slice is offered here:
-    /// the files already match, so nothing is written and no re-read happens.
-    async fn ensure_slices_impl(&self, specs: Vec<SliceSpec>) -> Result<(), SystemdError> {
-        for spec in &specs {
+    /// The unit directory is shared with the operator and with every other
+    /// package on the host. Generated names all have this shape, and the only
+    /// names offered for removal are ones read back out of the directory, so
+    /// this is what keeps a malformed or unexpected entry from being unlinked.
+    // r[impl priority.groups-owned]
+    fn is_owned_slice(name: &str) -> bool {
+        name.starts_with("seedling-") && name.ends_with(".slice")
+    }
+
+    /// Names of the slices this runtime owns that currently exist on disk.
+    async fn existing_owned_slices(&self) -> Result<Vec<String>, SystemdError> {
+        let mut found = Vec::new();
+        let mut dir = match tokio::fs::read_dir(UNIT_DIR).await {
+            Ok(d) => d,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(found),
+            Err(e) => return Err(IoSnafu.into_error(e)),
+        };
+        while let Some(entry) = dir.next_entry().await.map_err(|e| IoSnafu.into_error(e))? {
+            let name = entry.file_name().to_string_lossy().into_owned();
+            if Self::is_owned_slice(&name) {
+                found.push(name);
+            }
+        }
+        Ok(found)
+    }
+
+    // r[impl priority.actuation]
+    /// Bring the set of owned slices on this host into line with `desired`.
+    ///
+    /// The unit directory is the state, not any record this process keeps: what
+    /// is written is decided by comparing against the files that are actually
+    /// there. That is what makes the first pass after a restart free — the files
+    /// already match, so nothing is written, the supervisor is not asked to
+    /// re-read its units, and no slice is contacted over the bus — and it is
+    /// what lets a slice left behind by an app that went away while this process
+    /// was not running still be collected.
+    ///
+    /// `prune` is false when the caller could not account for every app, so a
+    /// short desired set never unlinks a live app's slice.
+    async fn sync_slices_impl(
+        &self,
+        desired: Vec<SliceSpec>,
+        prune: bool,
+    ) -> Result<(), SystemdError> {
+        for spec in &desired {
             validate_unit_name(&spec.name)?;
+            if !Self::is_owned_slice(&spec.name) {
+                return Err(InvalidUnitNameSnafu {
+                    name: spec.name.clone(),
+                }
+                .build());
+            }
         }
 
-        let mut wrote_any = false;
-        for spec in &specs {
+        let existing = self.existing_owned_slices().await?;
+
+        // Write only what differs, and remember which slices actually changed:
+        // those are the ones whose weights have to be pushed to the live group.
+        let mut changed = Vec::new();
+        for spec in &desired {
             let wanted = Self::slice_unit_content(spec);
             let path = std::path::Path::new(UNIT_DIR).join(&spec.name);
             let current = tokio::fs::read_to_string(&path).await.ok();
             if current.as_deref() != Some(wanted.as_str()) {
                 self.write_unit_impl(&spec.name, &wanted).await?;
-                wrote_any = true;
+                changed.push(spec);
             }
         }
-        if wrote_any {
-            self.daemon_reload_impl().await?;
+
+        // Unlink rather than stop. Stopping a slice stops every unit still
+        // inside it, which would kill running workloads outright, bypassing
+        // their stop signal and timeout. Unlinking releases an empty slice and
+        // leaves a slice that still has members running.
+        let mut unlinked = false;
+        if prune {
+            let wanted: std::collections::HashSet<&str> =
+                desired.iter().map(|s| s.name.as_str()).collect();
+            for name in &existing {
+                if wanted.contains(name.as_str()) {
+                    continue;
+                }
+                let path = std::path::Path::new(UNIT_DIR).join(name);
+                match tokio::fs::remove_file(&path).await {
+                    Ok(()) => unlinked = true,
+                    Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                    Err(e) => return Err(IoSnafu.into_error(e)),
+                }
+            }
         }
+
+        if changed.is_empty() && !unlinked {
+            return Ok(());
+        }
+        self.daemon_reload_impl().await?;
 
         let proxy = Systemd1ManagerProxy::new(&self.conn)
             .await
             .context(DBusSnafu)?;
-        for spec in &specs {
+        for spec in changed {
             proxy
                 .start_unit(&spec.name, "replace")
                 .await
@@ -457,41 +527,16 @@ impl SystemdManager {
                     vec![
                         UnitProperty {
                             name: "CPUWeight",
-                            value: Value::from(spec.cpu_weight),
+                            value: Value::from(spec.weight),
                         },
                         UnitProperty {
                             name: "IOWeight",
-                            value: Value::from(spec.io_weight),
+                            value: Value::from(spec.weight),
                         },
                     ],
                 )
                 .await
                 .context(DBusSnafu)?;
-        }
-        Ok(())
-    }
-
-    // r[impl priority.actuation]
-    /// Forget the named slices.
-    ///
-    /// Deliberately does not stop them. Stopping a slice stops every unit still
-    /// inside it, which would kill running workloads outright — bypassing their
-    /// stop signal and timeout — if this were ever reached while the slice
-    /// still had members. Removing the unit file releases an empty slice and
-    /// leaves a non-empty one running.
-    async fn remove_slices_impl(&self, names: Vec<String>) -> Result<(), SystemdError> {
-        let mut removed_any = false;
-        for name in &names {
-            validate_unit_name(name)?;
-            let path = std::path::Path::new(UNIT_DIR).join(name);
-            match tokio::fs::remove_file(&path).await {
-                Ok(()) => removed_any = true,
-                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-                Err(e) => return Err(IoSnafu.into_error(e)),
-            }
-        }
-        if removed_any {
-            self.daemon_reload_impl().await?;
         }
         Ok(())
     }
@@ -821,12 +866,16 @@ impl ProcessManager for SystemdManager {
         Box::pin(async move { self.stop_unit_impl(name).await.map_err(Into::into) })
     }
 
-    fn ensure_slices<'a>(&'a self, specs: Vec<SliceSpec>) -> BoxFuture<'a, Result<(), BoxError>> {
-        Box::pin(async move { self.ensure_slices_impl(specs).await.map_err(Into::into) })
-    }
-
-    fn remove_slices<'a>(&'a self, names: Vec<String>) -> BoxFuture<'a, Result<(), BoxError>> {
-        Box::pin(async move { self.remove_slices_impl(names).await.map_err(Into::into) })
+    fn sync_slices<'a>(
+        &'a self,
+        desired: Vec<SliceSpec>,
+        prune: bool,
+    ) -> BoxFuture<'a, Result<(), BoxError>> {
+        Box::pin(async move {
+            self.sync_slices_impl(desired, prune)
+                .await
+                .map_err(Into::into)
+        })
     }
 
     fn reset_failed_unit<'a>(&'a self, name: &'a str) -> BoxFuture<'a, Result<(), BoxError>> {

@@ -1,5 +1,5 @@
 use std::{
-    collections::{BTreeMap, HashMap, HashSet},
+    collections::{BTreeMap, BTreeSet, HashMap, HashSet},
     net::{Ipv4Addr, Ipv6Addr},
     path::PathBuf,
     sync::Arc,
@@ -23,7 +23,7 @@ use crate::{
         desired::{DesiredState, EffectiveScales, compute, compute_uninstalling},
         identity::InstanceId,
         lifecycle::LifecycleState,
-        priority::{self, AppPriority},
+        priority::AppPriority,
         scaling,
         site_services::{resolve::ResolveCtx, resolver::SiteServiceResolver},
         stopped,
@@ -33,7 +33,7 @@ use crate::{
         actuator::Actuator,
         caddy,
         observer::Observer,
-        resolver,
+        priority, resolver,
         types::{DataPlaneRules, SliceSpec, UnitSummary},
     },
 };
@@ -58,6 +58,9 @@ const INFRA_ENSURE_TIMEOUT: Duration = Duration::from_secs(10);
 /// slices up again without an operator touching anything.
 // r[impl priority.actuation]
 const SLICE_BACKOFF_BASE: Duration = Duration::from_secs(10);
+/// Budget for one slice sync. Bounded like every other blocking supervisor call
+/// on this path, so a wedged bus cannot hold up the tick's actuation.
+const SLICE_SYNC_TIMEOUT: Duration = Duration::from_secs(10);
 const SLICE_BACKOFF_CAP: Duration = Duration::from_secs(300);
 
 /// Consecutive failures before the operator is told. Below this the retry is
@@ -414,11 +417,6 @@ pub struct Reconciler {
     /// subsequent tick triggers a reset of `replace_failed` for that app.
     // r[impl autonomous.healthcheck-replace.guard]
     last_seen_generation: HashMap<AppName, u64>,
-    /// Weights last successfully applied to each slice, so a tick that changes
-    /// nothing does no supervisor work. An entry is dropped when its apply
-    /// fails, so the next tick retries rather than assuming it landed.
-    // r[impl priority.actuation]
-    applied_slices: BTreeMap<String, SliceSpec>,
     /// Paces retries when the supervisor refuses the slice set, so a host with
     /// a read-only unit directory is not asked to re-read its units every tick.
     /// Keyed by unit so the gate is shared by the whole batch.
@@ -560,7 +558,6 @@ impl Reconciler {
             crash_looped: HashSet::new(),
             event_tx,
             prev_states: BTreeMap::new(),
-            applied_slices: BTreeMap::new(),
             slice_retry: crate::runtime::retry::RetryGates::new(
                 SLICE_BACKOFF_BASE,
                 SLICE_BACKOFF_CAP,
@@ -609,14 +606,31 @@ impl Reconciler {
         // every app is reported as dropped and the tick holds what is running.
         let priorities = match self
             .db
-            .call(|db| priority::load_all_app_priorities(db))
+            .call(crate::runtime::priority::load_all_app_priorities)
         {
-            Ok(p) => p,
+            Ok(p) => {
+                self.clear_system_fault("app_priorities_unreadable");
+                p
+            }
             Err(e) => {
                 error!(
                     error = %e,
                     "could not read app priorities; holding this tick rather than actuating \
                      workloads at a standing nobody chose"
+                );
+                // Filed on the first failure rather than past a threshold: this
+                // halts the whole tick, so nothing else — routes, health,
+                // restarts, teardown — advances either, and an operator looking
+                // at a system that has silently stopped moving needs to be told
+                // why. Filing is idempotent, so repeated ticks do not pile up.
+                self.file_system_fault(
+                    "app_priorities_unreadable",
+                    &format!(
+                        "could not read the app priorities that decide how workloads compete \
+                         for host resources, so reconciliation is held rather than actuating \
+                         them at a standing nobody chose. Nothing else advances while this \
+                         persists. Error: {e}"
+                    ),
                 );
                 return (Vec::new(), reg.list().len().max(1));
             }
@@ -733,55 +747,56 @@ impl Reconciler {
 fn desired_slices(apps: &[AppSnapshot]) -> BTreeMap<String, SliceSpec> {
     let mut desired: BTreeMap<String, SliceSpec> = BTreeMap::new();
 
-    // r[impl priority.kill-order]
-    desired.insert(
-        priority::INFRA_SLICE.to_owned(),
-        SliceSpec {
-            name: priority::INFRA_SLICE.to_owned(),
-            description: "seedling infrastructure".to_owned(),
-            cpu_weight: priority::INFRA_WEIGHT,
-            io_weight: priority::INFRA_WEIGHT,
-        },
-    );
-
     for app in apps {
         let app_slice = priority::app_slice(&app.name);
-        let weight = priority::app_weight(app.app_priority);
         desired.insert(
             app_slice.clone(),
             SliceSpec {
                 name: app_slice,
                 description: format!("seedling app {}", app.name),
-                cpu_weight: weight,
-                io_weight: weight,
+                weight: priority::app_weight(app.app_priority),
             },
         );
 
-        // Every level gets a slice, whether or not the current definition
-        // declares it. Deriving the set from the declared levels instead would
-        // drop a tier out of the desired set the moment a Deployment's level
-        // changed, while that Deployment's previous-generation instances were
-        // still running in it — and the tier would then be collected out from
-        // under them. The unused ones cost an empty group each.
-        for tier in [
-            Priority::Critical,
-            Priority::Elevated,
-            Priority::Normal,
-            Priority::Low,
-        ] {
+        // The levels this app's definition actually declares, plus Normal,
+        // where Jobs and every other workload that is not a Deployment stand.
+        // A level that stops being declared has its slice forgotten, which is
+        // safe: forgetting unlinks the unit file and leaves anything still
+        // running in the slice alone.
+        let mut tiers: BTreeSet<Priority> = BTreeSet::new();
+        tiers.insert(Priority::Normal);
+        for resource in app.app_def.resources.values() {
+            if let Resource::Deployment(deployment) = resource {
+                tiers.insert(deployment.def.lock().priority);
+            }
+        }
+        for tier in tiers {
             let name = priority::tier_slice(&app.name, tier);
-            let weight = priority::deployment_weight(tier);
             desired.insert(
                 name.clone(),
                 SliceSpec {
                     name,
                     description: format!("seedling app {} at {}", app.name, tier.as_str()),
-                    cpu_weight: weight,
-                    io_weight: weight,
+                    weight: priority::deployment_weight(tier),
                 },
             );
         }
     }
+
+    // r[impl priority.kill-order]
+    // r[impl priority.groups-owned]
+    // Inserted last so it always wins the key: an app named for the
+    // infrastructure component realises the same slice name, and an app that
+    // predates the reservation on that name would otherwise reweight the group
+    // holding the proxy and the resolver down to its own standing.
+    desired.insert(
+        priority::INFRA_SLICE.to_owned(),
+        SliceSpec {
+            name: priority::INFRA_SLICE.to_owned(),
+            description: "seedling infrastructure".to_owned(),
+            weight: priority::INFRA_WEIGHT,
+        },
+    );
 
     desired
 }
@@ -796,75 +811,53 @@ impl Reconciler {
     /// take effect without a redeploy.
     // r[impl priority.actuation]
     async fn reconcile_slices(&mut self, apps: &[AppSnapshot], dropped_apps: usize) {
-        let desired = desired_slices(apps);
-
-        // r[impl priority.actuation]
-        // Only what has actually changed is offered to the supervisor, so a
-        // steady tick does no work at all here.
-        let pending: Vec<SliceSpec> = desired
-            .iter()
-            .filter(|(name, spec)| self.applied_slices.get(*name) != Some(*spec))
-            .map(|(_, spec)| spec.clone())
-            .collect();
-
-        if !pending.is_empty() {
-            let now = Instant::now();
-            if self.slice_retry.should_attempt(&(), now) {
-                match self.driver.process.ensure_slices(pending.clone()).await {
-                    Ok(()) => {
-                        for spec in pending {
-                            self.applied_slices.insert(spec.name.clone(), spec);
-                        }
-                        self.slice_retry.record_success(&());
-                        self.clear_system_fault("slice_apply_failed");
-                    }
-                    Err(e) => {
-                        // Nothing is recorded as applied: a failed batch must
-                        // not read as done on the next tick.
-                        let failures = self.slice_retry.record_failure((), now);
-                        warn!(error = %e, failures, "failed to apply resource-control slices");
-                        if failures >= SLICE_FAULT_THRESHOLD {
-                            self.file_system_fault(
-                                "slice_apply_failed",
-                                &format!(
-                                    "could not apply the resource-control groups that carry \
-                                     workload priority, after {failures} attempts; workloads run \
-                                     without their configured CPU and I/O shares until this \
-                                     clears. Last error: {e}"
-                                ),
-                            );
-                        }
-                    }
-                }
-            }
+        let now = Instant::now();
+        if !self.slice_retry.should_attempt(&(), now) {
+            return;
         }
 
+        let desired: Vec<SliceSpec> = desired_slices(apps).into_values().collect();
         // r[impl reconciliation.absolute-state]
-        // A slice missing from `desired` means its app is gone only when every
-        // app computed its desired state. An app dropped by a transient error
-        // is absent from `apps` while its workloads keep running, and forgetting
-        // its slice would lose the weights they are running under.
-        if dropped_apps > 0 {
-            return;
-        }
-        let stale: Vec<String> = self
-            .applied_slices
-            .keys()
-            .filter(|name| !desired.contains_key(*name))
-            .cloned()
-            .collect();
-        if stale.is_empty() {
-            return;
-        }
-        match self.driver.process.remove_slices(stale.clone()).await {
-            Ok(()) => {
-                for name in stale {
-                    self.applied_slices.remove(&name);
-                }
+        // Forgetting a slice is only safe when every app was accounted for. An
+        // app dropped by a transient error is absent from `apps` while its
+        // workloads keep running, and its slice carries the weights they run
+        // under.
+        let prune = dropped_apps == 0;
+
+        let synced = tokio::time::timeout(
+            SLICE_SYNC_TIMEOUT,
+            self.driver.process.sync_slices(desired, prune),
+        )
+        .await;
+
+        match synced {
+            Ok(Ok(())) => {
+                self.slice_retry.record_success(&());
+                self.clear_system_fault("slice_sync_failed");
             }
-            Err(e) => {
-                warn!(error = %e, "failed to remove resource-control slices");
-            }
+            Ok(Err(e)) => self.record_slice_failure(now, &e.to_string()),
+            Err(_) => self.record_slice_failure(
+                now,
+                &format!("timed out after {}s", SLICE_SYNC_TIMEOUT.as_secs()),
+            ),
+        }
+    }
+
+    /// Pace the retry and, past a threshold, tell the operator. There is no
+    /// give-up state: the next tick past the back-off tries again.
+    // r[impl priority.actuation]
+    fn record_slice_failure(&mut self, now: Instant, error: &str) {
+        let failures = self.slice_retry.record_failure((), now);
+        warn!(error, failures, "failed to sync resource-control slices");
+        if failures >= SLICE_FAULT_THRESHOLD {
+            self.file_system_fault(
+                "slice_sync_failed",
+                &format!(
+                    "could not apply the resource-control groups that carry workload priority, \
+                     after {failures} attempts; workloads run without their configured CPU and \
+                     I/O shares until this clears. Last error: {error}"
+                ),
+            );
         }
     }
 }
@@ -2238,7 +2231,9 @@ mod tests {
         assert!(slices.contains_key("seedling-demo-low.slice"));
         // Always present: Jobs and other non-Deployment workloads stand here.
         assert!(slices.contains_key("seedling-demo-normal.slice"));
-        // Not declared by any Deployment, so not created.
+        // Not declared by any Deployment, so not created. Forgetting a level
+        // that stops being declared is safe because removal unlinks the unit
+        // file and leaves anything still running in the slice alone.
         assert!(!slices.contains_key("seedling-demo-elevated.slice"));
     }
 
@@ -2257,17 +2252,11 @@ mod tests {
         let slices = desired_slices(&apps);
 
         let app_slice = &slices["seedling-demo.slice"];
-        assert_eq!(
-            app_slice.cpu_weight,
-            priority::app_weight(AppPriority::High)
-        );
-        assert_eq!(app_slice.io_weight, priority::app_weight(AppPriority::High));
+        assert_eq!(app_slice.weight, priority::app_weight(AppPriority::High));
+        assert_eq!(app_slice.weight, priority::app_weight(AppPriority::High));
 
         let tier = &slices["seedling-demo-critical.slice"];
-        assert_eq!(
-            tier.cpu_weight,
-            priority::deployment_weight(Priority::Critical)
-        );
+        assert_eq!(tier.weight, priority::deployment_weight(Priority::Critical));
     }
 
     // r[verify priority.settings]
@@ -2279,13 +2268,13 @@ mod tests {
         let high = desired_slices(&[snapshot_with_priorities("demo", AppPriority::High, script)]);
         let low = desired_slices(&[snapshot_with_priorities("demo", AppPriority::Low, script)]);
         assert_ne!(
-            high["seedling-demo.slice"].cpu_weight,
-            low["seedling-demo.slice"].cpu_weight
+            high["seedling-demo.slice"].weight,
+            low["seedling-demo.slice"].weight
         );
         // The tier slices are unchanged: the app term lives on the app slice.
         assert_eq!(
-            high["seedling-demo-normal.slice"].cpu_weight,
-            low["seedling-demo-normal.slice"].cpu_weight
+            high["seedling-demo-normal.slice"].weight,
+            low["seedling-demo-normal.slice"].weight
         );
     }
 
@@ -2294,7 +2283,7 @@ mod tests {
     fn the_infra_slice_is_always_present_and_outweighs_every_app() {
         let slices = desired_slices(&[]);
         let infra = &slices[priority::INFRA_SLICE];
-        assert_eq!(infra.cpu_weight, priority::INFRA_WEIGHT);
+        assert_eq!(infra.weight, priority::INFRA_WEIGHT);
 
         let apps = vec![snapshot_with_priorities(
             "demo",
@@ -2302,8 +2291,27 @@ mod tests {
             r#"app.deployment("api").image("docker.io/library/nginx:1");"#,
         )];
         let with_app = desired_slices(&apps);
-        assert!(
-            with_app[priority::INFRA_SLICE].cpu_weight > with_app["seedling-demo.slice"].cpu_weight
+        assert!(with_app[priority::INFRA_SLICE].weight > with_app["seedling-demo.slice"].weight);
+    }
+
+    // r[verify priority.groups-owned]
+    // Registering an app under the infrastructure name is refused, but an app
+    // that predates that reservation still reaches this derivation, and its
+    // slice name is byte-identical to the infrastructure slice. The
+    // infrastructure entry has to win, or the group holding the proxy and the
+    // resolver takes the app's standing.
+    #[test]
+    fn an_app_named_for_the_infra_slice_cannot_displace_it() {
+        let apps = vec![snapshot_with_priorities(
+            priority::INFRA_COMPONENT,
+            AppPriority::Low,
+            r#"app.deployment("api").image("docker.io/library/nginx:1");"#,
+        )];
+        let slices = desired_slices(&apps);
+        assert_eq!(
+            slices[priority::INFRA_SLICE].weight,
+            priority::INFRA_WEIGHT,
+            "infrastructure keeps its own weight, not the app's"
         );
     }
 
@@ -2321,8 +2329,8 @@ mod tests {
         assert!(slices.contains_key("seedling-app.slice"));
         assert!(slices.contains_key("seedling-app_two.slice"));
         assert_ne!(
-            slices["seedling-app.slice"].cpu_weight,
-            slices["seedling-app_two.slice"].cpu_weight
+            slices["seedling-app.slice"].weight,
+            slices["seedling-app_two.slice"].weight
         );
     }
 

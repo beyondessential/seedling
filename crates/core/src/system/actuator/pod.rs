@@ -10,11 +10,11 @@ use crate::{
     },
     runtime::{
         identity::{ResourceInstance, VolumeName},
-        priority::WorkloadStanding,
         registry::RegistryError,
     },
     system::{
         System,
+        priority::WorkloadStanding,
         translate::proxy::{instance_ipv6, pod_network_prefix},
         types::{ActiveState, TransientRestart, TransientUnitSpec},
     },

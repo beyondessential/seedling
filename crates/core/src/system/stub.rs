@@ -611,22 +611,20 @@ impl ProcessManager for StubProcessManager {
         .boxed()
     }
 
-    fn ensure_slices<'a>(&'a self, specs: Vec<SliceSpec>) -> BoxFuture<'a, Result<(), BoxError>> {
+    fn sync_slices<'a>(
+        &'a self,
+        desired: Vec<SliceSpec>,
+        prune: bool,
+    ) -> BoxFuture<'a, Result<(), BoxError>> {
         async move {
             let mut s = self.state.lock();
-            for spec in specs {
-                s.slices.insert(spec.name.clone(), spec);
+            if prune {
+                let wanted: std::collections::HashSet<&str> =
+                    desired.iter().map(|spec| spec.name.as_str()).collect();
+                s.slices.retain(|name, _| wanted.contains(name.as_str()));
             }
-            Ok(())
-        }
-        .boxed()
-    }
-
-    fn remove_slices<'a>(&'a self, names: Vec<String>) -> BoxFuture<'a, Result<(), BoxError>> {
-        async move {
-            let mut s = self.state.lock();
-            for name in &names {
-                s.slices.remove(name);
+            for spec in desired {
+                s.slices.insert(spec.name.clone(), spec);
             }
             Ok(())
         }

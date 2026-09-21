@@ -9,7 +9,7 @@ use snafu::{ResultExt, Snafu};
 
 use super::config::build_caddy_config;
 use super::proxy::{CaddyAddrs, CaddyProxy};
-use crate::runtime::priority;
+use crate::system::priority;
 use crate::system::{
     ContainerRuntime, NetworkProxy, ProcessManager,
     types::{ContainerStatus, ProxyConfig, TransientRestart, TransientUnitSpec},
