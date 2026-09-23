@@ -30,8 +30,8 @@ routing, TLS and certificates, and the Tamanu, patient portal and mSupply contai
 with their config, lifecycle and upgrades.
 
 App definitions are owned by the apps they describe. The Seedling repo keeps the common ones,
-and gains the ability to take a definition from the app's own repo at the version that app is
-running.
+and gains the ability to fetch a definition from where its app publishes it, record where it
+came from, and refuse a definition and app version that do not go together.
 
 Seedling is also operable from Canopy rather than only from the host: reporting health worth
 acting on, accepting direction for work it should do, and performing backups Canopy asks for.
@@ -127,12 +127,23 @@ What this needs, in outline:
 
 - A definition carries provenance: where it came from, and at which version
 - Seedling can fetch a definition from that source, rather than only accepting pushed text
-- The definition and the app version move together, so upgrading an app takes the definition
-  that release expects
+- A definition declares which app versions it supports, and Seedling refuses a combination the
+  definition does not support. The definition and the app version stay separate knobs, and a
+  regime change moves both in one atomic update, so the upgrade runs under the definition that
+  knows the new regime
+- A definition can carry files alongside its script, such as the error pages B6 serves
 
-The mechanism is open. Whatever it is, it has to hold the property that makes `/apps/update`
-safe today: a definition that fails to evaluate leaves the previous one running and observable
+Definitions are fetched as OCI artefacts from the registry the app's images come from, either
+standalone or as an entry in the image index. A host has to reach that registry to upgrade at
+all, so this adds no connectivity on a poor link, and the registry allowlist governs
+definitions as it does images. Pushing a definition from a local folder stays. Whatever the
+source, a definition that fails to evaluate leaves the previous one running and observable
 state unchanged.
+
+This does not gate the migration. The definitions in `apps/` are demos and never run in
+production, so there is nothing to ship with in the meantime. A production definition can stay
+a single script, maintained wherever it is maintained and pushed through `/apps/create`, until
+this lands.
 
 The rewrite does not wait on the move. It is the same work wherever the files end up.
 
@@ -290,19 +301,15 @@ rest.
 - **Which of the three certificate paths do we build for?** They are not equivalent in effort
   or in what they leave behind. The warm-cert fix is common to all three, but committing to
   one changes what a cutover looks like.
-- **How does a definition reach Seedling from the app's repo, and does it gate the
-  migration?** Candidates differ a lot in cost and in what they assume about host
-  connectivity: pulling from a release artefact, carrying the definition in the app's own
-  container image, or relaying through an existing connection. A migrating host is often on a
-  poor link, so anything requiring the host to reach a new external service needs care. The
-  migration can ship with definitions still in `apps/` and pick this up after, so the question
-  is whether it is a blocker or a follow-on.
 - **What shape does the staged takeover take?** A per-app flag, a site-level mode, or an
   explicit `ingresses takeover` operation. This changes the ops migration's middle stages
   enough that their step lists get rewritten against what ships rather than adapted to it.
 - **What is Canopy allowed to change, and what stops it?** A param set is not a small write:
   `on_change` runs arbitrary script, so "set a param" and "run an upgrade" are the same
-  operation. Needs a decision on which params are remotely settable, whether the host can
+  operation. A param set can also be refused by the definition's validators, and an upgrade
+  across a regime change is a definition-plus-params update rather than a param set (section
+  2), so remote direction may need to carry a definition reference. Needs a decision on which
+  params are remotely settable, whether the host can
   refuse, and how this interacts with `operation_in_progress` when Canopy asks for something
   during a lifecycle operation. An operator watching the host should be able to see what
   Canopy asked for and what it caused.
