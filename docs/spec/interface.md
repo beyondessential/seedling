@@ -270,7 +270,7 @@ Absent specification bugs, anything that is not defined here is either defined i
 > i[definition.bundle.limits]
 > A bundle, pushed or fetched, is rejected with `bundle_invalid`, and nothing is stored, when:
 >
-> - its total size exceeds the runtime's bundle size limit;
+> - its total size exceeds the runtime's bundle size limit, or it holds more files than the runtime's bundle file limit;
 > - it holds anything other than regular files and the directories containing them;
 > - a path in it is absolute, contains a null byte, or escapes the bundle root after normalisation;
 > - its [metadata file](language.md#l--bsl.bundle.metadata) cannot be parsed, has a field of the wrong type, or has a field it does not define;
@@ -293,6 +293,8 @@ Absent specification bugs, anything that is not defined here is either defined i
 > - an image index, from whose entries of that artifact type one is [selected](#i--definition.fetch.select). The index's other entries, such as container images, play no part.
 >
 > A definition artefact has a single layer, of media type `application/vnd.bes.seedling.definition.v1.tar+gzip`: a gzip-compressed tar archive whose root is the bundle root.
+> Every manifest read during a fetch is accepted only when its bytes hash to the digest it was requested under: the digest a reference names, the digest an index entry gives, and the digest the registry reports all have to agree with the bytes served.
+> The digest the fetch records as [provenance](#i--definition.provenance) is the one taken over those bytes, so it names the definition that was installed rather than what the registry asserted.
 > A definition manifest may carry the annotation `vnd.bes.seedling.versions`, holding the Seedling version requirement its bundle's metadata declares, and an index entry may carry the same annotation on its descriptor.
 > A fetched bundle whose declared requirement differs from its manifest's annotation is rejected with `bundle_invalid`.
 > Any failure to fetch, whether the registry is unreachable, the reference is not found, credentials are refused, or the reference names no definition artefact, refuses the request with `fetch_failed`, the message giving the cause, and nothing is stored.

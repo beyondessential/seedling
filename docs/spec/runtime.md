@@ -1688,6 +1688,8 @@ Two levers set how a workload competes for host resources under pressure. Each D
 
 > r[secret.history]
 > Entries in the [generation history](#r--generation.history) that record a previous or new value for a secret parameter must protect those values using the [secret key](#r--secret.key).
+> Each of the two values is protected according to how it was held: the value being replaced is protected when it was read from secret storage, and the value replacing it is protected when it is written there.
+> A definition that drops a parameter's `secret` flag in the same update that changes its value must therefore still protect the value it replaced, in history and in the event announcing the change.
 > History retrieval must decrypt these values internally before serving them to callers that are authorised to reconstruct past generations.
 
 > r[secret.redaction]
