@@ -305,10 +305,19 @@ async fn resolve(
     reference: &DefinitionRef,
     running: &Version,
 ) -> Result<(ManifestDoc, String, Option<VersionRequirement>), FetchError> {
-    let (bytes, digest) = registry
+    let (bytes, reported) = registry
         .manifest(&reference.parsed)
         .await
         .map_err(|e| failed(format!("could not fetch {}: {e}", reference.as_str())))?;
+    let digest = manifest_digest(&bytes, &reported, reference.as_str())?;
+    if let Some(pinned) = reference.parsed.digest()
+        && pinned != digest
+    {
+        return Err(failed(format!(
+            "{} was served a manifest that hashes to {digest}",
+            reference.as_str()
+        )));
+    }
     let doc = parse_doc(&bytes, "manifest")?;
     let Some(entries) = &doc.manifests else {
         let is_definition = doc.artifact_type.as_deref() == Some(ARTIFACT_TYPE)
@@ -324,16 +333,17 @@ async fn resolve(
     let entry = select_entry(entries, running)?;
     let claimed = annotation_requirement(&entry.annotations, "index entry")?;
     let child = reference.with_digest(&entry.digest);
-    let (bytes, child_digest) = registry.manifest(&child).await.map_err(|e| {
+    let (bytes, reported) = registry.manifest(&child).await.map_err(|e| {
         failed(format!(
             "could not fetch definition entry {}: {e}",
             entry.digest
         ))
     })?;
+    let what = format!("definition entry {}", entry.digest);
+    let child_digest = manifest_digest(&bytes, &reported, &what)?;
     if child_digest != entry.digest {
         return Err(failed(format!(
-            "definition entry {} was served with digest {child_digest}",
-            entry.digest
+            "{what} was served with digest {child_digest}"
         )));
     }
     Ok((
@@ -410,17 +420,38 @@ pub async fn fetch(
     Ok(Fetched { bundle, digest })
 }
 
-fn verify_digest(blob: &[u8], expected: &str) -> Result<(), FetchError> {
-    let Some(hex) = expected.strip_prefix("sha256:") else {
-        return Err(failed(format!(
-            "definition layer digest {expected} uses an unsupported algorithm"
-        )));
-    };
-    let actual: String = Sha256::digest(blob)
+/// The `sha256:` digest of some bytes.
+fn sha256_digest(bytes: &[u8]) -> String {
+    let hex: String = Sha256::digest(bytes)
         .iter()
         .map(|b| format!("{b:02x}"))
         .collect();
-    if actual != hex {
+    format!("sha256:{hex}")
+}
+
+/// The digest of manifest bytes, taken over the bytes themselves.
+///
+/// Digest pinning, the provenance a fetch records, and the re-check that
+/// notices a tag has moved all rest on this value, so it is never the digest
+/// the registry reports: that one only has to agree with it.
+// i[impl definition.fetch]
+fn manifest_digest(bytes: &[u8], reported: &str, what: &str) -> Result<String, FetchError> {
+    let actual = sha256_digest(bytes);
+    if reported != actual {
+        return Err(failed(format!(
+            "{what} was served as {reported} but its contents hash to {actual}"
+        )));
+    }
+    Ok(actual)
+}
+
+fn verify_digest(blob: &[u8], expected: &str) -> Result<(), FetchError> {
+    if !expected.starts_with("sha256:") {
+        return Err(failed(format!(
+            "definition layer digest {expected} uses an unsupported algorithm"
+        )));
+    }
+    if sha256_digest(blob) != expected {
         return Err(failed(format!(
             "definition layer does not match its digest {expected}"
         )));
@@ -545,6 +576,10 @@ impl Registry for OciRegistry {
             const PAGE: usize = 500;
             let auth = Self::auth(reference);
             let mut tags: Vec<String> = Vec::new();
+            // The ordered list is what `last` pages from; membership is
+            // asked once per incoming tag, so it gets its own set rather
+            // than a scan of everything accumulated so far.
+            let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
             loop {
                 let page = self
                     .client
@@ -561,7 +596,7 @@ impl Registry for OciRegistry {
                 // page forever; stop as soon as a page brings nothing new.
                 let before = tags.len();
                 for tag in page.tags {
-                    if !tags.contains(&tag) {
+                    if seen.insert(tag.clone()) {
                         tags.push(tag);
                     }
                 }

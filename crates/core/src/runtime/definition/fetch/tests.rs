@@ -207,3 +207,50 @@ fn tags_are_listed_for_a_repository() {
     assert_eq!(block(list_tags(&reg, &repo)).unwrap(), vec!["1", "2"]);
     assert!(DefinitionRef::parse_repository("ghcr.io/org/app-def:1").is_err());
 }
+
+// i[verify definition.fetch]
+#[test]
+fn a_manifest_that_does_not_hash_to_its_digest_is_refused() {
+    let other = br#"{"schemaVersion":2,"artifactType":"other","layers":[]}"#;
+
+    // A registry claiming the digest it was asked for while serving other
+    // bytes, which is what a header-reported digest lets it do.
+    let reg = FakeRegistry::default();
+    let digest = reg.push_definition(REPO, &[("app.seed.rhai", b"app;")], None);
+    reg.tag(REPO, "1", &digest);
+    reg.serve_instead(&format!("{REPO}:1"), other, Some(&digest));
+    let e = block(fetch(&reg, &r("ghcr.io/org/app-def:1"), &v("0.12.0"))).unwrap_err();
+    assert!(e.to_string().contains("hash to"), "{e}");
+
+    // A pinned digest, the form an operator uses to pin content, where the
+    // registry reports the bytes it actually served.
+    let reg = FakeRegistry::default();
+    let digest = reg.push_definition(REPO, &[("app.seed.rhai", b"app;")], None);
+    reg.serve_instead(&format!("{REPO}@{digest}"), other, None);
+    let e = block(fetch(&reg, &r(&format!("{REPO}@{digest}")), &v("0.12.0"))).unwrap_err();
+    assert!(e.to_string().contains("hashes to"), "{e}");
+
+    // An index entry, whose digest the index named.
+    let reg = FakeRegistry::default();
+    let child = reg.push_definition(REPO, &[("app.seed.rhai", b"app;")], None);
+    let index = reg.push_index(REPO, &[(&child, Some(ARTIFACT_TYPE), None)]);
+    reg.tag(REPO, "1", &index);
+    reg.serve_instead(&format!("{REPO}@{child}"), other, None);
+    let e = block(fetch(&reg, &r("ghcr.io/org/app-def:1"), &v("0.12.0"))).unwrap_err();
+    assert!(e.to_string().contains("was served with digest"), "{e}");
+}
+
+// i[verify definition.fetch]
+// i[verify definition.provenance]
+#[test]
+fn the_recorded_digest_is_taken_over_the_manifest_bytes() {
+    let reg = FakeRegistry::default();
+    let digest = reg.push_definition(REPO, &[("app.seed.rhai", b"app;")], None);
+    reg.tag(REPO, "1", &digest);
+    // A tag may legitimately move, and what is recorded is what was served.
+    let moved = reg.push_definition(REPO, &[("app.seed.rhai", b"newer;")], None);
+    reg.tag(REPO, "1", &moved);
+    let got = block(fetch(&reg, &r("ghcr.io/org/app-def:1"), &v("0.12.0"))).unwrap();
+    assert_eq!(got.digest, moved);
+    assert_ne!(got.digest, digest);
+}

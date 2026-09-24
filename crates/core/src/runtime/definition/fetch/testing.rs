@@ -42,6 +42,9 @@ pub fn tar_gz(files: &[(&str, &[u8])]) -> Vec<u8> {
 pub struct FakeRegistry {
     /// Keyed by `registry/repository:tag` or `registry/repository@digest`.
     manifests: Mutex<BTreeMap<String, Bytes>>,
+    /// Digests the registry claims, for keys where that is not the digest of
+    /// the bytes it serves.
+    reported: Mutex<BTreeMap<String, String>>,
     blobs: Mutex<BTreeMap<String, Bytes>>,
     tags: Mutex<BTreeMap<String, Vec<String>>>,
     unreachable: Mutex<bool>,
@@ -61,6 +64,20 @@ impl FakeRegistry {
             .lock()
             .insert(format!("{repo}@{digest}"), Bytes::from(bytes));
         digest
+    }
+
+    /// Serve `bytes` for a key that already resolves, as a registry that
+    /// does not honour the digest or tag it was asked for. `reported` is the
+    /// digest it claims for them, standing in for the `Docker-Content-Digest`
+    /// header a real registry sends; without one it reports them honestly.
+    pub fn serve_instead(&self, key: &str, bytes: &[u8], reported: Option<&str>) {
+        self.manifests
+            .lock()
+            .insert(key.to_owned(), Bytes::copy_from_slice(bytes));
+        match reported {
+            Some(d) => self.reported.lock().insert(key.to_owned(), d.to_owned()),
+            None => self.reported.lock().remove(key),
+        };
     }
 
     /// Point `repo:tag` at the manifest with `digest`.
@@ -197,7 +214,12 @@ impl Registry for FakeRegistry {
                 .get(&key(reference))
                 .cloned()
                 .ok_or_else(|| "manifest unknown".to_owned())?;
-            let digest = digest_of(&bytes);
+            let digest = self
+                .reported
+                .lock()
+                .get(&key(reference))
+                .cloned()
+                .unwrap_or_else(|| digest_of(&bytes));
             Ok((bytes, digest))
         })
     }
