@@ -27,6 +27,7 @@ export function PlanDiff({ plan, unwarmedHandlerImages }: Props) {
   const diff = plan.diff ?? [];
   const handlers = plan.on_change_would_fire ?? [];
   const errors = plan.errors ?? [];
+  const rejections = plan.rejections ?? [];
   const unwarmed = unwarmedHandlerImages ?? [];
 
   return (
@@ -37,6 +38,15 @@ export function PlanDiff({ plan, unwarmedHandlerImages }: Props) {
             {e}
           </Alert>
         ))}
+      {/* w[impl routes.apps.definition.fetch] */}
+      {rejections.map((r) => (
+        <Alert key={r.name} severity="error">
+          <Box component="span" sx={{ fontFamily: "monospace" }}>
+            {r.name}
+          </Box>
+          : {r.reason}
+        </Alert>
+      ))}
       {unwarmed.length > 0 && (
         <Alert severity="warning">
           <Typography variant="body2" sx={{ mb: 0.5 }}>

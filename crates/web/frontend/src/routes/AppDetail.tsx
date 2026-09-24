@@ -53,6 +53,7 @@ import {
   OutlinedActionButton,
   SolidActionButton,
 } from "../components/ActionButton";
+import { DefinitionSection } from "../components/DefinitionSection";
 import {
   ImageReferencesCell,
   primaryReference,
@@ -2961,6 +2962,16 @@ export default function AppDetail() {
               <FaultList faults={data.faults} />
             </Section>
           )}
+
+          <Divider />
+
+          {/* w[impl routes.apps.definition] */}
+          <DefinitionSection
+            appName={name!}
+            definition={data.definition}
+            faults={data.faults}
+            onUpdated={refetch}
+          />
 
           <Divider />
 

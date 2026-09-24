@@ -8,9 +8,16 @@ interface Props {
   value: string;
   onChange: (value: string) => void;
   minHeight?: string;
+  /** Show the script without letting it be edited or replaced. */
+  readOnly?: boolean;
 }
 
-export function ScriptEditor({ value, onChange, minHeight = "60vh" }: Props) {
+export function ScriptEditor({
+  value,
+  onChange,
+  minHeight = "60vh",
+  readOnly = false,
+}: Props) {
   const { palette: { mode } } = useTheme();
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [fileName, setFileName] = useState<string | null>(null);
@@ -37,6 +44,7 @@ export function ScriptEditor({ value, onChange, minHeight = "60vh" }: Props) {
 
   const handleDrop = async (e: React.DragEvent) => {
     setDragOver(false);
+    if (readOnly) return;
     const file = e.dataTransfer.files[0];
     if (!file) return;
     e.preventDefault();
@@ -63,14 +71,16 @@ export function ScriptEditor({ value, onChange, minHeight = "60vh" }: Props) {
             {fileName}
           </Typography>
         )}
-        <Button
-          size="small"
-          startIcon={<UploadFileIcon fontSize="small" />}
-          onClick={() => fileInputRef.current?.click()}
-          sx={{ minWidth: 0 }}
-        >
-          Load file
-        </Button>
+        {!readOnly && (
+          <Button
+            size="small"
+            startIcon={<UploadFileIcon fontSize="small" />}
+            onClick={() => fileInputRef.current?.click()}
+            sx={{ minWidth: 0 }}
+          >
+            Load file
+          </Button>
+        )}
         <input
           ref={fileInputRef}
           type="file"
@@ -95,6 +105,8 @@ export function ScriptEditor({ value, onChange, minHeight = "60vh" }: Props) {
         <CodeMirror
           value={value}
           onChange={onChange}
+          readOnly={readOnly}
+          editable={!readOnly}
           extensions={[rhaiLanguage]}
           theme={mode}
           basicSetup={{
