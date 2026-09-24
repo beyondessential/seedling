@@ -135,3 +135,6 @@ pub(crate) fn resolve(
         },
     })
 }
+
+#[cfg(test)]
+mod tests;

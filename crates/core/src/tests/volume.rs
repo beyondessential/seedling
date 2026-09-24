@@ -860,15 +860,15 @@ fn captured_static_volume_cannot_be_modified_in_action() {
 // ---------------------------------------------------------------------------
 
 #[derive(Debug, Clone)]
-struct RecordedWrite {
-    target: crate::runtime::barrier::VolumeWriteTarget,
-    path: String,
-    contents: Vec<u8>,
+pub(super) struct RecordedWrite {
+    pub target: crate::runtime::barrier::VolumeWriteTarget,
+    pub path: String,
+    pub contents: Vec<u8>,
 }
 
 #[derive(Default)]
-struct RecordingVolumeWriter {
-    writes: parking_lot::Mutex<Vec<RecordedWrite>>,
+pub(super) struct RecordingVolumeWriter {
+    pub writes: parking_lot::Mutex<Vec<RecordedWrite>>,
 }
 
 impl crate::runtime::barrier::VolumeWriter for RecordingVolumeWriter {
@@ -894,13 +894,24 @@ fn run_action_with_writer(
     writer: Arc<RecordingVolumeWriter>,
     log: &crate::runtime::barrier::replay::InMemoryActionLog,
 ) -> crate::runtime::barrier::replay::OperationResult {
+    run_action_with_writer_in(script, &[], action_name, writer, log)
+}
+
+pub(super) fn run_action_with_writer_in(
+    script: &str,
+    files: &[(&str, &[u8])],
+    action_name: &str,
+    writer: Arc<RecordingVolumeWriter>,
+    log: &crate::runtime::barrier::replay::InMemoryActionLog,
+) -> crate::runtime::barrier::replay::OperationResult {
     use crate::runtime::{
         EphemeralInstanceRegistry, TestWorldOracle,
         barrier::OperationId,
         barrier::replay::{OperationContext, run_operation},
     };
 
-    let (engine, mut scope, app, ast) = run_test_script(script);
+    let (engine, mut scope, app, ast) =
+        super::run_test_script_in(script, files).expect("script should run without error");
     let oracle = Arc::new(TestWorldOracle::new());
     let registry: Arc<dyn crate::runtime::InstanceRegistry> =
         Arc::new(EphemeralInstanceRegistry::new());

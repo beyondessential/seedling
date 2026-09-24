@@ -1230,6 +1230,32 @@ async fn main() {
         });
     }
 
+    // r[impl fault.definition-unsupported] — the condition changes only when
+    // a definition is replaced or the runtime starts as another version, so
+    // it is converged for every app here and on each replacement.
+    {
+        let running = seedling_core::runtime::definition::version::running();
+        let definitions: Vec<_> = registry
+            .read()
+            .iter()
+            .map(|e| (e.name.clone(), Arc::clone(&e.bundle)))
+            .collect();
+        db.call(move |db| {
+            for (app, bundle) in definitions {
+                seedling_core::runtime::definition::faults::sync_unsupported(
+                    db, &app, &bundle, &running,
+                );
+            }
+        });
+    }
+
+    // r[impl definition.recheck]
+    let _definition_recheck_handle = seedling_core::runtime::definition::recheck::spawn(
+        Arc::clone(&registry),
+        db.clone(),
+        Arc::clone(&oi_state.definition_registry),
+    );
+
     // r[impl canopy.report.schedule] — reports go quiet on their own when no
     // client is offering to carry them, so this runs unconditionally.
     let _canopy_report_handle = seedling_core::runtime::canopy::spawn(Arc::clone(&oi_state));

@@ -5,6 +5,7 @@ pub mod bundle;
 pub mod faults;
 pub mod fetch;
 pub mod provenance;
+pub mod recheck;
 pub mod version;
 
 pub use bundle::{Bundle, BundleError, Script};
