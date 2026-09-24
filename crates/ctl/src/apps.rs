@@ -5,7 +5,7 @@ use seedling_protocol::client::OiClient;
 use seedling_protocol::names::{ActionName, AppName};
 
 use super::{
-    definition::{self, DefinitionArgs, resolve_or_exit},
+    definition::{self, DefinitionArgs, DefinitionKeys, resolve_or_exit},
     print_result,
 };
 
@@ -383,7 +383,7 @@ pub(super) async fn dispatch(client: &OiClient, cmd: AppsCommand) {
                     .iter()
                     .all(|a| script.contains(a))
             });
-            let mut params = definition.fields("script");
+            let mut params = definition.fields(DefinitionKeys::APP);
             params.insert("app".to_owned(), serde_json::json!(app));
             print_result(
                 client
@@ -424,7 +424,7 @@ pub(super) async fn dispatch(client: &OiClient, cmd: AppsCommand) {
                     std::process::exit(1);
                 });
             let definition = require_definition(&definition).await;
-            let mut params = definition.fields("script");
+            let mut params = definition.fields(DefinitionKeys::APP);
             params.insert("app".to_owned(), serde_json::json!(app));
             if let Some(param) = param {
                 params.insert("param".to_owned(), param);
@@ -674,11 +674,7 @@ pub(super) async fn dispatch(client: &OiClient, cmd: AppsCommand) {
             })
             .await;
             if let Some(proposed) = proposed {
-                for (key, value) in proposed.fields("script") {
-                    let key = match key.as_str() {
-                        "origin" => continue,
-                        other => format!("proposed_{other}"),
-                    };
+                for (key, value) in proposed.fields(DefinitionKeys::PROPOSED) {
                     params[key] = value;
                 }
             }

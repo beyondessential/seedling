@@ -3,7 +3,7 @@ use seedling_protocol::client::OiClient;
 use seedling_protocol::names::{AppName, TemplateName};
 
 use super::{
-    definition::{DefinitionArgs, resolve_or_exit},
+    definition::{DefinitionArgs, DefinitionKeys, resolve_or_exit},
     print_result,
 };
 
@@ -99,7 +99,7 @@ pub(super) async fn dispatch(client: &OiClient, cmd: TemplatesCommand) {
                 tracing::error!("give a script file, a folder, a GitHub folder URL, or --ref");
                 std::process::exit(1);
             };
-            let mut req = definition.fields("body");
+            let mut req = definition.fields(DefinitionKeys::TEMPLATE);
             req.insert("name".to_owned(), serde_json::to_value(&name).unwrap());
             req.insert("description".to_owned(), serde_json::json!(description));
             print_result(
@@ -118,7 +118,7 @@ pub(super) async fn dispatch(client: &OiClient, cmd: TemplatesCommand) {
             let mut req = serde_json::Map::new();
             req.insert("name".to_owned(), serde_json::to_value(&name).unwrap());
             if let Some(definition) = resolve_or_exit(&DefinitionArgs { source, reference }).await {
-                req.extend(definition.fields("body"));
+                req.extend(definition.fields(DefinitionKeys::TEMPLATE));
             }
             if clear_description {
                 req.insert("description".to_owned(), serde_json::Value::Null);
@@ -162,7 +162,7 @@ pub(super) async fn dispatch(client: &OiClient, cmd: TemplatesCommand) {
             .await;
             let params = match (name, definition) {
                 (Some(n), None) => serde_json::json!({ "name": n }),
-                (None, Some(d)) => serde_json::Value::Object(d.fields("body")),
+                (None, Some(d)) => serde_json::Value::Object(d.fields(DefinitionKeys::TEMPLATE)),
                 (None, None) => {
                     eprintln!("error: supply <name>, --file <path>, or --ref <reference>");
                     std::process::exit(1);

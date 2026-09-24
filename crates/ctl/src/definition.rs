@@ -32,30 +32,65 @@ pub(super) enum Definition {
     Reference(String),
 }
 
+/// The field names a request carries a definition under.
+///
+/// Each request shape that takes a definition names one set, so the mapping
+/// is enumerated here rather than derived from another shape's keys.
+// i[impl ctl.definition.source]
+#[derive(Clone, Copy)]
+pub(super) struct DefinitionKeys {
+    pub script: &'static str,
+    pub bundle: &'static str,
+    pub reference: &'static str,
+    /// `None` where the request has nowhere to report an origin.
+    pub origin: Option<&'static str>,
+}
+
+impl DefinitionKeys {
+    /// `/apps/create` and `/apps/update`.
+    pub const APP: Self = Self {
+        script: "script",
+        bundle: "bundle",
+        reference: "reference",
+        origin: Some("origin"),
+    };
+    /// `/templates/create` and `/templates/update`.
+    pub const TEMPLATE: Self = Self {
+        script: "body",
+        bundle: "bundle",
+        reference: "reference",
+        origin: Some("origin"),
+    };
+    /// The definition `/apps/plan` is asked to compare against, which it
+    /// never installs and so records no origin for.
+    pub const PROPOSED: Self = Self {
+        script: "proposed_script",
+        bundle: "proposed_bundle",
+        reference: "proposed_reference",
+        origin: None,
+    };
+}
+
 impl Definition {
-    /// The request fields for this definition, naming the script field
-    /// `script_key` (`body` for templates).
-    pub fn fields(&self, script_key: &str) -> Map<String, Value> {
+    /// The request fields for this definition, under `keys`.
+    pub fn fields(&self, keys: DefinitionKeys) -> Map<String, Value> {
         let mut out = Map::new();
         match self {
             Self::Script(text) => {
-                out.insert(script_key.to_owned(), json!(text));
+                out.insert(keys.script.to_owned(), json!(text));
             }
             Self::Bundle { files, origin } => {
                 let encoded: Map<String, Value> = files
                     .iter()
                     .map(|(p, c)| (p.clone(), json!(BASE64.encode(c))))
                     .collect();
-                out.insert("bundle".to_owned(), Value::Object(encoded));
-                if let Some((url, revision)) = origin {
-                    out.insert(
-                        "origin".to_owned(),
-                        json!({ "url": url, "revision": revision }),
-                    );
+                out.insert(keys.bundle.to_owned(), Value::Object(encoded));
+                if let (Some((url, revision)), Some(key)) = (origin, keys.origin) {
+                    out.insert(key.to_owned(), json!({ "url": url, "revision": revision }));
                 }
             }
             Self::Reference(r) => {
-                out.insert("reference".to_owned(), json!(r));
+                out.insert(keys.reference.to_owned(), json!(r));
             }
         }
         out

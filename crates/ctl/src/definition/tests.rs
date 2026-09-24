@@ -95,15 +95,15 @@ fn a_pushed_bundle_carries_its_origin() {
         files: BTreeMap::from([("app.seed.rhai".to_owned(), b"app;".to_vec())]),
         origin: Some(("https://github.com/o/r/tree/main/x".into(), "abc".into())),
     };
-    let fields = def.fields("script");
+    let fields = def.fields(DefinitionKeys::APP);
     assert_eq!(fields["bundle"]["app.seed.rhai"], BASE64.encode(b"app;"));
     assert_eq!(fields["origin"]["revision"], "abc");
     assert_eq!(
-        Definition::Script("x".into()).fields("body"),
+        Definition::Script("x".into()).fields(DefinitionKeys::TEMPLATE),
         json!({ "body": "x" }).as_object().unwrap().clone()
     );
     assert_eq!(
-        Definition::Reference("ghcr.io/o/d:1".into()).fields("script")["reference"],
+        Definition::Reference("ghcr.io/o/d:1".into()).fields(DefinitionKeys::APP)["reference"],
         "ghcr.io/o/d:1"
     );
 }
