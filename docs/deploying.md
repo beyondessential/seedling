@@ -117,6 +117,71 @@ the tailnet address at startup, so a normal boot binds `tailscale0`
 automatically; if you enable Tailscale on an already-running host, `sudo
 systemctl restart seedling.service` to pick it up.
 
+## App definitions
+
+An app's definition can be pushed from where the operator is, or fetched by
+the daemon from an OCI registry. Either way the daemon records where it came
+from, shown by `seedling-ctl apps show` and in generation history.
+
+```bash
+seedling-ctl apps create tamanu ./tamanu.seed.rhai          # a lone script
+seedling-ctl apps create tamanu ./deploy/seedling/           # a folder, pushed as a bundle
+seedling-ctl apps create tamanu \
+    https://github.com/<org>/<repo>/tree/<branch-or-tag>/deploy/seedling  # downloaded by ctl
+seedling-ctl apps create tamanu --ref ghcr.io/<org>/tamanu-definition:2.12.0  # fetched by the daemon
+```
+
+A folder push leaves out `.git` and `.jj`, and anything its `.seedignore`
+excludes (gitignore syntax). A GitHub URL is resolved to a commit and
+downloaded by `seedling-ctl` itself (set `GITHUB_TOKEN` for private
+repositories), so the host needs no GitHub access; the URL and commit are
+recorded as the reported origin.
+
+Replace a definition and change one parameter in the same generation, so an
+upgrade runs under the definition written for it:
+
+```bash
+seedling-ctl apps plan tamanu --ref ghcr.io/<org>/tamanu-definition:2.13.0 --param version=2.13.0
+seedling-ctl apps update tamanu --ref ghcr.io/<org>/tamanu-definition:2.13.0 --set version=2.13.0
+```
+
+An update that fails to fetch, breaks the bundle rules, fails to evaluate, or
+is rejected by a parameter validator is refused, and the app keeps running
+what it had. `seedling-ctl apps export tamanu ./out [--generation N]` writes
+any generation's bundle back out as a folder.
+
+### Publishing a definition to a registry
+
+A definition artefact is an OCI manifest with artifact type
+`application/vnd.bes.seedling.definition.v1` and one layer of media type
+`application/vnd.bes.seedling.definition.v1.tar+gzip`: a gzipped tar whose
+root is the bundle root. If the bundle's `seedling.toml` declares a Seedling
+version requirement, put the same string in the manifest annotation
+`vnd.bes.seedling.versions`. With [ORAS](https://oras.land):
+
+```bash
+tar -czf definition.tar.gz -C deploy/seedling .
+oras push ghcr.io/<org>/tamanu-definition:2.12.0 \
+    --artifact-type application/vnd.bes.seedling.definition.v1 \
+    --annotation "vnd.bes.seedling.versions=>=0.13" \
+    definition.tar.gz:application/vnd.bes.seedling.definition.v1.tar+gzip
+```
+
+The artefact can instead be an entry in the app image's index, beside the
+platform images, with the annotation on its index descriptor too. An index
+may carry several definition entries for different Seedling versions; the
+daemon picks the one whose requirement it satisfies with the highest minimum
+version.
+
+Fetching goes through the registry allowlist (`seedling-ctl registries
+list`) and uses the same registry credentials podman uses for image pulls,
+so a registry the host can pull images from needs no further setup.
+`seedling-ctl registries tags <repository>` lists what is published.
+
+The daemon re-resolves the tag of each fetched definition every few hours.
+When the tag has moved, the app gets a `definition_source_moved` fault; it
+never fetches or applies the new definition on its own.
+
 ## Host tooling (bestool)
 
 `bestool` is a hard dependency of the package. On a Seedling host it is the

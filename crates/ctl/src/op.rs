@@ -339,3 +339,26 @@ pub(super) async fn dispatch_events(
 ) {
     super::subscribe::subscribe(endpoint, auth, identity, actor).await;
 }
+
+#[cfg(test)]
+mod tests {
+    use clap::Parser;
+
+    use super::*;
+
+    #[derive(Parser)]
+    struct TestCli {
+        #[command(subcommand)]
+        cmd: RegistriesCommand,
+    }
+
+    // i[verify ctl.registries.tags]
+    #[test]
+    fn tags_takes_a_repository() {
+        let cli = TestCli::try_parse_from(["t", "tags", "ghcr.io/org/app-def"]).unwrap();
+        let RegistriesCommand::Tags { repository } = cli.cmd else {
+            panic!("expected Tags");
+        };
+        assert_eq!(repository, "ghcr.io/org/app-def");
+    }
+}

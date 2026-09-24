@@ -263,3 +263,18 @@ fn a_filed_fault_survives_a_restart_and_a_failed_recheck() {
     h.pass_at(MIN);
     assert_eq!(h.moved_faults("web").len(), 1);
 }
+
+// r[verify definition.recheck.cadence]
+#[test]
+fn rechecks_are_infrequent_and_spread() {
+    assert!(RECHECK_INTERVAL >= Duration::from_secs(60 * 60));
+    let spreads: std::collections::BTreeSet<u64> = (0..64)
+        .map(|_| jitter(RECHECK_INTERVAL).as_secs())
+        .collect();
+    assert!(
+        spreads
+            .iter()
+            .all(|s| *s <= RECHECK_INTERVAL.as_secs() / 10)
+    );
+    assert!(spreads.len() > 1, "hosts do not all pick the same moment");
+}

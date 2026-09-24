@@ -8,7 +8,7 @@ The full language specification is at [`docs/spec/language.md`](spec/language.md
 
 BSL is written in [Rhai](https://rhai.rs). Rhai is a scripting language with Rust-like syntax: `let`, closures `|args| { body }`, string interpolation with backticks, object maps `#{ key: value }`, and arrays `[a, b, c]`. You do not need to know Rust to write BSL.
 
-The conventional extension is `.seed.rhai`.
+The conventional extension is `.seed.rhai`. A script can stand alone, or be one part of a [definition bundle](#definition-bundles) that also carries files for it to read.
 
 A script runs in a fresh scope every time it is evaluated. The `app` global is pre-injected; everything else must be defined or computed.
 
@@ -146,7 +146,8 @@ let vol = app.volume("data")
     .exported(#{ description: "App data" })  // advertise to control plane
     .readonly()                              // read-only mount
     .tmpfs()                                 // RAM-backed; does not survive reboot
-    .write("/config.json", contents);        // pre-populate a file
+    .write("/config.json", contents)         // pre-populate a file (string or File)
+    .write_dir("/errors", app.dir("pages")); // copy a bundle folder in
 ```
 
 ### Parameter
@@ -166,7 +167,15 @@ version.on_change(|rt, old| {
     // old is the App state at the previous generation
     // use it to stop old resources before starting new ones
 });
+
+version.validate(|value, all| {
+    // throw to reject the proposed value; `all` maps every set param
+    // to its proposed value
+    if !value.starts_with("2.12") { throw "this definition runs 2.12.x"; }
+});
 ```
+
+A validator decides whether a proposed value is acceptable. It runs before any definition update, param set, or param unset is stored, against the values the app would hold if the request went through, so it sees the new definition's rules alongside the new values. A rejection refuses the request with `validation_failed` and the thrown value as the reason; nothing changes. A validator runs only while its param is set (use `required` for presence), gets no `rt`, and may not define resources. Call `validate` at most once per param, at the top level.
 
 ### Runtime (rt)
 
@@ -180,7 +189,7 @@ rt.restart(deployment)          // rotate a Deployment's instances per on_update
 rt.signal(target, "SIGHUP")     // deliver a POSIX signal to PID 1 of every running instance
 rt.warm_certs(resources)        // pre-provision TLS certs for ingresses
 rt.warm_images(resources)       // pre-pull container images without starting them
-rt.write(volume, path, contents)         // write a file into a volume at action time
+rt.write(volume, path, contents)         // write a file (string or File) into a volume at action time
 rt.exec(target, argv, options?)          // run argv inside a running container, returns Executed
 
 // Started methods — all block until state is reached (deadline in seconds):
@@ -478,6 +487,45 @@ Behaviour:
 - The call is at-most-once across replays.
 - Unlike static `Volume.write`, contents are NOT reapplied on container restart — `rt.write` is point-in-time. For tmpfs volumes the file is wiped at the next container start; that's allowed and is up to the script author to reason about.
 - Calling `rt.write` outside an action closure is a script error.
+
+## Definition bundles
+
+A definition is a *bundle*: a folder holding the script and any files it needs, such as error pages or seed data. A lone script is a bundle holding only `app.seed.rhai`.
+
+```
+tamanu/
+├── seedling.toml        # optional
+├── app.seed.rhai
+└── pages/
+    ├── 500.html
+    └── logo.png
+```
+
+`seedling.toml` is optional and has two optional fields:
+
+```toml
+seedling = ">=0.13, <0.15"          # Seedling versions this definition supports; `||` separates alternatives
+script = ["lib.rhai", "app.seed.rhai"] # script files, concatenated in order; default ["app.seed.rhai"]
+```
+
+A definition for a Seedling version the host is not running is refused when it is installed. An error in any script file is reported against that file and its own line number.
+
+Every other file is a *sidecar* the script can read:
+
+```rhai
+let pages = app.volume("error-pages")
+    .write_dir("/", app.dir("pages"));            // every file under pages/, byte for byte
+
+app.volume("seed").write("/seed.json", app.file("seed.json"));
+
+let banner = app.file("banner.txt").text();       // throws if the file is not UTF-8
+```
+
+- `app.file(path)` returns a `File`; `app.dir(path)` returns a `Directory` of every file beneath `path`. Paths are relative to the bundle root and cannot escape it; a missing file, or a folder with nothing in it, throws.
+- Both read the bundle the app was evaluated from, in any context. Inside an `on_change` handler, `old.file(...)` and `old.dir(...)` read the previous generation's bundle.
+- `volume.write` and `rt.write` accept a `File` as well as a string. `volume.write_dir(path, dir)` writes a whole directory, and may target the volume root.
+
+Bundles are limited to regular files and folders, 2 MiB in total. See [Deploying](deploying.md#app-definitions) for pushing a folder and publishing a bundle to a registry.
 
 ## Running a command inside a container: `rt.exec`
 
