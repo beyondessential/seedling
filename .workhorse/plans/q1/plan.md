@@ -112,18 +112,29 @@ Selection depends on the running Seedling version, so after a Seedling upgrade a
 
 Ordered so each stage compiles and tests on its own.
 
-- [ ] Bundle model (`crates/core/src/defs/bundle.rs`): paths, limits, `seedling.toml` metadata, version requirements, content hash and canonical encoding, script concatenation with an offset table, error position rewriting, tar.gz and base64-map decoding
-- [ ] Provenance type and its JSON shape
-- [ ] BSL: `File`, `Directory`, `app.file`, `app.dir`, `file.text`, `volume.write` with a `File`, `volume.write_dir`, `rt.write` with a `File`; volume writes carry bytes
-- [ ] BSL: `param.validate`, run against proposed values after evaluation; resource definitions throw inside a validator
-- [ ] Evaluation entry point takes a bundle; every caller (`AppEntry`, reload, replay, lifecycle, shells, images, registries, reconcile, templates) switches to it
-- [ ] Migration: `definition_bundles`, bundle hash, provenance and param change on generations, template bundles; backfill existing scripts as one-file bundles
-- [ ] Generation storage: bundle store/load, provenance, param change on `ScriptUpdate`, reconstruction and history readers, GC including templates
-- [ ] OCI fetch (`crates/core/src/runtime/definition/fetch.rs`): reference parsing, allowlist gate, containers-auth credentials, manifest or index resolution, selection, layer pull, annotation check; tag listing; digest-only resolution for re-checks
-- [ ] Handlers: definition source parsing, `/apps/create`, `/apps/update` (refusal semantics, validators, atomic param change, `on_change`), param set/unset validation, `/apps/show` provenance, `/apps/script` files, `/apps/bundle`, `/apps/generations`, `/apps/plan`, `/registries/tags`, `AppUpdated` fields, error codes
-- [ ] Templates carry bundles and provenance; `supported`; instantiation refuses unsupported
-- [ ] Faults: `definition_unsupported` at startup and on replacement; tag re-check task with per-app back-off filing `definition_source_moved`
-- [ ] CLI: definition sources (file, folder with `.seedignore`, GitHub URL, `--ref`), `--set`/`--unset`, `apps export`, `registries tags`
-- [ ] Web: provenance on the app page, update from registry with tag picker and plan review, editor keeps sidecars and is read-only for multi-file scripts
-- [ ] Docs: `docs/bsl-scripting.md`, `docs/deploying.md`
-- [ ] Tests against the test-cases file
+- [x] Bundle model (`crates/core/src/defs/bundle.rs`): paths, limits, `seedling.toml` metadata, version requirements, content hash and canonical encoding, script concatenation with an offset table, error position rewriting, tar.gz and base64-map decoding
+- [x] Provenance type and its JSON shape
+- [x] BSL: `File`, `Directory`, `app.file`, `app.dir`, `file.text`, `volume.write` with a `File`, `volume.write_dir`, `rt.write` with a `File`; volume writes carry bytes
+- [x] BSL: `param.validate`, run against proposed values after evaluation; resource definitions throw inside a validator
+- [x] Evaluation entry point takes a bundle; every caller (`AppEntry`, reload, replay, lifecycle, shells, images, registries, reconcile, templates) switches to it
+- [x] Migration: `definition_bundles`, bundle hash, provenance and param change on generations, template bundles; backfill existing scripts as one-file bundles
+- [x] Generation storage: bundle store/load, provenance, param change on `ScriptUpdate`, reconstruction and history readers, GC including templates
+- [x] OCI fetch (`crates/core/src/runtime/definition/fetch.rs`): reference parsing, allowlist gate, containers-auth credentials, manifest or index resolution, selection, layer pull, annotation check; tag listing; digest-only resolution for re-checks
+- [x] Handlers: definition source parsing, `/apps/create`, `/apps/update` (refusal semantics, validators, atomic param change, `on_change`), param set/unset validation, `/apps/show` provenance, `/apps/script` files, `/apps/bundle`, `/apps/generations`, `/apps/plan`, `/registries/tags`, `AppUpdated` fields, error codes
+- [x] Templates carry bundles and provenance; `supported`; instantiation refuses unsupported
+- [x] Faults: `definition_unsupported` at startup and on replacement; tag re-check task with per-app back-off filing `definition_source_moved`
+- [x] CLI: definition sources (file, folder with `.seedignore`, GitHub URL, `--ref`), `--set`/`--unset`, `apps export`, `registries tags`
+- [x] Web: provenance on the app page, update from registry with tag picker and plan review, editor keeps sidecars and is read-only for multi-file scripts
+- [x] Docs: `docs/bsl-scripting.md`, `docs/deploying.md`
+- [x] Tests against the test-cases file
+
+## Implementation notes
+
+- Bundles cap at 2 MiB of file contents. The daemon and ctl limit a request to 4 MiB, and the web proxy's request-line limit was raised from 1 MiB to match, so a bundle pushed from the web editor reaches the daemon.
+- The size limit applies at intake only (pushed, fetched). A stored bundle always reloads, including a script stored before bundles existed that is larger than the limit.
+- Content hashes are `sha256:`-prefixed hex over the canonical encoding in `runtime/definition/bundle.rs`, which is also the storage format. Migration v58 rehashes every stored script into it and records `pushed` provenance with no actor.
+- A lone script is returned by `/apps/script` exactly as written; files are joined with a newline only between files that lack one, so the line table stays exact.
+- Validators are captured during an evaluation run with validation on, and called with the same engine and AST. For a param set or unset whose proposed values fail to evaluate, the fallback is the registry's running `App`, whose `bundle` and `stored` are the last successful evaluation's.
+- The re-check ticks every five minutes; a healthy app is due every six hours plus up to a tenth of that, a failing one on a 15-minute-to-24-hour back-off. A result is dropped if the app's definition was replaced while the registry was being asked.
+- `definition_source_moved` is keyed by the newly selected digest, so a tag that moves again replaces the fault instead of leaving one describing a digest it no longer names.
+
