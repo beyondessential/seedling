@@ -1,6 +1,5 @@
 use std::{collections::BTreeMap, sync::Arc};
 
-use secrecy::SecretString;
 use seedling_protocol::error::{ErrorCode, OiError};
 use seedling_protocol::names::{AppName, ParamName};
 use serde::Deserialize;
@@ -334,41 +333,32 @@ pub(crate) fn set_param(
     let prev_owned = previous_value.clone();
     let cipher = Arc::clone(&state.cipher);
 
-    let generation = state
+    let (generation, previous_is_secret) = state
         .db
         .call(move |db| -> rusqlite::Result<_> {
-            if is_secret {
-                let secret_val = SecretString::new(value_owned.clone().into());
-                crate::runtime::apps::secret_params::upsert_secret_param(
-                    db,
-                    &cipher,
-                    &app_owned,
-                    &param_name_owned,
-                    &secret_val,
-                )?;
-                crate::runtime::apps::delete_one_param(db, &app_owned, &param_name_owned)?;
-            } else {
-                crate::runtime::apps::upsert_param(
-                    db,
-                    &app_owned,
-                    &param_name_owned,
-                    &value_owned,
-                )?;
-                crate::runtime::apps::secret_params::delete_one_secret_param(
-                    db,
-                    &app_owned,
-                    &param_name_owned,
-                )?;
-            }
-            generations::bump_param_set(
+            // r[impl secret.history] — read before the write replaces it.
+            let previous_is_secret = crate::runtime::apps::secret_params::is_stored_secret(
                 db,
                 &app_owned,
                 &param_name_owned,
-                prev_owned.as_deref(),
-                &value_owned,
+            )?;
+            crate::runtime::apps::store_param_value(
+                db,
                 &cipher,
+                &app_owned,
+                &param_name_owned,
+                Some(&value_owned),
                 is_secret,
-            )
+            )?;
+            let change = generations::ParamChange {
+                name: &param_name_owned,
+                previous: prev_owned.as_deref(),
+                new_value: Some(&value_owned),
+                is_secret,
+                previous_is_secret,
+            };
+            let generation = generations::bump_param_change(db, &app_owned, &change, &cipher)?;
+            Ok((generation, previous_is_secret))
         })
         .map_err(|e| OiError::new(ErrorCode::NotFound, format!("db error: {e}")))?;
 
@@ -380,7 +370,9 @@ pub(crate) fn set_param(
     let schedule = schedule_on_change(state, app, param_name, generation)?;
 
     // i[impl param.store.secret]
-    if is_secret {
+    // r[impl secret.history] — the event carries one redaction flag for both
+    // values, so a previous value that was secret withholds the pair.
+    if is_secret || previous_is_secret {
         ctx.events
             .param_change(app.clone(), generation, previous_generation)
             .set_redacted(param_name);
@@ -443,24 +435,32 @@ pub(crate) fn unset_param(
     let param_name_owned = param_name.clone();
     let prev_owned = previous_value.clone();
     let cipher = Arc::clone(&state.cipher);
-    let generation = state
+    let (generation, previous_is_secret) = state
         .db
         .call(move |db| -> rusqlite::Result<_> {
-            // Delete from both tables to handle any migration state.
-            crate::runtime::apps::delete_one_param(db, &app_owned, &param_name_owned)?;
-            crate::runtime::apps::secret_params::delete_one_secret_param(
+            // r[impl secret.history] — read before the delete removes it.
+            let previous_is_secret = crate::runtime::apps::secret_params::is_stored_secret(
                 db,
                 &app_owned,
                 &param_name_owned,
             )?;
-            generations::bump_param_unset(
+            crate::runtime::apps::store_param_value(
                 db,
+                &cipher,
                 &app_owned,
                 &param_name_owned,
-                &prev_owned,
-                &cipher,
+                None,
                 is_secret,
-            )
+            )?;
+            let change = generations::ParamChange {
+                name: &param_name_owned,
+                previous: Some(&prev_owned),
+                new_value: None,
+                is_secret,
+                previous_is_secret,
+            };
+            let generation = generations::bump_param_change(db, &app_owned, &change, &cipher)?;
+            Ok((generation, previous_is_secret))
         })
         .map_err(|e| OiError::new(ErrorCode::NotFound, format!("db error: {e}")))?;
 
@@ -472,7 +472,8 @@ pub(crate) fn unset_param(
     let schedule = schedule_on_change(state, app, param_name, generation)?;
 
     // i[impl param.store.secret]
-    if is_secret {
+    // r[impl secret.history]
+    if previous_is_secret {
         ctx.events
             .param_change(app.clone(), generation, previous_generation)
             .unset_redacted(param_name);

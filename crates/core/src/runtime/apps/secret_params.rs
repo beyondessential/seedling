@@ -35,6 +35,19 @@ pub fn load_secret_params_for_app(
     Ok(map)
 }
 
+/// Whether this app's parameter is currently held in secret storage.
+///
+/// A definition can stop marking a parameter secret without the value it
+/// already holds moving, so what a stored value needs is decided by where it
+/// lives, never by what the definition now says.
+// r[impl secret.history]
+pub fn is_stored_secret(db: &Db, app_name: &AppName, param: &ParamName) -> rusqlite::Result<bool> {
+    let mut stmt = db
+        .conn
+        .prepare("SELECT 1 FROM secret_params WHERE app_name = ?1 AND param_name = ?2")?;
+    stmt.exists(rusqlite::params![app_name, param])
+}
+
 // r[impl secret.storage]
 pub fn upsert_secret_param(
     db: &Db,

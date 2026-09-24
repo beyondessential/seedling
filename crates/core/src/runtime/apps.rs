@@ -5,7 +5,7 @@ use std::{
 
 use jiff::Timestamp;
 use parking_lot::{Mutex, RwLock};
-use seedling_protocol::names::{ActionName, AppName};
+use seedling_protocol::names::{ActionName, AppName, ParamName};
 use serde::{Deserialize, Serialize};
 use tokio::sync::Notify;
 
@@ -542,6 +542,38 @@ pub fn load_all_params_for_app(
         Err(e) => tracing::warn!(app = %app_name, "failed to load secret params: {e}"),
     }
     merged
+}
+
+/// Store or clear one parameter value, in whichever table its secrecy puts
+/// it, leaving no copy in the other.
+///
+/// Every path that writes a parameter goes through here: two tables hold
+/// them, and a value that landed in both, or in neither, is what disagreeing
+/// call sites produce.
+// r[impl secret.storage]
+pub fn store_param_value(
+    db: &Db,
+    cipher: &crate::runtime::secrets::Cipher,
+    app: &AppName,
+    name: &ParamName,
+    value: Option<&str>,
+    is_secret: bool,
+) -> rusqlite::Result<()> {
+    match value {
+        Some(v) if is_secret => {
+            let secret = secrecy::SecretString::new(v.to_owned().into());
+            secret_params::upsert_secret_param(db, cipher, app, name, &secret)?;
+            delete_one_param(db, app, name)
+        }
+        Some(v) => {
+            upsert_param(db, app, name, v)?;
+            secret_params::delete_one_secret_param(db, app, name)
+        }
+        None => {
+            delete_one_param(db, app, name)?;
+            secret_params::delete_one_secret_param(db, app, name)
+        }
+    }
 }
 
 // r[impl secret.migration]

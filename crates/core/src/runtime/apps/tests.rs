@@ -649,14 +649,18 @@ fn script_at_param_change_generation_resolves_to_most_recent_script() {
     let db = Db::open_in_memory().expect("open");
     let cipher = crate::runtime::secrets::Cipher::for_tests();
     generations::register_script(&db, &app("myapp"), trivial_script()).expect("bump");
-    generations::bump_param_set(
+    let site = param("site");
+    generations::bump_param_change(
         &db,
         &app("myapp"),
-        &param("site"),
-        None,
-        "prod",
+        &generations::ParamChange {
+            name: &site,
+            previous: None,
+            new_value: Some("prod"),
+            is_secret: false,
+            previous_is_secret: false,
+        },
         &cipher,
-        false,
     )
     .expect("param bump");
     assert_eq!(

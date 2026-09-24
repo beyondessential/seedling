@@ -216,14 +216,31 @@ fn now() -> String {
     jiff::Timestamp::now().to_string()
 }
 
-/// A parameter change recorded alongside a definition update.
+/// A parameter change recorded in the generation history.
 #[derive(Debug, Clone)]
 pub struct ParamChange<'a> {
     pub name: &'a ParamName,
     pub previous: Option<&'a str>,
     /// `None` when the change unsets the parameter.
     pub new_value: Option<&'a str>,
+    /// Whether the new value is held in secret storage.
     pub is_secret: bool,
+    /// Whether the value being replaced was held in secret storage.
+    ///
+    /// Separate from `is_secret` because a definition may drop a
+    /// parameter's `secret` flag in the same update that changes its value:
+    /// what the old value needs is decided by where it was, not by what the
+    /// definition now says.
+    pub previous_is_secret: bool,
+}
+
+impl ParamChange<'_> {
+    fn kind(&self) -> Kind {
+        match self.new_value {
+            Some(_) => Kind::ParamSet,
+            None => Kind::ParamUnset,
+        }
+    }
 }
 
 fn encrypt(cipher: &Cipher, value: Option<&str>) -> rusqlite::Result<Option<Vec<u8>>> {
@@ -261,36 +278,7 @@ fn insert_register_or_update(
         ],
     )?;
     if let Some((change, cipher)) = param {
-        // r[impl secret.history]
-        if change.is_secret {
-            db.conn.execute(
-                "UPDATE generations
-                    SET param_name = ?1,
-                        previous_value_ciphertext = ?2,
-                        new_value_ciphertext = ?3
-                  WHERE app = ?4 AND generation = ?5",
-                rusqlite::params![
-                    change.name,
-                    encrypt(cipher, change.previous)?,
-                    encrypt(cipher, change.new_value)?,
-                    app,
-                    gen_n as i64
-                ],
-            )?;
-        } else {
-            db.conn.execute(
-                "UPDATE generations
-                    SET param_name = ?1, previous_value = ?2, new_value = ?3
-                  WHERE app = ?4 AND generation = ?5",
-                rusqlite::params![
-                    change.name,
-                    change.previous,
-                    change.new_value,
-                    app,
-                    gen_n as i64
-                ],
-            )?;
-        }
+        write_param_change(db, app, gen_n, change, cipher)?;
     }
     db.conn.execute(
         "UPDATE registered_apps SET current_generation = ?1 WHERE name = ?2",
@@ -356,93 +344,65 @@ fn current_bundle_hash(db: &Db, app: &AppName) -> rusqlite::Result<String> {
     stmt.query_row([app], |row| row.get::<_, String>(0))
 }
 
-/// Bump the generation for a parameter set (transitioning to `Some(new)`).
-/// The previous value (`None` for `None → Some`) is recorded for history.
+/// Write a parameter change onto a history row, each of its two values in
+/// the column its own storage calls for.
 // r[impl secret.history]
-pub fn bump_param_set(
+fn write_param_change(
     db: &Db,
     app: &AppName,
-    name: &ParamName,
-    previous: Option<&str>,
-    new_value: &str,
+    generation: Generation,
+    change: &ParamChange<'_>,
     cipher: &Cipher,
-    is_secret: bool,
-) -> rusqlite::Result<Generation> {
-    let hash = current_bundle_hash(db, app)?;
-    let gen_n = next_generation_for(db, app)?;
-    if is_secret {
-        let prev_ct = previous
-            .map(|p| {
-                let s = SecretString::new(p.to_owned().into());
-                cipher
-                    .encrypt(&s)
-                    .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))
-            })
-            .transpose()?;
-        let new_ct = {
-            let s = SecretString::new(new_value.to_owned().into());
-            cipher
-                .encrypt(&s)
-                .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?
-        };
-        db.conn.execute(
-            "INSERT INTO generations
-                (app, generation, created_at, kind, param_name,
-                 previous_value_ciphertext, new_value_ciphertext, bundle_hash)
-             VALUES (?1, ?2, ?3, 'param_set', ?4, ?5, ?6, ?7)",
-            rusqlite::params![app, gen_n as i64, now(), name, prev_ct, new_ct, hash],
-        )?;
+) -> rusqlite::Result<()> {
+    let (previous, previous_ct) = if change.previous_is_secret {
+        (None, encrypt(cipher, change.previous)?)
     } else {
-        db.conn.execute(
-            "INSERT INTO generations
-                (app, generation, created_at, kind, param_name,
-                 previous_value, new_value, bundle_hash)
-             VALUES (?1, ?2, ?3, 'param_set', ?4, ?5, ?6, ?7)",
-            rusqlite::params![app, gen_n as i64, now(), name, previous, new_value, hash],
-        )?;
-    }
+        (change.previous, None)
+    };
+    let (new_value, new_ct) = if change.is_secret {
+        (None, encrypt(cipher, change.new_value)?)
+    } else {
+        (change.new_value, None)
+    };
     db.conn.execute(
-        "UPDATE registered_apps SET current_generation = ?1 WHERE name = ?2",
-        rusqlite::params![gen_n as i64, app],
+        "UPDATE generations
+            SET param_name = ?1,
+                previous_value = ?2,
+                previous_value_ciphertext = ?3,
+                new_value = ?4,
+                new_value_ciphertext = ?5
+          WHERE app = ?6 AND generation = ?7",
+        rusqlite::params![
+            change.name,
+            previous,
+            previous_ct,
+            new_value,
+            new_ct,
+            app,
+            generation as i64
+        ],
     )?;
-    Ok(gen_n)
+    Ok(())
 }
 
-/// Bump the generation for a parameter unset (transitioning to `None`).
+/// Bump the generation for a parameter set or unset, under the definition
+/// the app is already running. `new_value` of `None` is an unset.
 // r[impl secret.history]
-pub fn bump_param_unset(
+pub fn bump_param_change(
     db: &Db,
     app: &AppName,
-    name: &ParamName,
-    previous: &str,
+    change: &ParamChange<'_>,
     cipher: &Cipher,
-    is_secret: bool,
 ) -> rusqlite::Result<Generation> {
     let hash = current_bundle_hash(db, app)?;
     let gen_n = next_generation_for(db, app)?;
-    if is_secret {
-        let prev_ct = {
-            let s = SecretString::new(previous.to_owned().into());
-            cipher
-                .encrypt(&s)
-                .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?
-        };
-        db.conn.execute(
-            "INSERT INTO generations
-                (app, generation, created_at, kind, param_name,
-                 previous_value_ciphertext, bundle_hash)
-             VALUES (?1, ?2, ?3, 'param_unset', ?4, ?5, ?6)",
-            rusqlite::params![app, gen_n as i64, now(), name, prev_ct, hash],
-        )?;
-    } else {
-        db.conn.execute(
-            "INSERT INTO generations
-                (app, generation, created_at, kind, param_name,
-                 previous_value, new_value, bundle_hash)
-             VALUES (?1, ?2, ?3, 'param_unset', ?4, ?5, NULL, ?6)",
-            rusqlite::params![app, gen_n as i64, now(), name, previous, hash],
-        )?;
-    }
+    db.conn.execute(
+        "INSERT INTO generations
+            (app, generation, created_at, kind, bundle_hash)
+         VALUES (?1, ?2, ?3, ?4, ?5)",
+        rusqlite::params![app, gen_n as i64, now(), change.kind().as_str(), hash],
+    )?;
+    write_param_change(db, app, gen_n, change, cipher)?;
     db.conn.execute(
         "UPDATE registered_apps SET current_generation = ?1 WHERE name = ?2",
         rusqlite::params![gen_n as i64, app],

@@ -13,6 +13,45 @@ fn param(s: &str) -> ParamName {
     ParamName::new_unchecked(s)
 }
 
+/// The old set/unset entry points, as the tests that predate a parameter's
+/// two values being protected independently still read.
+fn bump_param_set(
+    db: &Db,
+    app: &AppName,
+    name: &ParamName,
+    previous: Option<&str>,
+    new_value: &str,
+    cipher: &Cipher,
+    is_secret: bool,
+) -> rusqlite::Result<Generation> {
+    let change = ParamChange {
+        name,
+        previous,
+        new_value: Some(new_value),
+        is_secret,
+        previous_is_secret: is_secret,
+    };
+    bump_param_change(db, app, &change, cipher)
+}
+
+fn bump_param_unset(
+    db: &Db,
+    app: &AppName,
+    name: &ParamName,
+    previous: &str,
+    cipher: &Cipher,
+    is_secret: bool,
+) -> rusqlite::Result<Generation> {
+    let change = ParamChange {
+        name,
+        previous: Some(previous),
+        new_value: None,
+        is_secret,
+        previous_is_secret: is_secret,
+    };
+    bump_param_change(db, app, &change, cipher)
+}
+
 const SCRIPT_A: &str = r#"app.deployment("web").image("ghcr.io/example/web:1.0");"#;
 const SCRIPT_B: &str = r#"app.deployment("web").image("ghcr.io/example/web:2.0");"#;
 
@@ -370,4 +409,46 @@ fn param_map_at_decrypts_secret_history() {
 
     let map = param_map_at(&db, &app(), g, &cipher).unwrap();
     assert_eq!(map.get("api_key").map(String::as_str), Some("secret-value"));
+}
+
+// r[verify secret.history]
+#[test]
+fn a_value_that_was_secret_stays_protected_when_the_flag_is_dropped() {
+    let db = test_db();
+    let cipher = test_cipher();
+    register_script(&db, &app(), SCRIPT_A).unwrap();
+    let name = param("api_key");
+    // The definition stops marking the parameter secret in the same update
+    // that changes its value, so the two values are held differently.
+    let change = ParamChange {
+        name: &name,
+        previous: Some("old-secret"),
+        new_value: Some("now-public"),
+        is_secret: false,
+        previous_is_secret: true,
+    };
+    let g = bump_param_change(&db, &app(), &change, &cipher).unwrap();
+    let entry = get(&db, &app(), g).unwrap().unwrap();
+    assert!(entry.previous_value_redacted);
+    assert_eq!(entry.previous_value, None);
+    assert_eq!(entry.new_value.as_deref(), Some("now-public"));
+    assert!(!entry.new_value_redacted);
+
+    let plaintext: Vec<Option<String>> = db
+        .conn
+        .prepare("SELECT previous_value FROM generations WHERE app = ?1 AND generation = ?2")
+        .unwrap()
+        .query_map(rusqlite::params![app(), g as i64], |r| r.get(0))
+        .unwrap()
+        .collect::<rusqlite::Result<_>>()
+        .unwrap();
+    assert_eq!(
+        plaintext,
+        vec![None],
+        "the old secret must not be in the clear"
+    );
+
+    // Walking history still reconstructs it.
+    let map = param_map_at(&db, &app(), g, &cipher).unwrap();
+    assert_eq!(map.get("api_key").map(String::as_str), Some("now-public"));
 }

@@ -1669,9 +1669,23 @@ pub(crate) fn update_app(state: &OiState, params: UpdateParams, ctx: &RequestCtx
 
     let name_owned = params.app.clone();
     let cipher = Arc::clone(&state.cipher);
-    let current_params = state
+    // r[impl secret.history] — whether the value being replaced is held in
+    // secret storage is read before anything is written, since this update
+    // may be what stops the definition marking it secret.
+    let changing = params.param.as_ref().map(|p| p.name.clone());
+    let (current_params, previous_is_secret) = state
         .db
-        .call(move |db| crate::runtime::apps::load_all_params_for_app(db, &cipher, &name_owned));
+        .call(move |db| -> rusqlite::Result<_> {
+            let values = crate::runtime::apps::load_all_params_for_app(db, &cipher, &name_owned);
+            let stored_secret = match &changing {
+                Some(name) => {
+                    crate::runtime::apps::secret_params::is_stored_secret(db, &name_owned, name)?
+                }
+                None => false,
+            };
+            Ok((values, stored_secret))
+        })
+        .map_err(|e| OiError::new(ErrorCode::Internal, format!("db params: {e}")))?;
 
     // r[impl operation.lifecycle.param-change] — at most one parameter,
     // carried in the same step as the definition.
@@ -1750,7 +1764,7 @@ pub(crate) fn update_app(state: &OiState, params: UpdateParams, ctx: &RequestCtx
             let tx = db.conn.unchecked_transaction()?;
             let recorded = match &change_owned {
                 Some((pname, previous, new_value)) => {
-                    store_param_value(
+                    crate::runtime::apps::store_param_value(
                         db,
                         &cipher,
                         &name_owned,
@@ -1763,6 +1777,7 @@ pub(crate) fn update_app(state: &OiState, params: UpdateParams, ctx: &RequestCtx
                         previous: previous.as_deref(),
                         new_value: new_value.as_deref(),
                         is_secret,
+                        previous_is_secret,
                     })
                 }
                 None => None,
@@ -1911,12 +1926,15 @@ pub(crate) fn update_app(state: &OiState, params: UpdateParams, ctx: &RequestCtx
 
     tracing::info!(app = %name, generation, schedule, "updated app");
     // i[impl event.types]
+    // r[impl secret.history] — each value is withheld on the same terms as
+    // it is recorded, so dropping the `secret` flag does not announce the
+    // value the flag was protecting.
     let param_event = change.as_ref().map(|(pname, previous, new_value)| {
-        let redact = |v: &Option<String>| if is_secret { None } else { v.clone() };
+        let keep = |secret: bool, v: &Option<String>| if secret { None } else { v.clone() };
         seedling_protocol::events::AppUpdatedParam {
             name: pname.clone(),
-            previous_value: redact(previous),
-            new_value: redact(new_value),
+            previous_value: keep(previous_is_secret, previous),
+            new_value: keep(is_secret, new_value),
         }
     });
     ctx.events.app_updated(
@@ -1927,33 +1945,6 @@ pub(crate) fn update_app(state: &OiState, params: UpdateParams, ctx: &RequestCtx
         param_event,
     );
     Ok(json!({ "schedule": schedule, "generation": generation }))
-}
-
-/// Store or clear one parameter value, in whichever table its secrecy puts it.
-fn store_param_value(
-    db: &crate::runtime::db::Db,
-    cipher: &crate::runtime::secrets::Cipher,
-    app: &AppName,
-    name: &ParamName,
-    value: Option<&str>,
-    is_secret: bool,
-) -> rusqlite::Result<()> {
-    use crate::runtime::apps::{delete_one_param, secret_params, upsert_param};
-    match value {
-        Some(v) if is_secret => {
-            let secret = secrecy::SecretString::new(v.to_owned().into());
-            secret_params::upsert_secret_param(db, cipher, app, name, &secret)?;
-            delete_one_param(db, app, name)
-        }
-        Some(v) => {
-            upsert_param(db, app, name, v)?;
-            secret_params::delete_one_secret_param(db, app, name)
-        }
-        None => {
-            delete_one_param(db, app, name)?;
-            secret_params::delete_one_secret_param(db, app, name)
-        }
-    }
 }
 
 // r[impl actuate.volume.hold]
