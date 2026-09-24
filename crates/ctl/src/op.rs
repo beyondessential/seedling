@@ -35,6 +35,9 @@ pub(super) enum RegistriesCommand {
     Add { registry: String },
     /// Remove a registry from the allowlist
     Remove { registry: String },
+    /// List a repository's tags, named without tag or digest
+    // i[impl ctl.registries.tags]
+    Tags { repository: String },
 }
 
 #[derive(Subcommand)]
@@ -182,6 +185,16 @@ pub(super) async fn dispatch_registries(client: &OiClient, cmd: RegistriesComman
                     .request(
                         "/registries/add",
                         serde_json::json!({ "registry": registry }),
+                    )
+                    .await,
+            );
+        }
+        RegistriesCommand::Tags { repository } => {
+            print_result(
+                client
+                    .request(
+                        "/registries/tags",
+                        serde_json::json!({ "repository": repository }),
                     )
                     .await,
             );

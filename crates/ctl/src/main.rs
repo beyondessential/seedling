@@ -12,6 +12,7 @@ mod apps;
 mod backups;
 mod canopy;
 mod client;
+mod definition;
 mod forward;
 mod ingresses;
 mod known_hosts;
