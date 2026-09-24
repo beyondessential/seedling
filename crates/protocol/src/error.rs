@@ -14,6 +14,16 @@ pub enum ErrorCode {
     AlreadyQueued,
     RequirementsInvalid,
     ScriptError,
+    // i[impl param.validation]
+    ValidationFailed,
+    // i[impl definition.bundle.limits]
+    BundleInvalid,
+    // i[impl definition.bundle.seedling-versions]
+    UnsupportedSeedling,
+    // i[impl definition.fetch]
+    FetchFailed,
+    // i[impl definition.fetch.access]
+    RegistryNotAllowed,
     Deregistering,
     ServerBusy,
     Internal,
@@ -69,6 +79,11 @@ mod tests {
             (ErrorCode::AlreadyQueued, "already_queued"),
             (ErrorCode::RequirementsInvalid, "requirements_invalid"),
             (ErrorCode::ScriptError, "script_error"),
+            (ErrorCode::ValidationFailed, "validation_failed"),
+            (ErrorCode::BundleInvalid, "bundle_invalid"),
+            (ErrorCode::UnsupportedSeedling, "unsupported_seedling"),
+            (ErrorCode::FetchFailed, "fetch_failed"),
+            (ErrorCode::RegistryNotAllowed, "registry_not_allowed"),
             (ErrorCode::Deregistering, "deregistering"),
             (ErrorCode::ServerBusy, "server_busy"),
             (ErrorCode::Internal, "internal"),
