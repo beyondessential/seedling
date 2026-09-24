@@ -298,24 +298,41 @@ mod github {
             if rel.as_os_str().is_empty() {
                 continue;
             }
-            let target = dest.join(rel);
-            if let Some(parent) = target.parent() {
-                std::fs::create_dir_all(parent).map_err(bad)?;
+            // Every entry is written beneath `dest`, so nothing but plain
+            // names may reach the join: an archive is not a trusted source
+            // of paths, whatever produced it.
+            if rel
+                .components()
+                .any(|c| !matches!(c, std::path::Component::Normal(_)))
+            {
+                return Err(format!(
+                    "the downloaded archive holds an entry outside the folder: {}",
+                    rel.display()
+                ));
             }
+            let target = dest.join(rel);
             match entry.header().entry_type() {
                 tar::EntryType::Directory => {
                     std::fs::create_dir_all(&target).map_err(bad)?;
                 }
                 tar::EntryType::Regular | tar::EntryType::Continuous => {
+                    if let Some(parent) = target.parent() {
+                        std::fs::create_dir_all(parent).map_err(bad)?;
+                    }
                     let mut contents = Vec::new();
                     entry.read_to_end(&mut contents).map_err(bad)?;
                     std::fs::write(&target, contents).map_err(bad)?;
                 }
                 tar::EntryType::XGlobalHeader | tar::EntryType::XHeader => {}
-                // Links and the like are reproduced so the folder rules can
-                // report them, rather than silently dropped.
-                _ => {
-                    entry.unpack(&target).map_err(bad)?;
+                // A symlink names its own target and a hardlink resolves one
+                // relative to where it lands, so neither is reproduced: the
+                // folder rules refuse them anyway, and this reports them
+                // without ever writing one.
+                other => {
+                    return Err(format!(
+                        "{} is not a regular file; definitions may only hold files and folders ({other:?})",
+                        rel.display()
+                    ));
                 }
             }
         }

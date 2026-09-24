@@ -149,3 +149,61 @@ fn export_reproduces_the_bundle_into_a_new_folder_only() {
     std::fs::create_dir(&empty).unwrap();
     export(&bundle, &empty).unwrap();
 }
+
+// i[verify ctl.definition.source]
+// i[verify ctl.definition.folder]
+#[test]
+fn a_tarball_entry_may_not_escape_the_folder_or_be_a_link() {
+    fn tarball(build: impl FnOnce(&mut tar::Builder<Vec<u8>>)) -> Vec<u8> {
+        let mut builder = tar::Builder::new(Vec::new());
+        build(&mut builder);
+        let mut gz = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+        gz.write_all(&builder.into_inner().unwrap()).unwrap();
+        gz.finish().unwrap()
+    }
+    fn file(b: &mut tar::Builder<Vec<u8>>, path: &str, contents: &[u8]) {
+        let mut header = tar::Header::new_gnu();
+        header.set_size(contents.len() as u64);
+        header.set_mode(0o644);
+        header.set_entry_type(tar::EntryType::Regular);
+        b.append_data(&mut header, path, contents).unwrap();
+    }
+
+    // A whole-repository URL leaves no folder prefix to filter on. The
+    // builder refuses to write `..`, so the name goes into the header raw,
+    // the way a hostile archive would carry it.
+    let escaping = tarball(|b| {
+        file(b, "org-repo-abc/app.seed.rhai", b"app;");
+        let mut header = tar::Header::new_gnu();
+        header.set_size(5);
+        header.set_mode(0o644);
+        header.set_entry_type(tar::EntryType::Regular);
+        let raw = b"org-repo-abc/../../escaped";
+        header.as_gnu_mut().unwrap().name[..raw.len()].copy_from_slice(raw);
+        header.set_cksum();
+        b.append(&header, &b"owned"[..]).unwrap();
+    });
+    let dir = tempfile::tempdir().unwrap();
+    let e = github::extract_folder(&escaping, "", dir.path()).unwrap_err();
+    assert!(e.contains("outside the folder"), "{e}");
+    assert!(!dir.path().parent().unwrap().join("escaped").exists());
+
+    for kind in [tar::EntryType::Symlink, tar::EntryType::Link] {
+        let linked = tarball(|b| {
+            file(b, "org-repo-abc/apps/web/app.seed.rhai", b"app;");
+            let mut header = tar::Header::new_gnu();
+            header.set_entry_type(kind);
+            header.set_size(0);
+            b.append_link(
+                &mut header,
+                "org-repo-abc/apps/web/stolen",
+                "../../../../etc/passwd",
+            )
+            .unwrap();
+        });
+        let dir = tempfile::tempdir().unwrap();
+        let e = github::extract_folder(&linked, "apps/web", dir.path()).unwrap_err();
+        assert!(e.contains("not a regular file"), "{e}");
+        assert!(!dir.path().join("stolen").exists());
+    }
+}
