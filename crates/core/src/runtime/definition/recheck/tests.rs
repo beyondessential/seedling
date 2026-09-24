@@ -278,3 +278,73 @@ fn rechecks_are_infrequent_and_spread() {
     );
     assert!(spreads.len() > 1, "hosts do not all pick the same moment");
 }
+
+/// A registry that takes `delay` to answer, as an unreachable host does
+/// before its connect and read timeouts expire.
+struct SlowRegistry<'a> {
+    inner: &'a FakeRegistry,
+    delay: Duration,
+}
+
+impl Registry for SlowRegistry<'_> {
+    fn manifest<'a>(
+        &'a self,
+        reference: &'a oci_client::Reference,
+    ) -> futures_util::future::BoxFuture<'a, Result<(bytes::Bytes, String), String>> {
+        Box::pin(async move {
+            tokio::time::sleep(self.delay).await;
+            self.inner.manifest(reference).await
+        })
+    }
+
+    fn blob<'a>(
+        &'a self,
+        reference: &'a oci_client::Reference,
+        digest: &'a str,
+        limit: usize,
+    ) -> futures_util::future::BoxFuture<'a, Result<bytes::Bytes, String>> {
+        self.inner.blob(reference, digest, limit)
+    }
+
+    fn tags<'a>(
+        &'a self,
+        reference: &'a oci_client::Reference,
+    ) -> futures_util::future::BoxFuture<'a, Result<Vec<String>, String>> {
+        self.inner.tags(reference)
+    }
+}
+
+// r[verify definition.recheck]
+#[test]
+fn a_slow_registry_does_not_hold_up_the_other_apps() {
+    let mut h = Harness::new();
+    let digest = h.publish("1", "// one");
+    let apps = 8;
+    for i in 0..apps {
+        h.fetched(&format!("app{i}"), &format!("{REPO}:1"), &digest);
+    }
+    let delay = Duration::from_secs(60);
+    let slow = SlowRegistry {
+        inner: &h.registry,
+        delay,
+    };
+    let start = h.start;
+    let rechecker = &mut h.rechecker;
+    let taken = tokio::runtime::Builder::new_current_thread()
+        .enable_time()
+        .start_paused(true)
+        .build()
+        .unwrap()
+        .block_on(async {
+            let from = tokio::time::Instant::now();
+            rechecker
+                .pass(&h.apps, &h.db, &slow, &running(), start)
+                .await;
+            from.elapsed()
+        });
+    assert!(
+        taken < delay * 2,
+        "a pass over {apps} apps took {taken:?}, so they were asked one after another"
+    );
+    assert_eq!(h.registry.requests.load(Ordering::SeqCst), apps);
+}

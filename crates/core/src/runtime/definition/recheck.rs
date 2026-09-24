@@ -13,6 +13,7 @@ use std::{
     time::{Duration, Instant},
 };
 
+use futures_util::StreamExt;
 use parking_lot::RwLock;
 use seedling_protocol::names::AppName;
 use semver::Version;
@@ -34,6 +35,10 @@ pub const TICK: Duration = Duration::from_secs(5 * 60);
 pub const RETRY_BASE: Duration = Duration::from_secs(15 * 60);
 // r[impl definition.recheck.backoff]
 pub const RETRY_CAP: Duration = Duration::from_secs(24 * 60 * 60);
+/// How many apps a pass asks about at once. A registry that is down answers
+/// only when its connect and read timeouts expire, and a pass that waited
+/// for each in turn would run past the tick that starts the next one.
+const PASS_CONCURRENCY: usize = 8;
 
 /// A spread of up to a tenth of the interval, so a fleet started together
 /// does not re-resolve against a registry at the same moment.
@@ -87,9 +92,9 @@ impl Rechecker {
 
     /// Re-check every app that is due at `now`.
     ///
-    /// Apps are checked one after another, but each app's schedule and
-    /// back-off are its own: one failing registry never pushes back another
-    /// app's re-check.
+    /// The due apps are asked concurrently and each app's schedule and
+    /// back-off are its own: one registry that hangs until its timeouts
+    /// expire never pushes back another app's re-check.
     // r[impl definition.recheck]
     // r[impl definition.recheck.backoff]
     // r[impl fault.definition-source-moved]
@@ -109,6 +114,7 @@ impl Rechecker {
         self.next_due
             .retain(|app, _| targets.iter().any(|(a, _)| a == app));
 
+        let mut due_now: Vec<(AppName, Target)> = Vec::new();
         for (app, target) in targets {
             let interval = self.interval;
             let due = *self
@@ -123,10 +129,43 @@ impl Rechecker {
             } else {
                 now >= due
             };
-            if !ready {
-                continue;
+            if ready {
+                due_now.push((app, target));
             }
-            match check(db, client, &target, running).await {
+        }
+        if due_now.is_empty() {
+            return;
+        }
+
+        // The allowlist governs the whole pass, and reading it is the one
+        // thing here that blocks on the database.
+        let allowed = match db.call(crate::runtime::registries::list_allowed_registries) {
+            Ok(a) => a,
+            Err(e) => {
+                // r[impl fault.definition-source-moved] — with no allowlist
+                // there is no re-check, and so nothing to file or clear.
+                tracing::warn!(
+                    "definition re-check pass skipped: could not read the allowlist: {e}"
+                );
+                return;
+            }
+        };
+
+        let results: Vec<(AppName, Target, Result<String, fetch::FetchError>)> =
+            futures_util::stream::iter(due_now.into_iter().map(|(app, target)| {
+                let allowed = &allowed;
+                async move {
+                    let outcome = check(client, allowed, &target, running).await;
+                    (app, target, outcome)
+                }
+            }))
+            .buffer_unordered(PASS_CONCURRENCY)
+            .collect()
+            .await;
+
+        for (app, target, outcome) in results {
+            let interval = self.interval;
+            match outcome {
                 Ok(selected) => {
                     self.gates.record_success(&app);
                     self.next_due
@@ -169,16 +208,13 @@ impl Rechecker {
 
 /// Resolve the digest a reference selects now, honouring the allowlist.
 async fn check(
-    db: &DbHandle,
     client: &dyn Registry,
+    allowed: &[String],
     target: &Target,
     running: &Version,
 ) -> Result<String, fetch::FetchError> {
     let reference = DefinitionRef::parse(&target.reference)?;
-    let allowed = db
-        .call(crate::runtime::registries::list_allowed_registries)
-        .map_err(|e| fetch::FetchError::Failed(format!("could not read the allowlist: {e}")))?;
-    fetch::check_allowed(&allowed, &reference)?;
+    fetch::check_allowed(allowed, &reference)?;
     fetch::resolve_digest(client, &reference, running).await
 }
 
