@@ -738,3 +738,58 @@ fn reload_of_unknown_app_is_noop() {
     assert!(!outcome.is_applied());
     assert!(!reg.is_registered("ghost"));
 }
+
+// i[verify app.persist]
+// A definition stored under one Seedling that no longer evaluates under the
+// next is still loaded, and is faulted rather than silently dropped.
+#[test]
+fn a_stored_definition_that_no_longer_evaluates_is_faulted_on_reload() {
+    let db = Db::open_in_memory().expect("open");
+    let generation = generations::register_script(&db, &app("myapp"), "throw \"no longer valid\";")
+        .expect("bump register");
+    let mut entry = make_entry("myapp", None);
+    entry.current_generation = generation;
+    AppRegistry::persist_app(&db, &entry).expect("persist");
+
+    let cipher = crate::runtime::secrets::Cipher::for_tests();
+    let registry = AppRegistry::load_from_db(
+        &db,
+        &cipher,
+        Arc::new(Notify::new()),
+        &crate::ScriptLimits::default(),
+    )
+    .expect("load registry");
+    let loaded = registry.get("myapp").expect("still registered");
+    assert!(loaded.script_error.is_some());
+    sync_script_error_fault(&db, loaded);
+    let faults = crate::runtime::faults::list_active_faults(&db, Some(&app("myapp"))).unwrap();
+    assert!(
+        faults.iter().any(|f| f.kind == "script_error"),
+        "{faults:?}"
+    );
+}
+
+// i[verify app.persist]
+// i[verify param.validation]
+#[test]
+fn reload_runs_no_validators() {
+    let db = Db::open_in_memory().expect("open");
+    let script = r#"app.param("mode").validate(|v, all| { throw "always rejects"; });"#;
+    let generation =
+        generations::register_script(&db, &app("myapp"), script).expect("bump register");
+    upsert_param(&db, &app("myapp"), &param("mode"), "stored").expect("store a value");
+    let mut entry = make_entry("myapp", None);
+    entry.current_generation = generation;
+    AppRegistry::persist_app(&db, &entry).expect("persist");
+
+    let cipher = crate::runtime::secrets::Cipher::for_tests();
+    let registry = AppRegistry::load_from_db(
+        &db,
+        &cipher,
+        Arc::new(Notify::new()),
+        &crate::ScriptLimits::default(),
+    )
+    .expect("load registry");
+    let loaded = registry.get("myapp").expect("registered");
+    assert!(loaded.script_error.is_none(), "{:?}", loaded.script_error);
+}

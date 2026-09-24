@@ -419,7 +419,16 @@ async fn main() {
     // ---------------------------------------------------------------------------
 
     let registry = tokio::task::block_in_place(|| {
-        AppRegistry::load_from_db(&db, &cipher, Arc::clone(&tick_notify), &script_limits)
+        AppRegistry::load_from_db(&db, &cipher, Arc::clone(&tick_notify), &script_limits).inspect(
+            |registry| {
+                // i[impl app.persist] — a stored definition that no longer
+                // evaluates is faulted, and one that evaluates again clears
+                // its old fault.
+                for entry in registry.iter() {
+                    seedling_core::runtime::apps::sync_script_error_fault(&db, entry);
+                }
+            },
+        )
     })
     .unwrap_or_else(|e| fatal!("failed to load registered apps: {e}"));
 

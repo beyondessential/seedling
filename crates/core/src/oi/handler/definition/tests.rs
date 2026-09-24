@@ -798,7 +798,7 @@ fn an_unsupported_stored_definition_faults_until_replaced() {
     // The app still runs its definition.
     assert!(!show(&oi, "web")["resources"].as_array().unwrap().is_empty());
     // Restarting as a supported version clears it.
-    let (a, b) = (app.clone(), bundle);
+    let (a, b) = (app.clone(), std::sync::Arc::clone(&bundle));
     oi.state.db.call(move |db| {
         crate::runtime::definition::faults::sync_unsupported(
             db,
@@ -808,6 +808,46 @@ fn an_unsupported_stored_definition_faults_until_replaced() {
         );
     });
     assert!(faults_of(&oi, "web").is_empty());
+    // So does replacing the definition with a supported one.
+    let (a, b) = (app.clone(), bundle);
+    oi.state.db.call(move |db| {
+        crate::runtime::definition::faults::sync_unsupported(
+            db,
+            &a,
+            &b,
+            &semver::Version::new(0, 13, 0),
+        );
+    });
+    assert_eq!(faults_of(&oi, "web"), vec!["definition_unsupported"]);
+    oi.call(
+        "/apps/update",
+        json!({ "app": "web", "script": MINIMAL_SCRIPT }),
+    )
+    .unwrap();
+    assert!(faults_of(&oi, "web").is_empty());
+}
+
+// i[verify generation.history]
+// r[verify generation.history]
+#[test]
+fn a_secret_changed_alongside_a_definition_is_redacted_in_history() {
+    let oi = TestOi::new();
+    let def = r#"app.param("api-key").kind("password");"#;
+    oi.call("/apps/create", json!({ "app": "web", "script": def }))
+        .unwrap();
+    oi.call(
+        "/apps/update",
+        json!({ "app": "web", "script": def, "param": { "name": "api-key", "value": "hunter22" } }),
+    )
+    .unwrap();
+    let history = oi
+        .call("/apps/generations", json!({ "app": "web" }))
+        .unwrap();
+    let entry = &history[0];
+    assert_eq!(entry["kind"], "script_update");
+    assert_eq!(entry["param_name"], "api-key");
+    assert_eq!(entry["redacted"], true);
+    assert!(!history.to_string().contains("hunter22"));
 }
 
 // i[verify template.definition]
