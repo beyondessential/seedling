@@ -5,7 +5,7 @@ use tokio::io::{
 
 /// The daemon's own request limit, so a request the daemon would accept,
 /// such as a pushed definition bundle, is not refused on the way to it.
-const MAX_FIRST_LINE: usize = 4 * 1024 * 1024;
+const MAX_FIRST_LINE: usize = seedling_protocol::REQUEST_LIMIT;
 
 pub struct PeekedRequest {
     pub method: String,
@@ -97,7 +97,7 @@ pub async fn proxy_from_peeked(
 
 #[cfg(test)]
 mod tests {
-    use super::{MAX_FIRST_LINE, read_bounded_line};
+    use super::read_bounded_line;
 
     // w[verify transport.webtransport]
     #[tokio::test]
@@ -132,11 +132,5 @@ mod tests {
         let mut out = String::new();
         read_bounded_line(&mut r, &mut out, 16).await.expect("read");
         assert!(out.len() > 16, "caller can still reject it: {}", out.len());
-    }
-
-    // w[verify transport.webtransport]
-    #[tokio::test]
-    async fn the_configured_limit_matches_the_daemons() {
-        assert_eq!(MAX_FIRST_LINE, 4 * 1024 * 1024);
     }
 }

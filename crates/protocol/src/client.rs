@@ -274,7 +274,7 @@ const RESPONSE_LIMIT: usize = 64 * 1024;
 
 /// Upper bound on an ordinary request's response body, which may carry
 /// listings and script text.
-const REQUEST_RESPONSE_LIMIT: usize = 4 * 1024 * 1024;
+const REQUEST_RESPONSE_LIMIT: usize = crate::REQUEST_LIMIT;
 
 pub struct OiClient {
     conn: Connection,
