@@ -1,6 +1,9 @@
 //! App definitions: bundles, where they came from, and fetching them.
 
+pub mod auth;
 pub mod bundle;
+pub mod faults;
+pub mod fetch;
 pub mod provenance;
 pub mod version;
 

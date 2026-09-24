@@ -1,58 +1,138 @@
+use std::sync::Arc;
+
 use rusqlite::{OptionalExtension, params};
 use seedling_protocol::names::TemplateName;
 
-use crate::runtime::db::Db;
+use crate::runtime::{
+    db::Db,
+    definition::{Bundle, Source},
+    generations,
+};
 
 // i[impl template.definition]
 #[derive(Debug, Clone)]
 pub struct Template {
     pub name: TemplateName,
-    pub body: String,
+    pub bundle: Arc<Bundle>,
+    pub source: Source,
     pub description: Option<String>,
     pub created_at: String,
 }
 
-fn row_to_template(row: &rusqlite::Row<'_>) -> rusqlite::Result<Template> {
-    Ok(Template {
+/// Why a template could not be read.
+#[derive(Debug)]
+pub enum Error {
+    Db(rusqlite::Error),
+    Bundle(generations::Error),
+}
+
+impl std::fmt::Display for Error {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Db(e) => write!(f, "database error: {e}"),
+            Self::Bundle(e) => e.fmt(f),
+        }
+    }
+}
+
+impl std::error::Error for Error {}
+
+impl From<rusqlite::Error> for Error {
+    fn from(e: rusqlite::Error) -> Self {
+        Self::Db(e)
+    }
+}
+
+impl From<generations::Error> for Error {
+    fn from(e: generations::Error) -> Self {
+        Self::Bundle(e)
+    }
+}
+
+struct Row {
+    name: TemplateName,
+    bundle_hash: String,
+    provenance: Option<String>,
+    description: Option<String>,
+    created_at: String,
+}
+
+const COLUMNS: &str = "name, bundle_hash, provenance, description, created_at";
+
+fn read_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Row> {
+    Ok(Row {
         name: row.get(0)?,
-        body: row.get(1)?,
-        description: row.get(2)?,
-        created_at: row.get(3)?,
+        bundle_hash: row.get(1)?,
+        provenance: row.get(2)?,
+        description: row.get(3)?,
+        created_at: row.get(4)?,
+    })
+}
+
+fn load(db: &Db, row: Row) -> Result<Template, Error> {
+    let source = match row.provenance.as_deref() {
+        Some(text) => Source::from_db(text).map_err(|e| {
+            Error::Bundle(generations::Error::CorruptBundle(format!(
+                "unreadable provenance: {e}"
+            )))
+        })?,
+        None => Source::unknown_push(),
+    };
+    Ok(Template {
+        name: row.name,
+        bundle: generations::load_bundle(db, &row.bundle_hash)?,
+        source,
+        description: row.description,
+        created_at: row.created_at,
     })
 }
 
 // i[impl template.create]
 pub fn create(db: &Db, t: &Template) -> rusqlite::Result<()> {
+    let tx = db.conn.unchecked_transaction()?;
+    generations::store_bundle(db, &t.bundle)?;
     db.conn.execute(
-        "INSERT INTO templates (name, body, description, created_at) VALUES (?1, ?2, ?3, ?4)",
-        params![t.name, t.body, t.description, t.created_at],
+        "INSERT INTO templates (name, bundle_hash, provenance, description, created_at)
+         VALUES (?1, ?2, ?3, ?4, ?5)",
+        params![
+            t.name,
+            t.bundle.hash(),
+            t.source.to_db(),
+            t.description,
+            t.created_at
+        ],
     )?;
-    Ok(())
+    tx.commit()
 }
 
 // i[impl template.list]
-pub fn list(db: &Db) -> rusqlite::Result<Vec<Template>> {
-    let mut stmt = db
-        .conn
-        .prepare("SELECT name, body, description, created_at FROM templates ORDER BY name")?;
-    let rows = stmt.query_map([], row_to_template)?;
-    rows.collect()
+pub fn list(db: &Db) -> Result<Vec<Template>, Error> {
+    let rows: Vec<Row> = {
+        let mut stmt = db
+            .conn
+            .prepare(&format!("SELECT {COLUMNS} FROM templates ORDER BY name"))?;
+        stmt.query_map([], read_row)?
+            .collect::<rusqlite::Result<_>>()?
+    };
+    rows.into_iter().map(|r| load(db, r)).collect()
 }
 
 // i[impl template.show]
-pub fn get(db: &Db, name: &TemplateName) -> rusqlite::Result<Option<Template>> {
-    db.conn
+pub fn get(db: &Db, name: &TemplateName) -> Result<Option<Template>, Error> {
+    let row = db
+        .conn
         .query_row(
-            "SELECT name, body, description, created_at FROM templates WHERE name = ?1",
+            &format!("SELECT {COLUMNS} FROM templates WHERE name = ?1"),
             params![name],
-            row_to_template,
+            read_row,
         )
-        .optional()
+        .optional()?;
+    row.map(|r| load(db, r)).transpose()
 }
 
 // i[impl template.update]
 pub struct UpdateFields<'a> {
-    pub body: Option<&'a str>,
+    pub definition: Option<(&'a Bundle, &'a Source)>,
     pub description: Option<Option<&'a str>>,
 }
 
@@ -61,9 +141,13 @@ pub fn update(db: &Db, name: &TemplateName, fields: UpdateFields<'_>) -> rusqlit
     let mut sets: Vec<&'static str> = Vec::new();
     let mut values: Vec<Box<dyn rusqlite::ToSql>> = Vec::new();
 
-    if let Some(body) = fields.body {
-        sets.push("body = ?");
-        values.push(Box::new(body.to_owned()));
+    let tx = db.conn.unchecked_transaction()?;
+    if let Some((bundle, source)) = fields.definition {
+        generations::store_bundle(db, bundle)?;
+        sets.push("bundle_hash = ?");
+        values.push(Box::new(bundle.hash().to_owned()));
+        sets.push("provenance = ?");
+        values.push(Box::new(source.to_db()));
     }
     if let Some(description) = fields.description {
         sets.push("description = ?");
@@ -78,14 +162,19 @@ pub fn update(db: &Db, name: &TemplateName, fields: UpdateFields<'_>) -> rusqlit
     values.push(Box::new(name.clone()));
     let params: Vec<&dyn rusqlite::ToSql> = values.iter().map(|b| b.as_ref()).collect();
     let n = db.conn.execute(&sql, params.as_slice())?;
+    generations::gc_bundles(db)?;
+    tx.commit()?;
     Ok(n > 0)
 }
 
 // i[impl template.remove]
 pub fn delete(db: &Db, name: &TemplateName) -> rusqlite::Result<bool> {
+    let tx = db.conn.unchecked_transaction()?;
     let n = db
         .conn
         .execute("DELETE FROM templates WHERE name = ?1", params![name])?;
+    generations::gc_bundles(db)?;
+    tx.commit()?;
     Ok(n > 0)
 }
 
@@ -107,10 +196,19 @@ mod tests {
     fn template(name: &str, body: &str) -> Template {
         Template {
             name: TemplateName::new_unchecked(name),
-            body: body.to_owned(),
+            bundle: script(body),
+            source: Source::unknown_push(),
             description: None,
             created_at: "2026-04-23T00:00:00Z".to_owned(),
         }
+    }
+
+    fn script(body: &str) -> Arc<Bundle> {
+        Arc::new(Bundle::from_stored_script(body))
+    }
+
+    fn body_of(t: &Template) -> String {
+        t.bundle.script().unwrap().text().trim_end().to_owned()
     }
 
     // i[verify template.definition]
@@ -122,7 +220,8 @@ mod tests {
             &db,
             &Template {
                 name: TemplateName::new_unchecked("nginx-stack"),
-                body: "app.deployment(\"web\");".to_owned(),
+                bundle: script("app.deployment(\"web\");"),
+                source: Source::unknown_push(),
                 description: Some("basic nginx".to_owned()),
                 created_at: "2026-04-23T00:00:00Z".to_owned(),
             },
@@ -131,7 +230,7 @@ mod tests {
         let got = get(&db, &TemplateName::new_unchecked("nginx-stack"))
             .unwrap()
             .unwrap();
-        assert_eq!(got.body, "app.deployment(\"web\");");
+        assert_eq!(body_of(&got), "app.deployment(\"web\");");
         assert_eq!(got.description.as_deref(), Some("basic nginx"));
     }
 
@@ -200,7 +299,8 @@ mod tests {
             &db,
             &Template {
                 name: TemplateName::new_unchecked("nginx-stack"),
-                body: "old body".to_owned(),
+                bundle: script("old body"),
+                source: Source::unknown_push(),
                 description: Some("old desc".to_owned()),
                 created_at: "2026-04-23T00:00:00Z".to_owned(),
             },
@@ -210,7 +310,7 @@ mod tests {
             &db,
             &TemplateName::new_unchecked("nginx-stack"),
             UpdateFields {
-                body: Some("new body"),
+                definition: Some((&script("new body"), &Source::unknown_push())),
                 description: Some(Some("new desc")),
             },
         )
@@ -219,7 +319,7 @@ mod tests {
         let got = get(&db, &TemplateName::new_unchecked("nginx-stack"))
             .unwrap()
             .unwrap();
-        assert_eq!(got.body, "new body");
+        assert_eq!(body_of(&got), "new body");
         assert_eq!(got.description.as_deref(), Some("new desc"));
         assert_eq!(got.created_at, "2026-04-23T00:00:00Z");
     }
@@ -232,7 +332,8 @@ mod tests {
             &db,
             &Template {
                 name: TemplateName::new_unchecked("t"),
-                body: "b1".to_owned(),
+                bundle: script("b1"),
+                source: Source::unknown_push(),
                 description: Some("keep me".to_owned()),
                 created_at: "2026-04-23T00:00:00Z".to_owned(),
             },
@@ -242,7 +343,7 @@ mod tests {
             &db,
             &TemplateName::new_unchecked("t"),
             UpdateFields {
-                body: Some("b2"),
+                definition: Some((&script("b2"), &Source::unknown_push())),
                 description: None,
             },
         )
@@ -250,7 +351,7 @@ mod tests {
         let got = get(&db, &TemplateName::new_unchecked("t"))
             .unwrap()
             .unwrap();
-        assert_eq!(got.body, "b2");
+        assert_eq!(body_of(&got), "b2");
         assert_eq!(got.description.as_deref(), Some("keep me"));
     }
 
@@ -262,7 +363,8 @@ mod tests {
             &db,
             &Template {
                 name: TemplateName::new_unchecked("t"),
-                body: "b".to_owned(),
+                bundle: script("b"),
+                source: Source::unknown_push(),
                 description: Some("initial".to_owned()),
                 created_at: "2026-04-23T00:00:00Z".to_owned(),
             },
@@ -272,7 +374,7 @@ mod tests {
             &db,
             &TemplateName::new_unchecked("t"),
             UpdateFields {
-                body: None,
+                definition: None,
                 description: Some(None),
             },
         )
@@ -291,7 +393,7 @@ mod tests {
             &db,
             &TemplateName::new_unchecked("ghost"),
             UpdateFields {
-                body: Some("x"),
+                definition: Some((&script("x"), &Source::unknown_push())),
                 description: None,
             },
         )

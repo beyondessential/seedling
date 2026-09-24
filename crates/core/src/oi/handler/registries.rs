@@ -14,6 +14,27 @@ pub(crate) struct RegistryParams {
     pub registry: String,
 }
 
+#[derive(Deserialize)]
+pub(crate) struct TagsParams {
+    pub repository: String,
+}
+
+// i[impl definition.tags]
+pub(crate) fn list_tags(state: &OiState, params: TagsParams) -> HandlerResult {
+    let repository =
+        crate::runtime::definition::fetch::DefinitionRef::parse_repository(&params.repository)?;
+    let allowed = state
+        .db
+        .call(registries::list_allowed_registries)
+        .map_err(|e| OiError::new(ErrorCode::Internal, format!("db error: {e}")))?;
+    crate::runtime::definition::fetch::check_allowed(&allowed, &repository)?;
+    let tags = super::definition::block_on(crate::runtime::definition::fetch::list_tags(
+        state.definition_registry.as_ref(),
+        &repository,
+    ))?;
+    Ok(json!({ "tags": tags }))
+}
+
 // i[registry.list]
 pub(crate) fn list_registries(state: &OiState) -> HandlerResult {
     let registries = state
@@ -67,13 +88,6 @@ fn re_evaluate_all_apps(state: &OiState) {
         reg.list().into_iter().map(|(name, _)| name).collect()
     };
     for name in &app_names {
-        let script = {
-            let reg = state.registry.read();
-            match reg.get(name.as_str()) {
-                Some(entry) => entry.script.clone(),
-                None => continue,
-            }
-        };
         let name_clone = name.clone();
         let cipher = std::sync::Arc::clone(&state.cipher);
         let loaded_params = state
@@ -84,7 +98,7 @@ fn re_evaluate_all_apps(state: &OiState) {
         let _ = state
             .registry
             .write()
-            .reload(name, script, &loaded_params, &state.script_limits);
+            .reload(name, &loaded_params, &state.script_limits);
         {
             let reg = state.registry.read();
             if let Some(entry) = reg.get(name.as_str()) {

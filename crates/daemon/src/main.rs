@@ -1129,6 +1129,7 @@ async fn main() {
         caddy_data_path: tokio::sync::OnceCell::new(),
         tailscale_provider: Some(Arc::clone(&tailscale_provider)),
         site_resolver: Some(Arc::clone(&site_resolver)),
+        definition_registry: Arc::new(seedling_core::runtime::definition::fetch::OciRegistry::new()),
     });
 
     // ---------------------------------------------------------------------------

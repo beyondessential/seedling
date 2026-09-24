@@ -75,6 +75,36 @@ impl CustomType for Param {
             },
         );
 
+        // l[impl param.validate]
+        // l[impl param.validate.constraints]
+        builder.with_fn(
+            "validate",
+            |this: &mut Self, closure: FnPtr| -> Result<Self, Box<EvalAltResult>> {
+                if crate::runtime::barrier::runtime::is_in_action_closure() {
+                    return Err(format!(
+                        "validate for parameter '{}' cannot be called from within an action closure",
+                        this.name
+                    )
+                    .into());
+                }
+                if this.app.def.load().validators.contains(&this.name) {
+                    return Err(format!(
+                        "a validator is already attached to parameter '{}'",
+                        this.name
+                    )
+                    .into());
+                }
+                let name_clone = this.name.clone();
+                this.app.def.rcu(|d| {
+                    let mut d = (**d).clone();
+                    d.validators.insert(name_clone.clone());
+                    d
+                });
+                crate::defs::app::capture_validator(this.name.clone(), closure);
+                Ok(this.clone())
+            },
+        );
+
         // l[impl param.schema.kind]
         builder.with_fn(
             "kind",

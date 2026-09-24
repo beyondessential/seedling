@@ -1,13 +1,35 @@
 use std::path::{Component, PathBuf};
 
+use bytes::Bytes;
 use rhai::{CustomType, EvalAltResult, Map, TypeBuilder};
 
 use crate::runtime::barrier::runtime::is_in_action_closure;
 
-use super::{Freezable, Holder, export::ExportOptions, resource::ResourceName};
+use super::{
+    Freezable, Holder,
+    export::ExportOptions,
+    file::{Directory, File},
+    resource::ResourceName,
+};
 
 // l[impl volume.write.validation]
 pub(crate) fn validate_volume_write_path(path: &str) -> Result<(), Box<EvalAltResult>> {
+    if volume_path_depth(path)? == 0 {
+        return Err("volume write path must not resolve to '/'".into());
+    }
+    Ok(())
+}
+
+/// Validate the target of `write_dir`: as for a single write, except that
+/// the volume root itself is a valid place to write a directory into.
+// l[impl volume.write-dir]
+pub(crate) fn validate_volume_dir_path(path: &str) -> Result<(), Box<EvalAltResult>> {
+    volume_path_depth(path).map(|_| ())
+}
+
+/// How deep inside the volume `path` resolves, or why it is not a valid
+/// volume path at all.
+fn volume_path_depth(path: &str) -> Result<usize, Box<EvalAltResult>> {
     if path.contains('\0') {
         return Err("volume write path must not contain null bytes".into());
     }
@@ -38,20 +60,21 @@ pub(crate) fn validate_volume_write_path(path: &str) -> Result<(), Box<EvalAltRe
         }
     }
 
-    // Having resolved the path, it must still name something inside the
-    // volume rather than the root itself.
-    if depth == 0 {
-        return Err("volume write path must not resolve to '/'".into());
-    }
+    Ok(depth)
+}
 
-    Ok(())
+/// Join a directory's path inside a volume with a bundle-relative file path.
+fn join_volume_path(dir: &str, rel: &str) -> String {
+    let dir = dir.trim_end_matches('/');
+    format!("{dir}/{rel}")
 }
 
 #[derive(Debug, Default, Clone)]
 pub struct VolumeDef {
     pub read_only: bool,
     pub tmpfs: bool,
-    pub writes: Vec<(String, String)>,
+    /// Declared file writes, in declaration order, as the bytes to write.
+    pub writes: Vec<(String, Bytes)>,
     pub exported: Option<ExportOptions>,
     // l[impl bsl.resource.description]
     pub description: Option<String>,
@@ -129,7 +152,37 @@ impl CustomType for Volume {
                  -> Result<Volume, Box<EvalAltResult>> {
                     this.ensure_unfrozen()?;
                     validate_volume_write_path(path)?;
-                    this.def.lock().writes.push((path.into(), contents.into()));
+                    this.def
+                        .lock()
+                        .writes
+                        .push((path.into(), Bytes::copy_from_slice(contents.as_bytes())));
+                    Ok(this.clone())
+                },
+            )
+            // l[impl volume.write]
+            .with_fn(
+                "write",
+                |this: &mut Self, path: &str, file: File| -> Result<Volume, Box<EvalAltResult>> {
+                    this.ensure_unfrozen()?;
+                    validate_volume_write_path(path)?;
+                    this.def.lock().writes.push((path.into(), file.contents));
+                    Ok(this.clone())
+                },
+            )
+            // l[impl volume.write-dir]
+            .with_fn(
+                "write_dir",
+                |this: &mut Self,
+                 path: &str,
+                 dir: Directory|
+                 -> Result<Volume, Box<EvalAltResult>> {
+                    this.ensure_unfrozen()?;
+                    validate_volume_dir_path(path)?;
+                    let mut def = this.def.lock();
+                    for (rel, contents) in dir.files {
+                        def.writes.push((join_volume_path(path, &rel), contents));
+                    }
+                    drop(def);
                     Ok(this.clone())
                 },
             )

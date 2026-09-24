@@ -15,6 +15,7 @@ pub(super) fn on_app(builder: &mut TypeBuilder<App>) {
         "service",
         |this: &mut App, name: &str| -> Result<Service, Box<EvalAltResult>> {
             super::super::validate_name(name)?;
+            super::ensure_not_validating()?;
             let rname = ResourceName::new(name.into());
             if is_in_action_closure() {
                 let adef = action_def().ok_or_else(|| -> Box<EvalAltResult> {
@@ -72,6 +73,7 @@ pub(super) fn on_app(builder: &mut TypeBuilder<App>) {
         "external_service",
         |this: &mut App, name: &str| -> Result<ExternalService, Box<EvalAltResult>> {
             super::super::validate_name(name)?;
+            super::ensure_not_validating()?;
             let rname = ResourceName::new(name.into());
             let id = ResourceId {
                 kind: ResourceKind::ExternalService,

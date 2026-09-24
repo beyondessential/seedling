@@ -79,23 +79,51 @@ fn app_lifecycle_events_wire_shape() {
         json!({"type": "AppDeregistered", "app": "web"})
     );
 
+    let definition = json!({"kind": "pushed", "pushed_by": null, "reported_origin": null});
     assert_eq!(
-        shape(|tx| tx.app_updated(&app, 3, Some(2), None)),
+        shape(|tx| tx.app_updated(&app, 3, Some(2), definition.clone(), None, None)),
         json!({
             "type": "AppUpdated",
             "app": "web",
             "generation": 3,
             "previous_generation": 2,
+            "definition": definition,
         })
     );
 
     assert_eq!(
-        shape(|tx| tx.app_updated(&app, 1, None, None)),
+        shape(|tx| tx.app_updated(&app, 1, None, definition.clone(), None, None)),
         json!({
             "type": "AppUpdated",
             "app": "web",
             "generation": 1,
             "previous_generation": null,
+            "definition": definition,
+        })
+    );
+
+    assert_eq!(
+        shape(|tx| tx.app_updated(
+            &app,
+            4,
+            Some(3),
+            definition.clone(),
+            Some(AppUpdatedParam {
+                name: ParamName::new("version").unwrap(),
+                previous_value: Some("2.11".into()),
+                new_value: Some("2.12".into()),
+            }),
+            None,
+        )),
+        json!({
+            "type": "AppUpdated",
+            "app": "web",
+            "generation": 4,
+            "previous_generation": 3,
+            "definition": definition,
+            "name": "version",
+            "previous_value": "2.11",
+            "new_value": "2.12",
         })
     );
 
@@ -837,7 +865,7 @@ fn event_sender_with_actor_attaches_actor_to_every_event() {
 
     sender.app_registered(&app, 1);
     sender.app_deregistered(&app);
-    sender.app_updated(&app, 2, Some(1));
+    sender.app_updated(&app, 2, Some(1), json!({"kind": "pushed"}), None);
     sender.app_phase_changed(&app, "installed");
     sender.scale(app.clone(), "srv", 0, 4).changed(2, 1);
     sender

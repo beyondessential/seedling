@@ -95,7 +95,7 @@ pub fn probe_app(
     // app-level script_error fault and there's nothing to probe.
     let app_name = app.def.load().name.clone();
     let captured = {
-        let (mut scope, fresh_app) = crate::defs::scope();
+        let (mut scope, fresh_app) = crate::defs::scope(Arc::clone(&app.bundle));
         fresh_app.def.rcu(|d| {
             let mut d = (**d).clone();
             d.name = app_name.clone();
@@ -342,7 +342,7 @@ mod tests {
     fn setup_engine_and_app(script: &str) -> (Engine, AST, App) {
         let mut engine = Engine::new();
         defs::register(&mut engine);
-        let (mut scope, app) = defs::scope();
+        let (mut scope, app) = defs::scope(Default::default());
         app.def.rcu(|d| {
             let mut d = (**d).clone();
             d.name = AppName::new("testapp").unwrap();

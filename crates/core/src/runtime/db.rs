@@ -7,6 +7,7 @@ use sha2::{Digest, Sha256};
 mod migrations {
     pub mod v14;
     pub mod v20;
+    pub mod v58;
 }
 
 struct Migration {
@@ -136,6 +137,7 @@ const SQL_V55: &str = include_str!("db/migrations/v55.sql");
 const SQL_V56: &str = include_str!("db/migrations/v56.sql");
 // r[impl priority.settings]
 const SQL_V57: &str = include_str!("db/migrations/v57.sql");
+const SQL_V58: &str = migrations::v58::SQL;
 
 const MIGRATIONS: &[Migration] = &[
     Migration {
@@ -417,6 +419,11 @@ const MIGRATIONS: &[Migration] = &[
         version: 57,
         sql: SQL_V57,
         custom_run: None,
+    },
+    Migration {
+        version: 58,
+        sql: SQL_V58,
+        custom_run: Some(migrations::v58::run),
     },
 ];
 

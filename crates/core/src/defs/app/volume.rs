@@ -17,6 +17,7 @@ pub(super) fn on_app(builder: &mut TypeBuilder<App>) {
         "volume",
         |this: &mut App, name: &str| -> Result<Volume, Box<EvalAltResult>> {
             super::super::validate_name(name)?;
+            super::ensure_not_validating()?;
             let rname = ResourceName::new(name.into());
             if is_in_action_closure() {
                 let adef = action_def().ok_or_else(|| -> Box<EvalAltResult> {
@@ -117,6 +118,7 @@ pub(super) fn on_app(builder: &mut TypeBuilder<App>) {
 
 fn external_volume_resolve(this: &mut App, name: &str) -> Result<Dynamic, Box<EvalAltResult>> {
     super::super::validate_name(name)?;
+    super::ensure_not_validating()?;
     let rname = ResourceName::new(name.into());
     let op_binding = get_operation_volume_binding(name);
     let id = ResourceId {

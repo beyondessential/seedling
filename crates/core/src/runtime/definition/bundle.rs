@@ -110,13 +110,13 @@ impl Script {
         let mut segments = Vec::new();
         let mut next_line = 1;
         for (file, contents) in files {
-            let mut lines = contents.lines().count();
-            text.push_str(contents);
-            // Every file is closed with a newline so the next one starts on
-            // a line of its own and the line table stays exact.
-            if !contents.ends_with('\n') {
+            // Each file starts on a line of its own, so the line table stays
+            // exact; a lone script is returned exactly as written.
+            if !text.is_empty() && !text.ends_with('\n') {
                 text.push('\n');
             }
+            let mut lines = contents.lines().count();
+            text.push_str(contents);
             if contents.is_empty() {
                 lines = 1;
             }
@@ -198,6 +198,12 @@ pub struct Bundle {
     script: Result<Script, BundleError>,
 }
 
+impl Default for Bundle {
+    fn default() -> Self {
+        Self::empty()
+    }
+}
+
 impl Bundle {
     /// Validate a set of files as a bundle.
     ///
@@ -209,6 +215,22 @@ impl Bundle {
     pub fn from_files(
         files: impl IntoIterator<Item = (String, Vec<u8>)>,
     ) -> Result<Self, BundleError> {
+        Self::build(files, true)
+    }
+
+    /// Rebuild a bundle the runtime already holds. The size limit governs
+    /// what may be installed, not what was installed under an earlier limit,
+    /// so it is not reapplied: a stored definition must always load.
+    fn from_stored(
+        files: impl IntoIterator<Item = (String, Vec<u8>)>,
+    ) -> Result<Self, BundleError> {
+        Self::build(files, false)
+    }
+
+    fn build(
+        files: impl IntoIterator<Item = (String, Vec<u8>)>,
+        enforce_limit: bool,
+    ) -> Result<Self, BundleError> {
         let mut out: BTreeMap<String, Bytes> = BTreeMap::new();
         let mut total = 0usize;
         for (raw, contents) in files {
@@ -217,7 +239,7 @@ impl Bundle {
                 return Err(invalid(format!("path {raw:?} names the bundle root")));
             }
             total = total.saturating_add(contents.len());
-            if total > BUNDLE_SIZE_LIMIT {
+            if enforce_limit && total > BUNDLE_SIZE_LIMIT {
                 return Err(invalid(format!(
                     "bundle exceeds the {BUNDLE_SIZE_LIMIT}-byte size limit at {path:?}"
                 )));
@@ -245,10 +267,23 @@ impl Bundle {
         })
     }
 
+    /// A bundle holding no files, for an `App` not evaluated from any
+    /// definition.
+    pub fn empty() -> Self {
+        Self::from_files(std::iter::empty()).expect("an empty bundle breaks no rule")
+    }
+
     /// A lone script, as a bundle holding only `app.seed.rhai`.
     // l[impl bsl.bundle]
     pub fn from_script(text: &str) -> Result<Self, BundleError> {
         Self::from_files([(DEFAULT_SCRIPT.to_owned(), text.as_bytes().to_vec())])
+    }
+
+    /// A script stored before definitions were bundles, as the one-file
+    /// bundle it now is.
+    pub fn from_stored_script(text: &str) -> Self {
+        Self::from_stored([(DEFAULT_SCRIPT.to_owned(), text.as_bytes().to_vec())])
+            .expect("a single script file breaks no bundle rule but size")
     }
 
     /// Decode the wire form: an object map of path to base64 contents.
@@ -319,6 +354,27 @@ impl Bundle {
         Self::from_files(files)
     }
 
+    /// This bundle with the text of its only script file replaced, every
+    /// other file carried over unchanged.
+    pub fn with_script(&self, text: &str) -> Result<Self, BundleError> {
+        let script = self.script()?;
+        let mut files = script.files();
+        let (Some(only), None) = (files.next(), files.next()) else {
+            return Err(invalid(
+                "the definition's script spans several files; replace the bundle instead",
+            ));
+        };
+        let only = only.to_owned();
+        Self::from_files(self.files.iter().map(|(path, contents)| {
+            let contents = if *path == only {
+                text.as_bytes().to_vec()
+            } else {
+                contents.to_vec()
+            };
+            (path.clone(), contents)
+        }))
+    }
+
     pub fn to_wire(&self) -> serde_json::Map<String, serde_json::Value> {
         self.files
             .iter()
@@ -349,7 +405,7 @@ impl Bundle {
                 .map_err(|_| invalid("stored bundle has a non-UTF-8 path"))?;
             files.push((path, contents.to_vec()));
         }
-        Self::from_files(files)
+        Self::from_stored(files)
     }
 
     // i[impl definition.content-hash]

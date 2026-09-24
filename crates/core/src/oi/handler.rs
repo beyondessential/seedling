@@ -66,6 +66,7 @@ mod appdef_json;
 mod apps;
 pub mod backups;
 mod canopy;
+mod definition;
 mod faults;
 mod images;
 mod ingresses;
@@ -210,10 +211,12 @@ fn parse_and_dispatch(state: &Arc<OiState>, buf: &[u8], ctx: &RequestCtx) -> Han
         "/apps/unstop" => apps::unstop_all_resources(state, parse_params(req.params)?, ctx),
         // i[app.script]
         "/apps/script" => apps::get_app_script(state, parse_params(req.params)?),
+        // i[app.bundle]
+        "/apps/bundle" => apps::get_app_bundle(state, parse_params(req.params)?),
         // i[generation.history]
         "/apps/generations" => apps::list_generations(state, parse_params(req.params)?),
         // i[plan.dry-run]
-        "/apps/plan" => apps::dry_run_plan(state, parse_params(req.params)?),
+        "/apps/plan" => apps::dry_run_plan(state, parse_params(req.params)?, ctx),
         // i[param.set]
         "/apps/params/set" => params::set_param(state, parse_params(req.params)?, ctx),
         // i[param.unset]
@@ -268,6 +271,8 @@ fn parse_and_dispatch(state: &Arc<OiState>, buf: &[u8], ctx: &RequestCtx) -> Han
         "/registries/add" => registries::add_registry(state, parse_params(req.params)?),
         // i[registry.remove]
         "/registries/remove" => registries::remove_registry(state, parse_params(req.params)?),
+        // i[definition.tags]
+        "/registries/tags" => registries::list_tags(state, parse_params(req.params)?),
         // i[image.list]
         "/images/list" => images::list_images(state),
         // i[image.pull]
@@ -403,7 +408,7 @@ fn parse_and_dispatch(state: &Arc<OiState>, buf: &[u8], ctx: &RequestCtx) -> Han
         // i[template.remove]
         "/templates/remove" => templates::remove_template(state, parse_params(req.params)?, ctx),
         // i[template.preview]
-        "/templates/preview" => templates::preview_template(state, parse_params(req.params)?),
+        "/templates/preview" => templates::preview_template(state, parse_params(req.params)?, ctx),
         // i[template.instantiate]
         "/templates/instantiate" => {
             templates::instantiate_template(state, parse_params(req.params)?, ctx)

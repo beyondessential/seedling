@@ -1,10 +1,15 @@
 use rhai::Dynamic;
 use rhai::{AST, Engine, Scope};
 
+use crate::defs;
 use crate::defs::install::InstallDef;
 use crate::runtime::barrier::runtime::{ActionClosureGuard, RuntimeInstance};
 use crate::runtime::barrier::shell::ShellControl;
-use crate::{defs, setup_language as setup};
+
+/// An engine, scope and app evaluating no particular definition.
+pub fn setup(limits: &crate::ScriptLimits) -> (Engine, Scope<'static>, defs::app::App) {
+    crate::setup_language(limits, Default::default())
+}
 
 mod action;
 mod action_call;
@@ -52,7 +57,7 @@ fn exercise_actions(engine: &Engine, scope: &mut Scope, app: &defs::app::App, sc
     // Re-run the script with the TLS capture active to recover FnPtrs,
     // exactly as run_operation does. FnPtrs are never stored persistently.
     let (actions, shells, install, param_changes) = {
-        let (mut fresh_scope, fresh_app) = defs::scope();
+        let (mut fresh_scope, fresh_app) = defs::scope(Default::default());
         fresh_app.def.rcu(|old| {
             let mut new_def = (**old).clone();
             new_def.name = app.def.load().name.clone();

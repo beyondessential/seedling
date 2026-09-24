@@ -1,12 +1,16 @@
-use std::{collections::BTreeMap, fmt::Write as FmtWrite};
+use std::{collections::BTreeMap, sync::Arc};
 
 use secrecy::{ExposeSecret, SecretString};
 use seedling_protocol::names::{AppName, ParamName};
-use sha2::{Digest, Sha256};
 
 use crate::{
     defs::app::App,
-    runtime::{apps, db::Db, secrets::Cipher},
+    runtime::{
+        apps,
+        db::Db,
+        definition::{Bundle, Source},
+        secrets::Cipher,
+    },
 };
 
 // r[impl generation.definition]
@@ -80,7 +84,10 @@ pub struct HistoryEntry {
     pub previous_value_redacted: bool,
     /// True when the new value was stored encrypted (redact in responses).
     pub new_value_redacted: bool,
-    pub script_hash: String,
+    pub bundle_hash: String,
+    /// For `Register` and `ScriptUpdate`: how the installed definition
+    /// reached the runtime.
+    pub provenance: Option<Source>,
     pub operation_id: Option<String>,
     pub outcome: Option<Outcome>,
     pub outcome_error: Option<String>,
@@ -95,7 +102,8 @@ pub enum Error {
         app: AppName,
         generation: Generation,
     },
-    MissingScript(String),
+    MissingBundle(String),
+    CorruptBundle(String),
 }
 
 impl std::fmt::Display for Error {
@@ -107,7 +115,8 @@ impl std::fmt::Display for Error {
             Self::NotFound { app, generation } => {
                 write!(f, "generation {generation} not found for app {app:?}")
             }
-            Self::MissingScript(hash) => write!(f, "script body not found for hash {hash}"),
+            Self::MissingBundle(hash) => write!(f, "definition bundle not found for hash {hash}"),
+            Self::CorruptBundle(msg) => write!(f, "stored definition bundle is unreadable: {msg}"),
         }
     }
 }
@@ -134,38 +143,52 @@ impl From<apps::ScriptError> for Error {
     }
 }
 
-fn hex_of(digest: &[u8]) -> String {
-    let mut s = String::with_capacity(digest.len() * 2);
-    for b in digest {
-        write!(s, "{b:02x}").expect("write to String is infallible");
-    }
-    s
-}
-
-fn hash_script(script: &str) -> String {
-    hex_of(&Sha256::digest(script.as_bytes()))
-}
-
 // r[impl generation.script-storage]
-fn store_script(db: &Db, script: &str) -> rusqlite::Result<String> {
-    let hash = hash_script(script);
+pub fn store_bundle(db: &Db, bundle: &Bundle) -> rusqlite::Result<()> {
     db.conn.execute(
-        "INSERT OR IGNORE INTO script_bodies (hash, body) VALUES (?1, ?2)",
-        rusqlite::params![hash, script],
+        "INSERT INTO definition_bundles (hash, contents) VALUES (?1, ?2)
+         ON CONFLICT(hash) DO NOTHING",
+        rusqlite::params![bundle.hash(), bundle.canonical_bytes()],
     )?;
-    Ok(hash)
+    Ok(())
 }
 
+/// Load a stored bundle by content hash.
 // r[impl generation.script-storage]
-pub fn script_body(db: &Db, hash: &str) -> rusqlite::Result<Option<String>> {
+pub fn load_bundle(db: &Db, hash: &str) -> Result<Arc<Bundle>, Error> {
     let mut stmt = db
         .conn
-        .prepare("SELECT body FROM script_bodies WHERE hash = ?1")?;
-    match stmt.query_row([hash], |row| row.get::<_, String>(0)) {
-        Ok(s) => Ok(Some(s)),
-        Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
-        Err(e) => Err(e),
+        .prepare("SELECT contents FROM definition_bundles WHERE hash = ?1")?;
+    let contents: Vec<u8> = match stmt.query_row([hash], |row| row.get(0)) {
+        Ok(c) => c,
+        Err(rusqlite::Error::QueryReturnedNoRows) => {
+            return Err(Error::MissingBundle(hash.to_owned()));
+        }
+        Err(e) => return Err(e.into()),
+    };
+    let bundle =
+        Bundle::from_canonical_bytes(&contents).map_err(|e| Error::CorruptBundle(e.to_string()))?;
+    // A row whose contents no longer hash to its key would let two different
+    // definitions pass for one; refuse it rather than install the wrong one.
+    if bundle.hash() != hash {
+        return Err(Error::CorruptBundle(format!(
+            "bundle stored under {hash} hashes to {}",
+            bundle.hash()
+        )));
     }
+    Ok(Arc::new(bundle))
+}
+
+/// Delete stored bundles no generation or template references.
+// r[impl generation.deregister]
+pub fn gc_bundles(db: &Db) -> rusqlite::Result<()> {
+    db.conn.execute(
+        "DELETE FROM definition_bundles
+         WHERE hash NOT IN (SELECT DISTINCT bundle_hash FROM generations)
+           AND hash NOT IN (SELECT bundle_hash FROM templates WHERE bundle_hash IS NOT NULL)",
+        [],
+    )?;
+    Ok(())
 }
 
 pub fn current(db: &Db, app: &AppName) -> rusqlite::Result<Option<Generation>> {
@@ -193,20 +216,82 @@ fn now() -> String {
     jiff::Timestamp::now().to_string()
 }
 
+/// A parameter change recorded alongside a definition update.
+#[derive(Debug, Clone)]
+pub struct ParamChange<'a> {
+    pub name: &'a ParamName,
+    pub previous: Option<&'a str>,
+    /// `None` when the change unsets the parameter.
+    pub new_value: Option<&'a str>,
+    pub is_secret: bool,
+}
+
+fn encrypt(cipher: &Cipher, value: Option<&str>) -> rusqlite::Result<Option<Vec<u8>>> {
+    value
+        .map(|v| {
+            cipher
+                .encrypt(&SecretString::new(v.to_owned().into()))
+                .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))
+        })
+        .transpose()
+}
+
 // r[impl generation.bumps]
 fn insert_register_or_update(
     db: &Db,
     app: &AppName,
     kind: Kind,
-    script_hash: &str,
+    bundle: &Bundle,
+    source: &Source,
+    param: Option<(&ParamChange<'_>, &Cipher)>,
 ) -> rusqlite::Result<Generation> {
+    store_bundle(db, bundle)?;
     let gen_n = next_generation_for(db, app)?;
     db.conn.execute(
         "INSERT INTO generations
-            (app, generation, created_at, kind, script_hash)
-         VALUES (?1, ?2, ?3, ?4, ?5)",
-        rusqlite::params![app, gen_n as i64, now(), kind.as_str(), script_hash],
+            (app, generation, created_at, kind, bundle_hash, provenance)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+        rusqlite::params![
+            app,
+            gen_n as i64,
+            now(),
+            kind.as_str(),
+            bundle.hash(),
+            source.to_db()
+        ],
     )?;
+    if let Some((change, cipher)) = param {
+        // r[impl secret.history]
+        if change.is_secret {
+            db.conn.execute(
+                "UPDATE generations
+                    SET param_name = ?1,
+                        previous_value_ciphertext = ?2,
+                        new_value_ciphertext = ?3
+                  WHERE app = ?4 AND generation = ?5",
+                rusqlite::params![
+                    change.name,
+                    encrypt(cipher, change.previous)?,
+                    encrypt(cipher, change.new_value)?,
+                    app,
+                    gen_n as i64
+                ],
+            )?;
+        } else {
+            db.conn.execute(
+                "UPDATE generations
+                    SET param_name = ?1, previous_value = ?2, new_value = ?3
+                  WHERE app = ?4 AND generation = ?5",
+                rusqlite::params![
+                    change.name,
+                    change.previous,
+                    change.new_value,
+                    app,
+                    gen_n as i64
+                ],
+            )?;
+        }
+    }
     db.conn.execute(
         "UPDATE registered_apps SET current_generation = ?1 WHERE name = ?2",
         rusqlite::params![gen_n as i64, app],
@@ -215,23 +300,55 @@ fn insert_register_or_update(
 }
 
 /// Bump the generation for the initial registration of an app.
-/// Stores the script body content-addressed and writes a `Register` history entry.
-pub fn bump_register(db: &Db, app: &AppName, script: &str) -> rusqlite::Result<Generation> {
-    let hash = store_script(db, script)?;
-    insert_register_or_update(db, app, Kind::Register, &hash)
+/// Stores the bundle content-addressed and writes a `Register` history entry.
+pub fn bump_register(
+    db: &Db,
+    app: &AppName,
+    bundle: &Bundle,
+    source: &Source,
+) -> rusqlite::Result<Generation> {
+    insert_register_or_update(db, app, Kind::Register, bundle, source, None)
 }
 
-/// Bump the generation for a script update. The new script is stored and a
-/// `ScriptUpdate` entry is written. Idempotent storage: identical script content
-/// reuses the existing `script_bodies` row.
-pub fn bump_script_update(db: &Db, app: &AppName, script: &str) -> rusqlite::Result<Generation> {
-    let hash = store_script(db, script)?;
-    insert_register_or_update(db, app, Kind::ScriptUpdate, &hash)
+/// Bump the generation for a definition update, recording the parameter
+/// change made alongside it, if any. Identical bundle content reuses the
+/// existing stored bundle.
+pub fn bump_script_update(
+    db: &Db,
+    app: &AppName,
+    bundle: &Bundle,
+    source: &Source,
+    param: Option<(&ParamChange<'_>, &Cipher)>,
+) -> rusqlite::Result<Generation> {
+    insert_register_or_update(db, app, Kind::ScriptUpdate, bundle, source, param)
 }
 
-fn current_script_hash(db: &Db, app: &AppName) -> rusqlite::Result<String> {
+/// Register `app` from a lone script, pushed by nobody known.
+#[cfg(test)]
+pub fn register_script(db: &Db, app: &AppName, script: &str) -> rusqlite::Result<Generation> {
+    bump_register(
+        db,
+        app,
+        &Bundle::from_stored_script(script),
+        &Source::unknown_push(),
+    )
+}
+
+/// Replace `app`'s definition with a lone script, pushed by nobody known.
+#[cfg(test)]
+pub fn update_script(db: &Db, app: &AppName, script: &str) -> rusqlite::Result<Generation> {
+    bump_script_update(
+        db,
+        app,
+        &Bundle::from_stored_script(script),
+        &Source::unknown_push(),
+        None,
+    )
+}
+
+fn current_bundle_hash(db: &Db, app: &AppName) -> rusqlite::Result<String> {
     let mut stmt = db.conn.prepare(
-        "SELECT script_hash FROM generations
+        "SELECT bundle_hash FROM generations
          WHERE app = ?1
          ORDER BY generation DESC
          LIMIT 1",
@@ -251,7 +368,7 @@ pub fn bump_param_set(
     cipher: &Cipher,
     is_secret: bool,
 ) -> rusqlite::Result<Generation> {
-    let hash = current_script_hash(db, app)?;
+    let hash = current_bundle_hash(db, app)?;
     let gen_n = next_generation_for(db, app)?;
     if is_secret {
         let prev_ct = previous
@@ -271,7 +388,7 @@ pub fn bump_param_set(
         db.conn.execute(
             "INSERT INTO generations
                 (app, generation, created_at, kind, param_name,
-                 previous_value_ciphertext, new_value_ciphertext, script_hash)
+                 previous_value_ciphertext, new_value_ciphertext, bundle_hash)
              VALUES (?1, ?2, ?3, 'param_set', ?4, ?5, ?6, ?7)",
             rusqlite::params![app, gen_n as i64, now(), name, prev_ct, new_ct, hash],
         )?;
@@ -279,7 +396,7 @@ pub fn bump_param_set(
         db.conn.execute(
             "INSERT INTO generations
                 (app, generation, created_at, kind, param_name,
-                 previous_value, new_value, script_hash)
+                 previous_value, new_value, bundle_hash)
              VALUES (?1, ?2, ?3, 'param_set', ?4, ?5, ?6, ?7)",
             rusqlite::params![app, gen_n as i64, now(), name, previous, new_value, hash],
         )?;
@@ -301,7 +418,7 @@ pub fn bump_param_unset(
     cipher: &Cipher,
     is_secret: bool,
 ) -> rusqlite::Result<Generation> {
-    let hash = current_script_hash(db, app)?;
+    let hash = current_bundle_hash(db, app)?;
     let gen_n = next_generation_for(db, app)?;
     if is_secret {
         let prev_ct = {
@@ -313,7 +430,7 @@ pub fn bump_param_unset(
         db.conn.execute(
             "INSERT INTO generations
                 (app, generation, created_at, kind, param_name,
-                 previous_value_ciphertext, script_hash)
+                 previous_value_ciphertext, bundle_hash)
              VALUES (?1, ?2, ?3, 'param_unset', ?4, ?5, ?6)",
             rusqlite::params![app, gen_n as i64, now(), name, prev_ct, hash],
         )?;
@@ -321,7 +438,7 @@ pub fn bump_param_unset(
         db.conn.execute(
             "INSERT INTO generations
                 (app, generation, created_at, kind, param_name,
-                 previous_value, new_value, script_hash)
+                 previous_value, new_value, bundle_hash)
              VALUES (?1, ?2, ?3, 'param_unset', ?4, ?5, NULL, ?6)",
             rusqlite::params![app, gen_n as i64, now(), name, previous, hash],
         )?;
@@ -382,8 +499,8 @@ pub fn list(
     let entries = if let Some(before) = before {
         let mut stmt = db.conn.prepare(
             "SELECT generation, created_at, kind, param_name, previous_value,
-                    new_value, script_hash, operation_id, outcome, outcome_error,
-                    previous_value_ciphertext, new_value_ciphertext
+                    new_value, bundle_hash, operation_id, outcome, outcome_error,
+                    previous_value_ciphertext, new_value_ciphertext, provenance
              FROM generations
              WHERE app = ?1 AND generation < ?2
              ORDER BY generation DESC
@@ -393,8 +510,8 @@ pub fn list(
     } else {
         let mut stmt = db.conn.prepare(
             "SELECT generation, created_at, kind, param_name, previous_value,
-                    new_value, script_hash, operation_id, outcome, outcome_error,
-                    previous_value_ciphertext, new_value_ciphertext
+                    new_value, bundle_hash, operation_id, outcome, outcome_error,
+                    previous_value_ciphertext, new_value_ciphertext, provenance
              FROM generations
              WHERE app = ?1
              ORDER BY generation DESC
@@ -412,6 +529,7 @@ fn rows_to_entries(mut rows: rusqlite::Rows<'_>) -> rusqlite::Result<Vec<History
         let outcome_str: Option<String> = row.get(8)?;
         let prev_ct: Option<Vec<u8>> = row.get(10)?;
         let new_ct: Option<Vec<u8>> = row.get(11)?;
+        let provenance: Option<String> = row.get(12)?;
         out.push(HistoryEntry {
             generation: row.get::<_, i64>(0)? as Generation,
             created_at: row.get(1)?,
@@ -421,7 +539,8 @@ fn rows_to_entries(mut rows: rusqlite::Rows<'_>) -> rusqlite::Result<Vec<History
             new_value: row.get(5)?,
             previous_value_redacted: prev_ct.is_some(),
             new_value_redacted: new_ct.is_some(),
-            script_hash: row.get(6)?,
+            bundle_hash: row.get(6)?,
+            provenance: provenance.as_deref().and_then(|p| Source::from_db(p).ok()),
             operation_id: row.get(7)?,
             outcome: outcome_str.as_deref().and_then(Outcome::parse),
             outcome_error: row.get(9)?,
@@ -438,8 +557,8 @@ pub fn get(
 ) -> rusqlite::Result<Option<HistoryEntry>> {
     let mut stmt = db.conn.prepare(
         "SELECT generation, created_at, kind, param_name, previous_value,
-                new_value, script_hash, operation_id, outcome, outcome_error,
-                previous_value_ciphertext, new_value_ciphertext
+                new_value, bundle_hash, operation_id, outcome, outcome_error,
+                previous_value_ciphertext, new_value_ciphertext, provenance
          FROM generations
          WHERE app = ?1 AND generation = ?2",
     )?;
@@ -448,9 +567,11 @@ pub fn get(
 }
 
 /// Build the parameter map at a specific generation by walking history.
-/// For each parameter, the most recent ParamSet/ParamUnset entry at or before
-/// `generation` is taken; ParamUnset (or no entry) yields None.
+/// For each parameter, the most recent change at or before `generation` is
+/// taken, whether a ParamSet, a ParamUnset, or a ScriptUpdate that changed it
+/// alongside its definition; an unset (or no change) yields None.
 // r[impl secret.history]
+// r[impl generation.reconstruction]
 pub fn param_map_at(
     db: &Db,
     app: &AppName,
@@ -462,7 +583,8 @@ pub fn param_map_at(
          FROM generations
          WHERE app = ?1
            AND generation <= ?2
-           AND kind IN ('param_set', 'param_unset')
+           AND param_name IS NOT NULL
+           AND kind IN ('param_set', 'param_unset', 'script_update')
          ORDER BY param_name ASC, generation DESC",
     )?;
     let mut map: BTreeMap<String, String> = BTreeMap::new();
@@ -476,9 +598,13 @@ pub fn param_map_at(
         }
         last_param = Some(name.clone());
         let kind: String = row.get(1)?;
-        if kind == "param_set" {
-            let plaintext: Option<String> = row.get(2)?;
-            let ciphertext: Option<Vec<u8>> = row.get(3)?;
+        let plaintext: Option<String> = row.get(2)?;
+        let ciphertext: Option<Vec<u8>> = row.get(3)?;
+        // A ScriptUpdate row unset its parameter when it recorded no new
+        // value in either column.
+        let sets = kind == "param_set"
+            || (kind == "script_update" && (plaintext.is_some() || ciphertext.is_some()));
+        if sets {
             let value = if let Some(ct) = ciphertext {
                 match cipher.decrypt(&ct) {
                     Ok(s) => Some(s.expose_secret().to_owned()),
@@ -498,21 +624,34 @@ pub fn param_map_at(
     Ok(map)
 }
 
-/// Look up the script hash active at a specific generation: the script_hash
-/// of the most recent Register/ScriptUpdate at or before that generation.
+/// Look up the definition active at a specific generation: the bundle hash
+/// and provenance of the most recent Register/ScriptUpdate at or before it.
 // r[impl generation.previous]
-pub fn script_hash_at(db: &Db, app: &AppName, generation: Generation) -> Result<String, Error> {
+// r[impl generation.reconstruction]
+pub fn definition_at(
+    db: &Db,
+    app: &AppName,
+    generation: Generation,
+) -> Result<(String, Source), Error> {
     let mut stmt = db.conn.prepare(
-        "SELECT script_hash
+        "SELECT bundle_hash, provenance
          FROM generations
          WHERE app = ?1 AND generation <= ?2
+           AND kind IN ('register', 'script_update')
          ORDER BY generation DESC
          LIMIT 1",
     )?;
     match stmt.query_row(rusqlite::params![app, generation as i64], |row| {
-        row.get::<_, String>(0)
+        Ok((row.get::<_, String>(0)?, row.get::<_, Option<String>>(1)?))
     }) {
-        Ok(h) => Ok(h),
+        Ok((hash, provenance)) => {
+            let source = match provenance {
+                Some(text) => Source::from_db(&text)
+                    .map_err(|e| Error::CorruptBundle(format!("unreadable provenance: {e}")))?,
+                None => Source::unknown_push(),
+            };
+            Ok((hash, source))
+        }
         Err(rusqlite::Error::QueryReturnedNoRows) => Err(Error::NotFound {
             app: app.clone(),
             generation,
@@ -521,8 +660,14 @@ pub fn script_hash_at(db: &Db, app: &AppName, generation: Generation) -> Result<
     }
 }
 
+/// The bundle hash a generation's history row carries: the definition that
+/// was current when it was written.
+pub fn bundle_hash_at(db: &Db, app: &AppName, generation: Generation) -> Result<String, Error> {
+    definition_at(db, app, generation).map(|(hash, _)| hash)
+}
+
 /// Reconstruct the AppDef as it was at a specific generation by loading the
-/// script body active at that generation and evaluating it with the parameter
+/// bundle active at that generation and evaluating it with the parameter
 /// map at that generation.
 // r[impl generation.reconstruction]
 pub fn reconstruct_app_def(
@@ -538,29 +683,23 @@ pub fn reconstruct_app_def(
             generation,
         });
     }
-    let hash = script_hash_at(db, app, generation)?;
-    let script = script_body(db, &hash)?.ok_or_else(|| Error::MissingScript(hash.clone()))?;
+    let (hash, _) = definition_at(db, app, generation)?;
+    let bundle = load_bundle(db, &hash)?;
     let params = param_map_at(db, app, generation, cipher)?;
-    let (evaled, script_error) = apps::evaluate_script(app, &script, &params, limits);
+    let (evaled, script_error) = apps::evaluate(app, &bundle, &params, limits);
     if let Some(e) = script_error {
         return Err(Error::Script(e));
     }
     Ok(evaled)
 }
 
-/// Delete all generation history and orphaned script bodies for an app.
+/// Delete all generation history and orphaned bundles for an app.
 /// Called as part of deregistration.
 // r[impl generation.deregister]
 pub fn delete_for_app(db: &Db, app: &AppName) -> rusqlite::Result<()> {
     db.conn
         .execute("DELETE FROM generations WHERE app = ?1", [app])?;
-    // Garbage-collect any script bodies no longer referenced by any generation.
-    db.conn.execute(
-        "DELETE FROM script_bodies
-         WHERE hash NOT IN (SELECT DISTINCT script_hash FROM generations)",
-        [],
-    )?;
-    Ok(())
+    gc_bundles(db)
 }
 
 #[cfg(test)]

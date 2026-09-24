@@ -119,9 +119,9 @@ pub(crate) async fn open_shell_session(
                 None => return Err(("not_found", format!("shell not found: {shell_name}"))),
             }
         };
-        Ok((entry.app.clone(), entry.script.clone(), shell_params_schema))
+        Ok((entry.app.clone(), shell_params_schema))
     })();
-    let (app, script, shell_params_schema) = match lookup {
+    let (app, shell_params_schema) = match lookup {
         Ok(v) => v,
         Err((code, msg)) => {
             let resp = serde_json::to_vec(&serde_json::json!({
@@ -215,8 +215,17 @@ pub(crate) async fn open_shell_session(
     let validated_params_for_task = validated_params;
 
     let run_result = tokio::task::spawn_blocking(move || {
-        let (engine, mut scope, _) = crate::setup_language(&script_limits);
-        let ast = match engine.compile(&script) {
+        let (engine, mut scope, _) = crate::setup_language(&script_limits, Arc::clone(&app.bundle));
+        let compiled = app
+            .bundle
+            .script()
+            .map_err(|e| e.to_string())
+            .and_then(|script| {
+                engine
+                    .compile(script.text())
+                    .map_err(|e| script.remap_error(&e.to_string()))
+            });
+        let ast = match compiled {
             Ok(a) => a,
             Err(e) => {
                 tracing::error!(

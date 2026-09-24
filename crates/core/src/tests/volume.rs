@@ -22,7 +22,8 @@ fn volume_named() {
 // l[verify volume.type]
 #[test]
 fn volume_anonymous_disallowed_at_top_level() {
-    let (engine, mut scope, _app) = crate::setup_language(&crate::ScriptLimits::default());
+    let (engine, mut scope, _app) =
+        crate::setup_language(&crate::ScriptLimits::default(), Default::default());
     let result = super::run_script(&engine, &mut scope, r#"let v = app.volume();"#);
     assert!(
         result.is_err(),
@@ -849,7 +850,7 @@ fn captured_static_volume_cannot_be_modified_in_action() {
         .expect("foo volume should exist");
     assert_eq!(
         vol_def.writes,
-        vec![("/outside".to_owned(), "content".to_owned())],
+        vec![("/outside".to_owned(), bytes::Bytes::from_static(b"content"))],
         "static-context write should be present, /inside must not be persisted"
     );
 }
@@ -862,7 +863,7 @@ fn captured_static_volume_cannot_be_modified_in_action() {
 struct RecordedWrite {
     target: crate::runtime::barrier::VolumeWriteTarget,
     path: String,
-    contents: String,
+    contents: Vec<u8>,
 }
 
 #[derive(Default)]
@@ -876,12 +877,12 @@ impl crate::runtime::barrier::VolumeWriter for RecordingVolumeWriter {
         _app: &str,
         target: crate::runtime::barrier::VolumeWriteTarget,
         path: &str,
-        contents: &str,
+        contents: &[u8],
     ) -> Result<(), String> {
         self.writes.lock().push(RecordedWrite {
             target,
             path: path.to_owned(),
-            contents: contents.to_owned(),
+            contents: contents.to_vec(),
         });
         Ok(())
     }
@@ -957,7 +958,7 @@ fn rt_write_named_volume_invokes_writer() {
     assert_eq!(writes.len(), 1);
     let w = &writes[0];
     assert_eq!(w.path, "/etc/app.conf");
-    assert_eq!(w.contents, "key=value");
+    assert_eq!(w.contents, b"key=value");
     match &w.target {
         VolumeWriteTarget::NamedVolume { name, tmpfs } => {
             assert_eq!(name, "cfg");

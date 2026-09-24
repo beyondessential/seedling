@@ -81,7 +81,7 @@ impl crate::runtime::barrier::VolumeWriter for OperationVolumeWriter {
         app: &str,
         target: crate::runtime::barrier::VolumeWriteTarget,
         path: &str,
-        contents: &str,
+        contents: &[u8],
     ) -> Result<(), String> {
         use crate::runtime::barrier::VolumeWriteTarget;
         use crate::runtime::identity::VolumeName;
@@ -91,7 +91,7 @@ impl crate::runtime::barrier::VolumeWriter for OperationVolumeWriter {
         let driver = Arc::clone(&self.driver);
         let app = app.to_owned();
         let path = path.to_owned();
-        let contents = contents.to_owned();
+        let contents = contents.to_vec();
 
         tokio::task::block_in_place(|| {
             tokio::runtime::Handle::current().block_on(async move {
@@ -276,7 +276,6 @@ fn resolve_action_volume_params(
 )]
 fn run_operation_loop(
     app: &App,
-    script: &str,
     db: DbHandle,
     params: serde_json::Map<String, serde_json::Value>,
     active_progress: Arc<RwLock<Option<OperationProgress>>>,
@@ -295,8 +294,18 @@ fn run_operation_loop(
     let action_name = &op_ctx.action_name;
     let operation_id = OperationId(op_ctx.operation_id.clone());
 
-    let (engine, mut scope, _) = crate::setup_language(script_limits);
-    let ast = match engine.compile(script) {
+    let (engine, mut scope, _) = crate::setup_language(script_limits, Arc::clone(&app.bundle));
+    // l[impl bsl.bundle.script-errors]
+    let compiled = app
+        .bundle
+        .script()
+        .map_err(|e| e.to_string())
+        .and_then(|script| {
+            engine
+                .compile(script.text())
+                .map_err(|e| script.remap_error(&e.to_string()))
+        });
+    let ast = match compiled {
         Ok(a) => a,
         Err(e) => {
             tracing::error!(app = %app_name, action = %action_name, "script compile error: {e}");
@@ -771,14 +780,13 @@ pub fn spawn_accepted_operation(
     trigger: String,
     actor: Option<std::sync::Arc<seedling_protocol::actor::Actor>>,
 ) {
-    let (app, active_progress, tick_notify, script) = {
+    let (app, active_progress, tick_notify) = {
         let reg = state.registry.read();
         match reg.get(app_name.as_str()) {
             Some(e) => (
                 e.app.clone(),
                 Arc::clone(&e.active_progress),
                 Arc::clone(&e.tick_notify),
-                e.script.clone(),
             ),
             None => {
                 tracing::error!(app = %app_name, "spawn_accepted_operation: app not found");
@@ -852,7 +860,6 @@ pub fn spawn_accepted_operation(
                 };
                 run_operation_loop(
                     &app,
-                    &script,
                     db,
                     params,
                     active_progress,
@@ -917,14 +924,13 @@ pub(crate) async fn run_operation_for_backup(
     target_generation: u64,
     operation_volume_bindings: HashMap<String, OperationVolumeBinding>,
 ) -> bool {
-    let (app, active_progress, tick_notify, script) = {
+    let (app, active_progress, tick_notify) = {
         let reg = state.registry.read();
         match reg.get(backup_app_name.as_str()) {
             Some(e) => (
                 e.app.clone(),
                 Arc::clone(&e.active_progress),
                 Arc::clone(&e.tick_notify),
-                e.script.clone(),
             ),
             None => {
                 tracing::error!(app = %backup_app_name, "run_operation_for_backup: app not found");
@@ -979,7 +985,6 @@ pub(crate) async fn run_operation_for_backup(
             };
             run_operation_loop(
                 &app,
-                &script,
                 db,
                 params,
                 active_progress_clone,

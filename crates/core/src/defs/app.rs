@@ -5,6 +5,8 @@ use std::sync::Arc;
 use rhai::{CustomType, FnPtr, Map, TypeBuilder};
 use seedling_protocol::names::{ActionName, AppName, ParamName, ShellName};
 
+use crate::runtime::definition::Bundle;
+
 use super::{
     Holder,
     action::{ActionDef, ShellDef},
@@ -15,6 +17,7 @@ use super::{
 mod action;
 mod collection;
 mod deployment;
+mod file;
 mod install;
 mod job;
 mod param;
@@ -87,6 +90,63 @@ fn capture_install(fnptr: FnPtr) {
             store.install = Some(fnptr);
         }
     });
+}
+
+// ---------------------------------------------------------------------------
+// Thread-local validator capture
+// ---------------------------------------------------------------------------
+
+thread_local! {
+    static VALIDATOR_CAPTURE: RefCell<Option<BTreeMap<ParamName, FnPtr>>> = const { RefCell::new(None) };
+    static IN_VALIDATOR: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Start collecting `param.validate` closures on this thread. Evaluations
+/// that will not run validators leave the buffer inactive, and the closures
+/// are dropped.
+pub(crate) fn begin_validator_capture() {
+    VALIDATOR_CAPTURE.with(|c| *c.borrow_mut() = Some(BTreeMap::new()));
+}
+
+/// Stop collecting and return what was captured. Must be called once after
+/// `begin_validator_capture`, whether or not the script run succeeded.
+pub(crate) fn end_validator_capture() -> BTreeMap<ParamName, FnPtr> {
+    VALIDATOR_CAPTURE.with(|c| c.borrow_mut().take().unwrap_or_default())
+}
+
+pub(crate) fn capture_validator(name: ParamName, fnptr: FnPtr) {
+    VALIDATOR_CAPTURE.with(|c| {
+        if let Some(ref mut store) = *c.borrow_mut() {
+            store.insert(name, fnptr);
+        }
+    });
+}
+
+/// Marks the thread as running a validator for as long as the guard lives,
+/// so that resource definitions throw.
+// l[impl param.validate.pure]
+pub(crate) struct ValidatorFrame(());
+
+impl ValidatorFrame {
+    pub fn enter() -> Self {
+        IN_VALIDATOR.with(|v| v.set(true));
+        Self(())
+    }
+}
+
+impl Drop for ValidatorFrame {
+    fn drop(&mut self) {
+        IN_VALIDATOR.with(|v| v.set(false));
+    }
+}
+
+/// Refuse a resource definition made from within a validator.
+// l[impl param.validate.pure]
+pub(crate) fn ensure_not_validating() -> Result<(), Box<rhai::EvalAltResult>> {
+    if IN_VALIDATOR.with(|v| v.get()) {
+        return Err("a validator must not define resources".into());
+    }
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------
@@ -230,6 +290,9 @@ pub struct AppDef {
     pub install: Option<InstallDef>,
     /// Names of parameters that have an `on_change` handler registered.
     pub param_changes: BTreeSet<ParamName>,
+    /// Names of parameters that have a validator attached.
+    // l[impl param.validate]
+    pub validators: BTreeSet<ParamName>,
 }
 
 fn extract_description(options: &Map) -> Result<Option<String>, Box<rhai::EvalAltResult>> {
@@ -252,14 +315,25 @@ pub struct App {
     /// Operator-provided parameter values, pre-populated from the database before
     /// script evaluation. Not BSL-driven — the script cannot modify this directly.
     pub stored: Holder<BTreeMap<String, String>>,
+    /// The definition bundle this app was evaluated from, read by
+    /// `app.file` and `app.dir`.
+    // l[impl app.bundle.context]
+    pub bundle: Arc<Bundle>,
+}
+
+impl App {
+    pub fn with_bundle(bundle: Arc<Bundle>) -> Self {
+        Self {
+            def: Arc::new(arc_swap::ArcSwap::new(Arc::new(AppDef::default()))),
+            stored: Arc::new(parking_lot::Mutex::new(BTreeMap::new())),
+            bundle,
+        }
+    }
 }
 
 impl Default for App {
     fn default() -> Self {
-        Self {
-            def: Arc::new(arc_swap::ArcSwap::new(Arc::new(AppDef::default()))),
-            stored: Arc::new(parking_lot::Mutex::new(BTreeMap::new())),
-        }
+        Self::with_bundle(Arc::new(Bundle::empty()))
     }
 }
 
@@ -268,6 +342,7 @@ impl std::fmt::Debug for App {
         f.debug_struct("App")
             .field("def", &self.def)
             .field("stored", &self.stored)
+            .field("bundle", &self.bundle.hash())
             .finish_non_exhaustive()
     }
 }
@@ -289,6 +364,7 @@ impl CustomType for App {
         });
 
         param::on_app(&mut builder);
+        file::on_app(&mut builder);
         service::on_app(&mut builder);
         deployment::on_app(&mut builder);
         job::on_app(&mut builder);

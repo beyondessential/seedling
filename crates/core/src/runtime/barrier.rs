@@ -273,7 +273,7 @@ pub trait VolumeWriter: Send + Sync {
         app: &str,
         target: VolumeWriteTarget,
         path: &str,
-        contents: &str,
+        contents: &[u8],
     ) -> Result<(), String>;
 }
 

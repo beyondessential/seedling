@@ -16,7 +16,7 @@ use seedling_protocol::names::ActionName;
 
 use crate::defs;
 use crate::runtime::barrier::runtime::{ActionClosureGuard, RuntimeInstance};
-use crate::setup_language as setup;
+use crate::tests::setup;
 
 /// Invoke a single captured action by name, with a fresh runtime stub
 /// and the action call table populated for the script's full set of
@@ -27,7 +27,7 @@ struct Captured {
 }
 
 fn capture_actions(engine: &Engine, ast: &AST) -> (Captured, defs::app::App) {
-    let (mut scope, fresh_app) = defs::scope();
+    let (mut scope, fresh_app) = defs::scope(Default::default());
     defs::app::begin_closure_capture();
     engine
         .run_ast_with_scope(&mut scope, ast)

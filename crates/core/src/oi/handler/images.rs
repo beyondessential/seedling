@@ -340,8 +340,9 @@ pub(crate) fn clear_pins(state: &OiState, params: PinsClearParams) -> HandlerRes
 pub(crate) struct DiscoverParams {
     pub app: String,
     /// Optional BSL script source text to probe in place of the app's
-    /// stored script. The edit-script preview supplies this to surface
-    /// dynamic images a proposed script would introduce.
+    /// stored script, alongside the app's other bundle files. The
+    /// edit-script preview supplies this to surface dynamic images a
+    /// proposed script would introduce.
     #[serde(default)]
     pub proposed_script: Option<String>,
     /// Per-handler supplied param values. Outer key = handler name
@@ -357,10 +358,10 @@ pub(crate) fn discover_images(state: &OiState, params: DiscoverParams) -> Handle
     let name = AppName::new(&params.app)
         .map_err(|e| OiError::new(ErrorCode::RequirementsInvalid, format!("invalid app: {e}")))?;
 
-    let (stored_app, registered_script) = {
+    let (stored_app, registered_bundle) = {
         let reg = state.registry.read();
         match reg.get(name.as_str()) {
-            Some(entry) => (entry.app.clone(), entry.script.clone()),
+            Some(entry) => (entry.app.clone(), std::sync::Arc::clone(&entry.bundle)),
             None => return Err(OiError::not_found(format!("app not registered: {name}"))),
         }
     };
@@ -368,19 +369,18 @@ pub(crate) fn discover_images(state: &OiState, params: DiscoverParams) -> Handle
     // When `proposed_script` is supplied, freshly evaluate it against the
     // stored params so the probe sees the AppDef the update *would*
     // produce. Otherwise probe the registered app as-is.
-    let script = params.proposed_script.clone().unwrap_or(registered_script);
+    let bundle = match &params.proposed_script {
+        Some(text) => std::sync::Arc::new(registered_bundle.with_script(text)?),
+        None => registered_bundle,
+    };
     let app = if params.proposed_script.is_some() {
         let name_owned = name.clone();
         let cipher = std::sync::Arc::clone(&state.cipher);
         let stored_params = state.db.call(move |db| {
             crate::runtime::apps::load_all_params_for_app(db, &cipher, &name_owned)
         });
-        let (proposed_app, err) = crate::runtime::apps::evaluate_script(
-            &name,
-            &script,
-            &stored_params,
-            &state.script_limits,
-        );
+        let (proposed_app, err) =
+            crate::runtime::apps::evaluate(&name, &bundle, &stored_params, &state.script_limits);
         if let Some(e) = err {
             return Err(OiError::new(
                 ErrorCode::NotFound,
@@ -392,13 +392,18 @@ pub(crate) fn discover_images(state: &OiState, params: DiscoverParams) -> Handle
         stored_app
     };
 
-    let (engine, _scope, _stub_app) = crate::setup_language(&state.script_limits);
-    let ast = match engine.compile(&script) {
+    let script = bundle.script()?;
+    let (engine, _scope, _stub_app) =
+        crate::setup_language(&state.script_limits, std::sync::Arc::clone(&bundle));
+    let ast = match engine.compile(script.text()) {
         Ok(a) => a,
         Err(e) => {
             return Err(OiError::new(
                 ErrorCode::NotFound,
-                format!("failed to compile app script: {e}"),
+                format!(
+                    "failed to compile app script: {}",
+                    script.remap_error(&e.to_string())
+                ),
             ));
         }
     };
@@ -445,10 +450,10 @@ pub(crate) fn discover_images(state: &OiState, params: DiscoverParams) -> Handle
 ///   partial) safe set have their expiration cleared.
 // r[impl image.pin.update-reconcile]
 pub(crate) fn reconcile_pins_post_update(state: &OiState, app_name: &AppName) {
-    let (app, script) = {
+    let (app, bundle) = {
         let reg = state.registry.read();
         match reg.get(app_name.as_str()) {
-            Some(entry) => (entry.app.clone(), entry.script.clone()),
+            Some(entry) => (entry.app.clone(), std::sync::Arc::clone(&entry.bundle)),
             None => return,
         }
     };
@@ -471,8 +476,16 @@ pub(crate) fn reconcile_pins_post_update(state: &OiState, app_name: &AppName) {
         out
     };
 
-    let (engine, _scope, _stub) = crate::setup_language(&state.script_limits);
-    let ast = match engine.compile(&script) {
+    let Ok(script) = bundle.script() else {
+        tracing::warn!(
+            app = %app_name,
+            "post-update pin reconciliation: definition has no readable script; leaving pins untouched"
+        );
+        return;
+    };
+    let (engine, _scope, _stub) =
+        crate::setup_language(&state.script_limits, std::sync::Arc::clone(&bundle));
+    let ast = match engine.compile(script.text()) {
         Ok(a) => a,
         Err(e) => {
             tracing::warn!(
