@@ -107,3 +107,23 @@ Selection depends on the running Seedling version, so after a Seedling upgrade a
 - `docs/bsl-scripting.md`: bundles, `seedling.toml`, `app.file`/`app.dir`, `write_dir`, validators.
 - `docs/deploying.md`: publishing a definition artefact (e.g. with `oras push`), the annotation, and index placement.
 - `docs/failure-modes.md` if the re-check trap turns out to be a pattern worth listing.
+
+## Build checklist
+
+Ordered so each stage compiles and tests on its own.
+
+- [ ] Bundle model (`crates/core/src/defs/bundle.rs`): paths, limits, `seedling.toml` metadata, version requirements, content hash and canonical encoding, script concatenation with an offset table, error position rewriting, tar.gz and base64-map decoding
+- [ ] Provenance type and its JSON shape
+- [ ] BSL: `File`, `Directory`, `app.file`, `app.dir`, `file.text`, `volume.write` with a `File`, `volume.write_dir`, `rt.write` with a `File`; volume writes carry bytes
+- [ ] BSL: `param.validate`, run against proposed values after evaluation; resource definitions throw inside a validator
+- [ ] Evaluation entry point takes a bundle; every caller (`AppEntry`, reload, replay, lifecycle, shells, images, registries, reconcile, templates) switches to it
+- [ ] Migration: `definition_bundles`, bundle hash, provenance and param change on generations, template bundles; backfill existing scripts as one-file bundles
+- [ ] Generation storage: bundle store/load, provenance, param change on `ScriptUpdate`, reconstruction and history readers, GC including templates
+- [ ] OCI fetch (`crates/core/src/runtime/definition/fetch.rs`): reference parsing, allowlist gate, containers-auth credentials, manifest or index resolution, selection, layer pull, annotation check; tag listing; digest-only resolution for re-checks
+- [ ] Handlers: definition source parsing, `/apps/create`, `/apps/update` (refusal semantics, validators, atomic param change, `on_change`), param set/unset validation, `/apps/show` provenance, `/apps/script` files, `/apps/bundle`, `/apps/generations`, `/apps/plan`, `/registries/tags`, `AppUpdated` fields, error codes
+- [ ] Templates carry bundles and provenance; `supported`; instantiation refuses unsupported
+- [ ] Faults: `definition_unsupported` at startup and on replacement; tag re-check task with per-app back-off filing `definition_source_moved`
+- [ ] CLI: definition sources (file, folder with `.seedignore`, GitHub URL, `--ref`), `--set`/`--unset`, `apps export`, `registries tags`
+- [ ] Web: provenance on the app page, update from registry with tag picker and plan review, editor keeps sidecars and is read-only for multi-file scripts
+- [ ] Docs: `docs/bsl-scripting.md`, `docs/deploying.md`
+- [ ] Tests against the test-cases file
