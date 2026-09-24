@@ -99,7 +99,7 @@ Selection depends on the running Seedling version, so after a Seedling upgrade a
 
 ## Follow-ups
 
-- A template catalogue that Seedling could pull from, raised by the user during the split. Would build on template provenance and the version requirement for filtering. A separate card if wanted.
+- A template catalogue that Seedling could pull from: card C5. Builds on template provenance and the version requirement for filtering.
 - PRD correction: the migration-gating open question carries the premise that definitions are "still in `apps/`". The `apps/` definitions are demos; the real reason this card doesn't gate migration is that a production definition can stay a single pushed script.
 
 ## Docs to update when implementing

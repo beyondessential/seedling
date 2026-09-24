@@ -227,7 +227,7 @@ These came up while splitting, and the specs follow them rather than the section
 - An atomic update carries at most one param change alongside the definition, keeping `r[operation.lifecycle.param-change]`'s one-param rule. Cross-param validators still see the one proposed value.
 - A validator is `param.validate(|value, params| ...)`: returning accepts, throwing rejects with the thrown value as the reason, and any exception rejects.
 - A definition artefact is one manifest with a Seedling definition artifact type and a single tar+gzip layer holding the bundle.
-- Templates carry provenance, and an app instantiated from one inherits it. A template catalogue Seedling could pull from is a possible later card.
+- Templates carry provenance, and an app instantiated from one inherits it. A template catalogue Seedling could pull from is card C5.
 - Definitions declare the Seedling versions they support. That needs reading without evaluation, so a bundle may hold `seedling.toml` at its root, which reverses "no manifest". Its fields are `seedling`, a version requirement also mirrored as an OCI annotation, and `script`, an ordered list of script files concatenated for evaluation, defaulting to `["app.seed.rhai"]`.
 - Among several matching index entries, the one with the highest minimum Seedling version is selected. A tie is refused.
 - A stored definition whose requirement excludes the running Seedling still evaluates and runs, and holds a `definition_unsupported` condition fault.
