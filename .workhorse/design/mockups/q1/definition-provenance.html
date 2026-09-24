@@ -1,0 +1,192 @@
+<!-- spec: docs/spec/web.md w[routes.apps.definition], w[routes.apps.definition.fetch] -->
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>App definition provenance and registry update</title>
+<style>
+  * { box-sizing: border-box; }
+  body { margin: 0; font-family: Roboto, "Helvetica Neue", Arial, sans-serif; color: rgba(0,0,0,0.87); background: #fff; font-size: 14px; }
+  .frame { max-width: 1100px; margin: 0 auto 48px; padding: 24px; }
+  .frame-label { font-size: 12px; color: rgba(0,0,0,0.5); margin: 24px auto 0; max-width: 1100px; padding: 0 24px; text-transform: uppercase; letter-spacing: 0.08em; }
+  .crumbs { display: flex; align-items: center; gap: 8px; margin-bottom: 16px; }
+  .crumbs a { color: rgba(0,0,0,0.6); text-decoration: none; }
+  .crumbs .sep { color: rgba(0,0,0,0.38); }
+  .grow { flex: 1; }
+  .btn { font: 500 13px Roboto, sans-serif; letter-spacing: 0.03em; text-transform: uppercase; border-radius: 4px; padding: 4px 10px; background: none; cursor: pointer; display: inline-flex; align-items: center; gap: 6px; }
+  .btn.outlined.read { color: #2e7d32; border: 1px solid rgba(46,125,50,0.5); }
+  .btn.outlined.write { color: #ed6c02; border: 1px solid rgba(237,108,2,0.5); }
+  .btn.outlined.danger { color: #d32f2f; border: 1px solid rgba(211,47,47,0.5); }
+  .btn.solid.write { color: #fff; background: #ed6c02; border: 1px solid #ed6c02; box-shadow: 0 1px 3px rgba(0,0,0,0.2); }
+  .btn.text { color: #2e7d32; border: 1px solid transparent; }
+  .icon-btn { width: 30px; height: 30px; border-radius: 50%; border: none; background: none; color: rgba(0,0,0,0.54); font-size: 16px; }
+  .title-row { display: flex; align-items: center; gap: 8px; }
+  h5 { font-size: 24px; font-weight: 400; margin: 0; }
+  h6 { font-size: 20px; font-weight: 500; margin: 0; }
+  .chip { display: inline-flex; align-items: center; height: 24px; padding: 0 8px; border-radius: 12px; font-size: 13px; }
+  .chip.success { background: #2e7d32; color: #fff; }
+  .chip.warning { background: #ed6c02; color: #fff; }
+  .chip.outlined { border: 1px solid rgba(0,0,0,0.23); color: rgba(0,0,0,0.87); }
+  .caption { font-size: 12px; color: rgba(0,0,0,0.6); }
+  .desc { color: rgba(0,0,0,0.6); margin-top: 4px; }
+  .stack > * + * { margin-top: 24px; }
+  .section-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }
+  .paper { border: 1px solid rgba(0,0,0,0.12); border-radius: 4px; }
+  .kv { display: grid; grid-template-columns: 140px 1fr; }
+  .kv > div { padding: 10px 16px; border-bottom: 1px solid rgba(224,224,224,1); }
+  .kv > div:nth-last-child(-n+2) { border-bottom: none; }
+  .kv .k { color: rgba(0,0,0,0.6); }
+  .mono { font-family: "Roboto Mono", ui-monospace, monospace; font-size: 13px; }
+  .muted { color: rgba(0,0,0,0.6); }
+  .alert { display: flex; align-items: center; gap: 12px; padding: 6px 16px; border-radius: 4px; font-size: 14px; }
+  .alert.warning { background: #fff4e5; color: #663c00; }
+  .alert .grow { flex: 1; }
+  table { width: 100%; border-collapse: collapse; }
+  th, td { text-align: left; padding: 10px 16px; border-bottom: 1px solid rgba(224,224,224,1); }
+  th { font-weight: 500; }
+  tr:last-child td { border-bottom: none; }
+
+  /* dialog */
+  .backdrop { background: rgba(0,0,0,0.5); padding: 48px 24px; }
+  .dialog { background: #fff; max-width: 900px; margin: 0 auto; border-radius: 4px; box-shadow: 0 11px 15px -7px rgba(0,0,0,0.2), 0 24px 38px 3px rgba(0,0,0,0.14); }
+  .dialog-title { padding: 16px 24px; font-size: 20px; font-weight: 500; }
+  .dialog-content { padding: 16px 24px; border-top: 1px solid rgba(0,0,0,0.12); border-bottom: 1px solid rgba(0,0,0,0.12); }
+  .dialog-actions { padding: 8px; display: flex; justify-content: flex-end; gap: 8px; }
+  .field { position: relative; border: 1px solid rgba(0,0,0,0.23); border-radius: 4px; padding: 14px 12px 10px; }
+  .field label { position: absolute; top: -8px; left: 8px; background: #fff; padding: 0 4px; font-size: 12px; color: rgba(0,0,0,0.6); }
+  .field.focused { border: 2px solid #2e7d32; }
+  .field.focused label { color: #2e7d32; }
+  .row { display: flex; gap: 16px; }
+  .row > * { flex: 1; }
+  .helper { font-size: 12px; color: rgba(0,0,0,0.6); margin: 4px 14px 0; }
+  .menu { border-radius: 4px; box-shadow: 0 5px 5px -3px rgba(0,0,0,0.2), 0 8px 10px 1px rgba(0,0,0,0.14); margin-top: 4px; padding: 8px 0; }
+  .menu div { padding: 6px 16px; display: flex; justify-content: space-between; }
+  .menu .sel { background: rgba(46,125,50,0.08); }
+  .diff { margin-top: 16px; }
+  .diff-entry { display: flex; gap: 8px; align-items: baseline; padding: 4px 0; }
+  .tag { font-size: 12px; padding: 1px 6px; border-radius: 10px; }
+  .tag.mod { background: #e3f2fd; color: #01579b; }
+  .alert.error { background: #fdeded; color: #5f2120; margin-top: 16px; }
+</style>
+</head>
+<body>
+
+<div class="frame-label">App detail · fetched definition, tag moved</div>
+<div class="frame">
+  <div class="crumbs">
+    <a href="#">Apps</a><span class="sep">/</span><span>central</span>
+    <span class="grow"></span>
+    <button class="btn outlined danger">Uninstall</button>
+    <button class="btn outlined read">Logs</button>
+    <button class="btn outlined write">Edit script</button>
+    <button class="icon-btn" title="Refresh">&#x21bb;</button>
+  </div>
+
+  <div class="stack">
+    <div>
+      <div class="title-row">
+        <h5>central</h5>
+        <span class="chip warning">Degraded</span>
+        <span class="caption">gen 42</span>
+      </div>
+      <div class="desc">Tamanu central server</div>
+    </div>
+
+    <div>
+      <div class="section-head">
+        <h6>Definition</h6>
+        <button class="btn outlined write">Update from registry</button>
+      </div>
+      <div class="paper">
+        <div class="kv">
+          <div class="k">Source</div>
+          <div class="mono">ghcr.io/beyondessential/tamanu-central:v2.11.3</div>
+          <div class="k">Digest</div>
+          <div class="mono">sha256:4f1c…9a02</div>
+          <div class="k">Seedling</div>
+          <div class="mono">&gt;=0.13, &lt;0.15</div>
+        </div>
+      </div>
+      <div class="alert warning" style="margin-top: 8px;">
+        <span class="grow">Tag <span class="mono">v2.11.3</span> now points to <span class="mono">sha256:b73e…11cd</span></span>
+        <button class="btn text" style="color:#663c00">Review</button>
+      </div>
+    </div>
+
+    <div>
+      <div class="section-head"><h6>Params</h6></div>
+      <div class="paper">
+        <table>
+          <tr><th>Name</th><th>Value</th><th></th></tr>
+          <tr><td class="mono">version</td><td class="mono">2.11.3</td><td class="muted">Set</td></tr>
+          <tr><td class="mono">hostname</td><td class="mono">central.example.org</td><td class="muted">Set</td></tr>
+        </table>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="frame-label">App detail · pushed definition</div>
+<div class="frame">
+  <div class="section-head">
+    <h6>Definition</h6>
+    <button class="btn outlined write">Update from registry</button>
+  </div>
+  <div class="paper">
+    <div class="kv">
+      <div class="k">Source</div>
+      <div>Pushed by <strong>alex (ctl)</strong></div>
+      <div class="k">Content hash</div>
+      <div class="mono">sha256:0d9e…77b4</div>
+      <div class="k">Origin</div>
+      <div><span class="mono">github.com/beyondessential/tamanu/tree/main/deploy/seedling</span> <span class="mono muted">@ 3e1f2a9</span> <span class="caption">(reported by client)</span></div>
+    </div>
+  </div>
+</div>
+
+<div class="frame-label">Update from registry · review with a validator rejection</div>
+<div class="backdrop">
+  <div class="dialog">
+    <div class="dialog-title">Update definition · <span class="mono">central</span></div>
+    <div class="dialog-content">
+      <div class="row">
+        <div>
+          <div class="field focused">
+            <label>Tag</label>
+            <span class="mono">v2.12.0</span>
+          </div>
+          <div class="menu">
+            <div class="sel"><span class="mono">v2.12.0</span></div>
+            <div><span class="mono">v2.11.3</span><span class="caption">current</span></div>
+            <div><span class="mono">v2.11.2</span></div>
+          </div>
+          <div class="helper mono">ghcr.io/beyondessential/tamanu-central</div>
+        </div>
+        <div>
+          <div class="row" style="gap: 8px;">
+            <div class="field"><label>Param</label><span class="mono">version</span></div>
+            <div class="field"><label>Value</label><span class="mono">2.12.0</span></div>
+          </div>
+          <div class="helper">Optional. Applied with the new definition.</div>
+        </div>
+      </div>
+
+      <div class="diff">
+        <div class="diff-entry"><span class="tag mod">modified</span><span class="mono">deployment/api</span><span class="caption">container.image</span></div>
+        <div class="diff-entry"><span class="tag mod">modified</span><span class="mono">deployment/web</span><span class="caption">container.image</span></div>
+        <div class="diff-entry"><span class="caption">on_change fires:</span><span class="mono">version</span></div>
+      </div>
+
+      <div class="alert error">
+        <span><span class="mono">hostname</span>: needs a fully qualified name</span>
+      </div>
+    </div>
+    <div class="dialog-actions">
+      <button class="btn text">Cancel</button>
+      <button class="btn solid write" style="opacity: 0.4;" disabled>Apply</button>
+    </div>
+  </div>
+</div>
+
+</body>
+</html>

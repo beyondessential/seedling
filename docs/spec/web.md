@@ -107,7 +107,22 @@ Absent specification bugs, anything not defined here is either defined in anothe
 
 > w[routes.apps]
 > The web interface exposes the full app management surface of the OI:
-> listing registered apps and their statuses; showing detailed app status including resources, faults, params, install requirements, and actions; registering new apps with a BSL script; updating an app's BSL script; deregistering apps; setting and unsetting parameters; scaling deployments; setting an app's priority; viewing generation history; planning proposed changes; invoking lifecycle actions; and invoking the install action with its requirements.
+> listing registered apps and their statuses; showing detailed app status including resources, faults, params, install requirements, and actions; registering new apps with a BSL script; updating an app's BSL script or fetching its definition from a registry; deregistering apps; setting and unsetting parameters; scaling deployments; setting an app's priority; viewing generation history; planning proposed changes; invoking lifecycle actions; and invoking the install action with its requirements.
+
+> w[routes.apps.definition]
+> The app detail page must show where the app's current definition came from, following its [provenance](interface.md#i--definition.provenance): for a fetched definition, its reference and digest; for a pushed one, its content hash and who pushed it, together with any origin the client reported, marked as reported by the client.
+
+> w[routes.apps.definition.fetch]
+> The app detail page must let the operator update the app's definition from a registry.
+> For an app whose definition was fetched, it lists the tags of the recorded reference's repository through [`/registries/tags`](interface.md#i--definition.tags) for the operator to pick from; the operator may instead enter a complete reference.
+> The operator may change one parameter alongside the new definition.
+> Before applying, the page shows the [planned change](interface.md#i--plan.dry-run), including any validator rejections, and a change that is rejected cannot be applied.
+> The update is issued as a single [`/apps/update`](interface.md#i--app.update) request.
+> While the app has an active `definition_source_moved` fault, the page shows beside the provenance that the recorded tag has moved, and offers that tag as the one to update to.
+
+> w[routes.apps.definition.edit]
+> The script editor edits the definition's script file when the definition has exactly one, carrying every other file in the bundle over unchanged, and the result is recorded as pushed.
+> A definition whose script spans several files is shown read-only in the editor, and is updated by pushing or fetching.
 
 > w[routes.apps.fault-count]
 > The apps table on the home route must surface, per app, how many active faults are currently filed against it.

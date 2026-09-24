@@ -1,5 +1,5 @@
 ---
-status: draft
+status: complete
 ---
 
 # Definitions carry provenance and can be fetched from their source
@@ -219,3 +219,15 @@ It runs as its own spawned task, like the Tailscale poller and TLS renewal, not 
 - [x] Pushing from a GitHub URL plus folder path: ctl downloads and pushes; provenance is a push with a client-reported origin
 - [x] How often tags are re-checked, and its back-off on a poor link: coarse (6-hourly to daily) fixed constant with jitter; per-app capped-exponential back-off on failure, no give-up; standalone spawned task; a failed check never files or clears the fault
 - [x] Fetch path vs container-engine auth: Seedling resolves directly with an in-process OCI client reading Podman's existing credential file; the allowlist is a hard gate for definition fetches
+
+## Decided at split
+
+These came up while splitting, and the specs follow them rather than the sections above where they differ.
+
+- An atomic update carries at most one param change alongside the definition, keeping `r[operation.lifecycle.param-change]`'s one-param rule. Cross-param validators still see the one proposed value.
+- A validator is `param.validate(|value, params| ...)`: returning accepts, throwing rejects with the thrown value as the reason, and any exception rejects.
+- A definition artefact is one manifest with a Seedling definition artifact type and a single tar+gzip layer holding the bundle.
+- Templates carry provenance, and an app instantiated from one inherits it. A template catalogue Seedling could pull from is a possible later card.
+- Definitions declare the Seedling versions they support. That needs reading without evaluation, so a bundle may hold `seedling.toml` at its root, which reverses "no manifest". Its fields are `seedling`, a version requirement also mirrored as an OCI annotation, and `script`, an ordered list of script files concatenated for evaluation, defaulting to `["app.seed.rhai"]`.
+- Among several matching index entries, the one with the highest minimum Seedling version is selected. A tie is refused.
+- A stored definition whose requirement excludes the running Seedling still evaluates and runs, and holds a `definition_unsupported` condition fault.

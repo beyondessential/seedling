@@ -11,6 +11,29 @@ Absent specification bugs, anything that is not defined here is either defined i
 > l[bsl.script]
 > A BSL script is a single code listing that defines a Seedling Application.
 
+> l[bsl.bundle]
+> An application's definition is a *bundle*: a tree of files, one or more of which are its *script files*.
+> The BSL script that defines the application is the script files' contents concatenated in the order the bundle's [metadata](#l--bsl.bundle.metadata) lists them.
+> Every other file in the bundle is a *sidecar file*, which the script can [read](#l--app.file) and copy into volumes.
+> A definition consisting of a script alone is a bundle holding only `app.seed.rhai`.
+
+> l[bsl.bundle.metadata]
+> A bundle may hold a metadata file, `seedling.toml`, at its root.
+> It has two optional fields:
+>
+> - `seedling`: a [Seedling version requirement](#l--bsl.bundle.seedling-versions) naming the Seedling versions the definition supports. Absent, the definition supports every version.
+> - `script`: an array of bundle paths naming the script files, in concatenation order. Absent, it is `["app.seed.rhai"]`.
+>
+> A bundle without the file is treated as one whose fields are all absent.
+> The file is part of the bundle and is not itself a script file.
+
+> l[bsl.bundle.seedling-versions]
+> A Seedling version requirement is a string of one or more semantic-version comparator sets separated by `||`, each set a comma-separated list of comparators such as `>=0.13, <0.15`.
+> A Seedling version satisfies the requirement when it satisfies every comparator of at least one set.
+
+> l[bsl.bundle.script-errors]
+> An evaluation error arising in a script file names that file and the line within it, not a position in the concatenated script.
+
 > l[bsl.scope]
 > The runtime must use a distinct [Rhai Scope](https://rhai.rs/book/engine/scope.html) for each BSL script.
 
@@ -299,6 +322,27 @@ This is currently the only value.
 >
 > The method returns `app` so calls may be chained.
 
+## Bundle files
+
+> l[app.file]
+> `app.file(path: string)` returns a `File` holding the contents of the file at `path` in the app's [bundle](#l--bsl.bundle).
+> `path` is relative to the bundle root, uses `/` as its separator, and is normalised without touching any filesystem.
+> A path that is absolute, contains a null byte, escapes the bundle root after normalisation, or names no file in the bundle throws.
+
+> l[app.dir]
+> `app.dir(path: string)` returns a `Directory` holding every file in the bundle beneath `path`, each at its path relative to `path`.
+> `path` follows the same rules as for [app.file](#l--app.file), and a path beneath which the bundle holds no file throws.
+
+> l[app.bundle.context]
+> `app.file` and `app.dir` may be called in any context, and always read the bundle the app was evaluated from.
+> Within an [`on_change`](#l--param.on-change.old) handler, `old.file` and `old.dir` read the previous generation's bundle.
+
+> l[file.type]
+> A `File` is an immutable sequence of bytes read from the bundle.
+
+> l[file.text]
+> `file.text()` returns the file's contents as a string, and throws if they are not valid UTF-8.
+
 # Parameter
 
 > l[param.type]
@@ -322,7 +366,8 @@ This is currently the only value.
 > The `fn` closure may take up to two arguments: the [Runtime Instance](#l--rt.var) (typically named `rt`) and the previous `App` instance (typically named `old`).
 
 > l[param.on-change.old]
-> The `old` argument is an `App` value that reflects the state at the previous [generation](#r--generation.definition): the script evaluated with the parameter values as they were before the change.
+> The `old` argument is an `App` value that reflects the state at the previous [generation](#r--generation.definition): the previous generation's definition, evaluated with the parameter values as they were before the change.
+> When the change arrives together with a new definition, the handler is the one registered by the new definition, and `old` is the previous definition at the previous values.
 >
 > `old.param(name).is_set()` and `old.param(name).value()` return results consistent with the prior parameter state.
 > Static resources defined in the script, and actions, are accessible via `old` and reflect their prior definitions. This is useful for resources whose shape depends on parameter values.
@@ -370,6 +415,25 @@ This is currently the only value.
 > l[param.schema.secret-from-kind]
 > Parameters with `kind` `"password"` or `"weak-password"` are implicitly secret: their `secret` flag is treated as `true` unless explicitly overridden with `param.secret(false)`.
 > The `secret` builder may be called after `kind` to override this implication in either direction.
+
+> l[param.validate]
+> `param.validate(fn: closure)` attaches a validator to the parameter, which decides whether a proposed value is acceptable.
+> The closure takes two arguments: the parameter's proposed value, and an object map from each set parameter's name to its proposed value.
+> Returning accepts the value.
+> Throwing rejects it, and the thrown value is the reason reported for the rejection; any exception raised within the closure rejects the value, whether thrown deliberately or not.
+> When the runtime runs validators, and what a rejection refuses, is defined in [param.validation](interface.md#i--param.validation).
+
+> l[param.validate.unset]
+> A validator runs only while its parameter is set.
+> An unset parameter always passes, and [required](#l--param.schema.required) is what governs whether a value must be present.
+
+> l[param.validate.pure]
+> A validator is given no [runtime instance](#l--rt.var) and its result is its only effect.
+> Defining a resource within a validator throws.
+
+> l[param.validate.constraints]
+> `validate` may only be called at the top level of the script (statically). Calling it from within an action closure must throw.
+> Calling `validate` more than once on the same parameter must throw.
 
 # Service
 
@@ -936,8 +1000,15 @@ This is currently the only value.
 > The contents of a tmpfs volume do not survive a host reboot.
 
 > l[volume.write]
-> `volume.write(path: string, contents: string)` is an instance method which writes some data to the volume at `path`.
+> `volume.write(path: string, contents: string | File)` is an instance method which writes some data to the volume at `path`.
+> A [`File`](#l--file.type) is written byte for byte as it is held in the bundle.
 > Any existing content at `path` is discarded or shadowed.
+
+> l[volume.write-dir]
+> `volume.write_dir(path: string, dir: Directory)` is an instance method which writes every file in a [`Directory`](#l--app.dir) into the volume beneath `path`.
+> Each file keeps its path relative to the directory, and is written byte for byte as it is held in the bundle.
+> `path` is validated as for [volume.write](#l--volume.write.validation), except that it may resolve to the volume root.
+> The writes are declared file writes in the same way as those of `volume.write`, and are applied and reapplied alike.
 
 > l[volume.write.validation]
 > The `path` argument must be an absolute path (starting with `/`), must not contain null bytes, and must not escape the volume root after canonicalisation (resolving `.` and `..` segments without touching the filesystem). A path that resolves to `/` itself is also forbidden.
@@ -1274,7 +1345,8 @@ This spec defines the semantics of the Runtime Instance as far as BSL is concern
 > `Executed.ensure_success()` throws a script error when the command exited non-zero. The error message includes the exit code. It is the most concise way to assert that a command succeeded; the matching pattern is `rt.exec(...).ensure_success()`.
 
 > l[rt.write]
-> The `rt.write(target: Volume | ExternalVolume, path: string, contents: string)` method writes a file into the given volume at action runtime, parallel to the static `Volume.write`.
+> The `rt.write(target: Volume | ExternalVolume, path: string, contents: string | File)` method writes a file into the given volume at action runtime, parallel to the static `Volume.write`.
+> A [`File`](#l--file.type) is written byte for byte as it is held in the bundle.
 >
 > The target may be:
 >
