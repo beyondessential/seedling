@@ -204,3 +204,72 @@ fn canonical_and_wire_forms_round_trip() {
     );
     assert_eq!(Bundle::from_wire(&b.to_wire()).unwrap(), b);
 }
+
+// l[verify bsl.bundle.script-errors]
+#[test]
+fn an_empty_script_file_does_not_shift_the_line_table() {
+    let b = Bundle::from_files(files(&[
+        (
+            "seedling.toml",
+            b"script = [\"empty.rhai\", \"a.rhai\", \"b.rhai\"]",
+        ),
+        ("empty.rhai", b""),
+        ("a.rhai", b"let a = 1;\n"),
+        ("b.rhai", b"let c = 3;\nthrow \"bad\";\n"),
+    ]))
+    .unwrap();
+    let script = b.script().unwrap();
+    assert_eq!(script.text(), "let a = 1;\nlet c = 3;\nthrow \"bad\";\n");
+    assert_eq!(
+        script.remap_error("Runtime error: bad (line 3, position 1)"),
+        "Runtime error: bad (b.rhai line 2, position 1)"
+    );
+    assert_eq!(
+        script.remap_error("at (line 1, position 3)"),
+        "at (a.rhai line 1, position 3)"
+    );
+}
+
+// i[verify definition.bundle.limits]
+#[test]
+fn bundles_holding_too_many_files_are_rejected() {
+    let paths: Vec<(String, Vec<u8>)> = (0..=BUNDLE_FILE_LIMIT)
+        .map(|n| (format!("f{n}"), Vec::new()))
+        .collect();
+    let m = invalid_message(Bundle::from_files(paths.clone()));
+    assert!(
+        m.contains(&format!("{BUNDLE_FILE_LIMIT}-file limit")),
+        "{m}"
+    );
+
+    let data = tar_gz(|b| {
+        for (path, _) in &paths {
+            add_file(b, path, b"");
+        }
+    });
+    let m = invalid_message(Bundle::from_tar_gz(&data));
+    assert!(
+        m.contains(&format!("{BUNDLE_FILE_LIMIT}-file limit")),
+        "{m}"
+    );
+
+    // A stored bundle from before the limit still loads.
+    let stored = Bundle::from_stored(paths).unwrap();
+    assert_eq!(stored.files().len(), BUNDLE_FILE_LIMIT + 1);
+}
+
+// i[verify definition.bundle.limits]
+#[test]
+fn a_file_and_a_folder_of_the_same_name_conflict() {
+    for pair in [
+        [("a/b", &b"x"[..]), ("a", &b"y"[..])],
+        [("a", &b"y"[..]), ("a/b", &b"x"[..])],
+        [("a/b/c", &b"x"[..]), ("a/b", &b"y"[..])],
+    ] {
+        let m = invalid_message(Bundle::from_files(files(&pair)));
+        assert!(m.contains("one is inside the other"), "{m}");
+    }
+    // Neighbours that merely share a prefix do not conflict.
+    Bundle::from_files(files(&[("a", b"x"), ("a!b", b"y"), ("ab", b"z")])).unwrap();
+    Bundle::from_files(files(&[("a!b", b"y"), ("a/b", b"x")])).unwrap();
+}

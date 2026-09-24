@@ -1,4 +1,4 @@
-use std::{collections::BTreeMap, fmt, io::Read};
+use std::{collections::BTreeMap, fmt, io::Read, ops::Bound};
 
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use bytes::Bytes;
@@ -14,6 +14,13 @@ use super::version::VersionRequirement;
 /// `/apps/bundle` returns them the same way, so the cap has to leave the
 /// encoded form inside the 4 MiB request and response limits.
 pub const BUNDLE_SIZE_LIMIT: usize = 2 * 1024 * 1024;
+
+/// Upper bound on the number of files in a bundle.
+///
+/// The size limit alone does not bound intake: a pushed map of empty files,
+/// or a tar of empty-file headers, costs almost nothing towards it while
+/// still making the runtime hold and walk one entry each.
+pub const BUNDLE_FILE_LIMIT: usize = 4096;
 
 pub const METADATA_FILE: &str = "seedling.toml";
 pub const DEFAULT_SCRIPT: &str = "app.seed.rhai";
@@ -115,11 +122,11 @@ impl Script {
             if !text.is_empty() && !text.ends_with('\n') {
                 text.push('\n');
             }
-            let mut lines = contents.lines().count();
+            // An empty file contributes no text and no separator, so it
+            // takes no lines: charging it one would shift every file after
+            // it out of step with the concatenation.
+            let lines = contents.lines().count();
             text.push_str(contents);
-            if contents.is_empty() {
-                lines = 1;
-            }
             segments.push(Segment {
                 file: file.to_owned(),
                 first_line: next_line,
@@ -238,16 +245,20 @@ impl Bundle {
             if path.is_empty() {
                 return Err(invalid(format!("path {raw:?} names the bundle root")));
             }
-            total = total.saturating_add(contents.len());
+            total = total
+                .saturating_add(path.len())
+                .saturating_add(contents.len());
             if enforce_limit && total > BUNDLE_SIZE_LIMIT {
                 return Err(invalid(format!(
                     "bundle exceeds the {BUNDLE_SIZE_LIMIT}-byte size limit at {path:?}"
                 )));
             }
-            if let Some(dir) = out
-                .keys()
-                .find(|k| is_beneath(k, &path) || is_beneath(&path, k))
-            {
+            if enforce_limit && out.len() >= BUNDLE_FILE_LIMIT {
+                return Err(invalid(format!(
+                    "bundle holds more than the {BUNDLE_FILE_LIMIT}-file limit at {path:?}"
+                )));
+            }
+            if let Some(dir) = overlapping(&out, &path) {
                 return Err(invalid(format!(
                     "path {path:?} conflicts with {dir:?}: one is inside the other"
                 )));
@@ -316,7 +327,17 @@ impl Bundle {
             .map_err(|e| invalid(format!("bundle archive is unreadable: {e}")))?;
         let mut files = Vec::new();
         let mut total = 0usize;
+        let mut seen = 0usize;
         for entry in entries {
+            // Headers cost nothing to decompress and little to hold, so the
+            // byte cap alone would let a small blob expand into millions of
+            // entries; the count is capped as the entries are read.
+            seen += 1;
+            if seen > BUNDLE_FILE_LIMIT {
+                return Err(invalid(format!(
+                    "bundle archive holds more than the {BUNDLE_FILE_LIMIT}-file limit"
+                )));
+            }
             let mut entry =
                 entry.map_err(|e| invalid(format!("bundle archive is unreadable: {e}")))?;
             let path = entry
@@ -457,8 +478,27 @@ impl Bundle {
     }
 }
 
-fn is_beneath(dir: &str, path: &str) -> bool {
-    path.len() > dir.len() && path.starts_with(dir) && path.as_bytes()[dir.len()] == b'/'
+/// The accepted path that `path` is inside, or that is inside `path`.
+///
+/// Neither relationship needs a scan of what has been accepted: every file
+/// beneath `path` sorts contiguously from the prefix `path/`, and every
+/// directory `path` sits under is one of its own ancestors.
+fn overlapping<'a>(out: &'a BTreeMap<String, Bytes>, path: &str) -> Option<&'a String> {
+    let beneath = format!("{path}/");
+    let from_beneath = (Bound::Included(beneath.as_str()), Bound::Unbounded);
+    if let Some((key, _)) = out.range::<str, _>(from_beneath).next()
+        && key.starts_with(&beneath)
+    {
+        return Some(key);
+    }
+    let mut rest = path;
+    while let Some((ancestor, _)) = rest.rsplit_once('/') {
+        if let Some((key, _)) = out.get_key_value(ancestor) {
+            return Some(key);
+        }
+        rest = ancestor;
+    }
+    None
 }
 
 // l[impl bsl.bundle.metadata]
