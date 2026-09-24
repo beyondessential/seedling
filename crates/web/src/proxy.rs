@@ -3,7 +3,9 @@ use tokio::io::{
     AsyncBufRead, AsyncBufReadExt as _, AsyncReadExt as _, AsyncWriteExt as _, BufReader,
 };
 
-const MAX_FIRST_LINE: usize = 1024 * 1024;
+/// The daemon's own request limit, so a request the daemon would accept,
+/// such as a pushed definition bundle, is not refused on the way to it.
+const MAX_FIRST_LINE: usize = 4 * 1024 * 1024;
 
 pub struct PeekedRequest {
     pub method: String,
@@ -134,7 +136,7 @@ mod tests {
 
     // w[verify transport.webtransport]
     #[tokio::test]
-    async fn the_configured_limit_is_a_megabyte() {
-        assert_eq!(MAX_FIRST_LINE, 1024 * 1024);
+    async fn the_configured_limit_matches_the_daemons() {
+        assert_eq!(MAX_FIRST_LINE, 4 * 1024 * 1024);
     }
 }
