@@ -33,6 +33,11 @@ function renderEdit(fixtures = {}) {
     safetyMode: "write",
     fixtures: {
       "/apps/script": { script: "// v1", generation: 3 },
+      "/apps/bundle": {
+        generation: 3,
+        provenance: {},
+        bundle: { "app.seed.rhai": btoa("// v1") },
+      },
       "/apps/plan": plan,
       "/apps/images/discover": { per_handler: [], all_images: [] },
       "/images/list": { images: [] },
@@ -106,5 +111,75 @@ describe("EditScript", () => {
       },
     });
     expect(await screen.findByText(/no such app/)).toBeTruthy();
+  });
+
+  // w[verify routes.apps.definition.edit]
+  it("carries sidecar files over when the script is edited", async () => {
+    const { request } = renderEdit({
+      "/apps/script": { script: "// v1", files: ["app.seed.rhai"], generation: 3 },
+      "/apps/bundle": {
+        generation: 3,
+        provenance: {},
+        bundle: { "app.seed.rhai": btoa("// v1"), "pages/500.html": btoa("<p>") },
+      },
+    });
+    const editor = await findSeededEditor();
+    fireEvent.change(editor, { target: { value: "// v2" } });
+    fireEvent.click(screen.getByRole("button", { name: "Review & apply" }));
+    const expected = { "app.seed.rhai": btoa("// v2"), "pages/500.html": btoa("<p>") };
+    await waitFor(() =>
+      expect(request).toHaveBeenCalledWith("/apps/plan", {
+        app: "shop",
+        proposed_bundle: expected,
+      }),
+    );
+    fireEvent.click(await screen.findByRole("button", { name: "Apply" }));
+    await waitFor(() =>
+      expect(request).toHaveBeenCalledWith("/apps/update", {
+        app: "shop",
+        bundle: expected,
+      }),
+    );
+  });
+
+  // w[verify routes.apps.definition.edit]
+  it("will not apply before the definition's files are known", async () => {
+    for (const fixture of [
+      { ok: false, error: { code: "internal", message: "bundle unavailable" } },
+      null,
+    ]) {
+      const { unmount } = renderEdit({ "/apps/bundle": fixture });
+      const editor = await findSeededEditor();
+      fireEvent.change(editor, { target: { value: "// v2" } });
+      expect(
+        screen.getByRole("button", { name: "Loading…" }).hasAttribute("disabled"),
+      ).toBe(true);
+      expect(screen.queryByRole("button", { name: "Review & apply" })).toBeNull();
+      unmount();
+    }
+    renderEdit({
+      "/apps/bundle": {
+        ok: false,
+        error: { code: "internal", message: "bundle unavailable" },
+      },
+    });
+    expect(await screen.findByText(/bundle unavailable/)).toBeTruthy();
+  });
+
+  // w[verify routes.apps.definition.edit]
+  it("opens a script spanning several files read-only", async () => {
+    renderEdit({
+      "/apps/script": {
+        script: "// v1",
+        files: ["lib.rhai", "app.seed.rhai"],
+        generation: 3,
+      },
+    });
+    await findSeededEditor();
+    expect(screen.getByText(/spans several files/)).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Load file" })).toBeNull();
+    expect(
+      screen.getByRole("button", { name: "No changes" }).hasAttribute("disabled"),
+    ).toBe(true);
   });
 });

@@ -1,4 +1,5 @@
 import {
+  Alert,
   Box,
   Button,
   CircularProgress,
@@ -18,6 +19,7 @@ import { ScriptEditor } from "../components/ScriptEditor";
 import { useOiAction } from "../hooks/useOiAction";
 import { useOiQuery } from "../hooks/useOi";
 import type {
+  AppBundleResponse,
   DiscoverResponse,
   ImagePin,
   ImageSummary,
@@ -26,7 +28,16 @@ import type {
 
 interface ScriptResponse {
   script: string;
+  files?: string[];
   generation: number;
+}
+
+function utf8ToBase64(text: string): string {
+  let binary = "";
+  for (const byte of new TextEncoder().encode(text)) {
+    binary += String.fromCharCode(byte);
+  }
+  return btoa(binary);
 }
 
 export default function EditScript() {
@@ -38,6 +49,10 @@ export default function EditScript() {
     loading: fetching,
     error: fetchError,
   } = useOiQuery<ScriptResponse>("/apps/script", { app: name });
+  const { data: bundle, error: bundleError } = useOiQuery<AppBundleResponse>(
+    "/apps/bundle",
+    { app: name },
+  );
 
   const { execute: planExec, loading: planning, error: planError } = useOiAction();
   const { execute: discoverExec } = useOiAction();
@@ -52,15 +67,36 @@ export default function EditScript() {
     if (data) setScript(data.script);
   }, [data]);
 
+  // w[impl routes.apps.definition.edit]
+  // Only a definition with exactly one script file is edited here; every
+  // other file in its bundle is carried over untouched.
+  const scriptFiles = data?.files ?? ["app.seed.rhai"];
+  const readOnly = scriptFiles.length > 1;
+  const scriptFile = scriptFiles[0];
+  // Until the bundle has arrived, what else the definition holds is
+  // unknown: submitting a lone script then would replace the whole
+  // definition with one file and take the sidecars with it.
+  const files = bundle?.bundle ?? null;
+  const hasSidecars =
+    files !== null && Object.keys(files).some((p) => p !== scriptFile);
+  /** The edited definition as request fields, prefixed for `/apps/plan`. */
+  const definitionFields = (prefix: "" | "proposed_") =>
+    files && hasSidecars
+      ? {
+          [`${prefix}bundle`]: { ...files, [scriptFile]: utf8ToBase64(script) },
+        }
+      : { [`${prefix}script`]: script };
+
   const unchanged = data !== null && data?.script === script;
-  const canReview = !saving && !planning && !!data && !unchanged;
+  const canReview =
+    !saving && !planning && !!data && !!files && !unchanged && !readOnly;
 
   const handleReview = async () => {
     if (!canReview) return;
     try {
       const result = (await planExec("/apps/plan", {
         app: name,
-        proposed_script: script,
+        ...definitionFields("proposed_"),
       })) as PlanResponse;
       setPlan(result);
       setUnwarmedHandlerImages([]);
@@ -104,7 +140,7 @@ export default function EditScript() {
 
   const handleConfirm = async () => {
     try {
-      await saveExec("/apps/update", { app: name, script });
+      await saveExec("/apps/update", { app: name, ...definitionFields("") });
       navigate(`/apps/${name}`);
     } catch {
       // displayed via saveError
@@ -115,7 +151,8 @@ export default function EditScript() {
     setPlan(null);
   };
 
-  const planHasErrors = (plan?.errors?.length ?? 0) > 0;
+  const planHasErrors =
+    (plan?.errors?.length ?? 0) > 0 || (plan?.rejections?.length ?? 0) > 0;
 
   return (
     <Box sx={{ p: 3, maxWidth: 960, mx: "auto", display: "flex", flexDirection: "column", gap: 2 }}>
@@ -157,11 +194,18 @@ export default function EditScript() {
           onClick={handleReview}
           disabled={!canReview}
         >
-          {planning ? "Planning…" : unchanged ? "No changes" : "Review & apply"}
+          {planning
+            ? "Planning…"
+            : unchanged
+              ? "No changes"
+              : !files
+                ? "Loading…"
+                : "Review & apply"}
         </SolidActionButton>
       </Box>
       <Stack spacing={1}>
         {fetchError && <OiErrorAlert error={fetchError} />}
+        {bundleError && <OiErrorAlert error={bundleError} />}
         {planError && <OiErrorAlert error={planError} />}
       </Stack>
       {fetching && (
@@ -169,8 +213,19 @@ export default function EditScript() {
           <CircularProgress />
         </Box>
       )}
+      {readOnly && (
+        <Alert severity="info">
+          This definition's script spans several files. Update it by pushing or
+          fetching.
+        </Alert>
+      )}
       {data && (
-        <ScriptEditor value={script} onChange={setScript} minHeight="70vh" />
+        <ScriptEditor
+          value={script}
+          onChange={setScript}
+          minHeight="70vh"
+          readOnly={readOnly}
+        />
       )}
       <Dialog
         open={plan !== null}

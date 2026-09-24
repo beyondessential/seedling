@@ -13,6 +13,45 @@ fn param(s: &str) -> ParamName {
     ParamName::new_unchecked(s)
 }
 
+/// The old set/unset entry points, as the tests that predate a parameter's
+/// two values being protected independently still read.
+fn bump_param_set(
+    db: &Db,
+    app: &AppName,
+    name: &ParamName,
+    previous: Option<&str>,
+    new_value: &str,
+    cipher: &Cipher,
+    is_secret: bool,
+) -> rusqlite::Result<Generation> {
+    let change = ParamChange {
+        name,
+        previous,
+        new_value: Some(new_value),
+        is_secret,
+        previous_is_secret: is_secret,
+    };
+    bump_param_change(db, app, &change, cipher)
+}
+
+fn bump_param_unset(
+    db: &Db,
+    app: &AppName,
+    name: &ParamName,
+    previous: &str,
+    cipher: &Cipher,
+    is_secret: bool,
+) -> rusqlite::Result<Generation> {
+    let change = ParamChange {
+        name,
+        previous: Some(previous),
+        new_value: None,
+        is_secret,
+        previous_is_secret: is_secret,
+    };
+    bump_param_change(db, app, &change, cipher)
+}
+
 const SCRIPT_A: &str = r#"app.deployment("web").image("ghcr.io/example/web:1.0");"#;
 const SCRIPT_B: &str = r#"app.deployment("web").image("ghcr.io/example/web:2.0");"#;
 
@@ -40,7 +79,7 @@ fn test_cipher() -> crate::runtime::secrets::Cipher {
 #[test]
 fn register_bumps_to_one() {
     let db = test_db();
-    let g = bump_register(&db, &app(), SCRIPT_A).unwrap();
+    let g = register_script(&db, &app(), SCRIPT_A).unwrap();
     assert_eq!(g, 1);
     assert_eq!(current(&db, &app()).unwrap(), Some(1));
 }
@@ -51,14 +90,14 @@ fn register_bumps_to_one() {
 #[test]
 fn script_update_increments_generation_and_dedups_bodies() {
     let db = test_db();
-    bump_register(&db, &app(), SCRIPT_A).unwrap();
-    let g2 = bump_script_update(&db, &app(), SCRIPT_B).unwrap();
-    let g3 = bump_script_update(&db, &app(), SCRIPT_A).unwrap();
+    register_script(&db, &app(), SCRIPT_A).unwrap();
+    let g2 = update_script(&db, &app(), SCRIPT_B).unwrap();
+    let g3 = update_script(&db, &app(), SCRIPT_A).unwrap();
     assert_eq!(g2, 2);
     assert_eq!(g3, 3);
     let count: i64 = db
         .conn
-        .query_row("SELECT COUNT(*) FROM script_bodies", [], |r| r.get(0))
+        .query_row("SELECT COUNT(*) FROM definition_bundles", [], |r| r.get(0))
         .unwrap();
     assert_eq!(count, 2, "identical script content should dedupe");
 }
@@ -68,7 +107,7 @@ fn script_update_increments_generation_and_dedups_bodies() {
 fn param_set_records_previous_value() {
     let db = test_db();
     let cipher = test_cipher();
-    bump_register(&db, &app(), SCRIPT_A).unwrap();
+    register_script(&db, &app(), SCRIPT_A).unwrap();
     bump_param_set(&db, &app(), &param("version"), None, "1.0", &cipher, false).unwrap();
     let g = bump_param_set(
         &db,
@@ -93,7 +132,7 @@ fn param_set_records_previous_value() {
 fn param_unset_records_previous_value_and_no_new() {
     let db = test_db();
     let cipher = test_cipher();
-    bump_register(&db, &app(), SCRIPT_A).unwrap();
+    register_script(&db, &app(), SCRIPT_A).unwrap();
     bump_param_set(
         &db,
         &app(),
@@ -117,7 +156,7 @@ fn param_unset_records_previous_value_and_no_new() {
 fn param_map_at_walks_history() {
     let db = test_db();
     let cipher = test_cipher();
-    bump_register(&db, &app(), SCRIPT_A).unwrap();
+    register_script(&db, &app(), SCRIPT_A).unwrap();
     bump_param_set(&db, &app(), &param("domain"), None, "v1", &cipher, false).unwrap();
     let g_after_v1 = current(&db, &app()).unwrap().unwrap();
     bump_param_set(
@@ -153,9 +192,9 @@ fn reconstruct_at_prior_generation_uses_old_script_and_params() {
     let db = test_db();
     let cipher = test_cipher();
     let limits = ScriptLimits::default();
-    bump_register(&db, &app(), SCRIPT_A).unwrap();
+    register_script(&db, &app(), SCRIPT_A).unwrap();
     let g_old = current(&db, &app()).unwrap().unwrap();
-    bump_script_update(&db, &app(), SCRIPT_B).unwrap();
+    update_script(&db, &app(), SCRIPT_B).unwrap();
 
     let app_old = reconstruct_app_def(&db, &app(), g_old, &limits, &cipher).unwrap();
     let app_new = reconstruct_app_def(
@@ -198,7 +237,7 @@ fn reconstruct_at_prior_generation_uses_old_script_and_params() {
 fn list_returns_descending_with_limit_and_before() {
     let db = test_db();
     let cipher = test_cipher();
-    bump_register(&db, &app(), SCRIPT_A).unwrap();
+    register_script(&db, &app(), SCRIPT_A).unwrap();
     for i in 0..5 {
         bump_param_set(
             &db,
@@ -228,8 +267,8 @@ fn list_returns_descending_with_limit_and_before() {
 #[test]
 fn delete_for_app_wipes_history_and_orphan_bodies() {
     let db = test_db();
-    bump_register(&db, &app(), SCRIPT_A).unwrap();
-    bump_script_update(&db, &app(), SCRIPT_B).unwrap();
+    register_script(&db, &app(), SCRIPT_A).unwrap();
+    update_script(&db, &app(), SCRIPT_B).unwrap();
 
     db.conn
         .execute(
@@ -238,7 +277,7 @@ fn delete_for_app_wipes_history_and_orphan_bodies() {
             [],
         )
         .unwrap();
-    bump_register(&db, &AppName::new("other").unwrap(), SCRIPT_A).unwrap();
+    register_script(&db, &AppName::new("other").unwrap(), SCRIPT_A).unwrap();
 
     delete_for_app(&db, &app()).unwrap();
 
@@ -254,7 +293,7 @@ fn delete_for_app_wipes_history_and_orphan_bodies() {
 
     let body_count: i64 = db
         .conn
-        .query_row("SELECT COUNT(*) FROM script_bodies", [], |r| r.get(0))
+        .query_row("SELECT COUNT(*) FROM definition_bundles", [], |r| r.get(0))
         .unwrap();
     assert_eq!(body_count, 1, "SCRIPT_A is still referenced by 'other'");
 }
@@ -263,7 +302,7 @@ fn delete_for_app_wipes_history_and_orphan_bodies() {
 fn attach_operation_and_record_outcome() {
     let db = test_db();
     let cipher = test_cipher();
-    bump_register(&db, &app(), SCRIPT_A).unwrap();
+    register_script(&db, &app(), SCRIPT_A).unwrap();
     let g = bump_param_set(&db, &app(), &param("k"), None, "v", &cipher, false).unwrap();
     attach_operation(&db, &app(), g, "op-123").unwrap();
     let entry = get(&db, &app(), g).unwrap().unwrap();
@@ -281,7 +320,7 @@ fn attach_operation_and_record_outcome() {
 fn reconstruct_unknown_generation_returns_not_found() {
     let db = test_db();
     let cipher = test_cipher();
-    bump_register(&db, &app(), SCRIPT_A).unwrap();
+    register_script(&db, &app(), SCRIPT_A).unwrap();
     let limits = ScriptLimits::default();
     let err = reconstruct_app_def(&db, &app(), 99, &limits, &cipher).unwrap_err();
     assert!(matches!(err, Error::NotFound { .. }));
@@ -293,7 +332,7 @@ fn reconstruct_unknown_generation_returns_not_found() {
 fn secret_param_set_stores_ciphertext_not_plaintext() {
     let db = test_db();
     let cipher = test_cipher();
-    bump_register(&db, &app(), SCRIPT_A).unwrap();
+    register_script(&db, &app(), SCRIPT_A).unwrap();
     let g = bump_param_set(
         &db,
         &app(),
@@ -319,7 +358,7 @@ fn secret_param_set_stores_ciphertext_not_plaintext() {
 fn secret_param_unset_stores_ciphertext_not_plaintext() {
     let db = test_db();
     let cipher = test_cipher();
-    bump_register(&db, &app(), SCRIPT_A).unwrap();
+    register_script(&db, &app(), SCRIPT_A).unwrap();
     bump_param_set(
         &db,
         &app(),
@@ -355,7 +394,7 @@ fn secret_param_unset_stores_ciphertext_not_plaintext() {
 fn param_map_at_decrypts_secret_history() {
     let db = test_db();
     let cipher = test_cipher();
-    bump_register(&db, &app(), SCRIPT_A).unwrap();
+    register_script(&db, &app(), SCRIPT_A).unwrap();
     bump_param_set(
         &db,
         &app(),
@@ -370,4 +409,46 @@ fn param_map_at_decrypts_secret_history() {
 
     let map = param_map_at(&db, &app(), g, &cipher).unwrap();
     assert_eq!(map.get("api_key").map(String::as_str), Some("secret-value"));
+}
+
+// r[verify secret.history]
+#[test]
+fn a_value_that_was_secret_stays_protected_when_the_flag_is_dropped() {
+    let db = test_db();
+    let cipher = test_cipher();
+    register_script(&db, &app(), SCRIPT_A).unwrap();
+    let name = param("api_key");
+    // The definition stops marking the parameter secret in the same update
+    // that changes its value, so the two values are held differently.
+    let change = ParamChange {
+        name: &name,
+        previous: Some("old-secret"),
+        new_value: Some("now-public"),
+        is_secret: false,
+        previous_is_secret: true,
+    };
+    let g = bump_param_change(&db, &app(), &change, &cipher).unwrap();
+    let entry = get(&db, &app(), g).unwrap().unwrap();
+    assert!(entry.previous_value_redacted);
+    assert_eq!(entry.previous_value, None);
+    assert_eq!(entry.new_value.as_deref(), Some("now-public"));
+    assert!(!entry.new_value_redacted);
+
+    let plaintext: Vec<Option<String>> = db
+        .conn
+        .prepare("SELECT previous_value FROM generations WHERE app = ?1 AND generation = ?2")
+        .unwrap()
+        .query_map(rusqlite::params![app(), g as i64], |r| r.get(0))
+        .unwrap()
+        .collect::<rusqlite::Result<_>>()
+        .unwrap();
+    assert_eq!(
+        plaintext,
+        vec![None],
+        "the old secret must not be in the clear"
+    );
+
+    // Walking history still reconstructs it.
+    let map = param_map_at(&db, &app(), g, &cipher).unwrap();
+    assert_eq!(map.get("api_key").map(String::as_str), Some("now-public"));
 }

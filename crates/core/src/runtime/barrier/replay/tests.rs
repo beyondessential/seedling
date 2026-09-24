@@ -27,7 +27,8 @@ fn dep(name: &str) -> ResourceInstance {
 #[test]
 fn db_action_log_barrier_suspends_then_resumes() {
     let (engine, mut scope, app, ast) = {
-        let (engine, mut scope, app) = crate::setup_language(&crate::ScriptLimits::default());
+        let (engine, mut scope, app) =
+            crate::setup_language(&crate::ScriptLimits::default(), Default::default());
         app.def.rcu(|d| {
             let mut d = (**d).clone();
             d.name = app_name();
@@ -141,7 +142,8 @@ fn db_action_log_barrier_suspends_then_resumes() {
 #[test]
 fn db_action_log_sequential_barriers() {
     let (engine, mut scope, app, ast) = {
-        let (engine, mut scope, app) = crate::setup_language(&crate::ScriptLimits::default());
+        let (engine, mut scope, app) =
+            crate::setup_language(&crate::ScriptLimits::default(), Default::default());
         app.def.rcu(|d| {
             let mut d = (**d).clone();
             d.name = app_name();

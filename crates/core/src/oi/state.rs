@@ -60,4 +60,7 @@ pub struct OiState {
     /// snapshots to operators. `None` in test harnesses.
     // r[impl service.site.address]
     pub site_resolver: Option<Arc<crate::runtime::site_services::resolver::SiteServiceResolver>>,
+    /// The OCI registry client definitions are fetched through.
+    // i[impl definition.fetch]
+    pub definition_registry: crate::runtime::definition::fetch::SharedRegistry,
 }

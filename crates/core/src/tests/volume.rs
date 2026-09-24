@@ -22,7 +22,8 @@ fn volume_named() {
 // l[verify volume.type]
 #[test]
 fn volume_anonymous_disallowed_at_top_level() {
-    let (engine, mut scope, _app) = crate::setup_language(&crate::ScriptLimits::default());
+    let (engine, mut scope, _app) =
+        crate::setup_language(&crate::ScriptLimits::default(), Default::default());
     let result = super::run_script(&engine, &mut scope, r#"let v = app.volume();"#);
     assert!(
         result.is_err(),
@@ -849,7 +850,7 @@ fn captured_static_volume_cannot_be_modified_in_action() {
         .expect("foo volume should exist");
     assert_eq!(
         vol_def.writes,
-        vec![("/outside".to_owned(), "content".to_owned())],
+        vec![("/outside".to_owned(), bytes::Bytes::from_static(b"content"))],
         "static-context write should be present, /inside must not be persisted"
     );
 }
@@ -859,15 +860,15 @@ fn captured_static_volume_cannot_be_modified_in_action() {
 // ---------------------------------------------------------------------------
 
 #[derive(Debug, Clone)]
-struct RecordedWrite {
-    target: crate::runtime::barrier::VolumeWriteTarget,
-    path: String,
-    contents: String,
+pub(super) struct RecordedWrite {
+    pub target: crate::runtime::barrier::VolumeWriteTarget,
+    pub path: String,
+    pub contents: Vec<u8>,
 }
 
 #[derive(Default)]
-struct RecordingVolumeWriter {
-    writes: parking_lot::Mutex<Vec<RecordedWrite>>,
+pub(super) struct RecordingVolumeWriter {
+    pub writes: parking_lot::Mutex<Vec<RecordedWrite>>,
 }
 
 impl crate::runtime::barrier::VolumeWriter for RecordingVolumeWriter {
@@ -876,12 +877,12 @@ impl crate::runtime::barrier::VolumeWriter for RecordingVolumeWriter {
         _app: &str,
         target: crate::runtime::barrier::VolumeWriteTarget,
         path: &str,
-        contents: &str,
+        contents: &[u8],
     ) -> Result<(), String> {
         self.writes.lock().push(RecordedWrite {
             target,
             path: path.to_owned(),
-            contents: contents.to_owned(),
+            contents: contents.to_vec(),
         });
         Ok(())
     }
@@ -893,13 +894,24 @@ fn run_action_with_writer(
     writer: Arc<RecordingVolumeWriter>,
     log: &crate::runtime::barrier::replay::InMemoryActionLog,
 ) -> crate::runtime::barrier::replay::OperationResult {
+    run_action_with_writer_in(script, &[], action_name, writer, log)
+}
+
+pub(super) fn run_action_with_writer_in(
+    script: &str,
+    files: &[(&str, &[u8])],
+    action_name: &str,
+    writer: Arc<RecordingVolumeWriter>,
+    log: &crate::runtime::barrier::replay::InMemoryActionLog,
+) -> crate::runtime::barrier::replay::OperationResult {
     use crate::runtime::{
         EphemeralInstanceRegistry, TestWorldOracle,
         barrier::OperationId,
         barrier::replay::{OperationContext, run_operation},
     };
 
-    let (engine, mut scope, app, ast) = run_test_script(script);
+    let (engine, mut scope, app, ast) =
+        super::run_test_script_in(script, files).expect("script should run without error");
     let oracle = Arc::new(TestWorldOracle::new());
     let registry: Arc<dyn crate::runtime::InstanceRegistry> =
         Arc::new(EphemeralInstanceRegistry::new());
@@ -957,7 +969,7 @@ fn rt_write_named_volume_invokes_writer() {
     assert_eq!(writes.len(), 1);
     let w = &writes[0];
     assert_eq!(w.path, "/etc/app.conf");
-    assert_eq!(w.contents, "key=value");
+    assert_eq!(w.contents, b"key=value");
     match &w.target {
         VolumeWriteTarget::NamedVolume { name, tmpfs } => {
             assert_eq!(name, "cfg");

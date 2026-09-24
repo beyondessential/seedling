@@ -15,6 +15,7 @@ pub(super) fn on_app(builder: &mut TypeBuilder<App>) {
         "deployment",
         |this: &mut App, name: &str| -> Result<Deployment, Box<EvalAltResult>> {
             super::super::validate_name(name)?;
+            super::ensure_not_validating()?;
             let rname = ResourceName::new(name.into());
             if is_in_action_closure() {
                 let adef = action_def().ok_or_else(|| -> Box<EvalAltResult> {

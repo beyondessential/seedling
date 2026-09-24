@@ -41,7 +41,10 @@ impl Default for ScriptLimits {
     }
 }
 
-pub fn setup_language(limits: &ScriptLimits) -> (Engine, Scope<'static>, defs::app::App) {
+pub fn setup_language(
+    limits: &ScriptLimits,
+    bundle: std::sync::Arc<runtime::definition::Bundle>,
+) -> (Engine, Scope<'static>, defs::app::App) {
     let mut engine = Engine::new();
 
     engine.set_max_operations(limits.max_operations);
@@ -52,7 +55,7 @@ pub fn setup_language(limits: &ScriptLimits) -> (Engine, Scope<'static>, defs::a
     engine.set_max_map_size(limits.max_map_size);
 
     defs::register(&mut engine);
-    let (scope, app) = defs::scope();
+    let (scope, app) = defs::scope(bundle);
     (engine, scope, app)
 }
 
@@ -61,7 +64,7 @@ mod engine_limits_tests {
     use super::*;
 
     fn eval(limits: ScriptLimits, src: &str) -> Result<(), Box<rhai::EvalAltResult>> {
-        let (engine, mut scope, _app) = setup_language(&limits);
+        let (engine, mut scope, _app) = setup_language(&limits, Default::default());
         let ast = engine.compile(src)?;
         engine.run_ast_with_scope(&mut scope, &ast)
     }

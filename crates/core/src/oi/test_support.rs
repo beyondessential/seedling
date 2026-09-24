@@ -16,6 +16,7 @@ use crate::oi::handler::{RequestCtx, dispatch};
 use crate::oi::state::OiState;
 use crate::runtime::apps::AppRegistry;
 use crate::runtime::db::DbHandle;
+use crate::runtime::definition::fetch::testing::FakeRegistry;
 use crate::runtime::scheduler::Scheduler;
 use crate::runtime::secrets::Cipher;
 use crate::runtime::tls::issuance::Coordinator;
@@ -44,6 +45,8 @@ pub(crate) const PARAMS_SCRIPT: &str = r#"
 /// params to exercise the same dispatch path the QUIC server uses.
 pub(crate) struct TestOi {
     pub state: Arc<OiState>,
+    /// The in-memory registry definitions are fetched from.
+    pub registry: Arc<FakeRegistry>,
     pub ctx: RequestCtx,
     /// Handlers spawn tokio tasks (lifecycle operations, re-evaluations), so
     /// keep a runtime alive and enter it around every dispatch.
@@ -58,6 +61,7 @@ impl TestOi {
             System::setup_stubbed(data_dir.path(), false).expect("stub system setup");
         let db = DbHandle::open_in_memory().expect("open in-memory db");
         let cipher = Arc::new(Cipher::for_tests());
+        let registry = Arc::new(FakeRegistry::default());
         let event_tx = new_event_channel();
         let actor = Arc::new(Actor {
             kind: Some("test".into()),
@@ -89,6 +93,7 @@ impl TestOi {
             caddy_data_path: tokio::sync::OnceCell::new(),
             tailscale_provider: None,
             site_resolver: None,
+            definition_registry: Arc::clone(&registry) as _,
         });
 
         let ctx = RequestCtx {
@@ -103,6 +108,7 @@ impl TestOi {
 
         Self {
             state,
+            registry,
             ctx,
             rt,
             _data_dir: data_dir,

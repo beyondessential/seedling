@@ -1,6 +1,5 @@
 use std::{collections::BTreeMap, sync::Arc};
 
-use secrecy::SecretString;
 use seedling_protocol::error::{ErrorCode, OiError};
 use seedling_protocol::names::{AppName, ParamName};
 use serde::Deserialize;
@@ -91,13 +90,6 @@ fn reload_and_persist_apperror(
 ) -> Result<(), OiError> {
     use crate::oi::handler::apps::{extract_persist_fields, persist_app_fields, sync_fault_state};
 
-    let script = {
-        let reg = state.registry.read();
-        reg.get(app.as_str())
-            .expect("confirmed registered")
-            .script
-            .clone()
-    };
     let app_owned = app.clone();
     let cipher = Arc::clone(&state.cipher);
     let loaded_params = state
@@ -109,12 +101,12 @@ fn reload_and_persist_apperror(
         })
         .map_err(|e| OiError::new(ErrorCode::NotFound, format!("db error: {e}")))?;
     // The outcome needs no gating here: this re-evaluates the app's existing
-    // script under new param values and derives nothing from the result but
-    // the fault state synced below, which is filed on either outcome.
+    // definition under new param values and derives nothing from the result
+    // but the fault state synced below, which is filed on either outcome.
     let _ = state
         .registry
         .write()
-        .reload(app, script, &loaded_params, &state.script_limits);
+        .reload(app, &loaded_params, &state.script_limits);
     {
         let reg = state.registry.read();
         if let Some(entry) = reg.get(app.as_str()) {
@@ -149,7 +141,67 @@ fn reload_and_persist_apperror(
     Ok(())
 }
 
-fn schedule_on_change(
+/// Validate the values a parameter set or unset would leave the app with,
+/// before anything is persisted.
+///
+/// The validators are those of the current definition evaluated with the
+/// proposed values; when that evaluation fails, those of the app's most
+/// recent successful evaluation, which the registry holds as its running
+/// `App` together with the bundle and values it came from.
+// i[impl param.validation]
+fn validate_proposed(
+    state: &OiState,
+    app: &AppName,
+    change: (&ParamName, Option<&str>),
+) -> Result<(), OiError> {
+    let (bundle, last_good) = {
+        let reg = state.registry.read();
+        let entry = reg.get(app.as_str()).expect("confirmed registered");
+        (
+            Arc::clone(&entry.bundle),
+            (
+                Arc::clone(&entry.app.bundle),
+                entry.app.stored.lock().clone(),
+            ),
+        )
+    };
+    let app_owned = app.clone();
+    let cipher = Arc::clone(&state.cipher);
+    let mut proposed = state
+        .db
+        .call(move |db| crate::runtime::apps::load_all_params_for_app(db, &cipher, &app_owned));
+    match change.1 {
+        Some(v) => proposed.insert(change.0.as_str().to_owned(), v.to_owned()),
+        None => proposed.remove(change.0.as_str()),
+    };
+    let limits = &state.script_limits;
+    let (_, result) =
+        crate::runtime::apps::evaluate_validated(app, &bundle, &proposed, &proposed, limits);
+    let rejections = match result {
+        Ok(r) => r,
+        Err(_) => {
+            let (last_bundle, last_values) = last_good;
+            let (_, fallback) = crate::runtime::apps::evaluate_validated(
+                app,
+                &last_bundle,
+                &last_values,
+                &proposed,
+                limits,
+            );
+            // With no evaluation that succeeds there are no validators to
+            // run; the value is stored and the failure surfaces as
+            // `script_error`, as it would without validation.
+            fallback.unwrap_or_default()
+        }
+    };
+    if rejections.is_empty() {
+        Ok(())
+    } else {
+        Err(super::apps::validation_error(&rejections))
+    }
+}
+
+pub(crate) fn schedule_on_change(
     state: &OiState,
     app: &AppName,
     param_name: &ParamName,
@@ -272,6 +324,8 @@ pub(crate) fn set_param(
             .unwrap_or(0)
     };
 
+    validate_proposed(state, app, (param_name, Some(value)))?;
+
     let is_secret = param_is_secret(state, app, param_name);
     let app_owned = app.clone();
     let param_name_owned = param_name.clone();
@@ -279,41 +333,32 @@ pub(crate) fn set_param(
     let prev_owned = previous_value.clone();
     let cipher = Arc::clone(&state.cipher);
 
-    let generation = state
+    let (generation, previous_is_secret) = state
         .db
         .call(move |db| -> rusqlite::Result<_> {
-            if is_secret {
-                let secret_val = SecretString::new(value_owned.clone().into());
-                crate::runtime::apps::secret_params::upsert_secret_param(
-                    db,
-                    &cipher,
-                    &app_owned,
-                    &param_name_owned,
-                    &secret_val,
-                )?;
-                crate::runtime::apps::delete_one_param(db, &app_owned, &param_name_owned)?;
-            } else {
-                crate::runtime::apps::upsert_param(
-                    db,
-                    &app_owned,
-                    &param_name_owned,
-                    &value_owned,
-                )?;
-                crate::runtime::apps::secret_params::delete_one_secret_param(
-                    db,
-                    &app_owned,
-                    &param_name_owned,
-                )?;
-            }
-            generations::bump_param_set(
+            // r[impl secret.history] — read before the write replaces it.
+            let previous_is_secret = crate::runtime::apps::secret_params::is_stored_secret(
                 db,
                 &app_owned,
                 &param_name_owned,
-                prev_owned.as_deref(),
-                &value_owned,
+            )?;
+            crate::runtime::apps::store_param_value(
+                db,
                 &cipher,
+                &app_owned,
+                &param_name_owned,
+                Some(&value_owned),
                 is_secret,
-            )
+            )?;
+            let change = generations::ParamChange {
+                name: &param_name_owned,
+                previous: prev_owned.as_deref(),
+                new_value: Some(&value_owned),
+                is_secret,
+                previous_is_secret,
+            };
+            let generation = generations::bump_param_change(db, &app_owned, &change, &cipher)?;
+            Ok((generation, previous_is_secret))
         })
         .map_err(|e| OiError::new(ErrorCode::NotFound, format!("db error: {e}")))?;
 
@@ -325,7 +370,9 @@ pub(crate) fn set_param(
     let schedule = schedule_on_change(state, app, param_name, generation)?;
 
     // i[impl param.store.secret]
-    if is_secret {
+    // r[impl secret.history] — the event carries one redaction flag for both
+    // values, so a previous value that was secret withholds the pair.
+    if is_secret || previous_is_secret {
         ctx.events
             .param_change(app.clone(), generation, previous_generation)
             .set_redacted(param_name);
@@ -380,30 +427,40 @@ pub(crate) fn unset_param(
             .unwrap_or(0)
     };
 
+    validate_proposed(state, app, (param_name, None))?;
+
     let is_secret = param_is_secret(state, app, param_name);
 
     let app_owned = app.clone();
     let param_name_owned = param_name.clone();
     let prev_owned = previous_value.clone();
     let cipher = Arc::clone(&state.cipher);
-    let generation = state
+    let (generation, previous_is_secret) = state
         .db
         .call(move |db| -> rusqlite::Result<_> {
-            // Delete from both tables to handle any migration state.
-            crate::runtime::apps::delete_one_param(db, &app_owned, &param_name_owned)?;
-            crate::runtime::apps::secret_params::delete_one_secret_param(
+            // r[impl secret.history] — read before the delete removes it.
+            let previous_is_secret = crate::runtime::apps::secret_params::is_stored_secret(
                 db,
                 &app_owned,
                 &param_name_owned,
             )?;
-            generations::bump_param_unset(
+            crate::runtime::apps::store_param_value(
                 db,
+                &cipher,
                 &app_owned,
                 &param_name_owned,
-                &prev_owned,
-                &cipher,
+                None,
                 is_secret,
-            )
+            )?;
+            let change = generations::ParamChange {
+                name: &param_name_owned,
+                previous: Some(&prev_owned),
+                new_value: None,
+                is_secret,
+                previous_is_secret,
+            };
+            let generation = generations::bump_param_change(db, &app_owned, &change, &cipher)?;
+            Ok((generation, previous_is_secret))
         })
         .map_err(|e| OiError::new(ErrorCode::NotFound, format!("db error: {e}")))?;
 
@@ -415,7 +472,8 @@ pub(crate) fn unset_param(
     let schedule = schedule_on_change(state, app, param_name, generation)?;
 
     // i[impl param.store.secret]
-    if is_secret {
+    // r[impl secret.history]
+    if previous_is_secret {
         ctx.events
             .param_change(app.clone(), generation, previous_generation)
             .unset_redacted(param_name);

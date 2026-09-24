@@ -35,6 +35,9 @@ pub(super) enum RegistriesCommand {
     Add { registry: String },
     /// Remove a registry from the allowlist
     Remove { registry: String },
+    /// List a repository's tags, named without tag or digest
+    // i[impl ctl.registries.tags]
+    Tags { repository: String },
 }
 
 #[derive(Subcommand)]
@@ -186,6 +189,16 @@ pub(super) async fn dispatch_registries(client: &OiClient, cmd: RegistriesComman
                     .await,
             );
         }
+        RegistriesCommand::Tags { repository } => {
+            print_result(
+                client
+                    .request(
+                        "/registries/tags",
+                        serde_json::json!({ "repository": repository }),
+                    )
+                    .await,
+            );
+        }
         RegistriesCommand::Remove { registry } => {
             print_result(
                 client
@@ -325,4 +338,27 @@ pub(super) async fn dispatch_events(
     actor: seedling_protocol::actor::Actor,
 ) {
     super::subscribe::subscribe(endpoint, auth, identity, actor).await;
+}
+
+#[cfg(test)]
+mod tests {
+    use clap::Parser;
+
+    use super::*;
+
+    #[derive(Parser)]
+    struct TestCli {
+        #[command(subcommand)]
+        cmd: RegistriesCommand,
+    }
+
+    // i[verify ctl.registries.tags]
+    #[test]
+    fn tags_takes_a_repository() {
+        let cli = TestCli::try_parse_from(["t", "tags", "ghcr.io/org/app-def"]).unwrap();
+        let RegistriesCommand::Tags { repository } = cli.cmd else {
+            panic!("expected Tags");
+        };
+        assert_eq!(repository, "ghcr.io/org/app-def");
+    }
 }

@@ -170,6 +170,11 @@ Absent specification bugs, anything that is not defined here is either defined i
 > | `already_queued` | An operation is already queued for this app. |
 > | `requirements_invalid` | Install requirements failed validation; per-field errors are included in `message`. |
 > | `script_error` | The BSL script failed to parse or evaluate; detail is included in `message`. |
+> | `validation_failed` | A parameter [validator](#i--param.validation) rejected the proposed values; each rejecting parameter and its reason are included in `message`. |
+> | `bundle_invalid` | A definition bundle breaks the [bundle rules](#i--definition.bundle.limits); the offending path or field is included in `message`. |
+> | `unsupported_seedling` | A definition does not [support](#i--definition.bundle.seedling-versions) the running Seedling version. |
+> | `fetch_failed` | A definition could not be [fetched](#i--definition.fetch); the cause is included in `message`. |
+> | `registry_not_allowed` | The registry named by a definition reference is not on the [registry allowlist](#i--registry.list). |
 > | `deregistering` | The app is in the `Deregistering` state. |
 > | `server_busy` | The server's stream concurrency limit has been reached; the client should retry after a delay. |
 > | `internal` | An unexpected server-side failure (for example a database error) prevented the request from completing. |
@@ -208,13 +213,16 @@ Absent specification bugs, anything that is not defined here is either defined i
 # App Management
 
 > i[app.register]
-> `/apps/create { app, script }` evaluates the provided BSL script source text.
+> `/apps/create { app, ... }` evaluates the supplied [definition](#i--definition.source).
 > On success, the app is added to the managed set in the `NotInstalled` state and an `AppRegistered` event is emitted.
 > On script failure, `script_error` is returned and the app is not registered.
+> A definition refused while it is fetched or its bundle checked returns the error for that refusal, and the app is not registered.
 > A registration that fails for any reason leaves nothing observable behind: the app does not appear in listings, does not survive a restart, and a retried registration of the same name succeeds rather than being rejected as already registered.
 
 > i[app.persist]
-> Registered apps and their BSL scripts are stored durably and reloaded automatically on restart.
+> Registered apps, their definitions, and their definitions' provenance are stored durably and reloaded automatically on restart.
+> Reloading runs no [validators](#i--param.validation).
+> A stored definition that fails to evaluate on reload files a `script_error` app-level fault.
 
 > i[app.deregister]
 > `/apps/remove { app }` initiates graceful teardown of all of the app's resources and removes the app from the managed set.
@@ -222,12 +230,21 @@ Absent specification bugs, anything that is not defined here is either defined i
 > Otherwise the app immediately enters the `Deregistering` state and an `AppDeregistered` event is emitted when teardown completes and the app is fully removed.
 
 > i[app.update]
-> `/apps/update { app, script }` re-evaluates the provided BSL script source text.
+> `/apps/update { app, ..., param? }` replaces the app's [definition](#i--definition.source), optionally changing one parameter in the same step.
+> `param`, when present, is an object `{ name, value }`, where `value` is a string to set the parameter to or `null` to unset it.
 > If a lifecycle operation is in progress for the app, or one is queued, the request is rejected with `operation_in_progress`.
-> If the script fails to parse or evaluate, a `script_error` app-level fault is filed, the existing AppDef continues running, and the request still succeeds.
+>
+> The new definition is evaluated with the parameter values the request would produce, and those values are then [validated](#i--param.validation) against it.
+> If the definition cannot be fetched, its bundle is refused, it fails to parse or evaluate, or validation rejects, the request fails with the corresponding error and nothing observable changes: no bundle or parameter value is stored, the generation is not bumped, no fault is filed or cleared, and the existing AppDef continues running.
 > "Continues running" extends to every piece of state derived from the definition: volume data is not held, scaling decisions are not clamped, port forwards are not torn down, and action schedules are not pruned.
-> A partially-evaluated definition is never observable — an update that failed part-way through must not be distinguishable, in any state derived from the definition, from an update that was never submitted.
-> On success, any previously active `script_error` fault for this app is cleared, and the app's [generation](#r--generation.definition) is bumped with a `ScriptUpdate` history entry.
+> A partially-evaluated definition is never observable: an update that failed part-way through must not be distinguishable, in any state derived from the definition, from an update that was never submitted.
+>
+> On success, any previously active `script_error` fault for this app is cleared, and a single [generation](#r--generation.definition) bump records the new definition and the parameter change together, with a `ScriptUpdate` history entry.
+> When the parameter change matches one of the [transitions](#l--param.on-change.transitions) defined in the language spec, the new definition registers an `on_change` handler for that parameter, and the app is installed, the handler is scheduled as a lifecycle operation.
+> It runs under the new definition, with `old` being the previous generation.
+> A definition replaced without a parameter change schedules no handler.
+>
+> Returns `{ "schedule": "accepted" | "not_scheduled", "generation": <int> }`, as for [param.set](#i--param.set).
 
 > i[app.generation]
 > Every registered app has a current [generation](#r--generation.definition) — a per-app monotonic integer identifying the app's defined state at a point in time.
@@ -236,6 +253,72 @@ Absent specification bugs, anything that is not defined here is either defined i
 
 > i[app.list]
 > `/apps/list` returns an array of objects with fields `name`, `status`, and `fault_count` (the number of currently active, uncleared faults filed against the app).
+
+# App Definitions
+
+> i[definition.source]
+> A request that supplies an app definition carries exactly one of:
+>
+> - `script`: BSL source text, taken as a [bundle](language.md#l--bsl.bundle) holding only `app.seed.rhai`.
+> - `bundle`: an object map from bundle path to base64-encoded file contents.
+> - `reference`: a complete OCI reference, from which the runtime [fetches](#i--definition.fetch) the bundle.
+>
+> A request carrying none of them, or more than one, is rejected with `requirements_invalid`.
+> Alongside `script` or `bundle`, an optional `origin` object with string fields `url` and `revision` describes where the client obtained the files.
+> The runtime records it in the definition's [provenance](#i--definition.provenance) as reported by the client, without verifying it.
+
+> i[definition.bundle.limits]
+> A bundle, pushed or fetched, is rejected with `bundle_invalid`, and nothing is stored, when:
+>
+> - its total size exceeds the runtime's bundle size limit, or it holds more files than the runtime's bundle file limit;
+> - it holds anything other than regular files and the directories containing them;
+> - a path in it is absolute, contains a null byte, or escapes the bundle root after normalisation;
+> - its [metadata file](language.md#l--bsl.bundle.metadata) cannot be parsed, has a field of the wrong type, or has a field it does not define;
+> - its list of script files is empty or names a file twice, or a script file it names is missing from the bundle or is not valid UTF-8.
+>
+> The message names the offending path or field.
+
+> i[definition.bundle.seedling-versions]
+> Installing a definition into an app refuses it with `unsupported_seedling`, naming the requirement and the running version, when the running Seedling does not satisfy the definition's declared [Seedling version requirement](language.md#l--bsl.bundle.seedling-versions); nothing is stored.
+> The requirement is checked before any other part of the metadata, so a bundle written for a newer Seedling is reported as unsupported rather than as malformed.
+
+> i[definition.content-hash]
+> Every bundle is identified by a content hash computed over its paths and file contents alone.
+> The same files yield the same hash whether they were pushed or fetched, and in whatever order or archive they arrived.
+
+> i[definition.fetch]
+> Fetching resolves `reference` against its registry and takes the definition artefact from what it names:
+>
+> - a manifest whose artifact type is `application/vnd.bes.seedling.definition.v1`, which is the artefact; or
+> - an image index, from whose entries of that artifact type one is [selected](#i--definition.fetch.select). The index's other entries, such as container images, play no part.
+>
+> A definition artefact has a single layer, of media type `application/vnd.bes.seedling.definition.v1.tar+gzip`: a gzip-compressed tar archive whose root is the bundle root.
+> Every manifest read during a fetch is accepted only when its bytes hash to the digest it was requested under: the digest a reference names, the digest an index entry gives, and the digest the registry reports all have to agree with the bytes served.
+> The digest the fetch records as [provenance](#i--definition.provenance) is the one taken over those bytes, so it names the definition that was installed rather than what the registry asserted.
+> A definition manifest may carry the annotation `vnd.bes.seedling.versions`, holding the Seedling version requirement its bundle's metadata declares, and an index entry may carry the same annotation on its descriptor.
+> A fetched bundle whose declared requirement differs from its manifest's annotation is rejected with `bundle_invalid`.
+> Any failure to fetch, whether the registry is unreachable, the reference is not found, credentials are refused, or the reference names no definition artefact, refuses the request with `fetch_failed`, the message giving the cause, and nothing is stored.
+
+> i[definition.fetch.select]
+> Among an image index's definition entries, the candidates are those whose `vnd.bes.seedling.versions` annotation the running Seedling satisfies; an entry without the annotation is a candidate for every version.
+> The candidate whose requirement has the highest minimum is selected, the minimum of a requirement being the lowest version that satisfies it, and an entry without the annotation having the lowest minimum of all.
+> The fetch is refused with `unsupported_seedling` when there is no candidate, and with `fetch_failed`, naming the tied entries, when more than one candidate shares the highest minimum.
+
+> i[definition.fetch.access]
+> A fetch is refused with `registry_not_allowed` when the reference's registry is not on the [registry allowlist](#i--registry.list), before any request is made to that registry.
+> Fetching authenticates with the same registry credentials the host's container engine uses to pull images, so a registry the host can pull images from needs no further configuration to serve definitions.
+
+> i[definition.provenance]
+> Every app definition carries its *provenance*, reported as an object with a `kind` field and the fields for that kind:
+>
+> - `"fetched"`: `reference`, the reference as given, and `digest`, the digest of the definition manifest that was selected.
+> - `"pushed"`: `pushed_by`, the [actor](#i--wire.actor) that supplied the bundle, and `reported_origin`, the `origin` the client reported or `null` when it reported none.
+>
+> Both kinds also carry `content_hash`, the bundle's [content hash](#i--definition.content-hash), and `seedling_versions`, the bundle's declared Seedling version requirement or `null` when it declares none.
+
+> i[definition.tags]
+> `/registries/tags { repository }` lists the tags of an OCI repository, named as a reference without tag or digest, and returns `{ tags }`, an array of strings.
+> It is refused with `registry_not_allowed` or `fetch_failed` on the same terms as a [fetch](#i--definition.fetch.access).
 
 # App Status
 
@@ -261,6 +344,7 @@ Absent specification bugs, anything that is not defined here is either defined i
 >
 > - `status`: the app's current status as defined in [app.status](#i--app.status).
 > - `faults`: array of app-level [fault records](#i--fault.record) not associated with a specific resource instance (e.g. script evaluation errors). Empty when there are no active app-level faults.
+> - `definition`: the [provenance](#i--definition.provenance) of the app's current definition.
 > - `resources`: array of objects with fields `name`, `type`, `instances`, `faults`, `def`, and for Deployment resources, `scale`.
 >   Each instance has fields `id`, `display_name`, `lifecycle`, `transition_time` (RFC 3339, optional), and `restarts`.
 >   `restarts` summarises the instance's [restart history](#i--restart.record): `{ recent, window_secs, total, last_at, last_exit_code, last_exit_kind }`, where `recent` counts recovery restarts within the current rate window, `total` counts all retained records for the instance, and the `last_*` fields describe the most recent record (null when there is none). It is omitted for resource kinds that have no backing container.
@@ -404,10 +488,15 @@ Absent specification bugs, anything that is not defined here is either defined i
 # App Script Retrieval
 
 > i[app.script]
-> `/apps/script { app, generation? }` returns the BSL script source text for the specified app.
+> `/apps/script { app, generation? }` returns the BSL script source text for the specified app: its definition's script files concatenated in order.
 > If `generation` is provided, the script that was active at that generation is returned; otherwise the current generation's script is returned.
-> The response contains the fields `script` (the source text) and `generation` (the generation of the returned script).
+> The response contains the fields `script` (the source text), `files` (the paths of the script files, in order), and `generation` (the generation of the returned script).
 > Multiple consecutive generations may share the same script content (for example, when intermediate generations are parameter changes); this is not surfaced specially in the response.
+
+> i[app.bundle]
+> `/apps/bundle { app, generation? }` returns the whole definition bundle of the specified app at `generation`, or at the current generation when it is omitted.
+> The response contains the fields `generation`, `provenance` (the definition's [provenance](#i--definition.provenance)), and `bundle`, in the same encoding as a pushed [bundle](#i--definition.source).
+> Every generation's bundle remains retrievable for as long as the app is registered.
 
 # Generation History
 
@@ -420,9 +509,10 @@ Absent specification bugs, anything that is not defined here is either defined i
 > - `generation`: the generation number.
 > - `timestamp`: RFC 3339 timestamp.
 > - `kind`: `"register" | "script_update" | "param_set" | "param_unset"`.
-> - `param_name`: present for `param_set` and `param_unset`.
-> - `previous_value`: present for `param_set` and `param_unset`; `null` if the parameter was unset before this entry, if the parameter is currently secret, or if the value has been redacted. See `redacted`.
-> - `new_value`: present for `param_set` and `param_unset`; `null` for `param_unset`, if the parameter is currently secret, or if the value has been redacted. See `redacted`.
+> - `definition`: present for `register` and `script_update`; the [provenance](#i--definition.provenance) of the definition this generation installed.
+> - `param_name`: present for `param_set` and `param_unset`, and for a `script_update` that changed a parameter alongside its definition.
+> - `previous_value`: present whenever `param_name` is; `null` if the parameter was unset before this entry, if the parameter is currently secret, or if the value has been redacted. See `redacted`.
+> - `new_value`: present whenever `param_name` is; `null` if the entry unset the parameter, if the parameter is currently secret, or if the value has been redacted. See `redacted`.
 > - `redacted`: boolean; `true` when the parameter named by `param_name` is currently secret, in which case `previous_value` and `new_value` are `null` regardless of whether values were recorded.
 > - `script_changed`: boolean; `true` for `register` and `script_update`, otherwise `true` only if the script content for this generation differs from the immediately preceding generation. (For `param_set` / `param_unset`, this is always `false`.)
 > - `operation_id`: identifier of the lifecycle operation triggered by this change, if any.
@@ -436,14 +526,17 @@ Absent specification bugs, anything that is not defined here is either defined i
 >
 > Parameters:
 >
-> - `proposed_script`: optional BSL script source text to evaluate in place of the current script. If omitted, the current script is used.
-> - `proposed_params`: optional array of `{ name, value }` objects. `value` is `null` to model an unset; a string to model a set. Parameters not listed are taken from the current parameter map. If both `proposed_script` and `proposed_params` are omitted, the response is an empty diff.
+> - `proposed_script`, `proposed_bundle`, `proposed_reference`: optional, at most one of them; a definition to evaluate in place of the current one, given as for `script`, `bundle`, and `reference` in [definition.source](#i--definition.source). If all are omitted, the current definition is used.
+> - `proposed_params`: optional array of `{ name, value }` objects. `value` is `null` to model an unset; a string to model a set. Parameters not listed are taken from the current parameter map. If no proposed definition is given and `proposed_params` is omitted, the response is an empty diff.
+>
+> A proposed definition that cannot be fetched or whose bundle is refused returns the error an update with it would.
 >
 > The response contains:
 >
 > - `diff`: an array of resource diff entries, each with fields `resource_type`, `resource_name`, and `change` (`"added" | "removed" | "modified"`). For `modified` entries, a `fields` array lists the resource attributes that differ between current and proposed.
 > - `on_change_would_fire`: an array of parameter names whose `on_change` handlers would be scheduled if the proposed change were committed.
-> - `errors`: an array of evaluation errors, if the proposed script fails to evaluate. When present, `diff` and `on_change_would_fire` are absent.
+> - `errors`: an array of evaluation errors, if the proposed script fails to evaluate. When present, `diff`, `on_change_would_fire`, and `rejections` are absent.
+> - `rejections`: an array of `{ name, reason }` objects, one for each parameter whose [validator](#i--param.validation) rejects the proposed values. Empty when every validator accepts.
 >
 > The dry-run does not simulate the execution of `on_change` handlers or any action closures; it reports only the static diff and which handlers would be triggered.
 
@@ -465,9 +558,19 @@ Absent specification bugs, anything that is not defined here is either defined i
 >
 > If the requested value is equal to the current value, the request is a no-op: nothing is persisted, no generation bump occurs, and no handler is scheduled.
 >
+> Otherwise the proposed values are [validated](#i--param.validation) before anything is persisted; a rejection refuses the request with `validation_failed`, and neither the value nor the generation is changed.
+>
 > The script is re-evaluated after the value is persisted; if evaluation fails, a `script_error` app-level fault is filed and the request still succeeds.
 >
 > Returns `{ "schedule": "accepted" | "not_scheduled", "generation": <int> }` on success, or an error. `not_scheduled` means the generation was bumped but no `on_change` handler ran (for example, no handler is registered for the parameter, or the app is not installed). The returned `generation` is the app's current generation after the call (unchanged if the call was a no-op).
+
+> i[param.validation]
+> A definition update, parameter set, or parameter unset is validated before anything it changes is persisted.
+> Validation runs the [validator](language.md#l--param.validate) of every set parameter against the proposed parameter values, which are the values the app would hold if the request were accepted.
+> If any validator rejects, the request is refused with `validation_failed`, the message naming each rejecting parameter and its reason, and nothing is persisted.
+> The validators are those declared by the proposed definition evaluated with the proposed values.
+> For a parameter set or unset whose proposed values fail to evaluate, they are those of the app's most recent successful evaluation.
+> Registration and reload run no validators: a newly registered app has no set parameters, and a stored combination was validated when it was written.
 
 > i[param.unknown]
 > Setting a param whose name does not appear in the app's current script evaluation is permitted.
@@ -480,7 +583,9 @@ Absent specification bugs, anything that is not defined here is either defined i
 >
 > If the parameter has no stored value, the request is a no-op: nothing is changed, no generation bump occurs, and no handler is scheduled.
 >
-> Otherwise the app's [generation](#r--generation.definition) is bumped with a `ParamUnset` history entry. If an `on_change` handler is registered for the parameter and the app is installed, the handler is scheduled as a lifecycle operation.
+> Otherwise the proposed values are [validated](#i--param.validation) before anything is changed; a rejection refuses the request with `validation_failed`, and neither the value nor the generation is changed.
+>
+> Once validated, the app's [generation](#r--generation.definition) is bumped with a `ParamUnset` history entry. If an `on_change` handler is registered for the parameter and the app is installed, the handler is scheduled as a lifecycle operation.
 >
 > The script is re-evaluated after the value is removed; if evaluation fails, a `script_error` app-level fault is filed and the request still succeeds.
 >
@@ -787,7 +892,7 @@ Absent specification bugs, anything that is not defined here is either defined i
 > |---|---|
 > | `AppRegistered` | `app`, `generation` |
 > | `AppDeregistered` | `app` |
-> | `AppUpdated` | `app`, `generation`, `previous_generation` |
+> | `AppUpdated` | `app`, `generation`, `previous_generation`, `definition` (the new definition's [provenance](#i--definition.provenance)); and `name`, `previous_value`, `new_value` when a parameter changed alongside |
 > | `AppPhaseChanged` | `app`, `phase` |
 > | `ParamSet` | `app`, `name`, `previous_value`, `new_value`, `generation`, `previous_generation` |
 > | `ParamUnset` | `app`, `name`, `previous_value`, `generation`, `previous_generation` |
@@ -1002,47 +1107,50 @@ Absent specification bugs, anything that is not defined here is either defined i
 # Templates
 
 > i[template.definition]
-> A template is a stored, named BSL script body that is held for reuse.
+> A template is a stored, named app definition [bundle](language.md#l--bsl.bundle) that is held for reuse, together with the bundle's [provenance](#i--definition.provenance).
 > Templates are not themselves evaluated by the reconciler: they do not have a generation, phase, resources, parameter values, faults, or any other runtime state.
-> A template exists solely as a script body that can be inspected (previewed) and copied wholesale into a new app via `/templates/instantiate`.
+> A template exists solely as a bundle that can be inspected (previewed) and copied wholesale into a new app via `/templates/instantiate`.
+> Template requests supply a definition as for [definition.source](#i--definition.source), with the script text given as `body` in place of `script`.
 
 > i[template.name]
 > Template names follow the same rules as app names — see [bsl.name](language.md#l--bsl.name) — and must not start with an underscore.
 > Template names share no namespace with app names; a template and an app may have the same name.
 
 > i[template.create]
-> `/templates/create { name, body, description? }` stores a new template.
-> The script body is not evaluated at create time; syntactically invalid bodies are accepted and will surface as errors on `/templates/preview` or `/templates/instantiate`.
+> `/templates/create { name, ..., description? }` stores a new template.
+> The definition is not evaluated at create time; syntactically invalid scripts are accepted and will surface as errors on `/templates/preview` or `/templates/instantiate`.
+> A definition that cannot be fetched or whose bundle breaks the [bundle rules](#i--definition.bundle.limits) is refused as it would be for an app, and nothing is stored.
+> A definition whose Seedling version requirement the running Seedling does not satisfy is stored.
 > If a template with the given name already exists the request is rejected with `requirements_invalid`.
 > On success a `TemplateCreated` event is emitted.
 
 > i[template.list]
-> `/templates/list {}` returns an array of objects with fields `name`, `description` (string or `null`), and `created_at` (RFC 3339 timestamp).
+> `/templates/list {}` returns an array of objects with fields `name`, `description` (string or `null`), `created_at` (RFC 3339 timestamp), and `supported` (whether the running Seedling satisfies the template's declared Seedling version requirement).
 > The array is ordered by name.
 
 > i[template.show]
-> `/templates/show { name }` returns a single object with fields `name`, `body`, `description`, and `created_at`.
+> `/templates/show { name }` returns a single object with fields `name`, `body` (the template's script files concatenated in order), `provenance`, `supported` (as for `/templates/list`), `description`, and `created_at`.
 > Returns `not_found` if no such template exists.
 
 > i[template.update]
-> `/templates/update { name, body?, description? }` updates an existing template.
-> Only provided fields are changed: omitting `body` leaves the stored body unchanged, and omitting `description` leaves the stored description unchanged.
+> `/templates/update { name, ...?, description? }` updates an existing template.
+> Only provided fields are changed: supplying a definition replaces the stored bundle and its provenance, omitting one leaves them unchanged, and omitting `description` leaves the stored description unchanged.
 > To clear a description, pass `description: null`.
-> As with [template.create](#i--template.create), the body is not evaluated at update time.
+> A supplied definition is checked and stored as for [template.create](#i--template.create), and is not evaluated at update time.
 > Returns `not_found` if no template with the given name exists.
 > The template's `created_at` timestamp is not modified by update.
-> Apps already instantiated from the template are unaffected; the template's script body is copied at instantiation time and has no link to later edits.
+> Apps already instantiated from the template are unaffected; the template's bundle is copied at instantiation time and has no link to later edits.
 > On success a `TemplateUpdated` event is emitted.
 
 > i[template.remove]
 > `/templates/remove { name }` deletes a template.
-> Instantiated apps derived from the template are unaffected — their script body was copied at instantiation time.
+> Instantiated apps derived from the template are unaffected, since their bundle was copied at instantiation time.
 > Returns `not_found` if no such template exists.
 > On success a `TemplateRemoved` event is emitted.
 
 > i[template.preview]
-> `/templates/preview { name?, body? }` evaluates a template body and returns a read-only summary of what it declares, without storing or instantiating anything.
-> Exactly one of `name` (an existing template) or `body` (raw script text) must be supplied.
+> `/templates/preview { name?, ... }` evaluates a template definition and returns a read-only summary of what it declares, without storing or instantiating anything.
+> Exactly one of `name` (an existing template) or a definition must be supplied.
 > The response contains:
 >
 > - `resources`: array of objects with fields `name`, `type`, and `def` — the same shapes defined in [app.describe](#i--app.describe). Instance state and faults are not included because a template has none.
@@ -1051,11 +1159,11 @@ Absent specification bugs, anything that is not defined here is either defined i
 > - `script_error`: a string describing a script evaluation failure, or `null` when evaluation succeeded. When `script_error` is non-null the other fields reflect whatever partial state the engine produced before the error.
 
 > i[template.instantiate]
-> `/templates/instantiate { template, app }` creates a new app whose script body is a verbatim copy of the named template's body.
-> The behaviour is equivalent to calling [app.register](#i--app.register) with the template body and `app` as the name: the app starts in the `NotInstalled` state and an `AppRegistered` event is emitted.
+> `/templates/instantiate { template, app }` creates a new app whose definition is a verbatim copy of the named template's bundle, with the template's provenance.
+> The behaviour is equivalent to calling [app.register](#i--app.register) with the template's bundle and `app` as the name: the app starts in the `NotInstalled` state and an `AppRegistered` event is emitted.
 > In addition a `TemplateInstantiated` event is emitted referencing both the template name and the new app name.
-> After instantiation the app's script is independent of the template — subsequent `/templates/remove` or any future template editing has no effect on the app.
-> Returns `not_found` if the template does not exist; `requirements_invalid` if the app name is invalid or already in use; `script_error` if the template body fails to evaluate.
+> After instantiation the app's definition is independent of the template: subsequent `/templates/remove` or any future template editing has no effect on the app.
+> Returns `not_found` if the template does not exist; `requirements_invalid` if the app name is invalid or already in use; `unsupported_seedling` if the running Seedling does not satisfy the template's Seedling version requirement; `script_error` if the template's script fails to evaluate.
 
 # TLS Certificate Management
 
@@ -1344,6 +1452,28 @@ Seedling has no Canopy identity of its own. Instead a connected client may offer
 > The CLI accepts install params as positional arguments: `ctl apps install <app> [key=value]...`.
 > Install params carry values typed by the application's parameter schema rather than free-form JSON, so every argument must be a `key=value` pair.
 > An argument without `=` must be reported as an error naming that argument, and no request may be sent.
+
+> i[ctl.definition.source]
+> `ctl apps create`, `ctl apps update`, `ctl templates create`, and `ctl templates update` take the definition as one of:
+>
+> - a path to a file, pushed as a script;
+> - a path to a folder, pushed as a bundle;
+> - a GitHub URL naming a folder at a branch, tag, or commit, which the CLI resolves to a commit and downloads, then pushes as a bundle with that URL and commit as its reported origin, so the host needs no access to GitHub;
+> - `--ref <reference>`, which has the daemon [fetch](#i--definition.fetch) it.
+
+> i[ctl.definition.folder]
+> When pushing a folder, the CLI leaves out version-control metadata directories and whatever the folder's `.seedignore` file excludes, if it has one, using gitignore pattern syntax.
+> A symlink or other non-regular file that is not left out is reported as an error naming it, and no request is sent.
+
+> i[ctl.definition.param]
+> `ctl apps update` accepts one parameter change alongside the definition, as `--set name=value` or `--unset name`.
+
+> i[ctl.definition.export]
+> `ctl apps export <app> <folder> [--generation <n>]` writes the app's definition bundle at that generation, or the current one, into a new folder, reproducing the bundle's files exactly.
+> A folder that already exists and is not empty is reported as an error, and nothing is written.
+
+> i[ctl.registries.tags]
+> `ctl registries tags <repository>` lists a repository's tags, as a thin wrapper over [definition.tags](#i--definition.tags).
 
 > i[ctl.backup.app.hint]
 > When `ctl apps create` evaluates a script that declares actions `save-snapshot`, `list-snapshots`, and `restore-snapshot`, the CLI should print an informational message suggesting backup app registration.

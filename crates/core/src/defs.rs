@@ -94,6 +94,7 @@ pub mod container;
 pub mod deployment;
 pub mod enums;
 pub mod export;
+pub mod file;
 pub mod ingress;
 pub mod install;
 pub mod job;
@@ -110,6 +111,8 @@ pub mod volume;
 pub fn register(engine: &mut Engine) {
     engine.build_type::<app::App>();
     engine.build_type::<param::Param>();
+    engine.build_type::<file::File>();
+    engine.build_type::<file::Directory>();
     engine.build_type::<service::Service>();
     engine.build_type::<service::HttpService>();
     engine.build_type::<service::HttpServiceRoute>();
@@ -186,7 +189,7 @@ fn read_mem_total_bytes() -> i64 {
 
 // l[impl bsl.scope]
 // l[impl bsl.enums]
-pub fn scope() -> (Scope<'static>, app::App) {
+pub fn scope(bundle: Arc<crate::runtime::definition::Bundle>) -> (Scope<'static>, app::App) {
     let mut scope = Scope::new();
     let facts = crate::sysconst::get();
 
@@ -253,7 +256,7 @@ pub fn scope() -> (Scope<'static>, app::App) {
     // l[impl const.output.http2]
     scope.push_constant("Output", enums::Output::rhai_constant());
 
-    let app = app::App::default();
+    let app = app::App::with_bundle(bundle);
     // l[impl app.var]
     scope.push("app", app.clone());
     (scope, app)

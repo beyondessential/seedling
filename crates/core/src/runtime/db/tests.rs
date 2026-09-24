@@ -13,7 +13,7 @@ fn open_in_memory_succeeds() {
             |r| r.get(0),
         )
         .expect("schema_version should exist");
-    assert_eq!(version, 57);
+    assert_eq!(version, 58);
 }
 
 // r[verify history.persistence]
@@ -45,7 +45,7 @@ fn params_table_exists() {
             |r| r.get(0),
         )
         .expect("schema_version should exist");
-    assert_eq!(version, 57);
+    assert_eq!(version, 58);
 }
 
 // i[verify app.persist]
@@ -167,4 +167,51 @@ fn action_log_has_unique_constraint() {
         result.is_err(),
         "duplicate (operation_id, call_index) should be rejected"
     );
+}
+
+// r[verify generation.script-storage]
+// i[verify app.script]
+// i[verify definition.provenance]
+#[test]
+fn stored_scripts_become_one_file_bundles_pushed_by_nobody_known() {
+    use crate::runtime::definition::{Bundle, Source};
+
+    let db = Db::open_in_memory_through(57).expect("open at v57");
+    let script = r#"app.deployment("web").image("docker.io/library/nginx:1.29");"#;
+    db.conn
+        .execute_batch(&format!(
+            "INSERT INTO registered_apps (name, installed, uninstalling, current_generation)
+                 VALUES ('web', 0, 0, 2);
+             INSERT INTO script_bodies (hash, body) VALUES ('oldhash', '{s}');
+             INSERT INTO generations (app, generation, created_at, kind, script_hash)
+                 VALUES ('web', 1, 't', 'register', 'oldhash');
+             INSERT INTO generations (app, generation, created_at, kind, param_name, new_value, script_hash)
+                 VALUES ('web', 2, 't', 'param_set', 'mode', 'x', 'oldhash');
+             INSERT INTO templates (name, body, description, created_at)
+                 VALUES ('tmpl', '{s}', NULL, 't');",
+            s = script.replace('\'', "''")
+        ))
+        .expect("seed v57 data");
+
+    db.finish_migrations().expect("migrate to the latest");
+
+    let expected = Bundle::from_stored_script(script);
+    let app = seedling_protocol::names::AppName::new("web").unwrap();
+    for generation in [1, 2] {
+        let (hash, source) =
+            crate::runtime::generations::definition_at(&db, &app, generation).unwrap();
+        assert_eq!(hash, expected.hash());
+        assert_eq!(source, Source::unknown_push());
+    }
+    let bundle = crate::runtime::generations::load_bundle(&db, expected.hash()).unwrap();
+    assert_eq!(bundle.script().unwrap().text(), script);
+
+    let t = crate::runtime::templates::get(
+        &db,
+        &seedling_protocol::names::TemplateName::new_unchecked("tmpl"),
+    )
+    .unwrap()
+    .unwrap();
+    assert_eq!(t.bundle.hash(), expected.hash());
+    assert_eq!(t.source, Source::unknown_push());
 }

@@ -19,8 +19,8 @@ use super::{
 /// Default maximum number of concurrently active bidirectional streams.
 pub const DEFAULT_MAX_STREAMS: usize = 64;
 
-/// Maximum size of a request body read (4 MiB).
-const MAX_REQUEST_SIZE: usize = 4 * 1024 * 1024;
+/// Maximum size of a request body read.
+const MAX_REQUEST_SIZE: usize = seedling_protocol::REQUEST_LIMIT;
 
 /// Default OI listen port.
 pub const DEFAULT_PORT: u16 = 7891;

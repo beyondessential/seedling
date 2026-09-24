@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use seedling_protocol::error::{ErrorCode, OiError};
-use seedling_protocol::names::{ActionName, AppName};
+use seedling_protocol::names::{ActionName, AppName, ParamName};
 use serde::Deserialize;
 use serde_json::{Value, json};
 
@@ -13,8 +13,9 @@ use crate::{
     oi::{handler::RequestCtx, state::OiState},
     runtime::{
         AppPhase,
-        apps::{AppEntry, AppRegistry, AppStatus, ReloadOutcome},
+        apps::{AppEntry, AppRegistry, AppStatus},
         barrier::oracle::{derive_lifecycle_state, derive_state_with_transition_time},
+        definition::{Bundle, Source, version},
         desired::list_dynamic_resources_for_app,
         faults,
         history::{find_instances_for_group, query_observations},
@@ -33,6 +34,7 @@ use super::{
         action_entry_json, install_entry_json, param_schema_entry_json, resource_static_json,
         scale_bounds_of, shell_entry_json,
     },
+    definition::{self, DefinitionInput, Resolved},
 };
 
 #[derive(Deserialize)]
@@ -41,9 +43,29 @@ pub(crate) struct AppParams {
 }
 
 #[derive(Deserialize)]
-pub(crate) struct AppScriptParams {
+pub(crate) struct CreateParams {
     pub app: AppName,
-    pub script: String,
+    #[serde(flatten)]
+    pub definition: DefinitionInput,
+}
+
+/// One parameter change made alongside a definition update.
+// i[impl app.update]
+#[derive(Deserialize)]
+pub(crate) struct ParamUpdate {
+    pub name: ParamName,
+    /// `None` unsets the parameter.
+    #[serde(default)]
+    pub value: Option<String>,
+}
+
+#[derive(Deserialize)]
+pub(crate) struct UpdateParams {
+    pub app: AppName,
+    #[serde(flatten)]
+    pub definition: DefinitionInput,
+    #[serde(default)]
+    pub param: Option<ParamUpdate>,
 }
 
 #[derive(Deserialize)]
@@ -73,6 +95,10 @@ pub(crate) struct PlanParams {
     pub app: AppName,
     #[serde(default)]
     pub proposed_script: Option<String>,
+    #[serde(default)]
+    pub proposed_bundle: Option<serde_json::Map<String, Value>>,
+    #[serde(default)]
+    pub proposed_reference: Option<String>,
     #[serde(default)]
     pub proposed_params: Option<Vec<ProposedParam>>,
 }
@@ -865,6 +891,8 @@ pub(crate) fn describe_app(state: &OiState, params: AppParams) -> HandlerResult 
     let mut desc = json!({
         "status": status.name(),
         "generation": generation,
+        // i[impl definition.provenance]
+        "definition": entry.source.to_json(&entry.bundle),
         "description": def.description,
         "priority": app_priority.as_str(),
         "faults": app_faults_json,
@@ -954,43 +982,59 @@ pub(crate) fn describe_app(state: &OiState, params: AppParams) -> HandlerResult 
     Ok(desc)
 }
 
+/// The current generation as the registry holds it, or `not_found`.
+fn current_generation_of(state: &OiState, app: &AppName) -> Result<u64, OiError> {
+    state
+        .registry
+        .read()
+        .get(app.as_str())
+        .map(|e| e.current_generation)
+        .ok_or_else(|| OiError::not_found(format!("app not found: {app}")))
+}
+
+/// The definition active at `generation`, or at the current generation.
+fn definition_for(
+    state: &OiState,
+    app: &AppName,
+    generation: Option<u64>,
+) -> Result<(u64, Arc<Bundle>, Source), OiError> {
+    let current = current_generation_of(state, app)?;
+    let gen_n = generation.unwrap_or(current);
+    let app_owned = app.clone();
+    let found = state
+        .db
+        .call(move |db| crate::runtime::apps::definition_at_generation(db, &app_owned, gen_n))
+        .map_err(|e| {
+            OiError::new(
+                ErrorCode::Internal,
+                format!("could not read definition: {e}"),
+            )
+        })?;
+    let (bundle, source) = found
+        .ok_or_else(|| OiError::not_found(format!("generation {gen_n} not found for app {app}")))?;
+    Ok((gen_n, bundle, source))
+}
+
 // i[app.script]
 pub(crate) fn get_app_script(state: &OiState, params: GetScriptParams) -> HandlerResult {
-    let name = params.app.as_str();
+    let (generation, bundle, _) = definition_for(state, &params.app, params.generation)?;
+    // i[impl app.script]
+    let script = bundle.script().map_err(OiError::from)?;
+    Ok(json!({
+        "script": script.text(),
+        "files": script.files().collect::<Vec<_>>(),
+        "generation": generation,
+    }))
+}
 
-    {
-        let reg = state.registry.read();
-        if !reg.is_registered(name) {
-            return Err(OiError::not_found(format!("app not found: {name}")));
-        }
-    }
-
-    let name_owned = params.app.clone();
-    let (generation, script) = match params.generation {
-        Some(gen_n) => {
-            let script = state
-                .db
-                .call(move |db| {
-                    crate::runtime::apps::get_script_at_generation(db, &name_owned, gen_n)
-                })
-                .map_err(|e| OiError::new(ErrorCode::NotFound, format!("db error: {e}")))?
-                .ok_or_else(|| {
-                    OiError::not_found(format!("generation {gen_n} not found for app {name}"))
-                })?;
-            (gen_n, script)
-        }
-        None => {
-            let name_owned2 = params.app.clone();
-            let (gen_n, script) = state
-                .db
-                .call(move |db| crate::runtime::apps::get_current_script(db, &name_owned2))
-                .map_err(|e| OiError::new(ErrorCode::NotFound, format!("db error: {e}")))?
-                .ok_or_else(|| OiError::not_found(format!("no script found for app: {name}")))?;
-            (gen_n, script)
-        }
-    };
-
-    Ok(json!({ "script": script, "generation": generation }))
+// i[impl app.bundle]
+pub(crate) fn get_app_bundle(state: &OiState, params: GetScriptParams) -> HandlerResult {
+    let (generation, bundle, source) = definition_for(state, &params.app, params.generation)?;
+    Ok(json!({
+        "generation": generation,
+        "provenance": source.to_json(&bundle),
+        "bundle": bundle.to_wire(),
+    }))
 }
 
 // i[impl generation.history]
@@ -1014,36 +1058,56 @@ pub(crate) fn list_generations(state: &OiState, params: ListGenerationsParams) -
     let limit = params.limit.unwrap_or(50).clamp(1, 200);
     let name_owned = params.app.clone();
     let before = params.before;
-    let (entries, script_changed_for) = state
+    let (entries, script_changed_for, definitions) = state
         .db
-        .call(move |db| -> rusqlite::Result<_> {
-            let entries = crate::runtime::generations::list(db, &name_owned, before, limit)?;
+        .call(move |db| -> Result<_, crate::runtime::generations::Error> {
+            use crate::runtime::generations::{self as gens, Kind};
+            let entries = gens::list(db, &name_owned, before, limit)?;
 
             // Determine for each entry whether the script content changed relative to
             // the immediately preceding generation (informational, per i[generation.history]).
             let mut script_changed_for: std::collections::BTreeMap<u64, bool> =
                 std::collections::BTreeMap::new();
+            // i[impl generation.history] — the provenance of each installed
+            // definition, with the bundle-derived fields filled in.
+            let mut definitions: std::collections::BTreeMap<u64, Value> =
+                std::collections::BTreeMap::new();
+            // Provenance needs the content hash, which the row carries, and
+            // the bundle's declared requirement, which is one file; a page
+            // of 200 distinct definitions must not load 200 bundles.
+            let mut requirements: std::collections::HashMap<String, Option<String>> =
+                std::collections::HashMap::new();
             for entry in &entries {
                 let prior = if entry.generation > 1 {
-                    crate::runtime::generations::script_hash_at(
-                        db,
-                        &name_owned,
-                        entry.generation - 1,
-                    )
-                    .ok()
+                    gens::bundle_hash_at(db, &name_owned, entry.generation - 1).ok()
                 } else {
                     None
                 };
-                let changed = matches!(
-                    entry.kind,
-                    crate::runtime::generations::Kind::Register
-                        | crate::runtime::generations::Kind::ScriptUpdate
-                ) || prior.as_deref() != Some(entry.script_hash.as_str());
+                let installs = matches!(entry.kind, Kind::Register | Kind::ScriptUpdate);
+                let changed = installs || prior.as_deref() != Some(entry.bundle_hash.as_str());
                 script_changed_for.insert(entry.generation, changed);
+                if installs {
+                    let requirement = match requirements.get(&entry.bundle_hash) {
+                        Some(r) => r.clone(),
+                        None => {
+                            let r = gens::bundle_requirement(db, &entry.bundle_hash)?;
+                            requirements.insert(entry.bundle_hash.clone(), r.clone());
+                            r
+                        }
+                    };
+                    let source = entry
+                        .provenance
+                        .clone()
+                        .unwrap_or_else(Source::unknown_push);
+                    definitions.insert(
+                        entry.generation,
+                        source.to_json_with(&entry.bundle_hash, requirement.as_deref()),
+                    );
+                }
             }
-            Ok((entries, script_changed_for))
+            Ok((entries, script_changed_for, definitions))
         })
-        .map_err(|e| OiError::new(ErrorCode::NotFound, format!("db error: {e}")))?;
+        .map_err(|e| OiError::new(ErrorCode::Internal, format!("db error: {e}")))?;
 
     let result: Vec<Value> = entries
         .into_iter()
@@ -1052,14 +1116,13 @@ pub(crate) fn list_generations(state: &OiState, params: ListGenerationsParams) -
             obj.insert("generation".into(), json!(e.generation));
             obj.insert("timestamp".into(), json!(e.created_at));
             obj.insert("kind".into(), json!(e.kind.as_str()));
+            if let Some(definition) = definitions.get(&e.generation) {
+                obj.insert("definition".into(), definition.clone());
+            }
             if let Some(name) = &e.param_name {
                 obj.insert("param_name".into(), json!(name));
             }
-            if matches!(
-                e.kind,
-                crate::runtime::generations::Kind::ParamSet
-                    | crate::runtime::generations::Kind::ParamUnset
-            ) {
+            if e.param_name.is_some() {
                 // i[impl generation.history]
                 // r[impl secret.redaction]
                 let is_secret = e
@@ -1116,7 +1179,7 @@ pub(crate) fn list_generations(state: &OiState, params: ListGenerationsParams) -
 }
 
 // i[impl plan.dry-run]
-pub(crate) fn dry_run_plan(state: &OiState, params: PlanParams) -> HandlerResult {
+pub(crate) fn dry_run_plan(state: &OiState, params: PlanParams, ctx: &RequestCtx) -> HandlerResult {
     let name = params.app.as_str();
     {
         let reg = state.registry.read();
@@ -1125,19 +1188,33 @@ pub(crate) fn dry_run_plan(state: &OiState, params: PlanParams) -> HandlerResult
         }
     }
 
+    let proposed_definition = DefinitionInput {
+        script: params.proposed_script,
+        bundle: params.proposed_bundle,
+        reference: params.proposed_reference,
+        origin: None,
+    };
+
     // Empty input → empty diff.
-    if params.proposed_script.is_none() && params.proposed_params.is_none() {
+    if proposed_definition.is_empty() && params.proposed_params.is_none() {
         return Ok(json!({
             "diff": Vec::<Value>::new(),
             "on_change_would_fire": Vec::<String>::new(),
+            "rejections": Vec::<Value>::new(),
         }));
     }
 
-    let current_script = {
+    // A proposed definition is refused on the same terms an update with it
+    // would be, before anything is evaluated.
+    let proposed_bundle = if proposed_definition.is_empty() {
         let reg = state.registry.read();
-        let entry = reg.get(name).expect("confirmed registered");
-        entry.script.clone()
+        Arc::clone(&reg.get(name).expect("confirmed registered").bundle)
+    } else {
+        let Resolved { bundle, .. } = definition::resolve(state, proposed_definition, ctx)?;
+        bundle.check_installable(&version::running())?;
+        bundle
     };
+
     let name_owned = params.app.clone();
     let cipher = std::sync::Arc::clone(&state.cipher);
     let current_params = state
@@ -1159,17 +1236,17 @@ pub(crate) fn dry_run_plan(state: &OiState, params: PlanParams) -> HandlerResult
         }
     }
 
-    let proposed_script = params.proposed_script.as_deref().unwrap_or(&current_script);
-
-    let (proposed_app, proposed_err) = crate::runtime::apps::evaluate_script(
+    let (proposed_app, evaluation) = crate::runtime::apps::evaluate_validated(
         &params.app,
-        proposed_script,
+        &proposed_bundle,
+        &proposed_param_map,
         &proposed_param_map,
         &state.script_limits,
     );
-    if let Some(e) = proposed_err {
-        return Ok(json!({ "errors": [e.to_string()] }));
-    }
+    let rejections = match evaluation {
+        Ok(r) => r,
+        Err(e) => return Ok(json!({ "errors": [e.to_string()] })),
+    };
     let current_app = {
         let reg = state.registry.read();
         let entry = reg.get(name).expect("confirmed registered");
@@ -1254,10 +1331,17 @@ pub(crate) fn dry_run_plan(state: &OiState, params: PlanParams) -> HandlerResult
         }
     }
 
+    // i[impl param.validation]
+    let rejections: Vec<Value> = rejections
+        .into_iter()
+        .map(|r| json!({ "name": r.name, "reason": r.reason }))
+        .collect();
+
     Ok(json!({
         "diff": diff,
         "on_change_would_fire": on_change_would_fire,
         "errors": errors,
+        "rejections": rejections,
     }))
 }
 
@@ -1265,44 +1349,65 @@ pub(crate) fn dry_run_plan(state: &OiState, params: PlanParams) -> HandlerResult
 // i[app.persist]
 pub(crate) fn register_app(
     state: &OiState,
-    params: AppScriptParams,
+    params: CreateParams,
     ctx: &RequestCtx,
 ) -> HandlerResult {
-    let name = params.app.as_str();
-    let script = params.script.as_str();
+    check_registrable(state, &params.app)?;
+    let resolved = definition::resolve(state, params.definition, ctx)?;
+    register_resolved(state, &params.app, resolved, ctx)
+}
 
+/// The name checks that precede anything else about a registration.
+pub(crate) fn check_registrable(state: &OiState, app: &AppName) -> Result<(), OiError> {
+    let name = app.as_str();
     validate_name(name)?;
 
     // r[impl priority.groups-owned]
     // Creation only: a name the daemon claims is refused here, never on update
     // or delete, so an app registered before the reservation stays manageable.
-    crate::reserved::check_app_name(&params.app)
+    crate::reserved::check_app_name(app)
         .map_err(|e| OiError::new(ErrorCode::RequirementsInvalid, e.to_string()))?;
 
-    {
-        let reg = state.registry.read();
-        if reg.is_registered(name) {
-            return Err(OiError::new(
-                ErrorCode::RequirementsInvalid,
-                format!("app already registered: {name}"),
-            ));
-        }
+    let reg = state.registry.read();
+    if reg.is_registered(name) {
+        return Err(OiError::new(
+            ErrorCode::RequirementsInvalid,
+            format!("app already registered: {name}"),
+        ));
     }
+    Ok(())
+}
+
+/// Register `app` from a definition already resolved from its source.
+// i[impl app.register]
+pub(crate) fn register_resolved(
+    state: &OiState,
+    app_name: &AppName,
+    resolved: Resolved,
+    ctx: &RequestCtx,
+) -> HandlerResult {
+    let name = app_name.as_str();
+    let Resolved { bundle, source } = resolved;
+    // i[impl definition.bundle.seedling-versions]
+    bundle.check_installable(&version::running())?;
 
     // i[impl app.register] — durable first, observable second. The rows all
     // commit or none do, and only then does the app appear in the registry,
     // so a failed persist leaves nothing for `/apps/list` to show, nothing
     // for a restart to silently drop (load_from_db skips generation-0 rows),
     // and nothing for a retried `/apps/create` to collide with.
-    let (app, script_error) = crate::runtime::apps::evaluate_script(
-        &params.app,
-        script,
+    // i[impl param.validation] — registration runs no validators: a newly
+    // registered app has no set parameters.
+    let (app, script_error) = crate::runtime::apps::evaluate(
+        app_name,
+        &bundle,
         &std::collections::BTreeMap::new(),
         &state.script_limits,
     );
 
-    let name_owned = params.app.clone();
-    let script_owned = script.to_owned();
+    let name_owned = app_name.clone();
+    let bundle_owned = Arc::clone(&bundle);
+    let source_owned = source.clone();
     let generation = state
         .db
         .call(move |db| -> rusqlite::Result<u64> {
@@ -1311,17 +1416,22 @@ pub(crate) fn register_app(
             persist_app_fields(db, &name_owned, 0, false, false, false)?;
             // r[impl generation.bumps] — initial registration creates
             // generation 1.
-            let generation =
-                crate::runtime::generations::bump_register(db, &name_owned, &script_owned)?;
+            let generation = crate::runtime::generations::bump_register(
+                db,
+                &name_owned,
+                &bundle_owned,
+                &source_owned,
+            )?;
             persist_app_fields(db, &name_owned, generation, false, false, false)?;
             tx.commit()?;
             Ok(generation)
         })
-        .map_err(|e| OiError::new(ErrorCode::ScriptError, format!("db persist: {e}")))?;
+        .map_err(|e| OiError::new(ErrorCode::Internal, format!("db persist: {e}")))?;
 
     state.registry.write().insert_registered(
-        params.app.clone(),
-        script.to_owned(),
+        app_name.clone(),
+        bundle,
+        source,
         app,
         script_error,
         Arc::clone(&state.tick_notify),
@@ -1336,10 +1446,10 @@ pub(crate) fn register_app(
     }
 
     // r[impl schedule.prune]
-    sync_action_schedules(state, &params.app);
+    sync_action_schedules(state, app_name);
 
     tracing::info!(app = %name, generation, "registered app");
-    ctx.events.app_registered(&params.app, generation);
+    ctx.events.app_registered(app_name, generation);
     Ok(json!({ "generation": generation }))
 }
 
@@ -1507,14 +1617,30 @@ pub(crate) fn uninstall_app(state: &OiState, params: AppParams) -> HandlerResult
     Ok(json!({}))
 }
 
+fn named_volumes(def: &crate::defs::app::AppDef) -> Vec<String> {
+    def.resources
+        .iter()
+        .filter_map(|(id, resource)| match resource {
+            Resource::Volume(v) if !v.def.lock().tmpfs => Some(id.name.as_str().to_owned()),
+            _ => None,
+        })
+        .collect()
+}
+
+pub(crate) fn validation_error(rejections: &[crate::runtime::apps::Rejection]) -> OiError {
+    let detail: Vec<String> = rejections
+        .iter()
+        .map(|r| format!("{}: {}", r.name, r.reason))
+        .collect();
+    OiError::new(
+        ErrorCode::ValidationFailed,
+        format!("rejected by validation: {}", detail.join("; ")),
+    )
+}
+
 // i[app.update]
-pub(crate) fn update_app(
-    state: &OiState,
-    params: AppScriptParams,
-    ctx: &RequestCtx,
-) -> HandlerResult {
+pub(crate) fn update_app(state: &OiState, params: UpdateParams, ctx: &RequestCtx) -> HandlerResult {
     let name = params.app.as_str();
-    let script = params.script.as_str();
 
     {
         let reg = state.registry.read();
@@ -1531,15 +1657,74 @@ pub(crate) fn update_app(
         ));
     }
 
-    let previous_generation = {
+    // i[impl app.update] — everything up to the commit below is a check:
+    // fetching, bundle rules, evaluation and validation all happen before
+    // anything is stored, and every refusal returns with the database, the
+    // registry and the fault store exactly as they were.
+    let Resolved { bundle, source } = definition::resolve(state, params.definition, ctx)?;
+    bundle.check_installable(&version::running())?;
+
+    let (previous_generation, previous_named_volumes) = {
         let reg = state.registry.read();
-        reg.get(name).map(|e| e.current_generation).unwrap_or(0)
+        let entry = reg.get(name).expect("confirmed registered");
+        (
+            entry.current_generation,
+            named_volumes(&entry.app.def.load()),
+        )
     };
 
+    let name_owned = params.app.clone();
+    let cipher = Arc::clone(&state.cipher);
+    // r[impl secret.history] — whether the value being replaced is held in
+    // secret storage is read before anything is written, since this update
+    // may be what stops the definition marking it secret.
+    let changing = params.param.as_ref().map(|p| p.name.clone());
+    let (current_params, previous_is_secret) = state
+        .db
+        .call(move |db| -> rusqlite::Result<_> {
+            let values = crate::runtime::apps::load_all_params_for_app(db, &cipher, &name_owned);
+            let stored_secret = match &changing {
+                Some(name) => {
+                    crate::runtime::apps::secret_params::is_stored_secret(db, &name_owned, name)?
+                }
+                None => false,
+            };
+            Ok((values, stored_secret))
+        })
+        .map_err(|e| OiError::new(ErrorCode::Internal, format!("db params: {e}")))?;
+
+    // r[impl operation.lifecycle.param-change] — at most one parameter,
+    // carried in the same step as the definition.
+    let mut proposed = current_params.clone();
+    let change = params.param.and_then(|p| {
+        let previous = current_params.get(p.name.as_str()).cloned();
+        if previous == p.value {
+            return None;
+        }
+        match &p.value {
+            Some(v) => proposed.insert(p.name.as_str().to_owned(), v.clone()),
+            None => proposed.remove(p.name.as_str()),
+        };
+        Some((p.name, previous, p.value))
+    });
+
+    // i[impl param.validation] — the validators are those of the new
+    // definition, evaluated with the values the request would produce.
+    let (app, evaluation) = crate::runtime::apps::evaluate_validated(
+        &params.app,
+        &bundle,
+        &proposed,
+        &proposed,
+        &state.script_limits,
+    );
+    let rejections = evaluation.map_err(|e| OiError::new(ErrorCode::ScriptError, e.to_string()))?;
+    if !rejections.is_empty() {
+        return Err(validation_error(&rejections));
+    }
+
     // i[impl backup.app.validation]
-    // If this app is a registered backup app, validate the new script still
-    // declares all required backup actions before applying the update.
-    // i[impl backup.app.validation]
+    // If this app is a registered backup app, the new definition must still
+    // declare all required backup actions.
     {
         let name_owned = params.app.clone();
         let is_backup_app = state
@@ -1547,16 +1732,7 @@ pub(crate) fn update_app(
             .call(move |db| crate::runtime::backup_apps::is_registered(db, &name_owned))
             .map_err(|e| OiError::new(ErrorCode::Internal, format!("db backup apps: {e}")))?;
         if is_backup_app {
-            let (proposed, proposed_err) = crate::runtime::apps::evaluate_script(
-                &params.app,
-                script,
-                &std::collections::BTreeMap::new(),
-                &state.script_limits,
-            );
-            if let Some(e) = proposed_err {
-                return Err(OiError::new(ErrorCode::ScriptError, e.to_string()));
-            }
-            let def = proposed.def.load();
+            let def = app.def.load();
             let missing: Vec<&str> = seedling_protocol::backup_actions::REQUIRED_ACTIONS
                 .iter()
                 .copied()
@@ -1571,175 +1747,115 @@ pub(crate) fn update_app(
         }
     }
 
-    // r[impl actuate.volume.hold]
-    // Capture the set of named non-tmpfs volumes in the current AppDef before
-    // the reload swaps it out. After reload we diff against the new set to
-    // find volumes that were removed from the script and hold their on-disk
-    // data for operator review — without this, the reconciler would simply
-    // stop iterating over the removed resource on its next tick and the
-    // data would sit unreferenced in /opt/seedling/volumes forever.
-    let previous_named_volumes: Vec<String> = {
-        let reg = state.registry.read();
-        reg.get(name)
-            .map(|entry| {
-                let def = entry.app.def.load();
-                def.resources
-                    .iter()
-                    .filter_map(|(id, resource)| match resource {
-                        Resource::Volume(v) if !v.def.lock().tmpfs => {
-                            Some(id.name.as_str().to_owned())
-                        }
-                        _ => None,
-                    })
-                    .collect()
-            })
-            .unwrap_or_default()
-    };
+    // The new definition decides whether the changed parameter is secret.
+    let is_secret = change.as_ref().is_some_and(|(pname, _, _)| {
+        app.def
+            .load()
+            .params
+            .get(pname)
+            .is_some_and(|d| d.is_secret())
+    });
 
-    // Reload script and apply to in-memory AppDef immediately.
+    // r[impl generation.bumps] — the definition, the parameter change, and
+    // the generation bump commit together or not at all.
     let name_owned = params.app.clone();
-    let cipher = std::sync::Arc::clone(&state.cipher);
-    let loaded_params = state
+    let bundle_owned = Arc::clone(&bundle);
+    let source_owned = source.clone();
+    let change_owned = change.clone();
+    let cipher = Arc::clone(&state.cipher);
+    let app_for_migration = app.clone();
+    let generation = state
         .db
-        .call(move |db| crate::runtime::apps::load_all_params_for_app(db, &cipher, &name_owned));
-    let outcome = state.registry.write().reload(
+        .call(move |db| -> rusqlite::Result<u64> {
+            let tx = db.conn.unchecked_transaction()?;
+            let recorded = match &change_owned {
+                Some((pname, previous, new_value)) => {
+                    crate::runtime::apps::store_param_value(
+                        db,
+                        &cipher,
+                        &name_owned,
+                        pname,
+                        new_value.as_deref(),
+                        is_secret,
+                    )?;
+                    Some(crate::runtime::generations::ParamChange {
+                        name: pname,
+                        previous: previous.as_deref(),
+                        new_value: new_value.as_deref(),
+                        is_secret,
+                        previous_is_secret,
+                    })
+                }
+                None => None,
+            };
+            let generation = crate::runtime::generations::bump_script_update(
+                db,
+                &name_owned,
+                &bundle_owned,
+                &source_owned,
+                recorded.as_ref().map(|c| (c, cipher.as_ref())),
+            )?;
+            // r[impl secret.migration]
+            crate::runtime::apps::migrate_newly_secret_params(
+                db,
+                &cipher,
+                &name_owned,
+                &app_for_migration,
+            );
+            tx.commit()?;
+            Ok(generation)
+        })
+        .map_err(|e| OiError::new(ErrorCode::Internal, format!("db generation: {e}")))?;
+
+    // Durable; now observable.
+    state.registry.write().replace_definition(
         &params.app,
-        script.to_owned(),
-        &loaded_params,
-        &state.script_limits,
+        Arc::clone(&bundle),
+        source.clone(),
+        app,
+        generation,
     );
-    // i[impl app.update] — every diff below compares live state against the
-    // registry's definition. When evaluation failed the registry still holds
-    // the previous good definition, so those diffs would read the operator's
-    // typo as "the script no longer declares this volume / deployment /
-    // service / schedule" and destroy the state behind it.
-    let applied = outcome.is_applied();
-    if let ReloadOutcome::KeptPrevious(e) = &outcome {
-        tracing::warn!(
-            app = %name,
-            error = %e,
-            "script failed to evaluate; keeping the previous definition and its derived state"
-        );
-    }
 
     // r[impl actuate.volume.hold]
     // Diff previous vs current volume resources and hold anything the new
-    // script dropped. Runs synchronously with the update so there's no
+    // definition dropped. Runs synchronously with the update so there's no
     // window where the operator sees the old volume as gone but the on-disk
     // data hasn't been relocated yet.
-    if applied {
-        let current_named_volumes: std::collections::HashSet<String> = {
-            let reg = state.registry.read();
-            reg.get(name)
-                .map(|entry| {
-                    let def = entry.app.def.load();
-                    def.resources
-                        .iter()
-                        .filter_map(|(id, resource)| match resource {
-                            Resource::Volume(v) if !v.def.lock().tmpfs => {
-                                Some(id.name.as_str().to_owned())
-                            }
-                            _ => None,
-                        })
-                        .collect()
-                })
-                .unwrap_or_default()
-        };
-        let removed_volumes: Vec<String> = previous_named_volumes
-            .into_iter()
-            .filter(|n| !current_named_volumes.contains(n))
-            .collect();
-        if !removed_volumes.is_empty() {
-            let vol_store = &state.driver.volume_store;
-            for vol_name in &removed_volumes {
-                // Each named volume may have one or more resource_instances
-                // rows. Use the registry's display_name (the authoritative
-                // on-disk name, which for volumes is "<app>-volume-<name>"
-                // via kind_slug, not the "<app>-<name>" form Deployments
-                // use) — hardcoding a format here would miss future
-                // identity-scheme changes and trip on legacy rows with a
-                // different slug.
-                let name_owned = params.app.clone();
-                let vol_name_owned = vol_name.clone();
-                let instances = state.db.call(move |db| {
-                    crate::runtime::history::find_instances_for_group(
-                        db,
-                        &name_owned,
-                        crate::defs::resource::ResourceKind::Volume,
-                        Some(&vol_name_owned),
-                    )
-                    .unwrap_or_default()
-                });
-                for inst in &instances {
-                    let vol_name = crate::runtime::identity::VolumeName::of_instance(inst);
-                    match tokio::task::block_in_place(|| {
-                        tokio::runtime::Handle::current().block_on(vol_store.hold(
-                            &vol_name,
-                            name,
-                            "removed from app definition",
-                        ))
-                    }) {
-                        Ok(meta) => {
-                            tracing::info!(
-                                app = %name,
-                                volume = %vol_name,
-                                display = %inst.display_name,
-                                held_id = %meta.id,
-                                "held volume removed from app definition"
-                            );
-                            // r[impl actuate.volume.hold.events]
-                            ctx.events.held_volume_created(
-                                meta.id,
-                                &params.app,
-                                &meta.volume_name,
-                                &meta.reason,
-                            );
-                        }
-                        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-                            // Volume declared but never created on disk
-                            // (e.g. the app was never installed, or the
-                            // user added + removed the volume quickly).
-                            // The instance row still needs cleanup below.
-                        }
-                        Err(e) => {
-                            tracing::error!(
-                                app = %name,
-                                volume = %vol_name,
-                                display = %inst.display_name,
-                                "failed to hold removed volume: {e}"
-                            );
-                        }
-                    }
-                }
-                // Drop the instance rows so the registry matches the new
-                // AppDef. Done after the hold so on failure the rows
-                // remain and the next /apps/update retry can try again.
-                let name_owned = params.app.clone();
-                let inst_ids: Vec<_> = instances.iter().map(|i| i.id).collect();
-                let inst_displays: Vec<_> =
-                    instances.iter().map(|i| i.display_name.clone()).collect();
-                state.db.call(move |db| {
-                    for (id, disp) in inst_ids.iter().zip(inst_displays.iter()) {
-                        if let Err(e) = crate::runtime::history::delete_instance(db, *id) {
-                            tracing::warn!(
-                                app = %name_owned,
-                                instance = %disp,
-                                "failed to delete instance row for held volume: {e}"
-                            );
-                        }
-                    }
-                });
-            }
-        }
-    }
+    let current_named_volumes: std::collections::HashSet<String> = {
+        let reg = state.registry.read();
+        reg.get(name)
+            .map(|entry| named_volumes(&entry.app.def.load()).into_iter().collect())
+            .unwrap_or_default()
+    };
+    let removed_volumes: Vec<String> = previous_named_volumes
+        .into_iter()
+        .filter(|n| !current_named_volumes.contains(n))
+        .collect();
+    hold_removed_volumes(state, &params.app, &removed_volumes, ctx);
+
     {
         let reg = state.registry.read();
         if let Some(entry) = reg.get(name) {
             sync_fault_state(&state.db, entry);
         }
     }
+    // r[impl fault.definition-unsupported]
+    // r[impl fault.definition-source-moved]
+    {
+        let name_owned = params.app.clone();
+        let bundle_owned = Arc::clone(&bundle);
+        state.db.call(move |db| {
+            crate::runtime::definition::faults::sync_unsupported(
+                db,
+                &name_owned,
+                &bundle_owned,
+                &version::running(),
+            );
+            crate::runtime::definition::faults::clear_source_moved(db, &name_owned);
+        });
+    }
     // r[impl scaling.clamp]
-    if applied {
+    {
         let reg = state.registry.read();
         if let Some(entry) = reg.get(name) {
             let def = entry.app.def.load();
@@ -1772,45 +1888,9 @@ pub(crate) fn update_app(
         entry.tick_notify.notify_one();
     }
 
-    // r[impl generation.bumps] — script update bumps the generation.
-    let name_owned = params.app.clone();
-    let script_owned = script.to_owned();
-    let generation = state
-        .db
-        .call(move |db| {
-            crate::runtime::generations::bump_script_update(db, &name_owned, &script_owned)
-        })
-        .map_err(|e| OiError::new(ErrorCode::NotFound, format!("db generation: {e}")))?;
-    {
-        let mut reg = state.registry.write();
-        if let Some(entry) = reg.get_mut(name) {
-            entry.current_generation = generation;
-        }
-    }
-    // Persist with updated current_generation.
-    {
-        let reg = state.registry.read();
-        let entry = reg.get(name).expect("confirmed registered");
-        let (app_name, generation_n, installed, uninstalling, installing) =
-            extract_persist_fields(entry);
-        state
-            .db
-            .call(move |db| {
-                persist_app_fields(
-                    db,
-                    &app_name,
-                    generation_n,
-                    installed,
-                    uninstalling,
-                    installing,
-                )
-            })
-            .map_err(|e| OiError::new(ErrorCode::NotFound, format!("db update generation: {e}")))?;
-    }
-
     // i[forward.script-update] — tear down any forward whose target service is
     // no longer present in the new AppDef.
-    if applied {
+    {
         let valid_services: std::collections::HashSet<String> = {
             let reg = state.registry.read();
             if let Some(entry) = reg.get(name) {
@@ -1833,25 +1913,124 @@ pub(crate) fn update_app(
         }
     }
 
-    if applied {
-        // r[impl schedule.prune]
-        sync_action_schedules(state, &params.app);
+    // r[impl schedule.prune]
+    sync_action_schedules(state, &params.app);
 
-        // r[impl image.pin.update-reconcile]
-        super::images::reconcile_pins_post_update(state, &params.app);
-    }
+    // r[impl image.pin.update-reconcile]
+    super::images::reconcile_pins_post_update(state, &params.app);
 
-    tracing::info!(app = %name, generation, "updated app");
+    // i[impl app.update] — a handler for the changed parameter, registered
+    // by the new definition, runs under it with `old` the previous
+    // generation. A definition replaced without a parameter change
+    // schedules nothing.
+    let schedule = match &change {
+        Some((pname, _, _)) => {
+            super::params::schedule_on_change(state, &params.app, pname, generation)?
+        }
+        None => "not_scheduled",
+    };
+
+    tracing::info!(app = %name, generation, schedule, "updated app");
+    // i[impl event.types]
+    // r[impl secret.history] — each value is withheld on the same terms as
+    // it is recorded, so dropping the `secret` flag does not announce the
+    // value the flag was protecting.
+    let param_event = change.as_ref().map(|(pname, previous, new_value)| {
+        let keep = |secret: bool, v: &Option<String>| if secret { None } else { v.clone() };
+        seedling_protocol::events::AppUpdatedParam {
+            name: pname.clone(),
+            previous_value: keep(previous_is_secret, previous),
+            new_value: keep(is_secret, new_value),
+        }
+    });
     ctx.events.app_updated(
         &params.app,
         generation,
-        if previous_generation == 0 {
-            None
-        } else {
-            Some(previous_generation)
-        },
+        (previous_generation != 0).then_some(previous_generation),
+        source.to_json(&bundle),
+        param_event,
     );
-    Ok(json!({ "generation": generation }))
+    Ok(json!({ "schedule": schedule, "generation": generation }))
+}
+
+// r[impl actuate.volume.hold]
+fn hold_removed_volumes(state: &OiState, app: &AppName, removed: &[String], ctx: &RequestCtx) {
+    let name = app.as_str();
+    let vol_store = &state.driver.volume_store;
+    for vol_name in removed {
+        // Each named volume may have one or more resource_instances
+        // rows. Use the registry's display_name (the authoritative
+        // on-disk name, which for volumes is "<app>-volume-<name>"
+        // via kind_slug, not the "<app>-<name>" form Deployments
+        // use) — hardcoding a format here would miss future
+        // identity-scheme changes and trip on legacy rows with a
+        // different slug.
+        let name_owned = app.clone();
+        let vol_name_owned = vol_name.clone();
+        let instances = state.db.call(move |db| {
+            crate::runtime::history::find_instances_for_group(
+                db,
+                &name_owned,
+                crate::defs::resource::ResourceKind::Volume,
+                Some(&vol_name_owned),
+            )
+            .unwrap_or_default()
+        });
+        for inst in &instances {
+            let vol_name = crate::runtime::identity::VolumeName::of_instance(inst);
+            match tokio::task::block_in_place(|| {
+                tokio::runtime::Handle::current().block_on(vol_store.hold(
+                    &vol_name,
+                    name,
+                    "removed from app definition",
+                ))
+            }) {
+                Ok(meta) => {
+                    tracing::info!(
+                        app = %name,
+                        volume = %vol_name,
+                        display = %inst.display_name,
+                        held_id = %meta.id,
+                        "held volume removed from app definition"
+                    );
+                    // r[impl actuate.volume.hold.events]
+                    ctx.events
+                        .held_volume_created(meta.id, app, &meta.volume_name, &meta.reason);
+                }
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                    // Volume declared but never created on disk
+                    // (e.g. the app was never installed, or the
+                    // user added + removed the volume quickly).
+                    // The instance row still needs cleanup below.
+                }
+                Err(e) => {
+                    tracing::error!(
+                        app = %name,
+                        volume = %vol_name,
+                        display = %inst.display_name,
+                        "failed to hold removed volume: {e}"
+                    );
+                }
+            }
+        }
+        // Drop the instance rows so the registry matches the new
+        // AppDef. Done after the hold so on failure the rows
+        // remain and the next /apps/update retry can try again.
+        let name_owned = app.clone();
+        let inst_ids: Vec<_> = instances.iter().map(|i| i.id).collect();
+        let inst_displays: Vec<_> = instances.iter().map(|i| i.display_name.clone()).collect();
+        state.db.call(move |db| {
+            for (id, disp) in inst_ids.iter().zip(inst_displays.iter()) {
+                if let Err(e) = crate::runtime::history::delete_instance(db, *id) {
+                    tracing::warn!(
+                        app = %name_owned,
+                        instance = %disp,
+                        "failed to delete instance row for held volume: {e}"
+                    );
+                }
+            }
+        });
+    }
 }
 
 // i[impl deployment.restart]

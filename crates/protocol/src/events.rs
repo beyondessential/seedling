@@ -13,6 +13,16 @@ use crate::{
     },
 };
 
+/// A parameter changed in the same step as a definition update. Values are
+/// `None` for an unset, and for a secret parameter.
+// i[impl event.types]
+#[derive(Debug, Clone, Serialize)]
+pub struct AppUpdatedParam {
+    pub name: ParamName,
+    pub previous_value: Option<String>,
+    pub new_value: Option<String>,
+}
+
 // i[event.types]
 #[derive(Debug, Clone, Serialize)]
 #[serde(tag = "type")]
@@ -32,11 +42,17 @@ pub enum OiEvent {
         actor: Option<Arc<Actor>>,
     },
     // r[impl audit.log.generations]
+    // i[impl event.types]
     AppUpdated {
         timestamp: Timestamp,
         app: AppName,
         generation: u64,
         previous_generation: Option<u64>,
+        /// The new definition's provenance.
+        definition: serde_json::Value,
+        /// The parameter changed alongside the definition, if any.
+        #[serde(flatten, skip_serializing_if = "Option::is_none")]
+        param: Option<AppUpdatedParam>,
         #[serde(skip_serializing_if = "Option::is_none")]
         actor: Option<Arc<Actor>>,
     },
@@ -598,6 +614,8 @@ impl EventSender {
         app: &AppName,
         generation: u64,
         previous_generation: Option<u64>,
+        definition: serde_json::Value,
+        param: Option<AppUpdatedParam>,
         actor: Option<Arc<Actor>>,
     ) {
         self.emit(OiEvent::AppUpdated {
@@ -605,6 +623,8 @@ impl EventSender {
             app: app.clone(),
             generation,
             previous_generation,
+            definition,
+            param,
             actor,
         });
     }
@@ -1369,11 +1389,20 @@ impl EventSenderWithActor {
             .app_deregistered(app, Some(Arc::clone(&self.actor)));
     }
 
-    pub fn app_updated(&self, app: &AppName, generation: u64, previous_generation: Option<u64>) {
+    pub fn app_updated(
+        &self,
+        app: &AppName,
+        generation: u64,
+        previous_generation: Option<u64>,
+        definition: serde_json::Value,
+        param: Option<AppUpdatedParam>,
+    ) {
         self.inner.app_updated(
             app,
             generation,
             previous_generation,
+            definition,
+            param,
             Some(Arc::clone(&self.actor)),
         );
     }

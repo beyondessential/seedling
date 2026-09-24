@@ -7,6 +7,7 @@ use sha2::{Digest, Sha256};
 mod migrations {
     pub mod v14;
     pub mod v20;
+    pub mod v58;
 }
 
 struct Migration {
@@ -136,6 +137,7 @@ const SQL_V55: &str = include_str!("db/migrations/v55.sql");
 const SQL_V56: &str = include_str!("db/migrations/v56.sql");
 // r[impl priority.settings]
 const SQL_V57: &str = include_str!("db/migrations/v57.sql");
+const SQL_V58: &str = migrations::v58::SQL;
 
 const MIGRATIONS: &[Migration] = &[
     Migration {
@@ -418,6 +420,11 @@ const MIGRATIONS: &[Migration] = &[
         sql: SQL_V57,
         custom_run: None,
     },
+    Migration {
+        version: 58,
+        sql: SQL_V58,
+        custom_run: Some(migrations::v58::run),
+    },
 ];
 
 fn migration_hash(sql: &str) -> String {
@@ -488,6 +495,28 @@ impl Db {
     // hash will no longer match the edited content — causing a panic on startup.
     // Always add a new Migration entry and a new SQL/RS file instead.
     fn migrate(&self) -> SqlResult<()> {
+        self.apply_migrations(None)?;
+        self.verify_migrations()?;
+        Ok(())
+    }
+
+    /// A database migrated only as far as `last`, to exercise a later
+    /// migration against data written under the schema before it.
+    #[cfg(test)]
+    pub(crate) fn open_in_memory_through(last: i64) -> SqlResult<Self> {
+        let conn = Connection::open_in_memory()?;
+        conn.execute_batch("PRAGMA foreign_keys=ON;")?;
+        let db = Self { conn };
+        db.apply_migrations(Some(last))?;
+        Ok(db)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn finish_migrations(&self) -> SqlResult<()> {
+        self.migrate()
+    }
+
+    fn apply_migrations(&self, last: Option<i64>) -> SqlResult<()> {
         self.conn.execute_batch(
             "CREATE TABLE IF NOT EXISTS schema_version (
                 version     INTEGER NOT NULL,
@@ -517,6 +546,9 @@ impl Db {
         let tx = self.conn.unchecked_transaction()?;
 
         for m in MIGRATIONS {
+            if last.is_some_and(|l| m.version > l) {
+                break;
+            }
             if version < m.version {
                 match m.custom_run {
                     Some(f) => f(&self.conn)?,
@@ -527,8 +559,6 @@ impl Db {
         }
 
         tx.commit()?;
-
-        self.verify_migrations()?;
 
         Ok(())
     }

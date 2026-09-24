@@ -1,5 +1,5 @@
 // i[wire.actor]
-#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Actor {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub kind: Option<String>,

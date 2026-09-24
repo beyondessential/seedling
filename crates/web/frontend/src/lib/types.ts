@@ -257,9 +257,32 @@ export interface InstallRequirement {
   default_value: string | null;
 }
 
+/** Who pushed a definition, as the OI records the request's actor. */
+export interface DefinitionActor {
+  kind?: string;
+  id?: string;
+  display?: string;
+  session?: string;
+}
+
+/** Where an app's definition came from. */
+export type DefinitionProvenance = (
+  | { kind: "fetched"; reference: string; digest: string }
+  | {
+      kind: "pushed";
+      pushed_by: DefinitionActor | null;
+      /** Where the client said it got the files; never verified. */
+      reported_origin: { url: string; revision: string } | null;
+    }
+) & {
+  content_hash: string;
+  seedling_versions: string | null;
+};
+
 export interface AppDetail {
   status: AppStatus;
   generation: number;
+  definition: DefinitionProvenance;
   /** Operator-set standing of this app against the others on the host. */
   priority?: AppPriority;
   /** Free-form description set via `app.description(...)` in the BSL script. */
@@ -614,10 +637,24 @@ export interface PlanDiffEntry {
   fields?: string[];
 }
 
+export interface PlanRejection {
+  name: string;
+  reason: string;
+}
+
 export interface PlanResponse {
   diff?: PlanDiffEntry[];
   on_change_would_fire?: string[];
   errors?: string[];
+  /** Parameters whose validators reject the proposed values. */
+  rejections?: PlanRejection[];
+}
+
+export interface AppBundleResponse {
+  generation: number;
+  provenance: DefinitionProvenance;
+  /** Bundle path to base64-encoded contents. */
+  bundle: Record<string, string>;
 }
 
 export interface TemplateSummary {

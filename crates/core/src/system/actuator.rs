@@ -109,9 +109,9 @@ pub enum ActuateError {
 pub(crate) async fn safe_volume_write(
     mountpoint: &Path,
     rel_path: &str,
-    contents: &str,
+    contents: &[u8],
 ) -> Result<(), ActuateError> {
-    super::confined_write::write_async(mountpoint, rel_path, contents.as_bytes())
+    super::confined_write::write_async(mountpoint, rel_path, contents)
         .await
         .map_err(|e| match e {
             super::confined_write::ConfinedWriteError::Escape { path, .. } => {

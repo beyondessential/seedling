@@ -5,13 +5,18 @@ use std::{
 
 use jiff::Timestamp;
 use parking_lot::{Mutex, RwLock};
-use seedling_protocol::names::{ActionName, AppName};
+use seedling_protocol::names::{ActionName, AppName, ParamName};
 use serde::{Deserialize, Serialize};
 use tokio::sync::Notify;
 
 use crate::{
     defs::app::App,
-    runtime::{db::Db, desired::OperationProgress, generations},
+    runtime::{
+        db::Db,
+        definition::{Bundle, Source},
+        desired::OperationProgress,
+        generations,
+    },
     setup_language,
 };
 
@@ -45,9 +50,9 @@ impl std::error::Error for ScriptError {}
 pub enum ReloadOutcome {
     /// The script evaluated cleanly and the registry now holds its definition.
     Applied,
-    /// Evaluation failed. The previous definition keeps running and the new
-    /// script text and error are recorded; no state derived from the new
-    /// script may be diffed against the registry.
+    /// Evaluation failed. The previous definition keeps running and the
+    /// error is recorded; no state derived from the new evaluation may be
+    /// diffed against the registry.
     KeptPrevious(ScriptError),
     /// The app is not registered, so nothing was evaluated or stored.
     NotRegistered,
@@ -100,7 +105,15 @@ impl AppStatus {
 
 pub struct AppEntry {
     pub name: AppName,
-    pub script: String,
+    /// The definition installed at the current generation.
+    pub bundle: Arc<Bundle>,
+    /// How that definition reached the runtime.
+    // i[impl definition.provenance]
+    pub source: Source,
+    /// The most recent successful evaluation: the definition this app runs.
+    /// Its `stored` map and `bundle` are the values and definition it was
+    /// evaluated from, which is where validators are taken from when a
+    /// proposed change fails to evaluate.
     pub app: App,
     /// Shared with the reconciler so it can transition the phase when cleanup completes.
     pub phase: Arc<Mutex<AppPhase>>,
@@ -143,12 +156,13 @@ impl AppRegistry {
     pub fn register(
         &mut self,
         name: AppName,
-        script: String,
+        bundle: Arc<Bundle>,
+        source: Source,
         tick_notify: Arc<Notify>,
         limits: &crate::ScriptLimits,
     ) -> Result<(), ScriptError> {
-        let (app, script_error) = evaluate_script(&name, &script, &BTreeMap::new(), limits);
-        self.insert_registered(name, script, app, script_error, tick_notify, 0);
+        let (app, script_error) = evaluate(&name, &bundle, &BTreeMap::new(), limits);
+        self.insert_registered(name, bundle, source, app, script_error, tick_notify, 0);
         Ok(())
     }
 
@@ -159,10 +173,15 @@ impl AppRegistry {
     /// before the entry exists: a registration whose persistence failed must
     /// not leave an app that `/apps/list` shows, a restart silently drops,
     /// and a retried `/apps/create` rejects as already registered.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "an entry is exactly these parts; a builder would only rename them"
+    )]
     pub fn insert_registered(
         &mut self,
         name: AppName,
-        script: String,
+        bundle: Arc<Bundle>,
+        source: Source,
         app: App,
         script_error: Option<ScriptError>,
         tick_notify: Arc<Notify>,
@@ -176,7 +195,8 @@ impl AppRegistry {
             name.as_str().to_owned(),
             AppEntry {
                 name,
-                script,
+                bundle,
+                source,
                 app,
                 phase: Arc::new(Mutex::new(AppPhase::NotInstalled)),
                 active_progress: Arc::new(RwLock::new(None)),
@@ -194,39 +214,38 @@ impl AppRegistry {
     // i[app.update]
     // i[param.set]
     // i[param.unset]
-    /// Re-evaluate the script with updated stored params.
+    /// Re-evaluate the app's current definition with updated stored params.
     ///
-    /// On success the entry's app and script are updated and any active
-    /// script-error fault is cleared. On failure the existing AppDef keeps
-    /// running and the fault is recorded — the caller always succeeds.
+    /// On success the entry's app is updated and any active script-error
+    /// fault is cleared. On failure the existing AppDef keeps running and the
+    /// fault is recorded — the caller always succeeds.
     ///
     /// The returned outcome is what tells a caller whether the registry now
-    /// holds a definition derived from `script`. Anything that diffs the
+    /// holds a definition derived from these params. Anything that diffs the
     /// registry against previous state — volume holds, scaling bounds,
     /// forwards, schedules — is only meaningful on [`ReloadOutcome::Applied`].
-    #[must_use = "a KeptPrevious reload must not be followed by state derived from the new script"]
+    #[must_use = "a KeptPrevious reload must not be followed by state derived from the new values"]
     pub fn reload(
         &mut self,
         name: &AppName,
-        script: String,
         params: &BTreeMap<String, String>,
         limits: &crate::ScriptLimits,
     ) -> ReloadOutcome {
         // Checked before evaluating: an unregistered app has no definition to
         // replace, and reporting `Applied` for one would tell a caller the
-        // registry reflects a script it never stored.
-        if !self.entries.contains_key(name.as_str()) {
+        // registry reflects values it never stored.
+        let Some(bundle) = self
+            .entries
+            .get(name.as_str())
+            .map(|e| Arc::clone(&e.bundle))
+        else {
             return ReloadOutcome::NotRegistered;
-        }
-        let (app, raw_error) = evaluate_script(name, &script, params, limits);
+        };
+        let (app, raw_error) = evaluate(name, &bundle, params, limits);
         let entry = self
             .entries
             .get_mut(name.as_str())
             .expect("checked just above");
-        // The script text follows the new generation either way: /apps/show
-        // must return what the operator submitted, and a later param set has
-        // to re-evaluate that same text rather than resurrect the old one.
-        entry.script = script;
         match raw_error {
             None => {
                 entry.app = app;
@@ -242,6 +261,28 @@ impl AppRegistry {
                 ReloadOutcome::KeptPrevious(e)
             }
         }
+    }
+
+    /// Install an already-evaluated, already-validated definition, whose
+    /// generation has been committed, as the one the app runs.
+    // i[impl app.update]
+    pub fn replace_definition(
+        &mut self,
+        name: &AppName,
+        bundle: Arc<Bundle>,
+        source: Source,
+        app: App,
+        generation: generations::Generation,
+    ) -> bool {
+        let Some(entry) = self.entries.get_mut(name.as_str()) else {
+            return false;
+        };
+        entry.bundle = bundle;
+        entry.source = source;
+        entry.app = app;
+        entry.script_error = None;
+        entry.current_generation = generation;
+        true
     }
 
     pub fn get(&self, name: &str) -> Option<&AppEntry> {
@@ -303,26 +344,24 @@ impl AppRegistry {
             }
             let current_generation = current_gen as generations::Generation;
 
-            let hash = match generations::script_hash_at(db, &name, current_generation) {
-                Ok(h) => h,
+            let (hash, source) = match generations::definition_at(db, &name, current_generation) {
+                Ok(d) => d,
                 Err(e) => {
-                    tracing::warn!(app = %name, generation = current_generation, "failed to resolve script hash: {e}");
+                    tracing::warn!(app = %name, generation = current_generation, "failed to resolve definition: {e}");
                     continue;
                 }
             };
-            let script: String = match generations::script_body(db, &hash) {
-                Ok(Some(s)) => s,
-                Ok(None) => {
-                    tracing::warn!(app = %name, hash = %hash, "missing script body");
-                    continue;
-                }
+            let bundle = match generations::load_bundle(db, &hash) {
+                Ok(b) => b,
                 Err(e) => {
-                    tracing::warn!(app = %name, "failed to load script body: {e}");
+                    tracing::warn!(app = %name, hash = %hash, "failed to load definition bundle: {e}");
                     continue;
                 }
             };
             let stored = load_all_params_for_app(db, cipher, &name);
-            let (app, raw_error) = evaluate_script(&name, &script, &stored, limits);
+            // i[impl app.persist] — reload runs no validators: the stored
+            // combination was validated when it was written.
+            let (app, raw_error) = evaluate(&name, &bundle, &stored, limits);
             // r[impl secret.migration] — after the script declares which params are secret,
             // migrate any plaintext rows that should now be encrypted.
             migrate_newly_secret_params(db, cipher, &name, &app);
@@ -334,7 +373,8 @@ impl AppRegistry {
                 name.as_str().to_owned(),
                 AppEntry {
                     name,
-                    script,
+                    bundle,
+                    source,
                     app,
                     phase: Arc::new(Mutex::new(phase)),
                     active_progress: Arc::new(RwLock::new(None)),
@@ -379,44 +419,27 @@ impl AppRegistry {
     }
 }
 
-/// Retrieve the script text active at a specific generation, along with the app
-/// name (for cross-checking selection in the OI handler).
-pub fn get_script_at_generation(
+/// Retrieve the definition active at a specific generation — its bundle and
+/// provenance — or `None` when the app has no such generation.
+// i[impl app.script]
+// i[impl app.bundle]
+pub fn definition_at_generation(
     db: &Db,
     app: &AppName,
     generation: generations::Generation,
-) -> rusqlite::Result<Option<String>> {
-    // i[impl app.script]
+) -> Result<Option<(Arc<Bundle>, Source)>, generations::Error> {
     // At-or-before resolution only applies to generations that exist (e.g.
-    // param-change generations that share the previous script); a generation
-    // that was never recorded must not resolve to any script.
+    // param-change generations that share the previous definition); a
+    // generation that was never recorded must not resolve to anything.
     if generations::get(db, app, generation)?.is_none() {
         return Ok(None);
     }
-    let hash = match generations::script_hash_at(db, app, generation) {
-        Ok(h) => h,
+    let (hash, source) = match generations::definition_at(db, app, generation) {
+        Ok(d) => d,
         Err(generations::Error::NotFound { .. }) => return Ok(None),
-        Err(generations::Error::Db(e)) => return Err(e),
-        Err(e) => {
-            tracing::warn!(app = %app, generation, "script_hash_at failed: {e}");
-            return Ok(None);
-        }
+        Err(e) => return Err(e),
     };
-    generations::script_body(db, &hash)
-}
-
-/// Retrieve the script for the current generation of an app.
-pub fn get_current_script(
-    db: &Db,
-    app: &AppName,
-) -> rusqlite::Result<Option<(generations::Generation, String)>> {
-    let Some(current_gen) = generations::current(db, app)? else {
-        return Ok(None);
-    };
-    match get_script_at_generation(db, app, current_gen)? {
-        Some(s) => Ok(Some((current_gen, s))),
-        None => Ok(None),
-    }
+    Ok(Some((generations::load_bundle(db, &hash)?, source)))
 }
 
 // i[impl app.status.priority]
@@ -521,8 +544,40 @@ pub fn load_all_params_for_app(
     merged
 }
 
+/// Store or clear one parameter value, in whichever table its secrecy puts
+/// it, leaving no copy in the other.
+///
+/// Every path that writes a parameter goes through here: two tables hold
+/// them, and a value that landed in both, or in neither, is what disagreeing
+/// call sites produce.
+// r[impl secret.storage]
+pub fn store_param_value(
+    db: &Db,
+    cipher: &crate::runtime::secrets::Cipher,
+    app: &AppName,
+    name: &ParamName,
+    value: Option<&str>,
+    is_secret: bool,
+) -> rusqlite::Result<()> {
+    match value {
+        Some(v) if is_secret => {
+            let secret = secrecy::SecretString::new(v.to_owned().into());
+            secret_params::upsert_secret_param(db, cipher, app, name, &secret)?;
+            delete_one_param(db, app, name)
+        }
+        Some(v) => {
+            upsert_param(db, app, name, v)?;
+            secret_params::delete_one_secret_param(db, app, name)
+        }
+        None => {
+            delete_one_param(db, app, name)?;
+            secret_params::delete_one_secret_param(db, app, name)
+        }
+    }
+}
+
 // r[impl secret.migration]
-fn migrate_newly_secret_params(
+pub(crate) fn migrate_newly_secret_params(
     db: &Db,
     cipher: &crate::runtime::secrets::Cipher,
     app_name: &AppName,
@@ -542,13 +597,75 @@ fn migrate_newly_secret_params(
     }
 }
 
+/// A parameter whose validator rejected the proposed values.
+// i[impl param.validation]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Rejection {
+    pub name: String,
+    pub reason: String,
+}
+
+/// Evaluate a definition with `params`.
+///
+/// The returned `App` is populated up to wherever the script threw; see
+/// [`ReloadOutcome`] for why callers must not publish a failed one over a
+/// good one.
+pub fn evaluate(
+    name: &AppName,
+    bundle: &Arc<Bundle>,
+    params: &BTreeMap<String, String>,
+    limits: &crate::ScriptLimits,
+) -> (App, Option<ScriptError>) {
+    let (app, result) = run_definition(name, bundle, params, None, limits);
+    (app, result.err())
+}
+
+/// Evaluate a definition with `params`, then run the validator of every
+/// parameter set in `proposed` against `proposed`.
+///
+/// `params` and `proposed` are the same map except when validators are taken
+/// from an earlier evaluation because the proposed values fail to evaluate.
+// i[impl param.validation]
+pub fn evaluate_validated(
+    name: &AppName,
+    bundle: &Arc<Bundle>,
+    params: &BTreeMap<String, String>,
+    proposed: &BTreeMap<String, String>,
+    limits: &crate::ScriptLimits,
+) -> (App, Result<Vec<Rejection>, ScriptError>) {
+    run_definition(name, bundle, params, Some(proposed), limits)
+}
+
+/// Evaluate a lone script, as a one-file bundle.
+#[cfg(test)]
 pub fn evaluate_script(
     name: &AppName,
     script: &str,
     params: &BTreeMap<String, String>,
     limits: &crate::ScriptLimits,
 ) -> (App, Option<ScriptError>) {
-    let (engine, mut scope, app) = setup_language(limits);
+    evaluate(
+        name,
+        &Arc::new(Bundle::from_stored_script(script)),
+        params,
+        limits,
+    )
+}
+
+fn run_definition(
+    name: &AppName,
+    bundle: &Arc<Bundle>,
+    params: &BTreeMap<String, String>,
+    validate: Option<&BTreeMap<String, String>>,
+    limits: &crate::ScriptLimits,
+) -> (App, Result<Vec<Rejection>, ScriptError>) {
+    let (engine, mut scope, app) = setup_language(limits, Arc::clone(bundle));
+    let script = match bundle.script() {
+        Ok(s) => s,
+        // A stored definition that no longer reads as one (only possible
+        // for a bundle written for another Seedling) evaluates to nothing.
+        Err(e) => return (app, Err(ScriptError(e.to_string()))),
+    };
     // i[param.store] — pre-populate stored values so is_set()/value() work
     // during script evaluation. AppDef.params (the BSL-declared set) is
     // populated by the script itself via app.param() calls.
@@ -559,17 +676,75 @@ pub fn evaluate_script(
         d
     });
     crate::defs::app::set_appdef_holder(&app.def);
+    if validate.is_some() {
+        crate::defs::app::begin_validator_capture();
+    }
     // l[impl bsl.errors]
-    // Unhandled Rhai exceptions bubble up from `run_with_scope` and stop
+    // Unhandled Rhai exceptions bubble up from `run_ast_with_scope` and stop
     // further execution of this script evaluation. Rhai's native try/catch
     // is available to BSL authors for recovery; anything that escapes it
     // becomes a ScriptError and is surfaced as a fault by the caller.
-    let err = engine
-        .run_with_scope(&mut scope, script)
-        .err()
-        .map(|e| ScriptError(e.to_string()));
+    // l[impl bsl.bundle.script-errors]
+    let remap = |e: Box<rhai::EvalAltResult>| ScriptError(script.remap_error(&e.to_string()));
+    let ran = engine
+        .compile(script.text())
+        .map_err(|e| remap(e.into()))
+        .and_then(|ast| {
+            engine
+                .run_ast_with_scope(&mut scope, &ast)
+                .map(|()| ast)
+                .map_err(remap)
+        });
     crate::defs::app::clear_appdef_holder();
-    (app, err)
+    let validators = validate.map(|_| crate::defs::app::end_validator_capture());
+    let ast = match ran {
+        Ok(ast) => ast,
+        Err(e) => return (app, Err(e)),
+    };
+    let (Some(proposed), Some(validators)) = (validate, validators) else {
+        return (app, Ok(Vec::new()));
+    };
+    let rejections = run_validators(&engine, &ast, script, &validators, proposed);
+    (app, Ok(rejections))
+}
+
+// l[impl param.validate]
+// l[impl param.validate.unset]
+// l[impl param.validate.pure]
+fn run_validators(
+    engine: &rhai::Engine,
+    ast: &rhai::AST,
+    script: &crate::runtime::definition::Script,
+    validators: &BTreeMap<seedling_protocol::names::ParamName, rhai::FnPtr>,
+    proposed: &BTreeMap<String, String>,
+) -> Vec<Rejection> {
+    let values: rhai::Map = proposed
+        .iter()
+        .map(|(k, v)| (k.as_str().into(), rhai::Dynamic::from(v.clone())))
+        .collect();
+    let mut rejections = Vec::new();
+    for (name, validator) in validators {
+        // An unset parameter always passes; `required` governs presence.
+        let Some(value) = proposed.get(name.as_str()) else {
+            continue;
+        };
+        let _frame = crate::defs::app::ValidatorFrame::enter();
+        let result: Result<rhai::Dynamic, _> =
+            validator.call(engine, ast, (value.clone(), values.clone()));
+        if let Err(e) = result {
+            // A thrown value is the reason; any other failure rejects too,
+            // with the error itself as the reason.
+            let reason = match *e {
+                rhai::EvalAltResult::ErrorRuntime(ref thrown, _) => thrown.to_string(),
+                ref other => script.remap_error(&other.to_string()),
+            };
+            rejections.push(Rejection {
+                name: name.as_str().to_owned(),
+                reason,
+            });
+        }
+    }
+    rejections
 }
 
 #[cfg(test)]

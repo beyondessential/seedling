@@ -74,7 +74,8 @@ fn upsert_param_replaces_existing_value() {
 fn make_entry(name: &str, script_error: Option<&str>) -> AppEntry {
     AppEntry {
         name: app(name),
-        script: String::new(),
+        bundle: Arc::default(),
+        source: Source::unknown_push(),
         app: crate::defs::app::App::default(),
         phase: Arc::new(parking_lot::Mutex::new(AppPhase::NotInstalled)),
         active_progress: Arc::new(parking_lot::RwLock::new(None)),
@@ -331,7 +332,7 @@ fn registry_load_from_db_restores_params() {
         )
         .expect("insert app");
 
-    crate::runtime::generations::bump_register(
+    crate::runtime::generations::register_script(
         &db,
         &app("myapp"),
         r#"let h = app.param("hostname");"#,
@@ -383,6 +384,20 @@ fn trivial_script() -> &'static str {
     r#"app.deployment("web").image("docker.io/library/nginx:latest");"#
 }
 
+fn bundle_of(script: &str) -> Arc<Bundle> {
+    Arc::new(Bundle::from_stored_script(script))
+}
+
+fn script_text(bundle: &Bundle) -> &str {
+    bundle.script().unwrap().text()
+}
+
+fn script_at(db: &Db, name: &str, generation: u64) -> Option<String> {
+    definition_at_generation(db, &app(name), generation)
+        .expect("read definition")
+        .map(|(b, _)| script_text(&b).to_owned())
+}
+
 // i[verify app.register]
 #[test]
 fn register_adds_entry_and_makes_it_discoverable() {
@@ -390,7 +405,8 @@ fn register_adds_entry_and_makes_it_discoverable() {
     let notify = Arc::new(Notify::new());
     reg.register(
         app("myapp"),
-        trivial_script().to_owned(),
+        bundle_of(trivial_script()),
+        Source::unknown_push(),
         Arc::clone(&notify),
         &crate::ScriptLimits::default(),
     )
@@ -406,13 +422,14 @@ fn register_persists_script_verbatim_for_later_replay() {
     let notify = Arc::new(Notify::new());
     reg.register(
         app("myapp"),
-        trivial_script().to_owned(),
+        bundle_of(trivial_script()),
+        Source::unknown_push(),
         notify,
         &crate::ScriptLimits::default(),
     )
     .unwrap();
     let entry = reg.get("myapp").unwrap();
-    assert_eq!(entry.script, trivial_script());
+    assert_eq!(script_text(&entry.bundle), trivial_script());
     assert_eq!(entry.current_generation, 0);
 }
 
@@ -423,7 +440,8 @@ fn deregister_removes_entry() {
     let notify = Arc::new(Notify::new());
     reg.register(
         app("myapp"),
-        trivial_script().to_owned(),
+        bundle_of(trivial_script()),
+        Source::unknown_push(),
         notify,
         &crate::ScriptLimits::default(),
     )
@@ -448,7 +466,8 @@ fn list_returns_registered_apps_sorted() {
     for name in ["zeta-app", "alpha-app", "mu-app"] {
         reg.register(
             app(name),
-            trivial_script().to_owned(),
+            bundle_of(trivial_script()),
+            Source::unknown_push(),
             Arc::clone(&notify),
             &crate::ScriptLimits::default(),
         )
@@ -460,27 +479,36 @@ fn list_returns_registered_apps_sorted() {
 
 // i[verify app.update]
 #[test]
-fn reload_replaces_script_on_existing_entry() {
+fn replace_definition_installs_bundle_and_source() {
     let mut reg = AppRegistry::new();
     let notify = Arc::new(Notify::new());
     reg.register(
         app("myapp"),
-        trivial_script().to_owned(),
+        bundle_of(trivial_script()),
+        Source::unknown_push(),
         notify,
         &crate::ScriptLimits::default(),
     )
     .unwrap();
 
     let new_script = r#"app.deployment("api").image("ghcr.io/acme/api:1.0");"#;
-    let outcome = reg.reload(
+    let bundle = bundle_of(new_script);
+    let (evaluated, err) = evaluate(
         &app("myapp"),
-        new_script.to_owned(),
+        &bundle,
         &BTreeMap::new(),
         &crate::ScriptLimits::default(),
     );
-    assert!(outcome.is_applied());
+    assert!(err.is_none());
+    let source = Source::Fetched {
+        reference: "ghcr.io/acme/api-def:1".into(),
+        digest: "sha256:abc".into(),
+    };
+    assert!(reg.replace_definition(&app("myapp"), bundle, source.clone(), evaluated, 2));
     let entry = reg.get("myapp").unwrap();
-    assert_eq!(entry.script, new_script);
+    assert_eq!(script_text(&entry.bundle), new_script);
+    assert_eq!(entry.source, source);
+    assert_eq!(entry.current_generation, 2);
     assert!(entry.script_error.is_none());
 }
 
@@ -493,10 +521,10 @@ fn reload_replaces_script_on_existing_entry() {
 fn persist_and_load_round_trips_phase_and_generation() {
     let db = Db::open_in_memory().expect("open");
     let generation =
-        generations::bump_register(&db, &app("myapp"), trivial_script()).expect("bump register");
+        generations::register_script(&db, &app("myapp"), trivial_script()).expect("bump register");
 
     let mut entry = make_entry("myapp", None);
-    entry.script = trivial_script().to_owned();
+    entry.bundle = bundle_of(trivial_script());
     entry.current_generation = generation;
     *entry.phase.lock() = AppPhase::Installed;
     AppRegistry::persist_app(&db, &entry).expect("persist");
@@ -513,7 +541,8 @@ fn persist_and_load_round_trips_phase_and_generation() {
     let loaded = registry.get("myapp").expect("app present after reload");
     assert_eq!(*loaded.phase.lock(), AppPhase::Installed);
     assert_eq!(loaded.current_generation, generation);
-    assert_eq!(loaded.script, trivial_script());
+    assert_eq!(script_text(&loaded.bundle), trivial_script());
+    assert_eq!(loaded.source, Source::unknown_push());
 }
 
 // i[verify app.persist]
@@ -544,7 +573,7 @@ fn load_from_db_skips_apps_without_a_generation() {
 fn remove_app_deletes_persisted_row() {
     let db = Db::open_in_memory().expect("open");
     let generation =
-        generations::bump_register(&db, &app("myapp"), trivial_script()).expect("bump register");
+        generations::register_script(&db, &app("myapp"), trivial_script()).expect("bump register");
     let mut entry = make_entry("myapp", None);
     entry.current_generation = generation;
     AppRegistry::persist_app(&db, &entry).expect("persist");
@@ -597,37 +626,19 @@ fn script_retrieval_tracks_generation_bumps() {
     let old_script = r#"app.deployment("web").image("docker.io/library/nginx:1.25");"#;
     let new_script = r#"app.deployment("web").image("docker.io/library/nginx:1.26");"#;
 
-    let first = generations::bump_register(&db, &app("myapp"), old_script).expect("bump 1");
-    let second = generations::bump_script_update(&db, &app("myapp"), new_script).expect("bump 2");
+    let first = generations::register_script(&db, &app("myapp"), old_script).expect("bump 1");
+    let second = generations::update_script(&db, &app("myapp"), new_script).expect("bump 2");
     assert!(second > first, "generations are monotonic");
 
-    assert_eq!(
-        get_script_at_generation(&db, &app("myapp"), first)
-            .expect("get old")
-            .as_deref(),
-        Some(old_script)
-    );
-    let (current_gen, current_script) = get_current_script(&db, &app("myapp"))
-        .expect("get current")
-        .expect("current script present");
-    assert_eq!(current_gen, second);
-    assert_eq!(current_script, new_script);
+    assert_eq!(script_at(&db, "myapp", first).as_deref(), Some(old_script));
+    assert_eq!(script_at(&db, "myapp", second).as_deref(), Some(new_script));
 }
 
 // i[verify app.generation]
 #[test]
 fn script_retrieval_returns_none_for_unknown_app() {
     let db = Db::open_in_memory().expect("open");
-    assert!(
-        get_current_script(&db, &app("ghost"))
-            .expect("get current")
-            .is_none()
-    );
-    assert!(
-        get_script_at_generation(&db, &app("ghost"), 1)
-            .expect("get at generation")
-            .is_none()
-    );
+    assert!(script_at(&db, "ghost", 1).is_none());
 }
 
 // r[verify generation.previous]
@@ -637,21 +648,23 @@ fn script_at_param_change_generation_resolves_to_most_recent_script() {
     // generation is the most recent Register/ScriptUpdate at or before it.
     let db = Db::open_in_memory().expect("open");
     let cipher = crate::runtime::secrets::Cipher::for_tests();
-    generations::bump_register(&db, &app("myapp"), trivial_script()).expect("bump");
-    generations::bump_param_set(
+    generations::register_script(&db, &app("myapp"), trivial_script()).expect("bump");
+    let site = param("site");
+    generations::bump_param_change(
         &db,
         &app("myapp"),
-        &param("site"),
-        None,
-        "prod",
+        &generations::ParamChange {
+            name: &site,
+            previous: None,
+            new_value: Some("prod"),
+            is_secret: false,
+            previous_is_secret: false,
+        },
         &cipher,
-        false,
     )
     .expect("param bump");
     assert_eq!(
-        get_script_at_generation(&db, &app("myapp"), 2)
-            .expect("get")
-            .as_deref(),
+        script_at(&db, "myapp", 2).as_deref(),
         Some(trivial_script())
     );
 }
@@ -660,11 +673,8 @@ fn script_at_param_change_generation_resolves_to_most_recent_script() {
 #[test]
 fn script_at_nonexistent_generation_is_none() {
     let db = Db::open_in_memory().expect("open");
-    generations::bump_register(&db, &app("myapp"), trivial_script()).expect("bump");
-    assert_eq!(
-        get_script_at_generation(&db, &app("myapp"), 5).expect("get"),
-        None
-    );
+    generations::register_script(&db, &app("myapp"), trivial_script()).expect("bump");
+    assert_eq!(script_at(&db, "myapp", 5), None);
 }
 
 // i[verify app.update]
@@ -676,29 +686,27 @@ fn script_at_nonexistent_generation_is_none() {
 fn failed_reload_keeps_the_previous_definition() {
     let mut reg = AppRegistry::new();
     let notify = Arc::new(Notify::new());
-    let original = r#"
+    // Declares the deployment, then throws before reaching the volume when
+    // `mode` is `broken`: the partial evaluation looks exactly like "the
+    // operator removed the volume".
+    let script = r#"
         app.deployment("api").image("ghcr.io/acme/api:1.0");
+        let mode = app.param("mode");
+        if mode.is_set() && mode.value() == "broken" { throw "boom"; }
         app.volume("data");
     "#;
     reg.register(
         app("myapp"),
-        original.to_owned(),
+        bundle_of(script),
+        Source::unknown_push(),
         notify,
         &crate::ScriptLimits::default(),
     )
     .unwrap();
 
-    // Declares the deployment, then throws before reaching the volume: the
-    // partial evaluation looks exactly like "the operator removed the volume".
-    let broken = r#"
-        app.deployment("api").image("ghcr.io/acme/api:1.0");
-        throw "boom";
-        app.volume("data");
-    "#;
     let outcome = reg.reload(
         &app("myapp"),
-        broken.to_owned(),
-        &BTreeMap::new(),
+        &BTreeMap::from([("mode".to_owned(), "broken".to_owned())]),
         &crate::ScriptLimits::default(),
     );
 
@@ -715,9 +723,6 @@ fn failed_reload_keeps_the_previous_definition() {
                 && id.name.as_str() == "data"),
         "the previous definition's volume must still be present"
     );
-    // The submitted text and the fault are both recorded: the operator sees
-    // what they sent and why it did not take effect.
-    assert_eq!(entry.script, broken);
     assert!(entry.script_error.is_some());
 }
 
@@ -730,11 +735,65 @@ fn reload_of_unknown_app_is_noop() {
     // holds a definition it never stored.
     let outcome = reg.reload(
         &app("ghost"),
-        trivial_script().to_owned(),
         &BTreeMap::new(),
         &crate::ScriptLimits::default(),
     );
     assert!(matches!(outcome, ReloadOutcome::NotRegistered));
     assert!(!outcome.is_applied());
     assert!(!reg.is_registered("ghost"));
+}
+
+// i[verify app.persist]
+// A definition stored under one Seedling that no longer evaluates under the
+// next is still loaded, and is faulted rather than silently dropped.
+#[test]
+fn a_stored_definition_that_no_longer_evaluates_is_faulted_on_reload() {
+    let db = Db::open_in_memory().expect("open");
+    let generation = generations::register_script(&db, &app("myapp"), "throw \"no longer valid\";")
+        .expect("bump register");
+    let mut entry = make_entry("myapp", None);
+    entry.current_generation = generation;
+    AppRegistry::persist_app(&db, &entry).expect("persist");
+
+    let cipher = crate::runtime::secrets::Cipher::for_tests();
+    let registry = AppRegistry::load_from_db(
+        &db,
+        &cipher,
+        Arc::new(Notify::new()),
+        &crate::ScriptLimits::default(),
+    )
+    .expect("load registry");
+    let loaded = registry.get("myapp").expect("still registered");
+    assert!(loaded.script_error.is_some());
+    sync_script_error_fault(&db, loaded);
+    let faults = crate::runtime::faults::list_active_faults(&db, Some(&app("myapp"))).unwrap();
+    assert!(
+        faults.iter().any(|f| f.kind == "script_error"),
+        "{faults:?}"
+    );
+}
+
+// i[verify app.persist]
+// i[verify param.validation]
+#[test]
+fn reload_runs_no_validators() {
+    let db = Db::open_in_memory().expect("open");
+    let script = r#"app.param("mode").validate(|v, all| { throw "always rejects"; });"#;
+    let generation =
+        generations::register_script(&db, &app("myapp"), script).expect("bump register");
+    upsert_param(&db, &app("myapp"), &param("mode"), "stored").expect("store a value");
+    let mut entry = make_entry("myapp", None);
+    entry.current_generation = generation;
+    AppRegistry::persist_app(&db, &entry).expect("persist");
+
+    let cipher = crate::runtime::secrets::Cipher::for_tests();
+    let registry = AppRegistry::load_from_db(
+        &db,
+        &cipher,
+        Arc::new(Notify::new()),
+        &crate::ScriptLimits::default(),
+    )
+    .expect("load registry");
+    let loaded = registry.get("myapp").expect("registered");
+    assert!(loaded.script_error.is_none(), "{:?}", loaded.script_error);
 }

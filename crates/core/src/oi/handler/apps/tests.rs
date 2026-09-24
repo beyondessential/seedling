@@ -506,11 +506,11 @@ const DERIVED_STATE_SCRIPT: &str = r#"
 "#;
 
 // i[verify app.update]
-// A script that throws part-way through evaluation used to have its partial
-// result swapped into the registry, after which every post-update diff read
-// the resources declared below the throw as deleted — holding live volume
-// data, wiping scaling decisions, tearing down forwards, and pruning
-// schedules, all from a typo.
+// A script that throws part-way through evaluation must not have its partial
+// result swapped into the registry, or every post-update diff reads the
+// resources declared below the throw as deleted — holding live volume data,
+// wiping scaling decisions, tearing down forwards, and pruning schedules, all
+// from a typo.
 #[test]
 fn failed_update_leaves_derived_state_untouched() {
     let oi = TestOi::new();
@@ -546,11 +546,20 @@ fn failed_update_leaves_derived_state_untouched() {
         throw "typo";
         app.volume("data");
     "#;
-    // i[verify app.update] — the request still succeeds.
-    oi.call("/apps/update", json!({ "app": "demo", "script": broken }))
-        .unwrap();
+    let generation_before =
+        oi.call("/apps/show", json!({ "app": "demo" })).unwrap()["generation"].clone();
+    // i[verify app.update] — the request is refused.
+    let (code, message) = oi
+        .call("/apps/update", json!({ "app": "demo", "script": broken }))
+        .unwrap_err();
+    assert_eq!(code, "script_error");
+    assert!(message.contains("typo"), "{message}");
 
     let desc = oi.call("/apps/show", json!({ "app": "demo" })).unwrap();
+    assert_eq!(
+        desc["generation"], generation_before,
+        "the generation is not bumped"
+    );
 
     let resources = desc["resources"].as_array().unwrap();
     assert!(
@@ -585,11 +594,11 @@ fn failed_update_leaves_derived_state_untouched() {
         "the scheduled action must not be pruned"
     );
 
-    // The operator is still told what went wrong.
+    // The refusal is the report; nothing is filed against the app.
     let faults = desc["faults"].as_array().unwrap();
     assert!(
-        faults.iter().any(|f| f["kind"] == "script_error"),
-        "a script_error fault must be filed: {faults:#?}"
+        faults.is_empty(),
+        "a refused update files no fault: {faults:#?}"
     );
 }
 

@@ -1302,7 +1302,7 @@ impl RuntimeInstance {
         target: VolumeWriteTarget,
         target_resource: ResourceInstance,
         path: &str,
-        contents: &str,
+        contents: &[u8],
     ) -> Result<(), Box<EvalAltResult>> {
         validate_volume_write_path(path)?;
 
@@ -1681,7 +1681,22 @@ impl CustomType for RuntimeInstance {
                         return Err("rt.write may only be called inside an action closure".into());
                     }
                     let (write_target, instance) = resolve_volume_write_target(this, target)?;
-                    this.do_write(write_target, instance, path, contents)
+                    this.do_write(write_target, instance, path, contents.as_bytes())
+                },
+            )
+            // l[impl rt.write]
+            .with_fn(
+                "write",
+                |this: &mut Self,
+                 target: Dynamic,
+                 path: &str,
+                 file: crate::defs::file::File|
+                 -> Result<(), Box<EvalAltResult>> {
+                    if !is_in_action_closure() {
+                        return Err("rt.write may only be called inside an action closure".into());
+                    }
+                    let (write_target, instance) = resolve_volume_write_target(this, target)?;
+                    this.do_write(write_target, instance, path, &file.contents)
                 },
             )
             // l[impl rt.exec]

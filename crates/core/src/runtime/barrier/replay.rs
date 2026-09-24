@@ -369,7 +369,7 @@ pub fn run_operation<W: WorldStateOracle + 'static>(
     // discarded immediately after. The fresh AppDef is compared against the
     // stored one as an idempotency check, then also discarded.
     let (closure, is_param_change, is_shell, captured_actions) = {
-        let (mut fresh_scope, fresh_app) = crate::defs::scope();
+        let (mut fresh_scope, fresh_app) = crate::defs::scope(Arc::clone(&app.bundle));
         fresh_app.def.rcu(|d| {
             let mut d = (**d).clone();
             d.name = app_name.clone();

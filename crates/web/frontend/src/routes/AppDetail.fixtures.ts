@@ -194,6 +194,13 @@ export function makeDetail(overrides: Partial<AppDetail> = {}): AppDetail {
   return {
     status: "running",
     generation: 4,
+    definition: {
+      kind: "pushed",
+      pushed_by: { kind: "ctl", id: "fp123", display: "Alex" },
+      reported_origin: null,
+      content_hash: "sha256:0d9e",
+      seedling_versions: null,
+    },
     description: "A **testing** app",
     faults: [],
     resources: [makeWebDeployment(), dataVolume],

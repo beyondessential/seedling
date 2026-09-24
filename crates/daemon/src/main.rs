@@ -419,7 +419,16 @@ async fn main() {
     // ---------------------------------------------------------------------------
 
     let registry = tokio::task::block_in_place(|| {
-        AppRegistry::load_from_db(&db, &cipher, Arc::clone(&tick_notify), &script_limits)
+        AppRegistry::load_from_db(&db, &cipher, Arc::clone(&tick_notify), &script_limits).inspect(
+            |registry| {
+                // i[impl app.persist] — a stored definition that no longer
+                // evaluates is faulted, and one that evaluates again clears
+                // its old fault.
+                for entry in registry.iter() {
+                    seedling_core::runtime::apps::sync_script_error_fault(&db, entry);
+                }
+            },
+        )
     })
     .unwrap_or_else(|e| fatal!("failed to load registered apps: {e}"));
 
@@ -1129,6 +1138,7 @@ async fn main() {
         caddy_data_path: tokio::sync::OnceCell::new(),
         tailscale_provider: Some(Arc::clone(&tailscale_provider)),
         site_resolver: Some(Arc::clone(&site_resolver)),
+        definition_registry: Arc::new(seedling_core::runtime::definition::fetch::OciRegistry::new()),
     });
 
     // ---------------------------------------------------------------------------
@@ -1228,6 +1238,32 @@ async fn main() {
             }
         });
     }
+
+    // r[impl fault.definition-unsupported] — the condition changes only when
+    // a definition is replaced or the runtime starts as another version, so
+    // it is converged for every app here and on each replacement.
+    {
+        let running = seedling_core::runtime::definition::version::running();
+        let definitions: Vec<_> = registry
+            .read()
+            .iter()
+            .map(|e| (e.name.clone(), Arc::clone(&e.bundle)))
+            .collect();
+        db.call(move |db| {
+            for (app, bundle) in definitions {
+                seedling_core::runtime::definition::faults::sync_unsupported(
+                    db, &app, &bundle, &running,
+                );
+            }
+        });
+    }
+
+    // r[impl definition.recheck]
+    let _definition_recheck_handle = seedling_core::runtime::definition::recheck::spawn(
+        Arc::clone(&registry),
+        db.clone(),
+        Arc::clone(&oi_state.definition_registry),
+    );
 
     // r[impl canopy.report.schedule] — reports go quiet on their own when no
     // client is offering to carry them, so this runs unconditionally.

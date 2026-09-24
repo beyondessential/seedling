@@ -634,13 +634,28 @@ impl VolumeMount {
     }
 }
 
+/// A declared write as it is summarised: the text itself when it is UTF-8,
+/// otherwise its size and digest, so a binary file from the bundle still
+/// diffs when its contents change.
+fn write_summary(contents: &[u8]) -> String {
+    match std::str::from_utf8(contents) {
+        Ok(text) => text.to_owned(),
+        Err(_) => {
+            use sha2::{Digest, Sha256};
+            let digest = Sha256::digest(contents);
+            let hex: String = digest.iter().map(|b| format!("{b:02x}")).collect();
+            format!("<{} bytes, sha256:{hex}>", contents.len())
+        }
+    }
+}
+
 impl Volume {
     pub fn summary(&self) -> VolumeSummary {
         let def = self.def.lock();
         let writes: BTreeMap<String, String> = def
             .writes
             .iter()
-            .map(|(path, content)| (path.clone(), content.clone()))
+            .map(|(path, content)| (path.clone(), write_summary(content)))
             .collect();
         VolumeSummary {
             readonly: def.read_only,

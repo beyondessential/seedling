@@ -1,16 +1,22 @@
 use rhai::Dynamic;
 use rhai::{AST, Engine, Scope};
 
+use crate::defs;
 use crate::defs::install::InstallDef;
 use crate::runtime::barrier::runtime::{ActionClosureGuard, RuntimeInstance};
 use crate::runtime::barrier::shell::ShellControl;
-use crate::{defs, setup_language as setup};
+
+/// An engine, scope and app evaluating no particular definition.
+pub fn setup(limits: &crate::ScriptLimits) -> (Engine, Scope<'static>, defs::app::App) {
+    crate::setup_language(limits, Default::default())
+}
 
 mod action;
 mod action_call;
 mod app;
 mod barrier;
 mod bsl;
+mod bundle;
 mod collection;
 mod constants;
 mod container;
@@ -29,6 +35,24 @@ pub fn run_test_script(source: &str) -> (Engine, Scope<'static>, defs::app::App,
     let (engine, mut scope, app) = setup(&crate::ScriptLimits::default());
     let ast = run_script(&engine, &mut scope, source).expect("script should run without error");
     (engine, scope, app, ast)
+}
+
+/// Run `source` as the script of a bundle that also holds `files`.
+pub fn run_test_script_in(
+    source: &str,
+    files: &[(&str, &[u8])],
+) -> Result<(Engine, Scope<'static>, defs::app::App, AST), Box<rhai::EvalAltResult>> {
+    let mut all: Vec<(String, Vec<u8>)> = files
+        .iter()
+        .map(|(p, c)| ((*p).to_owned(), c.to_vec()))
+        .collect();
+    all.push(("app.seed.rhai".to_owned(), source.as_bytes().to_vec()));
+    let bundle = std::sync::Arc::new(
+        crate::runtime::definition::Bundle::from_files(all).expect("a valid test bundle"),
+    );
+    let (engine, mut scope, app) = crate::setup_language(&crate::ScriptLimits::default(), bundle);
+    let ast = run_script(&engine, &mut scope, source)?;
+    Ok((engine, scope, app, ast))
 }
 
 pub fn run_test_script_app(source: &str) -> defs::app::App {
@@ -52,7 +76,7 @@ fn exercise_actions(engine: &Engine, scope: &mut Scope, app: &defs::app::App, sc
     // Re-run the script with the TLS capture active to recover FnPtrs,
     // exactly as run_operation does. FnPtrs are never stored persistently.
     let (actions, shells, install, param_changes) = {
-        let (mut fresh_scope, fresh_app) = defs::scope();
+        let (mut fresh_scope, fresh_app) = defs::scope(Default::default());
         fresh_app.def.rcu(|old| {
             let mut new_def = (**old).clone();
             new_def.name = app.def.load().name.clone();

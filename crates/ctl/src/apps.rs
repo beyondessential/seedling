@@ -4,7 +4,10 @@ use clap::{Subcommand, ValueEnum};
 use seedling_protocol::client::OiClient;
 use seedling_protocol::names::{ActionName, AppName};
 
-use super::print_result;
+use super::{
+    definition::{self, DefinitionArgs, DefinitionKeys, resolve_or_exit},
+    print_result,
+};
 
 // i[ctl.action.params]
 // i[ctl.shell.params]
@@ -31,14 +34,38 @@ pub(super) enum AppsCommand {
     List,
     /// Describe an app
     Show { app: AppName },
-    /// Register an app from a script file
-    Create { app: AppName, script_file: PathBuf },
+    /// Register an app from a script file, a definition folder, a GitHub
+    /// folder URL, or an OCI reference
+    Create {
+        app: AppName,
+        #[command(flatten)]
+        definition: DefinitionArgs,
+    },
     /// Deregister an app
     Remove { app: AppName },
     /// Uninstall an app (stop all resources). The app can be deregistered once done.
     Uninstall { app: AppName },
-    /// Update an app's script
-    Update { app: AppName, script_file: PathBuf },
+    /// Replace an app's definition, optionally changing one parameter in
+    /// the same step
+    Update {
+        app: AppName,
+        #[command(flatten)]
+        definition: DefinitionArgs,
+        /// Set a parameter alongside the definition, as name=value
+        #[arg(long, value_name = "NAME=VALUE", conflicts_with = "unset")]
+        set: Option<String>,
+        /// Unset a parameter alongside the definition
+        #[arg(long, value_name = "NAME")]
+        unset: Option<String>,
+    },
+    /// Write an app's definition bundle into a new folder
+    Export {
+        app: AppName,
+        folder: PathBuf,
+        /// Generation to export (the current one by default)
+        #[arg(long)]
+        generation: Option<u64>,
+    },
     /// Manage app parameters
     Param {
         #[command(subcommand)]
@@ -150,9 +177,12 @@ pub(super) enum AppsCommand {
     /// Dry-run a hypothetical change against the current generation
     Plan {
         app: AppName,
-        /// Path to a proposed script file
-        #[arg(long = "script")]
-        proposed_script_file: Option<PathBuf>,
+        /// A proposed script file, definition folder, or GitHub folder URL
+        #[arg(long = "script", conflicts_with = "proposed_reference")]
+        proposed_script_file: Option<String>,
+        /// A proposed definition, fetched from this OCI reference
+        #[arg(long = "ref")]
+        proposed_reference: Option<String>,
         /// Proposed param change as `name=value` (repeatable). Use `name=` to
         /// model unsetting.
         #[arg(long = "param")]
@@ -345,18 +375,19 @@ pub(super) async fn dispatch(client: &OiClient, cmd: AppsCommand) {
                     .await,
             );
         }
-        AppsCommand::Create { app, script_file } => {
-            let script = read_script_file(&script_file);
+        AppsCommand::Create { app, definition } => {
+            let definition = require_definition(&definition).await;
             // i[impl ctl.backup.app.hint]
-            let looks_like_backup_app = seedling_protocol::backup_actions::REQUIRED_ACTIONS
-                .iter()
-                .all(|a| script.contains(a));
+            let looks_like_backup_app = definition.script_text().is_some_and(|script| {
+                seedling_protocol::backup_actions::REQUIRED_ACTIONS
+                    .iter()
+                    .all(|a| script.contains(a))
+            });
+            let mut params = definition.fields(DefinitionKeys::APP);
+            params.insert("app".to_owned(), serde_json::json!(app));
             print_result(
                 client
-                    .request(
-                        "/apps/create",
-                        serde_json::json!({ "app": app, "script": script }),
-                    )
+                    .request("/apps/create", serde_json::Value::Object(params))
                     .await,
             );
             if looks_like_backup_app {
@@ -380,16 +411,50 @@ pub(super) async fn dispatch(client: &OiClient, cmd: AppsCommand) {
                     .await,
             );
         }
-        AppsCommand::Update { app, script_file } => {
-            let script = read_script_file(&script_file);
+        AppsCommand::Update {
+            app,
+            definition,
+            set,
+            unset,
+        } => {
+            // i[impl ctl.definition.param]
+            let param =
+                definition::param_change(set.as_deref(), unset.as_deref()).unwrap_or_else(|e| {
+                    tracing::error!("{e}");
+                    std::process::exit(1);
+                });
+            let definition = require_definition(&definition).await;
+            let mut params = definition.fields(DefinitionKeys::APP);
+            params.insert("app".to_owned(), serde_json::json!(app));
+            if let Some(param) = param {
+                params.insert("param".to_owned(), param);
+            }
             print_result(
                 client
-                    .request(
-                        "/apps/update",
-                        serde_json::json!({ "app": app, "script": script }),
-                    )
+                    .request("/apps/update", serde_json::Value::Object(params))
                     .await,
             );
+        }
+        // i[impl ctl.definition.export]
+        AppsCommand::Export {
+            app,
+            folder,
+            generation,
+        } => {
+            let mut params = serde_json::json!({ "app": app });
+            if let Some(g) = generation {
+                params["generation"] = serde_json::json!(g);
+            }
+            match client.request("/apps/bundle", params).await {
+                Ok(v) => {
+                    let bundle = v["bundle"].as_object().cloned().unwrap_or_default();
+                    if let Err(e) = definition::export(&bundle, &folder) {
+                        tracing::error!("{e}");
+                        std::process::exit(1);
+                    }
+                }
+                Err(e) => print_result(Err(e)),
+            }
         }
         AppsCommand::Param { command } => match command {
             ParamCommand::Set { app, name, value } => {
@@ -599,12 +664,19 @@ pub(super) async fn dispatch(client: &OiClient, cmd: AppsCommand) {
         AppsCommand::Plan {
             app,
             proposed_script_file,
+            proposed_reference,
             proposed_params,
         } => {
             let mut params = serde_json::json!({ "app": app });
-            if let Some(path) = proposed_script_file {
-                let script = read_script_file(&path);
-                params["proposed_script"] = serde_json::json!(script);
+            let proposed = resolve_or_exit(&DefinitionArgs {
+                source: proposed_script_file,
+                reference: proposed_reference,
+            })
+            .await;
+            if let Some(proposed) = proposed {
+                for (key, value) in proposed.fields(DefinitionKeys::PROPOSED) {
+                    params[key] = value;
+                }
             }
             if !proposed_params.is_empty() {
                 let parsed: Vec<serde_json::Value> = proposed_params
@@ -626,11 +698,15 @@ pub(super) async fn dispatch(client: &OiClient, cmd: AppsCommand) {
     }
 }
 
-fn read_script_file(path: &PathBuf) -> String {
-    std::fs::read_to_string(path).unwrap_or_else(|e| {
-        tracing::error!("cannot read {}: {e}", path.display());
-        std::process::exit(1);
-    })
+/// Resolve a definition that must be given, or exit.
+async fn require_definition(args: &DefinitionArgs) -> definition::Definition {
+    match resolve_or_exit(args).await {
+        Some(d) => d,
+        None => {
+            tracing::error!("give a script file, a folder, a GitHub folder URL, or --ref");
+            std::process::exit(1);
+        }
+    }
 }
 
 #[cfg(test)]
@@ -643,6 +719,46 @@ mod tests {
     struct TestCli {
         #[command(subcommand)]
         cmd: AppsCommand,
+    }
+
+    // i[verify ctl.definition.source]
+    // i[verify ctl.definition.param]
+    #[test]
+    fn update_takes_a_reference_and_one_param_change() {
+        let cli = TestCli::try_parse_from([
+            "t",
+            "update",
+            "web",
+            "--ref",
+            "ghcr.io/org/def:2.12",
+            "--set",
+            "version=v2.12",
+        ])
+        .expect("parses");
+        let AppsCommand::Update {
+            definition, set, ..
+        } = cli.cmd
+        else {
+            panic!("expected Update");
+        };
+        assert_eq!(
+            definition.reference.as_deref(),
+            Some("ghcr.io/org/def:2.12")
+        );
+        assert_eq!(definition.source, None);
+        assert_eq!(set.as_deref(), Some("version=v2.12"));
+
+        assert!(
+            TestCli::try_parse_from(["t", "update", "web", "./def", "--ref", "x/y:1"]).is_err(),
+            "a source and a reference are exclusive"
+        );
+        assert!(
+            TestCli::try_parse_from([
+                "t", "update", "web", "./def", "--set", "a=b", "--unset", "c"
+            ])
+            .is_err(),
+            "one parameter change at most"
+        );
     }
 
     // i[verify ctl.install.params]

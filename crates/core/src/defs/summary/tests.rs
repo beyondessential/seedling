@@ -221,7 +221,7 @@ fn volume_summary_captures_writes_and_export() {
         *def = VolumeDef {
             read_only: true,
             tmpfs: false,
-            writes: vec![("/etc/motd".to_owned(), "hello".to_owned())],
+            writes: vec![("/etc/motd".to_owned(), "hello".into())],
             exported: Some(ExportOptions {
                 description: Some("shared data".to_owned()),
             }),
@@ -251,7 +251,7 @@ fn diff_fields_reports_volume_writes_change() {
     b.def
         .lock()
         .writes
-        .push(("/etc/motd".to_owned(), "hello".to_owned()));
+        .push(("/etc/motd".to_owned(), "hello".into()));
 
     let fields = diff_fields(
         &ResourceSummary::Volume(a.summary()),

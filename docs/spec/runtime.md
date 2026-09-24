@@ -112,14 +112,14 @@ Absent specification bugs, anything that is not defined here is either defined i
 
 > r[generation.definition]
 > A *generation* is a monotonically increasing per-app counter that uniquely identifies the application's defined state at a point in time.
-> Each generation corresponds to a specific `(script, parameter values)` pair.
+> Each generation corresponds to a specific `(definition bundle, parameter values)` pair.
 > The current generation of an app determines the AppDef that the reconciler maintains in steady state.
 
 > r[generation.bumps]
 > The generation of an app must be incremented (by exactly one) on each of:
 >
 > - The initial registration of the app.
-> - A successful script update.
+> - A successful definition update, together with the parameter change made alongside it, if any.
 > - A successful parameter set or unset.
 >
 > The bump must be committed to durable storage atomically with the change that caused it.
@@ -138,31 +138,50 @@ Absent specification bugs, anything that is not defined here is either defined i
 > - A timestamp of when the generation was created.
 > - The kind of change: `Register`, `ScriptUpdate`, `ParamSet`, or `ParamUnset`.
 > - For `ParamSet` and `ParamUnset`: the parameter name, the previous value (`Option<Value>`), and the new value (`Option<Value>`). A `ParamSet` from an unset state has a previous value of `None`; a `ParamUnset` has a new value of `None`.
-> - For `Register` and `ScriptUpdate`: the content hash of the script registered at this generation.
+> - For `Register` and `ScriptUpdate`: the content hash of the definition bundle installed at this generation, and that definition's [provenance](interface.md#i--definition.provenance).
+> - For a `ScriptUpdate` that changed a parameter alongside its definition: the parameter name, the previous value, and the new value, as for `ParamSet` and `ParamUnset`.
 > - The identity of the lifecycle operation triggered by this change, if any.
 > - The outcome of that operation: `Pending` (still running or queued), `Succeeded`, or `Failed` (with details).
 
 > r[generation.script-storage]
-> Script bodies must be stored content-addressed by hash.
-> Multiple generations whose script content is identical share a single stored script body.
-> A generation history entry references its script by hash; the script body is retrieved by looking up the hash.
+> Definition bundles must be stored content-addressed by their [content hash](interface.md#i--definition.content-hash).
+> Multiple generations whose bundles are identical share a single stored bundle.
+> A generation history entry references its bundle by hash; the bundle is retrieved by looking up the hash.
 
 > r[generation.reconstruction]
 > Given a generation number N for an app, the runtime must be able to reconstruct the AppDef as it was at generation N by:
 >
-> 1. Looking up generation N's script hash and loading the corresponding script body.
-> 2. Building the parameter map at generation N: for each parameter that has any history entry at or before N, the value is taken from the most recent `ParamSet` or `ParamUnset` entry at or before N. A `ParamUnset` (or absence of any entry) yields `None`.
-> 3. Evaluating the script with that parameter map.
+> 1. Looking up the bundle hash of the most recent `Register` or `ScriptUpdate` entry at or before N and loading the corresponding bundle.
+> 2. Building the parameter map at generation N: for each parameter that has any change recorded at or before N, the value is taken from the most recent such change, whether a `ParamSet`, a `ParamUnset`, or a `ScriptUpdate` that changed it alongside its definition. An unset (or absence of any change) yields `None`.
+> 3. Evaluating the bundle's script with that parameter map.
 
 > r[generation.previous]
 > The *previous generation* of generation N is generation N − 1.
 > Reconstruction of the previous generation is required to materialise the `old` argument of [`on_change`](#l--param.on-change.old) handlers.
 
 > r[generation.deregister]
-> When an app is deregistered, its generation history and all stored generation data (parameter values, script bodies referenced only by this app) must be deleted as part of teardown.
+> When an app is deregistered, its generation history and all stored generation data (parameter values, bundles referenced only by this app) must be deleted as part of teardown.
 > A subsequent registration of an app with the same name begins a new generation lineage from generation 1; the two registrations are independent for all runtime purposes.
 >
 > Forensic reconstruction of a prior app's history (across a deregister/re-register cycle) is the responsibility of the [audit log](#r--audit.log), not the per-app generation history.
+
+# Definition Sources
+
+> r[definition.recheck]
+> For every app whose definition was fetched from a reference naming a tag, the runtime periodically re-resolves that reference, selecting the definition manifest in the same way as a [fetch](interface.md#i--definition.fetch.select), and compares the selected digest with the one the app is running.
+> A re-check reads only manifests: it does not download the bundle, change the app, or install anything.
+> A definition fetched by digest, and a pushed definition, are never re-checked.
+> A re-check honours the [registry allowlist](interface.md#i--definition.fetch.access), and one it may not make counts as a failed re-check.
+
+> r[definition.recheck.cadence]
+> Re-checks are infrequent, since a tag moves rarely and acting on a move is the operator's decision.
+> Their timing is spread across hosts, so a fleet does not re-resolve against a registry at the same moment.
+> The exact schedule is not prescribed by this spec.
+
+> r[definition.recheck.backoff]
+> Consecutive failed re-checks for an app are spaced by an increasing delay up to a bounded maximum, so that an unreachable registry is not contacted on every cycle.
+> However long an app's re-checks have been failing, waiting the maximum delay is sufficient for another attempt, and a successful re-check resets the delay.
+> One app's failing re-checks do not delay another's.
 
 # Lifecycle
 
@@ -542,7 +561,7 @@ Absent specification bugs, anything that is not defined here is either defined i
 > r[operation.lifecycle.param-change]
 > A param change is a lifecycle operation.
 > It is subject to the same [concurrency restrictions](#r--operation.lifecycle.single) as all other lifecycle operations.
-> Only one parameter may be changed at a time.
+> Only one parameter may be changed at a time, including one changed alongside a definition update.
 
 > r[operation.lifecycle.generations]
 > Every lifecycle operation record must carry a *source generation* and a *target generation*.
@@ -1342,6 +1361,17 @@ Two levers set how a workload competes for host resources under pressure. Each D
 > When a Service's routing pool contains only unhealthy backends (i.e. the prefer-healthy rule has fallen back to "anything running" per [lifecycle.service.routing-pool](#r--lifecycle.service.routing-pool)), the runtime must file a fault of kind `service_degraded` associated with that Service.
 > The fault is cleared automatically when at least one backend in the pool becomes healthy or when the Service is unscheduled.
 
+> r[fault.definition-source-moved]
+> While a [re-check](#r--definition.recheck) finds that the reference recorded in an app's fetched definition selects a digest other than the one the app is running, the runtime must hold an app-level fault of kind `definition_source_moved` against the app, identifying the reference and both digests.
+> The fault is cleared when a re-check selects the running digest again, when the app's definition is replaced, or when the app is deregistered.
+> A failed re-check neither files nor clears the fault: a registry that could not be reached shows neither that the tag moved nor that it did not.
+> The fault is held durably, so it persists across a daemon restart until one of its clearing conditions occurs.
+
+> r[fault.definition-unsupported]
+> While the running Seedling does not satisfy the [Seedling version requirement](language.md#l--bsl.bundle.seedling-versions) declared by an app's current definition, the runtime must hold an app-level fault of kind `definition_unsupported` against the app, identifying the requirement and the running version.
+> The definition is evaluated and maintained as usual while the fault is held.
+> The fault is cleared when the app's definition is replaced by one the running Seedling satisfies, when the runtime starts as a version that satisfies it, or when the app is deregistered.
+
 > r[fault.lifecycle]
 > Every fault kind defines both the condition under which it is filed and the condition under which it clears; a kind with no clearing condition is not permitted.
 > A fault identifies the thing that is faulty, not merely the app it belongs to, and at most one fault is active for a given (app, kind, subject) at a time.
@@ -1658,6 +1688,8 @@ Two levers set how a workload competes for host resources under pressure. Each D
 
 > r[secret.history]
 > Entries in the [generation history](#r--generation.history) that record a previous or new value for a secret parameter must protect those values using the [secret key](#r--secret.key).
+> Each of the two values is protected according to how it was held: the value being replaced is protected when it was read from secret storage, and the value replacing it is protected when it is written there.
+> A definition that drops a parameter's `secret` flag in the same update that changes its value must therefore still protect the value it replaced, in history and in the event announcing the change.
 > History retrieval must decrypt these values internally before serving them to callers that are authorised to reconstruct past generations.
 
 > r[secret.redaction]

@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::{collections::BTreeMap, sync::Arc};
 
 use seedling_protocol::error::{ErrorCode, HandlerResult, OiError};
 use seedling_protocol::names::{AppName, TemplateName};
@@ -10,12 +10,68 @@ use super::{
         action_entry_json, install_entry_json, param_schema_entry_json, resource_static_json,
         shell_entry_json,
     },
-    apps::{self as apps_handler, AppScriptParams},
+    apps as apps_handler,
+    definition::{self, DefinitionInput, Resolved},
 };
 use crate::{
     oi::{handler::RequestCtx, state::OiState},
-    runtime::{self, apps::evaluate_script},
+    runtime::{
+        self,
+        apps::evaluate,
+        definition::{Bundle, Origin, version},
+    },
 };
+
+/// A template request's definition: as for an app, with the script text
+/// given as `body`.
+// i[impl template.definition]
+#[derive(Deserialize, Default)]
+pub(crate) struct TemplateDefinition {
+    #[serde(default)]
+    pub body: Option<String>,
+    #[serde(default)]
+    pub bundle: Option<serde_json::Map<String, Value>>,
+    #[serde(default)]
+    pub reference: Option<String>,
+    #[serde(default)]
+    pub origin: Option<Origin>,
+}
+
+impl From<TemplateDefinition> for DefinitionInput {
+    fn from(t: TemplateDefinition) -> Self {
+        Self {
+            script: t.body,
+            bundle: t.bundle,
+            reference: t.reference,
+            origin: t.origin,
+        }
+    }
+}
+
+fn internal(e: impl std::fmt::Display) -> OiError {
+    OiError::new(ErrorCode::Internal, format!("db error: {e}"))
+}
+
+/// Resolve and check a definition for storing in a template: fetched and
+/// held to the bundle rules as for an app, but stored even when the running
+/// Seedling does not support it, in which case the rest of its metadata is
+/// left for a Seedling that does.
+// i[impl template.create]
+fn resolve_for_template(
+    state: &OiState,
+    input: DefinitionInput,
+    ctx: &RequestCtx,
+) -> Result<Resolved, OiError> {
+    let resolved = definition::resolve(state, input, ctx)?;
+    if resolved.bundle.supports(&version::running()) {
+        resolved.bundle.script()?;
+    }
+    Ok(resolved)
+}
+
+fn supported(bundle: &Bundle) -> bool {
+    bundle.supports(&version::running())
+}
 
 #[cfg(test)]
 mod tests;
@@ -23,7 +79,8 @@ mod tests;
 #[derive(Deserialize)]
 pub(crate) struct CreateParams {
     pub name: TemplateName,
-    pub body: String,
+    #[serde(flatten)]
+    pub definition: TemplateDefinition,
     #[serde(default)]
     pub description: Option<String>,
 }
@@ -37,8 +94,8 @@ pub(crate) struct NameParams {
 pub(crate) struct PreviewParams {
     #[serde(default)]
     pub name: Option<TemplateName>,
-    #[serde(default)]
-    pub body: Option<String>,
+    #[serde(flatten)]
+    pub definition: TemplateDefinition,
 }
 
 #[derive(Deserialize)]
@@ -50,8 +107,8 @@ pub(crate) struct InstantiateParams {
 #[derive(Deserialize)]
 pub(crate) struct UpdateParams {
     pub name: TemplateName,
-    #[serde(default)]
-    pub body: Option<String>,
+    #[serde(flatten)]
+    pub definition: TemplateDefinition,
     #[serde(default, deserialize_with = "deserialize_description")]
     pub description: DescriptionUpdate,
 }
@@ -82,31 +139,33 @@ pub(crate) fn create_template(
     ctx: &RequestCtx,
 ) -> HandlerResult {
     // i[impl template.name] — validation runs inside TemplateName::deserialize.
-    let t = runtime::templates::Template {
-        name: params.name.clone(),
-        body: params.body,
-        description: params.description,
-        created_at: jiff::Timestamp::now().to_string(),
-    };
-
-    let name_for_check = t.name.clone();
+    let name_for_check = params.name.clone();
     let already = state
         .db
         .call(move |db| runtime::templates::exists(db, &name_for_check))
-        .map_err(|e| OiError::new(ErrorCode::Internal, format!("db error: {e}")))?;
+        .map_err(internal)?;
     if already {
         return Err(OiError::new(
             ErrorCode::RequirementsInvalid,
-            format!("template already exists: {}", t.name),
+            format!("template already exists: {}", params.name),
         ));
     }
+
+    let Resolved { bundle, source } = resolve_for_template(state, params.definition.into(), ctx)?;
+    let t = runtime::templates::Template {
+        name: params.name.clone(),
+        bundle,
+        source,
+        description: params.description,
+        created_at: jiff::Timestamp::now().to_string(),
+    };
 
     let name_for_event = t.name.clone();
     let to_insert = t.clone();
     state
         .db
         .call(move |db| runtime::templates::create(db, &to_insert))
-        .map_err(|e| OiError::new(ErrorCode::Internal, format!("db error: {e}")))?;
+        .map_err(internal)?;
 
     tracing::info!(template = %name_for_event, "created template");
     ctx.events.template_created(&name_for_event);
@@ -119,10 +178,7 @@ pub(crate) fn create_template(
 
 // i[template.list]
 pub(crate) fn list_templates(state: &OiState) -> HandlerResult {
-    let rows = state
-        .db
-        .call(runtime::templates::list)
-        .map_err(|e| OiError::new(ErrorCode::Internal, format!("db error: {e}")))?;
+    let rows = state.db.call(runtime::templates::list).map_err(internal)?;
 
     let out: Vec<Value> = rows
         .into_iter()
@@ -131,6 +187,7 @@ pub(crate) fn list_templates(state: &OiState) -> HandlerResult {
                 "name": t.name,
                 "description": t.description,
                 "created_at": t.created_at,
+                "supported": supported(&t.bundle),
             })
         })
         .collect();
@@ -144,12 +201,21 @@ pub(crate) fn show_template(state: &OiState, params: NameParams) -> HandlerResul
     let row = state
         .db
         .call(move |db| runtime::templates::get(db, &name_for_db))
-        .map_err(|e| OiError::new(ErrorCode::Internal, format!("db error: {e}")))?
+        .map_err(internal)?
         .ok_or_else(|| OiError::not_found(format!("template not found: {name}")))?;
 
+    // A template for a newer Seedling may name script files this one cannot
+    // read; its body is then empty rather than the request failing.
+    let body = row
+        .bundle
+        .script()
+        .map(|s| s.text().to_owned())
+        .unwrap_or_default();
     Ok(json!({
         "name": row.name,
-        "body": row.body,
+        "body": body,
+        "provenance": row.source.to_json(&row.bundle),
+        "supported": supported(&row.bundle),
         "description": row.description,
         "created_at": row.created_at,
     }))
@@ -163,7 +229,12 @@ pub(crate) fn update_template(
 ) -> HandlerResult {
     let name = params.name;
 
-    let body_owned = params.body;
+    let input: DefinitionInput = params.definition.into();
+    let definition = if input.is_empty() {
+        None
+    } else {
+        Some(resolve_for_template(state, input, ctx)?)
+    };
     let description_owned = match params.description {
         DescriptionUpdate::Unchanged => None,
         DescriptionUpdate::Set(s) => Some(s),
@@ -177,12 +248,12 @@ pub(crate) fn update_template(
                 db,
                 &name_for_db,
                 runtime::templates::UpdateFields {
-                    body: body_owned.as_deref(),
+                    definition: definition.as_ref().map(|d| (d.bundle.as_ref(), &d.source)),
                     description: description_owned.as_ref().map(|s| s.as_deref()),
                 },
             )
         })
-        .map_err(|e| OiError::new(ErrorCode::Internal, format!("db error: {e}")))?;
+        .map_err(internal)?;
     if !updated {
         return Err(OiError::not_found(format!("template not found: {name}")));
     }
@@ -204,7 +275,7 @@ pub(crate) fn remove_template(
     let deleted = state
         .db
         .call(move |db| runtime::templates::delete(db, &name_for_db))
-        .map_err(|e| OiError::new(ErrorCode::Internal, format!("db error: {e}")))?;
+        .map_err(internal)?;
     if !deleted {
         return Err(OiError::not_found(format!("template not found: {name}")));
     }
@@ -215,32 +286,40 @@ pub(crate) fn remove_template(
 }
 
 // i[template.preview]
-pub(crate) fn preview_template(state: &OiState, params: PreviewParams) -> HandlerResult {
-    let (display_name, body) = match (params.name, params.body) {
-        (Some(_), Some(_)) => {
+pub(crate) fn preview_template(
+    state: &OiState,
+    params: PreviewParams,
+    ctx: &RequestCtx,
+) -> HandlerResult {
+    let input: DefinitionInput = params.definition.into();
+    let (display_name, bundle) = match (params.name, input.is_empty()) {
+        (Some(_), false) => {
             return Err(OiError::new(
                 ErrorCode::RequirementsInvalid,
-                "supply exactly one of `name` or `body`".to_string(),
+                "supply exactly one of `name` or a definition".to_string(),
             ));
         }
-        (None, None) => {
+        (None, true) => {
             return Err(OiError::new(
                 ErrorCode::RequirementsInvalid,
-                "supply one of `name` or `body`".to_string(),
+                "supply one of `name` or a definition".to_string(),
             ));
         }
-        (Some(name), None) => {
+        (Some(name), true) => {
             let row = state
                 .db
                 .call({
                     let name = name.clone();
                     move |db| runtime::templates::get(db, &name)
                 })
-                .map_err(|e| OiError::new(ErrorCode::Internal, format!("db error: {e}")))?
+                .map_err(internal)?
                 .ok_or_else(|| OiError::not_found(format!("template not found: {name}")))?;
-            (name.into_string(), row.body)
+            (name.into_string(), row.bundle)
         }
-        (None, Some(body)) => ("(preview)".to_owned(), body),
+        (None, false) => (
+            "(preview)".to_owned(),
+            definition::resolve(state, input, ctx)?.bundle,
+        ),
     };
 
     let empty_params: BTreeMap<String, String> = BTreeMap::new();
@@ -248,7 +327,7 @@ pub(crate) fn preview_template(state: &OiState, params: PreviewParams) -> Handle
     // rules is overkill. Use new_unchecked so the "(preview)" placeholder is
     // allowed to stand in for an unnamed preview.
     let preview_app = AppName::new_unchecked(display_name.clone());
-    let (app, err) = evaluate_script(&preview_app, &body, &empty_params, &state.script_limits);
+    let (app, err) = evaluate(&preview_app, &bundle, &empty_params, &state.script_limits);
     let def = app.def.load();
 
     let resources_json: Vec<Value> = def
@@ -293,14 +372,21 @@ pub(crate) fn instantiate_template(
     let row = state
         .db
         .call(move |db| runtime::templates::get(db, &lookup))
-        .map_err(|e| OiError::new(ErrorCode::Internal, format!("db error: {e}")))?
+        .map_err(internal)?
         .ok_or_else(|| OiError::not_found(format!("template not found: {template_name}")))?;
 
-    let register_params = AppScriptParams {
-        app: app_name.clone(),
-        script: row.body,
-    };
-    let register_result = apps_handler::register_app(state, register_params, ctx)?;
+    // i[impl template.instantiate] — a verbatim copy of the bundle, carrying
+    // the template's provenance.
+    apps_handler::check_registrable(state, &app_name)?;
+    let register_result = apps_handler::register_resolved(
+        state,
+        &app_name,
+        Resolved {
+            bundle: Arc::clone(&row.bundle),
+            source: row.source,
+        },
+        ctx,
+    )?;
 
     tracing::info!(template = %template_name, app = %app_name, "instantiated template");
     ctx.events.template_instantiated(&template_name, &app_name);
