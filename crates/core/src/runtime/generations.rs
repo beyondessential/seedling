@@ -179,6 +179,25 @@ pub fn load_bundle(db: &Db, hash: &str) -> Result<Arc<Bundle>, Error> {
     Ok(Arc::new(bundle))
 }
 
+/// The Seedling version requirement a stored bundle declares, read without
+/// materialising the bundle or re-hashing it.
+// r[impl generation.script-storage]
+pub fn bundle_requirement(db: &Db, hash: &str) -> Result<Option<String>, Error> {
+    let mut stmt = db
+        .conn
+        .prepare("SELECT contents FROM definition_bundles WHERE hash = ?1")?;
+    let contents: Vec<u8> = match stmt.query_row([hash], |row| row.get(0)) {
+        Ok(c) => c,
+        Err(rusqlite::Error::QueryReturnedNoRows) => {
+            return Err(Error::MissingBundle(hash.to_owned()));
+        }
+        Err(e) => return Err(e.into()),
+    };
+    Bundle::requirement_of_canonical(&contents)
+        .map(|r| r.map(|r| r.as_str().to_owned()))
+        .map_err(|e| Error::CorruptBundle(e.to_string()))
+}
+
 /// Delete stored bundles no generation or template references.
 // r[impl generation.deregister]
 pub fn gc_bundles(db: &Db) -> rusqlite::Result<()> {

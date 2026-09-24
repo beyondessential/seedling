@@ -273,3 +273,35 @@ fn a_file_and_a_folder_of_the_same_name_conflict() {
     Bundle::from_files(files(&[("a", b"x"), ("a!b", b"y"), ("ab", b"z")])).unwrap();
     Bundle::from_files(files(&[("a!b", b"y"), ("a/b", b"x")])).unwrap();
 }
+
+// i[verify definition.provenance]
+#[test]
+fn the_requirement_is_readable_without_rebuilding_the_bundle() {
+    let cases: &[&[(&str, &[u8])]] = &[
+        &[
+            ("app.seed.rhai", b"x"),
+            ("seedling.toml", b"seedling = \">=0.12\""),
+        ],
+        // A path sorting after the metadata file, and one before it.
+        &[
+            ("aaa.txt", b"a"),
+            ("seedling.toml", b"seedling = \">=0.12\""),
+            ("zzz.txt", b"z"),
+        ],
+    ];
+    for files_in in cases {
+        let b = Bundle::from_files(files(files_in)).unwrap();
+        let read = Bundle::requirement_of_canonical(&b.canonical_bytes()).unwrap();
+        assert_eq!(
+            read.as_ref().map(|r| r.as_str()),
+            b.seedling_versions().map(|r| r.as_str())
+        );
+    }
+    let none = Bundle::from_files(files(&[("app.seed.rhai", b"x"), ("zzz.txt", b"z")])).unwrap();
+    assert!(
+        Bundle::requirement_of_canonical(&none.canonical_bytes())
+            .unwrap()
+            .is_none()
+    );
+    assert!(Bundle::requirement_of_canonical(b"not a bundle").is_err());
+}

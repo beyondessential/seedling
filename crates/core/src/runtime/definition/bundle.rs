@@ -267,7 +267,7 @@ impl Bundle {
                 return Err(invalid(format!("path {path:?} appears twice")));
             }
         }
-        let seedling = read_requirement(out.get(METADATA_FILE))?;
+        let seedling = read_requirement(out.get(METADATA_FILE).map(|b| b.as_ref()))?;
         let script = read_script(&out);
         let hash = content_hash(&out);
         Ok(Self {
@@ -429,6 +429,32 @@ impl Bundle {
         Self::from_stored(files)
     }
 
+    /// The Seedling version requirement a stored bundle declares, read
+    /// straight out of the canonical encoding.
+    ///
+    /// A generation history page reports the requirement of every definition
+    /// it lists; rebuilding each bundle to read one field would hash
+    /// megabytes per row for a value that is one file long.
+    // i[impl definition.provenance]
+    pub fn requirement_of_canonical(
+        data: &[u8],
+    ) -> Result<Option<VersionRequirement>, BundleError> {
+        let mut rest = data
+            .strip_prefix(CANONICAL_MAGIC)
+            .ok_or_else(|| invalid("stored bundle has an unknown encoding"))?;
+        while !rest.is_empty() {
+            let path = take_chunk(&mut rest)?;
+            let contents = take_chunk(&mut rest)?;
+            match path.cmp(METADATA_FILE.as_bytes()) {
+                std::cmp::Ordering::Less => {}
+                // Files are encoded in path order, so it is not here.
+                std::cmp::Ordering::Greater => break,
+                std::cmp::Ordering::Equal => return read_requirement(Some(contents)),
+            }
+        }
+        Ok(None)
+    }
+
     // i[impl definition.content-hash]
     pub fn hash(&self) -> &str {
         &self.hash
@@ -502,7 +528,7 @@ fn overlapping<'a>(out: &'a BTreeMap<String, Bytes>, path: &str) -> Option<&'a S
 }
 
 // l[impl bsl.bundle.metadata]
-fn read_requirement(file: Option<&Bytes>) -> Result<Option<VersionRequirement>, BundleError> {
+fn read_requirement(file: Option<&[u8]>) -> Result<Option<VersionRequirement>, BundleError> {
     let Some(bytes) = file else {
         return Ok(None);
     };

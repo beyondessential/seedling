@@ -1072,7 +1072,10 @@ pub(crate) fn list_generations(state: &OiState, params: ListGenerationsParams) -
             // definition, with the bundle-derived fields filled in.
             let mut definitions: std::collections::BTreeMap<u64, Value> =
                 std::collections::BTreeMap::new();
-            let mut bundles: std::collections::HashMap<String, Arc<Bundle>> =
+            // Provenance needs the content hash, which the row carries, and
+            // the bundle's declared requirement, which is one file; a page
+            // of 200 distinct definitions must not load 200 bundles.
+            let mut requirements: std::collections::HashMap<String, Option<String>> =
                 std::collections::HashMap::new();
             for entry in &entries {
                 let prior = if entry.generation > 1 {
@@ -1084,19 +1087,22 @@ pub(crate) fn list_generations(state: &OiState, params: ListGenerationsParams) -
                 let changed = installs || prior.as_deref() != Some(entry.bundle_hash.as_str());
                 script_changed_for.insert(entry.generation, changed);
                 if installs {
-                    let bundle = match bundles.get(&entry.bundle_hash) {
-                        Some(b) => Arc::clone(b),
+                    let requirement = match requirements.get(&entry.bundle_hash) {
+                        Some(r) => r.clone(),
                         None => {
-                            let b = gens::load_bundle(db, &entry.bundle_hash)?;
-                            bundles.insert(entry.bundle_hash.clone(), Arc::clone(&b));
-                            b
+                            let r = gens::bundle_requirement(db, &entry.bundle_hash)?;
+                            requirements.insert(entry.bundle_hash.clone(), r.clone());
+                            r
                         }
                     };
                     let source = entry
                         .provenance
                         .clone()
                         .unwrap_or_else(Source::unknown_push);
-                    definitions.insert(entry.generation, source.to_json(&bundle));
+                    definitions.insert(
+                        entry.generation,
+                        source.to_json_with(&entry.bundle_hash, requirement.as_deref()),
+                    );
                 }
             }
             Ok((entries, script_changed_for, definitions))

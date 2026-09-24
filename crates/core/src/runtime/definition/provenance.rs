@@ -61,15 +61,24 @@ impl Source {
     /// The full provenance object for a definition with this source.
     // i[impl definition.provenance]
     pub fn to_json(&self, bundle: &Bundle) -> Value {
+        self.to_json_with(
+            bundle.hash(),
+            bundle.seedling_versions().map(|r| r.as_str()),
+        )
+    }
+
+    /// The same, for a caller holding the two bundle-derived fields without
+    /// the bundle: a history page already has the content hash in the row it
+    /// is listing, and reads the requirement on its own rather than
+    /// materialising every definition it names.
+    // i[impl definition.provenance]
+    pub fn to_json_with(&self, content_hash: &str, seedling_versions: Option<&str>) -> Value {
         let mut obj = match serde_json::to_value(self).expect("provenance serialises") {
             Value::Object(map) => map,
             _ => unreachable!("an internally tagged enum serialises as an object"),
         };
-        obj.insert("content_hash".into(), json!(bundle.hash()));
-        obj.insert(
-            "seedling_versions".into(),
-            json!(bundle.seedling_versions().map(|r| r.as_str())),
-        );
+        obj.insert("content_hash".into(), json!(content_hash));
+        obj.insert("seedling_versions".into(), json!(seedling_versions));
         Value::Object(obj)
     }
 }
