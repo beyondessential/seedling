@@ -139,6 +139,30 @@ Rejected:
 - **Release asset**: a new endpoint for the host to reach, and forge-specific.
 - **Canopy relay**: depends on a live bestool offer, and the relay is deliberately outbound-only.
 
+### Fetch path: Seedling resolves directly (chosen)
+
+Seedling fetches with an in-process OCI client rather than going through the container engine.
+
+Today every pull goes through Podman's libpod REST API over `/run/podman/podman.sock`, and Podman resolves the registry, manifest, digest and auth itself. Seedling has no OCI client and holds no registry credentials. The reason not to reuse that path is shape: Podman's pull is image- and platform-shaped. Selecting a manifest by artifact type out of an index, resolving a tag to a digest without pulling it, and listing a repository's tags all sit outside what that API offers, and the moved-tag check and the web UI's tag picker need exactly those three. Routing the fetch through Podman would leave those needing a direct registry call anyway, splitting the path for no gain.
+
+Auth: the client reads the same credential file Podman reads, so "no new credential store" holds and Seedling's access is whatever the host already has for image pulls. This is a shared read of an existing file, not a second store to populate.
+
+Allowlist: Seedling checks the allowlist itself before issuing the request, so a definition fetch is gated hard. This is stronger than image pulls, where `is_registry_allowed` exists but has no non-test caller and the allowlist only drives the `disallowed_registry` fault rather than blocking anything. Definition fetch gives that function its first real caller. The asymmetry is deliberate: a refused fetch answers a request an operator made and can be told about, where an image pull happens mid-reconciliation with no request to fail.
+
+### Tag re-check cadence and back-off
+
+Baseline cadence is coarse, in the six-hour to daily range rather than hourly. Tags move rarely, migrating hosts are often on poor links, and noticing a move some hours late costs nothing because Seedling never acts on it: the fault is the whole output.
+
+The interval is a fixed constant, matching TLS renewal and the Tailscale poll rather than GC's operator flag. `TailscaleConfig.poll_interval` is the precedent for carrying the field now and wiring a flag later if a deployment ever needs one.
+
+The schedule carries jitter, in the shape of backup scheduling's `random_delay_secs` (a random 0..interval/10 delay), so a fleet of hosts doesn't converge on the same instant against the same registry. That is the only other jittered timing in the codebase.
+
+Back-off on failure follows `r[actuate.image.retry]` and the existing `RetryGate`: capped exponential on consecutive failures, no terminal give-up state, success resets the count. Keyed per app, so one unreachable app's registry doesn't pace another's. Because the baseline is already coarse, back-off's job here is narrow: stop a host on a dead link burning a round trip every cycle, so the cap sits well above the baseline interval rather than near it.
+
+It runs as its own spawned task, like the Tailscale poller and TLS renewal, not as a ticker riding the 5s reconcile loop. It is a slow, self-contained external poll with its own back-off and its own fault. The `ScheduleTicker`/`BackupTicker` pattern exists for work that has to interleave with reconciliation, which this doesn't.
+
+**Implementation trap worth naming.** `sync_faults` is the usual condition-fault primitive, and Tailscale's `sync_unreachable_fault` looks like the template, but converging blindly each pass is wrong here. A failed check must leave `definition_source_moved` exactly as it was, filed or not, and a converge run on a tick where the resolution failed would clear a filed fault. The converge set can only be built from a successful resolution; a failed one skips the sync entirely. This is the general rule in `runtime.md`, that an iteration withholding an apply must draw no conclusion from having done so, and the failure-modes rule that wholesale-applied state must not be applied when a contributor is missing from it.
+
 ## Testing notes
 
 - A definition fetched from a standalone artefact and one fetched from an image index entry both register, and both record ref and digest.
@@ -154,6 +178,9 @@ Rejected:
 - A validator reading another param sees the proposed value of that param in an atomic update, not the stored one.
 - Restart reload of a stored combination runs no validators. A stored definition that no longer evaluates after a Seedling upgrade files `script_error`.
 - A moved tag files `definition_source_moved`. Moving it back clears the fault, and so does replacing the definition. A failed re-check leaves the fault exactly as it was, whether filed or not.
+- A re-check that fails does not clear a `definition_source_moved` fault that was already filed, and does not file one that wasn't: the fault survives an intervening failed check across a daemon restart, where the in-memory failure count starts at zero but the fault is in the database.
+- Consecutive failed re-checks for one app back off up to a cap and never disable the check: after any run of failures, one later success re-resolves the tag and files or clears the fault correctly.
+- Fetching resolves a definition from a registry that is on the allowlist but for which the host has no stored credentials, using the same credential source image pulls use, and a private registry the credentials don't cover is refused the fetch (not silently pulled).
 - A digest-pinned ref and a pushed definition never file `definition_source_moved`.
 - `volume.write_dir` copies a folder containing a binary file byte-exact, and reapplies on container restart.
 - `app.file(path).text()` throws on invalid UTF-8. `Volume.write` with a file value writes it byte-exact.
@@ -190,5 +217,5 @@ Rejected:
 - [x] Entry script name: `app.seed.rhai`
 - [x] Bundle limits: a size cap, regular files only, ctl skips VCS metadata and honours an ignore file
 - [x] Pushing from a GitHub URL plus folder path: ctl downloads and pushes; provenance is a push with a client-reported origin
-- [ ] How often tags are re-checked, and its back-off on a poor link
-- [ ] Fetch path vs container-engine auth (tech design)
+- [x] How often tags are re-checked, and its back-off on a poor link: coarse (6-hourly to daily) fixed constant with jitter; per-app capped-exponential back-off on failure, no give-up; standalone spawned task; a failed check never files or clears the fault
+- [x] Fetch path vs container-engine auth: Seedling resolves directly with an in-process OCI client reading Podman's existing credential file; the allowlist is a hard gate for definition fetches
