@@ -33,6 +33,11 @@ function renderEdit(fixtures = {}) {
     safetyMode: "write",
     fixtures: {
       "/apps/script": { script: "// v1", generation: 3 },
+      "/apps/bundle": {
+        generation: 3,
+        provenance: {},
+        bundle: { "app.seed.rhai": btoa("// v1") },
+      },
       "/apps/plan": plan,
       "/apps/images/discover": { per_handler: [], all_images: [] },
       "/images/list": { images: [] },
@@ -135,6 +140,30 @@ describe("EditScript", () => {
         bundle: expected,
       }),
     );
+  });
+
+  // w[verify routes.apps.definition.edit]
+  it("will not apply before the definition's files are known", async () => {
+    for (const fixture of [
+      { ok: false, error: { code: "internal", message: "bundle unavailable" } },
+      null,
+    ]) {
+      const { unmount } = renderEdit({ "/apps/bundle": fixture });
+      const editor = await findSeededEditor();
+      fireEvent.change(editor, { target: { value: "// v2" } });
+      expect(
+        screen.getByRole("button", { name: "Loading…" }).hasAttribute("disabled"),
+      ).toBe(true);
+      expect(screen.queryByRole("button", { name: "Review & apply" })).toBeNull();
+      unmount();
+    }
+    renderEdit({
+      "/apps/bundle": {
+        ok: false,
+        error: { code: "internal", message: "bundle unavailable" },
+      },
+    });
+    expect(await screen.findByText(/bundle unavailable/)).toBeTruthy();
   });
 
   // w[verify routes.apps.definition.edit]

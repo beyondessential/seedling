@@ -123,6 +123,7 @@ Absent specification bugs, anything not defined here is either defined in anothe
 > w[routes.apps.definition.edit]
 > The script editor edits the definition's script file when the definition has exactly one, carrying every other file in the bundle over unchanged, and the result is recorded as pushed.
 > A definition whose script spans several files is shown read-only in the editor, and is updated by pushing or fetching.
+> Applying is withheld until the definition's files have been read, since a bundle that has not arrived is not an empty one, and the reason is shown when they cannot be.
 
 > w[routes.apps.fault-count]
 > The apps table on the home route must surface, per app, how many active faults are currently filed against it.

@@ -49,9 +49,10 @@ export default function EditScript() {
     loading: fetching,
     error: fetchError,
   } = useOiQuery<ScriptResponse>("/apps/script", { app: name });
-  const { data: bundle } = useOiQuery<AppBundleResponse>("/apps/bundle", {
-    app: name,
-  });
+  const { data: bundle, error: bundleError } = useOiQuery<AppBundleResponse>(
+    "/apps/bundle",
+    { app: name },
+  );
 
   const { execute: planExec, loading: planning, error: planError } = useOiAction();
   const { execute: discoverExec } = useOiAction();
@@ -72,21 +73,23 @@ export default function EditScript() {
   const scriptFiles = data?.files ?? ["app.seed.rhai"];
   const readOnly = scriptFiles.length > 1;
   const scriptFile = scriptFiles[0];
+  // Until the bundle has arrived, what else the definition holds is
+  // unknown: submitting a lone script then would replace the whole
+  // definition with one file and take the sidecars with it.
+  const files = bundle?.bundle ?? null;
   const hasSidecars =
-    bundle !== null && Object.keys(bundle.bundle).some((p) => p !== scriptFile);
+    files !== null && Object.keys(files).some((p) => p !== scriptFile);
   /** The edited definition as request fields, prefixed for `/apps/plan`. */
   const definitionFields = (prefix: "" | "proposed_") =>
-    hasSidecars && bundle
+    files && hasSidecars
       ? {
-          [`${prefix}bundle`]: {
-            ...bundle.bundle,
-            [scriptFile]: utf8ToBase64(script),
-          },
+          [`${prefix}bundle`]: { ...files, [scriptFile]: utf8ToBase64(script) },
         }
       : { [`${prefix}script`]: script };
 
   const unchanged = data !== null && data?.script === script;
-  const canReview = !saving && !planning && !!data && !unchanged && !readOnly;
+  const canReview =
+    !saving && !planning && !!data && !!files && !unchanged && !readOnly;
 
   const handleReview = async () => {
     if (!canReview) return;
@@ -191,11 +194,18 @@ export default function EditScript() {
           onClick={handleReview}
           disabled={!canReview}
         >
-          {planning ? "Planning…" : unchanged ? "No changes" : "Review & apply"}
+          {planning
+            ? "Planning…"
+            : unchanged
+              ? "No changes"
+              : !files
+                ? "Loading…"
+                : "Review & apply"}
         </SolidActionButton>
       </Box>
       <Stack spacing={1}>
         {fetchError && <OiErrorAlert error={fetchError} />}
+        {bundleError && <OiErrorAlert error={bundleError} />}
         {planError && <OiErrorAlert error={planError} />}
       </Stack>
       {fetching && (
