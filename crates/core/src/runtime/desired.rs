@@ -7,7 +7,7 @@ use crate::defs::app::AppDef;
 use crate::defs::resource::{Resource, ResourceId, ResourceKind};
 use crate::runtime::barrier::{ActionLogEntry, CallKind};
 use crate::runtime::db::Db;
-use crate::runtime::identity::ResourceInstance;
+use crate::runtime::identity::{InstanceVariant, ResourceInstance};
 use crate::runtime::lifecycle::LifecycleState;
 use crate::runtime::stopped::StoppedSet;
 use crate::runtime::{InstanceRegistry, RegistryError};
@@ -25,6 +25,12 @@ pub struct DesiredResource {
     pub instance: ResourceInstance,
     pub desired: LifecycleState,
     pub definition: Resource,
+    /// The instance has been demoted out of its scaled group: an excess
+    /// replica, a singleton left behind by a deployment that has since become
+    /// scaled, or a replica an operation stopped. Only a demoted instance may
+    /// be retired; every other entry is part of the active desired state
+    /// whatever its lifecycle state, including a stopped singleton.
+    pub demoted: bool,
 }
 
 // r[impl desired-state.definition]
@@ -198,6 +204,8 @@ pub fn compute_uninstalling(
                 instance: inst,
                 desired: LifecycleState::Unscheduled,
                 definition: resource.clone(),
+                // Uninstall tears the whole app down through its own phase.
+                demoted: false,
             });
         }
     }
@@ -230,6 +238,7 @@ fn compute_steady(
                     instance: inst,
                     desired: LifecycleState::Ready,
                     definition: resource.clone(),
+                    demoted: false,
                 });
             }
             for inst in group.excess {
@@ -237,6 +246,7 @@ fn compute_steady(
                     instance: inst,
                     desired: LifecycleState::Unscheduled,
                     definition: resource.clone(),
+                    demoted: true,
                 });
             }
             continue;
@@ -254,6 +264,7 @@ fn compute_steady(
             instance: inst,
             desired,
             definition: resource.clone(),
+            demoted: false,
         });
     }
 
@@ -272,6 +283,8 @@ fn compute_during_operation(app_def: &AppDef, progress: &OperationProgress) -> D
                 instance: instance.clone(),
                 desired,
                 definition,
+                demoted: instance.variant == InstanceVariant::Scaled
+                    && desired == LifecycleState::Unscheduled,
             })
         })
         .collect();

@@ -10,7 +10,9 @@ use crate::{
     defs::resource::ResourceKind,
     runtime::{
         AppPhase,
+        apps::{AppEntry, AppRegistry},
         barrier::oracle::derive_lifecycle_state,
+        gc::{KnownDesiredState, gc_unscheduled_instances},
         history::{
             delete_instance, find_instances_for_group, insert_observation, query_observations,
         },
@@ -221,7 +223,10 @@ impl Reconciler {
                 continue;
             }
             for dr in &app.desired.resources {
-                if dr.desired != LifecycleState::Unscheduled {
+                // A stopped singleton is desired Unscheduled too, but it is
+                // still part of the active desired state: retiring it would
+                // mint a fresh identity on the next tick, and retire that.
+                if !dr.demoted {
                     continue;
                 }
                 let instance = dr.instance.clone();
@@ -288,6 +293,42 @@ impl Reconciler {
         }
     }
 
+    /// Delete instances that have sat Unscheduled past the retention period
+    /// and are outside their app's active desired state, at most once per
+    /// sweep interval.
+    ///
+    /// Only apps whose desired state this tick computed from the definition
+    /// (and which are still steady now), plus apps that are not installed,
+    /// contribute; every other app's instances are left alone.
+    // r[impl gc.instances]
+    pub(super) fn sweep_unscheduled_instances(&mut self, apps: &[AppSnapshot]) {
+        let now = std::time::Instant::now();
+        if self
+            .last_instance_gc
+            .is_some_and(|last| now.duration_since(last) < self.instance_gc.interval)
+        {
+            return;
+        }
+        self.last_instance_gc = Some(now);
+
+        let known = known_desired_state(apps, &self.app_registry.read());
+        let retain = self.instance_gc.retain;
+        match self
+            .db
+            .call(move |db| gc_unscheduled_instances(db, retain, &known))
+        {
+            Ok(retired) if !retired.is_empty() => {
+                self.written_obs.retain(|(id, _)| !retired.contains(id));
+                tracing::debug!(
+                    instances = retired.len(),
+                    "gc: pruned unscheduled instances"
+                );
+            }
+            Ok(_) => {}
+            Err(e) => error!(error = %e, "gc: unscheduled instances cleanup failed"),
+        }
+    }
+
     // r[impl observe.persist]
     // r[impl history.world.source]
     // `batch` is collected from probing real podman/systemd state during the
@@ -318,6 +359,40 @@ impl Reconciler {
             }
         }
     }
+}
+
+/// Each app's active desired state, for the apps where it is known.
+///
+/// A steady snapshot is rechecked against the registry because an operation
+/// may have started since it was taken, and an operation resolves its own
+/// scaled groups. An app not installed desires nothing. An app the registry
+/// does not hold may simply have failed to load, so it gets no entry.
+// r[impl gc.instances]
+fn known_desired_state(apps: &[AppSnapshot], registry: &AppRegistry) -> KnownDesiredState {
+    let still_steady = |entry: &AppEntry| {
+        *entry.phase.lock() == AppPhase::Installed && entry.active_progress.read().is_none()
+    };
+    let mut known = KnownDesiredState::default();
+    for app in apps.iter().filter(|app| app.steady) {
+        if registry.get(app.name.as_str()).is_some_and(still_steady) {
+            known.insert_app(
+                &app.name,
+                app.desired
+                    .resources
+                    .iter()
+                    .filter(|dr| !dr.demoted)
+                    .map(|dr| dr.instance.id),
+            );
+        }
+    }
+    for (name, _) in registry.list() {
+        if registry.get(name.as_str()).is_some_and(|entry| {
+            *entry.phase.lock() == AppPhase::NotInstalled && entry.active_progress.read().is_none()
+        }) {
+            known.insert_app(&name, []);
+        }
+    }
+    known
 }
 
 // r[impl gc.instances.never-actuated]
@@ -413,5 +488,85 @@ mod tests {
     #[test]
     fn ready_is_not_eligible() {
         assert!(!retire_eligible(LifecycleState::Ready, true, false));
+    }
+
+    fn register(reg: &mut AppRegistry, name: &str, phase: AppPhase) {
+        reg.register(
+            app(name),
+            std::sync::Arc::new(crate::runtime::definition::Bundle::from_stored_script("")),
+            crate::runtime::definition::Source::unknown_push(),
+            std::sync::Arc::new(tokio::sync::Notify::new()),
+            &crate::ScriptLimits::default(),
+        )
+        .unwrap();
+        *reg.get(name).unwrap().phase.lock() = phase;
+    }
+
+    fn steady_snapshot(
+        name: &str,
+        members: &[&ResourceInstance],
+        excess: &[&ResourceInstance],
+    ) -> AppSnapshot {
+        let volume = crate::defs::resource::Resource::Volume(crate::defs::volume::Volume::new(
+            Some(std::sync::Arc::new("data".to_owned())),
+        ));
+        let entry = |instance: &ResourceInstance, demoted: bool| crate::runtime::DesiredResource {
+            instance: instance.clone(),
+            desired: if demoted {
+                LifecycleState::Unscheduled
+            } else {
+                LifecycleState::Ready
+            },
+            definition: volume.clone(),
+            demoted,
+        };
+        AppSnapshot {
+            name: app(name),
+            desired: crate::runtime::DesiredState {
+                resources: members
+                    .iter()
+                    .map(|i| entry(i, false))
+                    .chain(excess.iter().map(|i| entry(i, true)))
+                    .collect(),
+            },
+            steady: true,
+            app_def: Default::default(),
+            phase: AppPhase::Installed,
+            phase_handle: std::sync::Arc::new(parking_lot::Mutex::new(AppPhase::Installed)),
+            warm_cert_hostnames: Default::default(),
+            current_generation: 1,
+            app_priority: Default::default(),
+        }
+    }
+
+    // r[verify gc.instances]
+    #[test]
+    fn only_apps_with_a_known_desired_state_are_swept() {
+        let scaled = || ResourceInstance::new_scaled(app("demo"), ResourceKind::Deployment, "web");
+        let (member, excess, unrelated) = (scaled(), scaled(), scaled());
+
+        let mut reg = AppRegistry::new();
+        register(&mut reg, "steady", AppPhase::Installed);
+        // Its snapshot was steady, but an operation has started since.
+        register(&mut reg, "busy", AppPhase::Installed);
+        *reg.get("busy").unwrap().active_progress.write() = Some(Default::default());
+        register(&mut reg, "installing", AppPhase::Installing);
+        register(&mut reg, "absent", AppPhase::NotInstalled);
+
+        let apps = [
+            steady_snapshot("steady", &[&member], &[&excess]),
+            steady_snapshot("busy", &[&member], &[]),
+            // Snapshotted, but no longer held by the registry.
+            steady_snapshot("unloaded", &[&member], &[]),
+        ];
+        let known = known_desired_state(&apps, &reg);
+
+        assert!(!known.sweepable("steady", member.id));
+        assert!(known.sweepable("steady", excess.id));
+        assert!(known.sweepable("steady", unrelated.id));
+        assert!(!known.sweepable("busy", unrelated.id));
+        assert!(!known.sweepable("installing", unrelated.id));
+        assert!(!known.sweepable("unloaded", unrelated.id));
+        assert!(known.sweepable("absent", unrelated.id));
     }
 }

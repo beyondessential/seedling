@@ -1,17 +1,19 @@
+use std::collections::{HashMap, HashSet};
 use std::time::Duration;
 
 use jiff::Timestamp;
+use seedling_protocol::names::AppName;
 use tokio::task::JoinHandle;
 use tracing::{debug, error};
 
 use crate::runtime::db::{Db, DbHandle};
+use crate::runtime::identity::InstanceId;
 
 pub struct GcConfig {
     pub interval: Duration,
     pub retain_action_log: Duration,
     pub retain_cleared_faults: Duration,
     pub retain_completed_operations: Duration,
-    pub retain_unscheduled_instances: Duration,
 }
 
 impl Default for GcConfig {
@@ -21,7 +23,6 @@ impl Default for GcConfig {
             retain_action_log: Duration::from_secs(24 * 60 * 60),
             retain_cleared_faults: Duration::from_secs(7 * 24 * 60 * 60),
             retain_completed_operations: Duration::from_secs(7 * 24 * 60 * 60),
-            retain_unscheduled_instances: Duration::from_secs(10 * 60),
         }
     }
 }
@@ -59,11 +60,6 @@ fn run_gc_cycle(db: &Db, config: &GcConfig) {
     match gc_completed_operations(db, config.retain_completed_operations) {
         Ok(n) if n > 0 => debug!(rows = n, "gc: pruned completed operations"),
         Err(e) => error!(error = %e, "gc: completed operations cleanup failed"),
-        _ => {}
-    }
-    match gc_unscheduled_instances(db, config.retain_unscheduled_instances) {
-        Ok(n) if n > 0 => debug!(rows = n, "gc: pruned unscheduled instances"),
-        Err(e) => error!(error = %e, "gc: unscheduled instances cleanup failed"),
         _ => {}
     }
     // r[impl gc.restarts]
@@ -130,8 +126,46 @@ const UNSCHEDULED_OBS_KINDS: &[&str] = &[
     "volume_cleaned_up",
 ];
 
+/// Cadence and retention for the unscheduled-instance sweep, which the
+/// reconciler runs because only it knows each app's active desired state.
+#[derive(Clone, Copy)]
+pub struct InstanceGcConfig {
+    pub interval: Duration,
+    pub retain: Duration,
+}
+
+/// The instances each app's active desired state holds, for the apps whose
+/// desired state is known. An app with no entry is one whose desired state
+/// could not be determined, so none of its instances may be swept.
+#[derive(Default)]
+pub struct KnownDesiredState {
+    apps: HashMap<String, HashSet<InstanceId>>,
+}
+
+impl KnownDesiredState {
+    pub fn insert_app(&mut self, app: &AppName, members: impl IntoIterator<Item = InstanceId>) {
+        self.apps
+            .insert(app.as_str().to_owned(), members.into_iter().collect());
+    }
+
+    /// Whether `id` may be swept: its app's desired state is known and does
+    /// not hold it.
+    pub(crate) fn sweepable(&self, app: &str, id: InstanceId) -> bool {
+        self.apps
+            .get(app)
+            .is_some_and(|members| !members.contains(&id))
+    }
+}
+
+/// Delete instances that have been Unscheduled for longer than `retain` and
+/// are not part of their app's active desired state, returning the ids
+/// retired.
 // r[impl gc.instances]
-fn gc_unscheduled_instances(db: &Db, retain: Duration) -> rusqlite::Result<usize> {
+pub fn gc_unscheduled_instances(
+    db: &Db,
+    retain: Duration,
+    known: &KnownDesiredState,
+) -> rusqlite::Result<Vec<InstanceId>> {
     let cutoff = now_ms() - retain.as_millis() as i64;
 
     // Find instances whose most recent observation is a terminal
@@ -143,7 +177,7 @@ fn gc_unscheduled_instances(db: &Db, retain: Duration) -> rusqlite::Result<usize
         .join(", ");
 
     let query = format!(
-        "SELECT ri.id
+        "SELECT DISTINCT ri.id, ri.app
          FROM resource_instances ri
          INNER JOIN (
              SELECT instance_id, obs_kind, recorded_at
@@ -168,39 +202,44 @@ fn gc_unscheduled_instances(db: &Db, retain: Duration) -> rusqlite::Result<usize
 
     let param_refs: Vec<&dyn rusqlite::types::ToSql> = params.iter().map(|p| &**p).collect();
 
-    let mut stmt = db.conn.prepare(&query)?;
-    let ids: Vec<String> = stmt
-        .query_map(param_refs.as_slice(), |row| row.get::<_, String>(0))?
+    // r[impl gc.instances.atomic]
+    // One transaction across the selection and, per instance, observations +
+    // faults + the registry row, so a mid-sequence error can't leave one of
+    // the three in a state the GC will never see again (observation history
+    // empty means the selecting query stops matching the instance).
+    let tx = db.conn.unchecked_transaction()?;
+    let candidates: Vec<(String, String)> = tx
+        .prepare(&query)?
+        .query_map(param_refs.as_slice(), |row| Ok((row.get(0)?, row.get(1)?)))?
         .collect::<Result<Vec<_>, _>>()?;
 
-    if ids.is_empty() {
-        return Ok(0);
-    }
-
-    // r[impl gc.instances.atomic]
-    // One transaction across observations + faults + the registry row per
-    // instance, so a mid-sequence error can't leave one of the three in a
-    // state the GC will never see again (observation history empty means the
-    // selecting query above stops matching the instance).
-    let tx = db.conn.unchecked_transaction()?;
-    let mut total = 0;
-    for id in &ids {
-        total += tx.execute(
+    let mut retired = Vec::new();
+    for (hex, app) in candidates {
+        // A row whose id does not parse cannot be matched against the desired
+        // state, so it is not known to be outside it.
+        let Some(id) = InstanceId::from_hex(&hex) else {
+            continue;
+        };
+        if !known.sweepable(&app, id) {
+            continue;
+        }
+        tx.execute(
             "DELETE FROM world_observations WHERE instance_id = ?1",
-            rusqlite::params![id],
+            rusqlite::params![hex],
         )?;
-        total += tx.execute(
+        tx.execute(
             "DELETE FROM faults WHERE instance_id = ?1",
-            rusqlite::params![id],
+            rusqlite::params![hex],
         )?;
-        total += tx.execute(
+        tx.execute(
             "DELETE FROM resource_instances WHERE id = ?1",
-            rusqlite::params![id],
+            rusqlite::params![hex],
         )?;
+        retired.push(id);
     }
     tx.commit()?;
 
-    Ok(total)
+    Ok(retired)
 }
 
 #[cfg(test)]
@@ -235,6 +274,12 @@ mod tests {
             barrier: None,
             extra: None,
         }
+    }
+
+    fn known_app(app: &str, members: impl IntoIterator<Item = InstanceId>) -> KnownDesiredState {
+        let mut known = KnownDesiredState::default();
+        known.insert_app(&app_name(app), members);
+        known
     }
 
     fn ensure_faults_init() {
@@ -473,7 +518,6 @@ mod tests {
     }
 
     // r[verify gc.instances]
-    // r[verify gc.instances]
     // r[verify gc.instances.atomic]
     #[test]
     fn gc_unscheduled_instances_removes_old() {
@@ -519,8 +563,10 @@ mod tests {
             )
             .unwrap();
 
-        let deleted = gc_unscheduled_instances(&db, Duration::from_secs(10 * 60)).unwrap();
-        assert!(deleted > 0);
+        let deleted =
+            gc_unscheduled_instances(&db, Duration::from_secs(10 * 60), &known_app("app", []))
+                .unwrap();
+        assert_eq!(deleted, vec![unscheduled.id]);
 
         let remaining: i64 = db
             .conn
@@ -562,8 +608,10 @@ mod tests {
         history::insert_observation(&db, &recent, "container_removed", &serde_json::json!({}))
             .unwrap();
 
-        let deleted = gc_unscheduled_instances(&db, Duration::from_secs(10 * 60)).unwrap();
-        assert_eq!(deleted, 0);
+        let deleted =
+            gc_unscheduled_instances(&db, Duration::from_secs(10 * 60), &known_app("app", []))
+                .unwrap();
+        assert!(deleted.is_empty());
 
         let remaining: i64 = db
             .conn
@@ -594,8 +642,10 @@ mod tests {
             )
             .unwrap();
 
-        let deleted = gc_unscheduled_instances(&db, Duration::from_secs(10 * 60)).unwrap();
-        assert_eq!(deleted, 0);
+        let deleted =
+            gc_unscheduled_instances(&db, Duration::from_secs(10 * 60), &known_app("app", []))
+                .unwrap();
+        assert!(deleted.is_empty());
 
         let remaining: i64 = db
             .conn
@@ -608,6 +658,98 @@ mod tests {
         assert_eq!(remaining, 1);
     }
 
+    /// Register `instance` with a lone `container_removed` observation
+    /// recorded well past the retention period.
+    fn long_unscheduled(db: &Db, instance: &ResourceInstance) {
+        history::insert_instance(db, instance).unwrap();
+        history::insert_observation(db, instance, "container_removed", &serde_json::json!({}))
+            .unwrap();
+        db.conn
+            .execute(
+                "UPDATE world_observations SET recorded_at = ?1 WHERE instance_id = ?2",
+                params![now_ms() - 20 * 60 * 1000, instance.id.to_hex()],
+            )
+            .unwrap();
+    }
+
+    fn instance_exists(db: &Db, instance: &ResourceInstance) -> bool {
+        db.conn
+            .query_row(
+                "SELECT COUNT(*) FROM resource_instances WHERE id = ?1",
+                params![instance.id.to_hex()],
+                |r| r.get::<_, i64>(0),
+            )
+            .unwrap()
+            == 1
+    }
+
+    // r[verify gc.instances]
+    // A kept replica whose container has been missing for longer than the
+    // retention period (an image pull failing during a recreate, say) looks
+    // exactly like a retired one to the observation history.
+    #[test]
+    fn gc_unscheduled_instances_preserves_desired_members() {
+        ensure_faults_init();
+        let db = Db::open_in_memory().unwrap();
+
+        let kept = ResourceInstance::new_scaled(app_name("app"), ResourceKind::Deployment, "web");
+        let stopped_ingress =
+            ResourceInstance::new_singleton(app_name("app"), ResourceKind::Ingress, "public");
+        let retired =
+            ResourceInstance::new_scaled(app_name("app"), ResourceKind::Deployment, "web");
+        for instance in [&kept, &stopped_ingress, &retired] {
+            long_unscheduled(&db, instance);
+        }
+        let kept_hex = kept.id.to_hex();
+        crate::runtime::faults::file_fault(
+            &db,
+            &app_name("app"),
+            Some("Deployment"),
+            Some("web"),
+            Some(&kept_hex),
+            "image_pull_failed",
+            "registry unreachable",
+        )
+        .unwrap();
+
+        let known = known_app("app", [kept.id, stopped_ingress.id]);
+        let deleted = gc_unscheduled_instances(&db, Duration::from_secs(10 * 60), &known).unwrap();
+        assert_eq!(deleted, vec![retired.id]);
+
+        assert!(instance_exists(&db, &kept));
+        assert!(instance_exists(&db, &stopped_ingress));
+        assert!(!instance_exists(&db, &retired));
+        let kept_faults: i64 = db
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM faults WHERE instance_id = ?1",
+                params![kept_hex],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(kept_faults, 1);
+    }
+
+    // r[verify gc.instances]
+    // An app with no entry is one whose desired state is not known this pass
+    // (mid-operation, failed to compute, failed to load), not one that
+    // desires nothing.
+    #[test]
+    fn gc_unscheduled_instances_preserves_apps_with_unknown_desired_state() {
+        let db = Db::open_in_memory().unwrap();
+
+        let unknown = dep("busy", "web");
+        let not_installed = dep("gone", "web");
+        long_unscheduled(&db, &unknown);
+        long_unscheduled(&db, &not_installed);
+
+        let deleted =
+            gc_unscheduled_instances(&db, Duration::from_secs(10 * 60), &known_app("gone", []))
+                .unwrap();
+        assert_eq!(deleted, vec![not_installed.id]);
+        assert!(instance_exists(&db, &unknown));
+    }
+
     #[test]
     fn gc_unscheduled_instances_preserves_no_observations() {
         let db = Db::open_in_memory().unwrap();
@@ -615,8 +757,10 @@ mod tests {
         let fresh = dep("app", "brand-new");
         history::insert_instance(&db, &fresh).unwrap();
 
-        let deleted = gc_unscheduled_instances(&db, Duration::from_secs(10 * 60)).unwrap();
-        assert_eq!(deleted, 0);
+        let deleted =
+            gc_unscheduled_instances(&db, Duration::from_secs(10 * 60), &known_app("app", []))
+                .unwrap();
+        assert!(deleted.is_empty());
 
         let remaining: i64 = db
             .conn

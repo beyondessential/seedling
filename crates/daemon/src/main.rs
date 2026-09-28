@@ -14,7 +14,7 @@ use seedling_core::{
     runtime::{
         AppRegistry, InstanceRegistry, Scheduler, audit,
         db::{Db, DbHandle},
-        gc::GcConfig,
+        gc::{GcConfig, InstanceGcConfig},
         registry::DbInstanceRegistry,
     },
     system::{
@@ -142,9 +142,15 @@ impl From<GcArgs> for GcConfig {
             retain_action_log: Duration::from_secs(a.gc_retain_action_log_secs),
             retain_cleared_faults: Duration::from_secs(a.gc_retain_cleared_faults_secs),
             retain_completed_operations: Duration::from_secs(a.gc_retain_completed_operations_secs),
-            retain_unscheduled_instances: Duration::from_secs(
-                a.gc_retain_unscheduled_instances_secs,
-            ),
+        }
+    }
+}
+
+impl From<&GcArgs> for InstanceGcConfig {
+    fn from(a: &GcArgs) -> Self {
+        Self {
+            interval: Duration::from_secs(a.gc_interval_secs),
+            retain: Duration::from_secs(a.gc_retain_unscheduled_instances_secs),
         }
     }
 }
@@ -965,7 +971,9 @@ async fn main() {
     // Audit log — subscribe before anything emits events.
     let _audit_handle = audit::spawn_audit_task(args.audit_log, event_tx.subscribe(), db.clone());
 
-    // Periodic garbage collection of operational tables.
+    // Periodic garbage collection of operational tables. The reconciler runs
+    // the unscheduled-instance sweep, as only it knows the desired state.
+    let instance_gc = InstanceGcConfig::from(&args.gc);
     let _gc_handle = seedling_core::runtime::gc::spawn_gc_task(db.clone(), args.gc.into());
 
     // r[impl ingress.site.tailscale]
@@ -1078,6 +1086,7 @@ async fn main() {
         cert_endpoint_url,
         Some(Arc::clone(&tls_coordinator)),
         Some(Arc::clone(&site_resolver)),
+        instance_gc,
     );
 
     // The reconciler and schedule ticker are spawned below, after OiState is

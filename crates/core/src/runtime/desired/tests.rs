@@ -263,6 +263,37 @@ fn stopped_resource_is_desired_at_unscheduled() {
 
     assert_eq!(state.resources.len(), 1);
     assert_eq!(state.resources[0].desired, LifecycleState::Unscheduled);
+    assert!(
+        !state.resources[0].demoted,
+        "a singleton an operation stops stays part of the desired state"
+    );
+}
+
+// r[verify gc.instances.never-actuated]
+#[test]
+fn replica_stopped_by_an_operation_is_demoted() {
+    let app_def = make_app_def(&["web"]);
+    let mut progress = OperationProgress::new();
+    progress.stopped(ResourceInstance::new_scaled(
+        app_name("myapp"),
+        ResourceKind::Deployment,
+        "web",
+    ));
+
+    let registry = EphemeralInstanceRegistry::new();
+    let scales = default_effective_scales(&app_def);
+    let state = compute(
+        &app_name("myapp"),
+        &app_def,
+        Some(&progress),
+        &registry,
+        &scales,
+        &StoppedSet::new(),
+    )
+    .unwrap();
+
+    assert_eq!(state.resources.len(), 1);
+    assert!(state.resources[0].demoted);
 }
 
 // r[verify desired-state.during-operation]
@@ -527,6 +558,11 @@ fn scaled_deployment_effective_less_than_existing_marks_excess_unscheduled() {
         .collect();
     assert_eq!(ready.len(), 2, "should keep 2 instances");
     assert_eq!(unscheduled.len(), 2, "should mark 2 excess as Unscheduled");
+    assert!(
+        ready.iter().all(|r| !r.demoted),
+        "kept replicas stay members"
+    );
+    assert!(unscheduled.iter().all(|r| r.demoted), "excess is demoted");
 }
 
 // r[verify autonomous.scale]
@@ -823,6 +859,10 @@ fn singleton_to_scaled_transition_marks_old_singleton_excess() {
         InstanceVariant::Singleton,
         "the excess instance should be the old Singleton"
     );
+    assert!(
+        unscheduled[0].demoted,
+        "the left-behind singleton is demoted"
+    );
 }
 
 // r[verify autonomous.scale]
@@ -859,6 +899,7 @@ fn uninstall_tears_down_all_scaled_instances() {
 // -----------------------------------------------------------------------
 
 // i[verify resource.stop]
+// r[verify gc.instances]
 #[test]
 fn stopped_singleton_resource_is_desired_at_unscheduled() {
     use crate::defs::volume::Volume;
@@ -888,6 +929,10 @@ fn stopped_singleton_resource_is_desired_at_unscheduled() {
     )
     .unwrap();
 
+    assert!(
+        state.resources.iter().all(|r| !r.demoted),
+        "a stopped singleton stays part of the desired state"
+    );
     let map = to_map(state);
     assert_eq!(map["data"], LifecycleState::Unscheduled);
     assert_eq!(map["web"], LifecycleState::Ready, "unstopped stays Ready");
@@ -929,7 +974,7 @@ fn stopped_deployment_scales_to_zero_unscheduling_existing_instances() {
         state
             .resources
             .iter()
-            .all(|r| r.desired == LifecycleState::Unscheduled)
+            .all(|r| r.desired == LifecycleState::Unscheduled && r.demoted)
     );
 }
 

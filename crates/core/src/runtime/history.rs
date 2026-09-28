@@ -153,6 +153,16 @@ pub fn delete_instance(db: &Db, id: InstanceId) -> rusqlite::Result<()> {
     Ok(())
 }
 
+/// Drop every registry row for `app`, once nothing of it is desired: its
+/// uninstall has finished, or it is being deregistered. Observations left
+/// behind are pruned as orphans.
+pub fn delete_instances_for_app(db: &Db, app: &AppName) -> rusqlite::Result<usize> {
+    db.conn.execute(
+        "DELETE FROM resource_instances WHERE app = ?1",
+        params![app],
+    )
+}
+
 // r[impl identity.stable]
 // r[impl identity.components]
 pub fn get_or_create_singleton(
