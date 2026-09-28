@@ -203,6 +203,7 @@ mod tests {
                     tls_acme: true,
                     redirect: Some(HttpRedirect {
                         from_port: 80,
+                        to_port: 443,
                         code: 308,
                     }),
                     routes: vec![ProxyRoute {

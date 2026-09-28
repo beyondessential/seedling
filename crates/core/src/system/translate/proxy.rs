@@ -312,9 +312,13 @@ fn ensure_vhost<'a>(
             routes: vec![],
         });
 
+    // l[impl ingress.redirect]
+    // A redirect is only declarable on an HTTPS-terminating ingress, so the
+    // ingress's own port is the one serving this hostname over TLS.
     if let Some(redirect) = &ingress.redirect {
         vhost.redirect = Some(HttpRedirect {
             from_port: redirect.port.get(),
+            to_port: ingress.port.get(),
             code: redirect.code,
         });
     }

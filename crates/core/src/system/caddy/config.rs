@@ -2,8 +2,8 @@ use serde_json::{Value, json};
 
 use crate::runtime::tls::state::is_caddy_internal;
 use crate::system::types::{
-    L4Proto, ProxyConfig, ProxyListenerProto, RedirectSegment, RouteBalance, RouteCompress,
-    RouteHeaderOps, RouteHeaders, RouteRateLimit, VirtualHost,
+    HttpRedirect, L4Proto, ProxyConfig, ProxyListenerProto, RedirectSegment, RouteBalance,
+    RouteCompress, RouteHeaderOps, RouteHeaders, RouteRateLimit, VirtualHost,
 };
 
 /// Ports declared for both a plaintext and a TLS listener.
@@ -104,7 +104,7 @@ pub(crate) fn build_caddy_config(config: &ProxyConfig) -> Value {
         // requested for its hostname.
         for vh in &config.virtual_hosts {
             if let Some(redirect) = &vh.redirect {
-                http_routes.push(redirect_route(&vh.hostname, redirect.code, &https_ports));
+                http_routes.push(redirect_route(&vh.hostname, redirect));
             } else if !vh.tls_acme {
                 http_routes.extend(proxy_routes_for_vhost(vh));
             }
@@ -604,19 +604,22 @@ fn regexp_literal(text: &str) -> String {
     out
 }
 
-fn redirect_route(hostname: &str, code: u16, https_ports: &[u16]) -> Value {
-    let target_port = https_ports.first().copied().unwrap_or(443);
-    let location = if target_port == 443 {
+// l[impl ingress.redirect]
+fn redirect_route(hostname: &str, redirect: &HttpRedirect) -> Value {
+    let location = if redirect.to_port == 443 {
         "https://{http.request.host}{http.request.uri}".to_string()
     } else {
-        format!("https://{{http.request.host}}:{target_port}{{http.request.uri}}")
+        format!(
+            "https://{{http.request.host}}:{}{{http.request.uri}}",
+            redirect.to_port
+        )
     };
 
     json!({
         "match": [{ "host": [hostname] }],
         "handle": [{
             "handler": "static_response",
-            "status_code": code,
+            "status_code": redirect.code,
             "headers": { "Location": [location] },
         }],
         "terminal": true,

@@ -717,6 +717,7 @@ This is currently the only value.
 
 > l[ingress.redirect]
 > The `ingress.redirect(port?: number, code?: number)` builder method emits an HTTP redirect on the `port` given if and when the ingress has obtained a TLS certificate.
+> The redirect sends the client to the same host and request path over HTTPS on the ingress's own port, whatever other HTTPS ports the node listens on.
 >
 > The `port` defaults to 80.
 > The `code` defaults to 307 ([Temporary Redirect](https://developer.mozilla.org/en-US/docs/Web/HTTP/Reference/Status/307)) and must be a redirection status code in the range 300–399; any other value throws.

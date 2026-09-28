@@ -150,7 +150,41 @@ pub(crate) fn read_cached_proxy_config(
             |r| r.get(0),
         )
         .optional()?;
-    Ok(json_str.and_then(|s| serde_json::from_str(&s).ok()))
+    Ok(json_str.and_then(|s| parse_cached_proxy_config(&s)))
+}
+
+// r[impl infra.proxy.upgrade.cache]
+pub(crate) fn parse_cached_proxy_config(json: &str) -> Option<ProxyConfig> {
+    let mut doc: serde_json::Value = serde_json::from_str(json).ok()?;
+    backfill_redirect_targets(&mut doc);
+    serde_json::from_value(doc).ok()
+}
+
+/// A document cached before HTTP redirects recorded their target port renders
+/// them to the first HTTPS listener it lists, as the daemon that wrote it did,
+/// so that replaying it reproduces what was running rather than a guess.
+fn backfill_redirect_targets(doc: &mut serde_json::Value) {
+    let first_https = doc["listeners"]
+        .as_array()
+        .and_then(|ls| ls.iter().find(|l| l["proto"] == "Https"))
+        .and_then(|l| l["port"].as_u64())
+        .unwrap_or(443);
+    let Some(vhosts) = doc
+        .get_mut("virtual_hosts")
+        .and_then(serde_json::Value::as_array_mut)
+    else {
+        return;
+    };
+    for vhost in vhosts {
+        if let Some(redirect) = vhost
+            .get_mut("redirect")
+            .and_then(serde_json::Value::as_object_mut)
+        {
+            redirect
+                .entry("to_port")
+                .or_insert_with(|| first_https.into());
+        }
+    }
 }
 
 // r[impl infra.proxy.upgrade.cache]

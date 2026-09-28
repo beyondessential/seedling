@@ -30,6 +30,7 @@ fn https_vhost(hostname: &str, upstream: &str) -> VirtualHost {
         tls_acme: true,
         redirect: Some(HttpRedirect {
             from_port: 80,
+            to_port: 443,
             code: 308,
         }),
         routes: vec![ProxyRoute {
@@ -559,8 +560,15 @@ fn redirect_handler_emits_static_response_with_and_without_path_preservation() {
     );
 }
 
+// l[verify ingress.redirect]
 #[test]
 fn http_to_https_redirect_targets_nonstandard_https_port() {
+    let mut vhost = https_vhost("example.com", "[fd5e::1]:3000");
+    vhost.redirect = Some(HttpRedirect {
+        from_port: 8080,
+        to_port: 8443,
+        code: 308,
+    });
     let config = ProxyConfig {
         listeners: vec![
             ProxyListener {
@@ -572,7 +580,7 @@ fn http_to_https_redirect_targets_nonstandard_https_port() {
                 proto: ProxyListenerProto::Http,
             },
         ],
-        virtual_hosts: vec![https_vhost("example.com", "[fd5e::1]:3000")],
+        virtual_hosts: vec![vhost],
         l4_routes: vec![],
         warm_cert_hostnames: Default::default(),
         cert_endpoint_url: None,
@@ -581,6 +589,66 @@ fn http_to_https_redirect_targets_nonstandard_https_port() {
     let redirect = &json["apps"]["http"]["servers"]["seedling_http"]["routes"][0]["handle"][0];
     assert_eq!(
         redirect["headers"]["Location"][0],
+        "https://{http.request.host}:8443{http.request.uri}"
+    );
+}
+
+fn redirecting_tls_ingress(hostname: &str, port: u16) -> crate::defs::ingress::IngressDef {
+    use crate::defs::{
+        Port,
+        ingress::{HttpTermination, RedirectDef},
+    };
+    crate::defs::ingress::IngressDef {
+        hostname: hostname.to_string(),
+        port: Port::new(i64::from(port)).unwrap(),
+        tls: true,
+        dtls: false,
+        http_terminate: Some(HttpTermination::Http1),
+        redirect: Some(RedirectDef {
+            port: Port::new(80).unwrap(),
+            code: 307,
+        }),
+        description: None,
+    }
+}
+
+// l[verify ingress.redirect]
+// The redirect used to target the node's lowest HTTPS port, which sent the
+// 8443 hostname's clients to 443 and only worked because the TLS server
+// happened to serve every hostname on every port.
+#[test]
+fn each_redirect_targets_its_own_ingress_port() {
+    let config = build_proxy_config(
+        &[
+            (
+                redirecting_tls_ingress("low.example.com", 443),
+                service_upstream(3000),
+            ),
+            (
+                redirecting_tls_ingress("high.example.com", 8443),
+                service_upstream(3001),
+            ),
+        ],
+        &[],
+    );
+    let json = build_caddy_config(&config);
+    let routes = json["apps"]["http"]["servers"]["seedling_http"]["routes"]
+        .as_array()
+        .expect("the plaintext server has the redirects");
+
+    let location_for = |host: &str| {
+        routes
+            .iter()
+            .find(|r| r["match"][0]["host"][0] == host)
+            .map(|r| r["handle"][0]["headers"]["Location"][0].clone())
+            .unwrap_or_else(|| panic!("no redirect for {host}"))
+    };
+    assert_eq!(
+        location_for("low.example.com"),
+        "https://{http.request.host}{http.request.uri}"
+    );
+    assert_eq!(
+        location_for("high.example.com"),
         "https://{http.request.host}:8443{http.request.uri}"
     );
 }
@@ -1076,6 +1144,49 @@ fn old_cached_config_without_rate_limit_still_deserialises() {
         panic!("expected reverse proxy")
     };
     assert_eq!(proxy.rate_limit, None);
+}
+
+// r[verify infra.proxy.upgrade.cache]
+// A document cached before redirects recorded their target is replayed as the
+// daemon that wrote it rendered it: to the first HTTPS listener it lists.
+#[test]
+fn old_cached_redirect_without_a_target_port_replays_as_it_was_rendered() {
+    let old = r#"{
+      "listeners":[{"port":80,"proto":"Http"},{"port":8443,"proto":"Https"},{"port":9443,"proto":"Https"}],
+      "virtual_hosts":[{"hostname":"app.example.com","tls_acme":true,
+        "redirect":{"from_port":80,"code":308},"routes":[]}],
+      "l4_routes":[],"warm_cert_hostnames":[],"cert_endpoint_url":null
+    }"#;
+    let cfg = super::startup::parse_cached_proxy_config(old)
+        .expect("a cached redirect from before target ports must still load");
+    let redirect = cfg.virtual_hosts[0].redirect.as_ref().unwrap();
+    assert_eq!(redirect.to_port, 8443);
+    assert_eq!(redirect.code, 308);
+}
+
+// r[verify infra.proxy.upgrade.cache]
+#[test]
+fn cached_redirect_keeps_its_recorded_target_port() {
+    let mut vhost = https_vhost("app.example.com", "[fd5e::1]:3000");
+    vhost.redirect = Some(HttpRedirect {
+        from_port: 80,
+        to_port: 9443,
+        code: 308,
+    });
+    let config = ProxyConfig {
+        listeners: vec![ProxyListener {
+            port: 8443,
+            proto: ProxyListenerProto::Https,
+        }],
+        virtual_hosts: vec![vhost],
+        ..Default::default()
+    };
+    let json = serde_json::to_string(&config).unwrap();
+    let back = super::startup::parse_cached_proxy_config(&json).expect("round-trips");
+    assert_eq!(
+        back.virtual_hosts[0].redirect.as_ref().unwrap().to_port,
+        9443
+    );
 }
 
 // r[verify service.http.route.rate-limiting]
@@ -1758,6 +1869,7 @@ fn an_ingress_redirect_answers_ahead_of_a_redirect_route_on_the_plaintext_vhost(
             tls_acme: true,
             redirect: Some(HttpRedirect {
                 from_port: 80,
+                to_port: 443,
                 code: 308,
             }),
             routes: vec![redirect_route_at(

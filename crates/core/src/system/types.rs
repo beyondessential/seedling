@@ -491,6 +491,9 @@ pub struct VirtualHost {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HttpRedirect {
     pub from_port: u16,
+    /// The HTTPS port the redirect sends clients to: the port of the ingress
+    /// that declared it, which is the one serving this hostname over TLS.
+    pub to_port: u16,
     pub code: u16,
 }
 
