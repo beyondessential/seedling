@@ -1538,6 +1538,12 @@ pub(crate) fn deregister_app(
             if let Err(e) = stopped::delete_stopped_for_app(db, &name_owned) {
                 tracing::warn!(app = %name_owned, "failed to clean up stopped resources during deregister: {e}");
             }
+            // r[impl gc.instances]
+            // Once the app leaves the registry, the instance sweep can no
+            // longer tell what it desires, so its rows go now or never.
+            if let Err(e) = crate::runtime::history::delete_instances_for_app(db, &name_owned) {
+                tracing::warn!(app = %name_owned, "failed to clean up resource instances during deregister: {e}");
+            }
             if let Err(e) = crate::runtime::db::delete_schedules_for_app(db, &name_owned) {
                 tracing::warn!(app = %name_owned, "failed to clean up schedules during deregister: {e}");
             }

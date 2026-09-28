@@ -516,13 +516,15 @@ Absent specification bugs, anything that is not defined here is either defined i
 > r[gc.instances]
 > Resource instance records that have remained in the Unscheduled lifecycle state for longer than a configurable retention period (default: 10 minutes) must be deleted, along with their associated world observation rows.
 > Instances that are part of the active desired state (i.e. in the `keep` set of a scaled group or a singleton) must never be deleted regardless of their lifecycle state.
+> A stopped singleton remains part of the active desired state.
+> Membership is judged against the desired state the reconciler computed from the app's definition, so an instance belonging to an app whose desired state is not known must not be deleted: while a lifecycle operation is in progress for the app, while it is installing or uninstalling, when its desired state could not be computed, or when the runtime could not load the app.
 
 > r[gc.instances.atomic]
 > The deletion of an instance's records must be atomic across the world observation rows, fault rows, and the resource instance row.
 > A partial deletion that leaves any of these three out of sync with the others is a defect: it allows orphan faults and registry rows to linger indefinitely, since subsequent garbage-collection passes select instances by observation history that no longer exists.
 
 > r[gc.instances.never-actuated]
-> A scaled instance that the desired state has demoted to Unscheduled must be retired immediately by the reconciler in any of the following cases:
+> A scaled instance that the desired state has demoted to Unscheduled, or a singleton left behind by a deployment that has since become scaled, must be retired immediately by the reconciler in any of the following cases:
 >
 > - The instance's lifecycle state, as derived from observations, is Unscheduled.
 > - The instance has no observations at all (it was never actuated).

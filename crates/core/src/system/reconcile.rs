@@ -21,6 +21,7 @@ use crate::{
         apps::{AppRegistry, transition_phase},
         db::DbHandle,
         desired::{DesiredState, EffectiveScales, compute, compute_uninstalling},
+        gc::InstanceGcConfig,
         identity::InstanceId,
         lifecycle::LifecycleState,
         priority::AppPriority,
@@ -344,6 +345,11 @@ impl Coverage {
 struct AppSnapshot {
     name: AppName,
     desired: DesiredState,
+    /// `desired` was computed from the app definition, so it names every
+    /// instance the app's active desired state holds. False while an
+    /// operation, install or uninstall is steering it instead.
+    // r[impl gc.instances]
+    steady: bool,
     app_def: AppDef,
     phase: AppPhase,
     phase_handle: Arc<Mutex<AppPhase>>,
@@ -455,6 +461,11 @@ pub struct Reconciler {
     /// Scratch state for the image reconcile phase (last-GC timestamp).
     // r[impl image.gc]
     image_phase_state: images::ImagePhaseState,
+    /// Cadence and retention of the unscheduled-instance sweep, and when it
+    /// last ran.
+    // r[impl gc.instances]
+    instance_gc: InstanceGcConfig,
+    last_instance_gc: Option<std::time::Instant>,
     /// URL Caddy should use for `tls.certificates.get_certificate`. Set
     /// once at daemon startup; threaded into every proxy config build so
     /// runtime-managed certs are served via the daemon.
@@ -530,6 +541,7 @@ impl Reconciler {
         cert_endpoint_url: Option<String>,
         tls_coordinator: Option<Arc<crate::runtime::tls::issuance::Coordinator>>,
         site_resolver: Option<Arc<SiteServiceResolver>>,
+        instance_gc: InstanceGcConfig,
     ) -> Self {
         let observer = Observer::new(Arc::clone(&driver));
         let written_obs = seed_written_obs(&db);
@@ -577,6 +589,8 @@ impl Reconciler {
             caddy_data_path: tokio::sync::OnceCell::new(),
             warm_cert_first_seen: HashMap::new(),
             image_phase_state: images::ImagePhaseState::new(),
+            instance_gc,
+            last_instance_gc: None,
             cert_endpoint_url,
             tls_coordinator,
             resolver_health_fail_count: std::sync::atomic::AtomicU32::new(0),
@@ -723,9 +737,11 @@ impl Reconciler {
             // Read once for the whole tick above; an app with no stored
             // decision stands at the default.
             let app_priority = priorities.get(&name).copied().unwrap_or_default();
+            let steady = phase == AppPhase::Installed && progress.is_none();
             snapshots.push(AppSnapshot {
                 name,
                 desired,
+                steady,
                 app_def,
                 phase,
                 phase_handle: Arc::clone(&entry.phase),
@@ -1485,6 +1501,7 @@ impl Reconciler {
 
         self.emit_state_changes(&apps);
         self.retire_unscheduled_excess(&apps);
+        self.sweep_unscheduled_instances(&apps);
 
         true
     }
@@ -1932,9 +1949,9 @@ impl Reconciler {
                             &app_name_owned,
                             "",
                         );
-                        if let Err(e) = db.conn.execute(
-                            "DELETE FROM resource_instances WHERE app = ?1",
-                            rusqlite::params![app_name_owned],
+                        if let Err(e) = crate::runtime::history::delete_instances_for_app(
+                            db,
+                            &app_name_owned,
                         ) {
                             warn!(app = %app_name_owned, "failed to clean up resource instances during uninstall: {e}");
                         }
@@ -2175,6 +2192,7 @@ mod tests {
         AppSnapshot {
             name: app_name,
             desired: DesiredState::default(),
+            steady: true,
             app_def,
             phase: AppPhase::Installed,
             phase_handle: Arc::new(Mutex::new(AppPhase::Installed)),
@@ -2201,6 +2219,7 @@ mod tests {
         AppSnapshot {
             name: app_name,
             desired: DesiredState::default(),
+            steady: true,
             app_def,
             phase: AppPhase::Installed,
             phase_handle: Arc::new(Mutex::new(AppPhase::Installed)),
