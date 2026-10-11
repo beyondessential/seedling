@@ -1,0 +1,146 @@
+The Seedling Windows Container Runtime is an implementation of the Seedling runtime for Windows Server hosts. It runs each workload as a process-isolated Windows container, composed at image-preparation time from a single OS base and the workload's artifact. It conforms to the operator interface spec and the language spec, and to the portable runtime spec (reconciliation, generations, lifecycle operations, barriers, history, faults, scheduling); this document defines the Windows infrastructure those portable semantics run on. Rule IDs use the `wcr[...]` namespace.
+
+Where this document is silent, the portable runtime spec applies unchanged. Where a portable rule (`r[...]`) is cited as replaced, the replacement here is normative for this runtime and the cited rule does not apply to it.
+
+Rules marked `[spike]` name a mechanism not yet confirmed on the platform; the companion plan records which spike settles each one, and what the fallback is if it does not hold.
+
+# Platform
+
+> wcr[platform.floor]
+> The runtime runs on Windows Server 2019 or later, x64, providing the Host Compute Service and Host Networking Service. Workloads run as process-isolated containers sharing the host kernel.
+
+# Base Image and Composition
+
+> wcr[base.image]
+> The runtime uses a single OS base image for all workloads, pulled from Microsoft's container registry and cached in the image store. The base pulled matches the host's OS build, so process isolation applies. When a host update changes the build, the runtime pulls the matching base for the new build.
+
+> wcr[compose.chain]
+> When an app image is prepared into the store, the runtime composes a runnable layer chain by stacking the [base](#wcr--base.image) layers beneath the artifact's layers. Starting an instance stacks a discardable scratch layer over the chain; the composed chain is shared across every instance and generation of that image. `[spike]`
+
+# Containers
+
+> wcr[engine.lifecycle]
+> The runtime runs each instance as a process-isolated container through containerd and its runhcs shim. containerd is a runtime-managed infrastructure dependency: seedlingd starts it ahead of the workloads and infrastructure that need it, and stops it once no workload remains, so an idle host runs only seedlingd. `[spike]`
+
+> wcr[container.model]
+> Each instance runs as one process-isolated container enclosing the workload's process tree, its [network compartment](#wcr--net.compartment), its mapped volumes, and its scratch layer. Stopping the container stops everything within it.
+
+> wcr[shim.ownership]
+> Each container is supervised by its runhcs shim, which owns the container for its lifetime. The shim runs independently of containerd and seedlingd: a workload keeps running while either restarts, and a restarting containerd re-attaches to its shims. A shim's death stops its container, which seedlingd reconciles as an observed exit. `[spike]`
+
+> wcr[daemon.reconnect]
+> On restart, seedlingd reconnects to containerd and folds the container state and the exit events it reports into the observation history. `[spike]`
+
+# Restarts
+
+> wcr[restart.ownership]
+> The reconciler owns restart. Nothing beneath it restarts a workload on its behalf: it observes an exited container, decides from desired state whether a replacement is due, and starts one. The supervisor pacing requirements of `r[autonomous.restart.backoff]` bind only where a platform supervisor actions restarts, so they do not apply here; the reconciler paces its own attempts, and stops retrying at the crash-loop threshold rather than at a supervisor's start limit (`r[autonomous.restart.rate]`).
+
+> wcr[restart.record]
+> Each restart is recorded at the point the reconciler actions it (`r[autonomous.restart.record]`), so no counter inference is needed. Its cause distinguishes recovery from an unexpected exit from a deliberate action — a deploy, a replacement, an operator request — even though the reconciler performs both kinds. Only recovery restarts count toward the crash-loop rate; a rolling update must not read as a crash burst.
+
+> wcr[restart.exit-capture]
+> A terminated container's exit status is folded into the observation history before the container's record is reaped. The platform frees a container's identity only when its record is deleted, so an exit status not read before deletion is unrecoverable, and a restart record missing it is a tally rather than a diagnosis.
+
+> wcr[restart.daemon-gap]
+> A workload that exits while seedlingd is down stays down until seedlingd returns and reconciles, because nothing else will restart it. The exposure is bounded by seedlingd's own restart, and the runtime is installed so that the host's service manager restarts it promptly. This is a stated property of owning restart in the control plane, not an oversight: on a platform whose supervisor actions restarts, the gap does not exist.
+
+# Networking
+
+> wcr[net.compartment]
+> Each instance's container has its own network compartment on the Seedling network, satisfying `r[infra.pod.network]`. The workload binds its listeners on all interfaces within its compartment, as a container conventionally does.
+
+> wcr[net.dataplane]
+> Service-address and mount-graph reachability (`r[infra.dataplane.service-dnat]`, `r[infra.dataplane.mount-dnat]`, `r[infra.dataplane.forward-policy]`) is realised at the compartment boundary: an instance's service address routes to its container's endpoint, a mount from A to B admits traffic from A's compartment to B's service address, and traffic outside the compiled mount graph is refused. Because the policy is attached to the compartment from the host side, the workload cannot alter its own reachability. The service address routes to the ready backing instance, so a replacement generation receives traffic once ready (`r[update.rolling]`, `r[autonomous.healthcheck-replace]`). `[spike]`
+
+> wcr[net.dns]
+> Each compartment resolves the Seedling zone through the [resolver](#wcr--infra.resolver) (`r[infra.pod.dns]`); other resolution follows the host's configuration.
+
+# Infrastructure Services
+
+> wcr[infra.services]
+> The ingress controller and the resolver run as runtime-managed containers on the Seedling network. The runtime renders their configuration from desired state, starts them in dependency order ahead of the workloads that need them, and stops them once no workload requires them, so a host with no workloads runs no infrastructure containers.
+
+> wcr[infra.ingress]
+> The ingress container binds the host's configured public ports and dials backends on their service addresses (`r[infra.proxy.startup]`, `r[lifecycle.ingress]`). Configuration changes apply by graceful reload, so established connections are not dropped.
+
+> wcr[infra.resolver]
+> The resolver container serves the Seedling zone on its service address (`r[infra.resolver]`); seedlingd renders its zone data and upstream forwarding.
+
+# Identity
+
+> wcr[identity.workload]
+> A workload runs under an account supplied by the [base](#wcr--base.image), non-administrative by default, so a workload that must not hold administrative rights is started without them rather than dropping them itself (`r[actuate.container.user]`). A declaration naming an account runs under that account. The account exists only inside the container: it is not a principal on the host and cannot be named in host access control.
+
+> wcr[identity.daemon]
+> seedlingd runs under its own service account, not the host's most privileged one. The runtime's own state — its database, its keys, and the [log store](#wcr--logs.sink) — is never mapped into a container, so it carries access control admitting only that account and the host's administrators, satisfying the owner-only requirements of `r[infra.key.file-permissions]` and `r[infra.db.file-permissions]`.
+
+> wcr[identity.hardening]
+> The portable container hardening requirements (`r[actuate.container.hardening]`) are met where the platform expresses them and reported absent where it does not. A limit on the number of processes in an instance applies. Capability dropping and privilege-escalation suppression have no platform equivalent and are not simulated. The root filesystem is discardable rather than read-only ([artifact.readonly](#wcr--artifact.readonly)): a workload may write to it, and those writes are lost when the instance stops, which is a weaker property than the portable rule's read-only root and is stated rather than claimed as equivalent.
+
+# Volumes
+
+> wcr[volume.model]
+> A volume is a runtime-owned host directory mapped into the consuming instance's container at a rendered path, read-only or read-write per the consuming declaration. An instance reaches only the volumes mapped into its own container.
+
+> wcr[volume.boundary]
+> The mapping is the boundary. An instance is confined to its mapped volumes because nothing else of the host's filesystem is present in its container, not because host access control excludes it: a container's [account](#wcr--identity.workload) is not a host principal, so a volume's host permissions cannot distinguish one instance from another. A volume's host permissions must therefore be treated as admitting any instance mapped that volume, and the runtime must not rely on them to separate instances.
+
+> wcr[volume.host-exposure]
+> Because a mapped volume must admit an identity that does not exist on the host, its permissions are broader than the owner-only rule the runtime applies to [its own state](#wcr--identity.daemon), and a host principal outside any container may be able to read it. This is a property of the platform's mapping model, not a configuration choice; the threat model states it and the runtime does not represent volume contents as confidential from the host.
+
+# Logs
+
+> wcr[logs.sink]
+> Workload and infrastructure output, and the runtime's own action records, are captured into the Windows log store, which serves the operator interface's log surface in place of the system journal the Linux runtime uses. Its contract — capture independent of the control plane, filtering, ordering, retention — is specified separately in the [Windows log store spec](runtime-windows-logs.md), so the log engine can be replaced without disturbing this document.
+
+# Shutdown and Signals
+
+> wcr[stop.methods]
+> A workload's [process profile](#wcr--artifact.profile) declares how it is asked to stop, one of:
+>
+> - `ctrl_break` / `ctrl_c`: the shim delivers a console control event to the workload's process group.
+> - `named_event`: the shim passes an event name in the environment and signals that event; a sibling reload event may be declared for reload.
+> - `terminate`: the container is terminated directly.
+>
+> `[spike]` for `ctrl_break` / `ctrl_c` and `named_event`: both deliver across the container boundary, and a container has its own object namespace. Where delivery cannot be made to work, the method degrades to `terminate` and the divergence is reported, rather than a stop request being silently dropped.
+
+> wcr[stop.ladder]
+> The stop sequence delivers the declared [stop method](#wcr--stop.methods), waits `stop_timeout` (`l[container.stop-signal]`, `l[container.stop-timeout]`), then terminates the container.
+
+> wcr[signal.map]
+> `rt.signal(target, name)` maps POSIX signal names onto Windows mechanisms:
+>
+> - `SIGTERM`, `SIGINT`, `SIGQUIT`, `SIGKILL` terminate the target's container, leaving desired state unchanged; the reconciler sees an exit and restarts per desired state.
+> - `SIGHUP` signals the target profile's reload event where one is declared, and is recorded as skipped where none is.
+> - Other signal names are recorded as skipped (`r[rt.signal]`).
+
+> wcr[signal.exit-code]
+> When the runtime terminates a process — the [stop ladder](#wcr--stop.ladder)'s final step, a signal-mapped termination, or a session teardown — it records a negative exit code, so `i[shell.exit]`'s convention distinguishes runtime termination from the process's own exit code.
+
+# Capabilities
+
+> wcr[capability.map]
+> The runtime reports `storage:block-clone` true when the volume root is ReFS. Snapshot and NAT64 capabilities are reported absent.
+
+# Actions and Shells
+
+> wcr[action.exec]
+> An `Executed` command runs as a new process inside the target instance's container, under the workload's account, environment, and working directory. It shares the container's lifetime: stopping the instance ends the command.
+
+> wcr[shell.session]
+> A shell session runs a process inside the target's container under a ConPTY pseudoconsole (`i[stream.shell]`): operator input drives the console input, console output drives the session's output stream, and resize requests resize the console. ConPTY merges the streams, so the session's stderr may carry nothing; clients must not block on it. `[spike]`
+
+> wcr[shell.volume]
+> A volume shell runs a container with the selected volumes mapped in, named by display name, launched with that directory as its working directory (`i[volumes.shell]`). Read-only and read-write sessions differ only in how the volumes are mapped.
+
+# Artifacts
+
+> wcr[artifact.format]
+> A Windows workload is delivered as an OCI image built without a base image: its layers carry only the workload's own filesystem, and its config declares the entrypoint, command, environment, working directory, exposed ports, and — in its labels — the [process profile](#wcr--artifact.profile). It is an ordinary OCI image — content-addressed layers, standard manifest and config — produced, stored, signed, and replicated with standard registry tooling, and completed for execution by [composition](#wcr--compose.chain).
+
+> wcr[artifact.profile]
+> The process profile is carried in the OCI config's `Labels`, namespaced under `au.bes.seedling.`: `au.bes.seedling.stop-method` names the [stop method](#wcr--stop.methods) (for example `ctrl_break`), and `au.bes.seedling.reload-event` names the event a workload signals for reload where it supports one. A BSL deployment may override these per the language spec's stop-configuration surface.
+
+> wcr[artifact.readonly]
+> The artifact's layers are read-only: [composition](#wcr--compose.chain) stacks them beneath a discardable scratch layer, so per-instance writes are ephemeral and durable state lives in [volumes](#wcr--volume.model).
