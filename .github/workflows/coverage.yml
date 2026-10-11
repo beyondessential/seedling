@@ -64,7 +64,7 @@ jobs:
         working-directory: crates/web/frontend
     steps:
       - uses: actions/checkout@v7.0.0
-      - uses: actions/setup-node@v6
+      - uses: actions/setup-node@v7
         with:
           node-version: lts/*
           cache: npm
