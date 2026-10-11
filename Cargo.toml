@@ -11,7 +11,7 @@ edition = "2024"
 publish = false
 
 [workspace.dependencies]
-argon2 = "0.5.3"
+argon2 = "0.6.0"
 axum = "0.8.9"
 mime_guess = "2.0.5"
 rust-embed = "8.11.0"
