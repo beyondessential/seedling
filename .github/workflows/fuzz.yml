@@ -15,7 +15,7 @@ jobs:
     name: Fuzz wire decoders
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7.0.0
+      - uses: actions/checkout@v7
       - name: Configure toolchain
         run: |
           rustup toolchain install --profile minimal --no-self-update nightly
