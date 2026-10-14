@@ -85,13 +85,13 @@ jobs:
       attestations: write
     steps:
       - uses: actions/checkout@v7.0.0
-      - uses: docker/setup-qemu-action@v4.2.0
+      - uses: docker/setup-qemu-action@v4.4.0
       - uses: docker/setup-buildx-action@v4
 
       # Build the native arch first and check it before anything is published,
       # so a missing module fails here rather than on a host.
       - name: Build for checking
-        uses: docker/build-push-action@v7.3.0
+        uses: docker/build-push-action@v7.4.0
         with:
           context: docker/caddy
           file: docker/caddy/Containerfile
@@ -133,7 +133,7 @@ jobs:
       - name: Build and publish
         id: push
         if: github.event_name != 'pull_request'
-        uses: docker/build-push-action@v7.3.0
+        uses: docker/build-push-action@v7.4.0
         with:
           context: docker/caddy
           file: docker/caddy/Containerfile
