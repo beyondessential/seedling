@@ -3,14 +3,20 @@ on:
   pull_request:
     types: [opened, reopened, edited]
 
-permissions:
-  contents: read
-  pull-requests: write
-
 jobs:
   review:
     # A Dependabot-triggered run gets none of the repository secrets, so the
     # reusable workflow has nothing to authenticate with and fails at setup.
     if: github.actor != 'dependabot[bot]'
+    # `id-token: write` lets the posting job authenticate to Workhorse; the
+    # review agents' job declares `contents: read` alone and never receives it.
+    permissions:
+      contents: read
+      pull-requests: write
+      id-token: write
     uses: beyondessential/review-hero/.github/workflows/review.yml@v1
+    with:
+      findings-url: https://workhorse.bes.au/api/review-hero/rounds
+      per-issue-comments: standalone
+      summary-comment: standalone
     secrets: inherit
