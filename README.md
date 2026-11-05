@@ -8,7 +8,7 @@ Seedling is a lightweight high-level container app management system.
 
 **Lightweight:** it's designed to run easily on single servers with few resources, and does not require setting up Kubernetes or complicated networking. You get three binaries and one kernel module ([jool](https://nicmx.github.io/Jool/), for NAT64) — and you don't even need to set up Jool, Seedling does it for you.
 
-**High-level:** you write app definitions which include high level concerns such as parameters, secret management, HTTPS and certificates, advanced upgrade and maintenance workflows, custom shells, volumes, snapshots, and backups... in a friendly and simple syntax that doesn't make you want to die (ie not YAML). A web UI and full CLI is included.
+**High-level:** you write app definitions which include high level concerns such as parameters, secret management, HTTPS and certificates, advanced upgrade and maintenance workflows, custom shells, volumes, and snapshots... in a friendly and simple syntax that doesn't make you want to die (ie not YAML). A web UI and full CLI is included.
 
 **Container:** everything except for Seedling itself (for bootstrapping reasons) is container-based. HTTP traffic routes through Caddy, which is itself containerised. DNS traffic uses CoreDNS, also containerised.
 
@@ -32,7 +32,6 @@ Documentation is a bit sparse at the moment.
 
 - [Deploying Seedling](./docs/deploying.md)
 - [App scripting language guide](./docs/bsl-scripting.md)
-- [Backup apps](./docs/backup-app.md)
 - [Dynamic vs static resources](./docs/resource-context-rules.md)
 - [Low-level networking docs](./docs/networking.md)
 - [Comprehensive specifications](./docs/spec/)

@@ -48,8 +48,7 @@ document. To redirect any of them, edit this section first.
 8. **Namespace per app + `seedling-system`.** Each installed BSL app gets its
    own namespace `seedling-app-<slug>`; the daemon, Caddy, and CoreDNS-or-equiv
    live in `seedling-system`. Free `NetworkPolicy` scoping, free per-app
-   `ResourceQuota`, clean teardown via namespace delete, per-app RBAC for
-   backups.
+   `ResourceQuota`, clean teardown via namespace delete, per-app RBAC.
 9. **Caddy stays as the L7+L4 termination layer.** Run as a `Deployment` in
    `seedling-system` with operator-configurable `Service` annotations (so EKS,
    GKE, MetalLB, etc. all work). seedling does not abstract over cloud LB
@@ -95,8 +94,8 @@ implementation. Listed for tracking.
   `Capabilities::supports_image_warming = false`.
 - **VolumeSnapshot availability.** `HAS_SNAPSHOTS` becomes a runtime probe
   asking whether the cluster has at least one `VolumeSnapshotClass` matching
-  the configured `StorageClass`. Need to land that probe before any backup
-  app design.
+  the configured `StorageClass`. Need to land that probe before relying on
+  snapshots.
 - **Multi-node scheduling controls.** Can BSL `Deployment.scale=range(3,3)`
   spread across nodes via topology spread constraints? Probably yes but needs
   field on BSL or default config.
@@ -109,7 +108,7 @@ implementation. Listed for tracking.
 - Single seedling daemon pod, in `seedling-system`, manages all installed apps
   in their own namespaces.
 - All four BSL resource kinds — Deployment, Job, Service, Ingress — work.
-- Volumes, including BTRFS-snapshot-equivalent backup app integration via
+- Volumes, including BTRFS-snapshot-equivalent site volume snapshots via
   `VolumeSnapshot`.
 - TLS via cert-manager.
 - Operator-configurable LB Service for Caddy.
@@ -158,7 +157,7 @@ implementation. Listed for tracking.
 │  └────────────────┘  └────────────┘  └──────┘  └─────────────┘ │
 │                                                                 │
 │  + cert-manager Certificate, NetworkPolicy, ResourceQuota,      │
-│    ServiceAccount, possibly VolumeSnapshot during backups       │
+│    ServiceAccount, possibly VolumeSnapshot for snapshots        │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
@@ -237,8 +236,6 @@ both the `K8sBackend` impl and the capability-gate logic.
 | Volume hold (delayed delete) | PVC `reclaimPolicy: Retain` + seedling-tracked release           | Operator confirmation gate stays in seedling.                                                    |
 | External Volume              | Operator pre-provisioned PVC referenced by name                  | Operator config maps logical name to PVC.                                                        |
 | Snapshots                    | `VolumeSnapshot` against the PVC                                 | Requires CSI driver with snapshot support. `HAS_SNAPSHOTS` becomes runtime probe.                |
-| Backup source binding        | Snapshot → clone PVC (read-only) → mount in backup pod           | Operation-scoped, deleted at action end.                                                         |
-| Backup destination binding   | Standard PVC (writable)                                          | Operation-scoped.                                                                                |
 | `rt.exec`                    | `pods/exec` subresource                                          | At-most-once via seedling action log, unchanged.                                                 |
 | `rt.signal`                  | **Unsupported.** Capability flag set false, install validates.   | Apps using `rt.signal` cannot install on K8s.                                                    |
 | `rt.start`/`rt.stop`         | StatefulSet/Job apply or delete                                  | Declarative; observation via watch.                                                              |
@@ -355,7 +352,6 @@ pub trait StorageBackend: Send + Sync + 'static {
         -> BoxFuture<'a, Result<SnapshotHandle, BoxError>>;
 
     /// Materialise a snapshot as a new volume, ro or rw.
-    /// Used for backup source binding (ro) and restore destination binding (rw).
     fn clone_snapshot<'a>(
         &'a self,
         snapshot: &'a SnapshotHandle,
@@ -529,13 +525,6 @@ a new PVC to the held PV.
 a matching `VolumeSnapshotClass`. On install, seedling probes the cluster for
 this and sets `Capabilities::supports_volume_snapshots` accordingly.
 
-For a backup app:
-- Source binding: `VolumeSnapshot` of the source PVC → clone PVC
-  (`spec.dataSource: VolumeSnapshot`) in the backup app's namespace, mounted
-  read-only.
-- Destination binding: a fresh PVC in the backup app's namespace, writable.
-- Both lifecycles tied to the operation.
-
 ### Observation
 
 `kube`-rs `watcher` + `reflector` for every kind seedling cares about:
@@ -586,7 +575,7 @@ Documented in `docs/k8s-install.md` (to write):
   chooses based on what's reachable. Public Let's Encrypt via DNS-01 is the
   recommended setup for clusters without inbound internet reachability.
 - A `StorageClass` (default or named) for seedling's PVCs, with a matching
-  `VolumeSnapshotClass` if backups are wanted.
+  `VolumeSnapshotClass` if snapshots are wanted.
 - A way to expose the Caddy Service to whatever range of clients needs to
   reach app ingresses (cloud LB, MetalLB, NodePort, hostNetwork — any of
   these work; cert mode is independent).
@@ -682,7 +671,6 @@ backend slots in alongside without further trait churn.
 
 - `StorageBackend` impl: PVC for named, emptyDir for tmpfs/anon.
 - `VolumeSnapshot` for snapshots.
-- Backup app source/destination binding via clone PVC.
 
 ### Phase 7 — bootstrap & operator UX
 
@@ -732,6 +720,3 @@ tests. Notable areas:
   CSI drivers. The reconciler must tolerate "PVC pending → bound" as a
   scheduled-but-not-ready state. Already in the BSL volume lifecycle model;
   just needs wiring.
-- **VolumeSnapshot cleanup.** Snapshots accumulate cost. Operation-scoped
-  snapshots for backups must be deleted at action end, with a sweeper for
-  orphans (action interrupted by daemon crash).

@@ -208,7 +208,8 @@ fn clear_active_rt() {
 // ---------------------------------------------------------------------------
 // Thread-local: operation-scoped volume bindings, set for the duration of
 // an action closure. Populated by the runtime before invoking an action
-// that requires bindings (e.g. backup operations); empty for normal actions.
+// that requires bindings (e.g. one with a `kind: "volume"` param); empty for
+// other actions.
 // ---------------------------------------------------------------------------
 
 thread_local! {

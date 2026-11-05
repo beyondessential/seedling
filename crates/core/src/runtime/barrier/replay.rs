@@ -252,8 +252,8 @@ pub struct OperationContext<'a, W: WorldStateOracle + 'static> {
     /// prior `App` for `on_change` handlers.
     pub cipher: Option<std::sync::Arc<crate::runtime::secrets::Cipher>>,
     /// Operation-scoped external volume bindings injected by the runtime.
-    /// Empty for normal operations; populated for internal operations such as
-    /// backup actions that need to expose snapshot paths to the closure.
+    /// Empty unless the operation hands a volume to the closure, as a
+    /// `kind: "volume"` param does.
     // l[impl volume.external.dynamic]
     pub operation_volume_bindings: HashMap<String, OperationVolumeBinding>,
     /// Cooperative cancellation signal. Barriers consult it at entry so an

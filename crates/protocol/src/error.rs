@@ -27,8 +27,6 @@ pub enum ErrorCode {
     Deregistering,
     ServerBusy,
     Internal,
-    // i[impl backup.app.deregister]
-    BackupAppInUse,
     // i[impl canopy.offer.disabled]
     // i[impl canopy.unavailable]
     CanopyDisabled,
@@ -87,7 +85,6 @@ mod tests {
             (ErrorCode::Deregistering, "deregistering"),
             (ErrorCode::ServerBusy, "server_busy"),
             (ErrorCode::Internal, "internal"),
-            (ErrorCode::BackupAppInUse, "backup_app_in_use"),
         ];
         for (code, expected) in cases {
             assert_eq!(serde_json::to_value(code).unwrap(), json!(expected));

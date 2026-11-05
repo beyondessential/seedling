@@ -569,7 +569,7 @@ The `IDLE_CMD` constant is provided as a sugar for the "container as exec host" 
 
 ## Action params with `kind: "volume"`
 
-Action and shell param schemas accept a special `kind: "volume"` that asks the operator to pick a site volume at invocation time. The runtime resolves the operator's choice into an operation-scoped binding and delivers the binding's name in `param["<name>_volume"]` (the same convention the backup actions use). The closure consumes it via `app.external_volume(...)`:
+Action and shell param schemas accept a special `kind: "volume"` that asks the operator to pick a site volume at invocation time. The runtime resolves the operator's choice into an operation-scoped binding and delivers the binding's name in `param["<name>_volume"]`. The closure consumes it via `app.external_volume(...)`:
 
 ```rhai
 app.on_action("dump", |rt, param| {

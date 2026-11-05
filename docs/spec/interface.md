@@ -178,7 +178,6 @@ Absent specification bugs, anything that is not defined here is either defined i
 > | `deregistering` | The app is in the `Deregistering` state. |
 > | `server_busy` | The server's stream concurrency limit has been reached; the client should retry after a delay. |
 > | `internal` | An unexpected server-side failure (for example a database error) prevented the request from completing. |
-> | `backup_app_in_use` | The backup app cannot be deregistered because a backup strategy still references it. |
 > | `canopy_disabled` | Canopy access is turned off for this instance; the request was refused for that reason alone. |
 > | `canopy_unavailable` | Canopy access is enabled but no provider is currently offering it, or the offering client could not reach Canopy. |
 
@@ -1030,80 +1029,6 @@ Absent specification bugs, anything that is not defined here is either defined i
 >
 > `kind` is one of `"install" | "start" | "action" | "shell" | "param_change"`. `error` is a human-readable message or `null`. `skipped_reason` is populated only in lenient mode when a handler was not probed. `all_images` is the deduplicated union of `images` across every handler with no `error` and no `skipped_reason`.
 
-## Backup Apps
-
-> i[backup.app.register]
-> `/backups/apps/register { app }` opts `app` in to the backup role. The app's BSL script must already declare the `save-snapshot`, `list-snapshots`, and `restore-snapshot` actions; otherwise the request is rejected with `requirements_invalid`.
->
-> Returns `{ "registered": true }` on success.
-
-> i[backup.app.deregister]
-> `/backups/apps/deregister { app }` removes `app` from the backup role.
-> If any backup strategies reference this app via their `via` field, the request is rejected with `backup_app_in_use`.
-
-> i[backup.app.list]
-> `/backups/apps/list {}` returns an array of registered backup apps; each entry has a single field `app` naming the BSL app.
-
-> i[backup.app.validation]
-> On `/apps/update` for an app that is a registered backup app, the runtime must evaluate the new script and reject the update if the required actions (`save-snapshot`, `list-snapshots`, `restore-snapshot`) are no longer present.
-> The same validation must be performed during `/apps/plan` (dry-run) and reported in the diff.
-
-## Backup Strategies
-
-> i[backup.strategy.create]
-> `/backups/strategies/create { name, via, schedule, volumes }` creates a named backup strategy.
->
-> - `name`: strategy name (follows standard naming rules).
-> - `via`: BSL app name of a registered backup app.
-> - `schedule`: one of `"every hour"`, `"twice a day"`, `"every day"`.
-> - `volumes`: array of source volume identifiers (`"<app>/<volume>"` or `"_site/<volume>"`).
->
-> Returns `{ "created": true }` on success.
-
-> i[backup.strategy.list]
-> `/backups/strategies/list {}` returns an array of strategy objects with fields `name`, `via`, `schedule`, and `volumes`.
-
-> i[backup.strategy.show]
-> `/backups/strategies/show { name }` returns the strategy object.
-
-> i[backup.strategy.update]
-> `/backups/strategies/update { name, via?, schedule?, volumes? }` updates a strategy. All fields except `name` are optional; only provided fields are changed.
-
-> i[backup.strategy.delete]
-> `/backups/strategies/delete { name }` deletes a strategy.
-
-> i[backup.run]
-> `/backups/run { strategy }` triggers an immediate backup for the named strategy, backing up all volumes in the strategy without a random delay.
->
-> Returns `[{ "volume": "<vol>", "operation_id": "<id>" }, ...]` — one entry per volume in the strategy, in declaration order. The backup runs asynchronously; the operation IDs can be used to track progress via events.
-
-> i[backup.snapshots.list]
-> `/backups/snapshots/list { strategy, volume }` synchronously invokes the backup app's `list-snapshots` action and returns the output.
->
-> `strategy` is the strategy name; `volume` is the volume identifier within the strategy (e.g. `"myapp/data"` or `"_site/vol"`).
->
-> The action is expected to filter its output to only snapshots it took for that volume via `save-snapshot`, so that restores cannot accidentally select a snapshot belonging to a different volume that shares the same backend repository. The information needed to filter is delivered via the `backup` param object (see [backup.action.backup-param](#i--backup.action.backup-param)).
->
-> Returns the parsed JSON written by the action to the volume delivered under the logical binding key `"output"`, at the filename given by the runtime (see [backup.list](runtime.md#r--backup.list) and [operation.volume-param](runtime.md#r--operation.volume-param)).
-
-> i[backup.action.backup-param]
-> When Seedling invokes any of the three required backup actions (`save-snapshot`, `list-snapshots`, `restore-snapshot`) on a registered backup app, the param map passed to the action closure must contain a key `backup` whose value is an object with the following string fields:
->
-> - `strategy`: the strategy name that caused this invocation.
-> - `app`: the BSL app whose volume is being backed up, or the literal `"_site"` for site-scoped volumes.
-> - `volume`: the named volume within `app` (for `"_site"`, the site volume name).
->
-> `save-snapshot` is expected to stamp `app` + `volume` (and optionally `strategy`) onto the resulting snapshot via the backend's tagging mechanism. `list-snapshots` is expected to filter its output by the same identity. `restore-snapshot` is expected to verify the requested snapshot matches before writing to the destination.
->
-> `restore-snapshot` additionally receives an opaque `snapshot` string param (the identifier previously returned by `list-snapshots`).
-
-> i[backup.restore]
-> `/backups/restore { strategy, volume, snapshot }` restores a snapshot to a new site volume.
->
-> `strategy` is the strategy name; `volume` is the source volume identifier; `snapshot` is the snapshot identifier as returned by `list-snapshots`.
->
-> Returns `{ "site_volume": "<name>" }` — the name of the newly created site volume containing the restored data.
-
 # Templates
 
 > i[template.definition]
@@ -1474,12 +1399,6 @@ Seedling has no Canopy identity of its own. Instead a connected client may offer
 
 > i[ctl.registries.tags]
 > `ctl registries tags <repository>` lists a repository's tags, as a thin wrapper over [definition.tags](#i--definition.tags).
-
-> i[ctl.backup.app.hint]
-> When `ctl apps create` evaluates a script that declares actions `save-snapshot`, `list-snapshots`, and `restore-snapshot`, the CLI should print an informational message suggesting backup app registration.
-
-> i[ctl.backup.strategy.allow-missing]
-> When creating or updating a backup strategy, the CLI checks whether each referenced volume exists. If any volume does not resolve and `--allow-missing` is not passed, the CLI must abort with an error before sending the request.
 
 > i[ctl.canopy]
 > The CLI exposes the operator-facing side of the Canopy relay: `ctl canopy status`, `ctl canopy enable`, and `ctl canopy disable`, as thin wrappers over [canopy.status](#i--canopy.status) and [canopy.settings](#i--canopy.settings).

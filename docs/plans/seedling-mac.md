@@ -25,8 +25,6 @@ This means an app developer can:
 
 - Run the full BSL feature set, including signals, image warming, volume
   snapshots, BTRFS subvolumes, healthchecks, the works.
-- Develop and test backup apps with real `VolumeSnapshot`-equivalent semantics
-  (BTRFS on loop device — see Storage below).
 - Get real, browser-trusted Let's Encrypt certs for their app ingresses if
   they own a DNS zone (DNS-01 challenge — see Networking below).
 - Use the same `seedling-ctl` binary (cross-compiled darwin) and same Web UI
@@ -86,11 +84,10 @@ identical semantics to the host backend on a real BTRFS-formatted server:
 
 - `HAS_SNAPSHOTS = true`.
 - Subvolume snapshots, source/destination clone semantics.
-- Backup app development works end-to-end with real snapshot-driven flows.
 
 Loop-device BTRFS isn't quite as performant as BTRFS on bare metal, but for
 a dev workload it's fine — and crucially, it exercises the same code paths
-the production backend uses, so backup apps developed on Mac behave the same
+the production backend uses, so volume snapshots on Mac behave the same
 on a server.
 
 The storage disk is independent of the OS disk. `seedling-mac reset` (without

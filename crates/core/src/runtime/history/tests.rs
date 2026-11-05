@@ -81,7 +81,7 @@ fn cancel_requested_round_trips_through_db() {
     let op = CurrentOperation {
         operation_id: OperationId("op-c1".into()),
         app: app_name("app"),
-        action_name: action_name("save-snapshot"),
+        action_name: action_name("reindex"),
         source_generation: 1,
         target_generation: 1,
     };

@@ -84,7 +84,7 @@ A prefix scan is fine to *enumerate candidates*; the decision must be an exact m
 recorded identity.
 
 The same discipline at grant time: names the daemon takes in an operator-shared namespace
-(`backup-snap-*` volumes, the `tailscale` ingress) belong in `crates/core/src/reserved.rs`,
+(such as the `tailscale` ingress) belong in `crates/core/src/reserved.rs`,
 are rejected **at creation only** — an operator must still be able to rename or remove
 something that predates the reservation — and their destructive consumers additionally check
 recorded ownership, because reservation cannot repair a collision that already exists.
@@ -102,7 +102,7 @@ Spec: `r[app.uninstall.scope]`, `r[namespace.reserved]`, `r[infra.pod.subnet]`.
 Dedup, subject identity, and the clearing condition were re-implemented at every call site and
 had diverged into five idioms. The results: a fault filed once per event without bound and
 never cleared; faults that could never clear after a restart because the "previously seen" set
-was in memory; and a successful backup of one volume clearing every *other* volume's failure.
+was in memory; and a success for one volume clearing every *other* volume's failure.
 
 **Check:**
 

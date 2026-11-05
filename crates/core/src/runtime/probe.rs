@@ -516,19 +516,19 @@ mod tests {
     // r[verify image.discover]
     #[test]
     fn handles_external_volume_with_unset_param_key() {
-        // Mirrors the kopia-style backup handler:
-        // `app.external_volume(param["output_volume"])` — `output_volume`
+        // A handler that calls `app.external_volume(param["output_volume"])`:
+        // `output_volume`
         // isn't in the handler's declared schema (it's supplied by the
         // runtime at real-invocation time), so in a probe it resolves to
         // unit. The probe should not throw; it should still extract
         // images from subsequent rt.start calls.
         let (engine, ast, app) = setup_engine_and_app(
             r#"
-            app.on_action("list-snapshots", |rt, param| {
+            app.on_action("export", |rt, param| {
                 let output = app.external_volume(param["output_volume"]);
                 rt.start(
                     app.job()
-                        .image("ghcr.io/example/kopia:0.21.0")
+                        .image("ghcr.io/example/tool:0.21.0")
                         .mount("/output", output)
                 ).ready();
             });
@@ -542,29 +542,29 @@ mod tests {
         let handler = response
             .per_handler
             .iter()
-            .find(|h| h.name == "list-snapshots")
-            .expect("list-snapshots probed");
+            .find(|h| h.name == "export")
+            .expect("export probed");
         assert!(
             handler.error.is_none(),
             "expected clean probe, got error {:?}",
             handler.error
         );
-        assert!(response.all_images.contains("ghcr.io/example/kopia:0.21.0"));
+        assert!(response.all_images.contains("ghcr.io/example/tool:0.21.0"));
     }
 
     // r[verify image.discover]
     #[test]
     fn surfaces_error_for_nested_param_indexing() {
-        // Kopia-like pattern: `backup["strategy"]` — `backup` is unset
+        // Nested indexing such as `config["mode"]` — `config` is unset
         // during probe so indexing fails. This isn't recoverable by
         // probe stubs (we can't predict what structure the script
         // expects), but the error should be reported cleanly rather than
         // aborting the whole probe.
         let (engine, ast, app) = setup_engine_and_app(
             r#"
-            app.on_action("list-snapshots", |rt, param| {
-                let strategy = param["backup"]["strategy"];
-                rt.start(app.job().image("ghcr.io/example/kopia:0.21.0"));
+            app.on_action("export", |rt, param| {
+                let mode = param["config"]["mode"];
+                rt.start(app.job().image("ghcr.io/example/tool:0.21.0"));
             });
             app.on_action("harmless", |rt, _param| {
                 rt.start(app.job().image("ghcr.io/example/foo:1.0")).ready();
@@ -588,7 +588,7 @@ mod tests {
         let broken = response
             .per_handler
             .iter()
-            .find(|h| h.name == "list-snapshots")
+            .find(|h| h.name == "export")
             .expect("probed");
         assert!(
             broken.error.is_some(),
@@ -597,7 +597,7 @@ mod tests {
         // The clean handler still shows up in all_images.
         assert!(response.all_images.contains("ghcr.io/example/foo:1.0"));
         // The broken handler's image must not pollute all_images.
-        assert!(!response.all_images.contains("ghcr.io/example/kopia:0.21.0"));
+        assert!(!response.all_images.contains("ghcr.io/example/tool:0.21.0"));
     }
 
     // r[verify image.discover]

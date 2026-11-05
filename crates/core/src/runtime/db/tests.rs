@@ -13,7 +13,7 @@ fn open_in_memory_succeeds() {
             |r| r.get(0),
         )
         .expect("schema_version should exist");
-    assert_eq!(version, 58);
+    assert_eq!(version, 59);
 }
 
 // r[verify history.persistence]
@@ -45,7 +45,7 @@ fn params_table_exists() {
             |r| r.get(0),
         )
         .expect("schema_version should exist");
-    assert_eq!(version, 58);
+    assert_eq!(version, 59);
 }
 
 // i[verify app.persist]
@@ -214,4 +214,45 @@ fn stored_scripts_become_one_file_bundles_pushed_by_nobody_known() {
     .unwrap();
     assert_eq!(t.bundle.hash(), expected.hash());
     assert_eq!(t.source, Source::unknown_push());
+}
+
+#[test]
+fn backup_tables_are_dropped_and_their_active_faults_retired() {
+    let db = Db::open_in_memory_through(58).expect("open at v58");
+    db.conn
+        .execute_batch(
+            "INSERT INTO backup_apps (app) VALUES ('kopia');
+             INSERT INTO backup_strategies (name, via, schedule, volumes)
+                 VALUES ('nightly', 'kopia', 'every day', '[\"web/data\"]');
+             INSERT INTO faults (id, app, kind, timestamp, description, subject)
+                 VALUES ('f1', 'kopia', 'backup_failed', 't', 'x', 'web/data'),
+                        ('f2', 'kopia', 'backup_source_unavailable', 't', 'x', 'web/data'),
+                        ('f3', 'kopia', 'backup_app_unavailable', 't', 'x', ''),
+                        ('f4', 'web', 'container_start_failed', 't', 'x', 'web-1');",
+        )
+        .expect("seed v58 data");
+
+    db.finish_migrations().expect("migrate to the latest");
+
+    for table in ["backup_apps", "backup_strategies"] {
+        let count: i64 = db
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name=?1",
+                [table],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(count, 0, "{table} should be dropped");
+    }
+
+    let active: Vec<String> = db
+        .conn
+        .prepare("SELECT id FROM faults WHERE cleared_at IS NULL")
+        .unwrap()
+        .query_map([], |r| r.get(0))
+        .unwrap()
+        .collect::<Result<_, _>>()
+        .unwrap();
+    assert_eq!(active, vec!["f4".to_owned()]);
 }

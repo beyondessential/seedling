@@ -5,7 +5,6 @@ import { SafetyModeProvider } from "./components/SafetyModeProvider";
 import { SessionProvider } from "./components/SessionProvider";
 import AppDetail from "./routes/AppDetail";
 import Apps from "./routes/Apps";
-import Backups from "./routes/Backups";
 import Canopy from "./routes/Canopy";
 import Certificates from "./routes/Certificates";
 import CreateApp from "./routes/CreateApp";
@@ -45,7 +44,6 @@ const router = createBrowserRouter([
       { path: "services", element: <Services /> },
       { path: "ingresses", element: <Ingresses /> },
       { path: "certificates", element: <Certificates /> },
-      { path: "backups", element: <Backups /> },
       { path: "keys", element: <Keys /> },
       { path: "registries", element: <Registries /> },
       { path: "canopy", element: <Canopy /> },
