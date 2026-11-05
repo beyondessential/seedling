@@ -322,6 +322,17 @@ This is currently the only value.
 >
 > The method returns `app` so calls may be chained.
 
+> l[app.canopy-type]
+> The `app.canopy_type(type: string)` method declares the Canopy application type the app is, such as `tamanu-central`.
+> The runtime reports the app to Canopy as an application of that type and acts with Canopy on its behalf under it, as described in [Canopy Reporting](runtime.md#canopy-reporting).
+>
+> A type is lowercase letters and digits in hyphen-separated segments, beginning with a letter; any other value throws, since Canopy refuses it.
+> Calling `canopy_type()` more than once replaces the previous value.
+> An app that never calls it has no Canopy type, and is not reported to Canopy as an application.
+> Calling it inside an action closure is a script error: the type describes what the app is, not what one operation does.
+>
+> The method returns `app` so calls may be chained.
+
 ## Bundle files
 
 > l[app.file]

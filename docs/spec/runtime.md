@@ -1772,7 +1772,9 @@ The BSL surface is intentionally strategy-agnostic: scripts declare only that an
 
 # Canopy Reporting
 
-Seedling reports its own health to Canopy so that a host is visible in the fleet view, using the relay defined in the interface spec. It reports as a source distinct from any other agent on the host, so that its checks and the issues derived from them are scoped to it alone.
+Seedling reports to Canopy so that a host and the apps it runs are visible in the fleet view, using the relay defined in the interface spec. It reports as a source distinct from any other agent on the host, so that its checks and the issues derived from them are scoped to it alone.
+
+Each report describes the machine, with Seedling's own health, and each app that holds a [Canopy application type](language.md#l--app.canopy-type), as an application of that type.
 
 > r[canopy.settings.enabled]
 > Whether Canopy access is enabled is stored durably and survives restarts.
@@ -1780,7 +1782,8 @@ Seedling reports its own health to Canopy so that a host is visible in the fleet
 
 > r[canopy.report.schedule]
 > While Canopy access is enabled and at least one offer is live, the runtime reports its status every sixty seconds.
-> When Canopy access is disabled, or no offer is live, no report is attempted and no fault is filed: the absence of a provider is a deployment choice rather than a malfunction.
+> When Canopy access is disabled, or no offer is live, no report is attempted.
+> The absence of a provider is a deployment choice rather than a malfunction, and files no fault unless an app relies on Canopy (see [canopy.offer.absent](#r--canopy.offer.absent)).
 > The runtime never initiates a connection of its own to obtain one.
 
 > r[canopy.report.identity]
@@ -1788,7 +1791,7 @@ Seedling reports its own health to Canopy so that a host is visible in the fleet
 > The identifier is cached durably so that the resolution is not repeated on every report, and is re-resolved after any report that fails in a way suggesting the cached value is wrong or absent.
 
 > r[canopy.report.checks]
-> Each report carries a fixed set of named checks, so that the check catalog Canopy maintains does not grow with the set of applications an operator installs:
+> Each report carries a fixed set of named checks on the machine, describing Seedling itself, so that the check catalog Canopy maintains does not grow with the set of applications an operator installs:
 >
 > | Check | Passed | Warning | Failed |
 > |---|---|---|---|
@@ -1806,7 +1809,7 @@ Seedling reports its own health to Canopy so that a host is visible in the fleet
 > A broken result neither opens nor closes the check's issue, so a known failure keeps its standing while the inability to check is itself surfaced.
 
 > r[canopy.report.extra]
-> Each report also carries the Seedling version, the daemon's own uptime in seconds, the total number of registered apps, a map of app status to count, the number of lifecycle operations in progress, and the number of active faults.
+> Each report also carries, as machine detail, the Seedling version, the daemon's own uptime in seconds, the total number of registered apps, a map of app status to count, the number of lifecycle operations in progress, and the number of active faults.
 > It does not carry the hostname, the host's uptime, or the version of any managed application: those describe the host rather than Seedling, and are reported by the agent that owns them.
 
 > r[canopy.report.fault]
@@ -1817,3 +1820,54 @@ Seedling reports its own health to Canopy so that a host is visible in the fleet
 > A report's response carries instructions for the reporting source, including a list of backups to run immediately.
 > That list is addressed only to the source that owns backups on a host, so a Seedling report never receives a non-empty one and the runtime does not act on it.
 > The runtime must not treat an empty list as a signal of any kind.
+
+> r[canopy.offer.absent]
+> An app relies on Canopy while it holds a Canopy application type (see [canopy.app.claim](#r--canopy.app.claim)).
+> While Canopy access is enabled and no offer has been live for fifteen minutes, the runtime holds an app-level fault of kind `canopy_offer_absent` against each app that relies on Canopy, stating when an offer was last live, or that none ever has been.
+> The period runs from the later of the last moment an offer was live and the moment the app came to rely on Canopy.
+> Both moments are recorded durably, so a daemon restart neither restarts the period nor clears the fault.
+> The fault is cleared when an offer becomes live, when Canopy access is disabled, when the app stops relying on Canopy, or when the app is deregistered.
+> A short absence, such as the offering client restarting, files nothing; a host that has gone without an offer long enough to fall behind on what its apps need from Canopy files a fault on each app affected.
+> Disabling Canopy access is an operator's decision, visible as such, and files nothing.
+
+## Applications
+
+> r[canopy.app.claim]
+> An app claims the [Canopy application type](language.md#l--app.canopy-type) its definition declares when that definition is registered or applied.
+> The runtime records durably which app holds each type, and the order in which the other apps claimed it.
+> An app that claims a type no app holds becomes its holder.
+> Canopy addresses an application by its type, so a type has at most one holder at a time.
+
+> r[canopy.app.claimant]
+> An app that claims a type another app holds is a claimant of that type.
+> A claimant is not reported to Canopy, and the runtime acts with Canopy for it in no way.
+> While it is a claimant, the runtime holds an app-level fault of kind `canopy_type_held` against it, naming the type and the app holding it.
+> The fault excludes none of the app's resources from reconciliation, so the claimant runs as it otherwise would, and the holder is unaffected.
+> The fault is cleared when the app becomes the holder, when its definition stops declaring the type, or when it is deregistered.
+> A second app of a type is faulted rather than refused, so that a replacement can be stood up beside the app it replaces.
+
+> r[canopy.app.release]
+> A holder releases its type when it enters `Deregistering`, or when a definition declaring a different type or none is applied to it.
+> The type then passes to the claimant that claimed it earliest, so an app can be replaced by registering its successor and then deregistering it.
+> With no claimant, the type is unheld until another app claims it.
+
+> r[canopy.app.features]
+> Wherever the runtime acts with Canopy on behalf of an application type, it acts for that type's holder only.
+
+> r[canopy.app.key]
+> Each holder is reported under the key `host-<type>`, derived from the type alone.
+> A type passing from one app to another therefore continues as the same Canopy application, keeping what Canopy holds for it, rather than leaving the old one unreachable and creating a new one beside it.
+> It is also the key other agents use for the single application of a type on a host, so where another agent already reports that application, as on a host moving onto Seedling, Seedling's report describes the same application rather than a second one of its type.
+
+> r[canopy.app.health]
+> Each reported application carries one check, `health/app`, graded from the holder's [status](interface.md#i--app.status):
+>
+> | Status | Result |
+> |---|---|
+> | `Running` | passed |
+> | `Degraded` | warning |
+> | `Faulted` | failed |
+> | `NotInstalled`, `Installing`, `Operating` | skipped |
+>
+> A lifecycle operation neither raises nor recovers the application's health, since an upgrade in progress is neither a failure nor evidence of recovery.
+> The check's detail carries the app's status and its active faults, each with its kind, the resource it is filed against where there is one, and its description, so an operator reading the application in Canopy can see why without a second lookup.
