@@ -1855,9 +1855,8 @@ Each report describes the machine, with Seedling's own health, and each app that
 > Wherever the runtime acts with Canopy on behalf of an application type, it acts for that type's holder only.
 
 > r[canopy.app.key]
-> Each holder is reported under the key `host-<type>`, derived from the type alone.
-> A type passing from one app to another therefore continues as the same Canopy application, keeping what Canopy holds for it, rather than leaving the old one unreachable and creating a new one beside it.
-> It is also the key other agents use for the single application of a type on a host, so where another agent already reports that application, as on a host moving onto Seedling, Seedling's report describes the same application rather than a second one of its type.
+> Each holder is reported under its app name as the key, since the name is what identifies an app on the host.
+> A type passing from one app to another is therefore a different application to Canopy: the new holder's application starts without the grants Canopy held for the previous one, and the previous one reads as unreachable until an operator archives it.
 
 > r[canopy.app.health]
 > Each reported application carries one check, `health/app`, graded from the holder's [status](interface.md#i--app.status):
