@@ -6,7 +6,7 @@ base: default
 
 Seedling adopts Canopy for certificates, backups, DNS names and workload identity tokens, with every call going through the existing relay. The groundwork card lands first; the strands after it are independent of each other.
 
-## Report apps to Canopy as applications
+## Report apps to Canopy as applications · H5
 
 An app definition declares its Canopy application type in BSL, and Seedling reports each typed app to Canopy as an application whose health is the app's status, with its faults as detail. The first app to claim a type holds it; a later app declaring the same type gets a non-critical fault and no Canopy features, and takes the type over when the holder is removed. Also covers the fault filed when an app relies on Canopy and no offer has been live past a grace period. Every Canopy card here depends on this one.
 
