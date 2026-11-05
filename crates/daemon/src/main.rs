@@ -620,6 +620,8 @@ async fn main() {
         }
     }
 
+    seedling_core::system::leftover_snapshots::sweep(&db, &driver.volume_store).await;
+
     // r[impl actuate.volume.tmpfs]
     // Reset the tmpfs-volume bind-mount root on startup. /run is tmpfs so
     // contents are already gone after a host reboot, but a daemon restart

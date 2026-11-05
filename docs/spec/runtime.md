@@ -1067,6 +1067,9 @@ Some operations must hand a writable or read-only path to an action closure with
 > r[volume.site.promote.events]
 > Promoting a snapshot site volume must emit an event identifying the new managed site volume and the source snapshot. The promoted volume is treated as a new managed site volume for audit purposes, distinct from the source snapshot which remains intact.
 
+> r[volume.site.leftover-snapshots]
+> Earlier releases ran backups from a read-only snapshot of the source volume, stored as site-volume storage under a name beginning `backup-snap-` and removed when the run finished. A run interrupted between those two steps left the snapshot on disk with no site volume recorded for it. On startup, the runtime must delete any site-volume storage whose name begins `backup-snap-` and for which no site volume is recorded. Storage recorded as a site volume is the operator's and must be left alone, as must storage whose ownership could not be determined.
+
 > r[volume.external.mapping.events]
 > Creating, removing, or retargeting an operator-configured external volume mapping must emit an event identifying the app and external volume name, the new mapping target (or absence of one for removal), and — for retargeting — the previous target. These events feed both the event feed and the [audit log](#r--audit.log).
 
@@ -1296,9 +1299,9 @@ Two levers set how a workload competes for host resources under pressure. Each D
 > The faulted resource is excluded from active reconciliation until the fault is resolved.
 
 > r[namespace.reserved]
-> The runtime grants itself names inside namespaces operators also use, such as the site-ingress name `tailscale`.
-> Creating a site ingress under a reserved name is rejected; the restriction applies to creation only, so an object that predates the reservation can still be renamed or removed.
-> Reservation alone is not sufficient: a component that deletes or disables objects it believes are its own must identify them by what the runtime recorded — a manually created site ingress is never disabled or replaced by a discovery provider — regardless of what the object is named.
+> The runtime grants itself names inside namespaces operators also use: site-volume names beginning `backup-snap-`, and the site-ingress name `tailscale`.
+> Creating a site volume or site ingress under a reserved name is rejected; the restriction applies to creation only, so an object that predates the reservation can still be renamed or removed.
+> Reservation alone is not sufficient: a component that deletes or disables objects it believes are its own must identify them by what the runtime recorded — a registered site volume is never deleted by the [leftover snapshot sweep](#r--volume.site.leftover-snapshots), and a manually created site ingress is never disabled or replaced by a discovery provider — regardless of what the object is named.
 
 > r[app.uninstall.scope]
 > Uninstalling an app affects only resources belonging to that app.

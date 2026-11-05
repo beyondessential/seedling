@@ -84,7 +84,7 @@ A prefix scan is fine to *enumerate candidates*; the decision must be an exact m
 recorded identity.
 
 The same discipline at grant time: names the daemon takes in an operator-shared namespace
-(such as the `tailscale` ingress) belong in `crates/core/src/reserved.rs`,
+(`backup-snap-*` volumes, the `tailscale` ingress) belong in `crates/core/src/reserved.rs`,
 are rejected **at creation only** — an operator must still be able to rename or remove
 something that predates the reservation — and their destructive consumers additionally check
 recorded ownership, because reservation cannot repair a collision that already exists.
