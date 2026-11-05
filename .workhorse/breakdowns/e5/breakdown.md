@@ -14,7 +14,7 @@ An app definition declares its Canopy application type in BSL, and Seedling repo
 
 For a hostname with no operator policy, Seedling requests its certificate from Canopy when an offer is live and the entitlements allow the hostname's app to have it, with HTTP-01 as the fallback. Seedling holds the key and submits a CSR; Canopy renews and Seedling collects, replacing the key when Canopy says it must. Adds a Canopy-only policy that drops the HTTP-01 fallback, for hostnames Seedling does not yet receive traffic for. Canopy certificates appear in the hostname view and satisfy warm-cert readiness like other runtime-managed certificates.
 
-## Remove the backup-app framework
+## Remove the backup-app framework · G5
 
 Remove backup apps, backup strategies, Seedling's own backup scheduling and the `backup_failed` path across the runtime, OI, ctl and web interface, with a new migration dropping their tables. Operation-scoped volume bindings and the reserved `_volume` and `_filename` param keys stay. Independent of the Canopy work and can land at any point.
 
