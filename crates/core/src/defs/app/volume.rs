@@ -84,7 +84,7 @@ pub(super) fn on_app(builder: &mut TypeBuilder<App>) {
     );
 
     // r[impl image.discover]
-    // Probe-robust fallback: backup handlers commonly call
+    // Probe-robust fallback: handlers taking a `kind: "volume"` param call
     // `app.external_volume(param["output_volume"])`, and probing without
     // caller-supplied params makes that argument unit. Rather than bubble
     // a cryptic "function not found", when we're inside a probe pass we

@@ -309,16 +309,6 @@ bsl_name_newtype! {
 }
 
 bsl_name_newtype! {
-    /// Canonical name of a backup strategy.
-    ///
-    /// Backup strategies live at the site level (not inside an app) and are
-    /// invoked by name by the backup scheduler. A strategy's name must not
-    /// collide with a registered backup app — that check is enforced at
-    /// strategy-creation time.
-    BackupStrategyName
-}
-
-bsl_name_newtype! {
     /// Canonical name of a seed-script template stored on the site.
     ///
     /// Template names follow the same rules as app names so that instantiated
@@ -696,20 +686,8 @@ mod tests {
     }
 
     #[test]
-    fn backup_strategy_name_accepts_canonical() {
-        BackupStrategyName::new("nightly").unwrap();
-    }
-
-    #[test]
     fn template_name_accepts_canonical() {
         TemplateName::new("postgres-stack").unwrap();
-    }
-
-    #[test]
-    fn template_and_backup_strategy_are_distinct_types() {
-        let t = TemplateName::new("foo").unwrap();
-        let b = BackupStrategyName::new("foo").unwrap();
-        assert_eq!(t.as_str(), b.as_str());
     }
 
     #[test]

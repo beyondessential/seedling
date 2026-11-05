@@ -83,7 +83,6 @@ describe("Navbar", () => {
       "Site ingresses": "/ingresses",
       "TLS certificates": "/certificates",
       Volumes: "/volumes",
-      Backups: "/backups",
       Templates: "/templates",
     };
     for (const [name, href] of Object.entries(links)) {

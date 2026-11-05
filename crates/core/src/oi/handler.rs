@@ -64,7 +64,6 @@ pub(super) fn is_valid_dns_name(s: &str) -> bool {
 pub mod actions;
 mod appdef_json;
 mod apps;
-pub mod backups;
 mod canopy;
 mod definition;
 mod faults;
@@ -373,30 +372,6 @@ fn parse_and_dispatch(state: &Arc<OiState>, buf: &[u8], ctx: &RequestCtx) -> Han
         "/ingresses/site/discovery/status" => ingresses::discovery_status(state),
         // r[impl ingress.site.tailscale]
         "/ingresses/site/discovery/refresh" => ingresses::discovery_refresh(state),
-        // i[backup.app.register]
-        "/backups/apps/register" => backups::register_backup_app(state, parse_params(req.params)?),
-        // i[backup.app.deregister]
-        "/backups/apps/deregister" => {
-            backups::deregister_backup_app(state, parse_params(req.params)?)
-        }
-        // i[backup.app.list]
-        "/backups/apps/list" => backups::list_backup_apps(state),
-        // i[backup.strategy.create]
-        "/backups/strategies/create" => backups::create_strategy(state, parse_params(req.params)?),
-        // i[backup.strategy.list]
-        "/backups/strategies/list" => backups::list_strategies(state),
-        // i[backup.strategy.show]
-        "/backups/strategies/show" => backups::show_strategy(state, parse_params(req.params)?),
-        // i[backup.strategy.update]
-        "/backups/strategies/update" => backups::update_strategy(state, parse_params(req.params)?),
-        // i[backup.strategy.delete]
-        "/backups/strategies/delete" => backups::delete_strategy(state, parse_params(req.params)?),
-        // i[backup.run]
-        "/backups/run" => backups::run_backup(state, parse_params(req.params)?),
-        // i[backup.snapshots.list]
-        "/backups/snapshots/list" => backups::list_snapshots(state, parse_params(req.params)?),
-        // i[backup.restore]
-        "/backups/restore" => backups::restore_backup(state, parse_params(req.params)?),
         // i[template.create]
         "/templates/create" => templates::create_template(state, parse_params(req.params)?, ctx),
         // i[template.list]

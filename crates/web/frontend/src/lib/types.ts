@@ -609,27 +609,6 @@ export interface ExternalServiceMapping {
   target: ServiceRef;
 }
 
-export interface BackupApp {
-  app: string;
-}
-
-export const BACKUP_SCHEDULES = ["every hour", "twice a day", "every day"] as const;
-export type BackupSchedule = (typeof BACKUP_SCHEDULES)[number];
-
-export interface BackupStrategy {
-  name: string;
-  via: string;
-  schedule: BackupSchedule;
-  volumes: string[];
-  last_fired_at: string | null;
-  next_fire_at: string | null;
-}
-
-export interface BackupRunResult {
-  volume: string;
-  operation_id: string;
-}
-
 export interface PlanDiffEntry {
   resource_type: string;
   resource_name: string;

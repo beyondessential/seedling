@@ -1,12 +1,14 @@
 //! Names Seedling grants itself inside namespaces operators also use.
 //!
-//! Site volumes and site ingresses are operator-facing namespaces, and the
-//! daemon takes names in both: `backup-snap-*` for the transient snapshots a
-//! backup run creates, and `tailscale` for the ingress the discovery provider
-//! maintains. Both are then recognised later *by name*, and both have a
-//! destructive consumer — startup deletes everything under the snapshot
-//! prefix, and the provider disables whatever row holds the ingress name.
-//! Nothing stopped an operator creating an object with either name first.
+//! Site volumes, site ingresses and apps are operator-facing namespaces, and
+//! the daemon takes names in each: `backup-snap-*` for the snapshots backup
+//! runs of earlier releases left behind, `tailscale` for the ingress the
+//! discovery provider maintains, and the slice component the daemon keeps for
+//! its own infrastructure. The first two are then recognised later *by name*,
+//! and both have a destructive consumer: startup deletes leftover storage
+//! under the snapshot prefix, and the provider disables whatever row holds the
+//! ingress name. Nothing stopped an operator creating an object with either
+//! name first.
 //!
 //! Two halves are needed and neither suffices alone. Reservation at creation
 //! stops new collisions but cannot repair one that already exists, and does
@@ -16,19 +18,16 @@
 //! acts only on rows whose source is its own discovery. Reservation makes
 //! collisions impossible going forward; ownership checks make them harmless
 //! regardless of history.
-//!
-//! The constants lived apart before — `backup_execution.rs` and
-//! `tailscale.rs` knew nothing about each other or about the creation
-//! handlers — which is exactly how the gap opened.
 
 use seedling_protocol::names::{AppName, SiteIngressName, SiteVolumeName};
 
 /// Site-volume name prefixes the daemon claims.
 ///
-/// Startup deletes every site volume under these, so an operator volume that
-/// happened to match was destroyed on the next daemon start.
+/// Startup deletes unrecorded site-volume storage under these, so an operator
+/// volume whose record was not yet written would be destroyed on the next
+/// daemon start.
 pub const RESERVED_SITE_VOLUME_PREFIXES: &[&str] =
-    &[crate::runtime::backup_execution::SNAPSHOT_NAME_PREFIX];
+    &[crate::system::leftover_snapshots::SNAPSHOT_NAME_PREFIX];
 
 /// Site-ingress names the daemon claims.
 pub const RESERVED_SITE_INGRESS_NAMES: &[&str] =
@@ -66,8 +65,8 @@ pub fn check_site_volume_name(name: &SiteVolumeName) -> Result<(), ReservedName>
             return Err(ReservedName {
                 name: name.as_str().to_owned(),
                 reason: format!(
-                    "site volume names beginning {prefix:?} are used by backup runs and are \
-                     deleted at daemon startup"
+                    "site volume names beginning {prefix:?} belong to leftover backup \
+                     snapshots, which are deleted at daemon startup"
                 ),
             });
         }

@@ -1306,31 +1306,6 @@ pub(crate) fn dry_run_plan(state: &OiState, params: PlanParams, ctx: &RequestCtx
     }
     on_change_would_fire.sort();
 
-    // i[impl backup.app.validation]
-    // If this app is a registered backup app, report any missing required
-    // actions as errors in the plan output.
-    let mut errors: Vec<String> = Vec::new();
-    {
-        let name_owned = params.app.clone();
-        let is_backup_app = state
-            .db
-            .call(move |db| crate::runtime::backup_apps::is_registered(db, &name_owned))
-            .map_err(|e| OiError::new(ErrorCode::Internal, format!("db backup apps: {e}")))?;
-        if is_backup_app {
-            let missing: Vec<&str> = seedling_protocol::backup_actions::REQUIRED_ACTIONS
-                .iter()
-                .copied()
-                .filter(|a| !prop_def.actions.contains_key(*a))
-                .collect();
-            if !missing.is_empty() {
-                errors.push(format!(
-                    "backup app must declare actions: {}",
-                    missing.join(", ")
-                ));
-            }
-        }
-    }
-
     // i[impl param.validation]
     let rejections: Vec<Value> = rejections
         .into_iter()
@@ -1340,7 +1315,7 @@ pub(crate) fn dry_run_plan(state: &OiState, params: PlanParams, ctx: &RequestCtx
     Ok(json!({
         "diff": diff,
         "on_change_would_fire": on_change_would_fire,
-        "errors": errors,
+        "errors": Vec::<String>::new(),
         "rejections": rejections,
     }))
 }
@@ -1726,31 +1701,6 @@ pub(crate) fn update_app(state: &OiState, params: UpdateParams, ctx: &RequestCtx
     let rejections = evaluation.map_err(|e| OiError::new(ErrorCode::ScriptError, e.to_string()))?;
     if !rejections.is_empty() {
         return Err(validation_error(&rejections));
-    }
-
-    // i[impl backup.app.validation]
-    // If this app is a registered backup app, the new definition must still
-    // declare all required backup actions.
-    {
-        let name_owned = params.app.clone();
-        let is_backup_app = state
-            .db
-            .call(move |db| crate::runtime::backup_apps::is_registered(db, &name_owned))
-            .map_err(|e| OiError::new(ErrorCode::Internal, format!("db backup apps: {e}")))?;
-        if is_backup_app {
-            let def = app.def.load();
-            let missing: Vec<&str> = seedling_protocol::backup_actions::REQUIRED_ACTIONS
-                .iter()
-                .copied()
-                .filter(|a| !def.actions.contains_key(*a))
-                .collect();
-            if !missing.is_empty() {
-                return Err(OiError::new(
-                    ErrorCode::RequirementsInvalid,
-                    format!("backup app must declare actions: {}", missing.join(", ")),
-                ));
-            }
-        }
     }
 
     // The new definition decides whether the changed parameter is secret.

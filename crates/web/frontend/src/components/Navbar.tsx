@@ -1,5 +1,4 @@
 import AltRouteIcon from "@mui/icons-material/AltRoute";
-import BackupIcon from "@mui/icons-material/Backup";
 import CloudQueueIcon from "@mui/icons-material/CloudQueue";
 import DescriptionIcon from "@mui/icons-material/Description";
 import EventNoteIcon from "@mui/icons-material/EventNote";
@@ -267,16 +266,6 @@ export function Navbar() {
             >
               <StorageIcon fontSize="small" />
             </Badge>
-          </IconButton>
-        </Tooltip>
-        <Tooltip title="Backups">
-          <IconButton
-            size="small"
-            component={Link}
-            to="/backups"
-            sx={{ color: "rgba(255,255,255,0.6)", mr: 0.5 }}
-          >
-            <BackupIcon fontSize="small" />
           </IconButton>
         </Tooltip>
         <Tooltip title="Templates">

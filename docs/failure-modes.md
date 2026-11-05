@@ -102,7 +102,7 @@ Spec: `r[app.uninstall.scope]`, `r[namespace.reserved]`, `r[infra.pod.subnet]`.
 Dedup, subject identity, and the clearing condition were re-implemented at every call site and
 had diverged into five idioms. The results: a fault filed once per event without bound and
 never cleared; faults that could never clear after a restart because the "previously seen" set
-was in memory; and a successful backup of one volume clearing every *other* volume's failure.
+was in memory; and a success for one volume clearing every *other* volume's failure.
 
 **Check:**
 

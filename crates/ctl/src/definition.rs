@@ -95,21 +95,6 @@ impl Definition {
         }
         out
     }
-
-    /// The script text, when it can be seen without the daemon.
-    pub fn script_text(&self) -> Option<String> {
-        match self {
-            Self::Script(text) => Some(text.clone()),
-            Self::Bundle { files, .. } => Some(
-                files
-                    .values()
-                    .filter_map(|c| std::str::from_utf8(c).ok())
-                    .collect::<Vec<_>>()
-                    .join("\n"),
-            ),
-            Self::Reference(_) => None,
-        }
-    }
 }
 
 impl DefinitionArgs {

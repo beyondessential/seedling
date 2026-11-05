@@ -13,7 +13,6 @@
 // w[verify routes.images]
 // w[verify routes.certificates]
 // w[verify routes.volumes]
-// w[verify routes.backups]
 
 import { expect, test } from "../test-fixtures";
 
@@ -25,7 +24,6 @@ const PAGES: Array<{ tooltip: RegExp; url: string; heading: RegExp }> = [
   { tooltip: /Site ingresses/i, url: "/ingresses", heading: /Ingresses/i },
   { tooltip: /TLS certificates/i, url: "/certificates", heading: /Certificates/i },
   { tooltip: /^Volumes(?!:)/, url: "/volumes", heading: /Volumes/i },
-  { tooltip: /^Backups$/, url: "/backups", heading: /Backups/i },
   { tooltip: /^Templates$/, url: "/templates", heading: /Templates/i },
 ];
 

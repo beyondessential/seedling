@@ -232,9 +232,6 @@ Absent specification bugs, anything not defined here is either defined in anothe
 > When any handler's probe reports an error or is skipped, that must be surfaced inline near the discover results so the operator can decide to re-run the probe with explicit param values.
 > A "Warm all discovered" button must enqueue a pull-and-pin for each discovered image reference that is not already present or pinned.
 
-> w[routes.backups]
-> The web interface exposes backup management: registering and deregistering backup apps; creating, listing, showing, updating, and deleting backup strategies; triggering immediate backups; listing snapshots; and restoring snapshots.
-
 > w[routes.ingresses]
 > The web interface exposes site ingress management: listing manual and discovered ingresses separately; creating, updating, and deleting manual ingresses; attaching and detaching forward and redirect targets; and showing discovery provider status, including a warning while discovery is unhealthy. Failures of the underlying queries and mutations must be surfaced to the operator.
 

@@ -620,114 +620,7 @@ async fn main() {
         }
     }
 
-    // r[impl backup.execution.startup-cleanup]
-    // Filesystem-level scan for orphaned backup-execution snapshots.
-    // Per [backup.execution], the runtime takes a read-only snapshot of the
-    // source volume, hands it to the backup app, then removes it. If the
-    // daemon was killed between those two steps the snapshot is left on
-    // disk; without this scan they'd accumulate invisibly across restarts.
-    {
-        let driver_ref = Arc::clone(&driver);
-        let prefix = seedling_core::runtime::backup_execution::SNAPSHOT_NAME_PREFIX;
-        match driver_ref.volume_store.list_sites_with_prefix(prefix) {
-            Ok(orphans) if !orphans.is_empty() => {
-                // r[impl namespace.reserved] — a DB row is the record that an
-                // operator owns this name. Creation rejects the prefix now,
-                // but that cannot help a volume created before the check
-                // existed, and this sweep deletes on sight.
-                /// Why a snapshot-prefixed volume is not an orphan to remove.
-                /// A definite "the operator owns this" and a "we could not
-                /// tell" both keep the volume, but they are not the same
-                /// answer and must not be reported as one.
-                enum Keep {
-                    Registered,
-                    UnparseableName(String),
-                    OwnershipUnknown(String),
-                }
-
-                let candidates: Vec<String> =
-                    orphans.iter().map(|n| n.as_str().to_owned()).collect();
-                let keeps: std::collections::HashMap<String, Keep> = db.call(move |conn| {
-                    candidates
-                        .into_iter()
-                        .filter_map(|name| {
-                            let reason = match seedling_protocol::names::SiteVolumeName::new(&name)
-                            {
-                                Ok(parsed) => {
-                                    match seedling_core::runtime::site_volumes::get(conn, &parsed) {
-                                        Ok(Some(_)) => Keep::Registered,
-                                        Ok(None) => return None,
-                                        // A destructive sweep must be
-                                        // conservative: "we could not tell" is
-                                        // not "not owned".
-                                        Err(e) => Keep::OwnershipUnknown(e.to_string()),
-                                    }
-                                }
-                                // Also a "could not tell": a name Seedling
-                                // could not have created is not a snapshot of
-                                // ours to delete.
-                                Err(e) => Keep::UnparseableName(e.to_string()),
-                            };
-                            Some((name, reason))
-                        })
-                        .collect()
-                });
-                let orphans: Vec<_> = orphans
-                    .into_iter()
-                    .filter(|name| match keeps.get(name.as_str()) {
-                        None => true,
-                        Some(Keep::Registered) => {
-                            tracing::info!(
-                                volume = %name,
-                                "a registered site volume uses the backup snapshot prefix; \
-                                 leaving it alone"
-                            );
-                            false
-                        }
-                        Some(Keep::UnparseableName(e)) => {
-                            tracing::warn!(
-                                volume = %name,
-                                "a snapshot-prefixed path is not a valid site volume name, so \
-                                 it is not a snapshot of ours; leaving it alone: {e}"
-                            );
-                            false
-                        }
-                        Some(Keep::OwnershipUnknown(e)) => {
-                            tracing::warn!(
-                                volume = %name,
-                                "could not determine ownership of a snapshot-prefixed site \
-                                 volume; leaving it alone: {e}"
-                            );
-                            false
-                        }
-                    })
-                    .collect();
-                if !orphans.is_empty() {
-                    tracing::warn!(
-                        count = orphans.len(),
-                        "found orphaned backup-execution snapshots from a previous run; removing"
-                    );
-                }
-                for name in &orphans {
-                    tracing::info!(snapshot = %name, "removing orphaned backup snapshot");
-                    tokio::task::block_in_place(|| {
-                        tokio::runtime::Handle::current().block_on(async {
-                            if let Err(e) = driver_ref.volume_store.remove_site(name).await {
-                                tracing::warn!(
-                                    snapshot = %name,
-                                    "failed to remove orphaned backup snapshot: {e}"
-                                );
-                            }
-                        })
-                    });
-                }
-            }
-            Ok(_) => {}
-            Err(e) => {
-                tracing::warn!("failed to scan for orphaned backup snapshots: {e}");
-            }
-        }
-    }
+    seedling_core::system::leftover_snapshots::sweep(&db, &driver.volume_store).await;
 
     // r[impl actuate.volume.tmpfs]
     // Reset the tmpfs-volume bind-mount root on startup. /run is tmpfs so
@@ -1289,8 +1182,6 @@ async fn main() {
             let mut idle = false;
             // r[impl schedule.tick]
             let mut schedule_ticker = seedling_core::runtime::schedules::ScheduleTicker::new();
-            // r[impl backup.execution]
-            let mut backup_ticker = seedling_core::runtime::backup_execution::BackupTicker::new();
             loop {
                 if idle {
                     tick_notify.notified().await;
@@ -1358,34 +1249,6 @@ async fn main() {
                             );
                         }
                     }
-                }
-
-                // r[impl backup.execution]
-                let due_strategies = if let Some(now) = backup_ticker.maybe_tick() {
-                    schedule_db.call(move |db| {
-                        seedling_core::runtime::backup_execution::check_due_strategies(db, now)
-                    })
-                } else {
-                    Vec::new()
-                };
-                for due in due_strategies {
-                    let ids: Vec<_> = due
-                        .volumes
-                        .iter()
-                        .map(|_| seedling_core::runtime::barrier::OperationId::new())
-                        .collect();
-                    seedling_core::oi::handler::backups::spawn_backup_run(
-                        Arc::clone(&oi_state_for_sched),
-                        seedling_core::runtime::backup_strategies::BackupStrategy {
-                            name: due.name,
-                            via: due.via,
-                            schedule: due.schedule,
-                            volumes: due.volumes,
-                            last_fired_at: None,
-                        },
-                        ids,
-                        false,
-                    );
                 }
 
                 match AssertUnwindSafe(reconciler.tick()).catch_unwind().await {

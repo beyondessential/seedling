@@ -170,8 +170,7 @@ fn make_executor(state: &OiState) -> Option<Arc<dyn crate::runtime::barrier::Exe
 /// operator-supplied site volume name, build an
 /// [`OperationVolumeBinding`] keyed by a generated per-operation name, and
 /// rewrite the params map so the action closure sees `<key>_volume = <generated-name>`
-/// — matching the convention used by backups and consumed by
-/// `app.external_volume(param[...])`.
+/// — consumed by `app.external_volume(param[...])`.
 ///
 /// Volumes that have already been validated to exist by `invoke_action`'s
 /// pre-flight; here we only resolve to the host path and warn (instead of
@@ -284,7 +283,6 @@ fn run_operation_loop(
     script_limits: &crate::ScriptLimits,
     cipher: Arc<crate::runtime::secrets::Cipher>,
     operation_volume_bindings: HashMap<String, OperationVolumeBinding>,
-    persist_for_replay: bool,
     cancel_token: Arc<CancelToken>,
     container_signaler: Option<Arc<dyn crate::runtime::barrier::ContainerSignaler>>,
     volume_writer: Option<Arc<dyn crate::runtime::barrier::VolumeWriter>>,
@@ -338,28 +336,23 @@ fn run_operation_loop(
     // r[impl operation.lifecycle.events] r[impl barrier.replay] r[impl operation.params]
     // Persist the current operation so a runtime restart can resume it.
     // Params are encrypted because they may carry secret values.
-    // Callers that are inherently not replayable (backup actions, which hold
-    // a per-process snapshot binding in operation_volume_bindings) pass
-    // persist_for_replay=false and skip this step.
-    if persist_for_replay {
-        let record = CurrentOperation {
-            operation_id: operation_id.clone(),
-            app: app_name.clone(),
-            action_name: action_name.clone(),
-            source_generation: op_ctx.source_generation,
-            target_generation: op_ctx.target_generation,
-        };
-        let params_for_persist = params.clone();
-        let cipher_for_persist = Arc::clone(&cipher);
-        if let Err(e) = db.call(move |db| {
-            save_current_operation(db, &cipher_for_persist, &record, &params_for_persist)
-        }) {
-            tracing::warn!(
-                app = %app_name,
-                action = %action_name,
-                "failed to persist current_operation: {e}"
-            );
-        }
+    let record = CurrentOperation {
+        operation_id: operation_id.clone(),
+        app: app_name.clone(),
+        action_name: action_name.clone(),
+        source_generation: op_ctx.source_generation,
+        target_generation: op_ctx.target_generation,
+    };
+    let params_for_persist = params.clone();
+    let cipher_for_persist = Arc::clone(&cipher);
+    if let Err(e) = db.call(move |db| {
+        save_current_operation(db, &cipher_for_persist, &record, &params_for_persist)
+    }) {
+        tracing::warn!(
+            app = %app_name,
+            action = %action_name,
+            "failed to persist current_operation: {e}"
+        );
     }
 
     loop {
@@ -474,7 +467,7 @@ fn run_operation_loop(
 /// Sleep between replay cycles. Returns early if the operation was cancelled.
 ///
 /// Cadence is dynamic: short while freshly suspended (so short barriers feel
-/// responsive) and long for protracted waits (so an hours-long backup doesn't
+/// responsive) and long for protracted waits (so an hours-long wait doesn't
 /// replay tens of thousands of times).
 // r[impl barrier.suspension.poll-backoff]
 fn wait_next_tick(cancel_token: &CancelToken, waited_on_barrier_secs: u64) {
@@ -868,7 +861,6 @@ pub fn spawn_accepted_operation(
                     &script_limits,
                     cipher,
                     operation_volume_bindings,
-                    true,
                     cancel_token,
                     signaler,
                     writer,
@@ -908,123 +900,4 @@ pub fn spawn_accepted_operation(
             );
         }
     });
-}
-
-#[expect(
-    clippy::too_many_arguments,
-    reason = "internal helper grouping all operation state"
-)]
-pub(crate) async fn run_operation_for_backup(
-    state: &Arc<OiState>,
-    backup_app_name: &AppName,
-    action_name: &ActionName,
-    operation_id: OperationId,
-    params: serde_json::Map<String, serde_json::Value>,
-    source_generation: u64,
-    target_generation: u64,
-    operation_volume_bindings: HashMap<String, OperationVolumeBinding>,
-) -> bool {
-    let (app, active_progress, tick_notify) = {
-        let reg = state.registry.read();
-        match reg.get(backup_app_name.as_str()) {
-            Some(e) => (
-                e.app.clone(),
-                Arc::clone(&e.active_progress),
-                Arc::clone(&e.tick_notify),
-            ),
-            None => {
-                tracing::error!(app = %backup_app_name, "run_operation_for_backup: app not found");
-                // The caller (backups.rs) has already taken a scheduler slot
-                // for this operation via acquire_scheduler_slot. Release it
-                // before bailing so a stale "active" entry doesn't block
-                // every subsequent backup request forever — previously this
-                // leak caused /backups/snapshots/list to spin in the
-                // acquire loop indefinitely.
-                state.scheduler.lock().complete_current();
-                return false;
-            }
-        }
-    };
-
-    let db_path = state.db_path.clone();
-    let script_limits = state.script_limits.clone();
-    let cipher = Arc::clone(&state.cipher);
-    let operation_id_str = operation_id.0.clone();
-
-    let op_ctx = state.event_tx.operation(
-        backup_app_name.clone(),
-        action_name.clone(),
-        &operation_id.0,
-        source_generation,
-        target_generation,
-        None,
-    );
-    op_ctx.started("backup");
-
-    // r[impl operation.cancel]
-    let cancel_token = state
-        .scheduler
-        .lock()
-        .active()
-        .filter(|a| a.operation_id == operation_id)
-        .map(|a| Arc::clone(&a.cancel_token))
-        .unwrap_or_else(|| Arc::new(CancelToken::new()));
-
-    let success = {
-        let active_progress_clone = Arc::clone(&active_progress);
-        let tick_notify_clone = Arc::clone(&tick_notify);
-        let op_ctx = op_ctx.clone();
-        let cancel_token = Arc::clone(&cancel_token);
-        let signaler = make_container_signaler(state);
-        let writer = make_volume_writer(state);
-        let executor = make_executor(state);
-        tokio::task::spawn_blocking(move || {
-            let db = match open_operation_dbs(&db_path, &op_ctx.app) {
-                Some(d) => d,
-                None => return false,
-            };
-            run_operation_loop(
-                &app,
-                db,
-                params,
-                active_progress_clone,
-                tick_notify_clone,
-                &op_ctx,
-                &script_limits,
-                cipher,
-                operation_volume_bindings,
-                // Backup ops carry a per-process snapshot binding in
-                // operation_volume_bindings that cannot survive a restart;
-                // the spec exempts them from replay.
-                false,
-                cancel_token,
-                signaler,
-                writer,
-                executor,
-            )
-        })
-        .await
-        .unwrap_or(false)
-    };
-
-    cleanup_dynamic_resources(state, &operation_id_str, &active_progress, &tick_notify).await;
-    *active_progress.write() = None;
-    tick_notify.notify_one();
-
-    let next = state.scheduler.lock().complete_current();
-    if let Some(queued) = next {
-        spawn_accepted_operation(
-            Arc::clone(state),
-            queued.app,
-            queued.action,
-            queued.operation_id,
-            queued.params,
-            queued.source_generation,
-            queued.target_generation,
-            queued.trigger,
-            None,
-        );
-    }
-
-    success
 }

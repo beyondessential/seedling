@@ -184,15 +184,15 @@ describe("useOiAction", () => {
 
 describe("invalidateOiQueryCache", () => {
   it("removes every entry for the method and nothing else", () => {
-    sessionStorage.setItem("oiq:/backups/snapshots/list:{\"strategy\":\"a\"}", "x");
-    sessionStorage.setItem("oiq:/backups/snapshots/list:{\"strategy\":\"b\"}", "y");
+    sessionStorage.setItem("oiq:/apps/show:{\"app\":\"a\"}", "x");
+    sessionStorage.setItem("oiq:/apps/show:{\"app\":\"b\"}", "y");
     sessionStorage.setItem("oiq:/apps/list:{}", "z");
     sessionStorage.setItem("unrelated", "w");
 
-    invalidateOiQueryCache("/backups/snapshots/list");
+    invalidateOiQueryCache("/apps/show");
 
-    expect(sessionStorage.getItem('oiq:/backups/snapshots/list:{"strategy":"a"}')).toBeNull();
-    expect(sessionStorage.getItem('oiq:/backups/snapshots/list:{"strategy":"b"}')).toBeNull();
+    expect(sessionStorage.getItem('oiq:/apps/show:{"app":"a"}')).toBeNull();
+    expect(sessionStorage.getItem('oiq:/apps/show:{"app":"b"}')).toBeNull();
     expect(sessionStorage.getItem("oiq:/apps/list:{}")).toBe("z");
     expect(sessionStorage.getItem("unrelated")).toBe("w");
   });

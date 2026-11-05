@@ -61,11 +61,8 @@ const SQL_V20: &str = migrations::v20::SQL;
 const SQL_V21: &str = include_str!("db/migrations/v21.sql");
 // r[impl schedule.state]
 const SQL_V22: &str = include_str!("db/migrations/v22.sql");
-// i[impl backup.app.register]
 const SQL_V23: &str = include_str!("db/migrations/v23.sql");
-// i[impl backup.strategy.create]
 const SQL_V24: &str = include_str!("db/migrations/v24.sql");
-// r[impl backup.execution]
 const SQL_V25: &str = include_str!("db/migrations/v25.sql");
 const SQL_V26: &str = include_str!("db/migrations/v26.sql");
 // i[impl deployment.restart]
@@ -77,7 +74,6 @@ const SQL_V28: &str = include_str!("db/migrations/v28.sql");
 const SQL_V29: &str = include_str!("db/migrations/v29.sql");
 // i[impl action.invoke.install] r[impl operation.params]
 const SQL_V30: &str = include_str!("db/migrations/v30.sql");
-// i[impl backup.app.register]
 const SQL_V31: &str = include_str!("db/migrations/v31.sql");
 // r[impl operation.params]
 const SQL_V32: &str = include_str!("db/migrations/v32.sql");
@@ -138,6 +134,7 @@ const SQL_V56: &str = include_str!("db/migrations/v56.sql");
 // r[impl priority.settings]
 const SQL_V57: &str = include_str!("db/migrations/v57.sql");
 const SQL_V58: &str = migrations::v58::SQL;
+const SQL_V59: &str = include_str!("db/migrations/v59.sql");
 
 const MIGRATIONS: &[Migration] = &[
     Migration {
@@ -424,6 +421,11 @@ const MIGRATIONS: &[Migration] = &[
         version: 58,
         sql: SQL_V58,
         custom_run: Some(migrations::v58::run),
+    },
+    Migration {
+        version: 59,
+        sql: SQL_V59,
+        custom_run: None,
     },
 ];
 

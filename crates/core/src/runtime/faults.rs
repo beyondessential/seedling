@@ -58,9 +58,9 @@ pub struct FaultRecord {
 /// Before this existed, every site invented its own notion of sameness —
 /// `(kind, instance_id)` here, `(kind, resource_name)` there, `(kind,
 /// description)` elsewhere, bare `kind` in one place, and nothing at all in
-/// another. Clears were then either too broad (a successful backup of one
-/// volume cleared every volume's `backup_failed`) or too fragile (matching on
-/// a `host:port` substring of the description).
+/// another. Clears were then either too broad (a success for one volume
+/// cleared every volume's failure) or too fragile (matching on a `host:port`
+/// substring of the description).
 ///
 /// `resource_type`/`resource_name`/`instance_id` remain display metadata.
 /// Matching and clearing use this key alone.
@@ -380,7 +380,7 @@ pub fn count_active_faults(db: &crate::runtime::db::Db) -> rusqlite::Result<i64>
 ///
 /// Scoping is what keeps a converge call from clearing kinds it knows nothing
 /// about: a sweep that computes every currently-conflicting `(host, port)`
-/// must not treat the absence of a `backup_failed` key as a reason to clear
+/// must not treat the absence of an unrelated key as a reason to clear
 /// one.
 // r[impl fault.lifecycle]
 #[derive(Debug, Clone)]

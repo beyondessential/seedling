@@ -377,12 +377,6 @@ pub(super) async fn dispatch(client: &OiClient, cmd: AppsCommand) {
         }
         AppsCommand::Create { app, definition } => {
             let definition = require_definition(&definition).await;
-            // i[impl ctl.backup.app.hint]
-            let looks_like_backup_app = definition.script_text().is_some_and(|script| {
-                seedling_protocol::backup_actions::REQUIRED_ACTIONS
-                    .iter()
-                    .all(|a| script.contains(a))
-            });
             let mut params = definition.fields(DefinitionKeys::APP);
             params.insert("app".to_owned(), serde_json::json!(app));
             print_result(
@@ -390,12 +384,6 @@ pub(super) async fn dispatch(client: &OiClient, cmd: AppsCommand) {
                     .request("/apps/create", serde_json::Value::Object(params))
                     .await,
             );
-            if looks_like_backup_app {
-                tracing::info!(
-                    "this app looks like a backup app; \
-                     register it with: ctl backups apps register --name <name> --app {app}"
-                );
-            }
         }
         AppsCommand::Remove { app } => {
             print_result(

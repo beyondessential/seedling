@@ -9,7 +9,6 @@ use seedling_protocol::{
 };
 
 mod apps;
-mod backups;
 mod canopy;
 mod client;
 mod definition;
@@ -120,11 +119,6 @@ enum Command {
     Images {
         #[command(subcommand)]
         command: op::ImagesCommand,
-    },
-    /// Backup app management
-    Backups {
-        #[command(subcommand)]
-        command: backups::BackupsCommand,
     },
     /// BSL script templates
     Templates {
@@ -399,7 +393,6 @@ async fn main() {
         Command::Forwards { command } => op::dispatch_forwards(&client, command).await,
         Command::Registries { command } => op::dispatch_registries(&client, command).await,
         Command::Images { command } => op::dispatch_images(&client, command).await,
-        Command::Backups { command } => backups::dispatch(&client, command).await,
         Command::Templates { command } => templates::dispatch(&client, command).await,
         Command::Canopy { command } => canopy::dispatch(&client, command).await,
         Command::Tls { command } => tls::dispatch(&client, command).await,

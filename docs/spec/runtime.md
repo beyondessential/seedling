@@ -604,11 +604,10 @@ Absent specification bugs, anything that is not defined here is either defined i
 > Params may contain secret values, so the persisted form must be encrypted with the same cipher used for stored secret params.
 >
 > Shell sessions do not persist params; shells are not replayable.
-> Backup operations do not persist params; they bind per-process snapshot paths that cannot survive a runtime restart, so interrupted backups are dropped and the next scheduled fire takes over.
 
 ## Operation Volume Params
 
-Some internal operations (for example [backup.list](#r--backup.list), [backup.restore](#r--backup.restore), [backup.execution](#r--backup.execution)) must hand a writable or read-only path to an action closure without giving that path a stable, app-visible name. The runtime uses reserved param keys and operation-scoped volume bindings to do this in a collision-free way.
+Some operations must hand a writable or read-only path to an action closure without giving that path a stable, app-visible name, such as the site volume an operator supplies for a `volume` action param. The runtime uses reserved param keys and operation-scoped volume bindings to do this in a collision-free way.
 
 > r[operation.volume-param]
 > When an internal operation hands a volume to an action closure, it must not use a fixed name hard-coded in the BSL script. Instead, for each logical binding the operation wants to provide, the runtime must:
@@ -624,7 +623,7 @@ Some internal operations (for example [backup.list](#r--backup.list), [backup.re
 > r[operation.volume-param.filename]
 > An operation may additionally instruct an action closure to read or write a specific filename under an injected volume. It must not rely on a fixed filename known only to the runtime: instead, for each `<logical-key>_volume` param it adds, the runtime may add a companion param named `<logical-key>_filename` whose value is the filename the action closure must use.
 >
-> This keeps the filename an implementation detail of the runtime — the runtime may rename it or change its structure without requiring every backup app's BSL script to be rewritten.
+> This keeps the filename an implementation detail of the runtime — the runtime may rename it or change its structure without requiring every app's BSL script to be rewritten.
 
 > r[operation.volume-param.reserved]
 > Param keys ending in `_volume` or `_filename` are reserved. The runtime must reject operator-provided params whose keys end in either suffix (see [action.invoke](interface.md#i--action.invoke) and [action.params](language.md#l--action.params)). Only the runtime may insert such keys, and only as described in [operation.volume-param](#r--operation.volume-param) and [operation.volume-param.filename](#r--operation.volume-param.filename).
@@ -681,99 +680,6 @@ Some internal operations (for example [backup.list](#r--backup.list), [backup.re
 
 > r[schedule.start-reject]
 > Calling `on_schedule` on the Start Action (action name `"start"`) must throw at script evaluation time.
-
-# Backup Scheduling
-
-> r[backup.schedule]
-> Backup strategies use named schedule buckets: `"every hour"`, `"twice a day"`, `"every day"`. Snapshots are taken on the round boundary in the system local timezone:
->
-> - `"every hour"`: top of each hour (xx:00 local time).
-> - `"every day"`: midnight local time (00:00).
-> - `"twice a day"`: midnight and noon local time (00:00, 12:00).
-
-> r[backup.schedule.delay]
-> Before executing a backup strategy, the runtime must apply a random delay of 0–10% of the schedule interval:
->
-> - `"every hour"` (3600 s interval): 0–360 s delay.
-> - `"twice a day"` (43200 s interval): 0–4320 s delay.
-> - `"every day"` (86400 s interval): 0–8640 s delay.
->
-> For manually triggered backups (`/backups/run`), no delay is applied.
-
-> r[backup.schedule.catch-up]
-> If the runtime detects that one or more scheduled fire times for a strategy have
-> already passed (for example because the daemon was not running at the moment of
-> the scheduled fire), the strategy fires exactly once to catch up, regardless of
-> how many scheduled boundaries were missed. The strategy's last-fired timestamp
-> is then set to the catch-up fire time, so subsequent cron boundaries are
-> evaluated from there.
-
-> r[backup.run.last-fired]
-> Both scheduled fires and manually triggered fires via `/backups/run` must
-> update the strategy's last-fired timestamp to the moment the fire was
-> initiated, before any per-volume work begins. This keeps the scheduler's
-> next-fire computation consistent across triggers (so an immediately-due
-> scheduled fire does not double-run right after a manual invocation) and
-> lets the operator surface see the most recent fire promptly.
-
-> r[backup.validation.fire-time]
-> Before executing a backup strategy, the runtime must verify:
->
-> 1. The registered backup app still exists in the backup app registry.
-> 2. The backing app is registered in the app registry and exposes all required backup actions.
->
-> If either check fails, a `backup_app_unavailable` fault is filed against the backing app name and execution is aborted.
-
-> r[backup.execution]
-> For each volume in the strategy (in declaration order), the runtime must:
->
-> 1. Resolve the volume identifier to a filesystem path. If the path does not exist, file a
->    `backup_source_unavailable` fault against the backup app and skip the volume.
-> 2. Create a read-only snapshot of the source volume at a temporary path.
-> 3. Acquire the scheduler slot (waiting until no other operation is active).
-> 4. Run the backup app's `save-snapshot` action with the snapshot handed in under the logical
->    binding key `"source"`, using the scheme described in [operation.volume-param](#r--operation.volume-param). The action closure reads the generated volume name from `param["source_volume"]`.
-> 5. After the action completes (success or failure), remove the snapshot.
->
-> On success, any existing `backup_failed` and `backup_source_unavailable` faults for the backup app are cleared.
-
-> r[backup.execution.per-volume-failure]
-> Volume backups within a strategy are independent: a failure for one volume must not prevent
-> the remaining volumes from being backed up.
-
-> r[backup.execution.retry]
-> If the `save-snapshot` action fails, the runtime must retry exactly once after a fresh random
-> delay (following the same rules as `r[backup.schedule.delay]`). If the retry also fails, a
-> `backup_failed` fault is filed against the backup app with the failing volume noted in the
-> description.
-
-> r[backup.execution.startup-cleanup]
-> The snapshot cleanup mandated by [backup.execution](#r--backup.execution) is best-effort within a single process: if the runtime is killed between snapshot creation and the post-action removal step, the snapshot is left on disk and would otherwise accumulate invisibly across restarts.
-> On startup, the runtime must scan for any orphaned snapshots produced by [backup.execution](#r--backup.execution) — site volumes whose name identifies them as belonging to the backup-execution path rather than to a user-visible site volume — and delete them.
-
-> r[backup.list]
-> To list available snapshots for a volume, the runtime must synchronously invoke the backup app's
-> `list-snapshots` action. Using the scheme described in [operation.volume-param](#r--operation.volume-param) and [operation.volume-param.filename](#r--operation.volume-param.filename), the action receives:
->
-> - A `backup` param carrying the structured identity of the operation (see the interface spec's `backup.action.backup-param`).
-> - A writable volume provided under the logical binding key `"output"`. The action closure reads
->   the generated volume name from `param["output_volume"]`.
-> - A companion `param["output_filename"]` naming the file that the action must write. The
->   runtime chooses the filename; the action must write to exactly that name within the output
->   volume.
->
-> The runtime reads and returns the contents of that file as the result.
-
-> r[backup.restore]
-> To restore a snapshot, the runtime must:
->
-> 1. Create a new site volume with a generated name.
-> 2. Synchronously invoke the backup app's `restore-snapshot` action. Using the scheme described in [operation.volume-param](#r--operation.volume-param), the action receives:
->    - A param `"snapshot"` containing the snapshot identifier.
->    - A `backup` param carrying the structured identity of the operation (see the interface spec's `backup.action.backup-param`).
->    - A writable volume provided under the logical binding key `"destination"` pointing at the new site volume. The action closure reads the generated volume name from `param["destination_volume"]`.
-> 3. If the action fails, remove the site volume and propagate the error.
-> 4. Return the site volume name.
 
 # Action Closure Suspension
 
@@ -1161,6 +1067,9 @@ Some internal operations (for example [backup.list](#r--backup.list), [backup.re
 > r[volume.site.promote.events]
 > Promoting a snapshot site volume must emit an event identifying the new managed site volume and the source snapshot. The promoted volume is treated as a new managed site volume for audit purposes, distinct from the source snapshot which remains intact.
 
+> r[volume.site.leftover-snapshots]
+> Earlier releases ran backups from a read-only snapshot of the source volume, stored as site-volume storage under a name beginning `backup-snap-` and removed when the run finished. A run interrupted between those two steps left the snapshot on disk with no site volume recorded for it. On startup, the runtime must delete any site-volume storage whose name begins `backup-snap-` and for which no site volume is recorded. Storage recorded as a site volume is the operator's and must be left alone, as must storage whose ownership could not be determined.
+
 > r[volume.external.mapping.events]
 > Creating, removing, or retargeting an operator-configured external volume mapping must emit an event identifying the app and external volume name, the new mapping target (or absence of one for removal), and — for retargeting — the previous target. These events feed both the event feed and the [audit log](#r--audit.log).
 
@@ -1392,7 +1301,7 @@ Two levers set how a workload competes for host resources under pressure. Each D
 > r[namespace.reserved]
 > The runtime grants itself names inside namespaces operators also use: site-volume names beginning `backup-snap-`, and the site-ingress name `tailscale`.
 > Creating a site volume or site ingress under a reserved name is rejected; the restriction applies to creation only, so an object that predates the reservation can still be renamed or removed.
-> Reservation alone is not sufficient: a component that deletes or disables objects it believes are its own must identify them by what the runtime recorded — a registered site volume is never deleted by the snapshot sweep, and a manually created site ingress is never disabled or replaced by a discovery provider — regardless of what the object is named.
+> Reservation alone is not sufficient: a component that deletes or disables objects it believes are its own must identify them by what the runtime recorded — a registered site volume is never deleted by the [leftover snapshot sweep](#r--volume.site.leftover-snapshots), and a manually created site ingress is never disabled or replaced by a discovery provider — regardless of what the object is named.
 
 > r[app.uninstall.scope]
 > Uninstalling an app affects only resources belonging to that app.

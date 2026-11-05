@@ -211,7 +211,7 @@ named service inside the workload network. Seedling forwards bytes. It is
 the workload's responsibility to authenticate or encrypt that traffic if
 it needs to.
 
-### N9b. ACME-CA and DNS-provider availability or honesty
+### N9. ACME-CA and DNS-provider availability or honesty
 
 Once the operator binds a hostname to a public CA (Let's Encrypt by
 default) or a DNS provider (Route 53), seedling depends on those third
@@ -223,7 +223,7 @@ seedling. Mitigations: prefer DNS-01 (which requires control of the
 zone) over HTTP-01 where possible, monitor CT logs out-of-band, and
 rotate DNS-provider credentials promptly if compromise is suspected.
 
-### N9c. Outbound network reach from the daemon
+### N9b. Outbound network reach from the daemon
 
 The daemon makes outbound HTTPS requests to the configured ACME
 directory and to the DNS-provider API endpoints (Route 53 today). A
@@ -232,14 +232,6 @@ renewal; the runtime files faults but cannot work around the lack of
 egress. Operators are responsible for permitting the necessary egress
 or supplying an alternative directory via
 [`tls.cert.issue-acme-dns`](docs/spec/interface.md#i--tls.cert.issue-acme-dns).
-
-### N9. Backup integrity once exfiltrated
-
-A registered backup app is responsible for its own at-rest encryption,
-remote-store authentication, and integrity validation. Seedling delivers
-the volume bytes; the backup app decides what to do with them. The kopia
-example app uses Kopia's built-in encryption and authenticated metadata,
-but that is a property of the app, not of seedling.
 
 ### N10. A rogue BSL author running code on the host directly
 

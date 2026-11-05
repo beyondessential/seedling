@@ -418,15 +418,15 @@ fn file_once_does_not_duplicate() {
 }
 
 // r[verify fault.lifecycle]
-// Clearing keyed no more broadly than filing: this is H8 — a successful
-// backup of one volume cleared every other volume's failure.
+// Clearing keyed no more broadly than filing: this is H8 — a success for one
+// volume cleared every other volume's failure.
 #[test]
 fn faults_for_different_subjects_are_independent() {
     let db = Db::open_in_memory().expect("open");
     init_test_events();
-    let app = app("backups");
-    let ok = FaultKey::new(&app, "backup_failed", "site/data");
-    let broken = FaultKey::new(&app, "backup_failed", "site/archive");
+    let app = app("volumes");
+    let ok = FaultKey::new(&app, "volume_check_failed", "site/data");
+    let broken = FaultKey::new(&app, "volume_check_failed", "site/archive");
 
     file_once(&db, &ok, &meta(), "data failed").unwrap();
     file_once(&db, &broken, &meta(), "archive failed").unwrap();
@@ -435,7 +435,7 @@ fn faults_for_different_subjects_are_independent() {
     let to_clear: Vec<_> = list_active_faults(&db, Some(&app))
         .unwrap()
         .into_iter()
-        .filter(|f| f.kind == "backup_failed" && f.subject == "site/data")
+        .filter(|f| f.kind == "volume_check_failed" && f.subject == "site/data")
         .collect();
     for fault in &to_clear {
         clear_fault(&db, &fault.id, &app).unwrap();
