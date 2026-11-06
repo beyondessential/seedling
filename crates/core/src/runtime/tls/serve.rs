@@ -127,6 +127,8 @@ struct ServeState {
     /// Decides whether the proxy may go on to order a certificate of its own for
     /// a hostname the runtime holds none for.
     coordinator: Arc<Coordinator>,
+    /// What the gate last answered for each hostname, for a few seconds.
+    gate: Arc<GateCache>,
     /// Hex-encoded shared token; clients embed this in the URL path.
     /// See [`load_or_create_token`].
     token: Arc<String>,
@@ -175,7 +177,7 @@ async fn handle(
         // the policy's regular issuer". Any other non-2xx would be treated
         // as an error rather than a fall-through signal, so it is also what
         // keeps the proxy from ordering when it must not.
-        Ok(None) => match fall_through(&state.coordinator, &hostname) {
+        Ok(None) => match fall_through(&state.coordinator, &state.gate, &hostname) {
             FallThrough::Allow => StatusCode::NO_CONTENT.into_response(),
             FallThrough::Withhold => (
                 StatusCode::SERVICE_UNAVAILABLE,
@@ -219,17 +221,69 @@ pub fn endpoint_gate(c: &ChainDecision) -> FallThrough {
     }
 }
 
+/// The gate's recent answers, by hostname.
+///
+/// The proxy asks about a hostname at every handshake the runtime holds no
+/// certificate for, which is every handshake of every hostname the proxy
+/// orders for itself. Each answer reads the TLS state and the proxy's cache, so
+/// a burst of handshakes would each rebuild all of it on the one database
+/// thread. The answer moves on the scale of a report tick, so a few seconds'
+/// reuse costs nothing a hostname could notice.
+pub struct GateCache {
+    entries:
+        parking_lot::Mutex<std::collections::HashMap<String, (std::time::Instant, FallThrough)>>,
+}
+
+impl GateCache {
+    /// How long an answer is reused.
+    const TTL: std::time::Duration = std::time::Duration::from_secs(5);
+    /// The most hostnames remembered. The proxy can be asked about any name a
+    /// client sends as SNI, so the table must not grow with what strangers send.
+    const CAPACITY: usize = 4096;
+
+    fn new() -> Self {
+        Self {
+            entries: parking_lot::Mutex::new(std::collections::HashMap::new()),
+        }
+    }
+
+    fn get(&self, hostname: &str) -> Option<FallThrough> {
+        let entries = self.entries.lock();
+        let (at, answer) = entries.get(hostname)?;
+        (at.elapsed() < Self::TTL).then_some(*answer)
+    }
+
+    fn put(&self, hostname: &str, answer: FallThrough) {
+        let mut entries = self.entries.lock();
+        if entries.len() >= Self::CAPACITY {
+            entries.retain(|_, (at, _)| at.elapsed() < Self::TTL);
+            if entries.len() >= Self::CAPACITY {
+                entries.clear();
+            }
+        }
+        entries.insert(hostname.to_owned(), (std::time::Instant::now(), answer));
+    }
+}
+
 /// [`endpoint_gate`] for the hostname, or [`FallThrough::Allow`] when it is on
 /// no chain or the decision could not be made.
 ///
 /// Allowing is the answer to not knowing, because the other error is a
 /// hostname that serves nothing, and the cost of the first is one certificate
-/// ordered earlier than the chain would have liked.
-fn fall_through(coordinator: &Coordinator, hostname: &str) -> FallThrough {
+/// ordered earlier than the chain would have liked. An answer given for want of
+/// knowing is not remembered, so the next handshake asks again.
+fn fall_through(coordinator: &Coordinator, cache: &GateCache, hostname: &str) -> FallThrough {
+    if let Some(answer) = cache.get(hostname) {
+        return answer;
+    }
     match coordinator.chain_decisions(Some(hostname)) {
-        Some(decisions) => decisions
-            .get(hostname)
-            .map_or(FallThrough::Allow, endpoint_gate),
+        Some(decisions) => {
+            let answer = decisions
+                .get(hostname)
+                .map_or(FallThrough::Allow, endpoint_gate);
+            cache.put(hostname, answer);
+            answer
+        }
         None => FallThrough::Allow,
     }
 }
@@ -339,6 +393,7 @@ pub async fn spawn_server(
         db,
         cipher,
         coordinator,
+        gate: Arc::new(GateCache::new()),
         token: Arc::new(token),
     };
     let app = Router::new()
@@ -694,5 +749,60 @@ mod tests {
             204,
             "facts that could not be gathered"
         );
+    }
+
+    // r[verify tls.chain.proxy-gate]
+    #[test]
+    fn the_gate_remembers_an_answer_for_a_hostname_and_no_other() {
+        let cache = GateCache::new();
+        assert_eq!(cache.get("a.example.com"), None);
+        cache.put("a.example.com", FallThrough::Withhold);
+        assert_eq!(cache.get("a.example.com"), Some(FallThrough::Withhold));
+        assert_eq!(cache.get("b.example.com"), None);
+    }
+
+    // r[verify tls.chain.proxy-gate]
+    #[test]
+    fn the_gate_does_not_grow_with_the_names_strangers_send() {
+        let cache = GateCache::new();
+        for i in 0..(GateCache::CAPACITY * 2) {
+            cache.put(&format!("{i}.example.com"), FallThrough::Allow);
+        }
+        assert!(cache.entries.lock().len() <= GateCache::CAPACITY);
+    }
+
+    // r[verify tls.chain.proxy-gate]
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_burst_of_handshakes_decides_once() {
+        // Count how often the facts are gathered.
+        struct Counting(std::sync::atomic::AtomicUsize, Facts);
+        impl Environment for Counting {
+            fn gather(&self, only: Option<&str>) -> Option<(Vec<ManagedIngress>, ChainEnv)> {
+                self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                self.1.gather(only)
+            }
+        }
+        let (db, cipher) = fresh().await;
+        let cipher = Arc::new(cipher);
+        let coordinator = Coordinator::new(db.clone(), Arc::clone(&cipher));
+        let counting = Arc::new(Counting(
+            std::sync::atomic::AtomicUsize::new(0),
+            typed(Some(ProxyHolding::Nothing)),
+        ));
+        coordinator.set_environment(counting.clone());
+        let (addr, _handle) = spawn_server(
+            db,
+            cipher,
+            coordinator,
+            "tok".to_owned(),
+            "127.0.0.1:0".parse().unwrap(),
+        )
+        .await
+        .unwrap();
+        let url = format!("http://{addr}/cert/tok/get-certificate?server_name=shop.example.com");
+        for _ in 0..5 {
+            assert_eq!(reqwest::get(&url).await.unwrap().status().as_u16(), 503);
+        }
+        assert_eq!(counting.0.load(std::sync::atomic::Ordering::SeqCst), 1);
     }
 }
