@@ -203,7 +203,8 @@ pub fn classify_response(response: &CertificateResponse) -> Answer {
         // so would wait on an order that may never exist.
         other => Answer::Unavailable {
             reason: format!(
-                "Canopy answered with a state this runtime does not recognise: {other}"
+                "Canopy answered with a state this runtime does not recognise: {}",
+                tidy(other)
             ),
         },
     }
@@ -571,7 +572,9 @@ fn apply(
                         if names.is_empty() {
                             "no names".to_owned()
                         } else {
-                            names.join(", ")
+                            // The names come from the certificate, which a
+                            // relay chooses as much as it chooses its answers.
+                            tidy(names.join(", "))
                         },
                         ask.hostname
                     ),

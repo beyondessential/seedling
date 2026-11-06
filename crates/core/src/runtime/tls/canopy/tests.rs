@@ -74,6 +74,13 @@ fn a_state_the_runtime_does_not_know_is_neither_pending_nor_a_refusal() {
         Answer::Unavailable { reason } => assert!(reason.contains("quarantined"), "{reason}"),
         other => panic!("expected Unavailable, got {other:?}"),
     }
+    // And the state Canopy named is text a relay chose, like every other.
+    match classify_response(&response("pending\nERROR forged", false)) {
+        Answer::Unavailable { reason } => {
+            assert!(!reason.chars().any(char::is_control), "{reason:?}")
+        }
+        other => panic!("expected Unavailable, got {other:?}"),
+    }
 }
 
 // r[verify tls.canopy.revoked]
@@ -917,4 +924,48 @@ async fn a_revocation_leaves_its_replacement_outstanding() {
         row.row.step, 1,
         "and the hostname serves on the next strategy"
     );
+}
+
+// r[verify tls.cert.validation.san-coverage]
+#[tokio::test]
+async fn the_names_of_a_certificate_that_was_not_asked_for_are_tidied_too() {
+    struct Forging(Fake);
+    impl CertificateRelay for &Forging {
+        async fn request(
+            &self,
+            name: &str,
+            csr_der_b64: &str,
+            _app_type: Option<&str>,
+        ) -> std::result::Result<CertificateResponse, RelayFailure> {
+            use base64::Engine as _;
+            let der = base64::engine::general_purpose::STANDARD
+                .decode(csr_der_b64)
+                .unwrap();
+            let csr = rustls_pki_types::CertificateSigningRequestDer::from(der);
+            let mut params = CertificateSigningRequestParams::from_der(&csr).unwrap();
+            // A DNS name is IA5String, which a control character fits inside.
+            params.params.subject_alt_names = vec![rcgen::SanType::DnsName(
+                "other.example.com\nERROR forged".try_into().unwrap(),
+            )];
+            let pem = params.signed_by(&self.0.ca).unwrap().pem();
+            Ok(CertificateResponse::builder()
+                .key_must_be_replaced(false)
+                .name(name.to_owned())
+                .revoked(false)
+                .state("issued".to_owned())
+                .usable(true)
+                .chain(pem)
+                .build())
+        }
+    }
+
+    let forging = Forging(Fake::new([]));
+    let db = DbHandle::open_in_memory().unwrap();
+    let engine = Engine::new(db.clone(), Arc::new(Cipher::for_tests()), &forging);
+    let outcome = engine.ask(ask(AttemptTrigger::OnDemand)).await.unwrap();
+    let Outcome::Failed(reason) = &outcome else {
+        panic!("expected a refusal to store it, got {outcome:?}");
+    };
+    assert!(!reason.chars().any(char::is_control), "{reason:?}");
+    assert_eq!(canopy_rows(&db)[0].state, TlsCertState::CsrPending);
 }
