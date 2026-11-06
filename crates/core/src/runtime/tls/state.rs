@@ -759,6 +759,9 @@ struct ChainContext {
     serving: Option<(chain::Serving, ServingSource)>,
     row: Option<chain::Row>,
     last_error: Option<String>,
+    /// The proxy's cache holds something for this hostname that could not be
+    /// read. Not a certificate, and not an absence either.
+    proxy_unreadable: bool,
     proxy: Option<ProxyHolding>,
     staged_from: Option<i64>,
     retry_block: Option<Option<String>>,
@@ -841,6 +844,10 @@ impl ChainContext {
             row: chain_row.map(|r| r.row.clone()),
             last_error: chain_row.and_then(|r| r.last_error.clone()),
             proxy: snap.env.proxy.get(hostname).cloned(),
+            proxy_unreadable: matches!(
+                snap.env.proxy.get(hostname),
+                Some(ProxyHolding::Unreadable)
+            ),
             staged_from,
             retry_block: retry_block.map(|b| b.reason.clone()),
             force,
@@ -856,6 +863,16 @@ fn decide_chain(ctx: &ChainContext, strategies: Vec<Strategy>) -> Decision {
         // another now would only produce a duplicate.
         (None, Some(from)) if !ctx.force => chain::Cycle::Idle {
             next_cycle_at: from,
+        },
+        // r[impl tls.chain.cycle]
+        // The proxy holds something for the hostname that could not be read.
+        // That is not an absence: starting a cycle on it would have Canopy
+        // asked to replace a certificate the proxy may be serving perfectly
+        // well, which is the early replacement a cycle exists to avoid. An
+        // operator retry still starts one, since the operator can see what the
+        // runtime cannot.
+        (None, _) if ctx.proxy_unreadable && !ctx.force => chain::Cycle::Idle {
+            next_cycle_at: i64::MAX,
         },
         _ => chain::resolve(&chain::Inputs {
             chain: &strategies,
@@ -1380,6 +1397,54 @@ mod tests {
         let c = chain_of(&st);
         assert_eq!(c.serving, None);
         assert_eq!(c.proxy, Some(ProxyHolding::Unreadable));
+        assert!(
+            matches!(c.cycle, chain::Cycle::Idle { .. }),
+            "no cycle starts on it, so Canopy is not asked to replace what the proxy may be serving"
+        );
+        assert_eq!(c.act, ChainAct::Wait);
+
+        // A hostname the proxy holds nothing for is a different answer.
+        s.env
+            .proxy
+            .insert("host.example.com".to_owned(), ProxyHolding::Nothing);
+        assert_eq!(
+            chain_of(&compute_state(&s, "host.example.com")).act,
+            ChainAct::AskCanopy
+        );
+
+        // And one that was never looked at, because the proxy's cache could not
+        // be located at all, still gets a first certificate: the alternative is
+        // that nothing is ever issued while it cannot be found.
+        s.env.proxy.remove("host.example.com");
+        assert_eq!(
+            chain_of(&compute_state(&s, "host.example.com")).act,
+            ChainAct::AskCanopy
+        );
+    }
+
+    // r[verify tls.cert.force-retry]
+    #[test]
+    fn an_operator_retry_starts_a_cycle_the_unreadable_cache_was_deferring() {
+        let mut s = snap(
+            vec![],
+            vec![],
+            vec![],
+            vec![],
+            vec![TlsCertForceRetry {
+                hostname: "host.example.com".to_owned(),
+                requested_at: 90,
+            }],
+            "ops@x",
+            100,
+        );
+        s.env = canopy_env("host.example.com", &["tamanu"], true);
+        s.env
+            .proxy
+            .insert("host.example.com".to_owned(), ProxyHolding::Unreadable);
+        assert_eq!(
+            chain_of(&compute_state(&s, "host.example.com")).act,
+            ChainAct::AskCanopy
+        );
     }
 
     // r[verify tls.strategy.canopy-only]
