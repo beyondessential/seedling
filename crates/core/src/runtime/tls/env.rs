@@ -15,6 +15,18 @@ use super::state::{ChainEnv, ManagedIngress, ProxyCert, ProxyHolding};
 use crate::runtime::{canopy::store as canopy_store, db::Db};
 use crate::system::caddy::CertRead;
 
+/// Where the facts a chain depends on come from, for callers that do not hold
+/// the daemon's state themselves: the certificate endpoint, and the issuance
+/// coordinator that serves it.
+pub trait Environment: Send + Sync {
+    /// The TLS-terminating ingresses, and the facts a chain depends on for
+    /// them. `only` narrows both to the ingresses declaring one hostname.
+    ///
+    /// `None` when they could not be gathered. That is not an empty answer, and
+    /// no caller may act on it as one.
+    fn gather(&self, only: Option<&str>) -> Option<(Vec<ManagedIngress>, ChainEnv)>;
+}
+
 /// Build the [`ChainEnv`] for `managed` ingresses.
 ///
 /// `offer_live` is whether Canopy access is enabled and a client is offering to

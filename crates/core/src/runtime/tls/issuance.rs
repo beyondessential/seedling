@@ -20,7 +20,7 @@
 //! NOT auto-pause subsequent issuance — that's the operator's call via
 //! the retry-blocks endpoint.
 
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
 use std::sync::Arc;
 
 use parking_lot::Mutex;
@@ -30,7 +30,8 @@ use snafu::Snafu;
 use super::{
     AttemptOutcome, AttemptTrigger, TlsPolicy,
     acme::{self, IssueParams, Issued},
-    state::{self, Decision},
+    env::Environment,
+    state::{self, ChainDecision, Decision},
     store, tailscale_issuer,
 };
 use crate::runtime::{
@@ -87,6 +88,10 @@ pub struct Coordinator {
     /// well inside CA rate limits and avoids racing on the ACME account
     /// state during account bootstrap.
     issue_lock: Arc<tokio::sync::Mutex<()>>,
+    /// Where the facts a hostname's strategy chain depends on come from. Set
+    /// once the daemon's state exists, after the coordinator has to; until then
+    /// no chain decision can be made.
+    environment: std::sync::OnceLock<Arc<dyn Environment>>,
 }
 
 impl Coordinator {
@@ -96,7 +101,42 @@ impl Coordinator {
             cipher,
             in_flight: Arc::new(Mutex::new(HashSet::new())),
             issue_lock: Arc::new(tokio::sync::Mutex::new(())),
+            environment: std::sync::OnceLock::new(),
         })
+    }
+
+    /// Say where the facts a chain depends on come from. Takes effect once.
+    pub fn set_environment(&self, environment: Arc<dyn Environment>) {
+        let _ = self.environment.set(environment);
+    }
+
+    /// The chain decision for every TLS-terminating hostname on a chain, or for
+    /// the one named.
+    ///
+    /// `None` when the decisions could not be made, which is not the same as
+    /// no hostname being on a chain: a caller that withholds anything on the
+    /// strength of a decision must withhold nothing on `None`.
+    // r[impl tls.chain.cycle]
+    pub fn chain_decisions(&self, only: Option<&str>) -> Option<BTreeMap<String, ChainDecision>> {
+        let (managed, env) = self.environment.get()?.gather(only)?;
+        let snapshot = match self.db.call(state::Snapshot::load) {
+            Ok(snapshot) => snapshot.with_env(env),
+            Err(e) => {
+                tracing::warn!(error = %e, "cannot read the TLS state to decide a chain");
+                return None;
+            }
+        };
+        let mut out = BTreeMap::new();
+        for ingress in &managed {
+            if out.contains_key(&ingress.hostname) {
+                continue;
+            }
+            if let Decision::Chain(c) = state::compute_state(&snapshot, &ingress.hostname).decision
+            {
+                out.insert(ingress.hostname.clone(), c);
+            }
+        }
+        Some(out)
     }
 
     /// Reconciler-driven: ensure the runtime is making progress on a cert

@@ -67,6 +67,43 @@ pub struct OiState {
     pub definition_registry: crate::runtime::definition::fetch::SharedRegistry,
 }
 
+/// The daemon's state as the source of the facts a TLS chain depends on.
+///
+/// Weak, because the state holds the coordinator that holds this.
+pub struct OiEnvironment(std::sync::Weak<OiState>);
+
+impl OiEnvironment {
+    pub fn new(state: &Arc<OiState>) -> Self {
+        Self(Arc::downgrade(state))
+    }
+}
+
+impl crate::runtime::tls::env::Environment for OiEnvironment {
+    fn gather(
+        &self,
+        only: Option<&str>,
+    ) -> Option<(
+        Vec<crate::runtime::tls::state::ManagedIngress>,
+        crate::runtime::tls::state::ChainEnv,
+    )> {
+        let state = self.0.upgrade()?;
+        let mut managed = {
+            let registry = state.registry.read();
+            crate::runtime::tls::state::managed_ingresses(&registry)
+        };
+        if let Some(hostname) = only {
+            managed.retain(|m| m.hostname == hostname);
+        }
+        match state.chain_env(&managed) {
+            Ok(env) => Some((managed, env)),
+            Err(e) => {
+                tracing::warn!(error = %e, "cannot read the facts a TLS chain depends on");
+                None
+            }
+        }
+    }
+}
+
 impl OiState {
     /// Whether Canopy access is enabled and a client is offering to carry
     /// requests.

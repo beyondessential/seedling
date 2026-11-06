@@ -337,6 +337,8 @@ pub struct ChainDecision {
     /// carries the renewal out itself.
     // r[impl tls.canopy.collect]
     pub collect_canopy: bool,
+    /// When the proxy may start ordering a certificate of its own.
+    pub proxy_from: chain::ProxyFrom,
     pub canopy: CanopyStanding,
     /// What is serving the hostname, if anything usable is.
     pub serving: Option<ServingSource>,
@@ -836,11 +838,14 @@ fn decide_chain(ctx: &ChainContext, strategies: Vec<Strategy>) -> Decision {
             chain::Cycle::Idle { .. } => false,
         };
 
+    let proxy_from = chain::proxy_from(&strategies, ctx.serving.map(|(s, _)| s), &cycle);
+
     Decision::Chain(ChainDecision {
         strategies,
         cycle,
         act,
         collect_canopy,
+        proxy_from,
         canopy: ctx.canopy.clone(),
         serving: ctx.serving.map(|(_, source)| source),
         proxy: ctx.proxy,

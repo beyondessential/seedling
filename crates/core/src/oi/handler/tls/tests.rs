@@ -811,8 +811,11 @@ fn canopy_policy_set_list_clear_roundtrip() {
     );
 
     assert_eq!(
-        oi.call("/tls/policies/clear", json!({ "hostname": "*.example.com" }))
-            .unwrap()["ok"],
+        oi.call(
+            "/tls/policies/clear",
+            json!({ "hostname": "*.example.com" })
+        )
+        .unwrap()["ok"],
         true
     );
 }
@@ -906,8 +909,11 @@ fn a_canopy_only_hostname_is_waiting_on_canopy_even_with_no_offer() {
 fn a_retry_for_a_hostname_canopy_is_not_part_of_does_not_linger() {
     let oi = TestOi::new();
     tls_app(&oi, UNTYPED_TLS_APP);
-    oi.call("/tls/certificates/retry", json!({ "hostname": "shop.example.com" }))
-        .unwrap();
+    oi.call(
+        "/tls/certificates/retry",
+        json!({ "hostname": "shop.example.com" }),
+    )
+    .unwrap();
     assert!(
         shop_hostname(&oi)["force_retry_at"].is_null(),
         "nothing would ever consume the queued retry, so it must not wait for one"
@@ -920,7 +926,10 @@ fn a_retry_for_a_hostname_canopy_is_not_part_of_does_not_linger() {
 fn a_retry_for_a_hostname_canopy_can_be_asked_about_waits_for_the_report_tick() {
     let oi = TestOi::new();
     tls_app(&oi, TLS_APP);
-    oi.call("/tls/certificates/retry", json!({ "hostname": "shop.example.com" }))
-        .unwrap();
+    oi.call(
+        "/tls/certificates/retry",
+        json!({ "hostname": "shop.example.com" }),
+    )
+    .unwrap();
     assert!(!shop_hostname(&oi)["force_retry_at"].is_null());
 }

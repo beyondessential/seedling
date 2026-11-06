@@ -227,6 +227,60 @@ pub fn resolve(inputs: &Inputs<'_>) -> Cycle {
     }
 }
 
+/// When the proxy may start ordering a certificate for a hostname.
+///
+/// The proxy carries out the HTTP-01 and internal-CA strategies on its own
+/// schedule, so left alone it would order or renew the moment its own renewal
+/// point arrived, ahead of Canopy. This says when it is allowed to instead.
+// r[impl tls.chain.proxy-gate]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProxyFrom {
+    /// Whenever it likes: a proxy strategy is responsible, or first in the chain.
+    Always,
+    /// Not before this time, when the strategies ahead of it have run out of
+    /// theirs.
+    At(i64),
+    /// No clock says: the hostname has nothing to replace and an earlier
+    /// strategy is responsible, so it stays with that strategy.
+    Unknown,
+    /// Never: the chain has no proxy strategy.
+    Never,
+}
+
+/// When the proxy may start ordering, given where the hostname stands.
+// r[impl tls.chain.proxy-gate]
+pub fn proxy_from(chain: &[Strategy], serving: Option<Serving>, cycle: &Cycle) -> ProxyFrom {
+    let Some(proxy_at) = chain.iter().position(|s| s.is_proxy()) else {
+        return ProxyFrom::Never;
+    };
+    if proxy_at == 0 {
+        return ProxyFrom::Always;
+    }
+    let (identity, step, since) = match cycle {
+        Cycle::Running(r) => {
+            if r.step >= proxy_at {
+                return ProxyFrom::Always;
+            }
+            (r.identity, r.step, r.since)
+        }
+        // Nothing is running, so what is next is the start of the next cycle
+        // and the ladder from there.
+        Cycle::Idle { next_cycle_at } => match serving {
+            Some(s) => (s.identity, 0, *next_cycle_at),
+            None => return ProxyFrom::Unknown,
+        },
+    };
+    let Some(expiry) = identity.not_after else {
+        return ProxyFrom::Unknown;
+    };
+    let (mut step, mut since) = (step, since);
+    while step < proxy_at {
+        since = halfway(since, expiry);
+        step += 1;
+    }
+    ProxyFrom::At(since)
+}
+
 /// Whether a strategy can be asked right now, for a hostname with nothing to
 /// replace. Only Canopy can be unavailable, and not when it is the whole
 /// chain: a Canopy-only hostname is never moved on for want of an offer.
@@ -618,5 +672,51 @@ mod tests {
             vec![Strategy::InternalCa],
             "Canopy is never asked for a name no public CA can issue for"
         );
+    }
+
+    // r[verify tls.chain.proxy-gate]
+    #[test]
+    fn the_proxy_may_order_from_the_point_canopy_falls_through() {
+        let serving = serving();
+        let idle = resolve(&inputs(&TWO, 10 * DAY, Some(serving), None));
+        assert_eq!(
+            proxy_from(&TWO, Some(serving), &idle),
+            ProxyFrom::At(75 * DAY),
+            "known before the cycle starts, so the proxy's own renewal can be held off"
+        );
+        let running = resolve(&inputs(&TWO, 61 * DAY, Some(serving), None));
+        assert_eq!(
+            proxy_from(&TWO, Some(serving), &running),
+            ProxyFrom::At(75 * DAY)
+        );
+        let fallen = resolve(&inputs(&TWO, 76 * DAY, Some(serving), None));
+        assert_eq!(proxy_from(&TWO, Some(serving), &fallen), ProxyFrom::Always);
+    }
+
+    // r[verify tls.chain.proxy-gate]
+    #[test]
+    fn a_chain_with_no_earlier_strategy_leaves_the_proxy_alone() {
+        let chain = [Strategy::Http01];
+        let idle = resolve(&inputs(&chain, 10 * DAY, Some(serving()), None));
+        assert_eq!(
+            proxy_from(&chain, Some(serving()), &idle),
+            ProxyFrom::Always
+        );
+    }
+
+    // r[verify tls.chain.proxy-gate]
+    // r[verify tls.strategy.canopy-only]
+    #[test]
+    fn a_canopy_only_chain_never_lets_the_proxy_order() {
+        let chain = [Strategy::Canopy];
+        let idle = resolve(&inputs(&chain, 10 * DAY, Some(serving()), None));
+        assert_eq!(proxy_from(&chain, Some(serving()), &idle), ProxyFrom::Never);
+    }
+
+    // r[verify tls.chain.proxy-gate]
+    #[test]
+    fn with_nothing_to_replace_no_clock_says_when_the_proxy_may_order() {
+        let cycle = resolve(&inputs(&TWO, 5, None, None));
+        assert_eq!(proxy_from(&TWO, None, &cycle), ProxyFrom::Unknown);
     }
 }
