@@ -620,6 +620,7 @@ mod tests {
                 BTreeSet::new()
             };
             let env = ChainEnv {
+                known: true,
                 offer_live: self.offer_live,
                 canopy_types: BTreeMap::from([("shop.example.com".to_owned(), types)]),
                 proxy: self

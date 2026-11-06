@@ -1070,6 +1070,7 @@ fn the_hostname_view_shows_what_the_proxy_holds() {
     // What gathering the chain's facts read from the proxy's cache is what the
     // view shows; nothing re-reads it.
     let env = crate::runtime::tls::state::ChainEnv {
+        known: true,
         offer_live: false,
         canopy_types: Default::default(),
         proxy: std::collections::BTreeMap::from([(

@@ -89,6 +89,7 @@ pub fn collect(
     }
 
     Ok(ChainEnv {
+        known: true,
         offer_live,
         canopy_types,
         proxy,

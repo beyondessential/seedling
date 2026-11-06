@@ -143,6 +143,15 @@ pub enum ProxyHolding {
 /// function of its inputs.
 #[derive(Debug, Clone)]
 pub struct ChainEnv {
+    /// Whether these facts were gathered at all.
+    ///
+    /// False is not a set of facts that happens to be empty: it is a caller
+    /// that holds none, and a hostname's chain cannot be decided without them.
+    /// [`compute_state`] then reports [`Decision::Default`] for every hostname,
+    /// so what a caller gets is no chain decision rather than one made up from
+    /// what it did not know. Set by [`crate::runtime::tls::env::collect`], which
+    /// is the one thing that gathers them.
+    pub known: bool,
     /// Whether a Canopy offer is live.
     pub offer_live: bool,
     /// The Canopy application types of the apps declaring each hostname.
@@ -156,14 +165,15 @@ pub struct ChainEnv {
 }
 
 impl ChainEnv {
-    /// For a caller that holds none of these facts and acts on no chain
-    /// decision: the expiring-certificate sweep and the renewal scheduler,
-    /// which read a snapshot only for what is stored.
+    /// For a caller that holds none of these facts: the expiring-certificate
+    /// sweep and the renewal scheduler, which read a snapshot only for what is
+    /// stored, and the issuance coordinator's own ACME flow.
     ///
-    /// Named rather than defaulted, because what it produces is not a neutral
-    /// chain but one with no Canopy in it.
+    /// A snapshot built on it answers no chain decision at all, rather than one
+    /// made up from the absence of the facts: see [`known`](Self::known).
     pub fn none() -> Self {
         Self {
+            known: false,
             offer_live: false,
             canopy_types: BTreeMap::new(),
             proxy: BTreeMap::new(),
@@ -720,6 +730,12 @@ fn decide(
     chain_ctx: &ChainContext,
 ) -> Decision {
     match policy {
+        // Without the facts a chain rests on there is no chain to decide: a
+        // caller that gathered none reads a snapshot for what is stored, and
+        // must not be handed a decision made from their absence. The decisions
+        // of a bound policy are unaffected, since they rest on the database
+        // alone.
+        None | Some(TlsPolicy::Canopy) if !chain_ctx.facts_known => Decision::Default,
         // No operator policy bound: the default chain. A stored certificate
         // that covers the hostname, or one the proxy holds, is left alone
         // until its renewal point (see [`chain::resolve`]).
@@ -752,6 +768,8 @@ fn decide(
 /// snapshot before the decision so the decision itself is a plain function of
 /// it.
 struct ChainContext {
+    /// Whether the facts a chain rests on were gathered; see [`ChainEnv::known`].
+    facts_known: bool,
     now: i64,
     internal_name: bool,
     canopy: CanopyStanding,
@@ -836,6 +854,7 @@ impl ChainContext {
             });
 
         Self {
+            facts_known: snap.env.known,
             now,
             internal_name,
             canopy,
@@ -1143,7 +1162,10 @@ mod tests {
                 cert_profile: None,
                 updated_at: now,
             },
-            env: ChainEnv::none(),
+            env: ChainEnv {
+                known: true,
+                ..ChainEnv::none()
+            },
             now,
             sans,
         }
@@ -1287,6 +1309,7 @@ mod tests {
 
     fn canopy_env(hostname: &str, types: &[&str], offer_live: bool) -> ChainEnv {
         ChainEnv {
+            known: true,
             offer_live,
             canopy_types: BTreeMap::from([(
                 hostname.to_owned(),
@@ -2159,5 +2182,36 @@ mod tests {
             chain_of(&compute_state(&bare, "host.example.com")).replacing(),
             chain::Identity::NONE
         );
+    }
+
+    // r[verify tls.chain.cycle]
+    #[test]
+    fn a_snapshot_without_the_chains_facts_decides_no_chain() {
+        let mut s = snap(vec![], vec![], vec![], vec![], vec![], "ops@x", 1000);
+        s.env = ChainEnv::none();
+
+        // A hostname that would be on the default chain, and one bound to the
+        // Canopy-only policy: neither is decided from facts nobody gathered.
+        assert!(matches!(
+            compute_state(&s, "host.example.com").decision,
+            Decision::Default
+        ));
+        s.policies = vec![TlsPolicyRow {
+            hostname: "host.example.com".to_owned(),
+            policy: TlsPolicy::Canopy,
+            updated_at: 0,
+        }];
+        assert!(matches!(
+            compute_state(&s, "host.example.com").decision,
+            Decision::Default
+        ));
+
+        // A bound ACME-DNS policy rests on the database alone, so the callers
+        // that read a snapshot only for what is stored still get its decisions.
+        s.policies = vec![policy_acme("*", "p")];
+        assert!(matches!(
+            compute_state(&s, "host.example.com").decision,
+            Decision::IssueNow { .. }
+        ));
     }
 }
