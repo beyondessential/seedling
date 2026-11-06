@@ -1,6 +1,6 @@
 //! The apps reported to Canopy as applications.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 use seedling_protocol::names::AppName;
 use serde_json::{Value, json};
@@ -82,11 +82,38 @@ pub(super) fn report_applications(
     db: &Db,
     statuses: &[(AppName, AppStatus)],
 ) -> rusqlite::Result<Value> {
+    // The report runs every minute. Looking each app's status up by scanning
+    // the list, or asking for its faults in a query of its own, would grow the
+    // tick's cost with the app count on top of the work itself, so both are
+    // gathered once and only for the apps that will be reported.
+    let by_name: HashMap<&str, &AppStatus> = statuses
+        .iter()
+        .map(|(name, status)| (name.as_str(), status))
+        .collect();
+
+    let reported: Vec<(store::CanopyApp, &AppStatus)> = store::list_apps(db)?
+        .into_iter()
+        .filter_map(|app| {
+            let status = by_name.get(app.app.as_str()).copied()?;
+            Some((app, status))
+        })
+        .collect();
+
+    let reporting: HashSet<&str> = reported.iter().map(|(app, _)| app.app.as_str()).collect();
+    let mut faults_by_app: HashMap<&str, Vec<Value>> = HashMap::new();
+    let active = faults::list_active_faults(db, None)?;
+    for fault in &active {
+        let app = fault.app.as_str();
+        if reporting.contains(app) {
+            faults_by_app
+                .entry(app)
+                .or_default()
+                .push(fault_detail(fault));
+        }
+    }
+
     let mut applications = BTreeMap::new();
-    for app in store::list_apps(db)? {
-        let Some((name, status)) = statuses.iter().find(|(n, _)| n.as_str() == app.app) else {
-            continue;
-        };
+    for (app, status) in reported {
         let held = app.last_grade.as_deref();
         let graded = grade(status, held.and_then(Result_::from_stored));
         // Only when it differs: the grade is the same from one minute to the
@@ -100,14 +127,13 @@ pub(super) fn report_applications(
             _ => {}
         }
 
-        let active: Vec<Value> = faults::list_active_faults(db, Some(name))?
-            .iter()
-            .map(fault_detail)
-            .collect();
         let health = check(
             "health/app",
             graded.result,
-            json!({ "status": status.name(), "faults": active }),
+            json!({
+                "status": status.name(),
+                "faults": faults_by_app.remove(app.app.as_str()).unwrap_or_default(),
+            }),
         );
         applications.insert(
             app.app,

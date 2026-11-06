@@ -10,7 +10,7 @@ use crate::{
     oi::state::OiState,
     runtime::{
         db::Db,
-        faults::{self, FaultKey, FaultMeta},
+        faults::{self, FaultKey, FaultMeta, FaultScope},
     },
 };
 
@@ -38,13 +38,9 @@ pub fn sync_app_type(db: &Db, app: &AppName, canopy_type: Option<&str>) -> rusql
 // r[impl canopy.offer.absent]
 /// Clear the fault from every app.
 pub fn clear_all(db: &Db) -> rusqlite::Result<()> {
-    let held: Vec<_> = faults::list_active_faults(db, None)?
-        .into_iter()
-        .filter(|f| f.kind == FAULT_KIND)
-        .collect();
-    for fault in held {
-        faults::clear_fault(db, &fault.id, &fault.app)?;
-    }
+    // Through a scope, so the sweep this runs on every tick asks only for this
+    // kind rather than reading the host's whole fault list to discard it.
+    faults::clear_faults_in_scope(db, &FaultScope::Kind(FAULT_KIND.to_owned()))?;
     Ok(())
 }
 
