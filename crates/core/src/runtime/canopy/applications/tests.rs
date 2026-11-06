@@ -211,3 +211,24 @@ fn a_grade_that_has_not_changed_is_not_written_again() {
     report_applications(&db, &[(name("app"), AppStatus::Degraded)]).unwrap();
     assert_eq!(held_grade(&db).as_deref(), Some("warning"));
 }
+
+// r[verify canopy.app.health]
+#[test]
+fn a_fault_with_a_type_and_no_name_still_says_what_it_is_against() {
+    let db = db();
+    store::sync_app_type(&db, "app", Some("t")).unwrap();
+    faults::file_fault(
+        &db,
+        &name("app"),
+        Some("deployment"),
+        None,
+        None,
+        "scale_refused",
+        "no capacity",
+    )
+    .unwrap();
+
+    let report = report_applications(&db, &[(name("app"), AppStatus::Degraded)]).unwrap();
+    let listed = report["app"]["health"][0]["faults"].as_array().unwrap();
+    assert_eq!(listed[0]["resource"], "deployment");
+}

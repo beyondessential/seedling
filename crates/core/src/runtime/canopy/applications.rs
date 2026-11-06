@@ -60,10 +60,14 @@ fn grade(status: &AppStatus, before_operation: Option<Result_>) -> Graded {
 
 fn fault_detail(fault: &faults::FaultRecord) -> Value {
     let mut detail = json!({ "kind": fault.kind, "description": fault.description });
+    // A fault carries its type and its name independently, so either alone is
+    // a shape that reaches here. Say what there is: a fault against a kind of
+    // thing still tells an operator more than no resource at all.
     let resource = match (&fault.resource_type, &fault.resource_name) {
         (Some(kind), Some(name)) => Some(format!("{kind}/{name}")),
+        (Some(kind), None) => Some(kind.clone()),
         (None, Some(name)) => Some(name.clone()),
-        _ => None,
+        (None, None) => None,
     };
     if let (Some(map), Some(resource)) = (detail.as_object_mut(), resource) {
         map.insert("resource".into(), Value::String(resource));
