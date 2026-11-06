@@ -102,16 +102,6 @@ pub fn read_cert_state(caddy_data_path: &Path, hostname: &str) -> CertRead {
     })
 }
 
-/// Read and parse the Caddy-managed cert for `hostname` from disk, for display.
-/// `None` when there is nothing to show, whether the cache holds no certificate
-/// or one that could not be read.
-pub fn read_cert(caddy_data_path: &Path, hostname: &str) -> Option<CaddyCertView> {
-    match read_cert_state(caddy_data_path, hostname) {
-        CertRead::Present(view) => Some(view),
-        CertRead::Absent | CertRead::Unreadable => None,
-    }
-}
-
 /// For each `(instance, hostname)` pair, check the cert cache and return any
 /// `cert_valid` observation that should be persisted. Hostnames whose cert is
 /// not yet present produce no observation here; the fault layer is responsible

@@ -49,6 +49,9 @@ pub fn proxy_holdings(
             CertRead::Present(view) => ProxyHolding::Holds(ProxyCert {
                 not_before: view.not_before,
                 not_after: view.not_after,
+                issuer_kind: view.issuer_kind,
+                issuer: view.issuer,
+                self_signed: view.self_signed,
             }),
             CertRead::Absent => ProxyHolding::Nothing,
             CertRead::Unreadable => ProxyHolding::Unreadable,

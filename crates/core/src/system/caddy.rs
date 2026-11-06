@@ -5,9 +5,7 @@ mod proxy;
 mod startup;
 
 pub(crate) use cert_observation::observe as observe_certs;
-pub(crate) use cert_observation::{
-    CaddyCertView, CertRead, read_cert as read_caddy_cert, read_cert_state as read_caddy_cert_state,
-};
+pub(crate) use cert_observation::{CertRead, read_cert_state as read_caddy_cert_state};
 #[expect(unused_imports, reason = "public API surface")]
 pub(crate) use proxy::{CaddyAddrs, CaddyError};
 pub(crate) use proxy::{CaddyProxy, build_client};

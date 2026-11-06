@@ -217,7 +217,7 @@ pub enum FallThrough {
 /// renewal is held back by the schedule in its configuration instead.
 // r[impl tls.chain.proxy-gate]
 pub fn endpoint_gate(c: &ChainDecision) -> FallThrough {
-    match (c.proxy_from, c.proxy) {
+    match (c.proxy_from, &c.proxy) {
         (ProxyFrom::Always, _) => FallThrough::Allow,
         (_, Some(ProxyHolding::Nothing)) => FallThrough::Withhold,
         // The proxy holds a certificate, or what it holds could not be read, or
@@ -685,6 +685,7 @@ mod tests {
                 canopy_types: BTreeMap::from([("shop.example.com".to_owned(), types)]),
                 proxy: self
                     .proxy
+                    .clone()
                     .map(|p| BTreeMap::from([("shop.example.com".to_owned(), p)]))
                     .unwrap_or_default(),
             };
@@ -737,6 +738,9 @@ mod tests {
         let held = ProxyHolding::Holds(ProxyCert {
             not_before: Some(0),
             not_after: Some(i64::MAX / 2),
+            issuer_kind: "local".to_owned(),
+            issuer: None,
+            self_signed: true,
         });
         assert_eq!(status_for(Some(typed(Some(held)))).await, 204);
         assert_eq!(

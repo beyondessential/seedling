@@ -1059,3 +1059,53 @@ fn a_hostname_on_a_chain_is_not_driven_through_an_acme_dns_flow() {
     assert_eq!(code, "internal");
     assert!(msg.contains("has no policy"), "{msg}");
 }
+
+// i[verify tls.hostname.list]
+// r[verify tls.cert.metadata]
+#[test]
+fn the_hostname_view_shows_what_the_proxy_holds() {
+    let oi = TestOi::new();
+    tls_app(&oi, UNTYPED_TLS_APP);
+
+    // What gathering the chain's facts read from the proxy's cache is what the
+    // view shows; nothing re-reads it.
+    let env = crate::runtime::tls::state::ChainEnv {
+        offer_live: false,
+        canopy_types: Default::default(),
+        proxy: std::collections::BTreeMap::from([(
+            "shop.example.com".to_owned(),
+            crate::runtime::tls::state::ProxyHolding::Holds(
+                crate::runtime::tls::state::ProxyCert {
+                    not_before: Some(1),
+                    not_after: Some(i64::MAX / 2),
+                    issuer_kind: "local".to_owned(),
+                    issuer: Some("CN=Caddy Local Authority".to_owned()),
+                    self_signed: true,
+                },
+            ),
+        )]),
+    };
+    let snapshot = oi
+        .state
+        .db
+        .call(move |db| crate::runtime::tls::state::Snapshot::load(db, env))
+        .unwrap();
+    let st = crate::runtime::tls::state::compute_state(&snapshot, "shop.example.com");
+    let view = super::project_hostname_state(
+        "shop.example.com",
+        &std::collections::BTreeSet::from(["shop".to_owned()]),
+        &st,
+        match snapshot.env.proxy.get("shop.example.com") {
+            Some(crate::runtime::tls::state::ProxyHolding::Holds(c)) => Some(c),
+            _ => None,
+        },
+    );
+
+    assert_eq!(view["active_cert"]["origin"], "caddy");
+    assert_eq!(view["active_cert"]["caddy_issuer"], "local");
+    assert_eq!(view["active_cert"]["issuer"], "CN=Caddy Local Authority");
+    assert_eq!(view["active_cert"]["self_signed"], true);
+    assert_eq!(view["status"], "active");
+    assert_eq!(view["chain"]["responsible"], "internal_ca");
+    assert_eq!(view["last_issuance"]["kind"], "caddy");
+}

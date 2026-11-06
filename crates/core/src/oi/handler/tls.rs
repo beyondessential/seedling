@@ -887,28 +887,18 @@ pub(crate) fn list_hostnames(state: &OiState, params: ListHostnamesParams) -> Ha
         .call(move |db| state::Snapshot::load(db, env))
         .map_err(db_error)?;
 
-    // Resolve Caddy's data volume once per request (cached on OiState
-    // after first hit). For hostnames whose strategy is "default"
-    // (no operator policy bound) we read Caddy's certmagic store off
-    // disk to surface issuer / expiry / last-issued, since the runtime
-    // has no DB rows for those certs.
-    let caddy_data_path = state.resolve_caddy_data_path();
-
     let result: Vec<Value> = hostname_apps
         .into_iter()
         .map(|(hostname, apps)| {
             let st = state::compute_state(&snapshot, &hostname);
-            let caddy_cert = if matches!(
-                st.decision,
-                state::Decision::Default | state::Decision::Chain(_)
-            ) {
-                caddy_data_path
-                    .as_deref()
-                    .and_then(|p| crate::system::caddy::read_caddy_cert(p, &hostname))
-            } else {
-                None
+            // What the proxy holds was read when the chain's facts were
+            // gathered, so it is taken from there rather than read and parsed a
+            // second time for the display.
+            let caddy_cert = match snapshot.env.proxy.get(&hostname) {
+                Some(state::ProxyHolding::Holds(cert)) => Some(cert),
+                Some(state::ProxyHolding::Nothing | state::ProxyHolding::Unreadable) | None => None,
             };
-            project_hostname_state(&hostname, &apps, &st, caddy_cert.as_ref())
+            project_hostname_state(&hostname, &apps, &st, caddy_cert)
         })
         .collect();
 
@@ -916,14 +906,14 @@ pub(crate) fn list_hostnames(state: &OiState, params: ListHostnamesParams) -> Ha
 }
 
 /// Render a [`state::HostnameState`] as the JSON the OI rollup serves.
-/// `caddy_cert` is supplied for default-strategy hostnames: it carries
-/// what Caddy's own automatic TLS has on disk, so the rollup can show
-/// issuer / expiry / "last issued" for certs the runtime doesn't own.
+/// `caddy_cert` is what the proxy holds in its own cache, so the rollup can
+/// show issuer / expiry / "last issued" for certificates the runtime does not
+/// own.
 fn project_hostname_state(
     hostname: &str,
     apps: &BTreeSet<String>,
     st: &state::HostnameState<'_>,
-    caddy_cert: Option<&crate::system::caddy::CaddyCertView>,
+    caddy_cert: Option<&state::ProxyCert>,
 ) -> Value {
     let policy_json = match st.policy.map(|p| (&p.policy, p.hostname.as_str())) {
         None => json!({ "strategy": "default" }),
@@ -1018,7 +1008,7 @@ fn project_hostname_state(
 /// disk.
 fn decision_status(
     st: &state::HostnameState<'_>,
-    caddy_cert: Option<&crate::system::caddy::CaddyCertView>,
+    caddy_cert: Option<&state::ProxyCert>,
 ) -> &'static str {
     use state::Decision::*;
     use state::IssueReason as R;
@@ -1072,7 +1062,7 @@ fn decision_status(
 /// there is neither.
 fn serving_status(
     stored_not_after: Option<i64>,
-    caddy_cert: Option<&crate::system::caddy::CaddyCertView>,
+    caddy_cert: Option<&state::ProxyCert>,
     now: i64,
 ) -> Option<&'static str> {
     match (stored_not_after, caddy_cert.and_then(|c| c.not_after)) {
@@ -1088,10 +1078,7 @@ fn serving_status(
 /// falls through, and when the next cycle starts. Null for a hostname with no
 /// chain to report.
 // r[impl tls.cert.hostname-view]
-fn project_chain(
-    st: &state::HostnameState<'_>,
-    caddy_cert: Option<&crate::system::caddy::CaddyCertView>,
-) -> Value {
+fn project_chain(st: &state::HostnameState<'_>, caddy_cert: Option<&state::ProxyCert>) -> Value {
     use state::Decision::*;
     match &st.decision {
         Default => Value::Null,
@@ -1125,7 +1112,7 @@ fn project_chain(
 /// attributed to: the one that produced the certificate serving it.
 fn serving_strategy(
     c: &state::ChainDecision,
-    caddy_cert: Option<&crate::system::caddy::CaddyCertView>,
+    caddy_cert: Option<&state::ProxyCert>,
 ) -> &'static str {
     match c.serving {
         Some(state::ServingSource::Store { origin, .. }) => match origin {
@@ -1190,7 +1177,7 @@ fn decision_next_issuance(st: &state::HostnameState<'_>) -> (Option<i64>, Option
 /// hostnames — to whatever Caddy's on-disk store has.
 fn build_last_issuance(
     st: &state::HostnameState<'_>,
-    caddy_cert: Option<&crate::system::caddy::CaddyCertView>,
+    caddy_cert: Option<&state::ProxyCert>,
 ) -> Value {
     if let Some(cert) = st.active_cert
         && cert.origin == TlsCertOrigin::Manual

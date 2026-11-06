@@ -111,10 +111,19 @@ pub fn managed_ingresses(registry: &AppRegistry) -> Vec<ManagedIngress> {
 
 /// A certificate the proxy holds for a hostname in its own cache. The runtime
 /// has no row for it, only what its certificate says.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+///
+/// Carries what the operator's view shows as well as what the chain decides on,
+/// so the cache is read once for both rather than once each.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProxyCert {
     pub not_before: Option<i64>,
     pub not_after: Option<i64>,
+    /// The issuer's name for its directory in the proxy's cache: `local` for its
+    /// internal CA, otherwise the host of the ACME directory.
+    pub issuer_kind: String,
+    /// The issuer as the certificate itself gives it.
+    pub issuer: Option<String>,
+    pub self_signed: bool,
 }
 
 /// What the proxy's cache holds for a hostname, when it could be read.
@@ -122,7 +131,7 @@ pub struct ProxyCert {
 /// Three answers, because they lead to different things: a hostname the proxy
 /// holds nothing for may be withheld from it, one it holds a certificate for
 /// must not be, and one whose cache could not be read must be left as it is.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ProxyHolding {
     Holds(ProxyCert),
     Nothing,
@@ -377,7 +386,7 @@ impl ChainDecision {
     /// renews over HTTP-01 from that point and not before.
     // r[impl tls.chain.proxy-gate]
     pub fn proxy_renewal_ratio(&self) -> Option<f64> {
-        let Some(ProxyHolding::Holds(cert)) = self.proxy else {
+        let Some(ProxyHolding::Holds(cert)) = &self.proxy else {
             return None;
         };
         let (not_before, not_after) = (cert.not_before?, cert.not_after?);
@@ -819,7 +828,7 @@ impl ChainContext {
                     && c.hostname == hostname
             }),
             last_error: chain_row.and_then(|r| r.last_error.clone()),
-            proxy: snap.env.proxy.get(hostname).copied(),
+            proxy: snap.env.proxy.get(hostname).cloned(),
             staged_from,
             retry_block: retry_block.map(|b| b.reason.clone()),
             force,
@@ -931,7 +940,7 @@ fn decide_chain(ctx: &ChainContext, strategies: Vec<Strategy>) -> Decision {
         proxy_from,
         canopy: ctx.canopy.clone(),
         serving: ctx.serving.map(|(_, source)| source),
-        proxy: ctx.proxy,
+        proxy: ctx.proxy.clone(),
         last_error: ctx.last_error.clone(),
     }))
 }
@@ -1305,6 +1314,9 @@ mod tests {
             ProxyHolding::Holds(ProxyCert {
                 not_before: Some(0),
                 not_after: Some(300),
+                issuer_kind: "local".to_owned(),
+                issuer: None,
+                self_signed: false,
             }),
         );
         let st = compute_state(&s, "host.example.com");
@@ -1327,6 +1339,9 @@ mod tests {
             ProxyHolding::Holds(ProxyCert {
                 not_before: Some(0),
                 not_after: Some(300),
+                issuer_kind: "local".to_owned(),
+                issuer: None,
+                self_signed: false,
             }),
         );
         let st = compute_state(&s, "host.example.com");
@@ -1517,6 +1532,9 @@ mod tests {
             ProxyHolding::Holds(ProxyCert {
                 not_before: Some(0),
                 not_after: Some(300),
+                issuer_kind: "local".to_owned(),
+                issuer: None,
+                self_signed: false,
             }),
         );
         let st = compute_state(&s, "host.example.com");
@@ -1898,6 +1916,9 @@ mod tests {
         ProxyHolding::Holds(ProxyCert {
             not_before: Some(not_before),
             not_after: Some(not_after),
+            issuer_kind: "local".to_owned(),
+            issuer: None,
+            self_signed: false,
         })
     }
 
