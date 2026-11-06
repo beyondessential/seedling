@@ -150,7 +150,12 @@ async fn handle(
     if token.as_bytes().ct_eq(state.token.as_bytes()).unwrap_u8() != 1 {
         return StatusCode::NOT_FOUND.into_response();
     }
-    let Some(hostname) = query.server_name.filter(|s| !s.is_empty()) else {
+    let Some(hostname) = query
+        .server_name
+        .as_deref()
+        .map(normalise_sni)
+        .filter(|s| !s.is_empty())
+    else {
         return (
             StatusCode::BAD_REQUEST,
             "missing server_name query parameter",
@@ -219,6 +224,19 @@ pub fn endpoint_gate(c: &ChainDecision) -> FallThrough {
         // was not looked at: none of these is licence to take it down.
         (_, Some(ProxyHolding::Holds(_) | ProxyHolding::Unreadable) | None) => FallThrough::Allow,
     }
+}
+
+/// The name a client sent as SNI, as the rest of the runtime holds a hostname.
+///
+/// A DNS name is case-insensitive and may carry a trailing dot for the root, but
+/// the hostname an ingress declares is matched exactly: by the policy patterns,
+/// by the managed-ingress set, and by the keys of the chain's facts. A client
+/// chooses what it sends, so a name that differed only in case would resolve as
+/// one no app declares, and the gate would let the proxy order for a hostname
+/// another strategy is responsible for.
+// r[impl tls.chain.proxy-gate]
+fn normalise_sni(name: &str) -> String {
+    name.trim_end_matches('.').to_ascii_lowercase()
 }
 
 /// The gate's recent answers, by hostname.
@@ -804,5 +822,40 @@ mod tests {
             assert_eq!(reqwest::get(&url).await.unwrap().status().as_u16(), 503);
         }
         assert_eq!(counting.0.load(std::sync::atomic::Ordering::SeqCst), 1);
+    }
+
+    // r[verify tls.chain.proxy-gate]
+    #[test]
+    fn a_name_is_taken_as_the_runtime_holds_it_however_a_client_sent_it() {
+        assert_eq!(normalise_sni("SHOP.Example.COM"), "shop.example.com");
+        assert_eq!(normalise_sni("shop.example.com."), "shop.example.com");
+        assert_eq!(normalise_sni("shop.example.com"), "shop.example.com");
+        assert_eq!(normalise_sni(""), "");
+    }
+
+    // r[verify tls.chain.proxy-gate]
+    #[tokio::test(flavor = "multi_thread")]
+    async fn the_gate_is_not_evaded_by_the_case_a_client_sends() {
+        let (db, cipher) = fresh().await;
+        let cipher = Arc::new(cipher);
+        let coordinator = Coordinator::new(db.clone(), Arc::clone(&cipher));
+        coordinator.set_environment(Arc::new(typed(Some(ProxyHolding::Nothing))));
+        let (addr, _handle) = spawn_server(
+            db,
+            cipher,
+            coordinator,
+            "tok".to_owned(),
+            "127.0.0.1:0".parse().unwrap(),
+        )
+        .await
+        .unwrap();
+        for name in ["shop.example.com", "SHOP.Example.com", "shop.example.com."] {
+            let url = format!("http://{addr}/cert/tok/get-certificate?server_name={name}");
+            assert_eq!(
+                reqwest::get(&url).await.unwrap().status().as_u16(),
+                503,
+                "{name} is the hostname Canopy is responsible for"
+            );
+        }
     }
 }
