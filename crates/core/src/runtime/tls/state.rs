@@ -321,7 +321,7 @@ pub enum Decision {
     IssueNow { reason: IssueReason },
     /// The hostname is on a strategy chain: no policy, or the Canopy-only
     /// policy.
-    Chain(ChainDecision),
+    Chain(Box<ChainDecision>),
 }
 
 /// Where a hostname on a strategy chain stands, and what the runtime does about
@@ -872,7 +872,7 @@ fn decide_chain(ctx: &ChainContext, strategies: Vec<Strategy>) -> Decision {
 
     let proxy_from = chain::proxy_from(&strategies, ctx.serving.map(|(s, _)| s), &cycle);
 
-    Decision::Chain(ChainDecision {
+    Decision::Chain(Box::new(ChainDecision {
         strategies,
         cycle,
         act,
@@ -882,7 +882,7 @@ fn decide_chain(ctx: &ChainContext, strategies: Vec<Strategy>) -> Decision {
         serving: ctx.serving.map(|(_, source)| source),
         proxy: ctx.proxy,
         last_error: ctx.last_error.clone(),
-    })
+    }))
 }
 
 fn decide_acme_dns(

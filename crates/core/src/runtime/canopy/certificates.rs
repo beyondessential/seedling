@@ -317,3 +317,239 @@ fn trouble(hostname: &str, c: &ChainDecision) -> Option<String> {
     }
     None
 }
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use super::*;
+    use crate::oi::test_support::TestOi;
+    use crate::runtime::tls::{
+        KeyType, TlsCertOrigin, TlsCertState, chain,
+        store::{self, CertMetadata, NewCertificate},
+    };
+
+    const TYPED: &str = r#"
+        app.canopy_type("tamanu");
+        let web = app.service("web").exported().http(80);
+        web.ingress("shop.example.com", 443).tls(Terminate.Https, Output.Http1);
+        app.deployment("web").image("docker.io/library/nginx:1.29").http(80, web.route("/"));
+    "#;
+
+    const UNTYPED: &str = r#"
+        let web = app.service("web").exported().http(80);
+        web.ingress("shop.example.com", 443).tls(Terminate.Https, Output.Http1);
+        app.deployment("web").image("docker.io/library/nginx:1.29").http(80, web.route("/"));
+    "#;
+
+    fn shop(oi: &TestOi, script: &str) -> Vec<ManagedIngress> {
+        oi.call("/apps/create", json!({ "app": "shop", "script": script }))
+            .unwrap();
+        oi.install("shop");
+        let registry = oi.state.registry.read();
+        state::managed_ingresses(&registry)
+    }
+
+    fn active_faults(oi: &TestOi) -> Vec<faults::FaultRecord> {
+        oi.state.db.call(|db| {
+            faults::list_active_faults(db, None)
+                .unwrap()
+                .into_iter()
+                .filter(|f| f.kind == FAULT_KIND)
+                .collect()
+        })
+    }
+
+    fn record_failure(oi: &TestOi, reason: &str) {
+        let reason = reason.to_owned();
+        oi.state.db.call(move |db| {
+            store::put_chain_row(
+                db,
+                "shop.example.com",
+                &chain::Row {
+                    identity: chain::Identity::NONE,
+                    step: 0,
+                    since: 0,
+                    open_order_since: None,
+                    retry_not_before: None,
+                },
+                Some(&reason),
+            )
+            .unwrap();
+        });
+    }
+
+    // r[verify tls.canopy-only.untyped]
+    // r[verify tls.canopy.fault]
+    #[test]
+    fn a_canopy_only_hostname_nothing_can_ask_about_is_faulted_until_it_can_be() {
+        let oi = TestOi::new();
+        let managed = shop(&oi, UNTYPED);
+        oi.call(
+            "/tls/policies/set-canopy",
+            json!({ "hostname": "shop.example.com" }),
+        )
+        .unwrap();
+
+        oi.block_on(async { sync_faults(&oi.state, &managed) });
+        let filed = active_faults(&oi);
+        assert_eq!(filed.len(), 1);
+        assert_eq!(
+            filed[0].resource_name.as_deref(),
+            Some("shop.example.com:443")
+        );
+        assert!(
+            filed[0]
+                .description
+                .contains("no app declaring it has a Canopy type"),
+            "{}",
+            filed[0].description
+        );
+
+        // Filing again is not filing twice.
+        oi.block_on(async { sync_faults(&oi.state, &managed) });
+        assert_eq!(active_faults(&oi).len(), 1);
+
+        oi.call(
+            "/tls/policies/clear",
+            json!({ "hostname": "shop.example.com" }),
+        )
+        .unwrap();
+        oi.block_on(async { sync_faults(&oi.state, &managed) });
+        assert!(
+            active_faults(&oi).is_empty(),
+            "clearing the policy is one of the ways the fault goes"
+        );
+    }
+
+    // r[verify tls.canopy.fault]
+    #[test]
+    fn a_hostname_with_no_certificate_whose_request_keeps_failing_is_faulted() {
+        let oi = TestOi::new();
+        let managed = shop(&oi, TYPED);
+        oi.call(
+            "/tls/policies/set-canopy",
+            json!({ "hostname": "shop.example.com" }),
+        )
+        .unwrap();
+        record_failure(&oi, "dns challenge timed out");
+
+        oi.block_on(async { sync_faults(&oi.state, &managed) });
+        let filed = active_faults(&oi);
+        assert_eq!(filed.len(), 1);
+        assert!(
+            filed[0].description.contains("dns challenge timed out"),
+            "{}",
+            filed[0].description
+        );
+
+        // A usable certificate arrives: the chain has done its job.
+        let now = jiff::Timestamp::now().as_second();
+        let pem = crate::runtime::tls::test_support::self_signed_pem(&["shop.example.com"]);
+        oi.state.db.call(move |db| {
+            store::insert_certificate(
+                db,
+                NewCertificate {
+                    hostname: "shop.example.com",
+                    requested_hostname: None,
+                    state: TlsCertState::Active,
+                    origin: TlsCertOrigin::Canopy,
+                    cert_pem: Some(&pem),
+                    csr_pem: None,
+                    key_ciphertext: &[0u8; 8],
+                    key_type: KeyType::EcdsaP256,
+                    metadata: CertMetadata {
+                        not_before: Some(now - 86_400),
+                        not_after: Some(now + 89 * 86_400),
+                        ..Default::default()
+                    },
+                    note: None,
+                    acme_account_id: None,
+                },
+            )
+            .unwrap();
+        });
+        oi.block_on(async { sync_faults(&oi.state, &managed) });
+        assert!(active_faults(&oi).is_empty());
+    }
+
+    // r[verify tls.canopy.fault]
+    #[test]
+    fn trouble_while_a_certificate_is_still_usable_files_nothing() {
+        let oi = TestOi::new();
+        let managed = shop(&oi, TYPED);
+        let now = jiff::Timestamp::now().as_second();
+        let pem = crate::runtime::tls::test_support::self_signed_pem(&["shop.example.com"]);
+        oi.state.db.call(move |db| {
+            store::insert_certificate(
+                db,
+                NewCertificate {
+                    hostname: "shop.example.com",
+                    requested_hostname: None,
+                    state: TlsCertState::Active,
+                    origin: TlsCertOrigin::Canopy,
+                    cert_pem: Some(&pem),
+                    csr_pem: None,
+                    key_ciphertext: &[0u8; 8],
+                    key_type: KeyType::EcdsaP256,
+                    metadata: CertMetadata {
+                        // Past its renewal point and inside Canopy's window.
+                        not_before: Some(now - 70 * 86_400),
+                        not_after: Some(now + 20 * 86_400),
+                        ..Default::default()
+                    },
+                    note: None,
+                    acme_account_id: None,
+                },
+            )
+            .unwrap();
+        });
+        record_failure(&oi, "canopy is having a bad day");
+        oi.block_on(async { sync_faults(&oi.state, &managed) });
+        assert!(
+            active_faults(&oi).is_empty(),
+            "the certificate still serves and the chain is still working on it"
+        );
+    }
+
+    // r[verify tls.canopy.fault]
+    #[test]
+    fn a_chain_that_ran_out_of_strategies_without_a_replacement_is_faulted() {
+        let oi = TestOi::new();
+        let managed = shop(&oi, TYPED);
+        let now = jiff::Timestamp::now().as_second();
+        let pem = crate::runtime::tls::test_support::self_signed_pem(&["shop.example.com"]);
+        oi.state.db.call(move |db| {
+            store::insert_certificate(
+                db,
+                NewCertificate {
+                    hostname: "shop.example.com",
+                    requested_hostname: None,
+                    state: TlsCertState::Active,
+                    origin: TlsCertOrigin::Canopy,
+                    cert_pem: Some(&pem),
+                    csr_pem: None,
+                    key_ciphertext: &[0u8; 8],
+                    key_type: KeyType::EcdsaP256,
+                    metadata: CertMetadata {
+                        // Past the point Canopy falls through at.
+                        not_before: Some(now - 80 * 86_400),
+                        not_after: Some(now + 10 * 86_400),
+                        ..Default::default()
+                    },
+                    note: None,
+                    acme_account_id: None,
+                },
+            )
+            .unwrap();
+        });
+        oi.block_on(async { sync_faults(&oi.state, &managed) });
+        let filed = active_faults(&oi);
+        assert_eq!(filed.len(), 1);
+        assert!(
+            filed[0].description.contains("fell through to acme_http01"),
+            "{}",
+            filed[0].description
+        );
+    }
+}

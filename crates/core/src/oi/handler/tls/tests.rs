@@ -933,3 +933,78 @@ fn a_retry_for_a_hostname_canopy_can_be_asked_about_waits_for_the_report_tick() 
     .unwrap();
     assert!(!shop_hostname(&oi)["force_retry_at"].is_null());
 }
+
+// i[verify tls.hostname.list]
+// r[verify tls.cert.metadata]
+// r[verify tls.canopy.serve]
+#[test]
+fn a_canopy_certificate_is_in_the_hostname_view_like_any_other() {
+    let oi = TestOi::new();
+    tls_app(&oi, TLS_APP);
+
+    let now = jiff::Timestamp::now().as_second();
+    let pem = {
+        let key = KeyPair::generate_for(&PKCS_ECDSA_P256_SHA256).unwrap();
+        let mut params = CertificateParams::new(vec!["shop.example.com".to_owned()]).unwrap();
+        params.distinguished_name = DistinguishedName::new();
+        params.not_before = time::OffsetDateTime::from_unix_timestamp(now - 86_400).unwrap();
+        params.not_after = time::OffsetDateTime::from_unix_timestamp(now + 89 * 86_400).unwrap();
+        params.self_signed(&key).unwrap().pem()
+    };
+    oi.state.db.call(move |db| {
+        crate::runtime::tls::store::insert_certificate(
+            db,
+            crate::runtime::tls::store::NewCertificate {
+                hostname: "shop.example.com",
+                requested_hostname: Some("shop.example.com"),
+                state: crate::runtime::tls::TlsCertState::Active,
+                origin: crate::runtime::tls::TlsCertOrigin::Canopy,
+                cert_pem: Some(&pem),
+                csr_pem: None,
+                key_ciphertext: &[0u8; 8],
+                key_type: crate::runtime::tls::KeyType::EcdsaP256,
+                metadata: crate::runtime::tls::store::CertMetadata {
+                    issuer: Some("CN=Fake LE".to_owned()),
+                    not_before: Some(now - 86_400),
+                    not_after: Some(now + 89 * 86_400),
+                    serial: Some("01".to_owned()),
+                    self_signed: false,
+                },
+                note: None,
+                acme_account_id: None,
+            },
+        )
+        .unwrap();
+    });
+
+    let host = shop_hostname(&oi);
+    assert_eq!(host["status"], "active");
+    assert_eq!(host["active_cert"]["origin"], "canopy");
+    assert_eq!(host["active_cert"]["issuer"], "CN=Fake LE");
+    assert_eq!(host["active_cert"]["not_after"], now + 89 * 86_400);
+    assert_eq!(host["last_issuance"]["kind"], "canopy");
+    assert_eq!(host["chain"]["responsible"], "canopy");
+    assert!(
+        host["chain"]["next_cycle_at"].as_i64().unwrap() > now,
+        "a working certificate is left alone until its renewal point"
+    );
+    assert!(host["chain"]["fall_through_at"].is_null());
+
+    let certs = oi.call("/tls/certificates/list", json!({})).unwrap();
+    assert_eq!(certs["certificates"][0]["origin"], "canopy");
+}
+
+// r[verify tls.cert.eager-issuance]
+#[test]
+fn a_hostname_on_a_chain_is_not_driven_through_an_acme_dns_flow() {
+    let oi = TestOi::new();
+    tls_app(&oi, UNTYPED_TLS_APP);
+    let (code, msg) = oi
+        .call(
+            "/tls/certificates/issue-acme-dns",
+            json!({ "hostname": "shop.example.com" }),
+        )
+        .unwrap_err();
+    assert_eq!(code, "internal");
+    assert!(msg.contains("has no policy"), "{msg}");
+}

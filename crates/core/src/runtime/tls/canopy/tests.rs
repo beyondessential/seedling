@@ -668,3 +668,38 @@ async fn a_revocation_learnt_from_a_report_replaces_the_key_without_a_collection
         1
     );
 }
+
+// r[verify tls.canopy.key]
+// r[verify tls.chain.ladder]
+#[tokio::test]
+async fn a_restart_between_the_request_and_the_collection_finds_the_same_key_and_position() {
+    let fake = Fake::new([
+        Reply::Pending,
+        Reply::Fail(status(403, "name-not-entitled")),
+        Reply::Pending,
+    ]);
+    let db = DbHandle::open_in_memory().unwrap();
+    let first = Engine::new(db.clone(), Arc::new(Cipher::for_tests()), &fake);
+    first.ask(ask(AttemptTrigger::OnDemand)).await.unwrap();
+    let key_row = canopy_rows(&db)[0].id;
+    drop(first);
+
+    // Everything the first engine knew was in memory it no longer has.
+    let second = Engine::new(db.clone(), Arc::new(Cipher::for_tests()), &fake);
+    let outcome = second.ask(ask(AttemptTrigger::OnDemand)).await.unwrap();
+    assert!(matches!(outcome, Outcome::Refused(_)));
+    assert_eq!(canopy_rows(&db).len(), 1, "no second key was made");
+    assert_eq!(canopy_rows(&db)[0].id, key_row);
+    let seen = fake.requests();
+    assert_eq!(seen.len(), 2);
+
+    // The refusal was recorded, and a third engine finds it where it was left.
+    let third = Engine::new(db.clone(), Arc::new(Cipher::for_tests()), &fake);
+    third.ask(ask(AttemptTrigger::OnDemand)).await.unwrap();
+    let row = chain_row(&db).unwrap();
+    assert_eq!(
+        row.last_error, None,
+        "the later answer replaced the earlier reason"
+    );
+    assert_eq!(canopy_rows(&db).len(), 1);
+}

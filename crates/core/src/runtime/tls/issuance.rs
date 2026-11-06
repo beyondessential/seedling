@@ -148,7 +148,7 @@ impl Coordinator {
             }
             if let Decision::Chain(c) = state::compute_state(&snapshot, &ingress.hostname).decision
             {
-                out.insert(ingress.hostname.clone(), c);
+                out.insert(ingress.hostname.clone(), *c);
             }
         }
         Some(out)
