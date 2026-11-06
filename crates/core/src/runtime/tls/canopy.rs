@@ -529,6 +529,40 @@ fn apply(
                     );
                 }
             };
+            // r[impl tls.cert.validation.san-coverage]
+            // The signing request named exactly the hostname, so a chain for
+            // anything else is not what was asked for, whoever sent it: coverage
+            // is all that binds a certificate to a name, and one that carried
+            // other names would be served for them.
+            let names: Vec<String> = parsed
+                .san_dns_names
+                .iter()
+                .map(|n| n.to_ascii_lowercase())
+                .collect();
+            if names.len() != 1 || names[0] != ask.hostname.to_ascii_lowercase() {
+                return unavailable(
+                    db,
+                    row,
+                    ask,
+                    format!(
+                        "Canopy returned a certificate for {}, not for exactly {}",
+                        if names.is_empty() {
+                            "no names".to_owned()
+                        } else {
+                            names.join(", ")
+                        },
+                        ask.hostname
+                    ),
+                );
+            }
+            if parsed.metadata.not_after.is_some_and(|end| end <= now) {
+                return unavailable(
+                    db,
+                    row,
+                    ask,
+                    "Canopy returned a certificate that has already expired".to_owned(),
+                );
+            }
             match parse::leaf_spki_der(&chain_pem) {
                 Ok(spki) if spki == key_spki => {}
                 Ok(_) => {

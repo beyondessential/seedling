@@ -703,3 +703,53 @@ async fn a_restart_between_the_request_and_the_collection_finds_the_same_key_and
     );
     assert_eq!(canopy_rows(&db).len(), 1);
 }
+
+// r[verify tls.cert.validation.san-coverage]
+#[tokio::test]
+async fn a_chain_naming_more_than_was_asked_for_is_not_stored() {
+    struct Wide(Fake);
+    impl CertificateRelay for &Wide {
+        async fn request(
+            &self,
+            name: &str,
+            csr_der_b64: &str,
+            app_type: Option<&str>,
+        ) -> std::result::Result<CertificateResponse, RelayFailure> {
+            use base64::Engine as _;
+            let der = base64::engine::general_purpose::STANDARD
+                .decode(csr_der_b64)
+                .unwrap();
+            let csr = rustls_pki_types::CertificateSigningRequestDer::from(der);
+            let mut params = CertificateSigningRequestParams::from_der(&csr).unwrap();
+            params.params.subject_alt_names = vec![
+                rcgen::SanType::DnsName(name.try_into().unwrap()),
+                rcgen::SanType::DnsName("other.example.com".try_into().unwrap()),
+            ];
+            let _ = app_type;
+            let pem = params.signed_by(&self.0.ca).unwrap().pem();
+            Ok(CertificateResponse::builder()
+                .key_must_be_replaced(false)
+                .name(name.to_owned())
+                .revoked(false)
+                .state("issued".to_owned())
+                .usable(true)
+                .chain(pem)
+                .build())
+        }
+    }
+
+    let wide = Wide(Fake::new([]));
+    let db = DbHandle::open_in_memory().unwrap();
+    let engine = Engine::new(db.clone(), Arc::new(Cipher::for_tests()), &wide);
+    let outcome = engine.ask(ask(AttemptTrigger::OnDemand)).await.unwrap();
+    assert!(
+        matches!(&outcome, Outcome::Failed(r) if r.contains("other.example.com")),
+        "{outcome:?}"
+    );
+    assert_eq!(canopy_rows(&db)[0].state, TlsCertState::CsrPending);
+    assert!(
+        db.call(|db| store::find_active_for_hostname(db, "other.example.com"))
+            .unwrap()
+            .is_none()
+    );
+}
