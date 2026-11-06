@@ -75,3 +75,145 @@ pub fn collect(
         proxy,
     })
 }
+
+/// What the runtime itself holds for some hostnames.
+#[derive(Debug, Default, PartialEq, Eq)]
+pub struct RuntimeHoldings {
+    /// Hostnames a certificate the runtime stores can be served for right now.
+    pub served: BTreeSet<String>,
+    /// Hostnames with a Canopy order open.
+    pub ordering: BTreeSet<String>,
+}
+
+/// Which of `hostnames` the runtime serves a certificate for, and which have an
+/// order open.
+///
+/// The proxy's own cache cannot answer the first: a certificate the runtime
+/// serves to the proxy is never written there. A hostname the store could not be
+/// read for appears in neither set, since not knowing is not the same as holding
+/// nothing, and a caller treats it as not yet seen rather than as failed.
+// r[impl tls.canopy.serve]
+pub fn runtime_holdings(db: &Db, hostnames: &[String]) -> RuntimeHoldings {
+    let mut holdings = RuntimeHoldings::default();
+    for hostname in hostnames {
+        match super::store::find_active_for_hostname(db, hostname) {
+            Ok(Some(_)) => {
+                holdings.served.insert(hostname.clone());
+            }
+            Ok(None) => {}
+            Err(e) => {
+                tracing::warn!(%hostname, error = %e, "cannot read the certificate store");
+            }
+        }
+        match super::store::get_chain_row(db, hostname) {
+            Ok(Some(row)) if row.row.open_order_since.is_some() => {
+                holdings.ordering.insert(hostname.clone());
+            }
+            Ok(_) => {}
+            Err(e) => tracing::warn!(%hostname, error = %e, "cannot read the chain state"),
+        }
+    }
+    holdings
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::runtime::tls::{
+        KeyType, TlsCertOrigin, TlsCertState, chain,
+        store::{self, CertMetadata, NewCertificate},
+        test_support,
+    };
+
+    fn insert(db: &Db, hostname: &str, state: TlsCertState, not_after: i64) {
+        store::insert_certificate(
+            db,
+            NewCertificate {
+                hostname,
+                requested_hostname: None,
+                state,
+                origin: TlsCertOrigin::Canopy,
+                cert_pem: Some(&test_support::self_signed_pem(&[hostname])),
+                csr_pem: None,
+                key_ciphertext: &[0u8; 8],
+                key_type: KeyType::EcdsaP256,
+                metadata: CertMetadata {
+                    not_before: Some(0),
+                    not_after: Some(not_after),
+                    ..Default::default()
+                },
+                note: None,
+                acme_account_id: None,
+            },
+        )
+        .unwrap();
+    }
+
+    // r[verify tls.canopy.serve]
+    #[test]
+    fn a_stored_certificate_in_its_window_is_a_certificate_the_hostname_has() {
+        let db = Db::open_in_memory().unwrap();
+        let future = jiff::Timestamp::now().as_second() + 86_400;
+        insert(&db, "ok.example.com", TlsCertState::Active, future);
+        insert(&db, "expired.example.com", TlsCertState::Active, 100);
+        insert(&db, "revoked.example.com", TlsCertState::Revoked, future);
+        insert(&db, "waiting.example.com", TlsCertState::CsrPending, future);
+
+        let hostnames: Vec<String> = [
+            "ok.example.com",
+            "expired.example.com",
+            "revoked.example.com",
+            "waiting.example.com",
+            "none.example.com",
+        ]
+        .map(String::from)
+        .into();
+        let holdings = runtime_holdings(&db, &hostnames);
+        assert_eq!(
+            holdings.served,
+            BTreeSet::from(["ok.example.com".to_owned()]),
+            "an expired, revoked or not-yet-delivered certificate does not satisfy a barrier"
+        );
+    }
+
+    // r[verify tls.canopy.serve]
+    #[test]
+    fn an_open_order_is_seen_as_one() {
+        let db = Db::open_in_memory().unwrap();
+        store::put_chain_row(
+            &db,
+            "ordering.example.com",
+            &chain::Row {
+                identity: chain::Identity::NONE,
+                step: 0,
+                since: 1,
+                open_order_since: Some(1),
+                retry_not_before: None,
+            },
+            None,
+        )
+        .unwrap();
+        store::put_chain_row(
+            &db,
+            "refused.example.com",
+            &chain::Row {
+                identity: chain::Identity::NONE,
+                step: 0,
+                since: 1,
+                open_order_since: None,
+                retry_not_before: Some(5),
+            },
+            Some("no"),
+        )
+        .unwrap();
+        let hostnames = vec![
+            "ordering.example.com".to_owned(),
+            "refused.example.com".to_owned(),
+        ];
+        let holdings = runtime_holdings(&db, &hostnames);
+        assert_eq!(
+            holdings.ordering,
+            BTreeSet::from(["ordering.example.com".to_owned()])
+        );
+    }
+}
