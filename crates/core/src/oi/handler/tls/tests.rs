@@ -1109,3 +1109,64 @@ fn the_hostname_view_shows_what_the_proxy_holds() {
     assert_eq!(view["chain"]["responsible"], "internal_ca");
     assert_eq!(view["last_issuance"]["kind"], "caddy");
 }
+
+// i[verify tls.policy.set-canopy]
+// i[verify tls.policy.clear]
+// r[verify tls.policy.apply]
+#[test]
+fn a_policy_change_ends_the_cycles_that_ran_under_the_one_before_it() {
+    let oi = TestOi::new();
+    tls_app(&oi, TLS_APP);
+    let row = |open_order_since| crate::runtime::tls::chain::Row {
+        identity: crate::runtime::tls::chain::Identity::NONE,
+        step: 0,
+        since: 1,
+        open_order_since,
+        retry_not_before: Some(9_999_999_999),
+    };
+    let seed = move |db: &crate::runtime::db::Db| {
+        crate::runtime::tls::store::put_chain_row(
+            db,
+            "shop.example.com",
+            &row(Some(1)),
+            Some("refused"),
+        )
+        .unwrap();
+        crate::runtime::tls::store::put_chain_row(
+            db,
+            "other.example.org",
+            &row(None),
+            Some("refused"),
+        )
+        .unwrap();
+    };
+    let recorded = |oi: &TestOi| {
+        oi.state.db.call(|db| {
+            crate::runtime::tls::store::list_chain_rows(db)
+                .unwrap()
+                .into_iter()
+                .map(|r| r.hostname)
+                .collect::<Vec<_>>()
+        })
+    };
+
+    oi.state.db.call(seed);
+    oi.call(
+        "/tls/policies/set-canopy",
+        json!({ "hostname": "*.example.com" }),
+    )
+    .unwrap();
+    assert_eq!(
+        recorded(&oi),
+        vec!["other.example.org".to_owned()],
+        "the hostnames the pattern covers start afresh under the new policy"
+    );
+
+    oi.state.db.call(seed);
+    oi.call(
+        "/tls/policies/clear",
+        json!({ "hostname": "*.example.com" }),
+    )
+    .unwrap();
+    assert_eq!(recorded(&oi), vec!["other.example.org".to_owned()]);
+}

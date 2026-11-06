@@ -259,42 +259,77 @@ pub fn get_policy(db: &Db, hostname: &str) -> rusqlite::Result<Option<TlsPolicyR
 // r[impl tls.policy.apply]
 pub fn set_policy_acme_dns(db: &Db, hostname: &str, dns_provider: &str) -> rusqlite::Result<()> {
     let now = now_secs();
-    db.conn.execute(
-        "INSERT INTO tls_policies (hostname, strategy, dns_provider, cert_id, updated_at)
-         VALUES (?1, 'acme_dns', ?2, NULL, ?3)
-         ON CONFLICT(hostname) DO UPDATE SET
-             strategy = excluded.strategy,
-             dns_provider = excluded.dns_provider,
-             cert_id = NULL,
-             updated_at = excluded.updated_at",
-        params![hostname, dns_provider, now],
-    )?;
-    Ok(())
+    atomically(db, || {
+        db.conn.execute(
+            "INSERT INTO tls_policies (hostname, strategy, dns_provider, cert_id, updated_at)
+             VALUES (?1, 'acme_dns', ?2, NULL, ?3)
+             ON CONFLICT(hostname) DO UPDATE SET
+                 strategy = excluded.strategy,
+                 dns_provider = excluded.dns_provider,
+                 cert_id = NULL,
+                 updated_at = excluded.updated_at",
+            params![hostname, dns_provider, now],
+        )?;
+        forget_chains_under(db, hostname)?;
+        Ok(())
+    })
 }
 
 // r[impl tls.strategy.canopy-only]
 // r[impl tls.policy.apply]
 pub fn set_policy_canopy(db: &Db, hostname: &str) -> rusqlite::Result<()> {
     let now = now_secs();
-    db.conn.execute(
-        "INSERT INTO tls_policies (hostname, strategy, dns_provider, cert_id, updated_at)
-         VALUES (?1, 'canopy', NULL, NULL, ?2)
-         ON CONFLICT(hostname) DO UPDATE SET
-             strategy = excluded.strategy,
-             dns_provider = NULL,
-             cert_id = NULL,
-             updated_at = excluded.updated_at",
-        params![hostname, now],
-    )?;
+    atomically(db, || {
+        db.conn.execute(
+            "INSERT INTO tls_policies (hostname, strategy, dns_provider, cert_id, updated_at)
+             VALUES (?1, 'canopy', NULL, NULL, ?2)
+             ON CONFLICT(hostname) DO UPDATE SET
+                 strategy = excluded.strategy,
+                 dns_provider = NULL,
+                 cert_id = NULL,
+                 updated_at = excluded.updated_at",
+            params![hostname, now],
+        )?;
+        forget_chains_under(db, hostname)?;
+        Ok(())
+    })
+}
+
+/// Forget where every hostname the pattern covers had got to in its chain.
+///
+/// A chain belongs to the strategies a policy names, so a policy written or
+/// cleared ends the cycles that were running under the one before it. What is
+/// recorded would otherwise outlive the chain it was recorded for: an order
+/// pinned open that nothing will ever answer, which holds off the
+/// acquisition deadline for ever, and a refusal that would resurface the next
+/// time the hostname was on a chain.
+// r[impl tls.policy.apply]
+fn forget_chains_under(db: &Db, pattern: &str) -> rusqlite::Result<()> {
+    let hostnames: Vec<String> = {
+        let mut stmt = db.conn.prepare("SELECT hostname FROM tls_chain_state")?;
+        let rows = stmt.query_map([], |row| row.get::<_, String>(0))?;
+        rows.collect::<rusqlite::Result<Vec<_>>>()?
+            .into_iter()
+            .filter(|hostname| pattern_matches(pattern, hostname))
+            .collect()
+    };
+    for hostname in hostnames {
+        clear_chain_row(db, &hostname)?;
+    }
     Ok(())
 }
 
 // r[impl tls.policy.apply]
 pub fn clear_policy(db: &Db, hostname: &str) -> rusqlite::Result<bool> {
-    let n = db
-        .conn
-        .execute("DELETE FROM tls_policies WHERE hostname = ?1", [hostname])?;
-    Ok(n > 0)
+    atomically(db, || {
+        let n = db
+            .conn
+            .execute("DELETE FROM tls_policies WHERE hostname = ?1", [hostname])?;
+        if n > 0 {
+            forget_chains_under(db, hostname)?;
+        }
+        Ok(n > 0)
+    })
 }
 
 // ---------------------------------------------------------------------------
