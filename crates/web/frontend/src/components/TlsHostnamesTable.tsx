@@ -102,9 +102,6 @@ const CHAIN_LABEL: Record<TlsChainStrategy, string> = {
   canopy: "Canopy",
   acme_http01: "HTTP-01",
   internal_ca: "internal CA",
-  acme_dns: "ACME-DNS",
-  manual: "manual certificate",
-  tailscale: "Tailscale",
 };
 
 /** The responsible strategy, and when it falls through to the next. */

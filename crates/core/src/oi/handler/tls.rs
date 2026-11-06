@@ -944,7 +944,7 @@ fn project_hostname_state(
             state::Decision::Chain(c) => c.last_error.clone(),
             _ => None,
         });
-    let chain_json = project_chain(st, caddy_cert);
+    let chain_json = project_chain(st);
     let status = decision_status(st, caddy_cert);
     let (next_issuance_at, next_issuance_source) = decision_next_issuance(st);
     let block_json = st.retry_block.map_or(
@@ -1051,13 +1051,15 @@ fn serving_status(
 /// falls through, and when the next cycle starts. Null for a hostname with no
 /// chain to report.
 // r[impl tls.cert.hostname-view]
-fn project_chain(st: &state::HostnameState<'_>, caddy_cert: Option<&state::ProxyCert>) -> Value {
+fn project_chain(st: &state::HostnameState<'_>) -> Value {
     use state::Decision::*;
     match &st.decision {
-        Default => Value::Null,
         Chain(c) => match &c.cycle {
+            // Nothing running, so the strategy named is the one that will act
+            // when the next cycle starts. What produced the certificate serving
+            // the hostname meanwhile is its own origin, under `active_cert`.
             chain::Cycle::Idle { next_cycle_at } => json!({
-                "responsible": serving_strategy(c, caddy_cert),
+                "responsible": c.strategies.first().map_or("acme_http01", |s| s.as_str()),
                 "fall_through_at": null,
                 "next_cycle_at": (*next_cycle_at != i64::MAX).then_some(*next_cycle_at),
             }),
@@ -1067,38 +1069,15 @@ fn project_chain(st: &state::HostnameState<'_>, caddy_cert: Option<&state::Proxy
                 "next_cycle_at": null,
             }),
         },
-        Blocked { .. } | NoContactEmail | Debounced { .. } | Scheduled { .. } | IssueNow { .. } => {
-            let (next, source) = decision_next_issuance(st);
-            let renewal = matches!(source, Some("ari" | "fallback"))
-                .then_some(next)
-                .flatten();
-            json!({
-                "responsible": "acme_dns",
-                "fall_through_at": null,
-                "next_cycle_at": renewal,
-            })
-        }
-    }
-}
-
-/// The strategy a hostname with a usable certificate and no cycle running is
-/// attributed to: the one that produced the certificate serving it.
-fn serving_strategy(
-    c: &state::ChainDecision,
-    caddy_cert: Option<&state::ProxyCert>,
-) -> &'static str {
-    match c.serving {
-        Some(state::ServingSource::Store { origin, .. }) => match origin {
-            TlsCertOrigin::Canopy => "canopy",
-            TlsCertOrigin::AcmeDns => "acme_dns",
-            TlsCertOrigin::Manual | TlsCertOrigin::Csr => "manual",
-            TlsCertOrigin::Tailscale => "tailscale",
-        },
-        Some(state::ServingSource::Proxy) => match caddy_cert.map(|c| c.issuer_kind.as_str()) {
-            Some("local") => "internal_ca",
-            _ => "acme_http01",
-        },
-        None => c.strategies.first().map_or("acme_http01", |s| s.as_str()),
+        // A hostname bound to a policy that names one strategy is on no chain:
+        // there is no ladder to report, and what it is doing and when is in the
+        // policy and the next-issuance fields already.
+        Default
+        | Blocked { .. }
+        | NoContactEmail
+        | Debounced { .. }
+        | Scheduled { .. }
+        | IssueNow { .. } => Value::Null,
     }
 }
 

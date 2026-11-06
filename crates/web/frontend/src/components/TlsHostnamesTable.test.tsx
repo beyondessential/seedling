@@ -16,7 +16,8 @@ const acmeRow: TlsHostnameView = {
     is_wildcard_match: true,
   },
   status: "active",
-  chain: { responsible: "acme_dns", fall_through_at: null, next_cycle_at: now + 20 * 86400 },
+  // Bound to a policy naming one strategy, so on no chain.
+  chain: null,
   active_cert: {
     id: 3,
     origin: "acme_dns",
@@ -70,7 +71,7 @@ const queuedRow: TlsHostnameView = {
     is_wildcard_match: false,
   },
   status: "pending",
-  chain: { responsible: "acme_dns", fall_through_at: null, next_cycle_at: null },
+  chain: null,
   active_cert: null,
   last_issuance: null,
   last_error: null,

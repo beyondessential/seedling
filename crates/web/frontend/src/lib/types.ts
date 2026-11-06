@@ -891,14 +891,8 @@ export type TlsHostnamePolicy =
     is_wildcard_match: boolean;
   };
 
-/** The strategy responsible for a hostname's certificate. */
-export type TlsChainStrategy =
-  | "canopy"
-  | "acme_http01"
-  | "internal_ca"
-  | "acme_dns"
-  | "manual"
-  | "tailscale";
+/** The strategy responsible for a hostname's certificate within its chain. */
+export type TlsChainStrategy = "canopy" | "acme_http01" | "internal_ca";
 
 /** Where a hostname stands in its strategy chain. */
 export interface TlsHostnameChain {

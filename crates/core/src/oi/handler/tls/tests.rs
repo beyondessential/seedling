@@ -1133,7 +1133,10 @@ fn the_hostname_view_shows_what_the_proxy_holds() {
     assert_eq!(view["active_cert"]["issuer"], "CN=Caddy Local Authority");
     assert_eq!(view["active_cert"]["self_signed"], true);
     assert_eq!(view["status"], "active");
-    assert_eq!(view["chain"]["responsible"], "internal_ca");
+    assert_eq!(
+        view["chain"]["responsible"], "acme_http01",
+        "a public name's chain is HTTP-01, whatever the proxy happens to have served it with"
+    );
     assert_eq!(view["last_issuance"]["kind"], "caddy");
 }
 
