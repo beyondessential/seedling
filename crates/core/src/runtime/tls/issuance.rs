@@ -110,6 +110,21 @@ impl Coordinator {
         let _ = self.environment.set(environment);
     }
 
+    /// How long the proxy is to wait before renewing a certificate it holds, for
+    /// each hostname it must be held back on.
+    ///
+    /// `None` when the decisions could not be made, which is not an empty map:
+    /// an empty one tells the proxy it may renew whenever it likes.
+    // r[impl tls.chain.proxy-gate]
+    pub fn proxy_renewal_ratios(&self) -> Option<BTreeMap<String, f64>> {
+        Some(
+            self.chain_decisions(None)?
+                .into_iter()
+                .filter_map(|(hostname, c)| Some((hostname, c.proxy_renewal_ratio()?)))
+                .collect(),
+        )
+    }
+
     /// The chain decision for every TLS-terminating hostname on a chain, or for
     /// the one named.
     ///

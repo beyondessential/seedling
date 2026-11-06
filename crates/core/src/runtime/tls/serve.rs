@@ -689,6 +689,10 @@ mod tests {
         assert_eq!(status_for(None).await, 204, "no environment yet");
         let mut failing = typed(Some(ProxyHolding::Nothing));
         failing.fail = true;
-        assert_eq!(status_for(Some(failing)).await, 204, "facts that could not be gathered");
+        assert_eq!(
+            status_for(Some(failing)).await,
+            204,
+            "facts that could not be gathered"
+        );
     }
 }

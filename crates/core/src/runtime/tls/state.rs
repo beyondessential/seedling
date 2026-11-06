@@ -348,6 +348,38 @@ pub struct ChainDecision {
     pub last_error: Option<String>,
 }
 
+/// The least of a certificate's lifetime the proxy is left to renew in, so that
+/// it is never told to renew over a window of no time at all.
+const MIN_RENEWAL_RATIO: f64 = 0.0001;
+
+impl ChainDecision {
+    /// How much of the proxy-held certificate's lifetime may be left when the
+    /// proxy renews it, for a hostname the proxy must be held back on.
+    ///
+    /// `None` leaves the proxy to its own schedule: it holds no certificate,
+    /// or it may order whenever it likes. The ratio is the fraction left at the
+    /// moment the strategies ahead of the proxy run out of theirs, so the proxy
+    /// renews over HTTP-01 from that point and not before.
+    // r[impl tls.chain.proxy-gate]
+    pub fn proxy_renewal_ratio(&self) -> Option<f64> {
+        let Some(ProxyHolding::Holds(cert)) = self.proxy else {
+            return None;
+        };
+        let (not_before, not_after) = (cert.not_before?, cert.not_after?);
+        let lifetime = not_after.checked_sub(not_before).filter(|l| *l > 0)? as f64;
+        match self.proxy_from {
+            chain::ProxyFrom::Always => None,
+            chain::ProxyFrom::At(from) => {
+                let left = (not_after - from) as f64 / lifetime;
+                Some(left.clamp(MIN_RENEWAL_RATIO, 1.0))
+            }
+            // No chain strategy of the proxy's will ever be responsible, or no
+            // clock says when one would be.
+            chain::ProxyFrom::Never | chain::ProxyFrom::Unknown => Some(MIN_RENEWAL_RATIO),
+        }
+    }
+}
+
 /// What the runtime does for a hostname on a chain this tick.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ChainAct {
@@ -1809,5 +1841,62 @@ mod tests {
             }
             d => panic!("unexpected: {d:?}"),
         }
+    }
+
+    fn held_by_proxy(not_before: i64, not_after: i64) -> ProxyHolding {
+        ProxyHolding::Holds(ProxyCert {
+            not_before: Some(not_before),
+            not_after: Some(not_after),
+        })
+    }
+
+    // r[verify tls.chain.proxy-gate]
+    #[test]
+    fn the_proxy_is_held_to_the_point_canopy_falls_through() {
+        let mut s = snap(vec![], vec![], vec![], vec![], vec![], "ops@x", 100);
+        s.env = canopy_env("host.example.com", &["tamanu"], true);
+        s.env
+            .proxy
+            .insert("host.example.com".to_owned(), held_by_proxy(0, 600));
+        let st = compute_state(&s, "host.example.com");
+        let ratio = chain_of(&st).proxy_renewal_ratio().expect("held back");
+        // Renewal at 400, Canopy falls through at 500, a sixth of 600 left.
+        assert!((ratio - 100.0 / 600.0).abs() < 1e-9, "{ratio}");
+    }
+
+    // r[verify tls.chain.proxy-gate]
+    #[test]
+    fn a_proxy_that_may_order_keeps_its_own_schedule() {
+        let mut s = snap(vec![], vec![], vec![], vec![], vec![], "ops@x", 100);
+        s.env = canopy_env("host.example.com", &[], true);
+        s.env
+            .proxy
+            .insert("host.example.com".to_owned(), held_by_proxy(0, 600));
+        let st = compute_state(&s, "host.example.com");
+        assert_eq!(chain_of(&st).proxy_renewal_ratio(), None);
+    }
+
+    // r[verify tls.strategy.canopy-only]
+    #[test]
+    fn a_canopy_only_hostname_holds_the_proxy_to_the_last_moment() {
+        let mut s = snap(
+            vec![TlsPolicyRow {
+                hostname: "host.example.com".to_owned(),
+                policy: TlsPolicy::Canopy,
+                updated_at: 0,
+            }],
+            vec![],
+            vec![],
+            vec![],
+            vec![],
+            "ops@x",
+            100,
+        );
+        s.env = canopy_env("host.example.com", &["tamanu"], true);
+        s.env
+            .proxy
+            .insert("host.example.com".to_owned(), held_by_proxy(0, 600));
+        let st = compute_state(&s, "host.example.com");
+        assert_eq!(chain_of(&st).proxy_renewal_ratio(), Some(MIN_RENEWAL_RATIO));
     }
 }

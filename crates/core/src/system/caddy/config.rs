@@ -176,11 +176,38 @@ pub(crate) fn build_caddy_config(config: &ProxyConfig) -> Value {
             .partition(|h| is_caddy_internal(h));
 
         let mut policies: Vec<Value> = Vec::with_capacity(2);
+        // r[impl tls.chain.proxy-gate]
+        // Subjects the proxy may renew only later than its default are split
+        // out by the point they are given, since the ratio belongs to a policy
+        // and not to a subject. Everything else keeps the one policy it had.
+        let (held_back, public_subjects): (Vec<&str>, Vec<&str>) = public_subjects
+            .iter()
+            .copied()
+            .partition(|h| config.renewal_ratios.contains_key(*h));
         if !public_subjects.is_empty() {
             policies.push(Value::Object(build_policy(
                 &public_subjects,
                 config.cert_endpoint_url.as_deref(),
                 None,
+                None,
+            )));
+        }
+        let mut by_ratio: std::collections::BTreeMap<u64, (f64, Vec<&str>)> =
+            std::collections::BTreeMap::new();
+        for host in held_back {
+            let ratio = config.renewal_ratios[host];
+            by_ratio
+                .entry(ratio.to_bits())
+                .or_insert_with(|| (ratio, Vec::new()))
+                .1
+                .push(host);
+        }
+        for (ratio, subjects) in by_ratio.into_values() {
+            policies.push(Value::Object(build_policy(
+                &subjects,
+                config.cert_endpoint_url.as_deref(),
+                None,
+                Some(ratio),
             )));
         }
         if !internal_subjects.is_empty() {
@@ -188,6 +215,7 @@ pub(crate) fn build_caddy_config(config: &ProxyConfig) -> Value {
                 &internal_subjects,
                 config.cert_endpoint_url.as_deref(),
                 Some(json!([{ "module": "internal" }])),
+                None,
             )));
         }
 
@@ -240,6 +268,7 @@ fn build_policy(
     subjects: &[&str],
     cert_endpoint_url: Option<&str>,
     issuers: Option<Value>,
+    renewal_window_ratio: Option<f64>,
 ) -> serde_json::Map<String, Value> {
     let mut policy = serde_json::Map::new();
     policy.insert("subjects".to_string(), json!(subjects));
@@ -251,6 +280,9 @@ fn build_policy(
     }
     if let Some(issuers) = issuers {
         policy.insert("issuers".to_string(), issuers);
+    }
+    if let Some(ratio) = renewal_window_ratio {
+        policy.insert("renewal_window_ratio".to_string(), json!(ratio));
     }
     // Eager: we control which subjects Caddy should know about (routed
     // vhosts plus warm-cert hostnames), and we want the cert obtained

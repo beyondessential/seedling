@@ -257,6 +257,7 @@ pub fn build_proxy_config(
         l4_routes: vec![],
         warm_cert_hostnames: BTreeSet::new(),
         cert_endpoint_url: None,
+        renewal_ratios: Default::default(),
     }
 }
 

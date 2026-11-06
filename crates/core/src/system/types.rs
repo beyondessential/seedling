@@ -445,6 +445,16 @@ pub struct ProxyConfig {
     /// to fall back to its default ACME-HTTP-01 automation.
     // r[impl tls.cert.serve]
     pub cert_endpoint_url: Option<String>,
+    /// For a hostname the proxy already holds a certificate for, the fraction of
+    /// that certificate's lifetime that is left when the proxy may renew it.
+    ///
+    /// A hostname absent from the map renews on the proxy's own schedule, a third
+    /// of the lifetime from the end. A hostname whose chain puts a strategy ahead
+    /// of the proxy's is given a later point, so the proxy does not renew over
+    /// HTTP-01 at the moment the strategy ahead of it begins its own attempt.
+    // r[impl tls.chain.proxy-gate]
+    #[serde(default)]
+    pub renewal_ratios: std::collections::BTreeMap<String, f64>,
 }
 
 /// A layer-4 (TCP/UDP) proxy route for non-HTTP ingresses.
