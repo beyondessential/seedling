@@ -852,20 +852,30 @@ fn decide_chain(ctx: &ChainContext, strategies: Vec<Strategy>) -> Decision {
     };
 
     // r[impl tls.canopy.collect]
+    // A refusal recorded for this cycle moved the hostname on, and it stays
+    // with the later strategy until the next cycle: collecting a renewal Canopy
+    // has refused would ask it again on every tick for nothing.
+    let refused = match (&ctx.row, ctx.serving) {
+        (Some(row), Some((serving, _))) => {
+            row.identity == serving.identity && row.retry_not_before.is_some()
+        }
+        _ => false,
+    };
     let collect_canopy = ctx.canopy.applies()
         && match &cycle {
             chain::Cycle::Running(r) => {
                 r.open_order
-                    || matches!(
-                        ctx.serving,
-                        Some((
-                            _,
-                            ServingSource::Store {
-                                origin: TlsCertOrigin::Canopy,
-                                ..
-                            }
+                    || (!refused
+                        && matches!(
+                            ctx.serving,
+                            Some((
+                                _,
+                                ServingSource::Store {
+                                    origin: TlsCertOrigin::Canopy,
+                                    ..
+                                }
+                            ))
                         ))
-                    )
             }
             chain::Cycle::Idle { .. } => false,
         };
@@ -1898,5 +1908,41 @@ mod tests {
             .insert("host.example.com".to_owned(), held_by_proxy(0, 600));
         let st = compute_state(&s, "host.example.com");
         assert_eq!(chain_of(&st).proxy_renewal_ratio(), Some(MIN_RENEWAL_RATIO));
+    }
+
+    // r[verify tls.canopy.collect]
+    // r[verify tls.chain.refusal]
+    #[test]
+    fn a_renewal_canopy_refused_is_not_collected_on_every_tick() {
+        let mut cert = fake_cert("host.example.com", 7, 0, 300);
+        cert.origin = TlsCertOrigin::Canopy;
+        let mut s = snap(vec![], vec![cert], vec![], vec![], vec![], "ops@x", 250);
+        s.env = canopy_env("host.example.com", &["tamanu"], true);
+
+        // At the renewal point and inside Canopy's window, the held chain is
+        // collected on every tick.
+        let st = compute_state(&s, "host.example.com");
+        assert!(chain_of(&st).collect_canopy);
+
+        // Once Canopy refuses, the hostname has passed on and stays there.
+        s.chain_rows = vec![TlsChainRow {
+            hostname: "host.example.com".to_owned(),
+            row: chain::Row {
+                identity: chain::Identity {
+                    cert_id: Some(7),
+                    not_after: Some(300),
+                },
+                step: 1,
+                since: 240,
+                open_order_since: None,
+                retry_not_before: Some(3840),
+            },
+            last_error: Some("refused".to_owned()),
+            updated_at: 240,
+        }];
+        let st = compute_state(&s, "host.example.com");
+        let c = chain_of(&st);
+        assert!(!c.collect_canopy);
+        assert_eq!(c.act, ChainAct::Wait, "the proxy is responsible now");
     }
 }
