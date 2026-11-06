@@ -185,7 +185,11 @@ impl Coordinator {
     /// policy set or a certificate stored is acted on within the window, not
     /// within the tick.
     fn chain_state(&self) -> Option<Arc<ChainState>> {
-        if let Some((at, state)) = self.chain_state.lock().as_ref()
+        // Held across the build, so a burst of handshakes that all find it
+        // stale waits on the one rebuild instead of each starting its own and
+        // contending on the database thread.
+        let mut cached = self.chain_state.lock();
+        if let Some((at, state)) = cached.as_ref()
             && at.elapsed() < CHAIN_STATE_TTL
         {
             return Some(Arc::clone(state));
@@ -202,7 +206,7 @@ impl Coordinator {
             }
         };
         let state = Arc::new(ChainState { managed, snapshot });
-        *self.chain_state.lock() = Some((std::time::Instant::now(), Arc::clone(&state)));
+        *cached = Some((std::time::Instant::now(), Arc::clone(&state)));
         Some(state)
     }
 
