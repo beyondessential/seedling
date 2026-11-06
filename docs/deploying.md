@@ -265,6 +265,62 @@ Disabling refuses new offers and revokes any live one immediately, rather than
 waiting for the carrying client to reconnect. The same state and the on/off
 control are on the web interface's Canopy page.
 
+### Certificates from Canopy
+
+A hostname declared by a TLS-terminating ingress gets its certificate from the
+first of these that is available, unless an operator policy says otherwise:
+
+1. **Canopy**, for a hostname that a public CA can issue for and that is declared
+   by at least one app with a [Canopy type](bsl-scripting.md#reporting-to-canopy-appcanopy_type).
+   Seedling generates and keeps the key, sends Canopy a signing request, and
+   asks again on each report until the certificate comes back.
+2. **ACME HTTP-01**, which the proxy carries out itself.
+
+A hostname with no certificate yet goes to Canopy first when an offer is live and
+straight to the proxy when none is. A hostname that already has a usable
+certificate is left alone until the certificate reaches its renewal point (a
+third of its life from the end, or the start of the CA's suggested window), so
+connecting a Canopy offer, giving an app a type or binding a policy never
+replaces a working certificate early.
+
+From its renewal point a hostname moves down the chain in steps. Each strategy
+gets half of the time left before the certificate expires, so on a typical
+two-strategy chain Canopy has from two thirds of the way through the
+certificate's life to five sixths, and HTTP-01 takes over from there. Canopy is
+tried again at the next renewal point. A refusal by Canopy of the kind an
+operator has to resolve in Canopy (the server lacks the TLS grant, the name is
+outside the group's domains, no zone covers it) moves a hostname that already has
+a certificate on at once. A hostname with none stays with Canopy and is asked
+again hourly, because the operator is expected to authorise the request in
+Canopy, and falling back would turn that into a race over who set the name up
+first.
+
+Seedling does not look at what Canopy says a server may do before asking. The
+request is how an operator comes to know the hostname wants a certificate.
+
+To make Canopy the only source, so that a hostname never goes to HTTP-01 or the
+proxy's own CA, bind it to the Canopy-only policy. It suits a hostname Seedling
+does not yet receive traffic for, where a challenge could not succeed. The
+policy takes the same hostname shapes as the other policies, including
+wildcards, which result in one request per matching hostname:
+
+```bash
+seedling-ctl tls policies set-canopy app.example.com
+seedling-ctl tls policies clear app.example.com
+seedling-ctl tls hostnames          # shows the responsible strategy and when it falls through
+seedling-ctl tls certs retry app.example.com   # start a new cycle now
+```
+
+A Canopy-only hostname that no app with a Canopy type declares cannot be asked
+about, and is faulted with `canopy_certificate_failed`, as is any hostname whose
+request keeps failing while it has no usable certificate. If Canopy revokes a
+certificate or condemns its key, Seedling stops serving it, makes a new key and
+asks again, and the hostname passes to the next strategy meanwhile.
+
+A certificate from Canopy is stored and served by Seedling like any other it
+manages, so it appears in the hostname view and satisfies `rt.warm_certs`. It
+does not carry the `cert_expiring_soon` fault, since renewal is Canopy's.
+
 There is deliberately no way to relay an arbitrary request through the OI. The
 relay carries what the runtime itself needs, and an interface for relaying
 anything else would hand every authorised operator the full authority of the
