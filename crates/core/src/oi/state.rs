@@ -81,19 +81,15 @@ impl OiEnvironment {
 impl crate::runtime::tls::env::Environment for OiEnvironment {
     fn gather(
         &self,
-        only: Option<&str>,
     ) -> Option<(
         Vec<crate::runtime::tls::state::ManagedIngress>,
         crate::runtime::tls::state::ChainEnv,
     )> {
         let state = self.0.upgrade()?;
-        let mut managed = {
+        let managed = {
             let registry = state.registry.read();
             crate::runtime::tls::state::managed_ingresses(&registry)
         };
-        if let Some(hostname) = only {
-            managed.retain(|m| m.hostname == hostname);
-        }
         match state.chain_env(&managed) {
             Ok(env) => Some((managed, env)),
             Err(e) => {

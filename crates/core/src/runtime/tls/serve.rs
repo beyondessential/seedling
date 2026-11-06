@@ -605,7 +605,7 @@ mod tests {
     }
 
     impl Environment for Facts {
-        fn gather(&self, _only: Option<&str>) -> Option<(Vec<ManagedIngress>, ChainEnv)> {
+        fn gather(&self) -> Option<(Vec<ManagedIngress>, ChainEnv)> {
             if self.fail {
                 return None;
             }
@@ -728,13 +728,9 @@ mod tests {
     async fn handshakes_for_many_hostnames_read_the_world_once() {
         struct Counting(std::sync::atomic::AtomicUsize, Facts);
         impl Environment for Counting {
-            fn gather(&self, only: Option<&str>) -> Option<(Vec<ManagedIngress>, ChainEnv)> {
+            fn gather(&self) -> Option<(Vec<ManagedIngress>, ChainEnv)> {
                 self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-                assert_eq!(
-                    only, None,
-                    "the state is gathered for every hostname at once"
-                );
-                self.1.gather(only)
+                self.1.gather()
             }
         }
         let (db, cipher) = fresh().await;
@@ -787,9 +783,9 @@ mod tests {
         // Count how often the facts are gathered.
         struct Counting(std::sync::atomic::AtomicUsize, Facts);
         impl Environment for Counting {
-            fn gather(&self, only: Option<&str>) -> Option<(Vec<ManagedIngress>, ChainEnv)> {
+            fn gather(&self) -> Option<(Vec<ManagedIngress>, ChainEnv)> {
                 self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-                self.1.gather(only)
+                self.1.gather()
             }
         }
         let (db, cipher) = fresh().await;

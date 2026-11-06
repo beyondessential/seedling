@@ -19,12 +19,15 @@ use crate::system::caddy::CertRead;
 /// the daemon's state themselves: the certificate endpoint, and the issuance
 /// coordinator that serves it.
 pub trait Environment: Send + Sync {
-    /// The TLS-terminating ingresses, and the facts a chain depends on for
-    /// them. `only` narrows both to the ingresses declaring one hostname.
+    /// Every TLS-terminating ingress, and the facts a chain depends on for them.
+    ///
+    /// For all of them at once, never for one: what is gathered is shared by
+    /// every decision made against it, and one narrowed to a single hostname
+    /// would say of every other that no app declares it.
     ///
     /// `None` when they could not be gathered. That is not an empty answer, and
     /// no caller may act on it as one.
-    fn gather(&self, only: Option<&str>) -> Option<(Vec<ManagedIngress>, ChainEnv)>;
+    fn gather(&self) -> Option<(Vec<ManagedIngress>, ChainEnv)>;
 }
 
 /// Read what the proxy holds for each of `managed`, from its certificate cache.

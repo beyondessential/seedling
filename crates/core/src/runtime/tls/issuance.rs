@@ -241,10 +241,7 @@ impl Coordinator {
         {
             return Some(Arc::clone(state));
         }
-        // Gathered for every managed hostname, since the state is shared: one
-        // narrowed to a single hostname would say of every other that no app
-        // declares it.
-        let (managed, env) = self.environment.get()?.gather(None)?;
+        let (managed, env) = self.environment.get()?.gather()?;
         let snapshot = match self.db.call(move |db| state::Snapshot::load(db, env)) {
             Ok(snapshot) => snapshot,
             Err(e) => {
