@@ -197,3 +197,79 @@ fn description_is_serialised_in_resource_summary() {
         Some("nightly backup runner")
     );
 }
+
+// l[verify app.canopy-type]
+#[test]
+fn canopy_type_is_stored() {
+    let app = run_test_script_app(r#"app.canopy_type("tamanu-central");"#);
+    assert_eq!(
+        app.def.load().canopy_type.as_deref(),
+        Some("tamanu-central")
+    );
+}
+
+// l[verify app.canopy-type]
+#[test]
+fn canopy_type_last_call_wins_and_returns_app() {
+    let app = run_test_script_app(
+        r#"
+        let returned = app.canopy_type("first");
+        if returned.type_of() != "App" { throw "expected App"; }
+        app.canopy_type("second").description("chained");
+    "#,
+    );
+    assert_eq!(app.def.load().canopy_type.as_deref(), Some("second"));
+}
+
+// l[verify app.canopy-type]
+#[test]
+fn untyped_app_has_no_canopy_type() {
+    let app = run_test_script_app(r#"app.description("plain");"#);
+    assert_eq!(app.def.load().canopy_type, None);
+}
+
+// l[verify app.canopy-type]
+#[test]
+fn canopy_type_is_a_script_error_inside_an_action_closure() {
+    let (engine, mut scope, app, _) = run_test_script(r#"app.description("x");"#);
+    let _guard = crate::runtime::barrier::runtime::ActionClosureGuard::new(
+        std::sync::Arc::clone(&app.def),
+        "op".to_owned(),
+        Default::default(),
+    );
+    let err = engine
+        .run_with_scope(&mut scope, r#"app.canopy_type("tamanu");"#)
+        .expect_err("canopy_type inside an action closure throws");
+    assert!(err.to_string().contains("action closure"), "{err}");
+    assert_eq!(app.def.load().canopy_type, None);
+}
+
+// l[verify app.canopy-type]
+#[test]
+fn malformed_canopy_types_throw() {
+    for bad in [
+        "Tamanu",
+        "tamanu-Central",
+        "1tamanu",
+        "-tamanu",
+        "tamanu-",
+        "tamanu--central",
+        "tamanu_central",
+        "tamanu central",
+        "",
+    ] {
+        let err = run_test_script_err(&format!(r#"app.canopy_type("{bad}");"#));
+        assert!(err.to_string().contains("canopy_type"), "{bad:?}: {err}");
+    }
+    let err = run_test_script_err(r#"app.canopy_type(42);"#);
+    assert!(err.to_string().contains("must be a string"), "{err}");
+}
+
+// l[verify app.canopy-type]
+#[test]
+fn well_formed_canopy_types_are_accepted() {
+    for good in ["a", "tamanu", "tamanu-central", "a1", "tamanu2-v3-x"] {
+        let app = run_test_script_app(&format!(r#"app.canopy_type("{good}");"#));
+        assert_eq!(app.def.load().canopy_type.as_deref(), Some(good));
+    }
+}
