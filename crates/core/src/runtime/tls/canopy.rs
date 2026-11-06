@@ -563,6 +563,17 @@ fn apply(
                     "Canopy returned a certificate that has already expired".to_owned(),
                 );
             }
+            // Both ends of the window: a certificate whose validity has not begun
+            // is refused by every client it is served to, so storing it would
+            // leave the hostname serving nothing while reading as covered.
+            if parsed.metadata.not_before.is_some_and(|start| start > now) {
+                return unavailable(
+                    db,
+                    row,
+                    ask,
+                    "Canopy returned a certificate that is not valid yet".to_owned(),
+                );
+            }
             match parse::leaf_spki_der(&chain_pem) {
                 Ok(spki) if spki == key_spki => {}
                 Ok(_) => {

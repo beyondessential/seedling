@@ -785,3 +785,20 @@ async fn an_order_is_one_attempt_even_when_its_position_is_rewritten_under_it() 
         "the open attempt is not opened twice"
     );
 }
+
+// r[verify tls.canopy.collect]
+#[tokio::test]
+async fn a_chain_whose_validity_has_not_begun_is_not_stored() {
+    let n = now();
+    let fake = Fake::new([Reply::Issue {
+        not_before: n + DAY,
+        not_after: n + 90 * DAY,
+    }]);
+    let (engine, db) = engine(&fake);
+    let outcome = engine.ask(ask(AttemptTrigger::OnDemand)).await.unwrap();
+    assert!(
+        matches!(&outcome, Outcome::Failed(r) if r.contains("not valid yet")),
+        "{outcome:?}"
+    );
+    assert_eq!(canopy_rows(&db)[0].state, TlsCertState::CsrPending);
+}
