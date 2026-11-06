@@ -123,8 +123,8 @@ export default function Certificates() {
         sx={{ color: "text.secondary", mb: 2 }}
       >
         Per-domain rollup of every TLS-terminating ingress in the system.
-        Domains without an explicit policy use the default (TLS/HTTP/internal)
-        issuance Caddy provides automatically.
+        Domains without an explicit policy get their certificate from Canopy
+        where it applies, then from the proxy's own ACME HTTP-01 or internal CA.
       </Typography>
 
       {actionError && (
@@ -147,7 +147,6 @@ export default function Certificates() {
           policies={policies?.policies ?? []}
           loading={policiesLoading}
           error={policiesError}
-          providers={providers?.providers ?? []}
           onAdd={() => {
             clearError();
             setPolicyDialog(true);
@@ -159,7 +158,9 @@ export default function Certificates() {
         />
 
         <ManualCertsSection
-          certs={(certs?.certificates ?? []).filter((c) => c.origin !== "acme_dns")}
+          certs={(certs?.certificates ?? []).filter(
+            (c) => c.origin !== "acme_dns" && c.origin !== "canopy",
+          )}
           loading={certsLoading}
           error={certsError}
           onUpload={() => {
@@ -220,7 +221,7 @@ export default function Certificates() {
           setProviderDialog(false);
         }}
       />
-      <SetAcmeDnsPolicyDialog
+      <SetPolicyDialog
         open={policyDialog}
         providers={providers?.providers ?? []}
         onClose={() => setPolicyDialog(false)}
@@ -512,7 +513,6 @@ interface PoliciesSectionProps {
   policies: TlsPolicy[];
   loading: boolean;
   error: OiQueryError | null;
-  providers: TlsDnsProvider[];
   onAdd: () => void;
   onClear: (hostname: string) => void;
 }
@@ -521,7 +521,6 @@ function PoliciesSection({
   policies,
   loading,
   error,
-  providers,
   onAdd,
   onClear,
 }: PoliciesSectionProps) {
@@ -536,19 +535,19 @@ function PoliciesSection({
           size="small"
           startIcon={<AddIcon />}
           onClick={onAdd}
-          disabled={providers.length === 0}
         >
           Bind domain
         </OutlinedActionButton>
       </Box>
       <Typography variant="caption" sx={{ color: "text.secondary", mb: 1, display: "block" }}>
-        Domains absent here use the default Caddy issuance strategy (TLS/HTTP/internal).
+        Domains absent here follow the default chain: Canopy where it applies, then
+        the proxy's ACME HTTP-01 or internal CA.
       </Typography>
       {error && <OiErrorAlert error={error} />}
       {loading && <CircularProgress size={20} />}
       {policies.length === 0 ? (
         <Typography variant="body2" sx={{ color: "text.secondary" }}>
-          No operator policies — every TLS-terminating domain uses the Caddy default.
+          No operator policies — every TLS-terminating domain follows the default chain.
         </Typography>
       ) : (
         <TableContainer component={Paper} variant="outlined">
@@ -570,14 +569,14 @@ function PoliciesSection({
                   </TableCell>
                   <TableCell>
                     <Chip
-                      label="acme-dns"
+                      label={p.strategy === "canopy" ? "canopy only" : "acme-dns"}
                       size="small"
                       color="primary"
                       variant="outlined"
                     />
                   </TableCell>
                   <TableCell sx={{ fontFamily: "monospace", fontSize: "0.85rem" }}>
-                    provider: {p.dns_provider}
+                    {p.strategy === "acme_dns" ? `provider: ${p.dns_provider}` : "—"}
                   </TableCell>
                   <TableCell>
                     <Typography variant="caption" sx={{ color: "text.secondary" }}>
@@ -1012,21 +1011,22 @@ function UpsertProviderDialog({
   );
 }
 
-interface SetAcmeDnsPolicyDialogProps {
+interface SetPolicyDialogProps {
   open: boolean;
   providers: TlsDnsProvider[];
   onClose: () => void;
   onSubmitted: () => void;
 }
 
-function SetAcmeDnsPolicyDialog({
+function SetPolicyDialog({
   open,
   providers,
   onClose,
   onSubmitted,
-}: SetAcmeDnsPolicyDialogProps) {
+}: SetPolicyDialogProps) {
   const [hostname, setHostname] = useState("");
   const [provider, setProvider] = useState(providers[0]?.name ?? "");
+  const [chosen, setChosen] = useState<"acme_dns" | "canopy">("acme_dns");
   const [submitting, setSubmitting] = useState(false);
   const { execute, error, clearError } = useOiAction();
 
@@ -1034,6 +1034,9 @@ function SetAcmeDnsPolicyDialog({
   if (provider === "" && providers.length > 0) {
     setProvider(providers[0].name);
   }
+
+  // ACME-DNS needs a provider to bind to; Canopy does not.
+  const strategy = providers.length === 0 ? "canopy" : chosen;
 
   const reset = () => {
     setHostname("");
@@ -1047,15 +1050,19 @@ function SetAcmeDnsPolicyDialog({
 
   const trimmedHost = hostname.trim();
   const isExact = trimmedHost.length > 0 && !trimmedHost.includes("*");
-  const valid = trimmedHost.length > 0 && provider.length > 0;
+  const valid =
+    trimmedHost.length > 0 && (strategy === "canopy" || provider.length > 0);
 
   const submit = async () => {
     setSubmitting(true);
     try {
-      const result = await execute("/tls/policies/set-acme-dns", {
-        hostname: trimmedHost,
-        dns_provider: provider,
-      });
+      const result =
+        strategy === "canopy"
+          ? await execute("/tls/policies/set-canopy", { hostname: trimmedHost })
+          : await execute("/tls/policies/set-acme-dns", {
+              hostname: trimmedHost,
+              dns_provider: provider,
+            });
       if (result !== null) {
         reset();
         onSubmitted();
@@ -1067,7 +1074,7 @@ function SetAcmeDnsPolicyDialog({
 
   return (
     <Dialog open={open} onClose={close} fullWidth maxWidth="sm">
-      <DialogTitle>Bind domain to ACME-DNS</DialogTitle>
+      <DialogTitle>Bind domain</DialogTitle>
       <DialogContent>
         <Stack spacing={2} sx={{ mt: 1 }}>
           {error && (
@@ -1095,18 +1102,37 @@ function SetAcmeDnsPolicyDialog({
           />
           <TextField
             select
-            label="DNS provider"
-            value={provider}
-            onChange={(e) => setProvider(e.target.value)}
+            label="Strategy"
+            value={strategy}
+            onChange={(e) => setChosen(e.target.value as "acme_dns" | "canopy")}
             fullWidth
+            helperText={
+              strategy === "canopy"
+                ? "Never handed on to HTTP-01 or the internal CA."
+                : undefined
+            }
           >
-            {providers.map((p) => (
-              <MenuItem key={p.name} value={p.name}>
-                {p.name} ({p.kind})
-              </MenuItem>
-            ))}
+            <MenuItem value="acme_dns" disabled={providers.length === 0}>
+              ACME-DNS
+            </MenuItem>
+            <MenuItem value="canopy">Canopy only</MenuItem>
           </TextField>
-          {isExact && (
+          {strategy === "acme_dns" && (
+            <TextField
+              select
+              label="DNS provider"
+              value={provider}
+              onChange={(e) => setProvider(e.target.value)}
+              fullWidth
+            >
+              {providers.map((p) => (
+                <MenuItem key={p.name} value={p.name}>
+                  {p.name} ({p.kind})
+                </MenuItem>
+              ))}
+            </TextField>
+          )}
+          {strategy === "acme_dns" && isExact && (
             <Typography variant="caption" sx={{ color: "text.secondary" }}>
               When the global contact email is configured, the daemon will
               auto-fire a one-shot ACME-DNS issuance for this exact domain
@@ -1123,7 +1149,7 @@ function SetAcmeDnsPolicyDialog({
           safety="write"
           onClick={submit}
           disabled={!valid || submitting}
-          startIcon={isExact ? <BoltIcon /> : undefined}
+          startIcon={strategy === "acme_dns" && isExact ? <BoltIcon /> : undefined}
         >
           Save
         </SolidActionButton>

@@ -16,6 +16,7 @@ const acmeRow: TlsHostnameView = {
     is_wildcard_match: true,
   },
   status: "active",
+  chain: { responsible: "acme_dns", fall_through_at: null, next_cycle_at: now + 20 * 86400 },
   active_cert: {
     id: 3,
     origin: "acme_dns",
@@ -39,6 +40,7 @@ const defaultRow: TlsHostnameView = {
   apps: ["blog"],
   policy: { strategy: "default" },
   status: "default",
+  chain: { responsible: "acme_http01", fall_through_at: null, next_cycle_at: now + 3 * 86400 },
   active_cert: {
     id: null,
     origin: "caddy",
@@ -68,12 +70,56 @@ const queuedRow: TlsHostnameView = {
     is_wildcard_match: false,
   },
   status: "pending",
+  chain: { responsible: "acme_dns", fall_through_at: null, next_cycle_at: null },
   active_cert: null,
   last_issuance: null,
   last_error: null,
   retry_block: null,
   force_retry_at: now,
   next_issuance_at: now,
+  next_issuance_source: "immediate",
+};
+
+const canopyRow: TlsHostnameView = {
+  hostname: "portal.example.com",
+  apps: ["portal"],
+  policy: { strategy: "default" },
+  status: "active",
+  chain: {
+    responsible: "canopy",
+    fall_through_at: now + 5 * 86400,
+    next_cycle_at: null,
+  },
+  active_cert: {
+    id: 11,
+    origin: "canopy",
+    issuer: "CN=Fake LE",
+    not_before: now - 70 * 86400,
+    not_after: now + 20 * 86400,
+    self_signed: false,
+    ari_window_start: null,
+    ari_window_end: null,
+  },
+  last_issuance: { kind: "canopy", at: now - 70 * 86400, cert_id: 11 },
+  last_error: null,
+  retry_block: null,
+  force_retry_at: null,
+  next_issuance_at: null,
+  next_issuance_source: null,
+};
+
+const canopyOnlyRow: TlsHostnameView = {
+  hostname: "later.example.com",
+  apps: ["later"],
+  policy: { strategy: "canopy", pattern: "*.example.com", is_wildcard_match: true },
+  status: "pending",
+  chain: { responsible: "canopy", fall_through_at: null, next_cycle_at: null },
+  active_cert: null,
+  last_issuance: null,
+  last_error: null,
+  retry_block: null,
+  force_retry_at: null,
+  next_issuance_at: null,
   next_issuance_source: "immediate",
 };
 
@@ -121,6 +167,42 @@ describe("TlsHostnamesTable", () => {
 
     // Immediate-issuance row.
     expect(screen.getByText("queued")).toBeTruthy();
+  });
+
+  // w[verify routes.certificates]
+  it("shows the strategy responsible and when it falls through", async () => {
+    renderWithSession(<TlsHostnamesTable />, {
+      fixtures: { "/tls/hostnames/list": { hostnames: [canopyRow, canopyOnlyRow, defaultRow] } },
+    });
+    await screen.findByText("portal.example.com");
+
+    const portal = screen.getByText("portal.example.com").closest("tr") as HTMLElement;
+    expect(within(portal).getByText("Canopy, falls through in 5d")).toBeTruthy();
+    expect(within(portal).getByText("Canopy")).toBeTruthy();
+
+    const later = screen.getByText("later.example.com").closest("tr") as HTMLElement;
+    expect(within(later).getByText("Canopy only (*.example.com)")).toBeTruthy();
+    expect(within(later).getByText("Canopy")).toBeTruthy();
+
+    const blog = screen.getByText("blog.example.com").closest("tr") as HTMLElement;
+    expect(within(blog).getByText("HTTP-01")).toBeTruthy();
+  });
+
+  // w[verify routes.certificates]
+  it("offers a retry wherever Canopy is the one being asked", async () => {
+    const { request } = renderWithSession(<TlsHostnamesTable />, {
+      fixtures: { "/tls/hostnames/list": { hostnames: [canopyRow, canopyOnlyRow, defaultRow] } },
+      safetyMode: "write",
+    });
+    await screen.findByText("portal.example.com");
+    expect(within(screen.getByText("blog.example.com").closest("tr") as HTMLElement).queryByRole("button")).toBeNull();
+    fireEvent.click(renewButton("later.example.com"));
+    await waitFor(() => {
+      expect(request).toHaveBeenCalledWith("/tls/certificates/retry", {
+        hostname: "later.example.com",
+      });
+    });
+    expect(renewButton("portal.example.com")).toBeTruthy();
   });
 
   it("shows an error alert when the query fails", async () => {

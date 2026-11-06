@@ -21,6 +21,8 @@ import { useOiQuery } from "../hooks/useOi";
 import { useOiAction } from "../hooks/useOiAction";
 import { OiErrorAlert } from "./OiErrorAlert";
 import type {
+  TlsChainStrategy,
+  TlsHostnameChain,
   TlsHostnameLastIssuance,
   TlsHostnameStatus,
   TlsHostnameView,
@@ -89,7 +91,30 @@ function policySummary(view: TlsHostnameView): string {
       return policy.is_wildcard_match
         ? `ACME-DNS via ${policy.dns_provider} (${policy.pattern})`
         : `ACME-DNS via ${policy.dns_provider}`;
+    case "canopy":
+      return policy.is_wildcard_match
+        ? `Canopy only (${policy.pattern})`
+        : "Canopy only";
   }
+}
+
+const CHAIN_LABEL: Record<TlsChainStrategy, string> = {
+  canopy: "Canopy",
+  acme_http01: "HTTP-01",
+  internal_ca: "internal CA",
+  acme_dns: "ACME-DNS",
+  manual: "manual certificate",
+  tailscale: "Tailscale",
+};
+
+/** The responsible strategy, and when it falls through to the next. */
+function chainLabel(chain: TlsHostnameChain | null, now: number): string | null {
+  if (!chain) return null;
+  const who = CHAIN_LABEL[chain.responsible];
+  if (chain.fall_through_at != null) {
+    return `${who}, falls through ${relative(chain.fall_through_at, now)}`;
+  }
+  return who;
 }
 
 function caddyIssuerLabel(issuer: string): string {
@@ -111,6 +136,9 @@ function lastIssuanceLabel(
   }
   if (last.kind === "csr") {
     return { primary: "CSR-derived", secondary: when };
+  }
+  if (last.kind === "canopy") {
+    return { primary: "Canopy", secondary: when };
   }
   if (last.kind === "caddy") {
     return { primary: caddyIssuerLabel(last.provider), secondary: when };
@@ -207,7 +235,13 @@ export function TlsHostnamesTable({
             <TableBody>
               {rows.map((row) => {
                 const last = lastIssuanceLabel(row.last_issuance, now);
-                const isAcmeDns = row.policy.strategy === "acme_dns";
+                // A retry starts a new cycle, which matters wherever the runtime
+                // is the one asking: ACME-DNS, and Canopy alone or first.
+                const canRetry =
+                  row.policy.strategy === "acme_dns" ||
+                  row.policy.strategy === "canopy" ||
+                  row.chain?.responsible === "canopy";
+                const chainText = chainLabel(row.chain, now);
                 const statusTooltip =
                   row.status === "error" && row.last_error
                     ? row.last_error
@@ -277,6 +311,14 @@ export function TlsHostnamesTable({
                       >
                         {policySummary(row)}
                       </Typography>
+                      {chainText && (
+                        <Typography
+                          variant="caption"
+                          sx={{ color: "text.secondary", display: "block" }}
+                        >
+                          {chainText}
+                        </Typography>
+                      )}
                     </TableCell>
                     <TableCell>
                       <Typography variant="body2">{last.primary}</Typography>
@@ -304,7 +346,7 @@ export function TlsHostnamesTable({
                       )}
                     </TableCell>
                     <TableCell align="right">
-                      {isAcmeDns && (
+                      {canRetry && (
                         <IconActionButton
                           safety="write"
                           tooltip="Renew now"
