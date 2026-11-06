@@ -127,7 +127,6 @@ Absent specification bugs, anything not defined here is either defined in anothe
 
 > w[routes.apps.canopy-type]
 > The app detail page must show the app's [Canopy application type](language.md#l--app.canopy-type) when its definition declares one, beside the app's other declared details.
-> When the app is a claimant waiting on another app for its type, the page names that app, so the `canopy_type_held` fault reads with its cause in view.
 
 > w[routes.apps.fault-count]
 > The apps table on the home route must surface, per app, how many active faults are currently filed against it.
@@ -212,7 +211,7 @@ Absent specification bugs, anything not defined here is either defined in anothe
 > - Whether Canopy access is enabled, with a control to turn it on or off.
 > - The offer that would serve the next request — the offering agent, the endpoint it reaches, and when it was offered — or an indication that no client is currently offering one.
 > - The outcome and time of the most recent status report, including the error when the last one failed.
-> - Each Canopy application type claimed on the host, with the app holding it and any apps waiting on it.
+> - Each app reported to Canopy as an application, with its type.
 >
 > Registering and withdrawing offers is not exposed: those are made by the client that carries the requests, not by an operator.
 > Nor is relaying a request or forcing a report: the relay carries what the runtime itself needs, and a control for relaying an arbitrary request would grant any operator the full authority of the carrying client's Canopy identity.

@@ -446,7 +446,7 @@ Absent specification bugs, anything that is not defined here is either defined i
 > `/apps/show` includes, for each Deployment resource, a `priority` field carrying the [priority](language.md#l--deployment.priority) declared for it in the current AppDef, defaulting to `normal` where the definition declares none.
 
 > i[app.canopy.describe]
-> `/apps/show` includes a top-level `canopy` field: `null` when the app's definition declares no [Canopy application type](language.md#l--app.canopy-type), and otherwise `{ type, holder }`, where `holder` is true when the app holds the type and false when it is a claimant waiting on another app (see [canopy.app.claimant](runtime.md#r--canopy.app.claimant)).
+> `/apps/show` includes a top-level `canopy_type` field carrying the [Canopy application type](language.md#l--app.canopy-type) the app's definition declares, or `null` when it declares none.
 
 # Deployment Restart
 
@@ -1333,7 +1333,7 @@ Seedling has no Canopy identity of its own. Instead a connected client may offer
 > - `offers`: the number of live offers, which may exceed one.
 > - `server_id`: the Canopy server identifier last resolved for this instance, or `null` if none has been.
 > - `last_report`: the outcome of the most recent status report, or `null` if none has been attempted. When present, an object with fields `at` (RFC 3339), `ok` (boolean), and `error` (string, present only when `ok` is false).
-> - `applications`: an array with one object per Canopy application type claimed by an app, sorted by type, with fields `type`, `holder` (the name of the app holding it), and `claimants` (the names of the apps waiting on it, earliest claim first).
+> - `applications`: an array with one object per app [reported as a Canopy application](runtime.md#r--canopy.app.key), sorted by app name, with fields `app` and `type`.
 
 # Client Behaviour
 
