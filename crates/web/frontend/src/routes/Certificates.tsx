@@ -26,7 +26,7 @@ import {
   TextField,
   Typography,
 } from "@mui/material";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import {
   IconActionButton,
   OutlinedActionButton,
@@ -1026,7 +1026,13 @@ function SetPolicyDialog({
 }: SetPolicyDialogProps) {
   const [hostname, setHostname] = useState("");
   const [provider, setProvider] = useState(providers[0]?.name ?? "");
-  const [chosen, setChosen] = useState<"acme_dns" | "canopy">("acme_dns");
+  // ACME-DNS needs a provider to bind to; Canopy does not, so with no provider
+  // the only strategy on offer is Canopy. Held rather than derived, so a
+  // providers list that resolves while the dialog is open cannot change the
+  // strategy under the operator after they have seen it.
+  const [strategy, setStrategy] = useState<"acme_dns" | "canopy">(
+    providers.length === 0 ? "canopy" : "acme_dns",
+  );
   const [submitting, setSubmitting] = useState(false);
   const { execute, error, clearError } = useOiAction();
 
@@ -1035,8 +1041,15 @@ function SetPolicyDialog({
     setProvider(providers[0].name);
   }
 
-  // ACME-DNS needs a provider to bind to; Canopy does not.
-  const strategy = providers.length === 0 ? "canopy" : chosen;
+  // Settled when the dialog opens, from the providers known then, and left
+  // alone after: a list that resolves while it is open adds ACME-DNS to the
+  // choices without changing the one on screen.
+  useEffect(() => {
+    if (open) {
+      setStrategy(providers.length === 0 ? "canopy" : "acme_dns");
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open]);
 
   const reset = () => {
     setHostname("");
@@ -1104,7 +1117,7 @@ function SetPolicyDialog({
             select
             label="Strategy"
             value={strategy}
-            onChange={(e) => setChosen(e.target.value as "acme_dns" | "canopy")}
+            onChange={(e) => setStrategy(e.target.value as "acme_dns" | "canopy")}
             fullWidth
             helperText={
               strategy === "canopy"
