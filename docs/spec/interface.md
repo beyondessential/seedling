@@ -1095,7 +1095,7 @@ Absent specification bugs, anything that is not defined here is either defined i
 
 # TLS Certificate Management
 
-The TLS certificate operator surface mirrors the runtime concepts defined in [the runtime spec](runtime.md): named DNS providers, per-hostname policies, and a certificate registry covering manual uploads, CSR-derived certs, and certs the runtime obtained itself via ACME.
+The TLS certificate operator surface mirrors the runtime concepts defined in [the runtime spec](runtime.md): named DNS providers, per-hostname policies, and a certificate registry covering manual uploads, CSR-derived certs, and certs the runtime obtained itself via ACME or Canopy.
 This section covers the operator interface for the ACME-DNS strategy, manual cert lifecycle, and policy management.
 
 ## DNS Providers
@@ -1120,8 +1120,8 @@ This section covers the operator interface for the ACME-DNS strategy, manual cer
 
 > i[tls.policy.list]
 > `/tls/policies/list` returns all per-hostname policy rows.
-> Response `result.policies` is an array of objects each with `hostname`, `strategy` (`"acme_dns"` or `"manual"`), and either `dns_provider` (for acme-dns) or `cert_id` (for manual), plus `updated_at`.
-> Hostnames not in this list use the default ACME-HTTP-01 strategy.
+> Response `result.policies` is an array of objects each with `hostname`, `strategy` (`"acme_dns"`, `"canopy"`, or `"manual"`), and either `dns_provider` (for acme-dns) or `cert_id` (for manual), plus `updated_at`.
+> Hostnames not in this list use the default chain per [tls.strategy.default](runtime.md#r--tls.strategy.default).
 
 > i[tls.policy.set-acme-dns]
 > `/tls/policies/set-acme-dns { hostname, dns_provider, directory_url? }` binds `hostname` to the named DNS provider for ACME-DNS-01 issuance.
@@ -1131,15 +1131,21 @@ This section covers the operator interface for the ACME-DNS strategy, manual cer
 > Wildcard policies do not auto-issue (there is no concrete hostname to acquire a cert for); the operator runs [`tls.cert.issue-acme-dns`](#i--tls.cert.issue-acme-dns) per hostname.
 > `directory_url` defaults to the Let's Encrypt production directory.
 
+> i[tls.policy.set-canopy]
+> `/tls/policies/set-canopy { hostname }` binds `hostname` to the Canopy-only policy per [tls.strategy.canopy-only](runtime.md#r--tls.strategy.canopy-only).
+> `hostname` may be an exact hostname, the catch-all `*`, or a shell-glob-style subdomain wildcard, with the matching rules of [tls.policy.wildcard](runtime.md#r--tls.policy.wildcard).
+> The new policy takes effect on the next reconciliation tick per [tls.policy.apply](runtime.md#r--tls.policy.apply).
+> Setting it does not by itself replace a certificate the hostname already holds: a usable certificate is left until its renewal point, or until an operator [retry](#i--tls.cert.retry).
+
 > i[tls.policy.clear]
-> `/tls/policies/clear { hostname }` removes any operator policy for `hostname`, returning it to the default ACME-HTTP-01 strategy.
+> `/tls/policies/clear { hostname }` removes any operator policy for `hostname`, returning it to the default chain per [tls.strategy.default](runtime.md#r--tls.strategy.default).
 > Returns `not_found` if no policy exists for the hostname.
 
 ## Certificates
 
 > i[tls.cert.list]
 > `/tls/certificates/list` returns all stored certificates.
-> Response `result.certificates` is an array of objects each with `id`, `hostname`, `requested_hostname`, `request_covered`, `state` (`"csr_pending"`, `"active"`, `"superseded"`, or `"failed"`), `origin` (`"manual"`, `"csr"`, or `"acme_dns"`), `key_type`, `issuer`, `not_before`, `not_after`, `serial`, `self_signed`, `note`, `acme_account_id`, `created_at`, `updated_at`.
+> Response `result.certificates` is an array of objects each with `id`, `hostname`, `requested_hostname`, `request_covered`, `state` (`"csr_pending"`, `"active"`, `"superseded"`, or `"failed"`), `origin` (`"manual"`, `"csr"`, `"acme_dns"`, or `"canopy"`), `key_type`, `issuer`, `not_before`, `not_after`, `serial`, `self_signed`, `note`, `acme_account_id`, `created_at`, `updated_at`.
 > `hostname` is a name the certificate covers, used as a display label: for an operator upload its primary SAN, for a runtime-issued certificate the name it was issued for. What the certificate serves is decided by its full SAN list per [tls.cert.validation.san-coverage](runtime.md#r--tls.cert.validation.san-coverage), never by this field.
 > `requested_hostname` is the hostname a CSR was begun for; it is null for rows of any other origin, and on a CSR row it may differ from `hostname` when the CA signed a different name set.
 > `request_covered` reports whether the stored certificate covers that requested hostname, so that the rule is applied in one place rather than by each client. It is null where there is nothing to decide — no requested hostname, or no certificate yet — and also where the stored certificate cannot be parsed, which is not the same answer as "does not cover".
@@ -1189,7 +1195,8 @@ This section covers the operator interface for the ACME-DNS strategy, manual cer
 > i[tls.cert.retry]
 > `/tls/certificates/retry { hostname }` queues a retry for `hostname` and returns immediately.
 > The runtime clears any operator pause for the hostname, writes a persistent force-retry signal per [tls.cert.force-retry](runtime.md#r--tls.cert.force-retry), and nudges the issuance coordinator.
-> The actual ACME flow runs in the background; the cert appears in [`tls.cert.list`](#i--tls.cert.list) once issuance completes.
+> The retry starts a new cycle of the hostname's chain from its first strategy, per [tls.chain.return](runtime.md#r--tls.chain.return), so a hostname that passed to a later strategy asks Canopy again.
+> The actual issuance runs in the background; the cert appears in [`tls.cert.list`](#i--tls.cert.list) once issuance completes.
 > Survives a daemon restart: if the daemon dies between this call and the coordinator picking it up, the next reconciler tick after restart still processes it.
 
 ## Hostname view
@@ -1201,15 +1208,16 @@ This section covers the operator interface for the ACME-DNS strategy, manual cer
 >
 > - `hostname`
 > - `apps`: array of app names declaring this hostname (multiple when several apps share an ingress)
-> - `policy`: `{ strategy: "default" | "acme_dns" | "manual", dns_provider?, cert_id?, pattern?, is_wildcard_match? }` — `default` means no policy is bound and the proxy handles issuance directly; `pattern` is the matched policy pattern (which may be a wildcard), `is_wildcard_match` is true when the resolved policy was a wildcard rather than an exact match
+> - `policy`: `{ strategy: "default" | "acme_dns" | "canopy" | "manual", dns_provider?, cert_id?, pattern?, is_wildcard_match? }` — `default` means no policy is bound and the hostname follows the default chain; `pattern` is the matched policy pattern (which may be a wildcard), `is_wildcard_match` is true when the resolved policy was a wildcard rather than an exact match
 > - `status`: `"active" | "expired" | "error" | "pending" | "blocked" | "no_cert" | "default"` — derived from policy, active certificate, last attempt, and any retry block or queued retry. For `default`-strategy hostnames, `status` reflects the proxy's on-disk certificate when one is available (so a Caddy-served cert near expiry surfaces as `expired` rather than indistinguishably as `default`).
+> - `chain`: `{ responsible, fall_through_at?, next_cycle_at? }` — the strategy currently responsible for the hostname (`"canopy"`, `"acme_http01"`, `"internal_ca"`, `"acme_dns"`, or `"manual"`), when it falls through to the next strategy in Unix seconds if it will, and when the next cycle starts per [tls.chain.cycle](runtime.md#r--tls.chain.cycle); null for hostnames with no chain to report
 > - `active_cert`: `{ id, origin, caddy_issuer?, issuer, not_before, not_after, self_signed, ari_window_start, ari_window_end }` or null. `id` is null for proxy-managed certs; `origin` is `"caddy"` for those, with `caddy_issuer` naming the proxy's issuer subdir (`local` for its internal CA, otherwise the host of the ACME directory).
-> - `last_issuance`: `{ kind, at, cert_id?, provider? }` describing when and how the active certificate was last obtained, or null when no issuance has run; `kind` is `"manual"` for uploads, `"acme_dns"` for runtime-driven issuance, or `"caddy"` for proxy-managed certs (with `provider` set to the issuer subdir).
+> - `last_issuance`: `{ kind, at, cert_id?, provider? }` describing when and how the active certificate was last obtained, or null when no issuance has run; `kind` is `"manual"` for uploads, `"acme_dns"` or `"canopy"` for runtime-driven issuance, or `"caddy"` for proxy-managed certs (with `provider` set to the issuer subdir).
 > - `last_error`: error message from the most recent failed attempt for this hostname, when the latest attempt was a failure, otherwise null
 > - `retry_block`: `{ set_at, reason }` when an operator pause is set, otherwise null
 > - `force_retry_at`: timestamp of a queued operator-driven retry awaiting the coordinator, otherwise null
 > - `next_issuance_at`: expected next issuance time in Unix seconds, or null
-> - `next_issuance_source`: `"ari" | "fallback" | "immediate" | "debounce"` describing how `next_issuance_at` was derived (RFC 9773 ARI window, the runtime's lifetime-fraction fallback, "as soon as the coordinator runs", or "the time the after-failure debounce expires"), or null when the strategy is manual or default
+> - `next_issuance_source`: `"ari" | "fallback" | "immediate" | "debounce"` describing how `next_issuance_at` was derived (RFC 9773 ARI window, the runtime's lifetime-fraction fallback, "as soon as the coordinator runs", or "the time the after-failure debounce expires"), or null when the strategy is manual or the certificate is one the proxy obtained for itself
 >
 > The view is the canonical operator surface for what TLS hostnames exist and what state they are in; it deliberately replaces the older "list every stored cert" and "list every recent attempt" views, which exposed implementation rather than per-hostname state.
 

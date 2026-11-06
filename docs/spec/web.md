@@ -278,7 +278,8 @@ Absent specification bugs, anything not defined here is either defined in anothe
 > w[routes.certificates]
 > The web interface must expose TLS certificate management at `/certificates`, with the following sections:
 >
-> - **Per-hostname policies**: list, add (binding a hostname or wildcard to ACME-DNS via a configured provider), and clear.
+> - **Per-hostname policies**: list, add (binding a hostname or wildcard to ACME-DNS via a configured provider, or to the Canopy-only policy), and clear.
+> - **Hostnames**: for each hostname, the strategy responsible for it and when it falls through to the next, per [tls.hostname.list](interface.md#i--tls.hostname.list), with Canopy certificates shown alongside the others.
 > - **Settings**: view and edit the ACME contact email and certificate profile used for issuance.
 > - **Stored certificates**: list grouped by the certificate's label, surfacing state, origin, issuer, expiry, and serial; certificates within fourteen days of expiry and self-signed certificates must be visually flagged.
 >   A certificate obtained through the CSR flow surfaces the hostname the request was made for wherever that differs from the certificate's own primary SAN, and carries the same visual flagging as the two cases above when the issued certificate does not cover it.
