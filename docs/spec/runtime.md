@@ -1848,7 +1848,9 @@ Each report describes the machine, with Seedling's own health, and each app that
 > | `Running` | passed |
 > | `Degraded` | warning |
 > | `Faulted` | failed |
-> | `NotInstalled`, `Installing`, `Operating`, `Deregistering` | skipped |
+> | `Operating` | the result graded before the operation began, or skipped when there was none |
+> | `NotInstalled`, `Installing`, `Deregistering` | skipped |
 >
 > A lifecycle operation neither raises nor recovers the application's health, since an upgrade in progress is neither a failure nor evidence of recovery.
+> Canopy closes a check's issue when the check is skipped, so an operating app carries its earlier result instead, and that result is recorded durably so a restart during the operation does not change it.
 > The check's detail carries the app's status and its active faults, each with its kind, the resource it is filed against where there is one, and its description, so an operator reading the application in Canopy can see why without a second lookup.
