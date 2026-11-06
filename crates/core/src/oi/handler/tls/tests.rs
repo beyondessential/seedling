@@ -977,12 +977,38 @@ fn a_retry_for_a_hostname_canopy_is_not_part_of_does_not_linger() {
 fn a_retry_for_a_hostname_canopy_can_be_asked_about_waits_for_the_report_tick() {
     let oi = TestOi::new();
     tls_app(&oi, TLS_APP);
+    // A Canopy-only hostname is Canopy's to ask about whether or not an offer
+    // is live, so the report tick is what consumes the retry.
+    oi.call(
+        "/tls/policies/set-canopy",
+        json!({ "hostname": "shop.example.com" }),
+    )
+    .unwrap();
     oi.call(
         "/tls/certificates/retry",
         json!({ "hostname": "shop.example.com" }),
     )
     .unwrap();
     assert!(!shop_hostname(&oi)["force_retry_at"].is_null());
+}
+
+// i[verify tls.cert.retry]
+// r[verify tls.cert.force-retry]
+#[test]
+fn a_retry_is_not_left_queued_for_a_tick_that_would_skip_the_hostname() {
+    let oi = TestOi::new();
+    // A typed app, but no offer live: the chain skips Canopy for a hostname
+    // with no certificate, so no report tick would ever take the retry.
+    tls_app(&oi, TLS_APP);
+    oi.call(
+        "/tls/certificates/retry",
+        json!({ "hostname": "shop.example.com" }),
+    )
+    .unwrap();
+    assert!(
+        shop_hostname(&oi)["force_retry_at"].is_null(),
+        "the view must not promise work nothing will do"
+    );
 }
 
 // i[verify tls.hostname.list]

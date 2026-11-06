@@ -31,7 +31,7 @@ use super::{
     AttemptOutcome, AttemptTrigger, TlsPolicy,
     acme::{self, IssueParams, Issued},
     env::Environment,
-    state::{self, ChainDecision, Decision},
+    state::{self, ChainAct, ChainDecision, Decision},
     store, tailscale_issuer,
 };
 use crate::runtime::{
@@ -158,7 +158,15 @@ impl Coordinator {
         else {
             return;
         };
-        if c.canopy.applies() {
+        // Left for the report tick only where that tick will in fact take it:
+        // asking Canopy is what consumes a retry, and a hostname the chain is
+        // not putting to Canopy right now would keep the retry queued, with the
+        // operator's view promising work nothing was going to do.
+        let canopy_will_take_it = matches!(
+            c.act,
+            ChainAct::AskCanopy | ChainAct::Debounced { .. } | ChainAct::Blocked { .. }
+        ) || c.collect_canopy;
+        if canopy_will_take_it {
             return;
         }
         let (replacing, now) = (c.replacing(), state.snapshot.now);
