@@ -90,7 +90,12 @@ pub fn spawn(state: Arc<OiState>) -> tokio::task::JoinHandle<()> {
 async fn report(state: &Arc<OiState>) -> Result<(), String> {
     // Before the skip check: the fault is for the host that cannot report.
     absent::tick(state);
-    match report_once(state).await {
+    let outcome = report_once(state).await;
+    // Whatever the outcome: these faults describe hostnames, and a hostname's
+    // condition does not wait for the relay. One that was filed has to clear when
+    // its policy goes or its app gains a type, whether or not an offer is live.
+    certificates::sync_all_faults(state);
+    match outcome {
         Outcome::Skipped => {
             // Nothing is expected of an instance with no provider, so a fault
             // left over from when there was one would misdescribe it.

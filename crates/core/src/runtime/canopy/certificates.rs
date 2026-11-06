@@ -5,8 +5,10 @@
 //!
 //! 1. revoked certificates and condemned keys, learnt from the held-certificate
 //!    list in the report's answer, are replaced;
-//! 2. every hostname whose decision says Canopy is to be asked is asked;
-//! 3. the faults for Canopy trouble are brought into line with what is now so.
+//! 2. every hostname whose decision says Canopy is to be asked is asked.
+//!
+//! The faults for Canopy trouble are brought into line with what is now so on
+//! every tick, whether or not a report got through: see [`sync_all_faults`].
 //!
 //! The decision is [`crate::runtime::tls::state::compute_state`]'s alone: this
 //! module acts on it and never makes a decision of its own about which strategy
@@ -54,6 +56,16 @@ pub async fn run(state: &Arc<OiState>, names: &Entitlements) {
 
     replace_condemned(state, &engine, &managed, names).await;
     ask_canopy(state, &engine, &managed).await;
+}
+
+/// Bring the Canopy faults into line with the hostnames' conditions now.
+///
+/// Run on every report tick, including ticks that reach no one: see the caller.
+pub fn sync_all_faults(state: &Arc<OiState>) {
+    let managed = {
+        let registry = state.registry.read();
+        state::managed_ingresses(&registry)
+    };
     sync_faults(state, &managed);
 }
 
@@ -787,5 +799,32 @@ mod tests {
             "the cycle restarted from the first strategy"
         );
         assert!(row.row.open_order_since.is_some());
+    }
+
+    // r[verify tls.canopy-only.untyped]
+    // r[verify tls.canopy.fault]
+    #[test]
+    fn the_faults_follow_the_hostname_not_the_relay() {
+        let oi = TestOi::new();
+        let managed = shop(&oi, UNTYPED);
+        oi.call(
+            "/tls/policies/set-canopy",
+            json!({ "hostname": "shop.example.com" }),
+        )
+        .unwrap();
+        oi.block_on(async { sync_faults(&oi.state, &managed) });
+        assert_eq!(active_faults(&oi).len(), 1);
+
+        // No offer is live, so the report reaches no one; clearing the policy
+        // must still clear the fault.
+        oi.call(
+            "/tls/policies/clear",
+            json!({ "hostname": "shop.example.com" }),
+        )
+        .unwrap();
+        oi.block_on(async {
+            let _ = crate::runtime::canopy::report(&oi.state).await;
+        });
+        assert!(active_faults(&oi).is_empty());
     }
 }
