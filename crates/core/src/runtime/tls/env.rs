@@ -111,24 +111,56 @@ pub struct RuntimeHoldings {
 // r[impl tls.canopy.serve]
 pub fn runtime_holdings(db: &Db, hostnames: &[String]) -> RuntimeHoldings {
     let mut holdings = RuntimeHoldings::default();
-    for hostname in hostnames {
-        match super::store::find_active_for_hostname(db, hostname) {
-            Ok(Some(_)) => {
-                holdings.served.insert(hostname.clone());
-            }
-            Ok(None) => {}
-            Err(e) => {
-                tracing::warn!(%hostname, error = %e, "cannot read the certificate store");
+    let now = jiff::Timestamp::now().as_second();
+
+    // One pass over the certificates that could be served, ranking each against
+    // every hostname at once: the same ranking the serving lookup applies, so a
+    // hostname counts as served here exactly when the proxy would be handed
+    // something for it.
+    match super::store::list_servable(db, now) {
+        Ok(certificates) => {
+            for cert in certificates {
+                let Ok(facts) = super::parse::leaf_facts(&cert.cert_pem) else {
+                    // Unreadable is not "covers nothing", and the serving
+                    // lookup reports it; nothing more is said here.
+                    continue;
+                };
+                for hostname in hostnames {
+                    if holdings.served.contains(hostname) {
+                        continue;
+                    }
+                    if super::resolve::rank(
+                        &facts.san_dns_names,
+                        hostname,
+                        facts.self_issued,
+                        cert.not_after,
+                        cert.created_at,
+                        cert.id,
+                        now,
+                    )
+                    .is_some()
+                    {
+                        holdings.served.insert(hostname.clone());
+                    }
+                }
             }
         }
-        match super::store::get_chain_row(db, hostname) {
-            Ok(Some(row)) if row.row.open_order_since.is_some() => {
-                holdings.ordering.insert(hostname.clone());
-            }
-            Ok(_) => {}
-            Err(e) => tracing::warn!(%hostname, error = %e, "cannot read the chain state"),
-        }
+        // Not knowing is not holding nothing: every hostname is left out of
+        // both sets, and the caller treats it as not yet seen.
+        Err(e) => tracing::warn!(error = %e, "cannot read the certificate store"),
     }
+
+    match super::store::get_chain_rows(db, hostnames) {
+        Ok(rows) => {
+            for (hostname, row) in rows {
+                if row.row.open_order_since.is_some() {
+                    holdings.ordering.insert(hostname);
+                }
+            }
+        }
+        Err(e) => tracing::warn!(error = %e, "cannot read the chain state"),
+    }
+
     holdings
 }
 
@@ -230,6 +262,67 @@ mod tests {
         assert_eq!(
             holdings.ordering,
             BTreeSet::from(["ordering.example.com".to_owned()])
+        );
+    }
+
+    // r[verify tls.canopy.serve]
+    #[test]
+    fn one_pass_answers_for_every_hostname_at_once() {
+        let db = Db::open_in_memory().unwrap();
+        let future = jiff::Timestamp::now().as_second() + 86_400;
+        insert(&db, "a.example.com", TlsCertState::Active, future);
+        insert(&db, "b.example.com", TlsCertState::Active, future);
+        insert(&db, "stale.example.com", TlsCertState::Active, 100);
+
+        let hostnames: Vec<String> = [
+            "a.example.com",
+            "b.example.com",
+            "stale.example.com",
+            "none.example.com",
+        ]
+        .map(String::from)
+        .into();
+        let holdings = runtime_holdings(&db, &hostnames);
+        assert_eq!(
+            holdings.served,
+            BTreeSet::from(["a.example.com".to_owned(), "b.example.com".to_owned()]),
+            "each hostname is answered by the one pass, and an expired one is not served"
+        );
+    }
+
+    // r[verify tls.canopy.serve]
+    #[test]
+    fn a_wildcard_certificate_serves_the_hostnames_it_covers() {
+        let db = Db::open_in_memory().unwrap();
+        let future = jiff::Timestamp::now().as_second() + 86_400;
+        store::insert_certificate(
+            &db,
+            NewCertificate {
+                hostname: "*.example.com",
+                requested_hostname: None,
+                state: TlsCertState::Active,
+                origin: TlsCertOrigin::Canopy,
+                cert_pem: Some(&test_support::self_signed_pem(&["*.example.com"])),
+                csr_pem: None,
+                key_ciphertext: &[0u8; 8],
+                key_type: KeyType::EcdsaP256,
+                metadata: CertMetadata {
+                    not_before: Some(0),
+                    not_after: Some(future),
+                    ..Default::default()
+                },
+                note: None,
+                acme_account_id: None,
+            },
+        )
+        .unwrap();
+
+        let hostnames = vec!["one.example.com".to_owned(), "two.example.org".to_owned()];
+        let holdings = runtime_holdings(&db, &hostnames);
+        assert_eq!(
+            holdings.served,
+            BTreeSet::from(["one.example.com".to_owned()]),
+            "coverage is what binds a certificate to a hostname, not its label"
         );
     }
 }

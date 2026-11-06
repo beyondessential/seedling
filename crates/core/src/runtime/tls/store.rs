@@ -1451,6 +1451,55 @@ pub fn list_active_canopy_certificates(db: &Db) -> rusqlite::Result<Vec<(i64, St
         .collect()
 }
 
+/// Every active certificate that could be served, with just what deciding which
+/// hostnames it covers needs.
+///
+/// One pass for a whole set of hostnames, rather than a scan of the table per
+/// hostname: the warm-certificate sweep asks about every one of them on every
+/// reconciler tick, on the one thread every database call is serialised through.
+pub fn list_servable(db: &Db, now: i64) -> rusqlite::Result<Vec<ServableCertificate>> {
+    let mut stmt = db.conn.prepare_cached(
+        "SELECT id, cert_pem, self_signed, created_at, not_after
+         FROM tls_certificates
+         WHERE state = 'active' AND cert_pem IS NOT NULL
+           AND (not_before IS NULL OR not_before <= ?1)
+           AND (not_after IS NULL OR not_after > ?1)",
+    )?;
+    stmt.query_map([now], |row| {
+        let self_signed: i64 = row.get(2)?;
+        Ok(ServableCertificate {
+            id: row.get(0)?,
+            cert_pem: row.get(1)?,
+            self_signed: self_signed != 0,
+            created_at: row.get(3)?,
+            not_after: row.get(4)?,
+        })
+    })?
+    .collect()
+}
+
+/// A certificate inside its validity window, as [`list_servable`] reads it.
+pub struct ServableCertificate {
+    pub id: i64,
+    pub cert_pem: String,
+    pub self_signed: bool,
+    pub created_at: i64,
+    pub not_after: Option<i64>,
+}
+
+/// The recorded chain positions of `hostnames`, by hostname.
+pub fn get_chain_rows(
+    db: &Db,
+    hostnames: &[String],
+) -> rusqlite::Result<std::collections::BTreeMap<String, TlsChainRow>> {
+    let wanted: std::collections::BTreeSet<&str> = hostnames.iter().map(String::as_str).collect();
+    Ok(list_chain_rows(db)?
+        .into_iter()
+        .filter(|row| wanted.contains(row.hostname.as_str()))
+        .map(|row| (row.hostname.clone(), row))
+        .collect())
+}
+
 /// Store the chain Canopy delivered against a key the runtime holds, and
 /// retire what it replaces.
 ///
