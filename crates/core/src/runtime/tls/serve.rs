@@ -814,6 +814,55 @@ mod tests {
 
     // r[verify tls.chain.proxy-gate]
     #[tokio::test(flavor = "multi_thread")]
+    async fn handshakes_for_many_hostnames_read_the_world_once() {
+        struct Counting(std::sync::atomic::AtomicUsize, Facts);
+        impl Environment for Counting {
+            fn gather(&self, only: Option<&str>) -> Option<(Vec<ManagedIngress>, ChainEnv)> {
+                self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                assert_eq!(
+                    only, None,
+                    "the state is gathered for every hostname at once"
+                );
+                self.1.gather(only)
+            }
+        }
+        let (db, cipher) = fresh().await;
+        let cipher = Arc::new(cipher);
+        let coordinator = Coordinator::new(db.clone(), Arc::clone(&cipher));
+        let counting = Arc::new(Counting(
+            std::sync::atomic::AtomicUsize::new(0),
+            typed(Some(ProxyHolding::Nothing)),
+        ));
+        coordinator.set_environment(counting.clone());
+
+        // Different names, so none is answered from what the gate remembers.
+        for name in ["shop.example.com", "a.example.com", "b.example.com"] {
+            assert_eq!(
+                fall_through(&coordinator, &GateCache::new(), name),
+                if name == "shop.example.com" {
+                    FallThrough::Withhold
+                } else {
+                    FallThrough::Allow
+                }
+            );
+        }
+        assert_eq!(
+            counting.0.load(std::sync::atomic::Ordering::SeqCst),
+            1,
+            "one reading of the world serves every hostname decided against it"
+        );
+
+        coordinator.forget_chain_state();
+        let _ = fall_through(&coordinator, &GateCache::new(), "shop.example.com");
+        assert_eq!(
+            counting.0.load(std::sync::atomic::Ordering::SeqCst),
+            2,
+            "and a caller that has just written something gets a fresh one"
+        );
+    }
+
+    // r[verify tls.chain.proxy-gate]
+    #[tokio::test(flavor = "multi_thread")]
     async fn a_burst_of_handshakes_decides_once() {
         // Count how often the facts are gathered.
         struct Counting(std::sync::atomic::AtomicUsize, Facts);

@@ -242,6 +242,7 @@ pub(crate) fn set_policy_acme_dns(state: &OiState, params: SetAcmeDnsParams) -> 
     // For wildcard policies there's no concrete hostname to issue against
     // until an ingress for a matching name appears, at which point the
     // reconciler hands it to the coordinator.
+    state.tls_coordinator.forget_chain_state();
     let mut auto_issue_kicked = false;
     if !hostname.contains('*') {
         state.tls_coordinator.ensure(&hostname);
@@ -268,7 +269,8 @@ pub(crate) fn set_policy_canopy(state: &OiState, params: HostnameParams) -> Hand
         .map_err(db_error)?;
     // A usable certificate is left until its renewal point, and a hostname with
     // none is picked up by the next Canopy report tick, so there is nothing to
-    // kick here.
+    // kick here. The chain the proxy is told about does change, though.
+    state.tls_coordinator.forget_chain_state();
     Ok(json!({ "ok": true }))
 }
 
@@ -285,6 +287,7 @@ pub(crate) fn clear_policy(state: &OiState, params: HostnameParams) -> HandlerRe
             params.hostname
         )));
     }
+    state.tls_coordinator.forget_chain_state();
     Ok(json!({ "ok": true }))
 }
 
@@ -798,6 +801,7 @@ pub(crate) fn retry(state: &OiState, params: RetryParams) -> HandlerResult {
         .map_err(db_error)?;
     state.tls_coordinator.ensure(&hostname);
     settle_retry_without_canopy(state, &hostname)?;
+    state.tls_coordinator.forget_chain_state();
     Ok(json!({ "ok": true }))
 }
 

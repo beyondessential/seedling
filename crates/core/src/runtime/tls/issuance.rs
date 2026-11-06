@@ -92,6 +92,19 @@ pub struct Coordinator {
     /// once the daemon's state exists, after the coordinator has to; until then
     /// no chain decision can be made.
     environment: std::sync::OnceLock<Arc<dyn Environment>>,
+    /// The state chain decisions are made against, and when it was built. See
+    /// [`Coordinator::chain_state`].
+    chain_state: Mutex<Option<(std::time::Instant, Arc<ChainState>)>>,
+}
+
+/// How long one reading of the world serves every chain decision made against
+/// it.
+const CHAIN_STATE_TTL: std::time::Duration = std::time::Duration::from_secs(5);
+
+/// Everything a chain decision is made from, for every hostname at once.
+struct ChainState {
+    managed: Vec<state::ManagedIngress>,
+    snapshot: state::Snapshot,
 }
 
 impl Coordinator {
@@ -102,12 +115,20 @@ impl Coordinator {
             in_flight: Arc::new(Mutex::new(HashSet::new())),
             issue_lock: Arc::new(tokio::sync::Mutex::new(())),
             environment: std::sync::OnceLock::new(),
+            chain_state: Mutex::new(None),
         })
     }
 
     /// Say where the facts a chain depends on come from. Takes effect once.
     pub fn set_environment(&self, environment: Arc<dyn Environment>) {
         let _ = self.environment.set(environment);
+    }
+
+    /// Forget the state chain decisions are made against, so the next one is
+    /// made afresh. For a caller that has just written something a decision
+    /// rests on and wants it acted on now rather than within the window.
+    pub fn forget_chain_state(&self) {
+        *self.chain_state.lock() = None;
     }
 
     /// How long the proxy is to wait before renewing a certificate it holds, for
@@ -133,7 +154,46 @@ impl Coordinator {
     /// strength of a decision must withhold nothing on `None`.
     // r[impl tls.chain.cycle]
     pub fn chain_decisions(&self, only: Option<&str>) -> Option<BTreeMap<String, ChainDecision>> {
-        let (managed, env) = self.environment.get()?.gather(only)?;
+        let state = self.chain_state()?;
+        let mut out = BTreeMap::new();
+        for ingress in &state.managed {
+            if only.is_some_and(|host| host != ingress.hostname)
+                || out.contains_key(&ingress.hostname)
+            {
+                continue;
+            }
+            if let Decision::Chain(c) =
+                state::compute_state(&state.snapshot, &ingress.hostname).decision
+            {
+                out.insert(ingress.hostname.clone(), *c);
+            }
+        }
+        Some(out)
+    }
+
+    /// The state every chain decision is made against, built at most once per
+    /// [`CHAIN_STATE_TTL`].
+    ///
+    /// One state for every hostname rather than one per hostname asked about:
+    /// the proxy asks the certificate endpoint at each handshake it has no
+    /// certificate for, so building it per hostname would rebuild the whole TLS
+    /// state per name under traffic, on the one thread every database call in
+    /// the daemon is serialised through.
+    ///
+    /// The state is shared and so is as old as the moment it was built, which is
+    /// of the same order as the endpoint's own memory of what it answered: a
+    /// policy set or a certificate stored is acted on within the window, not
+    /// within the tick.
+    fn chain_state(&self) -> Option<Arc<ChainState>> {
+        if let Some((at, state)) = self.chain_state.lock().as_ref()
+            && at.elapsed() < CHAIN_STATE_TTL
+        {
+            return Some(Arc::clone(state));
+        }
+        // Gathered for every managed hostname, since the state is shared: one
+        // narrowed to a single hostname would say of every other that no app
+        // declares it.
+        let (managed, env) = self.environment.get()?.gather(None)?;
         let snapshot = match self.db.call(move |db| state::Snapshot::load(db, env)) {
             Ok(snapshot) => snapshot,
             Err(e) => {
@@ -141,17 +201,9 @@ impl Coordinator {
                 return None;
             }
         };
-        let mut out = BTreeMap::new();
-        for ingress in &managed {
-            if out.contains_key(&ingress.hostname) {
-                continue;
-            }
-            if let Decision::Chain(c) = state::compute_state(&snapshot, &ingress.hostname).decision
-            {
-                out.insert(ingress.hostname.clone(), *c);
-            }
-        }
-        Some(out)
+        let state = Arc::new(ChainState { managed, snapshot });
+        *self.chain_state.lock() = Some((std::time::Instant::now(), Arc::clone(&state)));
+        Some(state)
     }
 
     /// Reconciler-driven: ensure the runtime is making progress on a cert
