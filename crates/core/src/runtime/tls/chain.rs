@@ -187,9 +187,12 @@ pub fn resolve(inputs: &Inputs<'_>) -> Cycle {
     match serving {
         Some(serving) => {
             let row = row.filter(|r| r.identity == serving.identity);
+            // r[impl tls.chain.return]
+            // An operator retry starts the cycle again from the first strategy,
+            // whatever a refusal or the clock had already moved the hostname to.
             let (step, since) = match row {
+                _ if force => (0, now),
                 Some(r) => (r.step.min(last), r.since),
-                None if force => (0, now),
                 None if now >= serving.renewal_point => (0, serving.renewal_point),
                 None => {
                     return Cycle::Idle {
@@ -736,5 +739,24 @@ mod tests {
     fn with_nothing_to_replace_no_clock_says_when_the_proxy_may_order() {
         let cycle = resolve(&inputs(&TWO, 5, None, None));
         assert_eq!(proxy_from(&TWO, None, &cycle), ProxyFrom::Unknown);
+    }
+
+    // r[verify tls.chain.return]
+    // r[verify tls.cert.force-retry]
+    #[test]
+    fn an_operator_retry_restarts_a_hostname_a_refusal_had_moved_on() {
+        let row = Row {
+            identity: serving().identity,
+            step: 1,
+            since: 61 * DAY,
+            open_order_since: None,
+            retry_not_before: Some(62 * DAY),
+        };
+        let mut i = inputs(&TWO, 62 * DAY, Some(serving()), Some(&row));
+        i.force = true;
+        let r = running_of(resolve(&i));
+        assert_eq!(r.responsible, Strategy::Canopy, "asks Canopy again");
+        assert_eq!(r.since, 62 * DAY);
+        assert_eq!(r.fall_through_at, Some(76 * DAY));
     }
 }

@@ -207,6 +207,24 @@ async fn ask_canopy<R: CertificateRelay>(
             false
         };
 
+        // The retry has just written the position the cycle starts from, so the
+        // question to Canopy is built from what stands now and not from the
+        // decision that was made before it.
+        let fresh_snap;
+        let fresh;
+        let c = if forced {
+            let Some(reloaded) = snapshot(state, managed) else {
+                continue;
+            };
+            fresh_snap = reloaded;
+            fresh = state::compute_state(&fresh_snap, hostname);
+            match &fresh.decision {
+                Decision::Chain(c) => c,
+                _ => continue,
+            }
+        } else {
+            c
+        };
         let Some(ask) = ask_for(hostname, c, forced) else {
             continue;
         };
@@ -689,5 +707,85 @@ mod tests {
         let managed = managed_in(&oi);
         oi.block_on(ask_canopy(&oi.state, &engine(&oi, &recorder), &managed));
         assert!(recorder.0.lock().is_empty());
+    }
+
+    // r[verify tls.cert.force-retry]
+    // r[verify tls.chain.return]
+    #[test]
+    fn an_operator_retry_asks_canopy_again_for_a_hostname_a_refusal_moved_on() {
+        let oi = TestOi::new();
+        register(&oi, "shop", &script_for("tamanu", "shop.example.com", 443));
+
+        // A manual certificate past its renewal point, and a recorded refusal
+        // that handed the hostname on to HTTP-01.
+        let now = jiff::Timestamp::now().as_second();
+        let pem = crate::runtime::tls::test_support::self_signed_pem(&["shop.example.com"]);
+        let (id, not_after) = (now + 20 * 86_400, now + 20 * 86_400);
+        let cert_id = oi.state.db.call(move |db| {
+            let cert_id = store::insert_certificate(
+                db,
+                NewCertificate {
+                    hostname: "shop.example.com",
+                    requested_hostname: None,
+                    state: TlsCertState::Active,
+                    origin: TlsCertOrigin::Manual,
+                    cert_pem: Some(&pem),
+                    csr_pem: None,
+                    key_ciphertext: &[0u8; 8],
+                    key_type: KeyType::EcdsaP256,
+                    metadata: CertMetadata {
+                        not_before: Some(now - 70 * 86_400),
+                        not_after: Some(id),
+                        ..Default::default()
+                    },
+                    note: None,
+                    acme_account_id: None,
+                },
+            )
+            .unwrap();
+            store::put_chain_row(
+                db,
+                "shop.example.com",
+                &chain::Row {
+                    identity: chain::Identity {
+                        cert_id: Some(cert_id),
+                        not_after: Some(not_after),
+                    },
+                    step: 1,
+                    since: now - 86_400,
+                    open_order_since: None,
+                    retry_not_before: Some(now + 3_600),
+                },
+                Some("refused"),
+            )
+            .unwrap();
+            store::set_force_retry(db, "shop.example.com").unwrap();
+            cert_id
+        });
+
+        let recorder = Recorder::default();
+        let managed = managed_in(&oi);
+        oi.block_on(ask_canopy(&oi.state, &engine(&oi, &recorder), &managed));
+
+        assert_eq!(
+            recorder.0.lock().len(),
+            1,
+            "the retry asks Canopy again although the refusal had moved the hostname on"
+        );
+        let (row, queued) = oi.state.db.call(|db| {
+            (
+                store::get_chain_row(db, "shop.example.com")
+                    .unwrap()
+                    .unwrap(),
+                store::list_force_retries(db).unwrap().len(),
+            )
+        });
+        assert_eq!(queued, 0, "the retry was consumed");
+        assert_eq!(row.row.identity.cert_id, Some(cert_id));
+        assert_eq!(
+            row.row.step, 0,
+            "the cycle restarted from the first strategy"
+        );
+        assert!(row.row.open_order_since.is_some());
     }
 }
