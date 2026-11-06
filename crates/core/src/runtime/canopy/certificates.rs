@@ -130,10 +130,16 @@ async fn replace_condemned<R: CertificateRelay>(
             return;
         }
     };
+    if condemned.is_empty() {
+        return;
+    }
+    // Once, ahead of the loop: each certificate is for a hostname of its own, and
+    // what replacing one writes does not change what the next one's decision
+    // rests on.
+    let Some(snap) = snapshot(state, managed) else {
+        return;
+    };
     for c in condemned {
-        let Some(snap) = snapshot(state, managed) else {
-            return;
-        };
         let st = state::compute_state(&snap, &c.hostname);
         let ask = match &st.decision {
             Decision::Chain(chain) => ask_for(&c.hostname, chain, false),
