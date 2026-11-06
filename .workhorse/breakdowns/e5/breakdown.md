@@ -28,7 +28,7 @@ An operator restores an app's backup type from a chosen snapshot through ctl, th
 
 ## Publish DNS names through Canopy
 
-The operator sets the host's public addresses and turns registration on. Seedling then registers every TLS ingress hostname Canopy allows the app to publish with those addresses, and withdraws names that are no longer declared. Includes a helper that detects the public IP and suggests it for the operator to confirm, across ctl, the OI and the web interface.
+The operator sets the host's public addresses and turns registration on. Seedling then registers every ingress hostname Canopy allows the app to publish with those addresses, and withdraws names that are no longer declared. Includes a helper that detects the public IP and suggests it for the operator to confirm, across ctl, the OI and the web interface.
 
 ## Serve identity tokens to app containers
 
