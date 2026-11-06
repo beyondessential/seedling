@@ -152,10 +152,14 @@ impl OiState {
         managed: &[crate::runtime::tls::state::ManagedIngress],
     ) -> rusqlite::Result<crate::runtime::tls::state::ChainEnv> {
         let offer_live = self.canopy_offer_live();
-        let caddy_data = self.resolve_caddy_data_path();
+        // The proxy's cache is read here, outside the database thread: see
+        // `env::proxy_holdings`.
+        let proxy = crate::runtime::tls::env::proxy_holdings(
+            managed,
+            self.resolve_caddy_data_path().as_deref(),
+        );
         let managed = managed.to_vec();
-        self.db.call(move |db| {
-            crate::runtime::tls::env::collect(db, &managed, offer_live, caddy_data.as_deref())
-        })
+        self.db
+            .call(move |db| crate::runtime::tls::env::collect(db, &managed, offer_live, proxy))
     }
 }

@@ -27,17 +27,47 @@ pub trait Environment: Send + Sync {
     fn gather(&self, only: Option<&str>) -> Option<(Vec<ManagedIngress>, ChainEnv)>;
 }
 
+/// Read what the proxy holds for each of `managed`, from its certificate cache.
+///
+/// Disk work and nothing else, so it is done off the database thread: that
+/// thread serialises every database call in the daemon, and a directory walk and
+/// a certificate parse per hostname on it would be paid by every unrelated
+/// query. `caddy_data` is where the cache lives, and `None` when it could not be
+/// located, which leaves every hostname out of the map: not looked at, which is
+/// not the same as the proxy holding nothing.
+pub fn proxy_holdings(
+    managed: &[ManagedIngress],
+    caddy_data: Option<&Path>,
+) -> BTreeMap<String, ProxyHolding> {
+    let mut proxy = BTreeMap::new();
+    let Some(path) = caddy_data else {
+        return proxy;
+    };
+    let hostnames: BTreeSet<&str> = managed.iter().map(|m| m.hostname.as_str()).collect();
+    for hostname in hostnames {
+        let holding = match crate::system::caddy::read_caddy_cert_state(path, hostname) {
+            CertRead::Present(view) => ProxyHolding::Holds(ProxyCert {
+                not_before: view.not_before,
+                not_after: view.not_after,
+            }),
+            CertRead::Absent => ProxyHolding::Nothing,
+            CertRead::Unreadable => ProxyHolding::Unreadable,
+        };
+        proxy.insert(hostname.to_owned(), holding);
+    }
+    proxy
+}
+
 /// Build the [`ChainEnv`] for `managed` ingresses.
 ///
 /// `offer_live` is whether Canopy access is enabled and a client is offering to
-/// carry requests. `caddy_data` is where the proxy's certificate cache lives;
-/// `None` when it cannot be located, which leaves every hostname out of
-/// [`ChainEnv::proxy`]: not looked at, which is not the same as holding nothing.
+/// carry requests. `proxy` is what [`proxy_holdings`] read, which the caller does
+/// before entering the database thread.
 pub fn collect(
     db: &Db,
     managed: &[ManagedIngress],
     offer_live: bool,
-    caddy_data: Option<&Path>,
+    proxy: BTreeMap<String, ProxyHolding>,
 ) -> rusqlite::Result<ChainEnv> {
     let types_by_app: BTreeMap<String, String> = canopy_store::list_apps(db)?
         .into_iter()
@@ -45,27 +75,10 @@ pub fn collect(
         .collect();
 
     let mut canopy_types: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
-    let mut hostnames: BTreeSet<&str> = BTreeSet::new();
     for ingress in managed {
-        hostnames.insert(ingress.hostname.as_str());
         let entry = canopy_types.entry(ingress.hostname.clone()).or_default();
         if let Some(canopy_type) = types_by_app.get(ingress.app.as_str()) {
             entry.insert(canopy_type.clone());
-        }
-    }
-
-    let mut proxy = BTreeMap::new();
-    if let Some(path) = caddy_data {
-        for hostname in hostnames {
-            let holding = match crate::system::caddy::read_caddy_cert_state(path, hostname) {
-                CertRead::Present(view) => ProxyHolding::Holds(ProxyCert {
-                    not_before: view.not_before,
-                    not_after: view.not_after,
-                }),
-                CertRead::Absent => ProxyHolding::Nothing,
-                CertRead::Unreadable => ProxyHolding::Unreadable,
-            };
-            proxy.insert(hostname.to_owned(), holding);
         }
     }
 
