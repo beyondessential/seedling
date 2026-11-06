@@ -24,6 +24,7 @@ use bestool_canopy::schema::Entitlements;
 use crate::{
     oi::state::OiState,
     runtime::{
+        canopy::store as canopy_store,
         faults::{self, FaultKey, FaultMeta, FaultScope},
         tls::{
             AttemptTrigger,
@@ -121,6 +122,9 @@ pub fn sync_faults_after(state: &Arc<OiState>, tick: Option<Tick>) {
 ///
 /// Run on every report tick, including ticks that reach no one: see the caller.
 pub fn sync_all_faults(state: &Arc<OiState>) {
+    if !canopy_is_in_play(state) {
+        return;
+    }
     let managed = {
         let registry = state.registry.read();
         state::managed_ingresses(&registry)
@@ -129,6 +133,43 @@ pub fn sync_all_faults(state: &Arc<OiState>) {
         return;
     };
     sync_faults(state, &managed, &snapshot);
+}
+
+/// Whether Canopy has anything to do with this instance's certificates.
+///
+/// Asked before the whole chain machinery runs, every minute, on an install
+/// where Canopy may play no part at all: no app declaring a type, no policy
+/// naming it, and no fault of its left to clear. One narrow question, so the
+/// common case costs that rather than a reading of the world.
+///
+/// Errs towards doing the work: a question that could not be answered is not an
+/// answer of no, and a fault left filed would misdescribe the hostname for as
+/// long as it went unasked.
+fn canopy_is_in_play(state: &Arc<OiState>) -> bool {
+    state.db.call(|db| {
+        let typed_app = match canopy_store::list_apps(db) {
+            Ok(apps) => !apps.is_empty(),
+            Err(e) => {
+                tracing::warn!(error = %e, "canopy certificates: cannot read the apps' types");
+                return true;
+            }
+        };
+        let policy = match store::any_canopy_policy(db) {
+            Ok(any) => any,
+            Err(e) => {
+                tracing::warn!(error = %e, "canopy certificates: cannot read the policies");
+                return true;
+            }
+        };
+        let filed = match faults::any_active_fault_of_kind(db, FAULT_KIND) {
+            Ok(filed) => filed,
+            Err(e) => {
+                tracing::warn!(error = %e, "canopy certificates: cannot read the faults");
+                return true;
+            }
+        };
+        typed_app || policy || filed
+    })
 }
 
 /// Load a snapshot with the facts the chain depends on.
@@ -1295,5 +1336,48 @@ mod tests {
             .paused(false)
             .registered_names(vec![])
             .build()
+    }
+
+    // r[verify tls.canopy.fault]
+    #[test]
+    fn an_install_canopy_plays_no_part_in_does_not_run_the_chain_machinery() {
+        let oi = TestOi::new();
+        shop(&oi, UNTYPED);
+        assert!(
+            !canopy_is_in_play(&oi.state),
+            "no app declares a type, no policy names Canopy and no fault of its is filed"
+        );
+
+        // Any one of the three is enough to look.
+        oi.call(
+            "/tls/policies/set-canopy",
+            json!({ "hostname": "shop.example.com" }),
+        )
+        .unwrap();
+        assert!(canopy_is_in_play(&oi.state));
+        oi.call(
+            "/tls/policies/clear",
+            json!({ "hostname": "shop.example.com" }),
+        )
+        .unwrap();
+        assert!(!canopy_is_in_play(&oi.state));
+
+        // A fault of its own left filed is looked at, so it can be cleared.
+        oi.block_on(async { sync_all_faults(&oi.state) });
+        oi.state.db.call(|db| {
+            faults::file_fault(
+                db,
+                &seedling_protocol::names::AppName::new_unchecked("shop"),
+                Some("ingress"),
+                Some("shop.example.com:443"),
+                None,
+                FAULT_KIND,
+                "left over",
+            )
+            .unwrap();
+        });
+        assert!(canopy_is_in_play(&oi.state));
+        oi.block_on(async { sync_all_faults(&oi.state) });
+        assert!(active_faults(&oi).is_empty(), "and it is cleared");
     }
 }

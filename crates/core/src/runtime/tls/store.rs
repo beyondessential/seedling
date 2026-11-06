@@ -1451,6 +1451,15 @@ pub fn list_active_canopy_certificates(db: &Db) -> rusqlite::Result<Vec<(i64, St
         .collect()
 }
 
+/// Whether any hostname is bound to the Canopy-only policy.
+pub fn any_canopy_policy(db: &Db) -> rusqlite::Result<bool> {
+    db.conn.query_row(
+        "SELECT EXISTS(SELECT 1 FROM tls_policies WHERE strategy = 'canopy')",
+        [],
+        |row| row.get::<_, i64>(0).map(|n| n != 0),
+    )
+}
+
 /// Every active certificate that could be served, with just what deciding which
 /// hostnames it covers needs.
 ///

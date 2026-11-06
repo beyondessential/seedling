@@ -416,6 +416,18 @@ impl FaultScope {
     }
 }
 
+/// Whether any active fault of `kind` is filed, anywhere.
+///
+/// For a sweep that would otherwise do its whole pass only to find nothing to
+/// file and nothing to clear.
+pub fn any_active_fault_of_kind(db: &crate::runtime::db::Db, kind: &str) -> rusqlite::Result<bool> {
+    db.conn.query_row(
+        "SELECT EXISTS(SELECT 1 FROM faults WHERE cleared_at IS NULL AND kind = ?1)",
+        [kind],
+        |row| row.get::<_, i64>(0).map(|n| n != 0),
+    )
+}
+
 /// The active faults a scope owns, filtered in SQL.
 ///
 /// A global sweep such as ingress conflicts runs every tick; reading every
