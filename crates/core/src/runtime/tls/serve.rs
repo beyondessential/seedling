@@ -127,8 +127,6 @@ struct ServeState {
     /// Decides whether the proxy may go on to order a certificate of its own for
     /// a hostname the runtime holds none for.
     coordinator: Arc<Coordinator>,
-    /// What the gate last answered for each hostname, for a few seconds.
-    gate: Arc<GateCache>,
     /// Hex-encoded shared token; clients embed this in the URL path.
     /// See [`load_or_create_token`].
     token: Arc<String>,
@@ -182,7 +180,7 @@ async fn handle(
         // the policy's regular issuer". Any other non-2xx would be treated
         // as an error rather than a fall-through signal, so it is also what
         // keeps the proxy from ordering when it must not.
-        Ok(None) => match fall_through(&state.coordinator, &state.gate, &hostname) {
+        Ok(None) => match fall_through(&state.coordinator, &hostname) {
             FallThrough::Allow => StatusCode::NO_CONTENT.into_response(),
             FallThrough::Withhold => (
                 StatusCode::SERVICE_UNAVAILABLE,
@@ -239,80 +237,22 @@ fn normalise_sni(name: &str) -> String {
     name.trim_end_matches('.').to_ascii_lowercase()
 }
 
-/// The gate's recent answers, by hostname.
-///
-/// The proxy asks about a hostname at every handshake the runtime holds no
-/// certificate for, which is every handshake of every hostname the proxy
-/// orders for itself. Each answer reads the TLS state and the proxy's cache, so
-/// a burst of handshakes would each rebuild all of it on the one database
-/// thread. The answer moves on the scale of a report tick, so a few seconds'
-/// reuse costs nothing a hostname could notice.
-pub struct GateCache {
-    entries:
-        parking_lot::Mutex<std::collections::HashMap<String, (std::time::Instant, FallThrough)>>,
-}
-
-impl GateCache {
-    /// How long an answer is reused.
-    const TTL: std::time::Duration = std::time::Duration::from_secs(5);
-    /// The most hostnames remembered. The proxy can be asked about any name a
-    /// client sends as SNI, so the table must not grow with what strangers send.
-    const CAPACITY: usize = 4096;
-
-    fn new() -> Self {
-        Self {
-            entries: parking_lot::Mutex::new(std::collections::HashMap::new()),
-        }
-    }
-
-    fn get(&self, hostname: &str) -> Option<FallThrough> {
-        let entries = self.entries.lock();
-        let (at, answer) = entries.get(hostname)?;
-        (at.elapsed() < Self::TTL).then_some(*answer)
-    }
-
-    fn put(&self, hostname: &str, answer: FallThrough) {
-        let mut entries = self.entries.lock();
-        if entries.len() >= Self::CAPACITY {
-            entries.retain(|_, (at, _)| at.elapsed() < Self::TTL);
-            // Still full of answers that are all current, which is the flood of
-            // names this bound exists for. Drop the oldest to make room, since
-            // throwing the whole table away would send every warm hostname back
-            // to deciding at once — the very burst the cache is here to stop.
-            while entries.len() >= Self::CAPACITY {
-                let Some(oldest) = entries
-                    .iter()
-                    .min_by_key(|(_, (at, _))| *at)
-                    .map(|(name, _)| name.clone())
-                else {
-                    break;
-                };
-                entries.remove(&oldest);
-            }
-        }
-        entries.insert(hostname.to_owned(), (std::time::Instant::now(), answer));
-    }
-}
-
 /// [`endpoint_gate`] for the hostname, or [`FallThrough::Allow`] when it is on
 /// no chain or the decision could not be made.
 ///
 /// Allowing is the answer to not knowing, because the other error is a
 /// hostname that serves nothing, and the cost of the first is one certificate
-/// ordered earlier than the chain would have liked. An answer given for want of
-/// knowing is not remembered, so the next handshake asks again.
-fn fall_through(coordinator: &Coordinator, cache: &GateCache, hostname: &str) -> FallThrough {
-    if let Some(answer) = cache.get(hostname) {
-        return answer;
-    }
+/// ordered earlier than the chain would have liked.
+///
+/// Nothing is remembered here: the decision is served from the one state the
+/// coordinator holds for every hostname, which is where it is kept and the only
+/// place to forget it. A second memory of the same answer would be a second age
+/// for it, and one no operator action could clear.
+fn fall_through(coordinator: &Coordinator, hostname: &str) -> FallThrough {
     match coordinator.chain_decisions(Some(hostname)) {
-        Some(decisions) => {
-            let answer = decisions
-                .get(hostname)
-                .map_or(FallThrough::Allow, endpoint_gate);
-            cache.put(hostname, answer);
-            answer
-        }
+        Some(decisions) => decisions
+            .get(hostname)
+            .map_or(FallThrough::Allow, endpoint_gate),
         None => FallThrough::Allow,
     }
 }
@@ -422,7 +362,6 @@ pub async fn spawn_server(
         db,
         cipher,
         coordinator,
-        gate: Arc::new(GateCache::new()),
         token: Arc::new(token),
     };
     let app = Router::new()
@@ -785,34 +724,6 @@ mod tests {
     }
 
     // r[verify tls.chain.proxy-gate]
-    #[test]
-    fn the_gate_remembers_an_answer_for_a_hostname_and_no_other() {
-        let cache = GateCache::new();
-        assert_eq!(cache.get("a.example.com"), None);
-        cache.put("a.example.com", FallThrough::Withhold);
-        assert_eq!(cache.get("a.example.com"), Some(FallThrough::Withhold));
-        assert_eq!(cache.get("b.example.com"), None);
-    }
-
-    // r[verify tls.chain.proxy-gate]
-    #[test]
-    fn the_gate_does_not_grow_with_the_names_strangers_send() {
-        let cache = GateCache::new();
-        cache.put("warm.example.com", FallThrough::Withhold);
-        for i in 0..(GateCache::CAPACITY * 2) {
-            cache.put(&format!("{i}.example.com"), FallThrough::Allow);
-            assert!(
-                cache.entries.lock().len() <= GateCache::CAPACITY,
-                "the bound holds all the way through the flood"
-            );
-        }
-        // The names the flood pushed out are the oldest, and what it wrote most
-        // recently is still answered from the table rather than decided again.
-        let newest = format!("{}.example.com", GateCache::CAPACITY * 2 - 1);
-        assert_eq!(cache.get(&newest), Some(FallThrough::Allow));
-    }
-
-    // r[verify tls.chain.proxy-gate]
     #[tokio::test(flavor = "multi_thread")]
     async fn handshakes_for_many_hostnames_read_the_world_once() {
         struct Counting(std::sync::atomic::AtomicUsize, Facts);
@@ -835,10 +746,10 @@ mod tests {
         ));
         coordinator.set_environment(counting.clone());
 
-        // Different names, so none is answered from what the gate remembers.
+        // Different names, all decided against the one state.
         for name in ["shop.example.com", "a.example.com", "b.example.com"] {
             assert_eq!(
-                fall_through(&coordinator, &GateCache::new(), name),
+                fall_through(&coordinator, name),
                 if name == "shop.example.com" {
                     FallThrough::Withhold
                 } else {
@@ -853,7 +764,7 @@ mod tests {
         );
 
         coordinator.forget_chain_state();
-        let _ = fall_through(&coordinator, &GateCache::new(), "shop.example.com");
+        let _ = fall_through(&coordinator, "shop.example.com");
         assert_eq!(
             counting.0.load(std::sync::atomic::Ordering::SeqCst),
             2,
@@ -893,7 +804,11 @@ mod tests {
         for _ in 0..5 {
             assert_eq!(reqwest::get(&url).await.unwrap().status().as_u16(), 503);
         }
-        assert_eq!(counting.0.load(std::sync::atomic::Ordering::SeqCst), 1);
+        assert_eq!(
+            counting.0.load(std::sync::atomic::Ordering::SeqCst),
+            1,
+            "a handshake decides against the state already read, not against a new one"
+        );
     }
 
     // r[verify tls.chain.proxy-gate]
