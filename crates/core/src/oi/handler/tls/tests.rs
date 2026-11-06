@@ -886,6 +886,57 @@ fn a_typed_app_with_no_live_offer_goes_straight_to_the_proxy() {
 }
 
 // i[verify tls.hostname.list]
+// r[verify tls.canopy-only.untyped]
+#[test]
+fn a_hostname_nothing_can_ask_canopy_about_does_not_read_as_in_progress() {
+    let oi = TestOi::new();
+    tls_app(&oi, UNTYPED_TLS_APP);
+    oi.call(
+        "/tls/policies/set-canopy",
+        json!({ "hostname": "shop.example.com" }),
+    )
+    .unwrap();
+    let host = shop_hostname(&oi);
+    assert_eq!(
+        host["status"], "error",
+        "no app declaring it has a Canopy type, so nothing will ever ask"
+    );
+}
+
+// i[verify tls.hostname.list]
+// r[verify tls.chain.no-certificate]
+#[test]
+fn a_hostname_waiting_out_a_refusal_says_when_it_is_asked_again() {
+    let oi = TestOi::new();
+    tls_app(&oi, TLS_APP);
+    oi.call(
+        "/tls/policies/set-canopy",
+        json!({ "hostname": "shop.example.com" }),
+    )
+    .unwrap();
+    let until = jiff::Timestamp::now().as_second() + 3_600;
+    oi.state.db.call(move |db| {
+        crate::runtime::tls::store::put_chain_row(
+            db,
+            "shop.example.com",
+            &crate::runtime::tls::chain::Row {
+                identity: crate::runtime::tls::chain::Identity::NONE,
+                step: 0,
+                since: 0,
+                open_order_since: None,
+                retry_not_before: Some(until),
+            },
+            Some("refused"),
+        )
+        .unwrap();
+    });
+
+    let host = shop_hostname(&oi);
+    assert_eq!(host["next_issuance_source"], "debounce");
+    assert_eq!(host["next_issuance_at"], until);
+}
+
+// i[verify tls.hostname.list]
 // r[verify tls.strategy.canopy-only]
 #[test]
 fn a_canopy_only_hostname_is_waiting_on_canopy_even_with_no_offer() {

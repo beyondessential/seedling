@@ -1035,8 +1035,13 @@ fn decision_status(
             if let Some(status) = serving_status(active_not_after, caddy_cert, now) {
                 return status;
             }
-            // Nothing is serving the hostname. Canopy being asked is an
-            // acquisition in progress, and a failure it reported is an error.
+            // Nothing is serving the hostname. Canopy cannot be asked about it,
+            // so nothing is in progress and the operator has something to fix.
+            if c.act == state::ChainAct::CannotAskCanopy {
+                return "error";
+            }
+            // Canopy being asked is an acquisition in progress, and a failure it
+            // reported is an error.
             match (&c.cycle, &c.last_error) {
                 (chain::Cycle::Running(r), Some(_)) if r.responsible == Strategy::Canopy => "error",
                 (chain::Cycle::Running(r), None) if r.responsible == Strategy::Canopy => "pending",
@@ -1155,9 +1160,12 @@ fn decision_next_issuance(st: &state::HostnameState<'_>) -> (Option<i64>, Option
                 (Some(*next_cycle_at), Some(source.as_str()))
             }
             chain::Cycle::Idle { .. } => (None, None),
-            chain::Cycle::Running(r) if r.responsible == Strategy::Canopy => {
-                (None, Some("immediate"))
-            }
+            // Waiting out the after-failure cadence: say when, as the ACME-DNS
+            // path does, rather than claiming the next ask is immediate.
+            chain::Cycle::Running(r) if r.responsible == Strategy::Canopy => match &c.act {
+                state::ChainAct::Debounced { until } => (Some(*until), Some("debounce")),
+                _ => (None, Some("immediate")),
+            },
             chain::Cycle::Running(_) => (None, None),
         },
         // Debounce after a failure: surface the time the runtime is
