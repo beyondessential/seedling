@@ -51,8 +51,16 @@ const MOST_ASKED_PER_TICK: usize = 8;
 // r[impl tls.canopy.fault]
 pub const FAULT_KIND: &str = "canopy_certificate_failed";
 
+/// What one tick's certificate work did.
+pub struct Tick {
+    /// The state as it was read for the tick.
+    snapshot: Snapshot,
+    /// Whether anything a decision rests on was written.
+    wrote: bool,
+}
+
 /// Run one tick's worth of certificate work.
-pub async fn run(state: &Arc<OiState>, names: &Entitlements) {
+pub async fn run(state: &Arc<OiState>, names: &Entitlements) -> Option<Tick> {
     let managed = {
         let registry = state.registry.read();
         state::managed_ingresses(&registry)
@@ -68,11 +76,37 @@ pub async fn run(state: &Arc<OiState>, names: &Entitlements) {
     // the revocation had passed the hostname on, and asking again would put it
     // back on Canopy and overwrite the reason. They are asked on the next tick,
     // which decides from what the revocation recorded.
-    let Some(snapshot) = snapshot(state, &managed) else {
-        return;
-    };
+    let snapshot = snapshot(state, &managed)?;
     let replaced = replace_condemned(state, &engine, &snapshot, names).await;
-    ask_canopy(state, &engine, &managed, &snapshot, &replaced).await;
+    let asked = ask_canopy(state, &engine, &managed, &snapshot, &replaced).await;
+
+    let wrote = !replaced.is_empty() || asked > 0;
+    if wrote {
+        // The decisions have moved on, and the gate and the proxy's renewal
+        // points are answered from a reading of them: a revocation is exactly
+        // where the gate's answer flips, so it must not be answered from before
+        // it for the rest of the window.
+        state.tls_coordinator.forget_chain_state();
+    }
+    Some(Tick { snapshot, wrote })
+}
+
+/// Bring the Canopy faults into line after a tick's certificate work.
+///
+/// Reuses the tick's own reading where it wrote nothing, which is the steady
+/// state once certificates are issued; where it wrote, what it wrote is what
+/// the faults describe, so they are synced against a fresh one.
+pub fn sync_faults_after(state: &Arc<OiState>, tick: Option<Tick>) {
+    match tick {
+        Some(tick) if !tick.wrote => {
+            let managed = {
+                let registry = state.registry.read();
+                state::managed_ingresses(&registry)
+            };
+            sync_faults(state, &managed, &tick.snapshot);
+        }
+        _ => sync_all_faults(state),
+    }
 }
 
 /// Bring the Canopy faults into line with the hostnames' conditions now.
@@ -83,7 +117,10 @@ pub fn sync_all_faults(state: &Arc<OiState>) {
         let registry = state.registry.read();
         state::managed_ingresses(&registry)
     };
-    sync_faults(state, &managed);
+    let Some(snapshot) = snapshot(state, &managed) else {
+        return;
+    };
+    sync_faults(state, &managed, &snapshot);
 }
 
 /// Load a snapshot with the facts the chain depends on.
@@ -223,7 +260,7 @@ async fn ask_canopy<R: CertificateRelay>(
     managed: &[ManagedIngress],
     snap: &Snapshot,
     skip: &BTreeSet<String>,
-) {
+) -> usize {
     let hostnames: BTreeSet<&str> = managed.iter().map(|m| m.hostname.as_str()).collect();
     let mut asked = 0;
     for hostname in hostnames {
@@ -304,6 +341,7 @@ async fn ask_canopy<R: CertificateRelay>(
             Err(e) => record_engine_failure(state, &ask, &e),
         }
     }
+    asked
 }
 
 /// Record a failure that stopped the question being put at all.
@@ -351,13 +389,10 @@ fn record_engine_failure(state: &Arc<OiState>, ask: &Ask, error: &canopy::Error)
 /// longer needs it and never clears another kind of fault.
 // r[impl tls.canopy.fault]
 // r[impl tls.canopy-only.untyped]
-fn sync_faults(state: &Arc<OiState>, managed: &[ManagedIngress]) {
-    let Some(snap) = snapshot(state, managed) else {
-        return;
-    };
+fn sync_faults(state: &Arc<OiState>, managed: &[ManagedIngress], snap: &Snapshot) {
     let mut desired: BTreeMap<FaultKey, (FaultMeta, String)> = BTreeMap::new();
     for ingress in managed {
-        let st = state::compute_state(&snap, &ingress.hostname);
+        let st = state::compute_state(snap, &ingress.hostname);
         let Decision::Chain(c) = &st.decision else {
             continue;
         };
@@ -467,12 +502,11 @@ mod tests {
         app.deployment("web").image("docker.io/library/nginx:1.29").http(80, web.route("/"));
     "#;
 
-    fn shop(oi: &TestOi, script: &str) -> Vec<ManagedIngress> {
+    /// Register and install an app declaring `shop.example.com`.
+    fn shop(oi: &TestOi, script: &str) {
         oi.call("/apps/create", json!({ "app": "shop", "script": script }))
             .unwrap();
         oi.install("shop");
-        let registry = oi.state.registry.read();
-        state::managed_ingresses(&registry)
     }
 
     fn active_faults(oi: &TestOi) -> Vec<faults::FaultRecord> {
@@ -509,14 +543,14 @@ mod tests {
     #[test]
     fn a_canopy_only_hostname_nothing_can_ask_about_is_faulted_until_it_can_be() {
         let oi = TestOi::new();
-        let managed = shop(&oi, UNTYPED);
+        shop(&oi, UNTYPED);
         oi.call(
             "/tls/policies/set-canopy",
             json!({ "hostname": "shop.example.com" }),
         )
         .unwrap();
 
-        oi.block_on(async { sync_faults(&oi.state, &managed) });
+        oi.block_on(async { sync_all_faults(&oi.state) });
         let filed = active_faults(&oi);
         assert_eq!(filed.len(), 1);
         assert_eq!(
@@ -532,7 +566,7 @@ mod tests {
         );
 
         // Filing again is not filing twice.
-        oi.block_on(async { sync_faults(&oi.state, &managed) });
+        oi.block_on(async { sync_all_faults(&oi.state) });
         assert_eq!(active_faults(&oi).len(), 1);
 
         oi.call(
@@ -540,7 +574,7 @@ mod tests {
             json!({ "hostname": "shop.example.com" }),
         )
         .unwrap();
-        oi.block_on(async { sync_faults(&oi.state, &managed) });
+        oi.block_on(async { sync_all_faults(&oi.state) });
         assert!(
             active_faults(&oi).is_empty(),
             "clearing the policy is one of the ways the fault goes"
@@ -551,7 +585,7 @@ mod tests {
     #[test]
     fn a_hostname_with_no_certificate_whose_request_keeps_failing_is_faulted() {
         let oi = TestOi::new();
-        let managed = shop(&oi, TYPED);
+        shop(&oi, TYPED);
         oi.call(
             "/tls/policies/set-canopy",
             json!({ "hostname": "shop.example.com" }),
@@ -559,7 +593,7 @@ mod tests {
         .unwrap();
         record_failure(&oi, "dns challenge timed out");
 
-        oi.block_on(async { sync_faults(&oi.state, &managed) });
+        oi.block_on(async { sync_all_faults(&oi.state) });
         let filed = active_faults(&oi);
         assert_eq!(filed.len(), 1);
         assert!(
@@ -594,7 +628,7 @@ mod tests {
             )
             .unwrap();
         });
-        oi.block_on(async { sync_faults(&oi.state, &managed) });
+        oi.block_on(async { sync_all_faults(&oi.state) });
         assert!(active_faults(&oi).is_empty());
     }
 
@@ -602,7 +636,7 @@ mod tests {
     #[test]
     fn trouble_while_a_certificate_is_still_usable_files_nothing() {
         let oi = TestOi::new();
-        let managed = shop(&oi, TYPED);
+        shop(&oi, TYPED);
         let now = jiff::Timestamp::now().as_second();
         let pem = crate::runtime::tls::test_support::self_signed_pem(&["shop.example.com"]);
         oi.state.db.call(move |db| {
@@ -630,7 +664,7 @@ mod tests {
             .unwrap();
         });
         record_failure(&oi, "canopy is having a bad day");
-        oi.block_on(async { sync_faults(&oi.state, &managed) });
+        oi.block_on(async { sync_all_faults(&oi.state) });
         assert!(
             active_faults(&oi).is_empty(),
             "the certificate still serves and the chain is still working on it"
@@ -641,7 +675,7 @@ mod tests {
     #[test]
     fn a_chain_that_ran_out_of_strategies_without_a_replacement_is_faulted() {
         let oi = TestOi::new();
-        let managed = shop(&oi, TYPED);
+        shop(&oi, TYPED);
         let now = jiff::Timestamp::now().as_second();
         let pem = crate::runtime::tls::test_support::self_signed_pem(&["shop.example.com"]);
         oi.state.db.call(move |db| {
@@ -668,7 +702,7 @@ mod tests {
             )
             .unwrap();
         });
-        oi.block_on(async { sync_faults(&oi.state, &managed) });
+        oi.block_on(async { sync_all_faults(&oi.state) });
         let filed = active_faults(&oi);
         assert_eq!(filed.len(), 1);
         assert!(
@@ -914,13 +948,13 @@ mod tests {
     #[test]
     fn the_faults_follow_the_hostname_not_the_relay() {
         let oi = TestOi::new();
-        let managed = shop(&oi, UNTYPED);
+        shop(&oi, UNTYPED);
         oi.call(
             "/tls/policies/set-canopy",
             json!({ "hostname": "shop.example.com" }),
         )
         .unwrap();
-        oi.block_on(async { sync_faults(&oi.state, &managed) });
+        oi.block_on(async { sync_all_faults(&oi.state) });
         assert_eq!(active_faults(&oi).len(), 1);
 
         // No offer is live, so the report reaches no one; clearing the policy
@@ -1049,7 +1083,7 @@ mod tests {
     #[test]
     fn a_failure_before_the_question_is_put_is_recorded_and_faulted() {
         let oi = TestOi::new();
-        let managed = shop(&oi, TYPED);
+        shop(&oi, TYPED);
         oi.call(
             "/tls/policies/set-canopy",
             json!({ "hostname": "shop.example.com" }),
@@ -1078,6 +1112,7 @@ mod tests {
         });
 
         let engine = Engine::new(oi.state.db.clone(), Arc::clone(&oi.state.cipher), &Broken);
+        let managed = managed_in(&oi);
         oi.block_on(async {
             let snap = snapshot(&oi.state, &managed).expect("the state can be read");
             ask_canopy(&oi.state, &engine, &managed, &snap, &BTreeSet::new()).await;
@@ -1097,7 +1132,7 @@ mod tests {
             "and it is not asked again every tick"
         );
 
-        oi.block_on(async { sync_faults(&oi.state, &managed) });
+        oi.block_on(async { sync_all_faults(&oi.state) });
         assert_eq!(
             active_faults(&oi).len(),
             1,
