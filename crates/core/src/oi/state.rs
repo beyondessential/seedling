@@ -17,6 +17,8 @@ pub struct OiState {
     /// Set once by the server after key generation; never changes after that.
     pub spki_fingerprint: OnceLock<String>,
     pub start_time: Instant,
+    /// When the daemon started, on the wall clock.
+    pub started_at: jiff::Timestamp,
     pub db: crate::runtime::db::DbHandle,
     pub scheduler: Arc<parking_lot::Mutex<crate::runtime::Scheduler>>,
     pub tick_notify: Arc<tokio::sync::Notify>,

@@ -186,6 +186,7 @@ pub(crate) fn sync_fault_state(
     use crate::defs::{container::image_registry, resource::Resource};
     let app_name = entry.name.clone();
     let script_error = entry.script_error.clone();
+    let canopy_type = entry.app.def.load().canopy_type.clone();
     let used_registries: std::collections::BTreeSet<String> = {
         let def = entry.app.def.load();
         let mut regs = std::collections::BTreeSet::new();
@@ -212,6 +213,18 @@ pub(crate) fn sync_fault_state(
         regs
     };
     db.call(move |db| {
+        // r[impl canopy.app.key]
+        // A definition that failed to evaluate says nothing of its type, and
+        // dropping the type would take the app out of Canopy as if it had none.
+        if script_error.is_none()
+            && let Err(e) = crate::runtime::canopy::absent::sync_app_type(
+                db,
+                &app_name,
+                canopy_type.as_deref(),
+            )
+        {
+            tracing::error!(app = %app_name, "cannot record the app's Canopy type: {e}");
+        }
         // Sync script_error fault.
         {
             use crate::runtime::faults;
@@ -894,6 +907,8 @@ pub(crate) fn describe_app(state: &OiState, params: AppParams) -> HandlerResult 
         // i[impl definition.provenance]
         "definition": entry.source.to_json(&entry.bundle),
         "description": def.description,
+        // i[impl app.canopy.describe]
+        "canopy_type": def.canopy_type,
         "priority": app_priority.as_str(),
         "faults": app_faults_json,
         "resources": resources_json,
@@ -1499,6 +1514,10 @@ pub(crate) fn deregister_app(
             }
             if let Err(e) = crate::runtime::faults::clear_all_faults_for_app(db, &name_owned) {
                 tracing::warn!(app = %name_owned, "failed to clear faults during deregister: {e}");
+            }
+            // r[impl canopy.app.key]
+            if let Err(e) = crate::runtime::canopy::store::delete_app(db, name_owned.as_str()) {
+                tracing::warn!(app = %name_owned, "failed to forget the Canopy type during deregister: {e}");
             }
             if let Err(e) = scaling::delete_scaling_decisions_for_app(db, &name_owned) {
                 tracing::warn!(app = %name_owned, "failed to clean up scaling decisions during deregister: {e}");

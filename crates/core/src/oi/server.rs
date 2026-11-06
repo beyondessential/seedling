@@ -294,6 +294,7 @@ async fn handle_connection(
     // r[impl canopy.report.fault] — losing the last offer ends the expectation
     // to report, so a fault from when it held must not outlive it.
     if !ended.is_empty() {
+        crate::runtime::canopy::absent::offer_was_live(&state);
         crate::runtime::canopy::clear_fault_if_not_expected(&state);
     }
 }
