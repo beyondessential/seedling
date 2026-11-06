@@ -1871,7 +1871,7 @@ mod tests {
         let st = compute_state(&s, "host.example.com");
         let ratio = chain_of(&st).proxy_renewal_ratio().expect("held back");
         // Renewal at 400, Canopy falls through at 500, a sixth of 600 left.
-        assert!((ratio - 100.0 / 600.0).abs() < 1e-9, "{ratio}");
+        assert!((ratio - 100.0 / 600.0).abs() < 1e-9);
     }
 
     // r[verify tls.chain.proxy-gate]
