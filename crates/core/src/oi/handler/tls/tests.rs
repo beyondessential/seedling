@@ -740,3 +740,187 @@ fn set_acme_dns_accepts_the_shapes_the_spec_defines() {
         .unwrap_or_else(|e| panic!("should accept {good:?}: {e:?}"));
     }
 }
+
+const TLS_APP: &str = r#"
+    app.canopy_type("tamanu");
+    let web = app.service("web").exported().http(80);
+    web.ingress("shop.example.com", 443).tls(Terminate.Https, Output.Http1);
+    app.deployment("web")
+        .image("docker.io/library/nginx:1.29")
+        .http(80, web.route("/"));
+"#;
+
+const UNTYPED_TLS_APP: &str = r#"
+    let web = app.service("web").exported().http(80);
+    web.ingress("shop.example.com", 443).tls(Terminate.Https, Output.Http1);
+    app.deployment("web")
+        .image("docker.io/library/nginx:1.29")
+        .http(80, web.route("/"));
+"#;
+
+fn tls_app(oi: &TestOi, script: &str) {
+    oi.call("/apps/create", json!({ "app": "shop", "script": script }))
+        .expect("register app");
+    oi.install("shop");
+}
+
+fn shop_hostname(oi: &TestOi) -> serde_json::Value {
+    let list = oi.call("/tls/hostnames/list", json!({})).unwrap();
+    list["hostnames"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|h| h["hostname"] == "shop.example.com")
+        .cloned()
+        .expect("the hostname is in the view")
+}
+
+// i[verify tls.policy.set-canopy]
+// i[verify tls.policy.list]
+// i[verify tls.policy.clear]
+#[test]
+fn canopy_policy_set_list_clear_roundtrip() {
+    let oi = TestOi::new();
+    let set = oi
+        .call(
+            "/tls/policies/set-canopy",
+            json!({ "hostname": "*.example.com" }),
+        )
+        .unwrap();
+    assert_eq!(set["ok"], true);
+
+    let listed = oi.call("/tls/policies/list", json!({})).unwrap();
+    let policies = listed["policies"].as_array().unwrap();
+    assert_eq!(policies.len(), 1);
+    assert_eq!(policies[0]["hostname"], "*.example.com");
+    assert_eq!(policies[0]["strategy"], "canopy");
+    assert!(policies[0].get("dns_provider").is_none());
+
+    // Setting it again replaces rather than duplicates.
+    oi.call(
+        "/tls/policies/set-canopy",
+        json!({ "hostname": "*.example.com" }),
+    )
+    .unwrap();
+    assert_eq!(
+        oi.call("/tls/policies/list", json!({})).unwrap()["policies"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+
+    assert_eq!(
+        oi.call("/tls/policies/clear", json!({ "hostname": "*.example.com" }))
+            .unwrap()["ok"],
+        true
+    );
+}
+
+// r[verify tls.policy.wildcard]
+#[test]
+fn canopy_policy_refuses_a_pattern_that_can_never_match() {
+    let oi = TestOi::new();
+    for bad in ["", "*.", "not a hostname"] {
+        let (code, _) = oi
+            .call("/tls/policies/set-canopy", json!({ "hostname": bad }))
+            .unwrap_err();
+        assert_eq!(code, "requirements_invalid", "should refuse {bad:?}");
+    }
+}
+
+// i[verify tls.policy.set-canopy]
+#[test]
+fn canopy_policy_replaces_an_acme_dns_policy_for_the_same_pattern() {
+    let oi = TestOi::new();
+    upsert_route53(&oi, "aws-prod");
+    oi.call(
+        "/tls/policies/set-acme-dns",
+        json!({ "hostname": "shop.example.com", "dns_provider": "aws-prod" }),
+    )
+    .unwrap();
+    oi.call(
+        "/tls/policies/set-canopy",
+        json!({ "hostname": "shop.example.com" }),
+    )
+    .unwrap();
+    let policies = oi.call("/tls/policies/list", json!({})).unwrap()["policies"].clone();
+    assert_eq!(policies.as_array().unwrap().len(), 1);
+    assert_eq!(policies[0]["strategy"], "canopy");
+
+    // The provider is no longer referenced, so it can be removed.
+    assert_eq!(
+        oi.call("/tls/dns-providers/delete", json!({ "name": "aws-prod" }))
+            .unwrap()["ok"],
+        true
+    );
+}
+
+// i[verify tls.hostname.list]
+// r[verify tls.strategy.default]
+#[test]
+fn an_app_with_no_canopy_type_follows_the_proxy_alone() {
+    let oi = TestOi::new();
+    tls_app(&oi, UNTYPED_TLS_APP);
+    let host = shop_hostname(&oi);
+    assert_eq!(host["policy"]["strategy"], "default");
+    assert_eq!(host["chain"]["responsible"], "acme_http01");
+    assert!(host["chain"]["fall_through_at"].is_null());
+}
+
+// i[verify tls.hostname.list]
+// r[verify tls.chain.no-certificate]
+#[test]
+fn a_typed_app_with_no_live_offer_goes_straight_to_the_proxy() {
+    let oi = TestOi::new();
+    tls_app(&oi, TLS_APP);
+    let host = shop_hostname(&oi);
+    assert_eq!(host["policy"]["strategy"], "default");
+    assert_eq!(
+        host["chain"]["responsible"], "acme_http01",
+        "with no offer to ask, a hostname with no certificate does not wait for Canopy"
+    );
+}
+
+// i[verify tls.hostname.list]
+// r[verify tls.strategy.canopy-only]
+#[test]
+fn a_canopy_only_hostname_is_waiting_on_canopy_even_with_no_offer() {
+    let oi = TestOi::new();
+    tls_app(&oi, TLS_APP);
+    oi.call(
+        "/tls/policies/set-canopy",
+        json!({ "hostname": "shop.example.com" }),
+    )
+    .unwrap();
+    let host = shop_hostname(&oi);
+    assert_eq!(host["policy"]["strategy"], "canopy");
+    assert_eq!(host["chain"]["responsible"], "canopy");
+    assert_eq!(host["status"], "pending");
+    assert_eq!(host["next_issuance_source"], "immediate");
+}
+
+// i[verify tls.cert.retry]
+// r[verify tls.cert.force-retry]
+#[test]
+fn a_retry_for_a_hostname_canopy_is_not_part_of_does_not_linger() {
+    let oi = TestOi::new();
+    tls_app(&oi, UNTYPED_TLS_APP);
+    oi.call("/tls/certificates/retry", json!({ "hostname": "shop.example.com" }))
+        .unwrap();
+    assert!(
+        shop_hostname(&oi)["force_retry_at"].is_null(),
+        "nothing would ever consume the queued retry, so it must not wait for one"
+    );
+}
+
+// i[verify tls.cert.retry]
+// r[verify tls.cert.force-retry]
+#[test]
+fn a_retry_for_a_hostname_canopy_can_be_asked_about_waits_for_the_report_tick() {
+    let oi = TestOi::new();
+    tls_app(&oi, TLS_APP);
+    oi.call("/tls/certificates/retry", json!({ "hostname": "shop.example.com" }))
+        .unwrap();
+    assert!(!shop_hostname(&oi)["force_retry_at"].is_null());
+}

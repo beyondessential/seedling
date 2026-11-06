@@ -256,6 +256,22 @@ pub(crate) struct HostnameParams {
     pub hostname: String,
 }
 
+// i[tls.policy.set-canopy]
+// r[impl tls.strategy.canopy-only]
+pub(crate) fn set_policy_canopy(state: &OiState, params: HostnameParams) -> HandlerResult {
+    let hostname = params.hostname;
+    validate_policy_hostname(&hostname)?;
+    let for_db = hostname.clone();
+    state
+        .db
+        .call(move |db| store::set_policy_canopy(db, &for_db))
+        .map_err(db_error)?;
+    // A usable certificate is left until its renewal point, and a hostname with
+    // none is picked up by the next Canopy report tick, so there is nothing to
+    // kick here.
+    Ok(json!({ "ok": true }))
+}
+
 // i[tls.policy.clear]
 pub(crate) fn clear_policy(state: &OiState, params: HostnameParams) -> HandlerResult {
     let hostname = params.hostname.clone();
@@ -781,7 +797,44 @@ pub(crate) fn retry(state: &OiState, params: RetryParams) -> HandlerResult {
         })
         .map_err(db_error)?;
     state.tls_coordinator.ensure(&hostname);
+    settle_retry_without_canopy(state, &hostname)?;
     Ok(json!({ "ok": true }))
+}
+
+/// An operator retry for a hostname on a chain that Canopy is not part of has
+/// nobody to wait for it: the proxy carries out every strategy there is, and
+/// nothing else consumes the queued retry. Start its cycle now and leave the
+/// retry to be taken by the Canopy report tick only where Canopy can be asked.
+// r[impl tls.cert.force-retry]
+fn settle_retry_without_canopy(state: &OiState, hostname: &str) -> Result<(), OiError> {
+    let managed = {
+        let reg = state.registry.read();
+        state::managed_ingresses(&reg)
+    };
+    let env = state.chain_env(&managed).map_err(db_error)?;
+    let snapshot = state
+        .db
+        .call(state::Snapshot::load)
+        .map_err(db_error)?
+        .with_env(env);
+    let st = state::compute_state(&snapshot, hostname);
+    let state::Decision::Chain(c) = &st.decision else {
+        return Ok(());
+    };
+    if c.canopy.applies() {
+        return Ok(());
+    }
+    let replacing = match &c.cycle {
+        chain::Cycle::Running(r) => r.identity,
+        chain::Cycle::Idle { .. } => chain::Identity::NONE,
+    };
+    let now = snapshot.now;
+    let host = hostname.to_owned();
+    state
+        .db
+        .call(move |db| store::start_cycle_for_force_retry(db, &host, replacing, now))
+        .map_err(db_error)?;
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------
