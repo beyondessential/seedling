@@ -29,6 +29,7 @@ use crate::{
             AttemptTrigger,
             canopy::{self, Ask, CanopyRelay, CertificateRelay, Engine},
             chain::{self, Identity, Strategy},
+            state::AUTO_RETRY_DEBOUNCE_SECS,
             state::{
                 self, CanopyStanding, ChainAct, ChainDecision, Decision, ManagedIngress,
                 ServingSource, Snapshot,
@@ -153,10 +154,10 @@ async fn replace_condemned<R: CertificateRelay>(
         match ask {
             Some(ask) => {
                 if let Err(e) = engine
-                    .revoke_and_reorder(ask, c.cert_id, c.reason.clone())
+                    .revoke_and_reorder(ask.clone(), c.cert_id, c.reason.clone())
                     .await
                 {
-                    tracing::error!(hostname = %c.hostname, error = %e, "canopy certificates: replacing a revoked certificate failed");
+                    record_engine_failure(state, &ask, &e);
                 }
             }
             // The hostname has left its chain: the certificate must still stop
@@ -271,12 +272,48 @@ async fn ask_canopy<R: CertificateRelay>(
         let Some(ask) = ask_for(hostname, c, forced) else {
             continue;
         };
-        match engine.ask(ask).await {
+        match engine.ask(ask.clone()).await {
             Ok(outcome) => tracing::debug!(%hostname, ?outcome, "asked Canopy"),
-            Err(e) => {
-                tracing::error!(%hostname, error = %e, "canopy certificates: asking Canopy failed")
-            }
+            Err(e) => record_engine_failure(state, &ask, &e),
         }
+    }
+}
+
+/// Record a failure that stopped the question being put at all.
+///
+/// An error here happened before Canopy answered anything, so nothing of the
+/// answer path ran: without this the hostname would be asked again every tick
+/// with nothing recorded, no cadence and no fault — a condition that may never
+/// pass (a key that no longer decrypts) retried for ever and visible only in the
+/// log. Recorded where every answer is recorded, so the cadence and the fault
+/// follow from it.
+// r[impl tls.canopy.fault]
+fn record_engine_failure(state: &Arc<OiState>, ask: &Ask, error: &canopy::Error) {
+    let reason = format!("the request to Canopy could not be made: {error}");
+    tracing::error!(hostname = %ask.hostname, "{reason}");
+    let hostname = ask.hostname.clone();
+    let (identity, step, since) = (ask.replacing, ask.step, ask.since);
+    let now = jiff::Timestamp::now().as_second();
+    if let Err(e) = state.db.call(move |db| {
+        let open_order_since = store::get_chain_row(db, &hostname)?
+            .filter(|row| row.row.identity == identity)
+            .and_then(|row| row.row.open_order_since);
+        store::put_chain_row(
+            db,
+            &hostname,
+            &chain::Row {
+                identity,
+                step,
+                since,
+                // Nothing was learnt about an order already open, so it stays
+                // open; a fresh question that could not be put opens none.
+                open_order_since,
+                retry_not_before: Some(now + AUTO_RETRY_DEBOUNCE_SECS),
+            },
+            Some(&reason),
+        )
+    }) {
+        tracing::error!(hostname = %ask.hostname, error = %e, "canopy certificates: cannot record why the request could not be made");
     }
 }
 
@@ -955,5 +992,75 @@ mod tests {
             .unwrap();
         let spki = crate::runtime::tls::parse::leaf_spki_der(&pem).unwrap();
         crate::runtime::tls::canopy::key_fingerprint(&spki)
+    }
+
+    /// A relay that is never reached, because the question cannot be put.
+    struct Broken;
+    impl CertificateRelay for &Broken {
+        async fn request(
+            &self,
+            _name: &str,
+            _csr_der_b64: &str,
+            _app_type: Option<&str>,
+        ) -> Result<bestool_canopy::schema::CertificateResponse, canopy::RelayFailure> {
+            unreachable!("the engine fails before the relay is asked")
+        }
+    }
+
+    // r[verify tls.canopy.fault]
+    #[test]
+    fn a_failure_before_the_question_is_put_is_recorded_and_faulted() {
+        let oi = TestOi::new();
+        let managed = shop(&oi, TYPED);
+        oi.call(
+            "/tls/policies/set-canopy",
+            json!({ "hostname": "shop.example.com" }),
+        )
+        .unwrap();
+
+        // A key that no longer decrypts: the engine fails before it can ask.
+        oi.state.db.call(|db| {
+            store::insert_certificate(
+                db,
+                NewCertificate {
+                    hostname: "shop.example.com",
+                    requested_hostname: Some("shop.example.com"),
+                    state: TlsCertState::CsrPending,
+                    origin: TlsCertOrigin::Canopy,
+                    cert_pem: None,
+                    csr_pem: Some("not a signing request"),
+                    key_ciphertext: b"not a key",
+                    key_type: KeyType::EcdsaP256,
+                    metadata: CertMetadata::default(),
+                    note: None,
+                    acme_account_id: None,
+                },
+            )
+            .unwrap();
+        });
+
+        let engine = Engine::new(oi.state.db.clone(), Arc::clone(&oi.state.cipher), &Broken);
+        oi.block_on(ask_canopy(&oi.state, &engine, &managed));
+
+        let row = oi
+            .state
+            .db
+            .call(|db| store::get_chain_row(db, "shop.example.com").unwrap())
+            .expect("the failure is recorded where an answer would be");
+        assert!(
+            row.last_error.unwrap().contains("could not be made"),
+            "so the operator sees why"
+        );
+        assert!(
+            row.row.retry_not_before.is_some(),
+            "and it is not asked again every tick"
+        );
+
+        oi.block_on(async { sync_faults(&oi.state, &managed) });
+        assert_eq!(
+            active_faults(&oi).len(),
+            1,
+            "a condition that may never pass is faulted rather than retried in silence"
+        );
     }
 }
