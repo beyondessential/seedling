@@ -827,10 +827,7 @@ fn settle_retry_without_canopy(state: &OiState, hostname: &str) -> Result<(), Oi
     if c.canopy.applies() {
         return Ok(());
     }
-    let replacing = match &c.cycle {
-        chain::Cycle::Running(r) => r.identity,
-        chain::Cycle::Idle { .. } => chain::Identity::NONE,
-    };
+    let replacing = c.replacing();
     let now = snapshot.now;
     let host = hostname.to_owned();
     state

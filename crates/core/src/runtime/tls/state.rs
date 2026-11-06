@@ -366,6 +366,9 @@ pub struct ChainDecision {
     pub canopy: CanopyStanding,
     /// What is serving the hostname, if anything usable is.
     pub serving: Option<ServingSource>,
+    /// What a cycle starting now would replace, for a hostname with none
+    /// running: read through [`ChainDecision::replacing`].
+    replacing_when_idle: chain::Identity,
     /// What the proxy's cache holds, when it was looked at.
     pub proxy: Option<ProxyHolding>,
     /// Why the responsible strategy last failed to produce a certificate.
@@ -377,6 +380,24 @@ pub struct ChainDecision {
 const MIN_RENEWAL_RATIO: f64 = 0.0001;
 
 impl ChainDecision {
+    /// What a cycle starting now for this hostname would be replacing.
+    ///
+    /// One answer for every caller that starts one, because getting it wrong is
+    /// silent: a cycle recorded against an identity that is not the one serving
+    /// the hostname is read as belonging to an earlier cycle and ignored, and
+    /// the ladder is then measured from the wrong expiry.
+    // r[impl tls.chain.cycle]
+    pub fn replacing(&self) -> chain::Identity {
+        match &self.cycle {
+            // A cycle already running is replacing something, and that is what
+            // a retry restarts against.
+            chain::Cycle::Running(r) => r.identity,
+            // Nothing running, so a cycle starting now replaces whatever serves
+            // the hostname, which is why it was left alone until now.
+            chain::Cycle::Idle { .. } => self.replacing_when_idle,
+        }
+    }
+
     /// How much of the proxy-held certificate's lifetime may be left when the
     /// proxy renews it, for a hostname the proxy must be held back on.
     ///
@@ -938,6 +959,10 @@ fn decide_chain(ctx: &ChainContext, strategies: Vec<Strategy>) -> Decision {
         act,
         collect_canopy,
         proxy_from,
+        replacing_when_idle: ctx
+            .serving
+            .as_ref()
+            .map_or(chain::Identity::NONE, |(s, _)| s.identity),
         canopy: ctx.canopy.clone(),
         serving: ctx.serving.map(|(_, source)| source),
         proxy: ctx.proxy.clone(),
@@ -2046,5 +2071,33 @@ mod tests {
         // And not sooner than the cadence when the last answer refused it.
         s.chain_rows[0].row.retry_not_before = Some(3840);
         assert!(!chain_of(&compute_state(&s, "host.example.com")).collect_canopy);
+    }
+
+    // r[verify tls.chain.cycle]
+    // r[verify tls.cert.force-retry]
+    #[test]
+    fn what_a_cycle_starting_now_replaces_is_one_answer() {
+        let mut cert = fake_cert("host.example.com", 7, 0, 300);
+        cert.origin = TlsCertOrigin::Canopy;
+
+        // Nothing running: a retry replaces what is serving, so that the cycle
+        // it records is the one the next decision resolves against.
+        let mut s = snap(vec![], vec![cert], vec![], vec![], vec![], "ops@x", 100);
+        s.env = canopy_env("host.example.com", &["tamanu"], true);
+        let idle = chain_of(&compute_state(&s, "host.example.com")).replacing();
+        assert_eq!(idle.cert_id, Some(7));
+
+        // A cycle running replaces what it was already replacing, whether or not
+        // that certificate is still being served.
+        s.now = 250;
+        let running = chain_of(&compute_state(&s, "host.example.com")).replacing();
+        assert_eq!(running.cert_id, Some(7));
+
+        // And a hostname that has never had one replaces nothing.
+        let bare = snap(vec![], vec![], vec![], vec![], vec![], "ops@x", 100);
+        assert_eq!(
+            chain_of(&compute_state(&bare, "host.example.com")).replacing(),
+            chain::Identity::NONE
+        );
     }
 }

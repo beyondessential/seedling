@@ -233,13 +233,7 @@ async fn ask_canopy<R: CertificateRelay>(
         // An operator retry is consumed here, in the same write that records
         // the cycle it starts, so a restart cannot lose it.
         let forced = if st.force_retry_at.is_some() {
-            let replacing = match c.serving {
-                Some(ServingSource::Store { .. }) | Some(ServingSource::Proxy) => match &c.cycle {
-                    chain::Cycle::Running(r) => r.identity,
-                    chain::Cycle::Idle { .. } => Identity::NONE,
-                },
-                None => Identity::NONE,
-            };
+            let replacing = c.replacing();
             let now = snap.now;
             let host = hostname.to_owned();
             match state
