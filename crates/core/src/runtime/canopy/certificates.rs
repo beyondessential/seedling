@@ -41,11 +41,19 @@ use crate::{
 
 /// The most hostnames one tick asks Canopy about.
 ///
-/// Each request waits on the relay, which answers within its own timeout of a
-/// minute at worst, and they are made one after another so that a burst of them
-/// cannot be what makes Canopy slow. A tick that reaches its fill leaves the
-/// rest to the next one, which decides again from what is recorded.
+/// Requests are made one after another so that a burst of them cannot be what
+/// makes Canopy slow. A tick that reaches its fill leaves the rest to the next
+/// one, which decides again from what is recorded.
 const MOST_ASKED_PER_TICK: usize = 8;
+
+/// The longest a tick spends asking.
+///
+/// The count alone does not bound the time: the relay answers within a minute
+/// at worst, so eight of them could hold the reporting loop for eight. The
+/// loop's other work — the app statuses, the missing-offer fault, the
+/// certificate faults — waits behind it, so the asking gives way well inside
+/// one report interval.
+const LONGEST_ASKING: std::time::Duration = std::time::Duration::from_secs(20);
 
 /// The fault kind for a Canopy certificate that cannot be had.
 // r[impl tls.canopy.fault]
@@ -261,19 +269,33 @@ async fn ask_canopy<R: CertificateRelay>(
     snap: &Snapshot,
     skip: &BTreeSet<String>,
 ) -> usize {
-    let hostnames: BTreeSet<&str> = managed.iter().map(|m| m.hostname.as_str()).collect();
+    // Each tick starts after the hostname the last one stopped at, so a few
+    // whose orders stay open cannot hold the whole budget: in name order alone,
+    // eight slow hostnames at the front would be re-asked every tick and the
+    // rest never reached.
+    let names: Vec<&str> = {
+        let sorted: BTreeSet<&str> = managed.iter().map(|m| m.hostname.as_str()).collect();
+        let resume = state.canopy.asked_through();
+        let (before, from) = sorted
+            .iter()
+            .partition::<Vec<&str>, _>(|h| resume.as_deref().is_some_and(|r| **h <= r));
+        from.into_iter().chain(before).collect()
+    };
+
+    let started = std::time::Instant::now();
     let mut asked = 0;
-    for hostname in hostnames {
+    for hostname in names {
         if skip.contains(hostname) {
             // A revocation wrote for this hostname after the reading below was
             // taken, so nothing here knows where it now stands.
             continue;
         }
-        if asked >= MOST_ASKED_PER_TICK {
-            // The rest are asked on the next tick: the decision is made again
-            // from what is recorded, so nothing is lost by stopping here, and a
-            // relay that answers slowly cannot make one tick run for the sum of
-            // every hostname's wait while revocations and faults wait behind it.
+        if asked >= MOST_ASKED_PER_TICK || started.elapsed() >= LONGEST_ASKING {
+            // The rest are asked on the next tick, which starts from here: the
+            // decision is made again from what is recorded, so nothing is lost
+            // by stopping, and a relay that answers slowly cannot make one tick
+            // run for the sum of every hostname's wait while the revocations and
+            // the faults wait behind it.
             tracing::debug!(
                 asked,
                 "canopy certificates: the rest of the hostnames are left to the next tick"
@@ -336,6 +358,7 @@ async fn ask_canopy<R: CertificateRelay>(
             continue;
         };
         asked += 1;
+        state.canopy.set_asked_through(hostname);
         match engine.ask(ask.clone()).await {
             Ok(outcome) => tracing::debug!(%hostname, ?outcome, "asked Canopy"),
             Err(e) => record_engine_failure(state, &ask, &e),
@@ -1137,6 +1160,48 @@ mod tests {
             active_faults(&oi).len(),
             1,
             "a condition that may never pass is faulted rather than retried in silence"
+        );
+    }
+
+    // r[verify tls.canopy.request]
+    #[test]
+    fn each_tick_carries_on_from_where_the_last_one_stopped() {
+        let oi = TestOi::new();
+        for i in 0..(MOST_ASKED_PER_TICK + 3) {
+            register(
+                &oi,
+                &format!("app{i}"),
+                &script_for("tamanu", &format!("h{i:02}.example.com"), 443),
+            );
+        }
+        oi.call(
+            "/tls/policies/set-canopy",
+            json!({ "hostname": "*.example.com" }),
+        )
+        .unwrap();
+        let managed = managed_in(&oi);
+
+        let first = Recorder::default();
+        oi.block_on(asking(&oi, &first, &managed));
+        let second = Recorder::default();
+        oi.block_on(asking(&oi, &second, &managed));
+
+        let names = |r: &Recorder| {
+            r.0.lock()
+                .iter()
+                .map(|(n, _)| n.clone())
+                .collect::<Vec<_>>()
+        };
+        let (first, second) = (names(&first), names(&second));
+        assert_eq!(first.len(), MOST_ASKED_PER_TICK);
+        assert_eq!(second.len(), MOST_ASKED_PER_TICK);
+        assert!(
+            second.iter().any(|n| !first.contains(n)),
+            "the hostnames after the first tick's fill are reached: {second:?}"
+        );
+        assert_eq!(
+            second[0], "h08.example.com",
+            "the second tick starts after the hostname the first stopped at"
         );
     }
 

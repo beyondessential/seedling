@@ -98,6 +98,11 @@ pub struct CanopyState {
     /// persisted: after a restart there genuinely has been no attempt yet, and
     /// reporting a stale one as current would be worse than reporting none.
     last_report: Mutex<Option<crate::runtime::canopy::LastReport>>,
+    /// The last hostname a report tick asked Canopy for a certificate about, so
+    /// the next tick carries on after it. Not persisted: after a restart,
+    /// starting from the front costs one tick's worth of order, and what is
+    /// asked is decided from the database either way.
+    asked_through: Mutex<Option<String>>,
 }
 
 impl Default for CanopyState {
@@ -115,10 +120,21 @@ impl CanopyState {
             inflight: Semaphore::new(MAX_INFLIGHT_RELAYS),
             enabled: AtomicBool::new(true),
             last_report: Mutex::new(None),
+            asked_through: Mutex::new(None),
         }
     }
 
     // i[canopy.status]
+    /// The last hostname a report tick asked Canopy about, so the next one
+    /// starts after it rather than at the front of the list again.
+    pub fn asked_through(&self) -> Option<String> {
+        self.asked_through.lock().clone()
+    }
+
+    pub fn set_asked_through(&self, hostname: &str) {
+        *self.asked_through.lock() = Some(hostname.to_owned());
+    }
+
     pub fn last_report(&self) -> Option<crate::runtime::canopy::LastReport> {
         self.last_report.lock().clone()
     }
