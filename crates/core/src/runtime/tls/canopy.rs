@@ -685,7 +685,11 @@ fn apply(
 /// The order is open: note it, once.
 fn pending(db: &Db, mut row: chain::Row, ask: &Ask, now: i64) -> rusqlite::Result<ApplyResult> {
     if row.open_order_since.is_none() {
-        store::insert_attempt(db, &ask.hostname, ask.trigger)?;
+        // An order that is already open is one entry in the log, however the
+        // position recorded for it came to be rewritten.
+        if store::latest_pending_attempt(db, &ask.hostname)?.is_none() {
+            store::insert_attempt(db, &ask.hostname, ask.trigger)?;
+        }
         row.open_order_since = Some(now);
     }
     row.retry_not_before = None;

@@ -753,3 +753,35 @@ async fn a_chain_naming_more_than_was_asked_for_is_not_stored() {
             .is_none()
     );
 }
+
+// r[verify tls.canopy.attempts]
+#[tokio::test]
+async fn an_order_is_one_attempt_even_when_its_position_is_rewritten_under_it() {
+    let fake = Fake::new([Reply::Pending, Reply::Pending]);
+    let (engine, db) = engine(&fake);
+    engine.ask(ask(AttemptTrigger::OnDemand)).await.unwrap();
+    assert_eq!(attempts(&db).len(), 1);
+
+    // A position written without the open order, as a restarted cycle writes it.
+    db.call(|db| {
+        store::put_chain_row(
+            db,
+            "a.example.com",
+            &chain::Row {
+                identity: Identity::NONE,
+                step: 0,
+                since: 1,
+                open_order_since: None,
+                retry_not_before: None,
+            },
+            None,
+        )
+        .unwrap()
+    });
+    engine.ask(ask(AttemptTrigger::OnDemand)).await.unwrap();
+    assert_eq!(
+        attempts(&db).len(),
+        1,
+        "the open attempt is not opened twice"
+    );
+}
