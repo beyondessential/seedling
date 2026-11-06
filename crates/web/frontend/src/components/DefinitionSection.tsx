@@ -42,11 +42,13 @@ function Row({ label, children }: { label: string; children: React.ReactNode }) 
 export function DefinitionSection({
   appName,
   definition,
+  canopyType,
   faults,
   onUpdated,
 }: {
   appName: string;
   definition: DefinitionProvenance;
+  canopyType?: string | null;
   faults: FaultRecord[];
   onUpdated: () => void;
 }) {
@@ -120,6 +122,14 @@ export function DefinitionSection({
               <Row label="Seedling">
                 <Box component="span" sx={mono}>
                   {definition.seedling_versions}
+                </Box>
+              </Row>
+            )}
+            {/* w[impl routes.apps.canopy-type] */}
+            {canopyType && (
+              <Row label="Canopy type">
+                <Box component="span" sx={mono}>
+                  {canopyType}
                 </Box>
               </Row>
             )}

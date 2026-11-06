@@ -287,6 +287,9 @@ export interface AppDetail {
   priority?: AppPriority;
   /** Free-form description set via `app.description(...)` in the BSL script. */
   description?: string | null;
+  /** Canopy application type set via `app.canopy_type(...)` in the BSL
+   *  script, or null when the app is not reported to Canopy. */
+  canopy_type?: string | null;
   faults: FaultRecord[];
   resources: AppResource[];
   /** Resources created inside an in-flight action closure (jobs, anonymous

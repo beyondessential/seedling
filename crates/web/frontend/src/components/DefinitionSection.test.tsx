@@ -37,11 +37,13 @@ function mount(
   definition: DefinitionProvenance,
   faults: FaultRecord[] = [],
   fixtures: Record<string, unknown> = {},
+  canopyType: string | null = null,
 ) {
   return renderWithSession(
     <DefinitionSection
       appName="central"
       definition={definition}
+      canopyType={canopyType}
       faults={faults}
       onUpdated={() => {}}
     />,
@@ -63,6 +65,19 @@ describe("DefinitionSection", () => {
     expect(screen.getByText("ghcr.io/org/central-def:v2.11.3")).toBeTruthy();
     expect(screen.getByText("sha256:4f1c9a02")).toBeTruthy();
     expect(screen.getByText(">=0.12")).toBeTruthy();
+  });
+
+  // w[verify routes.apps.canopy-type]
+  it("shows the Canopy type the definition declares", () => {
+    mount(fetched, [], {}, "tamanu-central");
+    expect(screen.getByText("Canopy type")).toBeTruthy();
+    expect(screen.getByText("tamanu-central")).toBeTruthy();
+  });
+
+  // w[verify routes.apps.canopy-type]
+  it("shows no Canopy type row when the definition declares none", () => {
+    mount(fetched);
+    expect(screen.queryByText("Canopy type")).toBeNull();
   });
 
   // w[verify routes.apps.definition]
