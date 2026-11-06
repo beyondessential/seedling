@@ -219,6 +219,13 @@ impl Reconciler {
             if observed_hostnames.contains(hostname) {
                 self.warm_cert_first_seen.remove(hostname);
                 self.clear_resource_fault(instance, "cert_acquisition_failed");
+            } else if path.is_none() {
+                // The proxy's cache could not be read, so whether it holds a
+                // certificate for this hostname is unknown. Unknown is not
+                // absent, and faulting a hostname the proxy is serving perfectly
+                // well would report a transient mount failure as the hostname's
+                // problem.
+                continue;
             } else if ordering.contains(hostname) {
                 // An order that is open is an acquisition in progress, and it
                 // can take longer than the proxy's own ordering does: the
