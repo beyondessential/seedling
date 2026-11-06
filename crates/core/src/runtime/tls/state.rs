@@ -713,6 +713,10 @@ struct ChainContext {
     offer_live: bool,
     serving: Option<(chain::Serving, ServingSource)>,
     row: Option<chain::Row>,
+    /// The runtime holds a key for this hostname that Canopy has not yet
+    /// certified, so an order of its own is outstanding whichever strategy is
+    /// responsible for serving the hostname meanwhile.
+    awaiting_canopy: bool,
     last_error: Option<String>,
     proxy: Option<ProxyHolding>,
     staged_from: Option<i64>,
@@ -794,6 +798,11 @@ impl ChainContext {
             offer_live: snap.env.offer_live,
             serving,
             row: chain_row.map(|r| r.row.clone()),
+            awaiting_canopy: snap.certificates.iter().any(|c| {
+                c.origin == TlsCertOrigin::Canopy
+                    && c.state == TlsCertState::CsrPending
+                    && c.hostname == hostname
+            }),
             last_error: chain_row.and_then(|r| r.last_error.clone()),
             proxy: snap.env.proxy.get(hostname).copied(),
             staged_from,
@@ -861,10 +870,27 @@ fn decide_chain(ctx: &ChainContext, strategies: Vec<Strategy>) -> Decision {
         }
         _ => false,
     };
+    // The after-failure cadence holds for collection as much as for a first
+    // request: an answer that refused or rejected what was asked is not asked
+    // again sooner for being asked by the other path.
+    let waiting = ctx
+        .row
+        .as_ref()
+        .and_then(|row| row.retry_not_before)
+        .is_some_and(|until| until > ctx.now)
+        && !ctx.force;
     let collect_canopy = ctx.canopy.applies()
+        && !waiting
         && match &cycle {
             chain::Cycle::Running(r) => {
                 r.open_order
+                    // An order Canopy has not answered for is outstanding
+                    // whoever is serving the hostname meanwhile, so the key the
+                    // runtime holds for it is asked about until one arrives.
+                    // Without this a replacement for a revoked certificate that
+                    // failed on its one attempt would never be asked for again.
+                    // r[impl tls.canopy.revoked]
+                    || ctx.awaiting_canopy
                     || (!refused
                         && matches!(
                             ctx.serving,
@@ -1944,5 +1970,45 @@ mod tests {
         let c = chain_of(&st);
         assert!(!c.collect_canopy);
         assert_eq!(c.act, ChainAct::Wait, "the proxy is responsible now");
+    }
+
+    // r[verify tls.canopy.revoked]
+    #[test]
+    fn a_replacement_canopy_has_not_answered_for_is_asked_about_again() {
+        // What a revocation leaves behind: the revoked certificate recorded as
+        // the one being replaced, the hostname passed to the proxy, and a key
+        // waiting for its first certificate.
+        let mut pending = fake_cert("host.example.com", 9, 0, 300);
+        pending.origin = TlsCertOrigin::Canopy;
+        pending.state = TlsCertState::CsrPending;
+        let mut s = snap(vec![], vec![pending], vec![], vec![], vec![], "ops@x", 250);
+        s.env = canopy_env("host.example.com", &["tamanu"], true);
+        s.chain_rows = vec![TlsChainRow {
+            hostname: "host.example.com".to_owned(),
+            row: chain::Row {
+                identity: chain::Identity {
+                    cert_id: Some(7),
+                    not_after: Some(300),
+                },
+                step: 1,
+                since: 240,
+                open_order_since: None,
+                retry_not_before: None,
+            },
+            last_error: Some("revoked".to_owned()),
+            updated_at: 240,
+        }];
+
+        let st = compute_state(&s, "host.example.com");
+        let c = chain_of(&st);
+        assert_eq!(c.act, ChainAct::Wait, "the proxy serves the hostname now");
+        assert!(
+            c.collect_canopy,
+            "but the replacement Canopy has not answered for is still asked about"
+        );
+
+        // And not sooner than the cadence when the last answer refused it.
+        s.chain_rows[0].row.retry_not_before = Some(3840);
+        assert!(!chain_of(&compute_state(&s, "host.example.com")).collect_canopy);
     }
 }
