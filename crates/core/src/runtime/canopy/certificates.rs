@@ -142,7 +142,7 @@ async fn replace_condemned<R: CertificateRelay>(
     for c in condemned {
         let st = state::compute_state(&snap, &c.hostname);
         let ask = match &st.decision {
-            Decision::Chain(chain) => ask_for(&c.hostname, chain, false),
+            Decision::Chain(chain) => revocation_ask(&c.hostname, chain, snap.now),
             _ => None,
         };
         tracing::warn!(
@@ -159,9 +159,8 @@ async fn replace_condemned<R: CertificateRelay>(
                     tracing::error!(hostname = %c.hostname, error = %e, "canopy certificates: replacing a revoked certificate failed");
                 }
             }
-            // The hostname has left its chain, or no cycle is running to say
-            // where it stood: the certificate must still stop being served, and
-            // nothing more can be said about what replaces it.
+            // The hostname has left its chain: the certificate must still stop
+            // being served, and nothing more can be said about what replaces it.
             None => {
                 let id = c.cert_id;
                 if let Err(e) = state
@@ -171,6 +170,38 @@ async fn replace_condemned<R: CertificateRelay>(
                     tracing::error!(hostname = %c.hostname, error = %e, "canopy certificates: stopping a revoked certificate failed");
                 }
             }
+        }
+    }
+}
+
+/// What to say to Canopy for a hostname whose certificate it has revoked.
+///
+/// A revocation starts a cycle whenever it finds one not already running: the
+/// certificate it condemns was the one serving the hostname, so the hostname has
+/// something to replace and passes to the next strategy at once. Without this a
+/// revocation before the renewal point would record nothing, and the hostname
+/// would read as never having had a certificate and stay with Canopy.
+// r[impl tls.canopy.revoked]
+fn revocation_ask(hostname: &str, c: &ChainDecision, now: i64) -> Option<Ask> {
+    match &c.cycle {
+        chain::Cycle::Running(_) => ask_for(hostname, c, false),
+        chain::Cycle::Idle { .. } => {
+            let CanopyStanding::Applies { app_type } = &c.canopy else {
+                return None;
+            };
+            Some(Ask {
+                hostname: hostname.to_owned(),
+                app_type: app_type.clone(),
+                // The cycle starts now, with the condemned certificate as what
+                // is being replaced: `apply_revocation` reads it from the row it
+                // is given rather than from here.
+                replacing: Identity::NONE,
+                step: 0,
+                since: now,
+                chain_len: c.strategies.len(),
+                canopy_responsible: true,
+                trigger: AttemptTrigger::Renewal,
+            })
         }
     }
 }
@@ -832,5 +863,103 @@ mod tests {
             let _ = crate::runtime::canopy::report(&oi.state).await;
         });
         assert!(active_faults(&oi).is_empty());
+    }
+
+    /// Store a Canopy certificate serving `hostname`, valid for the window given.
+    fn canopy_cert(oi: &TestOi, hostname: &str, not_before: i64, not_after: i64) -> i64 {
+        let pem = crate::runtime::tls::test_support::self_signed_pem(&[hostname]);
+        let hostname = hostname.to_owned();
+        oi.state.db.call(move |db| {
+            store::insert_certificate(
+                db,
+                NewCertificate {
+                    hostname: &hostname,
+                    requested_hostname: None,
+                    state: TlsCertState::Active,
+                    origin: TlsCertOrigin::Canopy,
+                    cert_pem: Some(&pem),
+                    csr_pem: None,
+                    key_ciphertext: &[0u8; 8],
+                    key_type: KeyType::EcdsaP256,
+                    metadata: CertMetadata {
+                        not_before: Some(not_before),
+                        not_after: Some(not_after),
+                        ..Default::default()
+                    },
+                    note: None,
+                    acme_account_id: None,
+                },
+            )
+            .unwrap()
+        })
+    }
+
+    // r[verify tls.canopy.revoked]
+    // r[verify tls.chain.no-certificate]
+    #[test]
+    fn a_revocation_before_the_renewal_point_still_passes_the_hostname_on() {
+        let oi = TestOi::new();
+        register(&oi, "shop", &script_for("tamanu", "shop.example.com", 443));
+        let now = jiff::Timestamp::now().as_second();
+        // Well before its renewal point, so the cycle is idle.
+        let cert_id = canopy_cert(&oi, "shop.example.com", now - 86_400, now + 89 * 86_400);
+
+        let recorder = Recorder::default();
+        let managed = managed_in(&oi);
+        let names = Entitlements::builder()
+            .certificates(vec![
+                bestool_canopy::schema::HeldCertificate::builder()
+                    .key_fingerprint(canopy_key_fingerprint(&oi, cert_id))
+                    .key_must_be_replaced(false)
+                    .name("shop.example.com".to_owned())
+                    .revoked(true)
+                    .usable(false)
+                    .build(),
+            ])
+            .applications(vec![])
+            .certificate_names(vec![])
+            .domains(vec![])
+            .may_manage_dns(false)
+            .may_manage_tls(true)
+            .paused(false)
+            .registered_names(vec![])
+            .build();
+        oi.block_on(replace_condemned(
+            &oi.state,
+            &engine(&oi, &recorder),
+            &managed,
+            &names,
+        ));
+
+        let (row, revoked) = oi.state.db.call(move |db| {
+            (
+                store::get_chain_row(db, "shop.example.com").unwrap(),
+                store::get_certificate(db, cert_id).unwrap().unwrap().state,
+            )
+        });
+        assert_eq!(revoked, TlsCertState::Revoked);
+        let row = row.expect("a revocation records what the hostname is replacing");
+        assert_eq!(
+            row.row.identity.cert_id,
+            Some(cert_id),
+            "the revoked certificate is the one being replaced"
+        );
+        assert_eq!(
+            row.row.step, 1,
+            "and the hostname passes to the next strategy at once"
+        );
+        assert_eq!(recorder.0.lock().len(), 1, "a replacement was asked for");
+    }
+
+    /// The fingerprint Canopy names a stored certificate's key by.
+    fn canopy_key_fingerprint(oi: &TestOi, cert_id: i64) -> String {
+        let pem = oi
+            .state
+            .db
+            .call(move |db| store::get_certificate(db, cert_id).unwrap().unwrap())
+            .cert_pem
+            .unwrap();
+        let spki = crate::runtime::tls::parse::leaf_spki_der(&pem).unwrap();
+        crate::runtime::tls::canopy::key_fingerprint(&spki)
     }
 }
