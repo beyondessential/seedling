@@ -125,6 +125,9 @@ Absent specification bugs, anything not defined here is either defined in anothe
 > A definition whose script spans several files is shown read-only in the editor, and is updated by pushing or fetching.
 > Applying is withheld until the definition's files have been read, since a bundle that has not arrived is not an empty one, and the reason is shown when they cannot be.
 
+> w[routes.apps.canopy-type]
+> The app detail page must show the app's [Canopy application type](language.md#l--app.canopy-type) when its definition declares one, beside the app's other declared details.
+
 > w[routes.apps.fault-count]
 > The apps table on the home route must surface, per app, how many active faults are currently filed against it.
 > When the count is greater than zero, the row's status column shows an additional chip displaying the count alongside the existing status chip; when zero, no extra chip is shown.
@@ -208,6 +211,7 @@ Absent specification bugs, anything not defined here is either defined in anothe
 > - Whether Canopy access is enabled, with a control to turn it on or off.
 > - The offer that would serve the next request — the offering agent, the endpoint it reaches, and when it was offered — or an indication that no client is currently offering one.
 > - The outcome and time of the most recent status report, including the error when the last one failed.
+> - Each app reported to Canopy as an application, with its type.
 >
 > Registering and withdrawing offers is not exposed: those are made by the client that carries the requests, not by an operator.
 > Nor is relaying a request or forcing a report: the relay carries what the runtime itself needs, and a control for relaying an arbitrary request would grant any operator the full authority of the carrying client's Canopy identity.

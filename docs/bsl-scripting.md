@@ -488,6 +488,16 @@ Behaviour:
 - Unlike static `Volume.write`, contents are NOT reapplied on container restart — `rt.write` is point-in-time. For tmpfs volumes the file is wiped at the next container start; that's allowed and is up to the script author to reason about.
 - Calling `rt.write` outside an action closure is a script error.
 
+## Reporting to Canopy: `app.canopy_type`
+
+`app.canopy_type(type)` declares what the app is to Canopy:
+
+```rhai
+app.canopy_type("tamanu-central");
+```
+
+Seedling then reports the app to Canopy as an application of that type, keyed by the app's name, with its status as health and its faults as detail. A type is lowercase letters and digits in hyphen-separated segments, beginning with a letter; anything else throws. It is declared at the top level only, never inside an action. An app that does not call it is not reported as an application. See [Deploying](deploying.md#reaching-canopy-through-bestool) for what reporting needs on the host.
+
 ## Definition bundles
 
 A definition is a *bundle*: a folder holding the script and any files it needs, such as error pages or seed data. A lone script is a bundle holding only `app.seed.rhai`.

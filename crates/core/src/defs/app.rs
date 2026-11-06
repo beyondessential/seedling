@@ -2,7 +2,7 @@ use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
-use rhai::{CustomType, FnPtr, Map, TypeBuilder};
+use rhai::{CustomType, Dynamic, FnPtr, Map, TypeBuilder};
 use seedling_protocol::names::{ActionName, AppName, ParamName, ShellName};
 
 use crate::runtime::definition::Bundle;
@@ -280,6 +280,8 @@ pub struct AppDef {
     /// Free-form description of the application, set via `app.description()`.
     // l[impl app.description]
     pub description: Option<String>,
+    /// Canopy application type, set via `app.canopy_type()`.
+    pub canopy_type: Option<String>,
     /// Parameters declared by the BSL script via `app.param()`, with optional schema metadata.
     pub params: BTreeMap<ParamName, ParamDef>,
     pub resources: BTreeMap<ResourceId, Resource>,
@@ -301,6 +303,17 @@ fn extract_description(options: &Map) -> Result<Option<String>, Box<rhai::EvalAl
         .cloned()
         .map(|v| crate::defs::take::take_string("description", v))
         .transpose()
+}
+
+/// Whether `value` is a type Canopy accepts: lowercase letters and digits in
+/// hyphen-separated segments, beginning with a letter.
+fn is_valid_canopy_type(value: &str) -> bool {
+    value.split('-').all(|segment| {
+        !segment.is_empty()
+            && segment
+                .bytes()
+                .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit())
+    }) && value.starts_with(|c: char| c.is_ascii_lowercase())
 }
 
 // ---------------------------------------------------------------------------
@@ -362,6 +375,30 @@ impl CustomType for App {
             });
             this.clone()
         });
+
+        // l[impl app.canopy-type]
+        builder.with_fn(
+            "canopy_type",
+            |this: &mut App, canopy_type: Dynamic| -> Result<App, Box<rhai::EvalAltResult>> {
+                if crate::runtime::barrier::runtime::is_in_action_closure() {
+                    return Err("canopy_type cannot be called from within an action closure".into());
+                }
+                let canopy_type = crate::defs::take::take_string("canopy_type", canopy_type)?;
+                if !is_valid_canopy_type(&canopy_type) {
+                    return Err(format!(
+                        "canopy_type {canopy_type:?} must be lowercase letters and digits in \
+                         hyphen-separated segments, beginning with a letter"
+                    )
+                    .into());
+                }
+                this.def.rcu(|d| {
+                    let mut d = (**d).clone();
+                    d.canopy_type = Some(canopy_type.clone());
+                    d
+                });
+                Ok(this.clone())
+            },
+        );
 
         param::on_app(&mut builder);
         file::on_app(&mut builder);

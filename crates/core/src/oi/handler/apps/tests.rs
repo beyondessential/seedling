@@ -810,3 +810,105 @@ fn an_app_cannot_be_registered_into_the_infra_slice() {
     )
     .unwrap();
 }
+
+const TYPED_SCRIPT: &str = r#"
+    app.canopy_type("tamanu-central");
+    app.deployment("web").image("docker.io/library/nginx:1.29");
+"#;
+
+fn stored_canopy_types(oi: &TestOi) -> Vec<(String, String)> {
+    oi.state
+        .db
+        .call(crate::runtime::canopy::store::list_apps)
+        .unwrap()
+        .into_iter()
+        .map(|a| (a.app, a.canopy_type))
+        .collect()
+}
+
+// i[verify app.canopy.describe]
+#[test]
+fn show_carries_the_declared_canopy_type_or_null() {
+    let oi = TestOi::new();
+    oi.call(
+        "/apps/create",
+        json!({ "app": "typed", "script": TYPED_SCRIPT }),
+    )
+    .unwrap();
+    oi.call(
+        "/apps/create",
+        json!({ "app": "plain", "script": MINIMAL_SCRIPT }),
+    )
+    .unwrap();
+
+    let typed = oi.call("/apps/show", json!({ "app": "typed" })).unwrap();
+    assert_eq!(typed["canopy_type"], "tamanu-central");
+    let plain = oi.call("/apps/show", json!({ "app": "plain" })).unwrap();
+    assert_eq!(plain["canopy_type"], serde_json::Value::Null);
+}
+
+// r[verify canopy.app.key]
+#[test]
+fn applying_a_definition_records_changes_and_drops_the_canopy_type() {
+    let oi = TestOi::new();
+    oi.call(
+        "/apps/create",
+        json!({ "app": "demo", "script": TYPED_SCRIPT }),
+    )
+    .unwrap();
+    assert_eq!(
+        stored_canopy_types(&oi),
+        [("demo".to_owned(), "tamanu-central".to_owned())]
+    );
+
+    oi.call(
+        "/apps/update",
+        json!({ "app": "demo", "script": TYPED_SCRIPT.replace("tamanu-central", "tamanu-facility") }),
+    )
+    .unwrap();
+    assert_eq!(
+        stored_canopy_types(&oi),
+        [("demo".to_owned(), "tamanu-facility".to_owned())]
+    );
+
+    oi.call(
+        "/apps/update",
+        json!({ "app": "demo", "script": MINIMAL_SCRIPT }),
+    )
+    .unwrap();
+    assert!(stored_canopy_types(&oi).is_empty());
+}
+
+// r[verify canopy.app.key]
+#[test]
+fn a_refused_update_leaves_the_recorded_type_alone() {
+    let oi = TestOi::new();
+    oi.call(
+        "/apps/create",
+        json!({ "app": "demo", "script": TYPED_SCRIPT }),
+    )
+    .unwrap();
+    oi.call(
+        "/apps/update",
+        json!({ "app": "demo", "script": "throw \"typo\";" }),
+    )
+    .unwrap_err();
+    assert_eq!(
+        stored_canopy_types(&oi),
+        [("demo".to_owned(), "tamanu-central".to_owned())],
+        "a definition that did not evaluate says nothing of its type"
+    );
+}
+
+// r[verify canopy.app.key]
+#[test]
+fn deregistering_forgets_the_canopy_type() {
+    let oi = TestOi::new();
+    oi.call(
+        "/apps/create",
+        json!({ "app": "demo", "script": TYPED_SCRIPT }),
+    )
+    .unwrap();
+    oi.call("/apps/remove", json!({ "app": "demo" })).unwrap();
+    assert!(stored_canopy_types(&oi).is_empty());
+}

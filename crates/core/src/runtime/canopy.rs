@@ -6,7 +6,9 @@
 //!
 //! Nothing here dials out. Reporting happens only while a connected client is
 //! offering to carry the requests, which is why a host without one has no
-//! reporting task doing anything, nothing retrying, and no fault to explain.
+//! reporting task doing anything and nothing retrying. The one fault it can
+//! have is on an app that relies on Canopy, which has no way to be reported
+//! without one: see [`absent`].
 
 use std::{collections::HashMap, sync::Arc, time::Duration};
 
@@ -21,6 +23,8 @@ use crate::{
     system::types::ContainerStatus,
 };
 
+pub mod absent;
+mod applications;
 pub mod store;
 
 pub use store::{CanopySettings, get_settings, set_enabled, set_server_id};
@@ -83,6 +87,8 @@ pub fn spawn(state: Arc<OiState>) -> tokio::task::JoinHandle<()> {
 /// one — so the error is returned only for the benefit of tests; the loop above
 /// leaves it to the fault surface and the log.
 async fn report(state: &Arc<OiState>) -> Result<(), String> {
+    // Before the skip check: the fault is for the host that cannot report.
+    absent::tick(state);
     match report_once(state).await {
         Outcome::Skipped => {
             // Nothing is expected of an instance with no provider, so a fault
@@ -128,7 +134,10 @@ async fn report_once(state: &Arc<OiState>) -> Outcome {
         Err(e) => return Outcome::Failed(e),
     };
 
-    let payload = build_payload(state).await;
+    let payload = match build_payload(state).await {
+        Ok(payload) => payload,
+        Err(e) => return Outcome::Failed(e),
+    };
     match client.status(&server_id, &payload).await {
         // r[impl canopy.report.backup-prompt] — the response carries return-path
         // instructions, including backups to run now. That list is addressed to
@@ -179,6 +188,10 @@ enum Result_ {
     Passed,
     Warning,
     Failed,
+    /// The check does not apply, such as to an app that is not installed.
+    /// Canopy closes the check's issue on this, so it is not a way to say
+    /// nothing has changed.
+    Skipped,
     /// The check itself could not be evaluated.
     Broken,
 }
@@ -189,7 +202,21 @@ impl Result_ {
             Self::Passed => "passed",
             Self::Warning => "warning",
             Self::Failed => "failed",
+            Self::Skipped => "skipped",
             Self::Broken => "broken",
+        }
+    }
+}
+
+impl Result_ {
+    /// A grade as stored, which is only ever one of the three Canopy opens or
+    /// closes an issue on.
+    fn from_stored(stored: &str) -> Option<Self> {
+        match stored {
+            "passed" => Some(Self::Passed),
+            "warning" => Some(Self::Warning),
+            "failed" => Some(Self::Failed),
+            _ => None,
         }
     }
 }
@@ -206,7 +233,8 @@ fn check(name: &str, result: Result_, extra: Value) -> Value {
 
 // r[impl canopy.report.checks]
 // r[impl canopy.report.extra]
-async fn build_payload(state: &Arc<OiState>) -> Value {
+// r[impl canopy.app.key]
+async fn build_payload(state: &Arc<OiState>) -> Result<Value, String> {
     let (apps_check, apps_total, apps_by_status) = apps_check(state);
     let faults_check = faults_check(state);
     let proxy = component_check(
@@ -229,20 +257,34 @@ async fn build_payload(state: &Arc<OiState>) -> Value {
         .db
         .call(|db| faults::count_active_faults(db).unwrap_or(0));
 
-    json!({
+    let statuses = state.registry.read().list();
+    // A report that cannot say which apps there are fails rather than going
+    // out without them: an absent application reads to Canopy as unreachable.
+    let applications = state
+        .db
+        .call(move |db| applications::report_applications(db, &statuses))
+        .map_err(|e| format!("cannot read the apps to report: {e}"))?;
+
+    Ok(json!({
         "source": SOURCE,
         "healthy": healthy,
-        "health": health,
-        // r[impl canopy.report.extra] — what describes Seedling, and nothing
-        // that describes the host: the hostname, the host's uptime, and any
-        // managed application's version belong to the agent that owns them.
-        "seedlingVersion": env!("CARGO_PKG_VERSION"),
-        "seedlingUptimeSecs": state.start_time.elapsed().as_secs(),
-        "appsTotal": apps_total,
-        "appsByStatus": apps_by_status,
-        "activeOperations": active_operations(state),
-        "activeFaults": active_faults,
-    })
+        // The `machine` section is what makes Canopy read `applications`.
+        "machine": {
+            "health": health,
+            // r[impl canopy.report.extra] — what describes Seedling, and nothing
+            // that describes the host: the hostname, the host's uptime, and any
+            // managed application's version belong to the agent that owns them.
+            "detail": {
+                "seedlingVersion": env!("CARGO_PKG_VERSION"),
+                "seedlingUptimeSecs": state.start_time.elapsed().as_secs(),
+                "appsTotal": apps_total,
+                "appsByStatus": apps_by_status,
+                "activeOperations": active_operations(state),
+                "activeFaults": active_faults,
+            },
+        },
+        "applications": applications,
+    }))
 }
 
 // r[impl canopy.report.checks]
@@ -414,7 +456,7 @@ mod tests {
     }
 
     fn find<'a>(payload: &'a Value, name: &str) -> &'a Value {
-        payload["health"]
+        payload["machine"]["health"]
             .as_array()
             .expect("health is an array")
             .iter()
@@ -493,21 +535,22 @@ mod tests {
     #[test]
     fn the_report_names_seedling_as_its_source_and_describes_only_seedling() {
         let oi = TestOi::new();
-        let payload = oi.block_on(build_payload(&oi.state));
+        let payload = oi.block_on(build_payload(&oi.state)).expect("a payload");
 
         assert_eq!(payload["source"], SOURCE);
-        assert_eq!(payload["seedlingVersion"], env!("CARGO_PKG_VERSION"));
-        assert!(payload["seedlingUptimeSecs"].is_u64());
-        assert_eq!(payload["appsTotal"], 0);
-        assert_eq!(payload["activeOperations"], 0);
-        assert_eq!(payload["activeFaults"], 0);
+        let detail = &payload["machine"]["detail"];
+        assert_eq!(detail["seedlingVersion"], env!("CARGO_PKG_VERSION"));
+        assert!(detail["seedlingUptimeSecs"].is_u64());
+        assert_eq!(detail["appsTotal"], 0);
+        assert_eq!(detail["activeOperations"], 0);
+        assert_eq!(detail["activeFaults"], 0);
 
         // These describe the host, not Seedling, and the agent that owns them
         // already reports them; claiming them here would have the two fight.
-        assert!(payload.get("hostname").is_none());
-        assert!(payload.get("uptimeSecs").is_none());
+        assert!(detail.get("hostname").is_none());
+        assert!(detail.get("uptimeSecs").is_none());
         assert!(
-            payload.get("tamanuVersion").is_none(),
+            detail.get("tamanuVersion").is_none(),
             "tamanuVersion sets the server's tracked version and is not ours to set"
         );
     }
@@ -516,9 +559,9 @@ mod tests {
     #[test]
     fn the_report_carries_the_fixed_check_set() {
         let oi = TestOi::new();
-        let payload = oi.block_on(build_payload(&oi.state));
+        let payload = oi.block_on(build_payload(&oi.state)).expect("a payload");
 
-        let names: Vec<&str> = payload["health"]
+        let names: Vec<&str> = payload["machine"]["health"]
             .as_array()
             .unwrap()
             .iter()
@@ -536,11 +579,40 @@ mod tests {
         );
     }
 
+    // r[verify canopy.app.key]
+    #[test]
+    fn the_report_has_a_machine_section_and_an_applications_section() {
+        let oi = TestOi::with_app("central");
+        oi.state
+            .db
+            .call(|db| store::sync_app_type(db, "central", Some("tamanu-central")))
+            .unwrap();
+        let payload = oi.block_on(build_payload(&oi.state)).expect("a payload");
+
+        assert!(
+            payload["machine"].is_object(),
+            "without it Canopy does not read the applications"
+        );
+        assert_eq!(payload["applications"]["central"]["type"], "tamanu-central");
+        assert!(
+            payload.get("health").is_none(),
+            "the machine's checks are in the machine section"
+        );
+    }
+
+    // r[verify canopy.app.key]
+    #[test]
+    fn a_host_with_no_typed_apps_reports_an_empty_applications_section() {
+        let oi = TestOi::with_app("plain");
+        let payload = oi.block_on(build_payload(&oi.state)).expect("a payload");
+        assert_eq!(payload["applications"], json!({}));
+    }
+
     // r[verify canopy.report.checks]
     #[test]
     fn no_faults_passes_the_faults_check() {
         let oi = TestOi::new();
-        let payload = oi.block_on(build_payload(&oi.state));
+        let payload = oi.block_on(build_payload(&oi.state)).expect("a payload");
         let entry = find(&payload, "health/faults");
         assert_eq!(result_of(entry), "passed");
         assert_eq!(entry["count"], 0);
@@ -563,12 +635,12 @@ mod tests {
             .expect("file a fault");
         });
 
-        let payload = oi.block_on(build_payload(&oi.state));
+        let payload = oi.block_on(build_payload(&oi.state)).expect("a payload");
         let entry = find(&payload, "health/faults");
         assert_eq!(result_of(entry), "failed");
         assert_eq!(entry["count"], 1);
         assert_eq!(entry["kinds"], json!(["image_pull_failed"]));
-        assert_eq!(payload["activeFaults"], 1);
+        assert_eq!(payload["machine"]["detail"]["activeFaults"], 1);
         assert_eq!(
             payload["healthy"], false,
             "a failed check makes the overall self-report unhealthy"
@@ -598,7 +670,11 @@ mod tests {
             }
         });
 
-        let entry = find(&oi.block_on(build_payload(&oi.state)), "health/faults").clone();
+        let entry = find(
+            &oi.block_on(build_payload(&oi.state)).expect("a payload"),
+            "health/faults",
+        )
+        .clone();
         assert_eq!(entry["count"], 3);
         assert_eq!(
             entry["kinds"],

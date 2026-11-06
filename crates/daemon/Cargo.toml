@@ -14,6 +14,7 @@ seedling-protocol = { path = "../protocol" }
 
 clap.workspace = true
 futures-util.workspace = true
+jiff.workspace = true
 lloggs.workspace = true
 parking_lot.workspace = true
 quinn.workspace = true

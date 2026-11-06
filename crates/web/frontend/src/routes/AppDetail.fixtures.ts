@@ -202,6 +202,7 @@ export function makeDetail(overrides: Partial<AppDetail> = {}): AppDetail {
       seedling_versions: null,
     },
     description: "A **testing** app",
+    canopy_type: null,
     faults: [],
     resources: [makeWebDeployment(), dataVolume],
     dynamic_resources: [],

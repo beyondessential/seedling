@@ -24,7 +24,7 @@ use crate::{
         canopy::{QuicPeer, WithdrawReason},
         state::OiState,
     },
-    runtime::canopy::store,
+    runtime::canopy::{absent, store},
 };
 
 #[derive(Deserialize)]
@@ -80,6 +80,14 @@ pub(crate) fn offer(
     );
     ctx.events
         .canopy_offered(offer.offer_id, &offer.agent, &offer.endpoint);
+    // r[impl canopy.offer.absent] — an offer is live, so the apps relying on
+    // Canopy have what they need again.
+    state.db.call(|db| {
+        if let Err(e) = absent::clear_all(db) {
+            tracing::warn!("cannot clear the missing-offer fault: {e}");
+        }
+    });
+    absent::offer_was_live(state);
     Ok(json!({ "offer_id": offer.offer_id }))
 }
 
@@ -102,6 +110,7 @@ pub(crate) fn withdraw(
     // r[impl canopy.report.fault] — if that was the last offer, reporting is no
     // longer expected, so a fault from when it was would misdescribe us.
     crate::runtime::canopy::clear_fault_if_not_expected(state);
+    absent::offer_was_live(state);
     Ok(json!({}))
 }
 
@@ -132,9 +141,23 @@ pub(crate) fn set_settings(
     state.canopy.set_enabled(enabled);
 
     if !enabled {
+        // r[impl canopy.offer.absent] — turning access off is the operator's
+        // decision, not a malfunction to fault.
+        state.db.call(|db| {
+            if let Err(e) = absent::clear_all(db) {
+                tracing::warn!("cannot clear the missing-offer fault: {e}");
+            }
+        });
+    }
+
+    if !enabled {
         // Take effect now rather than at the offering clients' next reconnect,
         // which on a healthy connection may be a very long time away.
-        for offer in state.canopy.revoke_all() {
+        let revoked = state.canopy.revoke_all();
+        if !revoked.is_empty() {
+            absent::offer_was_live(state);
+        }
+        for offer in revoked {
             tracing::info!(
                 offer_id = %offer.offer_id,
                 "revoking a Canopy offer because access was turned off"
@@ -173,12 +196,22 @@ pub(crate) fn status(state: &Arc<OiState>) -> HandlerResult {
         value
     });
 
+    // i[impl canopy.status]
+    let applications: Vec<Value> = state
+        .db
+        .call(store::list_apps)
+        .map_err(|e| OiError::new(ErrorCode::Internal, format!("db error: {e}")))?
+        .into_iter()
+        .map(|a| json!({ "app": a.app, "type": a.canopy_type }))
+        .collect();
+
     Ok(json!({
         "enabled": settings.enabled,
         "offer": offer,
         "offers": state.canopy.count(),
         "server_id": settings.server_id,
         "last_report": last_report,
+        "applications": applications,
     }))
 }
 
@@ -203,6 +236,66 @@ mod tests {
             Value::Null,
             "no attempt has been made yet, and a stale one must not read as current"
         );
+    }
+
+    // i[verify canopy.status]
+    #[test]
+    fn status_lists_the_apps_reported_as_applications_by_name() {
+        let oi = TestOi::new();
+        for (app, script) in [
+            ("zeta", "app.canopy_type(\"tamanu-facility\");"),
+            ("alpha", "app.canopy_type(\"tamanu-central\");"),
+            ("plain", "app.description(\"x\");"),
+        ] {
+            oi.call("/apps/create", json!({ "app": app, "script": script }))
+                .unwrap();
+        }
+        let status = oi.call("/canopy/status", json!({})).unwrap();
+        assert_eq!(
+            status["applications"],
+            json!([
+                { "app": "alpha", "type": "tamanu-central" },
+                { "app": "zeta", "type": "tamanu-facility" },
+            ])
+        );
+    }
+
+    // i[verify canopy.status]
+    #[test]
+    fn a_fresh_instance_reports_no_applications() {
+        let oi = TestOi::new();
+        assert_eq!(
+            oi.call("/canopy/status", json!({})).unwrap()["applications"],
+            json!([])
+        );
+    }
+
+    // r[verify canopy.offer.absent]
+    #[test]
+    fn disabling_clears_the_missing_offer_fault() {
+        let oi = TestOi::new();
+        oi.call(
+            "/apps/create",
+            json!({ "app": "demo", "script": "app.canopy_type(\"tamanu-central\");" }),
+        )
+        .unwrap();
+        oi.state.db.call(|db| {
+            crate::runtime::faults::file_fault(
+                db,
+                &seedling_protocol::names::AppName::new_unchecked("demo"),
+                None,
+                None,
+                None,
+                absent::FAULT_KIND,
+                "no offer",
+            )
+            .unwrap();
+        });
+        assert_eq!(active_faults(&oi), 1);
+
+        oi.call("/canopy/settings/set", json!({ "enabled": false }))
+            .unwrap();
+        assert_eq!(active_faults(&oi), 0);
     }
 
     // i[verify canopy.settings]

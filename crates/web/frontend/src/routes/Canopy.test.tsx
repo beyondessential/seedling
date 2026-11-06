@@ -15,6 +15,7 @@ const offered = {
   offers: 1,
   server_id: "018f0000-0000-7000-8000-0000000000aa",
   last_report: { at: "2026-07-30T08:01:00Z", ok: true },
+  applications: [],
 };
 
 const nothingOffering = {
@@ -23,6 +24,7 @@ const nothingOffering = {
   offers: 0,
   server_id: null,
   last_report: null,
+  applications: [],
 };
 
 describe("Canopy", () => {
@@ -48,6 +50,34 @@ describe("Canopy", () => {
     // A host without bestool is a deployment choice, so the page must not
     // present the absence as a problem.
     expect(screen.getByText(/nothing is wrong/)).toBeTruthy();
+  });
+
+  // w[verify routes.canopy]
+  it("lists each reported application with its type, linked to the app", async () => {
+    renderWithSession(<Canopy />, {
+      fixtures: {
+        "/canopy/status": {
+          ...offered,
+          applications: [
+            { app: "central", type: "tamanu-central" },
+            { app: "facility-1", type: "tamanu-facility" },
+          ],
+        },
+      },
+    });
+    const link = await screen.findByRole("link", { name: "central" });
+    expect(link.getAttribute("href")).toBe("/apps/central");
+    expect(screen.getByText("tamanu-central")).toBeTruthy();
+    expect(screen.getByRole("link", { name: "facility-1" })).toBeTruthy();
+    expect(screen.getByText("tamanu-facility")).toBeTruthy();
+  });
+
+  // w[verify routes.canopy]
+  it("says so when no app is reported as an application", async () => {
+    renderWithSession(<Canopy />, {
+      fixtures: { "/canopy/status": offered },
+    });
+    expect(await screen.findByText("No app declares a Canopy type.")).toBeTruthy();
   });
 
   // w[verify routes.canopy]

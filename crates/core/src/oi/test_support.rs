@@ -74,6 +74,7 @@ impl TestOi {
             registry: Arc::new(RwLock::new(AppRegistry::new())),
             spki_fingerprint: OnceLock::new(),
             start_time: Instant::now(),
+            started_at: jiff::Timestamp::now(),
             db: db.clone(),
             scheduler: Arc::new(Mutex::new(Scheduler::new())),
             tick_notify: Arc::new(tokio::sync::Notify::new()),

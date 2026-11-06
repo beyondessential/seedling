@@ -13,6 +13,7 @@ import {
   TableRow,
   Typography,
 } from "@mui/material";
+import { Link } from "react-router-dom";
 import {
   IconActionButton,
   SolidActionButton,
@@ -41,6 +42,12 @@ interface CanopyStatus {
   offers: number;
   server_id: string | null;
   last_report: LastReport | null;
+  applications: ReportedApplication[];
+}
+
+interface ReportedApplication {
+  app: string;
+  type: string;
 }
 
 // w[impl routes.canopy]
@@ -220,6 +227,34 @@ export default function Canopy() {
                 </TableBody>
               </Table>
             </TableContainer>
+          </Paper>
+
+          <Paper variant="outlined" sx={{ p: 2 }}>
+            <Typography variant="subtitle1" sx={{ mb: 1 }}>
+              Applications
+            </Typography>
+            {data.applications.length > 0 ? (
+              <TableContainer>
+                <Table size="small">
+                  <TableBody>
+                    {data.applications.map((a) => (
+                      <TableRow key={a.app}>
+                        <TableCell sx={{ width: 240 }}>
+                          <Link to={`/apps/${a.app}`}>{a.app}</Link>
+                        </TableCell>
+                        <TableCell sx={{ fontFamily: "monospace" }}>
+                          {a.type}
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </TableContainer>
+            ) : (
+              <Typography variant="body2" sx={{ color: "text.secondary" }}>
+                No app declares a Canopy type.
+              </Typography>
+            )}
           </Paper>
         </Stack>
       )}

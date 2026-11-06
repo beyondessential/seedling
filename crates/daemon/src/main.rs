@@ -1021,6 +1021,7 @@ async fn main() {
         registry: Arc::clone(&registry),
         spki_fingerprint: std::sync::OnceLock::new(),
         start_time: Instant::now(),
+        started_at: jiff::Timestamp::now(),
         db: db.clone(),
         scheduler: Arc::clone(&scheduler),
         tick_notify: Arc::clone(&tick_notify),
@@ -1149,13 +1150,30 @@ async fn main() {
         let definitions: Vec<_> = registry
             .read()
             .iter()
-            .map(|e| (e.name.clone(), Arc::clone(&e.bundle)))
+            .map(|e| {
+                // r[impl canopy.app.key] — only a definition that evaluated
+                // says what its type is; one that did not says nothing.
+                let canopy_type = e
+                    .script_error
+                    .is_none()
+                    .then(|| e.app.def.load().canopy_type.clone());
+                (e.name.clone(), Arc::clone(&e.bundle), canopy_type)
+            })
             .collect();
         db.call(move |db| {
-            for (app, bundle) in definitions {
+            for (app, bundle, canopy_type) in definitions {
                 seedling_core::runtime::definition::faults::sync_unsupported(
                     db, &app, &bundle, &running,
                 );
+                if let Some(canopy_type) = canopy_type
+                    && let Err(e) = seedling_core::runtime::canopy::absent::sync_app_type(
+                        db,
+                        &app,
+                        canopy_type.as_deref(),
+                    )
+                {
+                    tracing::error!(%app, "cannot record the app's Canopy type: {e}");
+                }
             }
         });
     }

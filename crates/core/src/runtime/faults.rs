@@ -308,13 +308,22 @@ pub fn clear_faults_by_kind(
     app: &AppName,
     kind: &str,
 ) -> rusqlite::Result<u64> {
-    let to_clear: Vec<_> = list_active_faults(db, Some(app))?
-        .into_iter()
-        .filter(|f| f.kind == kind)
-        .collect();
+    clear_faults_in_scope(db, &FaultScope::AppKind(app.clone(), kind.to_owned()))
+}
+
+/// Clear every active fault a scope owns. Returns how many were cleared.
+///
+/// The scope picks the rows in SQL, so a sweep that clears a kind across every
+/// app costs what that kind costs rather than what the whole fault table does.
+// r[impl fault.lifecycle]
+pub fn clear_faults_in_scope(
+    db: &crate::runtime::db::Db,
+    scope: &FaultScope,
+) -> rusqlite::Result<u64> {
+    let to_clear = list_active_faults_in_scope(db, scope)?;
     let count = to_clear.len() as u64;
     for f in &to_clear {
-        clear_fault(db, &f.id, app)?;
+        clear_fault(db, &f.id, &f.app)?;
     }
     Ok(count)
 }

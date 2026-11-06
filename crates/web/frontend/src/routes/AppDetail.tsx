@@ -2969,6 +2969,7 @@ export default function AppDetail() {
           <DefinitionSection
             appName={name!}
             definition={data.definition}
+            canopyType={data.canopy_type}
             faults={data.faults}
             onUpdated={refetch}
           />
