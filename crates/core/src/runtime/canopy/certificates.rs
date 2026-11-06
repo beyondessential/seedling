@@ -39,6 +39,14 @@ use crate::{
     },
 };
 
+/// The most hostnames one tick asks Canopy about.
+///
+/// Each request waits on the relay, which answers within its own timeout of a
+/// minute at worst, and they are made one after another so that a burst of them
+/// cannot be what makes Canopy slow. A tick that reaches its fill leaves the
+/// rest to the next one, which decides again from what is recorded.
+const MOST_ASKED_PER_TICK: usize = 8;
+
 /// The fault kind for a Canopy certificate that cannot be had.
 // r[impl tls.canopy.fault]
 pub const FAULT_KIND: &str = "canopy_certificate_failed";
@@ -212,7 +220,19 @@ async fn ask_canopy<R: CertificateRelay>(
     snap: &Snapshot,
 ) {
     let hostnames: BTreeSet<&str> = managed.iter().map(|m| m.hostname.as_str()).collect();
+    let mut asked = 0;
     for hostname in hostnames {
+        if asked >= MOST_ASKED_PER_TICK {
+            // The rest are asked on the next tick: the decision is made again
+            // from what is recorded, so nothing is lost by stopping here, and a
+            // relay that answers slowly cannot make one tick run for the sum of
+            // every hostname's wait while revocations and faults wait behind it.
+            tracing::debug!(
+                asked,
+                "canopy certificates: the rest of the hostnames are left to the next tick"
+            );
+            break;
+        }
         let st = state::compute_state(snap, hostname);
         let Decision::Chain(c) = &st.decision else {
             continue;
@@ -268,6 +288,7 @@ async fn ask_canopy<R: CertificateRelay>(
         let Some(ask) = ask_for(hostname, c, forced) else {
             continue;
         };
+        asked += 1;
         match engine.ask(ask.clone()).await {
             Ok(outcome) => tracing::debug!(%hostname, ?outcome, "asked Canopy"),
             Err(e) => record_engine_failure(state, &ask, &e),
@@ -1065,5 +1086,28 @@ mod tests {
             1,
             "a condition that may never pass is faulted rather than retried in silence"
         );
+    }
+
+    // r[verify tls.canopy.request]
+    #[test]
+    fn one_tick_asks_about_no_more_hostnames_than_it_can_wait_for() {
+        let oi = TestOi::new();
+        for i in 0..(MOST_ASKED_PER_TICK + 3) {
+            register(
+                &oi,
+                &format!("app{i}"),
+                &script_for("tamanu", &format!("h{i}.example.com"), 443),
+            );
+        }
+        oi.call(
+            "/tls/policies/set-canopy",
+            json!({ "hostname": "*.example.com" }),
+        )
+        .unwrap();
+
+        let recorder = Recorder::default();
+        let managed = managed_in(&oi);
+        oi.block_on(asking(&oi, &recorder, &managed));
+        assert_eq!(recorder.0.lock().len(), MOST_ASKED_PER_TICK);
     }
 }
