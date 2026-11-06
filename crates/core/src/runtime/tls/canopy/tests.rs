@@ -824,3 +824,36 @@ async fn a_failed_order_waits_out_the_same_cadence_a_refusal_does() {
     );
     assert_eq!(row.last_error.as_deref(), Some("dns challenge timed out"));
 }
+
+// r[verify tls.canopy.outcomes]
+#[test]
+fn what_canopy_says_cannot_forge_a_log_line_or_run_off_the_screen() {
+    let forged = RelayFailure::Status {
+        status: 403,
+        body:
+            r#"{"type":"https://c/errors/name-not-entitled","detail":"no\n\u001b[31mERROR forged"}"#
+                .to_owned(),
+    };
+    let Answer::Refused { reason } = classify_failure(&forged) else {
+        panic!("a 403 is a refusal");
+    };
+    assert!(!reason.contains('\n'), "{reason:?}");
+    assert!(!reason.chars().any(char::is_control), "{reason:?}");
+    assert!(
+        reason.contains("forged"),
+        "the text itself is kept: {reason:?}"
+    );
+
+    let mut long = response("failed", false);
+    long.last_error = Some("x".repeat(5_000));
+    let Answer::OrderFailed { reason } = classify_response(&long) else {
+        panic!("a failed order");
+    };
+    assert_eq!(reason.len(), REASON_LIMIT);
+
+    let unreachable = RelayFailure::Unreachable("gone\r\nfaked".to_owned());
+    let Answer::Unavailable { reason } = classify_failure(&unreachable) else {
+        panic!("unreachable");
+    };
+    assert!(!reason.chars().any(char::is_control), "{reason:?}");
+}

@@ -140,6 +140,30 @@ pub enum Answer {
     Malformed { reason: String },
 }
 
+/// The most of a reason from Canopy that is kept.
+const REASON_LIMIT: usize = 500;
+
+/// A reason as it is safe to put in a fault, a log line and the operator's view.
+///
+/// What Canopy says of an order travels through whichever client is carrying the
+/// relay and ends up interpolated into a log line and a fault description, so a
+/// line feed or a terminal escape in it would forge log lines and garble the
+/// operator's screen. Control characters become spaces rather than being dropped,
+/// so nothing is silently joined into a different word, and the whole is bounded.
+fn tidy(reason: impl AsRef<str>) -> String {
+    let mut out: String = reason
+        .as_ref()
+        .chars()
+        .map(|c| if c.is_control() { ' ' } else { c })
+        .take(REASON_LIMIT)
+        .collect();
+    let trimmed = out.trim();
+    if trimmed.len() != out.len() {
+        out = trimmed.to_owned();
+    }
+    out
+}
+
 /// Classify Canopy's answer to a request that reached it.
 // r[impl tls.canopy.outcomes]
 // r[impl tls.canopy.revoked]
@@ -166,8 +190,8 @@ pub fn classify_response(response: &CertificateResponse) -> Answer {
         "failed" => Answer::OrderFailed {
             reason: response
                 .last_error
-                .clone()
-                .unwrap_or_else(|| "the order failed".to_owned()),
+                .as_deref()
+                .map_or_else(|| "the order failed".to_owned(), tidy),
         },
         "revoked" => Answer::Revoked {
             reason: "Canopy reports the certificate revoked".to_owned(),
@@ -197,7 +221,7 @@ pub fn classify_failure(failure: &RelayFailure) -> Answer {
         RelayFailure::Status { status, body } => (*status, body.as_str()),
         RelayFailure::Unreachable(reason) => {
             return Answer::Unavailable {
-                reason: format!("Canopy could not be reached: {reason}"),
+                reason: format!("Canopy could not be reached: {}", tidy(reason)),
             };
         }
     };
@@ -207,12 +231,12 @@ pub fn classify_failure(failure: &RelayFailure) -> Answer {
         .and_then(|p| p.get("type"))
         .and_then(Value::as_str)
         .and_then(|t| t.rsplit('/').next())
-        .map(str::to_owned);
+        .map(tidy);
     let detail = problem
         .as_ref()
         .and_then(|p| p.get("detail"))
         .and_then(Value::as_str)
-        .map(str::to_owned)
+        .map(tidy)
         .or_else(|| slug.clone())
         .unwrap_or_else(|| format!("Canopy answered {status}"));
 
