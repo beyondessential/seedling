@@ -1824,9 +1824,10 @@ Each report describes the machine, with Seedling's own health, and each app that
 > r[canopy.offer.absent]
 > An app relies on Canopy while its definition declares a [Canopy application type](language.md#l--app.canopy-type).
 > While Canopy access is enabled and no offer has been live for fifteen minutes, the runtime holds an app-level fault of kind `canopy_offer_absent` against each app that relies on Canopy, stating when an offer was last live, or that none ever has been.
-> The period runs from the later of the last moment an offer was live and the moment the app came to rely on Canopy.
-> Both moments are recorded durably, so a daemon restart neither restarts the period nor clears the fault.
+> The period runs from the latest of the last moment an offer was live, the moment the runtime started, the moment Canopy access was last enabled, and the moment the app came to rely on Canopy, so neither a host returning from an outage nor an operator re-enabling access files the fault before an offering client has had the period to connect.
+> The last moment an offer was live is recorded durably, and remains accurate to within a reporting interval when the runtime stops without warning.
 > The fault is cleared when an offer becomes live, when Canopy access is disabled, when the app stops relying on Canopy, or when the app is deregistered.
+> It is held durably, and a restart does not clear it, since a restart is not one of those events.
 > A short absence, such as the offering client restarting, files nothing; a host that has gone without an offer long enough to fall behind on what its apps need from Canopy files a fault on each app affected.
 > Disabling Canopy access is an operator's decision, visible as such, and files nothing.
 
@@ -1835,7 +1836,9 @@ Each report describes the machine, with Seedling's own health, and each app that
 > r[canopy.app.key]
 > Each app whose definition declares a Canopy application type is reported as an application of that type, under its app name as the key, since the name is what identifies an app on the host.
 > Several apps may declare the same type, and each is reported as an application of its own.
-> Canopy identifies an application by its key and type together, so an app replaced by one of another name, or reported with a different type, is a different application to Canopy: it starts without the grants Canopy held for the previous one, and the previous one reads as unreachable until an operator archives it.
+> Canopy identifies an application by its key and type together, so an app replaced by one of another name, or reported with a different type, is a different application to Canopy.
+> It starts without the permissions an operator granted the previous one in Canopy, such as managing its DNS names and TLS certificates, until an operator grants them again.
+> An app that stops being reported, because it was deregistered, replaced, or its definition no longer declares the type, reads to Canopy as unreachable, with its checks left as last reported, until an operator archives it.
 
 > r[canopy.app.health]
 > Each reported application carries one check, `health/app`, graded from the app's [status](interface.md#i--app.status):

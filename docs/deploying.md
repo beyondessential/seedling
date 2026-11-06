@@ -236,8 +236,21 @@ report its own health to Canopy as the `seedling` source, alongside whatever
 
 Nothing happens on a host where no client offers one. Seedling never dials out —
 `bestool` initiates both the connection and the offer — so a host without it, or
-without a Canopy auth path, simply has the facility sitting idle: no retry loop,
-no connection timeout, and no fault to explain.
+without a Canopy auth path, simply has the facility sitting idle: no retry loop
+and no connection timeout.
+
+An app whose definition declares a Canopy application type (see
+[`app.canopy_type`](bsl-scripting.md#reporting-to-canopy-appcanopy_type)) is
+reported as an application of that type, keyed by its app name, with a
+`health/app` check graded from its status and its faults as detail. Several apps
+may share a type; each is its own application in Canopy. Replacing an app with
+one of another name makes a new Canopy application, so its DNS and TLS
+permissions in Canopy are granted again, and the old one shows as unreachable
+until it is archived there.
+
+Such an app relies on Canopy, so on a host where no offer has been live for
+fifteen minutes it is faulted with `canopy_offer_absent`. The fault clears as
+soon as an offer is live again. Disabling Canopy access files nothing.
 
 To see the current state, or to turn the facility off on a host that has a
 `bestool` but should not appear in Canopy:
