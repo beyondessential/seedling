@@ -20,6 +20,29 @@ fn now_secs() -> i64 {
     Timestamp::now().as_second()
 }
 
+/// Run `f` so that everything it writes lands together or not at all.
+///
+/// A savepoint rather than a transaction, so it composes: a caller that has
+/// opened an atomic section of its own can call a function that opens another,
+/// where a second `BEGIN` would fail. Used on its own it is a transaction.
+pub fn atomically<T>(db: &Db, f: impl FnOnce() -> rusqlite::Result<T>) -> rusqlite::Result<T> {
+    db.conn.execute_batch("SAVEPOINT tls_atomic")?;
+    match f() {
+        Ok(value) => {
+            db.conn.execute_batch("RELEASE tls_atomic")?;
+            Ok(value)
+        }
+        Err(e) => {
+            // The failure to report is the one that sent us here, not any this
+            // cleanup meets.
+            let _ = db
+                .conn
+                .execute_batch("ROLLBACK TO tls_atomic; RELEASE tls_atomic");
+            Err(e)
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // DNS providers
 // ---------------------------------------------------------------------------
@@ -748,16 +771,18 @@ pub fn supersede_other_active_for_hostname(db: &Db, keep_id: i64) -> rusqlite::R
 }
 
 pub fn delete_certificate(db: &Db, id: i64) -> rusqlite::Result<bool> {
-    let tx = db.conn.unchecked_transaction()?;
-    let n = tx.execute("DELETE FROM tls_certificates WHERE id = ?1", [id])?;
-    // A recorded chain position for a certificate that no longer exists would
-    // go on steering a hostname by an expiry nothing holds.
-    tx.execute(
-        "DELETE FROM tls_chain_state WHERE replacing_cert_id = ?1",
-        [id],
-    )?;
-    tx.commit()?;
-    Ok(n > 0)
+    atomically(db, || {
+        let n = db
+            .conn
+            .execute("DELETE FROM tls_certificates WHERE id = ?1", [id])?;
+        // A recorded chain position for a certificate that no longer exists
+        // would go on steering a hostname by an expiry nothing holds.
+        db.conn.execute(
+            "DELETE FROM tls_chain_state WHERE replacing_cert_id = ?1",
+            [id],
+        )?;
+        Ok(n > 0)
+    })
 }
 
 /// Reads the columns of [`CERT_COLUMNS`], positionally and in that order.
@@ -1057,6 +1082,19 @@ pub fn finalize_attempt(
     Ok(())
 }
 
+/// The newest attempt for `hostname` that has not finished.
+pub fn latest_pending_attempt(db: &Db, hostname: &str) -> rusqlite::Result<Option<i64>> {
+    db.conn
+        .query_row(
+            "SELECT id FROM tls_cert_attempts
+             WHERE hostname = ?1 AND outcome = 'pending'
+             ORDER BY id DESC LIMIT 1",
+            [hostname],
+            |r| r.get(0),
+        )
+        .optional()
+}
+
 /// List recent attempts. When `hostname` is `Some`, scopes to that
 /// hostname; otherwise returns all attempts. Newest first.
 pub fn list_attempts(
@@ -1219,7 +1257,7 @@ pub fn list_force_retries(db: &Db) -> rusqlite::Result<Vec<TlsCertForceRetry>> {
 pub fn list_chain_rows(db: &Db) -> rusqlite::Result<Vec<TlsChainRow>> {
     let mut stmt = db.conn.prepare(
         "SELECT hostname, replacing_cert_id, replacing_not_after, step, step_since,
-                open_order_since, last_error, updated_at
+                open_order_since, last_error, updated_at, retry_not_before
          FROM tls_chain_state ORDER BY hostname",
     )?;
     let rows = stmt
@@ -1237,6 +1275,7 @@ pub fn list_chain_rows(db: &Db) -> rusqlite::Result<Vec<TlsChainRow>> {
                     step: usize::try_from(step).map_err(|_| rusqlite::Error::InvalidQuery)?,
                     since: row.get(4)?,
                     open_order_since: row.get(5)?,
+                    retry_not_before: row.get(8)?,
                 },
                 last_error: row.get(6)?,
                 updated_at: row.get(7)?,
@@ -1246,14 +1285,25 @@ pub fn list_chain_rows(db: &Db) -> rusqlite::Result<Vec<TlsChainRow>> {
     Ok(rows)
 }
 
+pub fn get_chain_row(db: &Db, hostname: &str) -> rusqlite::Result<Option<TlsChainRow>> {
+    Ok(list_chain_rows(db)?
+        .into_iter()
+        .find(|r| r.hostname == hostname))
+}
+
 /// Record a hostname's chain position, replacing whatever was recorded.
 // r[impl tls.chain.ladder]
-pub fn put_chain_row(db: &Db, hostname: &str, row: &chain::Row, last_error: Option<&str>) -> rusqlite::Result<()> {
+pub fn put_chain_row(
+    db: &Db,
+    hostname: &str,
+    row: &chain::Row,
+    last_error: Option<&str>,
+) -> rusqlite::Result<()> {
     db.conn.execute(
         "INSERT INTO tls_chain_state
             (hostname, replacing_cert_id, replacing_not_after, step, step_since,
-             open_order_since, last_error, updated_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+             open_order_since, last_error, updated_at, retry_not_before)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
          ON CONFLICT(hostname) DO UPDATE SET
              replacing_cert_id = excluded.replacing_cert_id,
              replacing_not_after = excluded.replacing_not_after,
@@ -1261,7 +1311,8 @@ pub fn put_chain_row(db: &Db, hostname: &str, row: &chain::Row, last_error: Opti
              step_since = excluded.step_since,
              open_order_since = excluded.open_order_since,
              last_error = excluded.last_error,
-             updated_at = excluded.updated_at",
+             updated_at = excluded.updated_at,
+             retry_not_before = excluded.retry_not_before",
         params![
             hostname,
             row.identity.cert_id,
@@ -1271,6 +1322,7 @@ pub fn put_chain_row(db: &Db, hostname: &str, row: &chain::Row, last_error: Opti
             row.open_order_since,
             last_error,
             now_secs(),
+            row.retry_not_before,
         ],
     )?;
     Ok(())
@@ -1278,9 +1330,10 @@ pub fn put_chain_row(db: &Db, hostname: &str, row: &chain::Row, last_error: Opti
 
 /// Forget a hostname's chain position, because a cycle has finished.
 pub fn clear_chain_row(db: &Db, hostname: &str) -> rusqlite::Result<bool> {
-    let n = db
-        .conn
-        .execute("DELETE FROM tls_chain_state WHERE hostname = ?1", [hostname])?;
+    let n = db.conn.execute(
+        "DELETE FROM tls_chain_state WHERE hostname = ?1",
+        [hostname],
+    )?;
     Ok(n > 0)
 }
 
@@ -1297,23 +1350,24 @@ pub fn start_cycle_for_force_retry(
     replacing: chain::Identity,
     now: i64,
 ) -> rusqlite::Result<bool> {
-    let tx = db.conn.unchecked_transaction()?;
-    let queued = take_force_retry(db, hostname)?;
-    if queued {
-        put_chain_row(
-            db,
-            hostname,
-            &chain::Row {
-                identity: replacing,
-                step: 0,
-                since: now,
-                open_order_since: None,
-            },
-            None,
-        )?;
-    }
-    tx.commit()?;
-    Ok(queued)
+    atomically(db, || {
+        let queued = take_force_retry(db, hostname)?;
+        if queued {
+            put_chain_row(
+                db,
+                hostname,
+                &chain::Row {
+                    identity: replacing,
+                    step: 0,
+                    since: now,
+                    open_order_since: None,
+                    retry_not_before: None,
+                },
+                None,
+            )?;
+        }
+        Ok(queued)
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -1358,40 +1412,40 @@ pub fn activate_canopy_chain(
     cert_pem: &str,
     metadata: &CertMetadata,
 ) -> rusqlite::Result<bool> {
-    let tx = db.conn.unchecked_transaction()?;
-    let now = now_secs();
-    let updated = tx.execute(
-        "UPDATE tls_certificates SET
-            state = 'active',
-            cert_pem = ?1,
-            issuer = ?2,
-            not_before = ?3,
-            not_after = ?4,
-            serial = ?5,
-            self_signed = ?6,
-            ari_window_start = NULL,
-            ari_window_end = NULL,
-            ari_polled_at = NULL,
-            created_at = ?7,
-            updated_at = ?7
-         WHERE id = ?8 AND origin = 'canopy' AND state IN ('csr_pending', 'active')",
-        params![
-            cert_pem,
-            metadata.issuer,
-            metadata.not_before,
-            metadata.not_after,
-            metadata.serial,
-            metadata.self_signed as i64,
-            now,
-            id,
-        ],
-    )?;
-    if updated == 0 {
-        return Ok(false);
-    }
-    supersede_other_active_for_hostname(db, id)?;
-    tx.commit()?;
-    Ok(true)
+    atomically(db, || {
+        let now = now_secs();
+        let updated = db.conn.execute(
+            "UPDATE tls_certificates SET
+                state = 'active',
+                cert_pem = ?1,
+                issuer = ?2,
+                not_before = ?3,
+                not_after = ?4,
+                serial = ?5,
+                self_signed = ?6,
+                ari_window_start = NULL,
+                ari_window_end = NULL,
+                ari_polled_at = NULL,
+                created_at = ?7,
+                updated_at = ?7
+             WHERE id = ?8 AND origin = 'canopy' AND state IN ('csr_pending', 'active')",
+            params![
+                cert_pem,
+                metadata.issuer,
+                metadata.not_before,
+                metadata.not_after,
+                metadata.serial,
+                metadata.self_signed as i64,
+                now,
+                id,
+            ],
+        )?;
+        if updated == 0 {
+            return Ok(false);
+        }
+        supersede_other_active_for_hostname(db, id)?;
+        Ok(true)
+    })
 }
 
 /// Mark a Canopy certificate revoked and destroy its key, so it is neither

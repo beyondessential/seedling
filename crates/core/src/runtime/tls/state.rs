@@ -377,10 +377,7 @@ impl CanopyStanding {
 /// What is serving a hostname.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ServingSource {
-    Store {
-        cert_id: i64,
-        origin: TlsCertOrigin,
-    },
+    Store { cert_id: i64, origin: TlsCertOrigin },
     Proxy,
 }
 
@@ -734,17 +731,17 @@ impl ChainContext {
                 }
                 .filter(|c| c.not_after.is_none_or(|na| na > now))
                 .map(|c| {
-                        (
-                            chain::Serving {
-                                identity: chain::Identity {
-                                    cert_id: None,
-                                    not_after: c.not_after,
-                                },
-                                renewal_point: renewal_point_for(c.not_before, c.not_after),
+                    (
+                        chain::Serving {
+                            identity: chain::Identity {
+                                cert_id: None,
+                                not_after: c.not_after,
                             },
-                            ServingSource::Proxy,
-                        )
-                    })
+                            renewal_point: renewal_point_for(c.not_before, c.not_after),
+                        },
+                        ServingSource::Proxy,
+                    )
+                })
             });
 
         Self {
@@ -769,7 +766,9 @@ fn decide_chain(ctx: &ChainContext, strategies: Vec<Strategy>) -> Decision {
     let cycle = match (&ctx.serving, ctx.staged_from) {
         // A certificate about to start serving is not absent, and asking for
         // another now would only produce a duplicate.
-        (None, Some(from)) if !ctx.force => chain::Cycle::Idle { next_cycle_at: from },
+        (None, Some(from)) if !ctx.force => chain::Cycle::Idle {
+            next_cycle_at: from,
+        },
         _ => chain::resolve(&chain::Inputs {
             chain: &strategies,
             now: ctx.now,

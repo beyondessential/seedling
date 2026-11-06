@@ -25,8 +25,9 @@ use crate::runtime::tls::{
     AttemptOutcome, DnsProviderKind, KeyType, RetryBlockSource, TlsCertOrigin, TlsCertState,
     TlsPolicy,
     chain::{self, Strategy},
-    keypair, parse, state, store,
+    keypair, parse, state,
     state::NextSource,
+    store,
     store::CertMetadata,
     validate::{self, ValidateError},
 };
@@ -1052,7 +1053,9 @@ fn project_chain(
         },
         Blocked { .. } | NoContactEmail | Debounced { .. } | Scheduled { .. } | IssueNow { .. } => {
             let (next, source) = decision_next_issuance(st);
-            let renewal = matches!(source, Some("ari" | "fallback")).then_some(next).flatten();
+            let renewal = matches!(source, Some("ari" | "fallback"))
+                .then_some(next)
+                .flatten();
             json!({
                 "responsible": "acme_dns",
                 "fall_through_at": null,

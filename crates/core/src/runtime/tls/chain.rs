@@ -108,6 +108,8 @@ pub struct Row {
     pub since: i64,
     /// When an order with the responsible strategy was opened, if one is.
     pub open_order_since: Option<i64>,
+    /// The earliest the responsible strategy is asked again after a refusal.
+    pub retry_not_before: Option<i64>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -127,7 +129,9 @@ pub struct Inputs<'a> {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Cycle {
     /// A usable certificate that has not reached its renewal point.
-    Idle { next_cycle_at: i64 },
+    Idle {
+        next_cycle_at: i64,
+    },
     Running(Running),
 }
 
@@ -389,7 +393,11 @@ mod tests {
     fn the_answer_does_not_depend_on_when_it_is_asked() {
         let late = running_of(resolve(&inputs(&TWO, 89 * DAY, Some(serving()), None)));
         assert_eq!(late.responsible, Strategy::Http01);
-        assert_eq!(late.since, 75 * DAY, "it became responsible at the point, not when asked");
+        assert_eq!(
+            late.since,
+            75 * DAY,
+            "it became responsible at the point, not when asked"
+        );
     }
 
     // r[verify tls.chain.ladder]
@@ -411,8 +419,14 @@ mod tests {
             step: 1,
             since: 61 * DAY,
             open_order_since: None,
+            retry_not_before: None,
         };
-        let r = running_of(resolve(&inputs(&TWO, 62 * DAY, Some(serving()), Some(&row))));
+        let r = running_of(resolve(&inputs(
+            &TWO,
+            62 * DAY,
+            Some(serving()),
+            Some(&row),
+        )));
         assert_eq!(r.responsible, Strategy::Http01);
         assert_eq!(r.since, 61 * DAY);
     }
@@ -425,8 +439,14 @@ mod tests {
             step: 9,
             since: 61 * DAY,
             open_order_since: None,
+            retry_not_before: None,
         };
-        let r = running_of(resolve(&inputs(&TWO, 62 * DAY, Some(serving()), Some(&row))));
+        let r = running_of(resolve(&inputs(
+            &TWO,
+            62 * DAY,
+            Some(serving()),
+            Some(&row),
+        )));
         assert_eq!(r.step, 1);
     }
 
@@ -438,6 +458,7 @@ mod tests {
             step: 1,
             since: 20 * DAY,
             open_order_since: None,
+            retry_not_before: None,
         };
         let cycle = resolve(&inputs(&TWO, 10 * DAY, Some(serving()), Some(&row)));
         assert_eq!(
@@ -469,8 +490,14 @@ mod tests {
             step: 0,
             since: 10 * DAY,
             open_order_since: None,
+            retry_not_before: None,
         };
-        let r = running_of(resolve(&inputs(&TWO, 20 * DAY, Some(serving()), Some(&row))));
+        let r = running_of(resolve(&inputs(
+            &TWO,
+            20 * DAY,
+            Some(serving()),
+            Some(&row),
+        )));
         assert_eq!(r.responsible, Strategy::Canopy);
     }
 
@@ -479,7 +506,10 @@ mod tests {
     fn nothing_to_replace_starts_with_the_first_available_strategy() {
         let r = running_of(resolve(&inputs(&TWO, 5, None, None)));
         assert_eq!(r.responsible, Strategy::Canopy);
-        assert_eq!(r.fall_through_at, None, "there is no expiry to measure from");
+        assert_eq!(
+            r.fall_through_at, None,
+            "there is no expiry to measure from"
+        );
     }
 
     // r[verify tls.chain.no-certificate]
@@ -499,6 +529,7 @@ mod tests {
             step: 0,
             since: 1,
             open_order_since: None,
+            retry_not_before: None,
         };
         let r = running_of(resolve(&inputs(&TWO, 10 * DAY, None, Some(&row))));
         assert_eq!(
@@ -516,6 +547,7 @@ mod tests {
             step: 0,
             since: 1,
             open_order_since: Some(1),
+            retry_not_before: None,
         };
         let mut i = inputs(&TWO, 100, None, Some(&row));
         i.offer_live = false;
@@ -551,6 +583,7 @@ mod tests {
             step: 1,
             since: 30 * DAY,
             open_order_since: None,
+            retry_not_before: None,
         };
         let r = running_of(resolve(&inputs(&TWO, 31 * DAY, None, Some(&row))));
         assert_eq!(r.responsible, Strategy::Http01);
@@ -565,6 +598,7 @@ mod tests {
             step: 1,
             since: 20 * DAY,
             open_order_since: None,
+            retry_not_before: None,
         };
         let r = running_of(resolve(&inputs(&TWO, 31 * DAY, None, Some(&row))));
         assert!(r.identity.is_none());

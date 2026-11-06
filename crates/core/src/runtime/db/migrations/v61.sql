@@ -124,6 +124,9 @@ DROP TABLE _tls_attempt_cert_ids;
 --   last_error          why the responsible strategy last failed to produce a
 --                       certificate, or NULL when its last attempt did not fail.
 --                       Cleared when a certificate arrives.
+--   retry_not_before    the earliest the responsible strategy is asked again after
+--                       a refusal or a rejected request, or NULL when it may be
+--                       asked on the next opportunity.
 CREATE TABLE tls_chain_state (
     hostname            TEXT PRIMARY KEY,
     replacing_cert_id   INTEGER,
@@ -132,5 +135,6 @@ CREATE TABLE tls_chain_state (
     step_since          INTEGER NOT NULL,
     open_order_since    INTEGER,
     last_error          TEXT,
+    retry_not_before    INTEGER,
     updated_at          INTEGER NOT NULL
 );

@@ -296,7 +296,11 @@ fn canopy_migration_keeps_policies_certificates_and_attempt_links() {
         policies,
         vec![
             ("*.example.com".to_owned(), "acme_dns".to_owned(), None),
-            ("legacy.example.com".to_owned(), "manual".to_owned(), Some(7)),
+            (
+                "legacy.example.com".to_owned(),
+                "manual".to_owned(),
+                Some(7)
+            ),
         ]
     );
 

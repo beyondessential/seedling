@@ -159,6 +159,30 @@ fn san_dns_names(cert: &x509_parser::certificate::X509Certificate<'_>) -> Vec<St
     names
 }
 
+/// The leaf certificate's SubjectPublicKeyInfo, DER-encoded, so a certificate
+/// that came back for a key can be checked against the key that was sent.
+// r[impl tls.canopy.key]
+pub fn leaf_spki_der(pem: &str) -> Result<Vec<u8>> {
+    let blocks = pem::parse_many(pem.as_bytes()).map_err(|e| {
+        PemSnafu {
+            message: e.to_string(),
+        }
+        .build()
+    })?;
+    let leaf = blocks
+        .into_iter()
+        .find(|b| b.tag() == "CERTIFICATE")
+        .ok_or_else(|| NoCertBlockSnafu.build())?;
+    let (_, cert) =
+        x509_parser::certificate::X509Certificate::from_der(leaf.contents()).map_err(|e| {
+            X509Snafu {
+                message: e.to_string(),
+            }
+            .build()
+        })?;
+    Ok(cert.tbs_certificate.subject_pki.raw.to_vec())
+}
+
 /// What the resolution and supersession rules need to know about a leaf,
 /// from one parse.
 pub struct LeafFacts {

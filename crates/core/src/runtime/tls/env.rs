@@ -12,8 +12,8 @@ use std::{
 };
 
 use super::state::{ChainEnv, ManagedIngress, ProxyCert, ProxyHolding};
-use crate::system::caddy::CertRead;
 use crate::runtime::{canopy::store as canopy_store, db::Db};
+use crate::system::caddy::CertRead;
 
 /// Build the [`ChainEnv`] for `managed` ingresses.
 ///

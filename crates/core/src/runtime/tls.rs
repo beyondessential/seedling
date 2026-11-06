@@ -14,6 +14,7 @@
 //! re-bootstrapping the account on every restart.
 
 pub mod acme;
+pub mod canopy;
 pub mod chain;
 pub mod dns;
 pub mod env;
