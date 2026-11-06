@@ -857,3 +857,64 @@ fn what_canopy_says_cannot_forge_a_log_line_or_run_off_the_screen() {
     };
     assert!(!reason.chars().any(char::is_control), "{reason:?}");
 }
+
+// r[verify tls.canopy.attempts]
+// r[verify tls.cert.force-retry]
+#[tokio::test]
+async fn a_retry_while_an_order_is_open_does_not_strand_its_attempt() {
+    let fake = Fake::new([Reply::Pending]);
+    let (engine, db) = engine(&fake);
+    engine.ask(ask(AttemptTrigger::OnDemand)).await.unwrap();
+    assert_eq!(attempts(&db).len(), 1);
+
+    // An operator retry restarts the cycle, writing a position that carries no
+    // open order while one is in fact open.
+    db.call(|db| {
+        store::set_force_retry(db, "a.example.com").unwrap();
+        store::start_cycle_for_force_retry(db, "a.example.com", Identity::NONE, 10).unwrap();
+    });
+
+    fake.push(Reply::Fail(status(403, "name-not-entitled")));
+    engine.ask(ask(AttemptTrigger::Manual)).await.unwrap();
+
+    let log = attempts(&db);
+    assert_eq!(
+        log.len(),
+        1,
+        "no second entry was opened for the same order"
+    );
+    assert_eq!(
+        log[0].0,
+        AttemptOutcome::Failure,
+        "and the one that was open is closed rather than left pending for ever"
+    );
+}
+
+// r[verify tls.canopy.revoked]
+#[tokio::test]
+async fn a_revocation_leaves_its_replacement_outstanding() {
+    let n = now();
+    let fake = Fake::new([
+        Reply::Issue {
+            not_before: n - 60 * DAY,
+            not_after: n + 30 * DAY,
+        },
+        Reply::Revoked,
+        Reply::Fail(RelayFailure::Unreachable("relay down".to_owned())),
+    ]);
+    let (engine, db) = engine(&fake);
+    engine.ask(ask(AttemptTrigger::OnDemand)).await.unwrap();
+
+    // The replacement request fails outright, so nothing about the order was
+    // learnt: it stays outstanding for the next tick to ask about.
+    engine.ask(renewing(&db)).await.unwrap();
+    let row = chain_row(&db).unwrap();
+    assert!(
+        row.row.open_order_since.is_some(),
+        "the replacement is still outstanding after a request that reached no one"
+    );
+    assert_eq!(
+        row.row.step, 1,
+        "and the hostname serves on the next strategy"
+    );
+}

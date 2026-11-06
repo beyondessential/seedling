@@ -497,24 +497,23 @@ fn position(db: &Db, ask: &Ask) -> rusqlite::Result<(chain::Row, Option<String>)
     })
 }
 
-/// Close the open attempt for a hostname, or when none is open and the outcome
-/// is worth a log entry, open and close one.
+/// Close the attempt that is open for a hostname, or when none is and the
+/// outcome is worth a log entry, open and close one.
+///
+/// Whether one is open is asked of the log itself rather than taken from the
+/// hostname's recorded position: the two drifted apart whenever something
+/// rewrote the position while an order was in flight, and an attempt the caller
+/// believed closed then stayed open for ever.
 // r[impl tls.canopy.attempts]
 fn close_attempt(
     db: &Db,
     ask: &Ask,
-    open: bool,
     outcome: AttemptOutcome,
     cert_id: Option<i64>,
     error: Option<&str>,
     log_if_none: bool,
 ) -> rusqlite::Result<()> {
-    let id = if open {
-        store::latest_pending_attempt(db, &ask.hostname)?
-    } else {
-        None
-    };
-    let id = match id {
+    let id = match store::latest_pending_attempt(db, &ask.hostname)? {
         Some(id) => id,
         None if log_if_none => store::insert_attempt(db, &ask.hostname, ask.trigger)?,
         None => return Ok(()),
@@ -538,7 +537,6 @@ fn apply(
     now: i64,
 ) -> rusqlite::Result<ApplyResult> {
     let (mut row, _) = position(db, ask)?;
-    let was_open = row.open_order_since.is_some();
 
     match answer {
         Answer::Issued { chain_pem } => {
@@ -643,15 +641,7 @@ fn apply(
                     "the key for this certificate is no longer held".to_owned(),
                 );
             }
-            close_attempt(
-                db,
-                ask,
-                was_open,
-                AttemptOutcome::Success,
-                Some(key_id),
-                None,
-                true,
-            )?;
+            close_attempt(db, ask, AttemptOutcome::Success, Some(key_id), None, true)?;
             // The cycle is over: the new certificate is what the next one
             // replaces, so what was recorded for this one belongs to the past.
             store::clear_chain_row(db, &ask.hostname)?;
@@ -660,15 +650,7 @@ fn apply(
         Answer::Pending => pending(db, row, ask, now),
         Answer::Refused { reason } => {
             // r[impl tls.chain.refusal]
-            close_attempt(
-                db,
-                ask,
-                was_open,
-                AttemptOutcome::Failure,
-                None,
-                Some(&reason),
-                true,
-            )?;
+            close_attempt(db, ask, AttemptOutcome::Failure, None, Some(&reason), true)?;
             let advances =
                 ask.canopy_responsible && !ask.replacing.is_none() && ask.step + 1 < ask.chain_len;
             if advances {
@@ -685,15 +667,7 @@ fn apply(
             // A strategy that fails is asked again at the after-failure cadence,
             // as one that refuses is. Canopy goes on retrying the order on its
             // own side meanwhile, and the next ask collects whatever came of it.
-            close_attempt(
-                db,
-                ask,
-                was_open,
-                AttemptOutcome::Failure,
-                None,
-                Some(&reason),
-                false,
-            )?;
+            close_attempt(db, ask, AttemptOutcome::Failure, None, Some(&reason), false)?;
             row.open_order_since = None;
             row.retry_not_before = Some(now + AUTO_RETRY_DEBOUNCE_SECS);
             store::put_chain_row(db, &ask.hostname, &row, Some(&reason))?;
@@ -701,15 +675,7 @@ fn apply(
         }
         Answer::Unavailable { reason } => unavailable(db, row, ask, reason),
         Answer::Malformed { reason } => {
-            close_attempt(
-                db,
-                ask,
-                was_open,
-                AttemptOutcome::Failure,
-                None,
-                Some(&reason),
-                false,
-            )?;
+            close_attempt(db, ask, AttemptOutcome::Failure, None, Some(&reason), false)?;
             row.open_order_since = None;
             row.retry_not_before = Some(now + AUTO_RETRY_DEBOUNCE_SECS);
             store::put_chain_row(db, &ask.hostname, &row, Some(&reason))?;
@@ -722,15 +688,14 @@ fn apply(
 }
 
 /// The order is open: note it, once.
+// r[impl tls.canopy.attempts]
 fn pending(db: &Db, mut row: chain::Row, ask: &Ask, now: i64) -> rusqlite::Result<ApplyResult> {
-    if row.open_order_since.is_none() {
-        // An order that is already open is one entry in the log, however the
-        // position recorded for it came to be rewritten.
-        if store::latest_pending_attempt(db, &ask.hostname)?.is_none() {
-            store::insert_attempt(db, &ask.hostname, ask.trigger)?;
-        }
-        row.open_order_since = Some(now);
+    // One entry per order, asked of the log rather than of the position, which
+    // something may have rewritten while the order was in flight.
+    if store::latest_pending_attempt(db, &ask.hostname)?.is_none() {
+        store::insert_attempt(db, &ask.hostname, ask.trigger)?;
     }
+    row.open_order_since.get_or_insert(now);
     row.retry_not_before = None;
     store::put_chain_row(db, &ask.hostname, &row, None)?;
     Ok(ApplyResult::Done(Outcome::Pending))
@@ -764,18 +729,8 @@ fn apply_revocation(
     let was_serving = held
         .as_ref()
         .is_some_and(|c| c.state == TlsCertState::Active && c.cert_pem.is_some());
-    let was_open =
-        store::get_chain_row(db, &ask.hostname)?.is_some_and(|r| r.row.open_order_since.is_some());
     store::revoke_canopy_certificate(db, cert_id)?;
-    close_attempt(
-        db,
-        ask,
-        was_open,
-        AttemptOutcome::Failure,
-        None,
-        Some(reason),
-        false,
-    )?;
+    close_attempt(db, ask, AttemptOutcome::Failure, None, Some(reason), false)?;
 
     let (replacing, step, since) = if was_serving {
         (
@@ -796,7 +751,11 @@ fn apply_revocation(
             identity: replacing,
             step,
             since,
-            open_order_since: None,
+            // A replacement is outstanding from here until Canopy delivers one
+            // or refuses: the hostname serves on the next strategy meanwhile,
+            // and this is what has it go on asking.
+            // r[impl tls.canopy.revoked]
+            open_order_since: Some(now),
             retry_not_before: None,
         },
         Some(reason),

@@ -758,10 +758,6 @@ struct ChainContext {
     offer_live: bool,
     serving: Option<(chain::Serving, ServingSource)>,
     row: Option<chain::Row>,
-    /// The runtime holds a key for this hostname that Canopy has not yet
-    /// certified, so an order of its own is outstanding whichever strategy is
-    /// responsible for serving the hostname meanwhile.
-    awaiting_canopy: bool,
     last_error: Option<String>,
     proxy: Option<ProxyHolding>,
     staged_from: Option<i64>,
@@ -843,11 +839,6 @@ impl ChainContext {
             offer_live: snap.env.offer_live,
             serving,
             row: chain_row.map(|r| r.row.clone()),
-            awaiting_canopy: snap.certificates.iter().any(|c| {
-                c.origin == TlsCertOrigin::Canopy
-                    && c.state == TlsCertState::CsrPending
-                    && c.hostname == hostname
-            }),
             last_error: chain_row.and_then(|r| r.last_error.clone()),
             proxy: snap.env.proxy.get(hostname).cloned(),
             staged_from,
@@ -927,15 +918,14 @@ fn decide_chain(ctx: &ChainContext, strategies: Vec<Strategy>) -> Decision {
     let collect_canopy = ctx.canopy.applies()
         && !waiting
         && match &cycle {
+            // An order Canopy has not answered for is outstanding whoever is
+            // serving the hostname meanwhile, which is how a replacement for a
+            // revoked certificate goes on being asked for while the proxy serves
+            // the hostname. One fact, recorded in one place: a refusal clears it,
+            // and the hostname then stays where it is until the next cycle.
+            // r[impl tls.canopy.revoked]
             chain::Cycle::Running(r) => {
                 r.open_order
-                    // An order Canopy has not answered for is outstanding
-                    // whoever is serving the hostname meanwhile, so the key the
-                    // runtime holds for it is asked about until one arrives.
-                    // Without this a replacement for a revoked certificate that
-                    // failed on its one attempt would never be asked for again.
-                    // r[impl tls.canopy.revoked]
-                    || ctx.awaiting_canopy
                     || (!refused
                         && matches!(
                             ctx.serving,
@@ -2034,15 +2024,13 @@ mod tests {
     }
 
     // r[verify tls.canopy.revoked]
+    // r[verify tls.chain.return]
     #[test]
     fn a_replacement_canopy_has_not_answered_for_is_asked_about_again() {
         // What a revocation leaves behind: the revoked certificate recorded as
-        // the one being replaced, the hostname passed to the proxy, and a key
-        // waiting for its first certificate.
-        let mut pending = fake_cert("host.example.com", 9, 0, 300);
-        pending.origin = TlsCertOrigin::Canopy;
-        pending.state = TlsCertState::CsrPending;
-        let mut s = snap(vec![], vec![pending], vec![], vec![], vec![], "ops@x", 250);
+        // the one being replaced, the hostname passed to the proxy, and the
+        // replacement outstanding.
+        let mut s = snap(vec![], vec![], vec![], vec![], vec![], "ops@x", 250);
         s.env = canopy_env("host.example.com", &["tamanu"], true);
         s.chain_rows = vec![TlsChainRow {
             hostname: "host.example.com".to_owned(),
@@ -2053,7 +2041,7 @@ mod tests {
                 },
                 step: 1,
                 since: 240,
-                open_order_since: None,
+                open_order_since: Some(240),
                 retry_not_before: None,
             },
             last_error: Some("revoked".to_owned()),
@@ -2068,9 +2056,16 @@ mod tests {
             "but the replacement Canopy has not answered for is still asked about"
         );
 
-        // And not sooner than the cadence when the last answer refused it.
+        // Canopy refuses the replacement: the hostname stays where it is until
+        // the next cycle rather than asking again for ever.
+        s.chain_rows[0].row.open_order_since = None;
         s.chain_rows[0].row.retry_not_before = Some(3840);
         assert!(!chain_of(&compute_state(&s, "host.example.com")).collect_canopy);
+        s.now = 4000;
+        assert!(
+            !chain_of(&compute_state(&s, "host.example.com")).collect_canopy,
+            "nor once the after-failure cadence has lapsed"
+        );
     }
 
     // r[verify tls.chain.cycle]
