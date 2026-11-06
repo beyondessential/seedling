@@ -10,7 +10,7 @@ Seedling adopts Canopy for certificates, backups, DNS names and workload identit
 
 An app definition declares its Canopy application type in BSL, and Seedling reports each typed app to Canopy as an application whose health is the app's status, with its faults as detail. The first app to claim a type holds it; a later app declaring the same type gets a non-critical fault and no Canopy features, and takes the type over when the holder is removed. Also covers the fault filed when an app relies on Canopy and no offer has been live past a grace period. Every Canopy card here depends on this one.
 
-## Issue certificates through Canopy
+## Issue certificates through Canopy · J5
 
 For a hostname with no operator policy, Seedling requests its certificate from Canopy when an offer is live and the entitlements allow the hostname's app to have it, with HTTP-01 as the fallback. Seedling holds the key and submits a CSR; Canopy renews and Seedling collects, replacing the key when Canopy says it must. Adds a Canopy-only policy that drops the HTTP-01 fallback, for hostnames Seedling does not yet receive traffic for. Canopy certificates appear in the hostname view and satisfy warm-cert readiness like other runtime-managed certificates.
 
