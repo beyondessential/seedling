@@ -449,6 +449,9 @@ impl OwnedState {
             // Tailscale issuance doesn't use a DNS provider; the cert
             // comes from the local tailscaled API.
             TlsPolicy::Tailscale => None,
+            // Canopy requests go through the relay, not through this
+            // coordinator.
+            TlsPolicy::Canopy => None,
         });
         Self {
             decision: s.decision.clone(),
@@ -510,7 +513,10 @@ fn handle_non_issuing(
     owned: &OwnedState,
 ) -> Result<ProceedKind> {
     match &owned.decision {
-        Decision::Default => Err(CoordinatorError::NoPolicy {
+        // A hostname on a strategy chain is carried out by the proxy or by
+        // Canopy, never by an ACME-DNS flow, and has no policy to run one
+        // from.
+        Decision::Default | Decision::Chain(_) => Err(CoordinatorError::NoPolicy {
             hostname: hostname.to_owned(),
         }),
         Decision::Blocked { reason } => Err(CoordinatorError::Paused {

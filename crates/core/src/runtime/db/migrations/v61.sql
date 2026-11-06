@@ -121,6 +121,9 @@ DROP TABLE _tls_attempt_cert_ids;
 --   open_order_since    when an order with the responsible strategy was opened,
 --                       or NULL when none is open. A hostname stays with a
 --                       strategy while it has an order open.
+--   last_error          why the responsible strategy last failed to produce a
+--                       certificate, or NULL when its last attempt did not fail.
+--                       Cleared when a certificate arrives.
 CREATE TABLE tls_chain_state (
     hostname            TEXT PRIMARY KEY,
     replacing_cert_id   INTEGER,
@@ -128,5 +131,6 @@ CREATE TABLE tls_chain_state (
     step                INTEGER NOT NULL,
     step_since          INTEGER NOT NULL,
     open_order_since    INTEGER,
+    last_error          TEXT,
     updated_at          INTEGER NOT NULL
 );

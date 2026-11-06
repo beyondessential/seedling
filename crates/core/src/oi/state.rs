@@ -66,3 +66,59 @@ pub struct OiState {
     // i[impl definition.fetch]
     pub definition_registry: crate::runtime::definition::fetch::SharedRegistry,
 }
+
+impl OiState {
+    /// Whether Canopy access is enabled and a client is offering to carry
+    /// requests.
+    pub fn canopy_offer_live(&self) -> bool {
+        self.canopy.is_enabled() && self.canopy.current().is_some()
+    }
+
+    /// Resolve (and cache) the host filesystem path of the Caddy data volume.
+    /// Returns `None` if the volume can't be located right now, such as before
+    /// Caddy has started or when the container driver's mount-point query
+    /// failed. The cell is one-shot success; transient failures retry on the
+    /// next call.
+    pub fn resolve_caddy_data_path(&self) -> Option<PathBuf> {
+        if let Some(p) = self.caddy_data_path.get() {
+            return Some(p.clone());
+        }
+        let runtime = Arc::clone(&self.container_runtime);
+        let resolved: Result<PathBuf, _> = tokio::task::block_in_place(|| {
+            tokio::runtime::Handle::current().block_on(async move {
+                runtime
+                    .volume_mountpoint(crate::system::caddy::CADDY_DATA_VOLUME)
+                    .await
+            })
+        });
+        match resolved {
+            Ok(p) => {
+                // Best-effort fill; if another caller raced ahead and won we
+                // use whatever they stored.
+                let _ = self.caddy_data_path.set(p.clone());
+                Some(p)
+            }
+            Err(e) => {
+                tracing::debug!(
+                    error = %e,
+                    "caddy data volume unresolved; the proxy's certificates cannot be read"
+                );
+                None
+            }
+        }
+    }
+
+    /// The facts a hostname's strategy chain depends on, for the TLS-terminating
+    /// ingresses `managed`.
+    pub fn chain_env(
+        &self,
+        managed: &[crate::runtime::tls::state::ManagedIngress],
+    ) -> rusqlite::Result<crate::runtime::tls::state::ChainEnv> {
+        let offer_live = self.canopy_offer_live();
+        let caddy_data = self.resolve_caddy_data_path();
+        let managed = managed.to_vec();
+        self.db.call(move |db| {
+            crate::runtime::tls::env::collect(db, &managed, offer_live, caddy_data.as_deref())
+        })
+    }
+}

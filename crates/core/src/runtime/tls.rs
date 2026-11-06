@@ -14,7 +14,9 @@
 //! re-bootstrapping the account on every restart.
 
 pub mod acme;
+pub mod chain;
 pub mod dns;
+pub mod env;
 pub mod expiring;
 pub mod issuance;
 pub mod keypair;
@@ -257,6 +259,19 @@ pub enum TlsPolicy {
 pub struct TlsPolicyRow {
     pub hostname: String,
     pub policy: TlsPolicy,
+    pub updated_at: i64,
+}
+
+/// A hostname's recorded position in its strategy chain; see
+/// [`chain::Row`] for what the position means and why it is only sometimes
+/// recorded.
+// r[impl tls.chain.ladder]
+#[derive(Debug, Clone)]
+pub struct TlsChainRow {
+    pub hostname: String,
+    pub row: chain::Row,
+    /// Why the responsible strategy last failed to produce a certificate.
+    pub last_error: Option<String>,
     pub updated_at: i64,
 }
 

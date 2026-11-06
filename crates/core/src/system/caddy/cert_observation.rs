@@ -16,33 +16,47 @@ use crate::runtime::identity::ResourceInstance;
 
 /// Returns whether a cert file exists for the given hostname under any issuer.
 pub(crate) fn cert_present(caddy_data_path: &Path, hostname: &str) -> bool {
-    cert_path_for(caddy_data_path, hostname).is_some()
+    matches!(cert_path_for(caddy_data_path, hostname), Ok(Some(_)))
 }
 
 /// Locate the on-disk cert file for `hostname` under any issuer subdir.
-fn cert_path_for(caddy_data_path: &Path, hostname: &str) -> Option<(String, std::path::PathBuf)> {
+///
+/// `Ok(None)` means the cache was read and holds nothing for the hostname. A
+/// cache that could not be read is an error, since that cannot be told from
+/// "holds nothing" by looking at the result.
+fn cert_path_for(
+    caddy_data_path: &Path,
+    hostname: &str,
+) -> std::io::Result<Option<(String, std::path::PathBuf)>> {
     let cert_root = caddy_data_path
         .join(super::image::CERT_CACHE_DIR)
         .join("certificates");
-    let issuers = std::fs::read_dir(&cert_root).ok()?;
-    for entry in issuers.flatten() {
+    let issuers = match std::fs::read_dir(&cert_root) {
+        Ok(issuers) => issuers,
+        // The proxy has not written a certificate yet.
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(e) => return Err(e),
+    };
+    for entry in issuers {
+        let entry = entry?;
         let issuer_dir = entry.path();
         if !issuer_dir.is_dir() {
             continue;
         }
         let cert_path = issuer_dir.join(hostname).join(format!("{hostname}.crt"));
-        if cert_path.exists() {
+        if cert_path.try_exists()? {
             let issuer_kind = entry.file_name().to_string_lossy().into_owned();
-            return Some((issuer_kind, cert_path));
+            return Ok(Some((issuer_kind, cert_path)));
         }
     }
-    None
+    Ok(None)
 }
 
 /// Parsed view of a Caddy-managed certificate read off the certmagic
 /// data directory. Used by the OI rollup to show issuer / expiry / "last
 /// issued at" for hostnames whose strategy is the runtime default
 /// (Caddy's automatic TLS).
+#[derive(Debug)]
 pub struct CaddyCertView {
     /// The issuer subdir name on disk: `local` for Caddy's internal CA,
     /// or the host of the ACME directory URL (for example
@@ -55,19 +69,47 @@ pub struct CaddyCertView {
     pub self_signed: bool,
 }
 
+/// What the proxy's cache says about a hostname.
+#[derive(Debug)]
+pub enum CertRead {
+    /// The cache was read and holds no certificate for the hostname.
+    Absent,
+    /// A certificate file is there, or the cache could not be read, and what
+    /// it holds could not be determined.
+    Unreadable,
+    Present(CaddyCertView),
+}
+
 /// Read and parse the Caddy-managed cert for `hostname` from disk.
-/// Returns `None` if the file is absent or unparseable.
-pub fn read_cert(caddy_data_path: &Path, hostname: &str) -> Option<CaddyCertView> {
-    let (issuer_kind, cert_path) = cert_path_for(caddy_data_path, hostname)?;
-    let pem = std::fs::read_to_string(&cert_path).ok()?;
-    let parsed = crate::runtime::tls::parse::parse_chain(&pem).ok()?;
-    Some(CaddyCertView {
+pub fn read_cert_state(caddy_data_path: &Path, hostname: &str) -> CertRead {
+    let (issuer_kind, cert_path) = match cert_path_for(caddy_data_path, hostname) {
+        Ok(Some(found)) => found,
+        Ok(None) => return CertRead::Absent,
+        Err(_) => return CertRead::Unreadable,
+    };
+    let Ok(pem) = std::fs::read_to_string(&cert_path) else {
+        return CertRead::Unreadable;
+    };
+    let Ok(parsed) = crate::runtime::tls::parse::parse_chain(&pem) else {
+        return CertRead::Unreadable;
+    };
+    CertRead::Present(CaddyCertView {
         issuer_kind,
         issuer: parsed.metadata.issuer,
         not_before: parsed.metadata.not_before,
         not_after: parsed.metadata.not_after,
         self_signed: parsed.metadata.self_signed,
     })
+}
+
+/// Read and parse the Caddy-managed cert for `hostname` from disk, for display.
+/// `None` when there is nothing to show, whether the cache holds no certificate
+/// or one that could not be read.
+pub fn read_cert(caddy_data_path: &Path, hostname: &str) -> Option<CaddyCertView> {
+    match read_cert_state(caddy_data_path, hostname) {
+        CertRead::Present(view) => Some(view),
+        CertRead::Absent | CertRead::Unreadable => None,
+    }
 }
 
 /// For each `(instance, hostname)` pair, check the cert cache and return any

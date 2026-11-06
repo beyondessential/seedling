@@ -11,8 +11,8 @@ use secrecy::{ExposeSecret, SecretString};
 use super::{
     AcmeAccount, AttemptOutcome, AttemptTrigger, DnsProviderEntry, DnsProviderKind,
     DnsProviderSummary, KeyType, RetryBlockSource, TlsCertAttempt, TlsCertForceRetry,
-    TlsCertOrigin, TlsCertRetryBlock, TlsCertState, TlsCertificate, TlsPolicy, TlsPolicyRow,
-    TlsSettings, pattern_matches, pattern_specificity,
+    TlsCertOrigin, TlsCertRetryBlock, TlsCertState, TlsCertificate, TlsChainRow, TlsPolicy,
+    TlsPolicyRow, TlsSettings, chain, pattern_matches, pattern_specificity,
 };
 use crate::runtime::{db::Db, secrets::Cipher};
 
@@ -211,6 +211,8 @@ pub fn list_policies(db: &Db) -> rusqlite::Result<Vec<TlsPolicyRow>> {
                 },
                 // r[impl ingress.site.tailscale]
                 "tailscale" => TlsPolicy::Tailscale,
+                // r[impl tls.strategy.canopy-only]
+                "canopy" => TlsPolicy::Canopy,
                 "manual" => return Ok(None),
                 _ => return Err(rusqlite::Error::InvalidQuery),
             };
@@ -243,6 +245,23 @@ pub fn set_policy_acme_dns(db: &Db, hostname: &str, dns_provider: &str) -> rusql
              cert_id = NULL,
              updated_at = excluded.updated_at",
         params![hostname, dns_provider, now],
+    )?;
+    Ok(())
+}
+
+// r[impl tls.strategy.canopy-only]
+// r[impl tls.policy.apply]
+pub fn set_policy_canopy(db: &Db, hostname: &str) -> rusqlite::Result<()> {
+    let now = now_secs();
+    db.conn.execute(
+        "INSERT INTO tls_policies (hostname, strategy, dns_provider, cert_id, updated_at)
+         VALUES (?1, 'canopy', NULL, NULL, ?2)
+         ON CONFLICT(hostname) DO UPDATE SET
+             strategy = excluded.strategy,
+             dns_provider = NULL,
+             cert_id = NULL,
+             updated_at = excluded.updated_at",
+        params![hostname, now],
     )?;
     Ok(())
 }
@@ -729,9 +748,15 @@ pub fn supersede_other_active_for_hostname(db: &Db, keep_id: i64) -> rusqlite::R
 }
 
 pub fn delete_certificate(db: &Db, id: i64) -> rusqlite::Result<bool> {
-    let n = db
-        .conn
-        .execute("DELETE FROM tls_certificates WHERE id = ?1", [id])?;
+    let tx = db.conn.unchecked_transaction()?;
+    let n = tx.execute("DELETE FROM tls_certificates WHERE id = ?1", [id])?;
+    // A recorded chain position for a certificate that no longer exists would
+    // go on steering a hostname by an expiry nothing holds.
+    tx.execute(
+        "DELETE FROM tls_chain_state WHERE replacing_cert_id = ?1",
+        [id],
+    )?;
+    tx.commit()?;
     Ok(n > 0)
 }
 
@@ -1183,6 +1208,207 @@ pub fn list_force_retries(db: &Db) -> rusqlite::Result<Vec<TlsCertForceRetry>> {
         })?
         .collect::<rusqlite::Result<_>>()?;
     Ok(rows)
+}
+
+// ---------------------------------------------------------------------------
+// Strategy chain position
+// ---------------------------------------------------------------------------
+
+/// Every hostname with a recorded chain position.
+// r[impl tls.chain.ladder]
+pub fn list_chain_rows(db: &Db) -> rusqlite::Result<Vec<TlsChainRow>> {
+    let mut stmt = db.conn.prepare(
+        "SELECT hostname, replacing_cert_id, replacing_not_after, step, step_since,
+                open_order_since, last_error, updated_at
+         FROM tls_chain_state ORDER BY hostname",
+    )?;
+    let rows = stmt
+        .query_map([], |row| {
+            let step: i64 = row.get(3)?;
+            Ok(TlsChainRow {
+                hostname: row.get(0)?,
+                row: chain::Row {
+                    identity: chain::Identity {
+                        cert_id: row.get(1)?,
+                        not_after: row.get(2)?,
+                    },
+                    // A negative step cannot have been written by this code;
+                    // reading it as the first strategy would hide that.
+                    step: usize::try_from(step).map_err(|_| rusqlite::Error::InvalidQuery)?,
+                    since: row.get(4)?,
+                    open_order_since: row.get(5)?,
+                },
+                last_error: row.get(6)?,
+                updated_at: row.get(7)?,
+            })
+        })?
+        .collect::<rusqlite::Result<_>>()?;
+    Ok(rows)
+}
+
+/// Record a hostname's chain position, replacing whatever was recorded.
+// r[impl tls.chain.ladder]
+pub fn put_chain_row(db: &Db, hostname: &str, row: &chain::Row, last_error: Option<&str>) -> rusqlite::Result<()> {
+    db.conn.execute(
+        "INSERT INTO tls_chain_state
+            (hostname, replacing_cert_id, replacing_not_after, step, step_since,
+             open_order_since, last_error, updated_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+         ON CONFLICT(hostname) DO UPDATE SET
+             replacing_cert_id = excluded.replacing_cert_id,
+             replacing_not_after = excluded.replacing_not_after,
+             step = excluded.step,
+             step_since = excluded.step_since,
+             open_order_since = excluded.open_order_since,
+             last_error = excluded.last_error,
+             updated_at = excluded.updated_at",
+        params![
+            hostname,
+            row.identity.cert_id,
+            row.identity.not_after,
+            i64::try_from(row.step).map_err(|e| unreadable(e.to_string()))?,
+            row.since,
+            row.open_order_since,
+            last_error,
+            now_secs(),
+        ],
+    )?;
+    Ok(())
+}
+
+/// Forget a hostname's chain position, because a cycle has finished.
+pub fn clear_chain_row(db: &Db, hostname: &str) -> rusqlite::Result<bool> {
+    let n = db
+        .conn
+        .execute("DELETE FROM tls_chain_state WHERE hostname = ?1", [hostname])?;
+    Ok(n > 0)
+}
+
+/// Consume an operator retry for a hostname on a chain and start its cycle in
+/// the same transaction, so a restart between the two cannot lose the retry.
+///
+/// Returns whether a retry was queued. `replacing` is what the cycle replaces,
+/// as [`chain::resolve`] will see it.
+// r[impl tls.cert.force-retry]
+// r[impl tls.chain.return]
+pub fn start_cycle_for_force_retry(
+    db: &Db,
+    hostname: &str,
+    replacing: chain::Identity,
+    now: i64,
+) -> rusqlite::Result<bool> {
+    let tx = db.conn.unchecked_transaction()?;
+    let queued = take_force_retry(db, hostname)?;
+    if queued {
+        put_chain_row(
+            db,
+            hostname,
+            &chain::Row {
+                identity: replacing,
+                step: 0,
+                since: now,
+                open_order_since: None,
+            },
+            None,
+        )?;
+    }
+    tx.commit()?;
+    Ok(queued)
+}
+
+// ---------------------------------------------------------------------------
+// Canopy certificates
+// ---------------------------------------------------------------------------
+
+/// The key held for a Canopy certificate for `hostname`: the newest row of
+/// origin `canopy` that is waiting for its first certificate or holds one.
+///
+/// A revoked row is never returned, since its key has been destroyed.
+// r[impl tls.canopy.key]
+pub fn find_canopy_key(db: &Db, hostname: &str) -> rusqlite::Result<Option<TlsCertificate>> {
+    db.conn
+        .query_row(
+            &format!(
+                "SELECT {CERT_COLUMNS} FROM tls_certificates
+                 WHERE origin = 'canopy' AND hostname = ?1
+                   AND state IN ('csr_pending', 'active')
+                 ORDER BY id DESC LIMIT 1"
+            ),
+            [hostname],
+            row_to_certificate,
+        )
+        .optional()
+}
+
+/// Store the chain Canopy delivered against a key the runtime holds, and
+/// retire what it replaces.
+///
+/// The row is the key's: a first certificate activates a pending row, and a
+/// renewal replaces the chain in place, so there is never a window in which the
+/// key is held by no certificate. `created_at` moves to now, since resolution
+/// ranks certificates by when they came into being.
+///
+/// `Ok(false)` means the row was neither pending nor active any more, because a
+/// revocation or a cancellation got there first, and nothing was written.
+// r[impl tls.canopy.collect]
+// r[impl tls.cert.supersede]
+pub fn activate_canopy_chain(
+    db: &Db,
+    id: i64,
+    cert_pem: &str,
+    metadata: &CertMetadata,
+) -> rusqlite::Result<bool> {
+    let tx = db.conn.unchecked_transaction()?;
+    let now = now_secs();
+    let updated = tx.execute(
+        "UPDATE tls_certificates SET
+            state = 'active',
+            cert_pem = ?1,
+            issuer = ?2,
+            not_before = ?3,
+            not_after = ?4,
+            serial = ?5,
+            self_signed = ?6,
+            ari_window_start = NULL,
+            ari_window_end = NULL,
+            ari_polled_at = NULL,
+            created_at = ?7,
+            updated_at = ?7
+         WHERE id = ?8 AND origin = 'canopy' AND state IN ('csr_pending', 'active')",
+        params![
+            cert_pem,
+            metadata.issuer,
+            metadata.not_before,
+            metadata.not_after,
+            metadata.serial,
+            metadata.self_signed as i64,
+            now,
+            id,
+        ],
+    )?;
+    if updated == 0 {
+        return Ok(false);
+    }
+    supersede_other_active_for_hostname(db, id)?;
+    tx.commit()?;
+    Ok(true)
+}
+
+/// Mark a Canopy certificate revoked and destroy its key, so it is neither
+/// served nor usable again.
+///
+/// Returns whether a row was changed; a certificate already revoked is not.
+// r[impl tls.canopy.revoked]
+pub fn revoke_canopy_certificate(db: &Db, id: i64) -> rusqlite::Result<bool> {
+    let n = db.conn.execute(
+        "UPDATE tls_certificates SET
+            state = 'revoked',
+            key_ciphertext = x'',
+            updated_at = ?1
+         WHERE id = ?2 AND origin = 'canopy' AND state IN ('csr_pending', 'active')",
+        params![now_secs(), id],
+    )?;
+    Ok(n > 0)
 }
 
 // ---------------------------------------------------------------------------

@@ -108,22 +108,19 @@ fn compute_desired(
 ) -> Option<DesiredFault> {
     let st = state::compute_state(snap, &target.hostname);
     let cert = st.active_cert?;
-    // Only manual / CSR-derived certs warrant the fault. ACME-DNS certs
-    // are renewed autonomously; the operator does not need to be paged.
-    if !matches!(cert.origin, TlsCertOrigin::Manual | TlsCertOrigin::Csr) {
-        return None;
-    }
+    // Only manual / CSR-derived certs warrant the fault. ACME-DNS and
+    // Canopy certs are renewed by the runtime's own chain, and a chain that
+    // cannot replace one is reported by its own fault; the operator has
+    // nothing to upload.
+    let strategy = match cert.origin {
+        TlsCertOrigin::Manual => "manual",
+        TlsCertOrigin::Csr => "csr",
+        TlsCertOrigin::AcmeDns | TlsCertOrigin::Tailscale | TlsCertOrigin::Canopy => return None,
+    };
     let not_after = cert.not_after?;
     if not_after - now > EXPIRY_WINDOW_SECS {
         return None;
     }
-    let strategy = match cert.origin {
-        TlsCertOrigin::Manual => "manual",
-        TlsCertOrigin::Csr => "csr",
-        TlsCertOrigin::AcmeDns | TlsCertOrigin::Tailscale => {
-            unreachable!("filtered above: only manual / csr origins reach this branch")
-        }
-    };
     let description = format!(
         "certificate for {} (strategy: {strategy}) expires at unix={not_after}; \
          the runtime cannot autonomously renew this cert — upload a replacement",
