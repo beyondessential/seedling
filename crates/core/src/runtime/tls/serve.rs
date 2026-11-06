@@ -275,8 +275,19 @@ impl GateCache {
         let mut entries = self.entries.lock();
         if entries.len() >= Self::CAPACITY {
             entries.retain(|_, (at, _)| at.elapsed() < Self::TTL);
-            if entries.len() >= Self::CAPACITY {
-                entries.clear();
+            // Still full of answers that are all current, which is the flood of
+            // names this bound exists for. Drop the oldest to make room, since
+            // throwing the whole table away would send every warm hostname back
+            // to deciding at once — the very burst the cache is here to stop.
+            while entries.len() >= Self::CAPACITY {
+                let Some(oldest) = entries
+                    .iter()
+                    .min_by_key(|(_, (at, _))| *at)
+                    .map(|(name, _)| name.clone())
+                else {
+                    break;
+                };
+                entries.remove(&oldest);
             }
         }
         entries.insert(hostname.to_owned(), (std::time::Instant::now(), answer));
@@ -783,10 +794,18 @@ mod tests {
     #[test]
     fn the_gate_does_not_grow_with_the_names_strangers_send() {
         let cache = GateCache::new();
+        cache.put("warm.example.com", FallThrough::Withhold);
         for i in 0..(GateCache::CAPACITY * 2) {
             cache.put(&format!("{i}.example.com"), FallThrough::Allow);
+            assert!(
+                cache.entries.lock().len() <= GateCache::CAPACITY,
+                "the bound holds all the way through the flood"
+            );
         }
-        assert!(cache.entries.lock().len() <= GateCache::CAPACITY);
+        // The names the flood pushed out are the oldest, and what it wrote most
+        // recently is still answered from the table rather than decided again.
+        let newest = format!("{}.example.com", GateCache::CAPACITY * 2 - 1);
+        assert_eq!(cache.get(&newest), Some(FallThrough::Allow));
     }
 
     // r[verify tls.chain.proxy-gate]
