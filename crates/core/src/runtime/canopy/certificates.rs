@@ -25,7 +25,7 @@ use crate::{
         faults::{self, FaultKey, FaultMeta, FaultScope},
         tls::{
             AttemptTrigger,
-            canopy::{self, Ask, CanopyRelay, Engine},
+            canopy::{self, Ask, CanopyRelay, CertificateRelay, Engine},
             chain::{self, Identity, Strategy},
             state::{
                 self, CanopyStanding, ChainAct, ChainDecision, Decision, ManagedIngress,
@@ -104,9 +104,9 @@ fn ask_for(hostname: &str, c: &ChainDecision, forced: bool) -> Option<Ask> {
 }
 
 // r[impl tls.canopy.revoked]
-async fn replace_condemned(
+async fn replace_condemned<R: CertificateRelay>(
     state: &Arc<OiState>,
-    engine: &Engine<CanopyRelay>,
+    engine: &Engine<R>,
     managed: &[ManagedIngress],
     names: &Entitlements,
 ) {
@@ -157,9 +157,9 @@ async fn replace_condemned(
     }
 }
 
-async fn ask_canopy(
+async fn ask_canopy<R: CertificateRelay>(
     state: &Arc<OiState>,
-    engine: &Engine<CanopyRelay>,
+    engine: &Engine<R>,
     managed: &[ManagedIngress],
 ) {
     let Some(snap) = snapshot(state, managed) else {
@@ -551,5 +551,143 @@ mod tests {
             "{}",
             filed[0].description
         );
+    }
+
+    /// A relay that records what it was asked and answers that the order is open.
+    #[derive(Default)]
+    struct Recorder(parking_lot::Mutex<Vec<(String, Option<String>)>>);
+
+    impl CertificateRelay for &Recorder {
+        async fn request(
+            &self,
+            name: &str,
+            _csr_der_b64: &str,
+            app_type: Option<&str>,
+        ) -> Result<bestool_canopy::schema::CertificateResponse, canopy::RelayFailure> {
+            self.0
+                .lock()
+                .push((name.to_owned(), app_type.map(str::to_owned)));
+            Ok(bestool_canopy::schema::CertificateResponse::builder()
+                .key_must_be_replaced(false)
+                .name(name.to_owned())
+                .revoked(false)
+                .state("pending".to_owned())
+                .usable(false)
+                .build())
+        }
+    }
+
+    fn script_for(app_type: &str, hostname: &str, port: u16) -> String {
+        format!(
+            r#"
+            app.canopy_type("{app_type}");
+            let web = app.service("web").exported().http(80);
+            web.ingress("{hostname}", {port}).tls(Terminate.Https, Output.Http1);
+            app.deployment("web").image("docker.io/library/nginx:1.29").http(80, web.route("/"));
+            "#
+        )
+    }
+
+    fn register(oi: &TestOi, app: &str, script: &str) {
+        oi.call("/apps/create", json!({ "app": app, "script": script }))
+            .unwrap();
+        oi.install(app);
+    }
+
+    fn managed_in(oi: &TestOi) -> Vec<ManagedIngress> {
+        let registry = oi.state.registry.read();
+        state::managed_ingresses(&registry)
+    }
+
+    fn engine<'a>(oi: &TestOi, recorder: &'a Recorder) -> Engine<&'a Recorder> {
+        Engine::new(oi.state.db.clone(), Arc::clone(&oi.state.cipher), recorder)
+    }
+
+    // r[verify tls.canopy.request]
+    #[test]
+    fn one_request_is_made_for_a_hostname_however_many_apps_declare_it() {
+        let oi = TestOi::new();
+        register(&oi, "shop", &script_for("tamanu", "shop.example.com", 443));
+        register(
+            &oi,
+            "shop2",
+            &script_for("tamanu", "shop.example.com", 8443),
+        );
+        oi.call(
+            "/tls/policies/set-canopy",
+            json!({ "hostname": "shop.example.com" }),
+        )
+        .unwrap();
+
+        let recorder = Recorder::default();
+        let managed = managed_in(&oi);
+        oi.block_on(ask_canopy(&oi.state, &engine(&oi, &recorder), &managed));
+        let asked = recorder.0.lock().clone();
+        assert_eq!(
+            asked,
+            vec![("shop.example.com".to_owned(), Some("tamanu".to_owned()))],
+            "one request, naming the type both apps share"
+        );
+    }
+
+    // r[verify tls.canopy.request]
+    #[test]
+    fn apps_of_different_types_on_one_hostname_send_no_type() {
+        let oi = TestOi::new();
+        register(&oi, "shop", &script_for("tamanu", "shop.example.com", 443));
+        register(&oi, "shop2", &script_for("other", "shop.example.com", 8443));
+        oi.call(
+            "/tls/policies/set-canopy",
+            json!({ "hostname": "shop.example.com" }),
+        )
+        .unwrap();
+
+        let recorder = Recorder::default();
+        let managed = managed_in(&oi);
+        oi.block_on(ask_canopy(&oi.state, &engine(&oi, &recorder), &managed));
+        assert_eq!(
+            recorder.0.lock().clone(),
+            vec![("shop.example.com".to_owned(), None)]
+        );
+    }
+
+    // r[verify tls.canopy.request]
+    // r[verify tls.policy.wildcard]
+    #[test]
+    fn a_wildcard_policy_asks_for_each_concrete_hostname_and_never_the_wildcard() {
+        let oi = TestOi::new();
+        register(&oi, "one", &script_for("tamanu", "a.example.com", 443));
+        register(&oi, "two", &script_for("tamanu", "b.example.com", 443));
+        oi.call(
+            "/tls/policies/set-canopy",
+            json!({ "hostname": "*.example.com" }),
+        )
+        .unwrap();
+
+        let recorder = Recorder::default();
+        let managed = managed_in(&oi);
+        oi.block_on(ask_canopy(&oi.state, &engine(&oi, &recorder), &managed));
+        let mut names: Vec<String> = recorder.0.lock().iter().map(|(n, _)| n.clone()).collect();
+        names.sort();
+        assert_eq!(names, ["a.example.com", "b.example.com"]);
+    }
+
+    // r[verify tls.strategy.default]
+    // r[verify tls.chain.no-certificate]
+    #[test]
+    fn nothing_is_asked_of_canopy_for_a_hostname_the_proxy_alone_serves() {
+        let oi = TestOi::new();
+        register(&oi, "plain", UNTYPED);
+        let recorder = Recorder::default();
+        let managed = managed_in(&oi);
+        oi.block_on(ask_canopy(&oi.state, &engine(&oi, &recorder), &managed));
+        assert!(recorder.0.lock().is_empty());
+
+        // And a typed one with no offer goes to the proxy without waiting.
+        let oi = TestOi::new();
+        register(&oi, "shop", &script_for("tamanu", "shop.example.com", 443));
+        let managed = managed_in(&oi);
+        oi.block_on(ask_canopy(&oi.state, &engine(&oi, &recorder), &managed));
+        assert!(recorder.0.lock().is_empty());
     }
 }

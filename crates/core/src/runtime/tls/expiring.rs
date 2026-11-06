@@ -234,6 +234,21 @@ mod tests {
         assert_eq!(active_count(&db, FAULT_KIND), 0);
     }
 
+    // r[verify tls.fault.expiring]
+    #[test]
+    fn no_fault_for_canopy_origin() {
+        let (db, _) = fresh_db();
+        let now = Timestamp::now().as_second();
+        insert_cert(&db, "foo.example.com", TlsCertOrigin::Canopy, now + 86400);
+
+        sweep(&db, &[target("alpha", "foo.example.com")]).unwrap();
+        assert_eq!(
+            active_count(&db, FAULT_KIND),
+            0,
+            "renewal is the chain's job, and a chain that cannot replace one has its own fault"
+        );
+    }
+
     #[test]
     fn clears_fault_when_cert_no_longer_expiring() {
         let (db, _) = fresh_db();

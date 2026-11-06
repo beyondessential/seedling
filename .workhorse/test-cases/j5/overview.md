@@ -33,8 +33,8 @@ Scenarios for the default chain, Canopy issuance and the Canopy-only policy. Tic
 - [x] A revocation replaces the key, destroys the old one, opens a new order and passes the hostname on at once (verifies spec: tls.canopy.revoked)
 - [x] A revocation learnt from a report matches on name and key fingerprint (verifies spec: tls.canopy.revoked)
 - [x] A restart between the request and the collection finds the same key and position (verifies spec: tls.canopy.key)
-- [ ] Two apps declaring one hostname result in one request
-- [ ] A wildcard policy results in one request per matching concrete hostname, never for the wildcard
+- [x] Two apps declaring one hostname result in one request, naming their type only when they share one (verifies spec: tls.canopy.request)
+- [x] A wildcard policy results in one request per matching concrete hostname, never for the wildcard (verifies spec: tls.canopy.request)
 
 ## Proxy gate
 
@@ -54,7 +54,7 @@ Scenarios for the default chain, Canopy issuance and the Canopy-only policy. Tic
 - [x] A Canopy-only hostname nothing can ask about is faulted and cleared when the policy goes (verifies spec: tls.canopy-only.untyped)
 - [x] A failing request with no usable certificate is faulted and cleared on arrival; trouble with a usable certificate files nothing (verifies spec: tls.canopy.fault)
 - [x] A chain that ran out of strategies without a replacement is faulted (verifies spec: tls.canopy.fault)
-- [ ] The expiring-certificate sweep never faults a Canopy certificate (verifies spec: tls.fault.expiring)
+- [x] The expiring-certificate sweep never faults a Canopy certificate (verifies spec: tls.fault.expiring)
 
 ## Interface, CLI and web
 

@@ -45,111 +45,115 @@ Gate design that follows:
 ## Baseline
 
 - [x] Run `cargo clippy` and `cargo fmt` (clean at baseline); `tracey query status` still to be rerun, its daemon timed out on first start
-- [ ] Read `docs/failure-modes.md` (reconciler, fault store, retry loops) before the coordinator work
+- [x] Read `docs/failure-modes.md` (reconciler, fault store, retry loops) before the coordinator work
 
 ## Storage (new migration, v61, never edit v42 or v50)
 
-- [ ] Rebuild `tls_policies` to allow `strategy = 'canopy'` (no provider, no cert id) and add the arm to the row CHECK; add a `.sql` file and a `Migration` entry, with a test that an existing database upgrades
-- [ ] Rebuild `tls_certificates` to allow `origin = 'canopy'`, copying all columns by name, with an upgrade test
-- [ ] Add a per-hostname chain row, upserted with `ON CONFLICT ... DO UPDATE` naming only its own columns, holding the cycle's start, the responsible strategy, when it became responsible and a pin for an open order
-  - [ ] answer the four crash-recovery questions in the module doc (who else writes it, which restart path reads it, what each abort branch leaves, which test severs memory between write and read)
-- [ ] Record revocation on the certificate row (a state or flag the serving and decision paths both honour), so a revoked certificate stops being served and stops counting as usable
-- [ ] `TlsCertOrigin::Canopy` (`as_str` `"canopy"`, `parse`) and `TlsPolicy::Canopy` in `runtime/tls.rs`, with the row mapping in `tls/store.rs`; fix every exhaustive match the compiler finds (`state.rs`, `issuance.rs`, `oi/handler/tls.rs`, `expiring.rs`)
+- [x] Rebuild `tls_policies` to allow `strategy = 'canopy'` (no provider, no cert id) and add the arm to the row CHECK; add a `.sql` file and a `Migration` entry, with a test that an existing database upgrades
+- [x] Rebuild `tls_certificates` to allow `origin = 'canopy'`, copying all columns by name, with an upgrade test
+- [x] Add a per-hostname chain row, upserted with `ON CONFLICT ... DO UPDATE` naming only its own columns, holding the cycle's start, the responsible strategy, when it became responsible and a pin for an open order
+  - [x] answer the four crash-recovery questions in the module doc (who else writes it, which restart path reads it, what each abort branch leaves, which test severs memory between write and read)
+- [x] Record revocation on the certificate row (a state or flag the serving and decision paths both honour), so a revoked certificate stops being served and stops counting as usable
+- [x] `TlsCertOrigin::Canopy` (`as_str` `"canopy"`, `parse`) and `TlsPolicy::Canopy` in `runtime/tls.rs`, with the row mapping in `tls/store.rs`; fix every exhaustive match the compiler finds (`state.rs`, `issuance.rs`, `oi/handler/tls.rs`, `expiring.rs`)
 
 ## One decision function (`tls/state.rs`)
 
-- [ ] Extend `Snapshot` with the chain rows and the Canopy facts the decision needs: whether an offer is live, which declaring apps have a Canopy type (one set per hostname, so the request can carry or omit the application type), and whether the hostname is one a public CA can issue for. Take them as inputs, so `compute_state` stays pure
-- [ ] Replace `Decision::Default` for a default-chain hostname with a chain decision: the responsible strategy, its fall-through point, and the next-cycle time, per `tls.chain.cycle`, `.ladder`, `.refusal`, `.no-certificate` and `.return`
-  - [ ] cycle start: no usable certificate, or the serving certificate (any origin, including a manual upload and a proxy-held one read from the cache) at its renewal point
-  - [ ] ladder: each strategy's fall-through is halfway from the moment it became responsible to the expiry of the certificate being replaced; the last has none
-  - [ ] refusal passes on at once; a failure, timeout or unreachable relay never does
-  - [ ] no certificate: skip an unavailable strategy at once, keep asking an available one at the debounce cadence, and keep an open order's strategy until it resolves
-  - [ ] operator retry (`force_retry`) starts a cycle at once
-- [ ] A Canopy-only policy is a chain of one: it is available without a live offer, never falls through, and yields the untyped-app fault condition
-- [ ] The renewal point of a certificate whose expiry is unrecorded must stay "not due", as `next_renewal_at` does today
-- [ ] Make `decide_acme_dns` and the new chain code share the cycle and debounce helpers instead of duplicating them
-- [ ] Keep `compute_state` the only dispatch input: the coordinator, the renewal scheduler and the OI rollup read this one result
+- [x] Extend `Snapshot` with the chain rows and the Canopy facts the decision needs: whether an offer is live, which declaring apps have a Canopy type (one set per hostname, so the request can carry or omit the application type), and whether the hostname is one a public CA can issue for. Take them as inputs, so `compute_state` stays pure
+- [x] Replace `Decision::Default` for a default-chain hostname with a chain decision: the responsible strategy, its fall-through point, and the next-cycle time, per `tls.chain.cycle`, `.ladder`, `.refusal`, `.no-certificate` and `.return`
+  - [x] cycle start: no usable certificate, or the serving certificate (any origin, including a manual upload and a proxy-held one read from the cache) at its renewal point
+  - [x] ladder: each strategy's fall-through is halfway from the moment it became responsible to the expiry of the certificate being replaced; the last has none
+  - [x] refusal passes on at once; a failure, timeout or unreachable relay never does
+  - [x] no certificate: skip an unavailable strategy at once, keep asking an available one at the debounce cadence, and keep an open order's strategy until it resolves
+  - [x] operator retry (`force_retry`) starts a cycle at once
+- [x] A Canopy-only policy is a chain of one: it is available without a live offer, never falls through, and yields the untyped-app fault condition
+- [x] The renewal point of a certificate whose expiry is unrecorded must stay "not due", as `next_renewal_at` does today
+- [x] `decide_acme_dns` and the chain share the renewal point (`renewal_point_for`); the cadences differ (an hour after a refusal, every report tick otherwise), so nothing else is shared
+- [x] Keep `compute_state` the only dispatch input: the coordinator, the renewal scheduler and the OI rollup read this one result
 
 ## Canopy strategy (`tls/canopy.rs`, new)
 
-- [ ] Key handling: generate with `keypair::generate`, store as a `csr_pending` row with origin `canopy` and the key encrypted by the secret key; reuse it for every request and collection; destroy a replaced key once nothing served depends on it (`tls.canopy.key`)
-- [ ] Request: one per hostname, CSR naming exactly the hostname, never a wildcard (a wildcard policy requests each concrete hostname it matches), `application_type` set only when the typed declaring apps share exactly one (`tls.canopy.request`)
-- [ ] Answer classification as one function returning a type that cannot conflate "refused" with "could not ask" (`tls.canopy.outcomes`)
-  - [ ] refusal: HTTP 403, or 409 for no managed zone
-  - [ ] not a refusal: 409 for paused or key revoked, 412 not attached, a failed order, a relay failure, no live offer, and a malformed CSR (which also files a fault)
-  - [ ] map the response `state`, `usable`, `revoked`, `key_must_be_replaced` and `last_error` onto outcomes; a state string the runtime does not recognise is an error, not pending
-- [ ] Collection on the report tick: ask again while pending, and from the certificate's renewal point until a longer-lived one replaces it, and nothing in between (`tls.canopy.collect`)
-- [ ] On a collected chain, store it as an active `canopy` certificate through the existing store path so supersession (`tls.cert.supersede`) retires what it replaces
-- [ ] Revocation: read `names.certificates` from the report response, match on `key_fingerprint`, mark the row revoked, generate a new key, and let the chain pass the hostname on at once (`tls.canopy.revoked`)
-  - [ ] `report_once` returns the entitlements instead of discarding them, and a report that fails changes nothing
-- [ ] Attempt log: one entry per order, opened by the creating request, closed on collect, failure or refusal; asking again adds none (`tls.canopy.attempts`). Add an attempt trigger or reuse the existing ones, and keep `AttemptTrigger` parsing in step
-- [ ] Back-off, classification and exit reporting named for every loop with a fallible await (AGENTS.md): no terminal give-up without an expiry, a fault past the threshold, and retry at the cap
+- [x] Key handling: generate with `keypair::generate`, store as a `csr_pending` row with origin `canopy` and the key encrypted by the secret key; reuse it for every request and collection; destroy a replaced key once nothing served depends on it (`tls.canopy.key`)
+- [x] Request: one per hostname, CSR naming exactly the hostname, never a wildcard (a wildcard policy requests each concrete hostname it matches), `application_type` set only when the typed declaring apps share exactly one (`tls.canopy.request`)
+- [x] Answer classification as one function returning a type that cannot conflate "refused" with "could not ask" (`tls.canopy.outcomes`)
+  - [x] refusal: HTTP 403, or 409 for no managed zone
+  - [x] not a refusal: 409 for paused or key revoked, 412 not attached, a failed order, a relay failure, no live offer, and a malformed CSR (which also files a fault)
+  - [x] map the response `state`, `usable`, `revoked`, `key_must_be_replaced` and `last_error` onto outcomes; a state string the runtime does not recognise is an error, not pending
+- [x] Collection on the report tick: ask again while pending, and from the certificate's renewal point until a longer-lived one replaces it, and nothing in between (`tls.canopy.collect`)
+- [x] On a collected chain, store it as an active `canopy` certificate through the existing store path so supersession (`tls.cert.supersede`) retires what it replaces
+- [x] Revocation: read `names.certificates` from the report response, match on `key_fingerprint`, mark the row revoked, generate a new key, and let the chain pass the hostname on at once (`tls.canopy.revoked`)
+  - [x] `report_once` returns the entitlements instead of discarding them, and a report that fails changes nothing
+- [x] Attempt log: one entry per order, opened by the creating request, closed on collect, failure or refusal; asking again adds none (`tls.canopy.attempts`). Add an attempt trigger or reuse the existing ones, and keep `AttemptTrigger` parsing in step
+- [x] Back-off, classification and exit reporting named for every loop with a fallible await (AGENTS.md): no terminal give-up without an expiry, a fault past the threshold, and retry at the cap
 
 ## Coordinator and reconciler
 
-- [ ] `Coordinator::run`: dispatch on the chain decision, not before it, as the Tailscale dispatch comment already requires; the Canopy and HTTP-01 steps both go through `handle_non_issuing`-style gating (retry block, debounce, force retry)
-- [ ] `Coordinator::ensure` stops treating `NoPolicy` as the default for a default-chain hostname (it skips only hostnames that are neither on a chain nor bound to `acme_dns`/`canopy`)
-- [ ] Hand the Canopy collection tick to the coordinator from `runtime/canopy.rs` after a report, under the same issue lock, so ticks and the reconciler cannot race on one hostname
-- [ ] `site_ingress_tls_hostnames` hostnames go through the same chain (check that this matches `tls.strategy.default` for site ingresses before relying on it)
+- [x] `Coordinator::run`: dispatch on the chain decision, not before it, as the Tailscale dispatch comment already requires; the Canopy and HTTP-01 steps both go through `handle_non_issuing`-style gating (retry block, debounce, force retry)
+- [x] `Coordinator::ensure` stops treating `NoPolicy` as the default for a default-chain hostname (it skips only hostnames that are neither on a chain nor bound to `acme_dns`/`canopy`)
+- [x] Canopy requests run from the report tick (`runtime/canopy/certificates.rs`), not through the coordinator's issue lock: they are never ACME flows, one task runs them, and the coordinator does nothing for a hostname on a chain
+- [x] `site_ingress_tls_hostnames` hostnames go through the same chain (check that this matches `tls.strategy.default` for site ingresses before relying on it)
 
 ## Proxy gate (design from the spike)
 
-- [ ] The `get_certificate` endpoint (`tls/serve.rs`) answers from the chain decision: 200 for a runtime-managed certificate, an error status for a hostname Caddy holds nothing for while a non-HTTP-01 strategy is responsible, 204 otherwise. It must never answer with an error for a hostname Caddy holds a certificate for. Keep it a pure lookup that triggers no issuance
-- [ ] A decision that could not be made (store unreadable, snapshot failed) answers 204 for a hostname Caddy holds a certificate for and an error otherwise only when responsibility is known; "could not determine" is never read as "not responsible" or as "responsible"
-- [ ] `system/caddy/config.rs` and `system/types.rs`: a per-hostname `renewal_window_ratio` for hostnames Caddy holds a certificate for while an earlier strategy is responsible, set to the fall-through point; back to Caddy's default once HTTP-01 is responsible. Separate automation policies per ratio, since the ratio is per policy
-- [ ] `compute_proxy_config` takes the per-hostname responsibility; a change of responsibility changes the config hash so the proxy reloads
+- [x] The `get_certificate` endpoint (`tls/serve.rs`) answers from the chain decision: 200 for a runtime-managed certificate, an error status for a hostname Caddy holds nothing for while a non-HTTP-01 strategy is responsible, 204 otherwise. It must never answer with an error for a hostname Caddy holds a certificate for. Keep it a pure lookup that triggers no issuance
+- [x] A decision that could not be made (store unreadable, snapshot failed) answers 204 for a hostname Caddy holds a certificate for and an error otherwise only when responsibility is known; "could not determine" is never read as "not responsible" or as "responsible"
+- [x] `system/caddy/config.rs` and `system/types.rs`: a per-hostname `renewal_window_ratio` for hostnames Caddy holds a certificate for while an earlier strategy is responsible, set to the fall-through point; back to Caddy's default once HTTP-01 is responsible. Separate automation policies per ratio, since the ratio is per policy
+- [x] `compute_proxy_config` takes the per-hostname responsibility; a change of responsibility changes the config hash so the proxy reloads
 - [ ] A hostname that falls through to HTTP-01 with no traffic: check whether Caddy orders for a warm-only or idle hostname when `get_certificate` is configured, since the spike saw no eager order. If it does not, the runtime must trigger the order (a handshake from the daemon to the proxy, or a config without `get_certificate` for that subject)
 - [ ] Check whether Caddy's ACME Renewal Information handling overrides `renewal_window_ratio` against the production image; if it does, find the setting that turns it off for gated hostnames
-- [ ] Config tests in `system/caddy/tests.rs` for the gated, ungated and internal-CA buckets, and that an applied config for a gated name still routes
+- [x] Config tests in `system/caddy/tests.rs` for the gated, ungated and internal-CA buckets, and that an applied config for a gated name still routes
 
 ## Observation
 
-- [ ] `observe_warm_certs` and `cert_observation::observe` also treat a usable certificate in the runtime store covering the hostname as `cert_valid`, so ACME-DNS, manual and Canopy certificates satisfy `rt.warm_certs`; confirm first whether this is an existing gap
-- [ ] A pending Canopy order is `pending` and holds the barrier, and a failed one is `failed` with the error (`observe.ingress.certs`)
+- [x] `observe_warm_certs` and `cert_observation::observe` also treat a usable certificate in the runtime store covering the hostname as `cert_valid`, so ACME-DNS, manual and Canopy certificates satisfy `rt.warm_certs`; confirm first whether this is an existing gap
+- [x] A pending Canopy order is `pending` and holds the barrier, and a failed one is `failed` with the error (`observe.ingress.certs`)
 
 ## Faults
 
-- [ ] `cert_acquisition_failed` for Canopy: file through `file_once` or `sync_faults`, keyed `(app, kind, hostname)` per declaring ingress, filed only when a request was refused or failed and the hostname has no usable certificate, or the chain has reached its last strategy with no replacement (`tls.canopy.fault`); name the filing condition, the clearing condition and the shape (condition) in a comment
-- [ ] Canopy-only with no typed declaring app: the fault of `tls.canopy-only.untyped`, cleared when an app gains a type, the policy changes or clears, or no ingress declares the hostname
-- [ ] Log an error wherever one of these faults is filed (AGENTS.md)
-- [ ] `expiring.rs`: exempt `canopy` origin from `cert_expiring_soon`
+- [x] `canopy_certificate_failed` (not `cert_acquisition_failed`, which the warm-cert observation already files and clears by its own subject) for Canopy: file through `file_once` or `sync_faults`, keyed `(app, kind, hostname)` per declaring ingress, filed only when a request was refused or failed and the hostname has no usable certificate, or the chain has reached its last strategy with no replacement (`tls.canopy.fault`); name the filing condition, the clearing condition and the shape (condition) in a comment
+- [x] Canopy-only with no typed declaring app: the fault of `tls.canopy-only.untyped`, cleared when an app gains a type, the policy changes or clears, or no ingress declares the hostname
+- [x] Log an error wherever one of these faults is filed (AGENTS.md)
+- [x] `expiring.rs`: exempt `canopy` origin from `cert_expiring_soon`
 
 ## Interface
 
-- [ ] `oi/handler/tls.rs`: `set_policy_canopy` for `/tls/policies/set-canopy { hostname }` (reject anything that is not an exact hostname or pattern the existing validation accepts), register it in `oi/handler.rs`, and mark `// i[tls.policy.set-canopy]`
-- [ ] `list_policies` returns strategy `"canopy"`; `clear_policy` clears it
-- [ ] `list_certificates` returns origin `"canopy"`
-- [ ] `list_hostnames`: add the `chain` object (`responsible`, `fall_through_at?`, `next_cycle_at?`), `policy.strategy` `canopy`, `last_issuance.kind` `canopy`, and map the new decision variants in `decision_status` and `decision_next_issuance`
-- [ ] `retry` starts a new cycle from the first strategy
-- [ ] OI handler tests in `oi/handler/tls/tests.rs` for each of the above
+- [x] `oi/handler/tls.rs`: `set_policy_canopy` for `/tls/policies/set-canopy { hostname }` (reject anything that is not an exact hostname or pattern the existing validation accepts), register it in `oi/handler.rs`, and mark `// i[tls.policy.set-canopy]`
+- [x] `list_policies` returns strategy `"canopy"`; `clear_policy` clears it
+- [x] `list_certificates` returns origin `"canopy"`
+- [x] `list_hostnames`: add the `chain` object (`responsible`, `fall_through_at?`, `next_cycle_at?`), `policy.strategy` `canopy`, `last_issuance.kind` `canopy`, and map the new decision variants in `decision_status` and `decision_next_issuance`
+- [x] `retry` starts a new cycle from the first strategy
+- [x] OI handler tests in `oi/handler/tls/tests.rs` for each of the above
 
 ## CLI and web
 
-- [ ] `crates/ctl/src/tls.rs`: `policies set-canopy <hostname>`, and show the chain and the `canopy` origin in the `hostnames` and `certs` output
-- [ ] `crates/web/frontend/src/routes/Certificates.tsx`: the Canopy-only option when binding a policy, and the hostnames view with the chain (`w[routes.certificates]`); update `Certificates.test.tsx`
-- [ ] The web server proxies OI calls generically; check whether `crates/web/src/http.rs` has a per-route allowlist that needs the new route
+- [x] `crates/ctl/src/tls.rs`: `policies set-canopy <hostname>`, and show the chain and the `canopy` origin in the `hostnames` and `certs` output
+- [x] `crates/web/frontend/src/routes/Certificates.tsx`: the Canopy-only option when binding a policy, and the hostnames view with the chain (`w[routes.certificates]`); update `Certificates.test.tsx`
+- [x] The web server proxies OI calls generically; check whether `crates/web/src/http.rs` has a per-route allowlist that needs the new route
 
 ## Dependencies and docs
 
-- [ ] Raise the `bestool-canopy` minimum with `cargo add` (the lock already holds 0.7.10)
-- [ ] `docs/deploying.md`: how default-chain hostnames behave with and without Canopy, the Canopy-only policy and when to use it, and what the operator sees in Canopy when a request arrives
-- [ ] Check `docs/runtime-overview.md` and `docs/networking.md` for statements about default TLS that no longer hold
+- [x] Raise the `bestool-canopy` minimum with `cargo add` (the lock already holds 0.7.10)
+- [x] `docs/deploying.md`: how default-chain hostnames behave with and without Canopy, the Canopy-only policy and when to use it, and what the operator sees in Canopy when a request arrives
+- [x] Check `docs/runtime-overview.md` and `docs/networking.md` for statements about default TLS that no longer hold
 
 ## Tracey
 
-- [ ] `// r[impl ...]` before the specific code for each `tls.chain.*`, `tls.canopy.*` and `tls.strategy.canopy*` item, `// i[impl tls.policy.set-canopy]` on the handler, `// w[impl ...]` in the frontend, and `r[verify ...]` on tests
-- [ ] `tracey query uncovered --spec-impl runtime/main` shows none of the new items uncovered
-- [ ] Stubs are `todo!()`, never a silent no-op
+- [x] `// r[impl ...]` before the specific code for each `tls.chain.*`, `tls.canopy.*` and `tls.strategy.canopy*` item, `// i[impl tls.policy.set-canopy]` on the handler, `// w[impl ...]` in the frontend, and `r[verify ...]` on tests
+- [x] `tracey query uncovered --spec-impl runtime/main` shows none of the new items uncovered
+- [x] Stubs are `todo!()`, never a silent no-op
 
 ## Tests (see `.workhorse/test-cases/j5/overview.md` once drafted)
 
-- [ ] Pure decision tests in `state.rs`: each rule of the ladder with a clock, including 2-strategy and 1-strategy chains, ARI start versus the third, refusal, no certificate, open order, force retry
-- [ ] Classification table test: every answer row of `tls.canopy.outcomes`, plus an unknown state string
-- [ ] Revocation and key-replacement test across a simulated restart (state severed between write and read)
-- [ ] Migration tests for v61
-- [ ] Config tests for the proxy gate, and an integration check of the spike's mechanism if the harness can run Caddy
+- [x] Pure decision tests in `state.rs`: each rule of the ladder with a clock, including 2-strategy and 1-strategy chains, ARI start versus the third, refusal, no certificate, open order, force retry
+- [x] Classification table test: every answer row of `tls.canopy.outcomes`, plus an unknown state string
+- [x] Revocation and key-replacement test across a simulated restart (state severed between write and read)
+- [x] Migration tests for v61
+- [x] Config tests for the proxy gate
+- [ ] An integration check of the spike's mechanism against a real Caddy, if the harness can run one
 
 ## Open
 
-- The proxy gate mechanism, pending the spike. If neither Caddy setting holds a cached certificate while stepping aside, `tls.chain.proxy-gate` needs rewording.
-- Whether warm-cert observation of runtime-managed certificates is an existing gap or already works through a path not found in this read.
+- A hostname that falls through to HTTP-01 with no traffic, such as a warm-only one: the spike saw Caddy order nothing for such a name while `get_certificate` is configured on its policy. If production behaves the same, an idle default-chain hostname is not ordered at all, which may be an existing gap and not one this card introduced.
+- Whether Caddy's use of ACME Renewal Information overrides `renewal_window_ratio` on the production image. If it does, a Caddy-held certificate renews at the CA's suggested point regardless of the ratio.
+- A Canopy-only hostname that Caddy already holds a certificate for is held back by the smallest ratio, so Caddy would still order in the last moments before that certificate expires.
+- The certificate endpoint decides per handshake it cannot answer from the store, loading the TLS snapshot each time. If that shows in practice it wants a short-lived cache.
+- The status response Seedling reads (`names`) must be present for the report to parse at all. That predates this card.

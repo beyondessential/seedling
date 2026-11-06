@@ -12,6 +12,24 @@
 //! certificate and the cycle's recorded start, never stored, so a restart
 //! resumes where it was. Only what the clock cannot say is recorded (a
 //! refusal, a revocation, an open order): see [`Row`].
+//!
+//! What is recorded survives a restart, and each of the questions that asks of
+//! it has an answer:
+//!
+//! - **Who writes the row?** The Canopy engine, in one transaction with the
+//!   certificate and attempt-log changes the answer it is recording caused;
+//!   starting a cycle for an operator retry, in one transaction with consuming
+//!   the retry; and deleting a certificate, which drops the rows that were
+//!   measuring it. Nothing else.
+//! - **Which restart path reads it?** [`super::state::Snapshot::load`], on the
+//!   next decision, which resolves the position from the row and the clock
+//!   exactly as it did before the restart.
+//! - **What does an abort leave?** Nothing: each writer is atomic, so the row,
+//!   the certificate and the log are all as they were or all as the answer left
+//!   them.
+//! - **Which test severs memory between the write and the read?**
+//!   `a_restart_between_the_request_and_the_collection_finds_the_same_key_and_position`
+//!   in the Canopy engine's tests.
 
 /// One way of obtaining a hostname's certificate.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
