@@ -1621,6 +1621,7 @@ The BSL surface is intentionally strategy-agnostic: scripts declare only that an
 > r[tls.strategy.default]
 > When no operator-defined strategy applies to a hostname declared by a TLS-terminating ingress, its certificate comes from the first strategy in the default chain that is available for it.
 > The chain is [Canopy](#r--tls.strategy.canopy), then a public ACME certificate using the HTTP-01 challenge.
+> Canopy is in the chain only for a hostname it [applies to](#r--tls.strategy.canopy); for any other public hostname the chain is HTTP-01 alone.
 > This is the default and applies to any hostname not bound to a different strategy.
 > For hostnames that no public CA can issue for — IP literals, single-label hostnames, and the `.localhost`, `.local`, `.internal` TLDs (the same set excluded from wildcard auto-binding in [tls.policy.wildcard](#r--tls.policy.wildcard)) — the chain is the proxy's internal CA alone, producing a self-signed certificate that the proxy serves directly without contacting any external authority.
 > Canopy is never asked for such a hostname.
@@ -1794,12 +1795,14 @@ An operator policy names a chain of one.
 > The rule is the same for every chain, so that adding a strategy to one does not require a new schedule.
 
 > r[tls.chain.refusal]
-> A strategy that refuses a hostname outright passes it to the next strategy at once, without waiting for its fall-through point.
+> A strategy that refuses a hostname that has a certificate to replace passes it to the next strategy at once, without waiting for its fall-through point.
+> A hostname with no certificate to replace is the exception, covered by [tls.chain.no-certificate](#r--tls.chain.no-certificate).
 > Only a refusal the strategy's authority has actually given counts.
 > A failure, a timeout, an authority that could not be reached, and a strategy that could not be asked are none of them a refusal, and are retried until the fall-through point, since reading "could not determine" as "no" would move a hostname off a strategy that is merely briefly unavailable.
 
 > r[tls.chain.no-certificate]
-> A hostname with no usable certificate does not wait for a fall-through point, because there is no expiry to measure one from.
+> A hostname with no certificate to replace, because it has never had one or because its last one has expired, does not wait for a fall-through point, because there is no expiry to measure one from.
+> A certificate revoked by its issuer is not in this case: it is still the certificate being replaced, and [tls.canopy.revoked](#r--tls.canopy.revoked) applies.
 > A strategy that is available for it and refuses or fails keeps being asked, at the cadence of the after-failure debounce, and the hostname does not pass to the next strategy.
 > A strategy that is not available — for Canopy, no live offer — is skipped at once, and the next strategy becomes responsible.
 > A hostname that has an open order with a strategy stays with it until the order resolves, so an offer disappearing while an order is pending does not abandon the order.
@@ -1817,7 +1820,8 @@ An operator policy names a chain of one.
 > r[tls.strategy.canopy]
 > The Canopy strategy obtains a hostname's certificate from Canopy, through the [relay](interface.md#i--canopy.relay).
 > Seedling holds the key and submits a signing request, and Canopy proves control of the name, issues, and renews.
-> Canopy is available for a hostname when the name is one a public CA can issue for, at least one app declaring the hostname has a [Canopy application type](language.md#l--app.canopy-type), and an offer is live.
+> Canopy applies to a hostname when the name is one a public CA can issue for and at least one app declaring the hostname has a [Canopy application type](language.md#l--app.canopy-type).
+> It is available for such a hostname while an offer is live.
 > The runtime does not consult Canopy's entitlements before asking.
 > The request is how an operator comes to know that a hostname wants a certificate and authorises it, and declining to ask until an operator had set the name up first would make setting up a hostname a race over who configures it first.
 
@@ -1873,7 +1877,7 @@ An operator policy names a chain of one.
 > Operators may bind a hostname or wildcard pattern to the Canopy-only policy, which makes Canopy the chain's only strategy.
 > Such a hostname never passes to HTTP-01 or the proxy's internal CA, so it is suited to a hostname whose traffic Seedling does not yet receive and for which a challenge could not succeed.
 > A hostname under the policy follows [tls.chain.cycle](#r--tls.chain.cycle) and [tls.chain.no-certificate](#r--tls.chain.no-certificate): a valid certificate is left alone until its renewal point, and a failing or refused Canopy request is retried rather than abandoned, with no limit and with the fault of [tls.canopy.fault](#r--tls.canopy.fault) while it fails.
-> Whether Canopy is available follows [tls.strategy.canopy](#r--tls.strategy.canopy), except that having no live offer is not a reason to skip it.
+> Canopy is never skipped for want of a live offer, and applies as [tls.strategy.canopy](#r--tls.strategy.canopy) says.
 
 > r[tls.canopy-only.untyped]
 > When no app declaring a Canopy-only hostname has a Canopy type, Canopy cannot be asked, and the runtime files a fault of kind `cert_acquisition_failed` against each ingress declaring it, naming the hostname and saying that no declaring app has a Canopy type.
