@@ -55,8 +55,15 @@ pub async fn run(state: &Arc<OiState>, names: &Entitlements) {
         CanopyRelay::new(Arc::clone(&state.canopy)),
     );
 
-    replace_condemned(state, &engine, &managed, names).await;
-    ask_canopy(state, &engine, &managed).await;
+    // One reading for both: replacing a revocation and asking about a hostname
+    // each rest on the same facts, and nothing either writes changes what the
+    // other's hostnames rest on. The faults are synced afterwards against a
+    // fresh one, because what this pass writes is what they describe.
+    let Some(snapshot) = snapshot(state, &managed) else {
+        return;
+    };
+    replace_condemned(state, &engine, &snapshot, names).await;
+    ask_canopy(state, &engine, &managed, &snapshot).await;
 }
 
 /// Bring the Canopy faults into line with the hostnames' conditions now.
@@ -120,7 +127,7 @@ fn ask_for(hostname: &str, c: &ChainDecision, forced: bool) -> Option<Ask> {
 async fn replace_condemned<R: CertificateRelay>(
     state: &Arc<OiState>,
     engine: &Engine<R>,
-    managed: &[ManagedIngress],
+    snap: &Snapshot,
     names: &Entitlements,
 ) {
     let held = names.certificates.clone();
@@ -131,17 +138,8 @@ async fn replace_condemned<R: CertificateRelay>(
             return;
         }
     };
-    if condemned.is_empty() {
-        return;
-    }
-    // Once, ahead of the loop: each certificate is for a hostname of its own, and
-    // what replacing one writes does not change what the next one's decision
-    // rests on.
-    let Some(snap) = snapshot(state, managed) else {
-        return;
-    };
     for c in condemned {
-        let st = state::compute_state(&snap, &c.hostname);
+        let st = state::compute_state(snap, &c.hostname);
         let ask = match &st.decision {
             Decision::Chain(chain) => revocation_ask(&c.hostname, chain, snap.now),
             _ => None,
@@ -211,13 +209,11 @@ async fn ask_canopy<R: CertificateRelay>(
     state: &Arc<OiState>,
     engine: &Engine<R>,
     managed: &[ManagedIngress],
+    snap: &Snapshot,
 ) {
-    let Some(snap) = snapshot(state, managed) else {
-        return;
-    };
     let hostnames: BTreeSet<&str> = managed.iter().map(|m| m.hostname.as_str()).collect();
     for hostname in hostnames {
-        let st = state::compute_state(&snap, hostname);
+        let st = state::compute_state(snap, hostname);
         let Decision::Chain(c) = &st.decision else {
             continue;
         };
@@ -701,6 +697,12 @@ mod tests {
         Engine::new(oi.state.db.clone(), Arc::clone(&oi.state.cipher), recorder)
     }
 
+    /// Ask Canopy about every due hostname, against the state as it stands.
+    async fn asking(oi: &TestOi, recorder: &Recorder, managed: &[ManagedIngress]) {
+        let snap = snapshot(&oi.state, managed).expect("the state can be read");
+        ask_canopy(&oi.state, &engine(oi, recorder), managed, &snap).await;
+    }
+
     // r[verify tls.canopy.request]
     #[test]
     fn one_request_is_made_for_a_hostname_however_many_apps_declare_it() {
@@ -719,7 +721,7 @@ mod tests {
 
         let recorder = Recorder::default();
         let managed = managed_in(&oi);
-        oi.block_on(ask_canopy(&oi.state, &engine(&oi, &recorder), &managed));
+        oi.block_on(asking(&oi, &recorder, &managed));
         let asked = recorder.0.lock().clone();
         assert_eq!(
             asked,
@@ -742,7 +744,7 @@ mod tests {
 
         let recorder = Recorder::default();
         let managed = managed_in(&oi);
-        oi.block_on(ask_canopy(&oi.state, &engine(&oi, &recorder), &managed));
+        oi.block_on(asking(&oi, &recorder, &managed));
         assert_eq!(
             recorder.0.lock().clone(),
             vec![("shop.example.com".to_owned(), None)]
@@ -764,7 +766,7 @@ mod tests {
 
         let recorder = Recorder::default();
         let managed = managed_in(&oi);
-        oi.block_on(ask_canopy(&oi.state, &engine(&oi, &recorder), &managed));
+        oi.block_on(asking(&oi, &recorder, &managed));
         let mut names: Vec<String> = recorder.0.lock().iter().map(|(n, _)| n.clone()).collect();
         names.sort();
         assert_eq!(names, ["a.example.com", "b.example.com"]);
@@ -778,14 +780,14 @@ mod tests {
         register(&oi, "plain", UNTYPED);
         let recorder = Recorder::default();
         let managed = managed_in(&oi);
-        oi.block_on(ask_canopy(&oi.state, &engine(&oi, &recorder), &managed));
+        oi.block_on(asking(&oi, &recorder, &managed));
         assert!(recorder.0.lock().is_empty());
 
         // And a typed one with no offer goes to the proxy without waiting.
         let oi = TestOi::new();
         register(&oi, "shop", &script_for("tamanu", "shop.example.com", 443));
         let managed = managed_in(&oi);
-        oi.block_on(ask_canopy(&oi.state, &engine(&oi, &recorder), &managed));
+        oi.block_on(asking(&oi, &recorder, &managed));
         assert!(recorder.0.lock().is_empty());
     }
 
@@ -845,7 +847,7 @@ mod tests {
 
         let recorder = Recorder::default();
         let managed = managed_in(&oi);
-        oi.block_on(ask_canopy(&oi.state, &engine(&oi, &recorder), &managed));
+        oi.block_on(asking(&oi, &recorder, &managed));
 
         assert_eq!(
             recorder.0.lock().len(),
@@ -955,12 +957,10 @@ mod tests {
             .paused(false)
             .registered_names(vec![])
             .build();
-        oi.block_on(replace_condemned(
-            &oi.state,
-            &engine(&oi, &recorder),
-            &managed,
-            &names,
-        ));
+        oi.block_on(async {
+            let snap = snapshot(&oi.state, &managed).expect("the state can be read");
+            replace_condemned(&oi.state, &engine(&oi, &recorder), &snap, &names).await;
+        });
 
         let (row, revoked) = oi.state.db.call(move |db| {
             (
@@ -1040,7 +1040,10 @@ mod tests {
         });
 
         let engine = Engine::new(oi.state.db.clone(), Arc::clone(&oi.state.cipher), &Broken);
-        oi.block_on(ask_canopy(&oi.state, &engine, &managed));
+        oi.block_on(async {
+            let snap = snapshot(&oi.state, &managed).expect("the state can be read");
+            ask_canopy(&oi.state, &engine, &managed, &snap).await;
+        });
 
         let row = oi
             .state
