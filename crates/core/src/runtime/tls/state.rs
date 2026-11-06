@@ -332,6 +332,11 @@ pub struct ChainDecision {
     pub strategies: Vec<Strategy>,
     pub cycle: chain::Cycle,
     pub act: ChainAct,
+    /// Canopy is to be asked whichever strategy is responsible: an order is
+    /// open, or a Canopy certificate has reached its renewal point and Canopy
+    /// carries the renewal out itself.
+    // r[impl tls.canopy.collect]
+    pub collect_canopy: bool,
     pub canopy: CanopyStanding,
     /// What is serving the hostname, if anything usable is.
     pub serving: Option<ServingSource>,
@@ -351,6 +356,10 @@ pub enum ChainAct {
     Blocked { reason: Option<String> },
     /// Canopy is responsible: ask it on the next Canopy report tick.
     AskCanopy,
+    /// Canopy is responsible but was refused or its request rejected, and is
+    /// not asked again until `until`. An order already open is still asked
+    /// about on every tick.
+    Debounced { until: i64 },
     /// Canopy is responsible but cannot be asked about the hostname.
     CannotAskCanopy,
 }
@@ -785,19 +794,53 @@ fn decide_chain(ctx: &ChainContext, strategies: Vec<Strategy>) -> Decision {
                 ChainAct::Blocked {
                     reason: reason.clone(),
                 }
-            } else if ctx.canopy.applies() {
-                ChainAct::AskCanopy
-            } else {
+            } else if !ctx.canopy.applies() {
                 ChainAct::CannotAskCanopy
+            } else {
+                // r[impl tls.chain.no-certificate]
+                // A refusal is asked again at the after-failure cadence, not on
+                // every tick. An open order is collected on every tick, and an
+                // operator retry asks at once.
+                match ctx
+                    .row
+                    .as_ref()
+                    .filter(|row| row.identity == r.identity)
+                    .and_then(|row| row.retry_not_before)
+                {
+                    Some(until) if until > ctx.now && !r.open_order && !ctx.force => {
+                        ChainAct::Debounced { until }
+                    }
+                    _ => ChainAct::AskCanopy,
+                }
             }
         }
         _ => ChainAct::Wait,
     };
 
+    // r[impl tls.canopy.collect]
+    let collect_canopy = ctx.canopy.applies()
+        && match &cycle {
+            chain::Cycle::Running(r) => {
+                r.open_order
+                    || matches!(
+                        ctx.serving,
+                        Some((
+                            _,
+                            ServingSource::Store {
+                                origin: TlsCertOrigin::Canopy,
+                                ..
+                            }
+                        ))
+                    )
+            }
+            chain::Cycle::Idle { .. } => false,
+        };
+
     Decision::Chain(ChainDecision {
         strategies,
         cycle,
         act,
+        collect_canopy,
         canopy: ctx.canopy.clone(),
         serving: ctx.serving.map(|(_, source)| source),
         proxy: ctx.proxy,
@@ -1291,6 +1334,66 @@ mod tests {
                 reason: Some("paused".to_owned())
             }
         );
+    }
+
+    fn refused_row(open_order_since: Option<i64>) -> TlsChainRow {
+        TlsChainRow {
+            hostname: "host.example.com".to_owned(),
+            row: chain::Row {
+                identity: chain::Identity::NONE,
+                step: 0,
+                since: 0,
+                open_order_since,
+                retry_not_before: Some(2000),
+            },
+            last_error: Some("refused".to_owned()),
+            updated_at: 1000,
+        }
+    }
+
+    // r[verify tls.chain.no-certificate]
+    #[test]
+    fn a_refused_hostname_is_asked_again_at_the_after_failure_cadence() {
+        let mut s = snap(vec![], vec![], vec![], vec![], vec![], "ops@x", 1000);
+        s.env = canopy_env("host.example.com", &["tamanu"], true);
+        s.chain_rows = vec![refused_row(None)];
+        let st = compute_state(&s, "host.example.com");
+        assert_eq!(chain_of(&st).act, ChainAct::Debounced { until: 2000 });
+
+        s.now = 2000;
+        let st = compute_state(&s, "host.example.com");
+        assert_eq!(chain_of(&st).act, ChainAct::AskCanopy);
+    }
+
+    // r[verify tls.canopy.collect]
+    #[test]
+    fn an_open_order_is_asked_about_whatever_the_cadence() {
+        let mut s = snap(vec![], vec![], vec![], vec![], vec![], "ops@x", 1000);
+        s.env = canopy_env("host.example.com", &["tamanu"], true);
+        s.chain_rows = vec![refused_row(Some(900))];
+        let st = compute_state(&s, "host.example.com");
+        assert_eq!(chain_of(&st).act, ChainAct::AskCanopy);
+    }
+
+    // r[verify tls.cert.force-retry]
+    #[test]
+    fn an_operator_retry_bypasses_the_cadence() {
+        let mut s = snap(
+            vec![],
+            vec![],
+            vec![],
+            vec![],
+            vec![TlsCertForceRetry {
+                hostname: "host.example.com".to_owned(),
+                requested_at: 990,
+            }],
+            "ops@x",
+            1000,
+        );
+        s.env = canopy_env("host.example.com", &["tamanu"], true);
+        s.chain_rows = vec![refused_row(None)];
+        let st = compute_state(&s, "host.example.com");
+        assert_eq!(chain_of(&st).act, ChainAct::AskCanopy);
     }
 
     // r[verify tls.cert.force-retry]

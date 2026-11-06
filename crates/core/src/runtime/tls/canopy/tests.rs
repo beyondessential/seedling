@@ -301,6 +301,7 @@ fn ask(trigger: AttemptTrigger) -> Ask {
         step: 0,
         since: now(),
         chain_len: 2,
+        canopy_responsible: true,
         trigger,
     }
 }

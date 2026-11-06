@@ -1869,7 +1869,7 @@ An operator policy names a chain of one.
 > Asking again on a tick does not add an entry.
 
 > r[tls.canopy.fault]
-> The runtime files a fault of kind `cert_acquisition_failed` against each ingress declaring a hostname when a Canopy request was refused or failed and the hostname has no usable certificate, or when it has reached the last strategy in its chain without a replacement.
+> The runtime files a fault of kind `canopy_certificate_failed` against each ingress declaring a hostname when a Canopy request was refused or failed and the hostname has no usable certificate, or when it has reached the last strategy in its chain without a replacement.
 > The fault names the hostname and Canopy's reason, and is cleared when a usable certificate replaces the one in doubt.
 > A hostname that holds a usable certificate and is still inside a strategy's window files nothing for Canopy trouble, since the chain is still working on it.
 
@@ -1880,7 +1880,7 @@ An operator policy names a chain of one.
 > Canopy is never skipped for want of a live offer, and applies as [tls.strategy.canopy](#r--tls.strategy.canopy) says.
 
 > r[tls.canopy-only.untyped]
-> When no app declaring a Canopy-only hostname has a Canopy type, Canopy cannot be asked, and the runtime files a fault of kind `cert_acquisition_failed` against each ingress declaring it, naming the hostname and saying that no declaring app has a Canopy type.
+> When Canopy cannot be asked about a Canopy-only hostname, because no app declaring it has a Canopy type or because no public CA can issue for the name, the runtime files a fault of kind `canopy_certificate_failed` against each ingress declaring it, naming the hostname and saying which.
 > The fault is cleared when a declaring app gains a type, when the policy is changed or cleared, or when no ingress declares the hostname.
 
 > r[tls.policy.apply]

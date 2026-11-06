@@ -25,6 +25,7 @@ use crate::{
 
 pub mod absent;
 mod applications;
+pub mod certificates;
 pub mod store;
 
 pub use store::{CanopySettings, get_settings, set_enabled, set_server_id};
@@ -144,7 +145,12 @@ async fn report_once(state: &Arc<OiState>) -> Outcome {
         // whichever source owns backups on a host, which is never this one, so it
         // arrives empty and is discarded rather than being read as "nothing to
         // do" and acted on.
-        Ok(_) => Outcome::Reported,
+        Ok(response) => {
+            // The answer carries what Canopy holds for this server, which is
+            // what certificate requests are made against.
+            certificates::run(state, &response.names).await;
+            Outcome::Reported
+        }
         Err(e) => {
             // The cached identity is the most likely thing to be wrong when a
             // report is rejected, so drop it and let the next attempt re-resolve

@@ -73,6 +73,47 @@ pub trait CertificateRelay: Send + Sync {
     ) -> impl Future<Output = std::result::Result<CertificateResponse, RelayFailure>> + Send;
 }
 
+/// The relay a connected client offers, as a [`CertificateRelay`].
+pub struct CanopyRelay {
+    canopy: Arc<crate::oi::canopy::CanopyState>,
+}
+
+impl CanopyRelay {
+    pub fn new(canopy: Arc<crate::oi::canopy::CanopyState>) -> Self {
+        Self { canopy }
+    }
+}
+
+impl CertificateRelay for CanopyRelay {
+    async fn request(
+        &self,
+        name: &str,
+        csr_der_b64: &str,
+        app_type: Option<&str>,
+    ) -> std::result::Result<CertificateResponse, RelayFailure> {
+        use bestool_canopy::{CanopyClient, CanopyHttpError, schema::RequestCertificateArgs};
+
+        let client = CanopyClient::with_transport(crate::oi::canopy::OiCanopyTransport::new(
+            Arc::clone(&self.canopy),
+        ));
+        let args = RequestCertificateArgs::builder()
+            .name(name.to_owned())
+            .csr(csr_der_b64.to_owned())
+            .maybe_application_type(app_type.map(|t| t.to_owned().into()))
+            .build();
+        match client.certificates_request(&args).await {
+            Ok(response) => Ok(response),
+            Err(report) => Err(match report.downcast_ref::<CanopyHttpError>() {
+                Some(e) => RelayFailure::Status {
+                    status: e.status.as_u16(),
+                    body: e.body.clone(),
+                },
+                None => RelayFailure::Unreachable(format!("{report}")),
+            }),
+        }
+    }
+}
+
 /// What Canopy's answer means for the hostname.
 // r[impl tls.canopy.outcomes]
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -194,11 +235,14 @@ pub struct Ask {
     pub app_type: Option<String>,
     /// What the cycle replaces.
     pub replacing: Identity,
-    /// The Canopy strategy's index in the chain, and when it became
-    /// responsible.
+    /// The chain index of the strategy responsible, and when it became so.
     pub step: usize,
     pub since: i64,
     pub chain_len: usize,
+    /// Canopy is the strategy responsible. It is asked without being so to
+    /// collect an order that is open or a renewal that is due, and a refusal
+    /// then moves nothing.
+    pub canopy_responsible: bool,
     pub trigger: AttemptTrigger,
 }
 
@@ -556,7 +600,8 @@ fn apply(
                 Some(&reason),
                 true,
             )?;
-            let advances = !ask.replacing.is_none() && ask.step + 1 < ask.chain_len;
+            let advances =
+                ask.canopy_responsible && !ask.replacing.is_none() && ask.step + 1 < ask.chain_len;
             if advances {
                 row.step = ask.step + 1;
                 row.since = now;
