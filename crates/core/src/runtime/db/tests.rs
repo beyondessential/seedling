@@ -256,3 +256,102 @@ fn backup_tables_are_dropped_and_their_active_faults_retired() {
         .unwrap();
     assert_eq!(active, vec!["f4".to_owned()]);
 }
+
+// r[verify tls.strategy.canopy]
+// r[verify tls.strategy.canopy-only]
+// r[verify tls.chain.ladder]
+#[test]
+fn canopy_migration_keeps_policies_certificates_and_attempt_links() {
+    let db = Db::open_in_memory_through(60).expect("open at v60");
+    db.conn
+        .execute_batch(
+            "INSERT INTO tls_dns_providers (name, kind, config_ciphertext, created_at, updated_at)
+                 VALUES ('p', 'route53', x'00', 1, 1);
+             INSERT INTO tls_certificates
+                 (id, hostname, state, key_ciphertext, key_type, created_at, updated_at,
+                  origin, requested_hostname)
+                 VALUES (7, 'a.example.com', 'active', x'01', 'ecdsa_p256', 1, 1, 'csr', 'a.example.com'),
+                        (9, 'b.example.com', 'superseded', x'02', 'ecdsa_p256', 1, 1, 'acme_dns', NULL);
+             INSERT INTO tls_policies (hostname, strategy, dns_provider, cert_id, updated_at)
+                 VALUES ('*.example.com', 'acme_dns', 'p', NULL, 1),
+                        ('legacy.example.com', 'manual', NULL, 7, 1);
+             INSERT INTO tls_cert_attempts
+                 (id, hostname, triggered_by, started_at, outcome, cert_id)
+                 VALUES (1, 'a.example.com', 'manual', 1, 'success', 7),
+                        (2, 'b.example.com', 'on_demand', 2, 'failure', NULL);",
+        )
+        .expect("seed v60 data");
+
+    db.finish_migrations().expect("migrate to the latest");
+
+    let policies: Vec<(String, String, Option<i64>)> = db
+        .conn
+        .prepare("SELECT hostname, strategy, cert_id FROM tls_policies ORDER BY hostname")
+        .unwrap()
+        .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
+        .unwrap()
+        .collect::<Result<_, _>>()
+        .unwrap();
+    assert_eq!(
+        policies,
+        vec![
+            ("*.example.com".to_owned(), "acme_dns".to_owned(), None),
+            ("legacy.example.com".to_owned(), "manual".to_owned(), Some(7)),
+        ]
+    );
+
+    let certs: Vec<(i64, String, Option<String>)> = db
+        .conn
+        .prepare("SELECT id, origin, requested_hostname FROM tls_certificates ORDER BY id")
+        .unwrap()
+        .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
+        .unwrap()
+        .collect::<Result<_, _>>()
+        .unwrap();
+    assert_eq!(
+        certs,
+        vec![
+            (7, "csr".to_owned(), Some("a.example.com".to_owned())),
+            (9, "acme_dns".to_owned(), None),
+        ]
+    );
+
+    let links: Vec<(i64, Option<i64>)> = db
+        .conn
+        .prepare("SELECT id, cert_id FROM tls_cert_attempts ORDER BY id")
+        .unwrap()
+        .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))
+        .unwrap()
+        .collect::<Result<_, _>>()
+        .unwrap();
+    assert_eq!(
+        links,
+        vec![(1, Some(7)), (2, None)],
+        "the attempt log must still say which certificate each attempt produced"
+    );
+
+    db.conn
+        .execute_batch(
+            "INSERT INTO tls_policies (hostname, strategy, dns_provider, cert_id, updated_at)
+                 VALUES ('c.example.com', 'canopy', NULL, NULL, 1);
+             INSERT INTO tls_certificates
+                 (hostname, state, key_ciphertext, key_type, created_at, updated_at, origin)
+                 VALUES ('c.example.com', 'csr_pending', x'03', 'ecdsa_p256', 1, 1, 'canopy'),
+                        ('d.example.com', 'revoked', x'', 'ecdsa_p256', 1, 1, 'canopy');
+             INSERT INTO tls_chain_state
+                 (hostname, replacing_cert_id, replacing_not_after, step, step_since, updated_at)
+                 VALUES ('c.example.com', NULL, NULL, 0, 1, 1);",
+        )
+        .expect("the Canopy policy, origin, revoked state and chain row are accepted");
+
+    assert!(
+        db.conn
+            .execute(
+                "INSERT INTO tls_policies (hostname, strategy, dns_provider, cert_id, updated_at)
+                     VALUES ('e.example.com', 'canopy', 'p', NULL, 1)",
+                [],
+            )
+            .is_err(),
+        "a Canopy policy carries no DNS provider"
+    );
+}

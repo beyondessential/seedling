@@ -138,6 +138,9 @@ const SQL_V59: &str = include_str!("db/migrations/v59.sql");
 // r[impl canopy.app.key]
 // r[impl canopy.offer.absent]
 const SQL_V60: &str = include_str!("db/migrations/v60.sql");
+// r[impl tls.strategy.canopy]
+// r[impl tls.chain.ladder]
+const SQL_V61: &str = include_str!("db/migrations/v61.sql");
 
 const MIGRATIONS: &[Migration] = &[
     Migration {
@@ -433,6 +436,11 @@ const MIGRATIONS: &[Migration] = &[
     Migration {
         version: 60,
         sql: SQL_V60,
+        custom_run: None,
+    },
+    Migration {
+        version: 61,
+        sql: SQL_V61,
         custom_run: None,
     },
 ];
