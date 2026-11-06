@@ -657,6 +657,10 @@ fn apply(
             Ok(ApplyResult::Done(Outcome::Refused(reason)))
         }
         Answer::OrderFailed { reason } => {
+            // r[impl tls.chain.no-certificate]
+            // A strategy that fails is asked again at the after-failure cadence,
+            // as one that refuses is. Canopy goes on retrying the order on its
+            // own side meanwhile, and the next ask collects whatever came of it.
             close_attempt(
                 db,
                 ask,
@@ -667,7 +671,7 @@ fn apply(
                 false,
             )?;
             row.open_order_since = None;
-            row.retry_not_before = None;
+            row.retry_not_before = Some(now + AUTO_RETRY_DEBOUNCE_SECS);
             store::put_chain_row(db, &ask.hostname, &row, Some(&reason))?;
             Ok(ApplyResult::Done(Outcome::Failed(reason)))
         }

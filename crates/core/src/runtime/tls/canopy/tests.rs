@@ -180,6 +180,8 @@ enum Reply {
     /// A chain for some other key.
     IssueForOtherKey,
     Fail(RelayFailure),
+    /// Canopy opened the order and it failed on its side.
+    OrderFailed(String),
     Revoked,
 }
 
@@ -274,6 +276,11 @@ impl CertificateRelay for &Fake {
                     .build())
             }
             Reply::Fail(failure) => Err(failure),
+            Reply::OrderFailed(reason) => {
+                let mut response = base.state("failed".to_owned()).usable(false).build();
+                response.last_error = Some(reason);
+                Ok(response)
+            }
             Reply::Revoked => Ok(CertificateResponse::builder()
                 .key_must_be_replaced(false)
                 .name(name.to_owned())
@@ -801,4 +808,19 @@ async fn a_chain_whose_validity_has_not_begun_is_not_stored() {
         "{outcome:?}"
     );
     assert_eq!(canopy_rows(&db)[0].state, TlsCertState::CsrPending);
+}
+
+// r[verify tls.chain.no-certificate]
+#[tokio::test]
+async fn a_failed_order_waits_out_the_same_cadence_a_refusal_does() {
+    let fake = Fake::new([Reply::OrderFailed("dns challenge timed out".to_owned())]);
+    let (engine, db) = engine(&fake);
+    let outcome = engine.ask(ask(AttemptTrigger::OnDemand)).await.unwrap();
+    assert!(matches!(outcome, Outcome::Failed(_)));
+    let row = chain_row(&db).unwrap();
+    assert!(
+        row.row.retry_not_before.is_some(),
+        "a failing order is not asked again every tick"
+    );
+    assert_eq!(row.last_error.as_deref(), Some("dns challenge timed out"));
 }
