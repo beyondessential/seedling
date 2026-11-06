@@ -44,7 +44,7 @@ Gate design that follows:
 
 ## Baseline
 
-- [ ] Run `cargo clippy`, `cargo fmt` and `tracey query status` and fix anything outstanding before starting
+- [x] Run `cargo clippy` and `cargo fmt` (clean at baseline); `tracey query status` still to be rerun, its daemon timed out on first start
 - [ ] Read `docs/failure-modes.md` (reconciler, fault store, retry loops) before the coordinator work
 
 ## Storage (new migration, v61, never edit v42 or v50)
@@ -92,12 +92,15 @@ Gate design that follows:
 - [ ] Hand the Canopy collection tick to the coordinator from `runtime/canopy.rs` after a report, under the same issue lock, so ticks and the reconciler cannot race on one hostname
 - [ ] `site_ingress_tls_hostnames` hostnames go through the same chain (check that this matches `tls.strategy.default` for site ingresses before relying on it)
 
-## Proxy gate (after the spike)
+## Proxy gate (design from the spike)
 
-- [ ] Add the chosen gate to `system/caddy/config.rs` and `system/types.rs` (per-hostname "HTTP-01 responsible" input from the chain decision), emitted only for hostnames whose first strategy is not HTTP-01
-- [ ] `compute_proxy_config` takes the responsible-strategy set; a hostname the runtime could not decide for (the decision errored) must not be gated or ungated, so apply nothing for it rather than reading "could not determine" as "not responsible"
-- [ ] Warm-only subjects follow the same gate (`certificates.automate` is skipped while Canopy is responsible)
-- [ ] Config tests in `system/caddy/tests.rs` for gated, ungated and internal-CA buckets, and that an applied config for a gated name still routes
+- [ ] The `get_certificate` endpoint (`tls/serve.rs`) answers from the chain decision: 200 for a runtime-managed certificate, an error status for a hostname Caddy holds nothing for while a non-HTTP-01 strategy is responsible, 204 otherwise. It must never answer with an error for a hostname Caddy holds a certificate for. Keep it a pure lookup that triggers no issuance
+- [ ] A decision that could not be made (store unreadable, snapshot failed) answers 204 for a hostname Caddy holds a certificate for and an error otherwise only when responsibility is known; "could not determine" is never read as "not responsible" or as "responsible"
+- [ ] `system/caddy/config.rs` and `system/types.rs`: a per-hostname `renewal_window_ratio` for hostnames Caddy holds a certificate for while an earlier strategy is responsible, set to the fall-through point; back to Caddy's default once HTTP-01 is responsible. Separate automation policies per ratio, since the ratio is per policy
+- [ ] `compute_proxy_config` takes the per-hostname responsibility; a change of responsibility changes the config hash so the proxy reloads
+- [ ] A hostname that falls through to HTTP-01 with no traffic: check whether Caddy orders for a warm-only or idle hostname when `get_certificate` is configured, since the spike saw no eager order. If it does not, the runtime must trigger the order (a handshake from the daemon to the proxy, or a config without `get_certificate` for that subject)
+- [ ] Check whether Caddy's ACME Renewal Information handling overrides `renewal_window_ratio` against the production image; if it does, find the setting that turns it off for gated hostnames
+- [ ] Config tests in `system/caddy/tests.rs` for the gated, ungated and internal-CA buckets, and that an applied config for a gated name still routes
 
 ## Observation
 
