@@ -800,41 +800,11 @@ pub(crate) fn retry(state: &OiState, params: RetryParams) -> HandlerResult {
         })
         .map_err(db_error)?;
     state.tls_coordinator.ensure(&hostname);
-    settle_retry_without_canopy(state, &hostname)?;
+    // A hostname on a chain Canopy is not part of has nothing else to take the
+    // retry; the coordinator knows which that is.
+    state.tls_coordinator.settle_retry(&hostname);
     state.tls_coordinator.forget_chain_state();
     Ok(json!({ "ok": true }))
-}
-
-/// An operator retry for a hostname on a chain that Canopy is not part of has
-/// nobody to wait for it: the proxy carries out every strategy there is, and
-/// nothing else consumes the queued retry. Start its cycle now and leave the
-/// retry to be taken by the Canopy report tick only where Canopy can be asked.
-// r[impl tls.cert.force-retry]
-fn settle_retry_without_canopy(state: &OiState, hostname: &str) -> Result<(), OiError> {
-    let managed = {
-        let reg = state.registry.read();
-        state::managed_ingresses(&reg)
-    };
-    let env = state.chain_env(&managed).map_err(db_error)?;
-    let snapshot = state
-        .db
-        .call(move |db| state::Snapshot::load(db, env))
-        .map_err(db_error)?;
-    let st = state::compute_state(&snapshot, hostname);
-    let state::Decision::Chain(c) = &st.decision else {
-        return Ok(());
-    };
-    if c.canopy.applies() {
-        return Ok(());
-    }
-    let replacing = c.replacing();
-    let now = snapshot.now;
-    let host = hostname.to_owned();
-    state
-        .db
-        .call(move |db| store::start_cycle_for_force_retry(db, &host, replacing, now))
-        .map_err(db_error)?;
-    Ok(())
 }
 
 // ---------------------------------------------------------------------------

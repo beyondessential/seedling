@@ -130,6 +130,47 @@ impl Coordinator {
         let _ = self.environment.set(environment);
     }
 
+    /// Start the cycle an operator retry asked for, where nothing else would.
+    ///
+    /// A retry for a hostname Canopy can be asked about is left queued for the
+    /// report tick, which consumes it as part of asking. A hostname on a chain
+    /// Canopy is not part of has nobody waiting for it — the proxy carries out
+    /// every strategy there is — so the cycle is started here and the retry
+    /// consumed, in the write that records it.
+    ///
+    /// Does nothing for a hostname on no chain: an ACME-DNS or Tailscale
+    /// hostname's retry is the issuance coordinator's to take.
+    // r[impl tls.cert.force-retry]
+    // r[impl tls.chain.return]
+    pub fn settle_retry(&self, hostname: &str) {
+        let Some(state) = self.chain_state() else {
+            // Not knowing where the hostname stands is not knowing whether
+            // anything will take the retry, so it is left where it is: the
+            // report tick takes it if Canopy applies, and an operator can ask
+            // again if nothing does.
+            return;
+        };
+        let Some(Decision::Chain(c)) = state
+            .managed
+            .iter()
+            .any(|m| m.hostname == hostname)
+            .then(|| state::compute_state(&state.snapshot, hostname).decision)
+        else {
+            return;
+        };
+        if c.canopy.applies() {
+            return;
+        }
+        let (replacing, now) = (c.replacing(), state.snapshot.now);
+        let host = hostname.to_owned();
+        if let Err(e) = self
+            .db
+            .call(move |db| store::start_cycle_for_force_retry(db, &host, replacing, now))
+        {
+            tracing::warn!(%hostname, error = %e, "cannot start the cycle an operator retry asked for");
+        }
+    }
+
     /// Forget the state chain decisions are made against, so the next one is
     /// made afresh. For a caller that has just written something a decision
     /// rests on and wants it acted on now rather than within the window.
