@@ -1252,43 +1252,49 @@ pub fn list_force_retries(db: &Db) -> rusqlite::Result<Vec<TlsCertForceRetry>> {
 // Strategy chain position
 // ---------------------------------------------------------------------------
 
+const CHAIN_COLUMNS: &str = "hostname, replacing_cert_id, replacing_not_after, step, step_since, \
+     open_order_since, last_error, updated_at, retry_not_before";
+
+/// Reads the columns of [`CHAIN_COLUMNS`], positionally and in that order.
+fn row_to_chain(row: &rusqlite::Row<'_>) -> rusqlite::Result<TlsChainRow> {
+    let step: i64 = row.get(3)?;
+    Ok(TlsChainRow {
+        hostname: row.get(0)?,
+        row: chain::Row {
+            identity: chain::Identity {
+                cert_id: row.get(1)?,
+                not_after: row.get(2)?,
+            },
+            // A negative step cannot have been written by this code; reading it
+            // as the first strategy would hide that.
+            step: usize::try_from(step).map_err(|_| rusqlite::Error::InvalidQuery)?,
+            since: row.get(4)?,
+            open_order_since: row.get(5)?,
+            retry_not_before: row.get(8)?,
+        },
+        last_error: row.get(6)?,
+        updated_at: row.get(7)?,
+    })
+}
+
 /// Every hostname with a recorded chain position.
 // r[impl tls.chain.ladder]
 pub fn list_chain_rows(db: &Db) -> rusqlite::Result<Vec<TlsChainRow>> {
-    let mut stmt = db.conn.prepare(
-        "SELECT hostname, replacing_cert_id, replacing_not_after, step, step_since,
-                open_order_since, last_error, updated_at, retry_not_before
-         FROM tls_chain_state ORDER BY hostname",
-    )?;
-    let rows = stmt
-        .query_map([], |row| {
-            let step: i64 = row.get(3)?;
-            Ok(TlsChainRow {
-                hostname: row.get(0)?,
-                row: chain::Row {
-                    identity: chain::Identity {
-                        cert_id: row.get(1)?,
-                        not_after: row.get(2)?,
-                    },
-                    // A negative step cannot have been written by this code;
-                    // reading it as the first strategy would hide that.
-                    step: usize::try_from(step).map_err(|_| rusqlite::Error::InvalidQuery)?,
-                    since: row.get(4)?,
-                    open_order_since: row.get(5)?,
-                    retry_not_before: row.get(8)?,
-                },
-                last_error: row.get(6)?,
-                updated_at: row.get(7)?,
-            })
-        })?
-        .collect::<rusqlite::Result<_>>()?;
-    Ok(rows)
+    let mut stmt = db.conn.prepare(&format!(
+        "SELECT {CHAIN_COLUMNS} FROM tls_chain_state ORDER BY hostname"
+    ))?;
+    stmt.query_map([], row_to_chain)?.collect()
 }
 
+/// The recorded position of one hostname, by its key.
 pub fn get_chain_row(db: &Db, hostname: &str) -> rusqlite::Result<Option<TlsChainRow>> {
-    Ok(list_chain_rows(db)?
-        .into_iter()
-        .find(|r| r.hostname == hostname))
+    db.conn
+        .query_row(
+            &format!("SELECT {CHAIN_COLUMNS} FROM tls_chain_state WHERE hostname = ?1"),
+            [hostname],
+            row_to_chain,
+        )
+        .optional()
 }
 
 /// Record a hostname's chain position, replacing whatever was recorded.
