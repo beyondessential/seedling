@@ -99,7 +99,13 @@ pub struct Coordinator {
 
 /// How long one reading of the world serves every chain decision made against
 /// it.
-const CHAIN_STATE_TTL: std::time::Duration = std::time::Duration::from_secs(5);
+///
+/// Long enough that an idle reconciler tick, every few seconds, costs nothing;
+/// short enough that a certificate reaching its renewal point is acted on well
+/// inside the ladder, whose steps are days. What an operator does is not left to
+/// it: the writes that change a decision call
+/// [`Coordinator::forget_chain_state`].
+const CHAIN_STATE_TTL: std::time::Duration = std::time::Duration::from_secs(30);
 
 /// Everything a chain decision is made from, for every hostname at once.
 struct ChainState {

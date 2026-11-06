@@ -770,6 +770,15 @@ mod tests {
             2,
             "and a caller that has just written something gets a fresh one"
         );
+
+        // The renewal points the proxy is given come from the same reading, so
+        // forgetting it reaches them too.
+        let _ = coordinator.proxy_renewal_ratios();
+        assert_eq!(
+            counting.0.load(std::sync::atomic::Ordering::SeqCst),
+            2,
+            "one state answers the gate and the proxy's renewal points alike"
+        );
     }
 
     // r[verify tls.chain.proxy-gate]

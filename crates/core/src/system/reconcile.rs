@@ -483,10 +483,6 @@ pub struct Reconciler {
     /// likes for as long as the facts were unreadable.
     // r[impl tls.chain.proxy-gate]
     last_renewal_ratios: std::collections::BTreeMap<String, f64>,
-    /// When `last_renewal_ratios` was last worked out. Working them out reads the
-    /// proxy's certificates and the whole TLS state, and a renewal point moves on
-    /// the scale of days, so ticks in between reuse them.
-    renewal_ratios_at: Option<std::time::Instant>,
     /// Counter of consecutive resolver inline-health-check failures, owned
     /// by the reconciler so [`resolver::ensure_resolver_running`] can
     /// debounce transient probe misses across ticks instead of bouncing
@@ -604,7 +600,6 @@ impl Reconciler {
             cert_endpoint_url,
             tls_coordinator,
             last_renewal_ratios: Default::default(),
-            renewal_ratios_at: None,
             resolver_health_fail_count: std::sync::atomic::AtomicU32::new(0),
             site_resolver,
             observe_failure_streaks: HashMap::new(),
@@ -837,15 +832,9 @@ impl Reconciler {
     /// empty set that would release every hostname at once.
     // r[impl tls.chain.proxy-gate]
     fn resolve_renewal_ratios(&mut self) -> std::collections::BTreeMap<String, f64> {
-        /// How long worked-out renewal points are reused.
-        const RENEWAL_RATIOS_TTL: Duration = Duration::from_secs(30);
-
-        if self
-            .renewal_ratios_at
-            .is_some_and(|at| at.elapsed() < RENEWAL_RATIOS_TTL)
-        {
-            return self.last_renewal_ratios.clone();
-        }
+        // Asked every tick, and answered from the one state the coordinator
+        // holds for every chain decision: a second copy here would be a second
+        // age for the same decisions, and one no operator action could clear.
         match self
             .tls_coordinator
             .as_ref()
@@ -853,11 +842,11 @@ impl Reconciler {
         {
             Some(ratios) => {
                 self.last_renewal_ratios = ratios.clone();
-                self.renewal_ratios_at = Some(std::time::Instant::now());
                 ratios
             }
-            // Not worked out this time: the last ones stand, and the next tick
-            // tries again rather than waiting out the interval.
+            // Not worked out this time: the last ones stand, since the proxy's
+            // configuration is applied whole and leaving them out would tell it
+            // to renew whenever it liked.
             None => self.last_renewal_ratios.clone(),
         }
     }
