@@ -1400,6 +1400,22 @@ pub fn find_canopy_key(db: &Db, hostname: &str) -> rusqlite::Result<Option<TlsCe
         .optional()
 }
 
+/// The Canopy certificates the runtime is serving, with just what comparing
+/// them against what Canopy holds needs.
+///
+/// Narrow on purpose: this runs on every report tick, and the whole certificate
+/// table grows without bound as superseded rows are kept, each carrying its
+/// chain, its signing request and its encrypted key.
+// r[impl tls.canopy.revoked]
+pub fn list_active_canopy_certificates(db: &Db) -> rusqlite::Result<Vec<(i64, String, String)>> {
+    let mut stmt = db.conn.prepare_cached(
+        "SELECT id, hostname, cert_pem FROM tls_certificates
+         WHERE origin = 'canopy' AND state = 'active' AND cert_pem IS NOT NULL",
+    )?;
+    stmt.query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))?
+        .collect()
+}
+
 /// Store the chain Canopy delivered against a key the runtime holds, and
 /// retire what it replaces.
 ///

@@ -829,26 +829,23 @@ pub fn condemned_by(
     held: &[bestool_canopy::schema::HeldCertificate],
 ) -> rusqlite::Result<Vec<Condemned>> {
     let mut out = Vec::new();
-    for cert in store::list_certificates(db)? {
-        if cert.origin != super::TlsCertOrigin::Canopy || cert.state != TlsCertState::Active {
-            continue;
-        }
-        let Some(pem) = cert.cert_pem.as_deref() else {
-            continue;
-        };
-        let Ok(spki) = parse::leaf_spki_der(pem) else {
+    if held.is_empty() {
+        return Ok(out);
+    }
+    for (id, hostname, pem) in store::list_active_canopy_certificates(db)? {
+        let Ok(spki) = parse::leaf_spki_der(&pem) else {
             continue;
         };
         let fingerprint = key_fingerprint(&spki);
-        let name = cert.hostname.to_ascii_lowercase();
+        let name = hostname.to_ascii_lowercase();
         for h in held {
             if h.name.to_ascii_lowercase() == name
                 && h.key_fingerprint.eq_ignore_ascii_case(&fingerprint)
                 && (h.revoked || h.key_must_be_replaced)
             {
                 out.push(Condemned {
-                    hostname: cert.hostname.clone(),
-                    cert_id: cert.id,
+                    hostname: hostname.clone(),
+                    cert_id: id,
                     reason: if h.key_must_be_replaced {
                         "Canopy reports the key must be replaced".to_owned()
                     } else {
