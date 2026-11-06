@@ -238,6 +238,66 @@ mod tests {
         );
     }
 
+    // i[verify canopy.status]
+    #[test]
+    fn status_lists_the_apps_reported_as_applications_by_name() {
+        let oi = TestOi::new();
+        for (app, script) in [
+            ("zeta", "app.canopy_type(\"tamanu-facility\");"),
+            ("alpha", "app.canopy_type(\"tamanu-central\");"),
+            ("plain", "app.description(\"x\");"),
+        ] {
+            oi.call("/apps/create", json!({ "app": app, "script": script }))
+                .unwrap();
+        }
+        let status = oi.call("/canopy/status", json!({})).unwrap();
+        assert_eq!(
+            status["applications"],
+            json!([
+                { "app": "alpha", "type": "tamanu-central" },
+                { "app": "zeta", "type": "tamanu-facility" },
+            ])
+        );
+    }
+
+    // i[verify canopy.status]
+    #[test]
+    fn a_fresh_instance_reports_no_applications() {
+        let oi = TestOi::new();
+        assert_eq!(
+            oi.call("/canopy/status", json!({})).unwrap()["applications"],
+            json!([])
+        );
+    }
+
+    // r[verify canopy.offer.absent]
+    #[test]
+    fn disabling_clears_the_missing_offer_fault() {
+        let oi = TestOi::new();
+        oi.call(
+            "/apps/create",
+            json!({ "app": "demo", "script": "app.canopy_type(\"tamanu-central\");" }),
+        )
+        .unwrap();
+        oi.state.db.call(|db| {
+            crate::runtime::faults::file_fault(
+                db,
+                &seedling_protocol::names::AppName::new_unchecked("demo"),
+                None,
+                None,
+                None,
+                absent::FAULT_KIND,
+                "no offer",
+            )
+            .unwrap();
+        });
+        assert_eq!(active_faults(&oi), 1);
+
+        oi.call("/canopy/settings/set", json!({ "enabled": false }))
+            .unwrap();
+        assert_eq!(active_faults(&oi), 0);
+    }
+
     // i[verify canopy.settings]
     #[test]
     fn the_setting_round_trips_through_the_interface() {
