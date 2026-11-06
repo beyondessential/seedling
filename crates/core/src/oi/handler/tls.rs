@@ -852,7 +852,9 @@ pub(crate) fn list_hostnames(state: &OiState, params: ListHostnamesParams) -> Ha
     // The chain depends on what Canopy and the proxy are doing as well as on
     // the database, and on every app declaring a hostname, not just the ones
     // the filter keeps.
-    let env = state.chain_env(&all_managed).map_err(db_error)?;
+    let env = state
+        .chain_env_for_display(&all_managed)
+        .map_err(db_error)?;
     let snapshot = state
         .db
         .call(move |db| state::Snapshot::load(db, env))

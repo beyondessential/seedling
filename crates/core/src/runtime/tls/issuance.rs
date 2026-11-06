@@ -179,6 +179,16 @@ impl Coordinator {
         }
     }
 
+    /// What the proxy holds for each hostname, from the reading already taken.
+    ///
+    /// For a caller that wants the facts rather than the decisions, so that a
+    /// request on an operator's screen does not walk the proxy's certificate
+    /// cache itself. `None` when they could not be read, which is not an empty
+    /// answer.
+    pub fn proxy_holdings(&self) -> Option<BTreeMap<String, state::ProxyHolding>> {
+        Some(self.chain_state()?.snapshot.env.proxy.clone())
+    }
+
     /// Forget the state chain decisions are made against, so the next one is
     /// made afresh. For a caller that has just written something a decision
     /// rests on and wants it acted on now rather than within the window.

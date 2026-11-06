@@ -1197,3 +1197,33 @@ fn a_policy_change_ends_the_cycles_that_ran_under_the_one_before_it() {
     .unwrap();
     assert_eq!(recorded(&oi), vec!["other.example.org".to_owned()]);
 }
+
+// i[verify tls.hostname.list]
+// r[verify tls.cert.hostname-view]
+#[test]
+fn the_rollup_does_not_walk_the_proxys_cache_itself() {
+    let oi = TestOi::new();
+    tls_app(&oi, UNTYPED_TLS_APP);
+
+    // What the coordinator read is what the view shows, so a page that polls
+    // does not read and parse the proxy's certificates on every request.
+    let managed = {
+        let registry = oi.state.registry.read();
+        crate::runtime::tls::state::managed_ingresses(&registry)
+    };
+    let (from_coordinator, env) = oi.block_on(async {
+        (
+            oi.state
+                .tls_coordinator
+                .proxy_holdings()
+                .expect("the coordinator has read them"),
+            oi.state
+                .chain_env_for_display(&managed)
+                .expect("the rest is read from the database"),
+        )
+    });
+    assert_eq!(env.proxy, from_coordinator);
+
+    // And the rollup still answers.
+    assert_eq!(shop_hostname(&oi)["hostname"], "shop.example.com");
+}

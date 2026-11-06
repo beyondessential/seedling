@@ -141,6 +141,32 @@ impl OiState {
         }
     }
 
+    /// The facts a hostname's strategy chain depends on, for an operator's view
+    /// of them: the database read afresh, and what the proxy holds taken from
+    /// the reading the coordinator already has.
+    ///
+    /// The proxy's certificates are read off disk and parsed per hostname, which
+    /// is too much for a page that polls; they change on the scale of a renewal,
+    /// so the coordinator's is as good an answer. What is stored is read fresh,
+    /// since that is what an operator watches change.
+    pub fn chain_env_for_display(
+        &self,
+        managed: &[crate::runtime::tls::state::ManagedIngress],
+    ) -> rusqlite::Result<crate::runtime::tls::state::ChainEnv> {
+        match self.tls_coordinator.proxy_holdings() {
+            Some(proxy) => {
+                let offer_live = self.canopy_offer_live();
+                let managed = managed.to_vec();
+                self.db.call(move |db| {
+                    crate::runtime::tls::env::collect(db, &managed, offer_live, proxy)
+                })
+            }
+            // The coordinator has none to give, so they are gathered here as
+            // the runtime's own callers do.
+            None => self.chain_env(managed),
+        }
+    }
+
     /// The facts a hostname's strategy chain depends on, for the TLS-terminating
     /// ingresses `managed`.
     pub fn chain_env(
