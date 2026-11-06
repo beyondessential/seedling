@@ -12,8 +12,20 @@ use crate::runtime::{apps::AppStatus, db::Db, faults};
 #[derive(Debug, PartialEq, Eq)]
 struct Graded {
     result: Result_,
-    /// Whether this is a grade to keep for an operation that follows.
-    record: bool,
+    hold: Hold,
+}
+
+/// What becomes of the grade held against the app for an operation to re-send.
+#[derive(Debug, PartialEq, Eq)]
+enum Hold {
+    /// Hold this result: the app was graded in its own right.
+    Graded,
+    /// Leave the held result alone, since this one is not the app's own.
+    Unchanged,
+    /// Drop the held result. An app that has finished uninstalling starts its
+    /// next install ungraded, so the grade from the last one is not its to
+    /// re-send.
+    Dropped,
 }
 
 // r[impl canopy.app.health]
@@ -25,7 +37,11 @@ struct Graded {
 fn grade(status: &AppStatus, before_operation: Option<Result_>) -> Graded {
     let graded = |result| Graded {
         result,
-        record: true,
+        hold: Hold::Graded,
+    };
+    let skipped = |hold| Graded {
+        result: Result_::Skipped,
+        hold,
     };
     match status {
         AppStatus::Running => graded(Result_::Passed),
@@ -33,12 +49,12 @@ fn grade(status: &AppStatus, before_operation: Option<Result_>) -> Graded {
         AppStatus::Faulted => graded(Result_::Failed),
         AppStatus::Operating { .. } => Graded {
             result: before_operation.unwrap_or(Result_::Skipped),
-            record: false,
+            hold: Hold::Unchanged,
         },
-        AppStatus::NotInstalled | AppStatus::Installing | AppStatus::Uninstalling => Graded {
-            result: Result_::Skipped,
-            record: false,
-        },
+        // Held until the uninstall finishes, so an operation during one still
+        // re-sends the result the app had going into it.
+        AppStatus::Installing | AppStatus::Uninstalling => skipped(Hold::Unchanged),
+        AppStatus::NotInstalled => skipped(Hold::Dropped),
     }
 }
 
@@ -71,12 +87,17 @@ pub(super) fn report_applications(
         let Some((name, status)) = statuses.iter().find(|(n, _)| n.as_str() == app.app) else {
             continue;
         };
-        let graded = grade(
-            status,
-            app.last_grade.as_deref().and_then(Result_::from_stored),
-        );
-        if graded.record {
-            store::set_last_grade(db, &app.app, graded.result.as_str())?;
+        let held = app.last_grade.as_deref();
+        let graded = grade(status, held.and_then(Result_::from_stored));
+        // Only when it differs: the grade is the same from one minute to the
+        // next for as long as nothing happens to the app, and a write that
+        // stores what is already there costs a WAL write for nothing.
+        match graded.hold {
+            Hold::Graded if held != Some(graded.result.as_str()) => {
+                store::set_last_grade(db, &app.app, Some(graded.result.as_str()))?;
+            }
+            Hold::Dropped if held.is_some() => store::set_last_grade(db, &app.app, None)?,
+            _ => {}
         }
 
         let active: Vec<Value> = faults::list_active_faults(db, Some(name))?

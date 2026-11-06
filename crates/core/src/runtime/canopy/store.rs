@@ -125,7 +125,9 @@ pub fn delete_app(db: &Db, app: &str) -> rusqlite::Result<()> {
 }
 
 // r[impl canopy.app.health]
-pub fn set_last_grade(db: &Db, app: &str, grade: &str) -> rusqlite::Result<()> {
+/// Hold `grade` against `app` for an operation that follows, or `None` to
+/// drop the one held.
+pub fn set_last_grade(db: &Db, app: &str, grade: Option<&str>) -> rusqlite::Result<()> {
     db.conn.execute(
         "UPDATE canopy_apps SET last_grade = ?2 WHERE app = ?1",
         params![app, grade],
@@ -272,7 +274,7 @@ mod tests {
     fn since_survives_reapplying_the_same_type_and_a_change_restamps_it() {
         let db = db();
         sync_app_type_at(&db, "central", Some("tamanu-central"), 100).unwrap();
-        set_last_grade(&db, "central", "passed").unwrap();
+        set_last_grade(&db, "central", Some("passed")).unwrap();
         sync_app_type_at(&db, "central", Some("tamanu-central"), 200).unwrap();
         let apps = list_apps(&db).unwrap();
         assert_eq!(apps.len(), 1);

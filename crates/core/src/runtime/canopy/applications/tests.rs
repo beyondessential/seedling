@@ -164,3 +164,50 @@ fn the_check_lists_each_active_fault_with_kind_resource_and_description() {
     let script = listed.iter().find(|f| f["kind"] == "script_error").unwrap();
     assert!(script.get("resource").is_none());
 }
+
+fn held_grade(db: &Db) -> Option<String> {
+    store::list_apps(db).unwrap().remove(0).last_grade
+}
+
+// r[verify canopy.app.health]
+#[test]
+fn an_uninstalled_app_does_not_carry_its_grade_into_the_next_install() {
+    let db = db();
+    store::sync_app_type(&db, "app", Some("t")).unwrap();
+    report_applications(&db, &[(name("app"), AppStatus::Faulted)]).unwrap();
+    assert_eq!(held_grade(&db).as_deref(), Some("failed"));
+
+    report_applications(&db, &[(name("app"), AppStatus::Uninstalling)]).unwrap();
+    assert_eq!(
+        held_grade(&db).as_deref(),
+        Some("failed"),
+        "an operation during the uninstall still re-sends what it went in with"
+    );
+
+    report_applications(&db, &[(name("app"), AppStatus::NotInstalled)]).unwrap();
+    assert_eq!(held_grade(&db), None);
+
+    // The next install is a lifetime of its own, and has not been graded.
+    report_applications(&db, &[(name("app"), AppStatus::Installing)]).unwrap();
+    let during = report_applications(&db, &[(name("app"), operating())]).unwrap();
+    assert_eq!(result_of(&during["app"]), "skipped");
+}
+
+// r[verify canopy.app.health]
+#[test]
+fn a_grade_that_has_not_changed_is_not_written_again() {
+    let db = db();
+    store::sync_app_type(&db, "app", Some("t")).unwrap();
+    report_applications(&db, &[(name("app"), AppStatus::Running)]).unwrap();
+
+    let before = db.conn.total_changes();
+    report_applications(&db, &[(name("app"), AppStatus::Running)]).unwrap();
+    assert_eq!(
+        db.conn.total_changes(),
+        before,
+        "a tick that grades the app the same as the last writes nothing"
+    );
+
+    report_applications(&db, &[(name("app"), AppStatus::Degraded)]).unwrap();
+    assert_eq!(held_grade(&db).as_deref(), Some("warning"));
+}
