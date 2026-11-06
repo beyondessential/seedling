@@ -22,13 +22,25 @@ These findings come from reading the code and shape the steps below.
 - **CLI and web already have TLS surfaces.** `crates/ctl/src/tls.rs` has `Policies` subcommands and `crates/web/frontend/src/routes/Certificates.tsx` has the page, so the repo's CLI rule is met by extending them.
 - **Canopy ticks are in the report loop.** `runtime/canopy.rs` `spawn` ticks every 60 seconds and `OiState` already holds `tls_coordinator`, so collection can be driven from the report path.
 
-## Spike (blocks the proxy steps)
+## Spike outcome (Caddy 2.11.4, run locally with the internal CA)
 
-- [ ] Run `caddy` locally with a hostname that holds a certificate in storage (internal CA is enough) and establish, for each candidate gate:
-  - [ ] whether `skip_certificates` keeps serving the cached certificate and whether the `get_certificate` manager is still consulted for the skipped name
-  - [ ] whether `renewal_window_ratio` moves Caddy's renewal point, so Caddy renews only at the first fall-through point (a sixth of the lifetime remaining on a 2-strategy chain)
-  - [ ] whether a gated hostname can be handed back to Caddy by a config reload alone, without losing the certificate
-- [ ] Record the outcome in this plan, and pick the mechanism before the proxy steps. If neither candidate works, the fallback is for the runtime to import the proxy's cached certificate into its own store so it can serve it through `get_certificate`. That changes `tls.chain.proxy-gate`, so raise it with the user before building it.
+Findings, each from a run against a real Caddy with a stub `get_certificate` endpoint shaped like the one in `build_policy`:
+
+- **`skip_certificates` is not a gate.** After a reload with it, a name Caddy already held a certificate for stopped being served (the file stayed in storage but was not loaded). With a `get_certificate` endpoint configured and answering 204, Caddy still ordered from its issuer for a skipped name.
+- **The endpoint is consulted before Caddy's own cache, at handshake time.**
+  - 200 with PEM: Caddy serves that certificate and orders nothing, even if it holds one of its own.
+  - 204: Caddy falls through to its own cache and then its issuer.
+  - Any other status (503 and 404 tried): Caddy orders nothing and the handshake fails, **even for a hostname whose certificate Caddy already holds**. So an error answer takes a held certificate down.
+- **With `get_certificate` configured on the policy, Caddy did not order eagerly in this setup.** A warm-only subject (in `certificates.automate`, no route, no client connected) produced no order and no endpoint request, while the same subject without `get_certificate` ordered at load. This matches `build_policy`, so default-chain warm-only hostnames may depend on traffic today. Not confirmed against the production image.
+- **`renewal_window_ratio` works.** On a fresh start with the ratio high enough that the certificate was already inside the window, Caddy renewed within a maintenance tick (`renew_interval` shortened to 3s for the test). Ratio is the fraction of lifetime remaining at which Caddy renews. Caddy's maintenance runs every 10 minutes by default, so a change takes effect within that. A reload with a changed ratio did not show a renewal in the 12 seconds watched, so treat the latency as up to one maintenance interval.
+- Not tested: whether Caddy's use of ACME Renewal Information overrides the ratio for CAs that supply it.
+
+Gate design that follows:
+
+- **A hostname Caddy holds nothing for and whose first strategy is not HTTP-01**: the endpoint answers with an error status, so Caddy neither orders nor serves. Once HTTP-01 is responsible the endpoint answers 204.
+- **A hostname Caddy already holds a certificate for**: the endpoint answers 204, never an error. The cycle's start must not make Caddy renew, so its policy gets a `renewal_window_ratio` equal to the fall-through point (a sixth of the lifetime remaining on a two-strategy chain under the fallback renewal point). Once HTTP-01 is responsible the ratio goes back to Caddy's default.
+- **A Canopy or other runtime-managed certificate**: the endpoint answers 200, and it outranks anything Caddy holds.
+- The `get_certificate` endpoint (`tls/serve.rs`) therefore takes the chain decision, not just the store, and a change of responsible strategy that needs Caddy to act on a warm-only hostname still needs a trigger (see Proxy gate below).
 
 ## Baseline
 
