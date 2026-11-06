@@ -63,15 +63,16 @@ pub async fn run(state: &Arc<OiState>, names: &Entitlements) {
         CanopyRelay::new(Arc::clone(&state.canopy)),
     );
 
-    // One reading for both: replacing a revocation and asking about a hostname
-    // each rest on the same facts, and nothing either writes changes what the
-    // other's hostnames rest on. The faults are synced afterwards against a
-    // fresh one, because what this pass writes is what they describe.
+    // One reading for both phases, and the hostnames the first wrote for are
+    // left out of the second: a decision made from this reading would not know
+    // the revocation had passed the hostname on, and asking again would put it
+    // back on Canopy and overwrite the reason. They are asked on the next tick,
+    // which decides from what the revocation recorded.
     let Some(snapshot) = snapshot(state, &managed) else {
         return;
     };
-    replace_condemned(state, &engine, &snapshot, names).await;
-    ask_canopy(state, &engine, &managed, &snapshot).await;
+    let replaced = replace_condemned(state, &engine, &snapshot, names).await;
+    ask_canopy(state, &engine, &managed, &snapshot, &replaced).await;
 }
 
 /// Bring the Canopy faults into line with the hostnames' conditions now.
@@ -137,16 +138,18 @@ async fn replace_condemned<R: CertificateRelay>(
     engine: &Engine<R>,
     snap: &Snapshot,
     names: &Entitlements,
-) {
+) -> BTreeSet<String> {
+    let mut replaced = BTreeSet::new();
     let held = names.certificates.clone();
     let condemned = match state.db.call(move |db| canopy::condemned_by(db, &held)) {
         Ok(condemned) => condemned,
         Err(e) => {
             tracing::error!(error = %e, "canopy certificates: cannot compare held certificates");
-            return;
+            return replaced;
         }
     };
     for c in condemned {
+        replaced.insert(c.hostname.clone());
         let st = state::compute_state(snap, &c.hostname);
         let ask = match &st.decision {
             Decision::Chain(chain) => revocation_ask(&c.hostname, chain, snap.now),
@@ -179,6 +182,7 @@ async fn replace_condemned<R: CertificateRelay>(
             }
         }
     }
+    replaced
 }
 
 /// What to say to Canopy for a hostname whose certificate it has revoked.
@@ -218,10 +222,16 @@ async fn ask_canopy<R: CertificateRelay>(
     engine: &Engine<R>,
     managed: &[ManagedIngress],
     snap: &Snapshot,
+    skip: &BTreeSet<String>,
 ) {
     let hostnames: BTreeSet<&str> = managed.iter().map(|m| m.hostname.as_str()).collect();
     let mut asked = 0;
     for hostname in hostnames {
+        if skip.contains(hostname) {
+            // A revocation wrote for this hostname after the reading below was
+            // taken, so nothing here knows where it now stands.
+            continue;
+        }
         if asked >= MOST_ASKED_PER_TICK {
             // The rest are asked on the next tick: the decision is made again
             // from what is recorded, so nothing is lost by stopping here, and a
@@ -721,7 +731,14 @@ mod tests {
     /// Ask Canopy about every due hostname, against the state as it stands.
     async fn asking(oi: &TestOi, recorder: &Recorder, managed: &[ManagedIngress]) {
         let snap = snapshot(&oi.state, managed).expect("the state can be read");
-        ask_canopy(&oi.state, &engine(oi, recorder), managed, &snap).await;
+        ask_canopy(
+            &oi.state,
+            &engine(oi, recorder),
+            managed,
+            &snap,
+            &BTreeSet::new(),
+        )
+        .await;
     }
 
     // r[verify tls.canopy.request]
@@ -1063,7 +1080,7 @@ mod tests {
         let engine = Engine::new(oi.state.db.clone(), Arc::clone(&oi.state.cipher), &Broken);
         oi.block_on(async {
             let snap = snapshot(&oi.state, &managed).expect("the state can be read");
-            ask_canopy(&oi.state, &engine, &managed, &snap).await;
+            ask_canopy(&oi.state, &engine, &managed, &snap, &BTreeSet::new()).await;
         });
 
         let row = oi
@@ -1109,5 +1126,74 @@ mod tests {
         let managed = managed_in(&oi);
         oi.block_on(asking(&oi, &recorder, &managed));
         assert_eq!(recorder.0.lock().len(), MOST_ASKED_PER_TICK);
+    }
+
+    // r[verify tls.canopy.revoked]
+    // r[verify tls.chain.return]
+    #[test]
+    fn a_hostname_a_revocation_touched_is_not_asked_again_in_the_same_tick() {
+        let oi = TestOi::new();
+        register(&oi, "shop", &script_for("tamanu", "shop.example.com", 443));
+        let now = jiff::Timestamp::now().as_second();
+        // Past its renewal point, so without the guard the second phase would
+        // decide the hostname is Canopy's to ask about again.
+        let cert_id = canopy_cert(
+            &oi,
+            "shop.example.com",
+            now - 70 * 86_400,
+            now + 20 * 86_400,
+        );
+
+        let recorder = Recorder::default();
+        let managed = managed_in(&oi);
+        let names = revoking(&oi, cert_id, "shop.example.com");
+        oi.block_on(async {
+            let snap = snapshot(&oi.state, &managed).expect("the state can be read");
+            let engine = engine(&oi, &recorder);
+            let replaced = replace_condemned(&oi.state, &engine, &snap, &names).await;
+            assert!(replaced.contains("shop.example.com"));
+            ask_canopy(&oi.state, &engine, &managed, &snap, &replaced).await;
+        });
+
+        assert_eq!(
+            recorder.0.lock().len(),
+            1,
+            "the replacement was asked for once, and not asked again from the reading before it"
+        );
+        let row = oi
+            .state
+            .db
+            .call(|db| store::get_chain_row(db, "shop.example.com").unwrap())
+            .expect("the revocation recorded where the hostname stands");
+        assert_eq!(
+            row.row.step, 1,
+            "and it is still passed to the next strategy"
+        );
+        assert!(
+            row.row.open_order_since.is_some(),
+            "with the one replacement order the revocation opened"
+        );
+    }
+
+    /// What Canopy says of a certificate it has revoked.
+    fn revoking(oi: &TestOi, cert_id: i64, hostname: &str) -> Entitlements {
+        Entitlements::builder()
+            .applications(vec![])
+            .certificate_names(vec![])
+            .certificates(vec![
+                bestool_canopy::schema::HeldCertificate::builder()
+                    .key_fingerprint(canopy_key_fingerprint(oi, cert_id))
+                    .key_must_be_replaced(false)
+                    .name(hostname.to_owned())
+                    .revoked(true)
+                    .usable(false)
+                    .build(),
+            ])
+            .domains(vec![])
+            .may_manage_dns(false)
+            .may_manage_tls(true)
+            .paused(false)
+            .registered_names(vec![])
+            .build()
     }
 }
