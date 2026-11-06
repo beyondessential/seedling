@@ -86,7 +86,9 @@ pub struct RenewalReport {
 /// Walk the snapshot and return hostnames whose [`Decision`] says
 /// "issue now" — first issuance, due renewal, or operator force-retry.
 fn due_hostnames(db: &crate::runtime::db::Db) -> rusqlite::Result<Vec<String>> {
-    let snap = state::Snapshot::load(db)?;
+    // ACME-DNS hostnames only, which are on no chain: this reads the stored
+    // certificates and the decisions for the policy they are bound to.
+    let snap = state::Snapshot::load(db, state::ChainEnv::none())?;
     let mut hostnames: Vec<String> = Vec::new();
 
     // Existing certs: for each acme-dns active cert, ask the unified

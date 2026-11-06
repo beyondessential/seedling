@@ -134,8 +134,8 @@ impl Coordinator {
     // r[impl tls.chain.cycle]
     pub fn chain_decisions(&self, only: Option<&str>) -> Option<BTreeMap<String, ChainDecision>> {
         let (managed, env) = self.environment.get()?.gather(only)?;
-        let snapshot = match self.db.call(state::Snapshot::load) {
-            Ok(snapshot) => snapshot.with_env(env),
+        let snapshot = match self.db.call(move |db| state::Snapshot::load(db, env)) {
+            Ok(snapshot) => snapshot,
             Err(e) => {
                 tracing::warn!(error = %e, "cannot read the TLS state to decide a chain");
                 return None;
@@ -362,7 +362,8 @@ impl Coordinator {
         let owned = self
             .db
             .call(move |db| -> rusqlite::Result<OwnedState> {
-                let snap = state::Snapshot::load(db)?;
+                // An ACME-DNS or Tailscale flow, which is on no chain.
+                let snap = state::Snapshot::load(db, state::ChainEnv::none())?;
                 Ok(OwnedState::from_snapshot(
                     &snap,
                     &state::compute_state(&snap, &host_for_state),

@@ -814,9 +814,8 @@ fn settle_retry_without_canopy(state: &OiState, hostname: &str) -> Result<(), Oi
     let env = state.chain_env(&managed).map_err(db_error)?;
     let snapshot = state
         .db
-        .call(state::Snapshot::load)
-        .map_err(db_error)?
-        .with_env(env);
+        .call(move |db| state::Snapshot::load(db, env))
+        .map_err(db_error)?;
     let st = state::compute_state(&snapshot, hostname);
     let state::Decision::Chain(c) = &st.decision else {
         return Ok(());
@@ -885,9 +884,8 @@ pub(crate) fn list_hostnames(state: &OiState, params: ListHostnamesParams) -> Ha
     let env = state.chain_env(&all_managed).map_err(db_error)?;
     let snapshot = state
         .db
-        .call(state::Snapshot::load)
-        .map_err(db_error)?
-        .with_env(env);
+        .call(move |db| state::Snapshot::load(db, env))
+        .map_err(db_error)?;
 
     // Resolve Caddy's data volume once per request (cached on OiState
     // after first hit). For hostnames whose strategy is "default"

@@ -78,8 +78,8 @@ fn snapshot(state: &Arc<OiState>, managed: &[ManagedIngress]) -> Option<Snapshot
             return None;
         }
     };
-    match state.db.call(Snapshot::load) {
-        Ok(snapshot) => Some(snapshot.with_env(env)),
+    match state.db.call(move |db| Snapshot::load(db, env)) {
+        Ok(snapshot) => Some(snapshot),
         Err(e) => {
             tracing::error!(error = %e, "canopy certificates: cannot read the TLS state");
             None

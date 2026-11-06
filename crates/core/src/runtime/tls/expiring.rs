@@ -41,7 +41,10 @@ pub struct IngressTarget {
 /// Pure DB work; safe to call from inside a `DbHandle::call` closure.
 // r[impl tls.fault.expiring]
 pub fn sweep(db: &Db, targets: &[IngressTarget]) -> rusqlite::Result<()> {
-    let snap = state::Snapshot::load(db)?;
+    // Only what is stored matters here: the sweep reads each hostname's
+    // active certificate and files on its origin and expiry, and acts on no
+    // chain decision.
+    let snap = state::Snapshot::load(db, state::ChainEnv::none())?;
     let now = Timestamp::now().as_second();
 
     // Compute the set of (app, ingress, hostname, description) tuples

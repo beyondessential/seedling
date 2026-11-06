@@ -132,7 +132,7 @@ pub enum ProxyHolding {
 /// Facts about the world that decide a hostname's chain and are not in the
 /// database. Gathered by the caller, so [`compute_state`] stays a pure
 /// function of its inputs.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct ChainEnv {
     /// Whether a Canopy offer is live.
     pub offer_live: bool,
@@ -144,6 +144,22 @@ pub struct ChainEnv {
     /// not looked at, which is not the same as the proxy holding nothing for
     /// it.
     pub proxy: BTreeMap<String, ProxyHolding>,
+}
+
+impl ChainEnv {
+    /// For a caller that holds none of these facts and acts on no chain
+    /// decision: the expiring-certificate sweep and the renewal scheduler,
+    /// which read a snapshot only for what is stored.
+    ///
+    /// Named rather than defaulted, because what it produces is not a neutral
+    /// chain but one with no Canopy in it.
+    pub fn none() -> Self {
+        Self {
+            offer_live: false,
+            canopy_types: BTreeMap::new(),
+            proxy: BTreeMap::new(),
+        }
+    }
 }
 
 /// Snapshot of every DB row that drives a hostname's decision. Loaded
@@ -161,9 +177,8 @@ pub struct Snapshot {
     pub chain_rows: Vec<TlsChainRow>,
     pub settings: TlsSettings,
     /// What the database cannot say about a hostname's chain: whether an offer
-    /// is live, which apps declare it, what the proxy holds for it. Empty until
-    /// a caller that has them sets it with [`Snapshot::with_env`], which leaves
-    /// every default-chain hostname without Canopy in its chain.
+    /// is live, which apps declare it, what the proxy holds for it. Supplied by
+    /// the caller when the snapshot is loaded; see [`Snapshot::load`].
     pub env: ChainEnv,
     pub now: i64,
     /// SAN list per certificate id, parsed once when the snapshot is built.
@@ -189,7 +204,13 @@ pub struct Snapshot {
 
 impl Snapshot {
     /// Load a fresh snapshot of TLS state from the DB.
-    pub fn load(db: &Db) -> rusqlite::Result<Self> {
+    ///
+    /// `env` is required rather than filled in later, because its default is
+    /// not a neutral value: it says no app has a Canopy type and no offer is
+    /// live, which is a different chain for every hostname. A caller that holds
+    /// no such facts says so with [`ChainEnv::none`], and the chain decisions of
+    /// that snapshot are not to be acted on.
+    pub fn load(db: &Db, env: ChainEnv) -> rusqlite::Result<Self> {
         let certificates = store::list_certificates(db)?;
         let sans = index_sans(&certificates);
         Ok(Self {
@@ -200,16 +221,10 @@ impl Snapshot {
             force_retries: store::list_force_retries(db)?,
             chain_rows: store::list_chain_rows(db)?,
             settings: store::get_settings(db)?,
-            env: ChainEnv::default(),
+            env,
             now: Timestamp::now().as_second(),
             sans,
         })
-    }
-
-    #[must_use]
-    pub fn with_env(mut self, env: ChainEnv) -> Self {
-        self.env = env;
-        self
     }
 
     /// The certificate's SAN list, from the memo when it is there and by
@@ -1087,7 +1102,7 @@ mod tests {
                 cert_profile: None,
                 updated_at: now,
             },
-            env: ChainEnv::default(),
+            env: ChainEnv::none(),
             now,
             sans,
         }
