@@ -748,6 +748,15 @@ Some operations must hand a writable or read-only path to an action closure with
 > A barrier still recorded as waiting counts toward the [poll cadence](#r--barrier.suspension.poll-backoff) for as long as the record stands.
 > A barrier that has passed but was never recorded as passed therefore goes on lengthening the cadence of every barrier after it, so an operation whose first barrier waited a long time re-polls the next one slowly even though it is ready to proceed.
 
+> r[barrier.replay.abandoned]
+> Startup cleanup of resources left by a previous run must spare the resources recorded against the operation it is about to replay, so the replay can adopt them.
+> Where the replay does not then start, for any reason, those resources must be torn down and their records forgotten before the runtime goes on serving.
+>
+> A resource spared for a replay that never happens is recorded against an operation no live operation will ever claim, and the next start spares it again on the same reasoning, so nothing reclaims it for as long as the node lives.
+> Sparing a resource is therefore a promise, and every path that declines to replay owes it.
+>
+> Only resources actually torn down may be forgotten: a record the runtime could not read or act on must stay on the books, since dropping it would report a teardown that did not happen.
+
 > r[barrier.replay.determinism]
 > BSL action closures must not have side effects beyond `rt.*` calls.
 > Re-execution of a closure given the same AppDef and parameters must produce the same sequence of `rt.*` calls up to any given barrier point.
