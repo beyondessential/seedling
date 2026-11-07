@@ -141,6 +141,11 @@ fn trouble_that_may_pass_is_not_a_refusal() {
     for failure in [
         status(409, "name-management-paused"),
         status(409, "something-new"),
+        status(403, "something-new"),
+        RelayFailure::Status {
+            status: 403,
+            body: "<html>Forbidden by the gateway</html>".to_owned(),
+        },
         status(412, "device-has-no-server"),
         status(500, "database"),
         status(429, "rate-limited"),
@@ -842,7 +847,7 @@ fn what_canopy_says_cannot_forge_a_log_line_or_run_off_the_screen() {
                 .to_owned(),
     };
     let Answer::Refused { reason } = classify_failure(&forged) else {
-        panic!("a 403 is a refusal");
+        panic!("a 403 for a name not entitled is a refusal");
     };
     assert!(!reason.contains('\n'), "{reason:?}");
     assert!(!reason.chars().any(char::is_control), "{reason:?}");

@@ -213,9 +213,14 @@ pub fn classify_response(response: &CertificateResponse) -> Answer {
 /// Classify a request that did not produce an answer about the certificate.
 ///
 /// Canopy's errors carry a status and a problem-details body whose `type` names
-/// the cause. A 403 is a refusal whatever its cause. A 409 is told apart by its
-/// cause: no managed zone is a refusal, a paused server is not, and a condemned
-/// key calls for a new one. A cause not recognised is never a refusal.
+/// the cause. A refusal is the authority's own no, so it is only recognised by
+/// its cause: a 403 for a name outside what the server may have or for a server
+/// without the TLS grant, and a 409 for no managed zone. A paused server is not
+/// a refusal, and a condemned key calls for a new one. A 403 from somewhere else
+/// on the way (an intermediary, the carrying client's own authorisation) and any
+/// cause not recognised are never a refusal: they carry no word of Canopy's, and
+/// moving a hostname off its strategy on one would be a one-way step taken on
+/// something nobody can attribute.
 // r[impl tls.canopy.outcomes]
 pub fn classify_failure(failure: &RelayFailure) -> Answer {
     let (status, body) = match failure {
@@ -242,7 +247,9 @@ pub fn classify_failure(failure: &RelayFailure) -> Answer {
         .unwrap_or_else(|| format!("Canopy answered {status}"));
 
     match (status, slug.as_deref()) {
-        (403, _) => Answer::Refused { reason: detail },
+        (403, Some("name-not-entitled" | "auth-insufficient-permissions")) => {
+            Answer::Refused { reason: detail }
+        }
         (409, Some("conflict")) => Answer::Refused { reason: detail },
         (409, Some("certificate-key-compromised")) => Answer::Revoked { reason: detail },
         (400, _) => Answer::Malformed { reason: detail },
