@@ -1729,3 +1729,88 @@ fn a_second_barrier_on_one_started_does_not_rearm_the_first_record_each_pass() {
         "the record churned between the two barriers instead of holding the one that passed: {record:?}"
     );
 }
+
+// r[verify gc.instances.operation-keep-set]
+#[test]
+fn stopping_an_already_stopped_deployment_does_not_mint_instances_to_wait_on() {
+    // rt.stop addresses the instances a deployment has, so refusing to
+    // reuse torn-down ones leaves it minting fresh identities and waiting
+    // for them to terminate — which nothing will ever do, since the
+    // reconciler desires none of them.
+    let (engine, mut scope, app, ast) = setup_with_script(
+        r#"
+        let web = app.deployment("web").image("docker.io/library/nginx:latest");
+        app.on_start(|rt, _param| {
+            rt.stop(app.deployment("web"));
+        });
+    "#,
+    );
+
+    let db = crate::runtime::db::DbHandle::open_in_memory().expect("in-memory db");
+    let app_name = app.def.load().name.clone();
+    let reg: Arc<dyn crate::runtime::InstanceRegistry> = Arc::new(
+        crate::runtime::registry::DbInstanceRegistry::new(db.clone()),
+    );
+
+    // The deployment's one replica has been torn down already.
+    let existing = reg
+        .ensure_scaled_group(
+            &app_name,
+            ResourceKind::Deployment,
+            Some("web"),
+            1,
+            crate::runtime::registry::InstanceReuse::Any,
+        )
+        .expect("group resolves")
+        .keep[0]
+        .clone();
+    db.call({
+        let existing = existing.clone();
+        move |db| {
+            for kind in ["container_running", "container_removed"] {
+                crate::runtime::history::insert_observation(
+                    db,
+                    &existing,
+                    kind,
+                    &serde_json::json!({}),
+                )
+                .unwrap();
+            }
+        }
+    });
+
+    let oracle = Arc::new(TestWorldOracle::new());
+    oracle.set(dep("web"), LifecycleState::Unscheduled);
+    let log = InMemoryActionLog::new();
+
+    let r = run_pass_with_db(
+        &engine,
+        &ast,
+        &app,
+        &mut scope,
+        OperationId::new(),
+        &log,
+        Arc::clone(&oracle),
+        Arc::clone(&reg),
+        Some(db),
+    );
+    assert!(matches!(r, OperationResult::Completed), "{r:?}");
+
+    // The oracle keys on kind and name, so it cannot tell a minted
+    // instance from the real one; the identity in the log can.
+    let entries = log.load().expect("log loads");
+    let stopped = entries
+        .iter()
+        .find(|e| matches!(e.call_kind, crate::runtime::barrier::CallKind::Stop))
+        .expect("the stop is recorded");
+    assert_eq!(
+        stopped.resources.len(),
+        1,
+        "one replica, one instance to stop: {:?}",
+        stopped.resources
+    );
+    assert_eq!(
+        stopped.resources[0].id, existing.id,
+        "the stop addressed an instance it had just minted rather than the one the deployment has"
+    );
+}

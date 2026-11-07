@@ -520,10 +520,12 @@ Absent specification bugs, anything that is not defined here is either defined i
 > Membership is judged against the desired state the reconciler computed from the app's definition, so an instance belonging to an app whose desired state is not known must not be deleted: while a lifecycle operation is in progress for the app, while it is installing or uninstalling, when its desired state could not be computed, or when the runtime could not load the app.
 
 > r[gc.instances.operation-keep-set]
-> A lifecycle operation resolving a scaled group takes only instances the observation history does not already show torn down, allocating fresh ones in place of those it leaves out.
-> The instances it leaves out are the ones retirement deletes, so an operation's keep set and what the reconciler may delete never name the same instance, and an operation that starts between the reconciler reading desired state and acting on it cannot have an instance deleted under it.
+> An action starting a scaled group takes only instances the observation history does not already show torn down, allocating fresh ones in place of those it leaves out.
+> The instances it leaves out are the ones retirement deletes, so what an action starts and what the reconciler may delete never name the same instance, and an action that starts between the reconciler reading desired state and acting on it cannot have an instance deleted under it.
 >
-> This holds only for operations. The reconciler's own steady-state desired state keeps a scaled instance whatever its containers have done, because re-identifying it would discard the [restart record](#r--autonomous.restart.record) and observation history held against its identity.
+> This holds for starting a group and not for addressing one. An action that stops, queries, signals or warms a deployment names the instances that deployment has, torn down or not: resolving those to fresh instances instead would have it address replicas that do not exist and never will, while the ones it meant to address carried on.
+>
+> It holds for actions and not for the reconciler, whose steady-state desired state keeps a scaled instance whatever its containers have done, because re-identifying it would discard the [restart record](#r--autonomous.restart.record) and observation history held against its identity.
 
 > r[gc.instances.atomic]
 > The deletion of an instance's records must be atomic across the world observation rows, fault rows, and the resource instance row.

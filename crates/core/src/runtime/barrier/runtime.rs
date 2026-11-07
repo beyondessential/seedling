@@ -17,7 +17,7 @@ use crate::runtime::barrier::{
     ActionLogEntry, BarrierCondition, BarrierRecord, CallKind, ReplayContext, SharedContext,
     VolumeWriteTarget,
 };
-use crate::runtime::registry::{InstanceRegistry, RegistryError};
+use crate::runtime::registry::{InstanceRegistry, InstanceReuse, RegistryError};
 use crate::runtime::{LifecycleState, ResourceInstance, restart_gens};
 
 // ---------------------------------------------------------------------------
@@ -602,10 +602,13 @@ impl RuntimeInstance {
     /// failure this answers.
     ///
     /// Without a database there are no stored decisions to read, so the
-    /// lower bound is the answer rather than a failure. The floor of one
-    /// holds whatever the bounds say: an action resolving a deployment to
-    /// no instances at all would leave its barriers with nothing to wait
-    /// on, which never completes.
+    /// lower bound is the answer rather than a failure.
+    ///
+    /// The floor of one holds whatever the bounds say, as it did before
+    /// effective scale was consulted here. It is not what keeps a barrier
+    /// from waiting on nothing — a group holding no resources now returns
+    /// at once — so it stands only to leave `scale(0..n)` resolving as it
+    /// always has.
     fn effective_scale(&self, deployment: &str, low: u16, high: u16) -> Result<u16, RegistryError> {
         let Some(db) = &self.db else {
             return Ok(low.max(1));
@@ -624,9 +627,18 @@ impl RuntimeInstance {
     /// resolves them through the instance registry so the returned instances
     /// carry stable UUIDs.  Unknown types yield an empty vec (stub behaviour
     /// that leaves barriers trivially satisfied in language-only tests).
+    ///
+    /// `reuse` says whether a scaled group may resolve to instances that
+    /// have already been torn down. Only `rt.start` passes
+    /// [`InstanceReuse::Live`]: it is the call that brings replicas up, so
+    /// it is the one that must not adopt an instance retirement is about to
+    /// delete. Every other call addresses the instances the deployment
+    /// already has, and refusing the torn-down ones would have it mint
+    /// fresh identities and address those instead.
     fn extract_instances(
         &self,
         resources: Dynamic,
+        reuse: InstanceReuse,
     ) -> Result<Vec<(ResourceInstance, Option<crate::defs::resource::Resource>)>, RegistryError>
     {
         use crate::defs::deployment::Deployment;
@@ -680,15 +692,12 @@ impl RuntimeInstance {
             };
             let scale = self.effective_scale(&dep.name, scale.0, scale.1)?;
             // r[impl gc.instances.operation-keep-set]
-            // An operation holds its keep set across suspensions, so it must
-            // not take an instance the reconciler's retirement sweep is
-            // about to delete.
             let group = self.registry.ensure_scaled_group(
                 &self.app_name,
                 ResourceKind::Deployment,
                 Some(&dep.name),
                 scale,
-                crate::runtime::registry::InstanceReuse::Live,
+                reuse,
             )?;
             return Ok(group.keep.into_iter().map(|inst| (inst, None)).collect());
         }
@@ -848,7 +857,7 @@ impl RuntimeInstance {
                     if dyn_val.is_unit() {
                         continue;
                     }
-                    out.extend(self.extract_instances(dyn_val)?);
+                    out.extend(self.extract_instances(dyn_val, reuse)?);
                 }
                 return Ok(out);
             }
@@ -1748,12 +1757,17 @@ impl CustomType for RuntimeInstance {
             .with_fn(
                 "start",
                 |this: &mut Self, resources: Dynamic| -> Result<Started, Box<EvalAltResult>> {
-                    let resources_with_defs = this.extract_instances(resources).map_err(|e| {
-                        Box::new(EvalAltResult::ErrorRuntime(
-                            e.to_string().into(),
-                            rhai::Position::NONE,
-                        ))
-                    })?;
+                    // r[impl gc.instances.operation-keep-set]
+                    // The call that brings replicas up is the one that must
+                    // not adopt an instance retirement is about to delete.
+                    let resources_with_defs = this
+                        .extract_instances(resources, InstanceReuse::Live)
+                        .map_err(|e| {
+                            Box::new(EvalAltResult::ErrorRuntime(
+                                e.to_string().into(),
+                                rhai::Position::NONE,
+                            ))
+                        })?;
                     this.do_start(resources_with_defs)
                 },
             )
@@ -1762,7 +1776,7 @@ impl CustomType for RuntimeInstance {
                 "stop",
                 |this: &mut Self, resources: Dynamic| -> Result<(), Box<EvalAltResult>> {
                     let instances = this
-                        .extract_instances(resources)
+                        .extract_instances(resources, InstanceReuse::Any)
                         .map_err(|e| {
                             Box::new(EvalAltResult::ErrorRuntime(
                                 e.to_string().into(),
@@ -1782,7 +1796,7 @@ impl CustomType for RuntimeInstance {
                  deadline: i64|
                  -> Result<(), Box<EvalAltResult>> {
                     let instances = this
-                        .extract_instances(resources)
+                        .extract_instances(resources, InstanceReuse::Any)
                         .map_err(|e| {
                             Box::new(EvalAltResult::ErrorRuntime(
                                 e.to_string().into(),
@@ -1802,12 +1816,14 @@ impl CustomType for RuntimeInstance {
             .with_fn(
                 "query",
                 |this: &mut Self, resources: Dynamic| -> Result<Started, Box<EvalAltResult>> {
-                    let resources_with_defs = this.extract_instances(resources).map_err(|e| {
-                        Box::new(EvalAltResult::ErrorRuntime(
-                            e.to_string().into(),
-                            rhai::Position::NONE,
-                        ))
-                    })?;
+                    let resources_with_defs = this
+                        .extract_instances(resources, InstanceReuse::Any)
+                        .map_err(|e| {
+                            Box::new(EvalAltResult::ErrorRuntime(
+                                e.to_string().into(),
+                                rhai::Position::NONE,
+                            ))
+                        })?;
                     this.do_query(resources_with_defs)
                 },
             )
@@ -1815,12 +1831,14 @@ impl CustomType for RuntimeInstance {
             .with_fn(
                 "warm_certs",
                 |this: &mut Self, resources: Dynamic| -> Result<Started, Box<EvalAltResult>> {
-                    let resources_with_defs = this.extract_instances(resources).map_err(|e| {
-                        Box::new(EvalAltResult::ErrorRuntime(
-                            e.to_string().into(),
-                            rhai::Position::NONE,
-                        ))
-                    })?;
+                    let resources_with_defs = this
+                        .extract_instances(resources, InstanceReuse::Any)
+                        .map_err(|e| {
+                            Box::new(EvalAltResult::ErrorRuntime(
+                                e.to_string().into(),
+                                rhai::Position::NONE,
+                            ))
+                        })?;
                     this.do_warm_certs(resources_with_defs)
                 },
             )
@@ -1828,12 +1846,14 @@ impl CustomType for RuntimeInstance {
             .with_fn(
                 "warm_images",
                 |this: &mut Self, resources: Dynamic| -> Result<Started, Box<EvalAltResult>> {
-                    let resources_with_defs = this.extract_instances(resources).map_err(|e| {
-                        Box::new(EvalAltResult::ErrorRuntime(
-                            e.to_string().into(),
-                            rhai::Position::NONE,
-                        ))
-                    })?;
+                    let resources_with_defs = this
+                        .extract_instances(resources, InstanceReuse::Any)
+                        .map_err(|e| {
+                            Box::new(EvalAltResult::ErrorRuntime(
+                                e.to_string().into(),
+                                rhai::Position::NONE,
+                            ))
+                        })?;
                     this.do_warm_images(resources_with_defs)
                 },
             )
@@ -1844,12 +1864,14 @@ impl CustomType for RuntimeInstance {
                  target: Dynamic,
                  signal: &str|
                  -> Result<(), Box<EvalAltResult>> {
-                    let resources_with_defs = this.extract_instances(target).map_err(|e| {
-                        Box::new(EvalAltResult::ErrorRuntime(
-                            e.to_string().into(),
-                            rhai::Position::NONE,
-                        ))
-                    })?;
+                    let resources_with_defs = this
+                        .extract_instances(target, InstanceReuse::Any)
+                        .map_err(|e| {
+                            Box::new(EvalAltResult::ErrorRuntime(
+                                e.to_string().into(),
+                                rhai::Position::NONE,
+                            ))
+                        })?;
                     let resources: Vec<ResourceInstance> =
                         resources_with_defs.into_iter().map(|(r, _)| r).collect();
                     this.do_signal(resources, signal)
@@ -2019,7 +2041,7 @@ fn resolve_exec_target(
             .into());
         }
         let with_defs = rt
-            .extract_instances(Dynamic::from(dep))
+            .extract_instances(Dynamic::from(dep), InstanceReuse::Any)
             .map_err(|e| -> Box<EvalAltResult> { format!("rt.exec: {e}").into() })?;
         let mut iter = with_defs.into_iter();
         let first = iter.next().ok_or_else(|| -> Box<EvalAltResult> {
@@ -2036,7 +2058,7 @@ fn resolve_exec_target(
             return Err("rt.exec: anonymous jobs must be passed via the Started returned by rt.start, not directly".into());
         }
         let with_defs = rt
-            .extract_instances(Dynamic::from(job))
+            .extract_instances(Dynamic::from(job), InstanceReuse::Any)
             .map_err(|e| -> Box<EvalAltResult> { format!("rt.exec: {e}").into() })?;
         let mut iter = with_defs.into_iter();
         let first = iter.next().ok_or_else(|| -> Box<EvalAltResult> {
