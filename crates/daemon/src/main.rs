@@ -1298,7 +1298,7 @@ fn tear_down_dynamic_resources(
         // them. A unit still loaded is reset so it does not linger.
         let unit = format!("seedling-{}.service", record.display_name);
         let net_name = format!("seedling-{}", record.display_name);
-        let display = record.display_name.clone();
+        let container_name = record.display_name.clone();
         let driver_ref = Arc::clone(driver);
         // r[impl barrier.replay.abandoned]
         // Whether the world actually gave the resource up. A teardown that
@@ -1345,14 +1345,33 @@ fn tear_down_dynamic_resources(
                         torn_down = false;
                     }
                 }
-                // A failure here is not counted: the runtime reports a
-                // container that is not there as an error, and a dynamic
-                // resource's container has routinely already gone, removed on
-                // exit. The actuator's own teardown ignores it for the same
-                // reason. A runtime that is genuinely unreachable fails the
-                // network check above, so the case this would otherwise catch
-                // is caught there.
-                let _ = driver_ref.container.remove_container(&display, true).await;
+                // Asked for first, rather than removing and discarding the
+                // error: the runtime reports a container that is not there as
+                // an error, and a dynamic resource's container has routinely
+                // already gone, removed on exit. Discarding it also discards
+                // the failure to remove one that is still there, against a
+                // runtime answering perfectly well.
+                match driver_ref.container.inspect(&container_name).await {
+                    Ok(None) => {}
+                    Ok(Some(_)) => {
+                        if let Err(e) =
+                            driver_ref.container.remove_container(&container_name, true).await
+                        {
+                            tracing::warn!(
+                                container = %container_name,
+                                "could not remove the container: {e}"
+                            );
+                            torn_down = false;
+                        }
+                    }
+                    Err(e) => {
+                        tracing::warn!(
+                            container = %container_name,
+                            "could not tell whether the container is still there: {e}"
+                        );
+                        torn_down = false;
+                    }
+                }
                 torn_down
             })
         });
