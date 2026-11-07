@@ -235,6 +235,7 @@ mod tests {
             }],
             warm_cert_hostnames: BTreeSet::from(["warm.example.com".to_owned()]),
             cert_endpoint_url: Some("http://[fd5e::3]:8080/get_certificate".to_owned()),
+            renewal_ratios: Default::default(),
         }
     }
 

@@ -740,3 +740,541 @@ fn set_acme_dns_accepts_the_shapes_the_spec_defines() {
         .unwrap_or_else(|e| panic!("should accept {good:?}: {e:?}"));
     }
 }
+
+const TLS_APP: &str = r#"
+    app.canopy_type("tamanu");
+    let web = app.service("web").exported().http(80);
+    web.ingress("shop.example.com", 443).tls(Terminate.Https, Output.Http1);
+    app.deployment("web")
+        .image("docker.io/library/nginx:1.29")
+        .http(80, web.route("/"));
+"#;
+
+const UNTYPED_TLS_APP: &str = r#"
+    let web = app.service("web").exported().http(80);
+    web.ingress("shop.example.com", 443).tls(Terminate.Https, Output.Http1);
+    app.deployment("web")
+        .image("docker.io/library/nginx:1.29")
+        .http(80, web.route("/"));
+"#;
+
+fn tls_app(oi: &TestOi, script: &str) {
+    oi.call("/apps/create", json!({ "app": "shop", "script": script }))
+        .expect("register app");
+    oi.install("shop");
+}
+
+fn shop_hostname(oi: &TestOi) -> serde_json::Value {
+    let list = oi.call("/tls/hostnames/list", json!({})).unwrap();
+    list["hostnames"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|h| h["hostname"] == "shop.example.com")
+        .cloned()
+        .expect("the hostname is in the view")
+}
+
+// i[verify tls.policy.set-canopy]
+// i[verify tls.policy.list]
+// i[verify tls.policy.clear]
+#[test]
+fn canopy_policy_set_list_clear_roundtrip() {
+    let oi = TestOi::new();
+    let set = oi
+        .call(
+            "/tls/policies/set-canopy",
+            json!({ "hostname": "*.example.com" }),
+        )
+        .unwrap();
+    assert_eq!(set["ok"], true);
+
+    let listed = oi.call("/tls/policies/list", json!({})).unwrap();
+    let policies = listed["policies"].as_array().unwrap();
+    assert_eq!(policies.len(), 1);
+    assert_eq!(policies[0]["hostname"], "*.example.com");
+    assert_eq!(policies[0]["strategy"], "canopy");
+    assert!(policies[0].get("dns_provider").is_none());
+
+    // Setting it again replaces rather than duplicates.
+    oi.call(
+        "/tls/policies/set-canopy",
+        json!({ "hostname": "*.example.com" }),
+    )
+    .unwrap();
+    assert_eq!(
+        oi.call("/tls/policies/list", json!({})).unwrap()["policies"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+
+    assert_eq!(
+        oi.call(
+            "/tls/policies/clear",
+            json!({ "hostname": "*.example.com" })
+        )
+        .unwrap()["ok"],
+        true
+    );
+}
+
+// r[verify tls.policy.wildcard]
+#[test]
+fn canopy_policy_refuses_a_pattern_that_can_never_match() {
+    let oi = TestOi::new();
+    for bad in ["", "*.", "not a hostname"] {
+        let (code, _) = oi
+            .call("/tls/policies/set-canopy", json!({ "hostname": bad }))
+            .unwrap_err();
+        assert_eq!(code, "requirements_invalid", "should refuse {bad:?}");
+    }
+}
+
+// i[verify tls.policy.set-canopy]
+#[test]
+fn canopy_policy_replaces_an_acme_dns_policy_for_the_same_pattern() {
+    let oi = TestOi::new();
+    upsert_route53(&oi, "aws-prod");
+    oi.call(
+        "/tls/policies/set-acme-dns",
+        json!({ "hostname": "shop.example.com", "dns_provider": "aws-prod" }),
+    )
+    .unwrap();
+    oi.call(
+        "/tls/policies/set-canopy",
+        json!({ "hostname": "shop.example.com" }),
+    )
+    .unwrap();
+    let policies = oi.call("/tls/policies/list", json!({})).unwrap()["policies"].clone();
+    assert_eq!(policies.as_array().unwrap().len(), 1);
+    assert_eq!(policies[0]["strategy"], "canopy");
+
+    // The provider is no longer referenced, so it can be removed.
+    assert_eq!(
+        oi.call("/tls/dns-providers/delete", json!({ "name": "aws-prod" }))
+            .unwrap()["ok"],
+        true
+    );
+}
+
+// i[verify tls.hostname.list]
+// r[verify tls.strategy.default]
+#[test]
+fn an_app_with_no_canopy_type_follows_the_proxy_alone() {
+    let oi = TestOi::new();
+    tls_app(&oi, UNTYPED_TLS_APP);
+    let host = shop_hostname(&oi);
+    assert_eq!(host["policy"]["strategy"], "default");
+    assert_eq!(host["chain"]["responsible"], "acme_http01");
+    assert!(host["chain"]["fall_through_at"].is_null());
+}
+
+// i[verify tls.hostname.list]
+// r[verify tls.chain.no-certificate]
+#[test]
+fn a_typed_app_with_no_live_offer_goes_straight_to_the_proxy() {
+    let oi = TestOi::new();
+    tls_app(&oi, TLS_APP);
+    let host = shop_hostname(&oi);
+    assert_eq!(host["policy"]["strategy"], "default");
+    assert_eq!(
+        host["chain"]["responsible"], "acme_http01",
+        "with no offer to ask, a hostname with no certificate does not wait for Canopy"
+    );
+}
+
+// i[verify tls.hostname.list]
+// r[verify tls.canopy-only.untyped]
+#[test]
+fn a_hostname_nothing_can_ask_canopy_about_does_not_read_as_in_progress() {
+    let oi = TestOi::new();
+    tls_app(&oi, UNTYPED_TLS_APP);
+    oi.call(
+        "/tls/policies/set-canopy",
+        json!({ "hostname": "shop.example.com" }),
+    )
+    .unwrap();
+    let host = shop_hostname(&oi);
+    assert_eq!(
+        host["status"], "error",
+        "no app declaring it has a Canopy type, so nothing will ever ask"
+    );
+    assert!(
+        host["next_issuance_source"].is_null(),
+        "nothing is coming, so the view does not promise issuance"
+    );
+}
+
+// i[verify tls.hostname.list]
+// r[verify tls.chain.no-certificate]
+#[test]
+fn a_hostname_waiting_out_a_refusal_says_when_it_is_asked_again() {
+    let oi = TestOi::new();
+    tls_app(&oi, TLS_APP);
+    oi.call(
+        "/tls/policies/set-canopy",
+        json!({ "hostname": "shop.example.com" }),
+    )
+    .unwrap();
+    let until = jiff::Timestamp::now().as_second() + 3_600;
+    oi.state.db.call(move |db| {
+        crate::runtime::tls::store::put_chain_row(
+            db,
+            "shop.example.com",
+            &crate::runtime::tls::chain::Row {
+                identity: crate::runtime::tls::chain::Identity::NONE,
+                step: 0,
+                since: 0,
+                open_order_since: None,
+                retry_not_before: Some(until),
+            },
+            Some("refused"),
+        )
+        .unwrap();
+    });
+
+    let host = shop_hostname(&oi);
+    assert_eq!(host["next_issuance_source"], "debounce");
+    assert_eq!(host["next_issuance_at"], until);
+}
+
+// i[verify tls.hostname.list]
+// r[verify tls.strategy.canopy-only]
+#[test]
+fn a_canopy_only_hostname_is_waiting_on_canopy_even_with_no_offer() {
+    let oi = TestOi::new();
+    tls_app(&oi, TLS_APP);
+    oi.call(
+        "/tls/policies/set-canopy",
+        json!({ "hostname": "shop.example.com" }),
+    )
+    .unwrap();
+    let host = shop_hostname(&oi);
+    assert_eq!(host["policy"]["strategy"], "canopy");
+    assert_eq!(host["chain"]["responsible"], "canopy");
+    assert_eq!(host["status"], "pending");
+    assert_eq!(host["next_issuance_source"], "immediate");
+}
+
+// i[verify tls.cert.upload-manual]
+// r[verify tls.chain.cycle]
+#[test]
+fn a_certificate_an_operator_uploads_is_acted_on_at_once() {
+    let oi = TestOi::new();
+    tls_app(&oi, TLS_APP);
+    oi.call(
+        "/tls/policies/set-canopy",
+        json!({ "hostname": "shop.example.com" }),
+    )
+    .unwrap();
+
+    // The decisions read the proxy's cache, which wants a reactor.
+    let asking = |oi: &TestOi| {
+        oi.block_on(async {
+            oi.state
+                .tls_coordinator
+                .chain_decisions(Some("shop.example.com"))
+                .expect("the decisions can be made")
+                .remove("shop.example.com")
+                .expect("the hostname is on a chain")
+                .act
+        })
+    };
+    assert_eq!(
+        asking(&oi),
+        crate::runtime::tls::state::ChainAct::AskCanopy,
+        "with nothing serving it, Canopy is to be asked"
+    );
+
+    let (pem, key) = self_signed("shop.example.com");
+    oi.call(
+        "/tls/certificates/upload-manual",
+        json!({ "cert_pem": pem, "key_pem": key }),
+    )
+    .unwrap();
+
+    assert_eq!(
+        asking(&oi),
+        crate::runtime::tls::state::ChainAct::Wait,
+        "the certificate the operator uploaded is what the next decision rests on"
+    );
+}
+
+// i[verify tls.cert.retry]
+// r[verify tls.cert.force-retry]
+#[test]
+fn a_retry_for_a_hostname_canopy_is_not_part_of_does_not_linger() {
+    let oi = TestOi::new();
+    tls_app(&oi, UNTYPED_TLS_APP);
+    oi.call(
+        "/tls/certificates/retry",
+        json!({ "hostname": "shop.example.com" }),
+    )
+    .unwrap();
+    assert!(
+        shop_hostname(&oi)["force_retry_at"].is_null(),
+        "nothing would ever consume the queued retry, so it must not wait for one"
+    );
+}
+
+// i[verify tls.cert.retry]
+// r[verify tls.cert.force-retry]
+#[test]
+fn a_retry_for_a_hostname_canopy_can_be_asked_about_waits_for_the_report_tick() {
+    let oi = TestOi::new();
+    tls_app(&oi, TLS_APP);
+    // A Canopy-only hostname is Canopy's to ask about whether or not an offer
+    // is live, so the report tick is what consumes the retry.
+    oi.call(
+        "/tls/policies/set-canopy",
+        json!({ "hostname": "shop.example.com" }),
+    )
+    .unwrap();
+    oi.call(
+        "/tls/certificates/retry",
+        json!({ "hostname": "shop.example.com" }),
+    )
+    .unwrap();
+    assert!(!shop_hostname(&oi)["force_retry_at"].is_null());
+}
+
+// i[verify tls.cert.retry]
+// r[verify tls.cert.force-retry]
+#[test]
+fn a_retry_is_not_left_queued_for_a_tick_that_would_skip_the_hostname() {
+    let oi = TestOi::new();
+    // A typed app, but no offer live: the chain skips Canopy for a hostname
+    // with no certificate, so no report tick would ever take the retry.
+    tls_app(&oi, TLS_APP);
+    oi.call(
+        "/tls/certificates/retry",
+        json!({ "hostname": "shop.example.com" }),
+    )
+    .unwrap();
+    assert!(
+        shop_hostname(&oi)["force_retry_at"].is_null(),
+        "the view must not promise work nothing will do"
+    );
+}
+
+// i[verify tls.hostname.list]
+// r[verify tls.cert.metadata]
+// r[verify tls.canopy.serve]
+#[test]
+fn a_canopy_certificate_is_in_the_hostname_view_like_any_other() {
+    let oi = TestOi::new();
+    tls_app(&oi, TLS_APP);
+
+    let now = jiff::Timestamp::now().as_second();
+    let pem = {
+        let key = KeyPair::generate_for(&PKCS_ECDSA_P256_SHA256).unwrap();
+        let mut params = CertificateParams::new(vec!["shop.example.com".to_owned()]).unwrap();
+        params.distinguished_name = DistinguishedName::new();
+        params.not_before = time::OffsetDateTime::from_unix_timestamp(now - 86_400).unwrap();
+        params.not_after = time::OffsetDateTime::from_unix_timestamp(now + 89 * 86_400).unwrap();
+        params.self_signed(&key).unwrap().pem()
+    };
+    oi.state.db.call(move |db| {
+        crate::runtime::tls::store::insert_certificate(
+            db,
+            crate::runtime::tls::store::NewCertificate {
+                hostname: "shop.example.com",
+                requested_hostname: Some("shop.example.com"),
+                state: crate::runtime::tls::TlsCertState::Active,
+                origin: crate::runtime::tls::TlsCertOrigin::Canopy,
+                cert_pem: Some(&pem),
+                csr_pem: None,
+                key_ciphertext: &[0u8; 8],
+                key_type: crate::runtime::tls::KeyType::EcdsaP256,
+                metadata: crate::runtime::tls::store::CertMetadata {
+                    issuer: Some("CN=Fake LE".to_owned()),
+                    not_before: Some(now - 86_400),
+                    not_after: Some(now + 89 * 86_400),
+                    serial: Some("01".to_owned()),
+                    self_signed: false,
+                },
+                note: None,
+                acme_account_id: None,
+            },
+        )
+        .unwrap();
+    });
+
+    let host = shop_hostname(&oi);
+    assert_eq!(host["status"], "active");
+    assert_eq!(host["active_cert"]["origin"], "canopy");
+    assert_eq!(host["active_cert"]["issuer"], "CN=Fake LE");
+    assert_eq!(host["active_cert"]["not_after"], now + 89 * 86_400);
+    assert_eq!(host["last_issuance"]["kind"], "canopy");
+    assert_eq!(host["chain"]["responsible"], "canopy");
+    assert!(
+        host["chain"]["next_cycle_at"].as_i64().unwrap() > now,
+        "a working certificate is left alone until its renewal point"
+    );
+    assert!(host["chain"]["fall_through_at"].is_null());
+
+    let certs = oi.call("/tls/certificates/list", json!({})).unwrap();
+    assert_eq!(certs["certificates"][0]["origin"], "canopy");
+}
+
+// r[verify tls.cert.eager-issuance]
+#[test]
+fn a_hostname_on_a_chain_is_not_driven_through_an_acme_dns_flow() {
+    let oi = TestOi::new();
+    tls_app(&oi, UNTYPED_TLS_APP);
+    let (code, msg) = oi
+        .call(
+            "/tls/certificates/issue-acme-dns",
+            json!({ "hostname": "shop.example.com" }),
+        )
+        .unwrap_err();
+    assert_eq!(code, "internal");
+    assert!(msg.contains("has no policy"), "{msg}");
+}
+
+// i[verify tls.hostname.list]
+// r[verify tls.cert.metadata]
+#[test]
+fn the_hostname_view_shows_what_the_proxy_holds() {
+    let oi = TestOi::new();
+    tls_app(&oi, UNTYPED_TLS_APP);
+
+    // What gathering the chain's facts read from the proxy's cache is what the
+    // view shows; nothing re-reads it.
+    let env = crate::runtime::tls::state::ChainEnv {
+        known: true,
+        offer_live: false,
+        canopy_types: Default::default(),
+        proxy: std::collections::BTreeMap::from([(
+            "shop.example.com".to_owned(),
+            crate::runtime::tls::state::ProxyHolding::Holds(
+                crate::runtime::tls::state::ProxyCert {
+                    not_before: Some(1),
+                    not_after: Some(i64::MAX / 2),
+                    issuer_kind: "local".to_owned(),
+                    issuer: Some("CN=Caddy Local Authority".to_owned()),
+                    self_signed: true,
+                },
+            ),
+        )]),
+    };
+    let snapshot = oi
+        .state
+        .db
+        .call(move |db| crate::runtime::tls::state::Snapshot::load(db, env))
+        .unwrap();
+    let st = crate::runtime::tls::state::compute_state(&snapshot, "shop.example.com");
+    let view = super::project_hostname_state(
+        "shop.example.com",
+        &std::collections::BTreeSet::from(["shop".to_owned()]),
+        &st,
+        match snapshot.env.proxy.get("shop.example.com") {
+            Some(crate::runtime::tls::state::ProxyHolding::Holds(c)) => Some(c),
+            _ => None,
+        },
+    );
+
+    assert_eq!(view["active_cert"]["origin"], "caddy");
+    assert_eq!(view["active_cert"]["caddy_issuer"], "local");
+    assert_eq!(view["active_cert"]["issuer"], "CN=Caddy Local Authority");
+    assert_eq!(view["active_cert"]["self_signed"], true);
+    assert_eq!(view["status"], "active");
+    assert_eq!(
+        view["chain"]["responsible"], "acme_http01",
+        "a public name's chain is HTTP-01, whatever the proxy happens to have served it with"
+    );
+    assert_eq!(view["last_issuance"]["kind"], "caddy");
+}
+
+// i[verify tls.policy.set-canopy]
+// i[verify tls.policy.clear]
+// r[verify tls.policy.apply]
+#[test]
+fn a_policy_change_ends_the_cycles_that_ran_under_the_one_before_it() {
+    let oi = TestOi::new();
+    tls_app(&oi, TLS_APP);
+    let row = |open_order_since| crate::runtime::tls::chain::Row {
+        identity: crate::runtime::tls::chain::Identity::NONE,
+        step: 0,
+        since: 1,
+        open_order_since,
+        retry_not_before: Some(9_999_999_999),
+    };
+    let seed = move |db: &crate::runtime::db::Db| {
+        crate::runtime::tls::store::put_chain_row(
+            db,
+            "shop.example.com",
+            &row(Some(1)),
+            Some("refused"),
+        )
+        .unwrap();
+        crate::runtime::tls::store::put_chain_row(
+            db,
+            "other.example.org",
+            &row(None),
+            Some("refused"),
+        )
+        .unwrap();
+    };
+    let recorded = |oi: &TestOi| {
+        oi.state.db.call(|db| {
+            crate::runtime::tls::store::list_chain_rows(db)
+                .unwrap()
+                .into_iter()
+                .map(|r| r.hostname)
+                .collect::<Vec<_>>()
+        })
+    };
+
+    oi.state.db.call(seed);
+    oi.call(
+        "/tls/policies/set-canopy",
+        json!({ "hostname": "*.example.com" }),
+    )
+    .unwrap();
+    assert_eq!(
+        recorded(&oi),
+        vec!["other.example.org".to_owned()],
+        "the hostnames the pattern covers start afresh under the new policy"
+    );
+
+    oi.state.db.call(seed);
+    oi.call(
+        "/tls/policies/clear",
+        json!({ "hostname": "*.example.com" }),
+    )
+    .unwrap();
+    assert_eq!(recorded(&oi), vec!["other.example.org".to_owned()]);
+}
+
+// i[verify tls.hostname.list]
+// r[verify tls.cert.hostname-view]
+#[test]
+fn the_rollup_does_not_walk_the_proxys_cache_itself() {
+    let oi = TestOi::new();
+    tls_app(&oi, UNTYPED_TLS_APP);
+
+    // What the coordinator read is what the view shows, so a page that polls
+    // does not read and parse the proxy's certificates on every request.
+    let managed = {
+        let registry = oi.state.registry.read();
+        crate::runtime::tls::state::managed_ingresses(&registry)
+    };
+    let (from_coordinator, env) = oi.block_on(async {
+        (
+            oi.state
+                .tls_coordinator
+                .proxy_holdings()
+                .expect("the coordinator has read them"),
+            oi.state
+                .chain_env_for_display(&managed)
+                .expect("the rest is read from the database"),
+        )
+    });
+    assert_eq!(env.proxy, from_coordinator);
+
+    // And the rollup still answers.
+    assert_eq!(shop_hostname(&oi)["hostname"], "shop.example.com");
+}

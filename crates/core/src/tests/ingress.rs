@@ -120,6 +120,35 @@ fn ingress_certificates_implied_by_https() {
 
 // l[verify ingress.hostname]
 #[test]
+fn a_hostname_is_held_in_one_form_whatever_case_it_is_written_in() {
+    let app = run_test_script_app(
+        r#"
+        app.service("web").ingress("Shop.Example.COM", 443).tls(Terminate.Https, Output.Http1);
+    "#,
+    );
+    let def = app.def.load();
+    let ingress = def
+        .resources
+        .values()
+        .find_map(|r| match r {
+            defs::resource::Resource::Ingress(i) => Some(i.clone()),
+            _ => None,
+        })
+        .expect("the ingress was declared");
+    assert_eq!(
+        ingress.def.lock().hostname,
+        "shop.example.com",
+        "a name a handshake could never present is a name nothing decides for"
+    );
+    assert!(
+        ingress.name.contains("shop.example.com"),
+        "and what is derived from it shares the one form: {}",
+        ingress.name
+    );
+}
+
+// l[verify ingress.hostname]
+#[test]
 fn hostname_rejects_wildcard() {
     let _ = run_test_script_err(
         r#"

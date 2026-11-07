@@ -41,7 +41,10 @@ pub struct IngressTarget {
 /// Pure DB work; safe to call from inside a `DbHandle::call` closure.
 // r[impl tls.fault.expiring]
 pub fn sweep(db: &Db, targets: &[IngressTarget]) -> rusqlite::Result<()> {
-    let snap = state::Snapshot::load(db)?;
+    // Only what is stored matters here: the sweep reads each hostname's
+    // active certificate and files on its origin and expiry, and acts on no
+    // chain decision.
+    let snap = state::Snapshot::load(db, state::ChainEnv::none())?;
     let now = Timestamp::now().as_second();
 
     // Compute the set of (app, ingress, hostname, description) tuples
@@ -108,22 +111,19 @@ fn compute_desired(
 ) -> Option<DesiredFault> {
     let st = state::compute_state(snap, &target.hostname);
     let cert = st.active_cert?;
-    // Only manual / CSR-derived certs warrant the fault. ACME-DNS certs
-    // are renewed autonomously; the operator does not need to be paged.
-    if !matches!(cert.origin, TlsCertOrigin::Manual | TlsCertOrigin::Csr) {
-        return None;
-    }
+    // Only manual / CSR-derived certs warrant the fault. ACME-DNS and
+    // Canopy certs are renewed by the runtime's own chain, and a chain that
+    // cannot replace one is reported by its own fault; the operator has
+    // nothing to upload.
+    let strategy = match cert.origin {
+        TlsCertOrigin::Manual => "manual",
+        TlsCertOrigin::Csr => "csr",
+        TlsCertOrigin::AcmeDns | TlsCertOrigin::Tailscale | TlsCertOrigin::Canopy => return None,
+    };
     let not_after = cert.not_after?;
     if not_after - now > EXPIRY_WINDOW_SECS {
         return None;
     }
-    let strategy = match cert.origin {
-        TlsCertOrigin::Manual => "manual",
-        TlsCertOrigin::Csr => "csr",
-        TlsCertOrigin::AcmeDns | TlsCertOrigin::Tailscale => {
-            unreachable!("filtered above: only manual / csr origins reach this branch")
-        }
-    };
     let description = format!(
         "certificate for {} (strategy: {strategy}) expires at unix={not_after}; \
          the runtime cannot autonomously renew this cert — upload a replacement",
@@ -235,6 +235,21 @@ mod tests {
 
         sweep(&db, &[target("alpha", "foo.example.com")]).unwrap();
         assert_eq!(active_count(&db, FAULT_KIND), 0);
+    }
+
+    // r[verify tls.fault.expiring]
+    #[test]
+    fn no_fault_for_canopy_origin() {
+        let (db, _) = fresh_db();
+        let now = Timestamp::now().as_second();
+        insert_cert(&db, "foo.example.com", TlsCertOrigin::Canopy, now + 86400);
+
+        sweep(&db, &[target("alpha", "foo.example.com")]).unwrap();
+        assert_eq!(
+            active_count(&db, FAULT_KIND),
+            0,
+            "renewal is the chain's job, and a chain that cannot replace one has its own fault"
+        );
     }
 
     #[test]

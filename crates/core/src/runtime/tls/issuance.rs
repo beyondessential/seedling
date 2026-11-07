@@ -20,7 +20,7 @@
 //! NOT auto-pause subsequent issuance — that's the operator's call via
 //! the retry-blocks endpoint.
 
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
 use std::sync::Arc;
 
 use parking_lot::Mutex;
@@ -30,7 +30,8 @@ use snafu::Snafu;
 use super::{
     AttemptOutcome, AttemptTrigger, TlsPolicy,
     acme::{self, IssueParams, Issued},
-    state::{self, Decision},
+    env::Environment,
+    state::{self, ChainAct, ChainDecision, Decision},
     store, tailscale_issuer,
 };
 use crate::runtime::{
@@ -87,6 +88,29 @@ pub struct Coordinator {
     /// well inside CA rate limits and avoids racing on the ACME account
     /// state during account bootstrap.
     issue_lock: Arc<tokio::sync::Mutex<()>>,
+    /// Where the facts a hostname's strategy chain depends on come from. Set
+    /// once the daemon's state exists, after the coordinator has to; until then
+    /// no chain decision can be made.
+    environment: std::sync::OnceLock<Arc<dyn Environment>>,
+    /// The state chain decisions are made against, and when it was built. See
+    /// [`Coordinator::chain_state`].
+    chain_state: Mutex<Option<(std::time::Instant, Arc<ChainState>)>>,
+}
+
+/// How long one reading of the world serves every chain decision made against
+/// it.
+///
+/// Long enough that an idle reconciler tick, every few seconds, costs nothing;
+/// short enough that a certificate reaching its renewal point is acted on well
+/// inside the ladder, whose steps are days. What an operator does is not left to
+/// it: the writes that change a decision call
+/// [`Coordinator::forget_chain_state`].
+const CHAIN_STATE_TTL: std::time::Duration = std::time::Duration::from_secs(30);
+
+/// Everything a chain decision is made from, for every hostname at once.
+struct ChainState {
+    managed: Vec<state::ManagedIngress>,
+    snapshot: state::Snapshot,
 }
 
 impl Coordinator {
@@ -96,7 +120,169 @@ impl Coordinator {
             cipher,
             in_flight: Arc::new(Mutex::new(HashSet::new())),
             issue_lock: Arc::new(tokio::sync::Mutex::new(())),
+            environment: std::sync::OnceLock::new(),
+            chain_state: Mutex::new(None),
         })
+    }
+
+    /// Say where the facts a chain depends on come from. Takes effect once.
+    pub fn set_environment(&self, environment: Arc<dyn Environment>) {
+        let _ = self.environment.set(environment);
+    }
+
+    /// Start the cycle an operator retry asked for, where nothing else would.
+    ///
+    /// A retry for a hostname Canopy can be asked about is left queued for the
+    /// report tick, which consumes it as part of asking. A hostname on a chain
+    /// Canopy is not part of has nobody waiting for it — the proxy carries out
+    /// every strategy there is — so the cycle is started here and the retry
+    /// consumed, in the write that records it.
+    ///
+    /// Does nothing for a hostname on no chain: an ACME-DNS or Tailscale
+    /// hostname's retry is the issuance coordinator's to take.
+    // r[impl tls.cert.force-retry]
+    // r[impl tls.chain.return]
+    pub fn settle_retry(&self, hostname: &str) {
+        let Some(state) = self.chain_state() else {
+            // Not knowing where the hostname stands is not knowing whether
+            // anything will take the retry, so it is left where it is: the
+            // report tick takes it if Canopy applies, and an operator can ask
+            // again if nothing does.
+            return;
+        };
+        let Some(Decision::Chain(c)) = state
+            .managed
+            .iter()
+            .any(|m| m.hostname == hostname)
+            .then(|| state::compute_state(&state.snapshot, hostname).decision)
+        else {
+            return;
+        };
+        // Left for the report tick only where that tick will in fact take it:
+        // asking Canopy is what consumes a retry, and a hostname the chain is
+        // not putting to Canopy right now would keep the retry queued, with the
+        // operator's view promising work nothing was going to do.
+        let canopy_will_take_it = matches!(
+            c.act,
+            ChainAct::AskCanopy | ChainAct::Debounced { .. } | ChainAct::Blocked { .. }
+        ) || c.collect_canopy;
+        if canopy_will_take_it {
+            return;
+        }
+        let (replacing, now) = (c.replacing(), state.snapshot.now);
+        let host = hostname.to_owned();
+        match self
+            .db
+            .call(move |db| store::start_cycle_for_force_retry(db, &host, replacing, now))
+        {
+            Ok(_) => self.forget_chain_state(),
+            Err(e) => {
+                tracing::warn!(%hostname, error = %e, "cannot start the cycle an operator retry asked for");
+            }
+        }
+    }
+
+    /// What the proxy holds for each hostname, from the reading already taken.
+    ///
+    /// For a caller that wants the facts rather than the decisions, so that a
+    /// request on an operator's screen does not walk the proxy's certificate
+    /// cache itself. `None` when they could not be read, which is not an empty
+    /// answer.
+    pub fn proxy_holdings(&self) -> Option<BTreeMap<String, state::ProxyHolding>> {
+        Some(self.chain_state()?.snapshot.env.proxy.clone())
+    }
+
+    /// What the proxy holds for one hostname, read now rather than from the
+    /// state the decisions are made against.
+    ///
+    /// `None` when there is nothing to read it with, which is not the proxy
+    /// holding nothing.
+    // r[impl tls.chain.proxy-gate]
+    pub fn proxy_holding_now(&self, hostname: &str) -> Option<state::ProxyHolding> {
+        Some(self.environment.get()?.holding(hostname))
+    }
+
+    /// Forget the state chain decisions are made against, so the next one is
+    /// made afresh. For a caller that has just written something a decision
+    /// rests on and wants it acted on now rather than within the window.
+    pub fn forget_chain_state(&self) {
+        *self.chain_state.lock() = None;
+    }
+
+    /// How long the proxy is to wait before renewing a certificate it holds, for
+    /// each hostname it must be held back on.
+    ///
+    /// `None` when the decisions could not be made, which is not an empty map:
+    /// an empty one tells the proxy it may renew whenever it likes.
+    // r[impl tls.chain.proxy-gate]
+    pub fn proxy_renewal_ratios(&self) -> Option<BTreeMap<String, f64>> {
+        Some(
+            self.chain_decisions(None)?
+                .into_iter()
+                .filter_map(|(hostname, c)| Some((hostname, c.proxy_renewal_ratio()?)))
+                .collect(),
+        )
+    }
+
+    /// The chain decision for every TLS-terminating hostname on a chain, or for
+    /// the one named.
+    ///
+    /// `None` when the decisions could not be made, which is not the same as
+    /// no hostname being on a chain: a caller that withholds anything on the
+    /// strength of a decision must withhold nothing on `None`.
+    // r[impl tls.chain.cycle]
+    pub fn chain_decisions(&self, only: Option<&str>) -> Option<BTreeMap<String, ChainDecision>> {
+        let state = self.chain_state()?;
+        let mut out = BTreeMap::new();
+        for ingress in &state.managed {
+            if only.is_some_and(|host| host != ingress.hostname)
+                || out.contains_key(&ingress.hostname)
+            {
+                continue;
+            }
+            if let Decision::Chain(c) =
+                state::compute_state(&state.snapshot, &ingress.hostname).decision
+            {
+                out.insert(ingress.hostname.clone(), *c);
+            }
+        }
+        Some(out)
+    }
+
+    /// The state every chain decision is made against, built at most once per
+    /// [`CHAIN_STATE_TTL`].
+    ///
+    /// One state for every hostname rather than one per hostname asked about:
+    /// the proxy asks the certificate endpoint at each handshake it has no
+    /// certificate for, so building it per hostname would rebuild the whole TLS
+    /// state per name under traffic, on the one thread every database call in
+    /// the daemon is serialised through.
+    ///
+    /// The state is shared and so is as old as the moment it was built, which is
+    /// of the same order as the endpoint's own memory of what it answered: a
+    /// policy set or a certificate stored is acted on within the window, not
+    /// within the tick.
+    fn chain_state(&self) -> Option<Arc<ChainState>> {
+        // Held across the build, so a burst of handshakes that all find it
+        // stale waits on the one rebuild instead of each starting its own and
+        // contending on the database thread.
+        let mut cached = self.chain_state.lock();
+        if let Some((at, state)) = cached.as_ref()
+            && at.elapsed() < CHAIN_STATE_TTL
+        {
+            return Some(Arc::clone(state));
+        }
+        let (managed, env) = self.environment.get()?.gather()?;
+        let snapshot = match self.db.call(move |db| state::Snapshot::load(db, env)) {
+            Ok(snapshot) => snapshot,
+            Err(e) => {
+                tracing::warn!(error = %e, "cannot read the TLS state to decide a chain");
+                return None;
+            }
+        };
+        let state = Arc::new(ChainState { managed, snapshot });
+        *cached = Some((std::time::Instant::now(), Arc::clone(&state)));
+        Some(state)
     }
 
     /// Reconciler-driven: ensure the runtime is making progress on a cert
@@ -307,7 +493,8 @@ impl Coordinator {
         let owned = self
             .db
             .call(move |db| -> rusqlite::Result<OwnedState> {
-                let snap = state::Snapshot::load(db)?;
+                // An ACME-DNS or Tailscale flow, which is on no chain.
+                let snap = state::Snapshot::load(db, state::ChainEnv::none())?;
                 Ok(OwnedState::from_snapshot(
                     &snap,
                     &state::compute_state(&snap, &host_for_state),
@@ -449,6 +636,9 @@ impl OwnedState {
             // Tailscale issuance doesn't use a DNS provider; the cert
             // comes from the local tailscaled API.
             TlsPolicy::Tailscale => None,
+            // Canopy requests go through the relay, not through this
+            // coordinator.
+            TlsPolicy::Canopy => None,
         });
         Self {
             decision: s.decision.clone(),
@@ -510,7 +700,10 @@ fn handle_non_issuing(
     owned: &OwnedState,
 ) -> Result<ProceedKind> {
     match &owned.decision {
-        Decision::Default => Err(CoordinatorError::NoPolicy {
+        // A hostname on a strategy chain is carried out by the proxy or by
+        // Canopy, never by an ACME-DNS flow, and has no policy to run one
+        // from.
+        Decision::Default | Decision::Chain(_) => Err(CoordinatorError::NoPolicy {
             hostname: hostname.to_owned(),
         }),
         Decision::Blocked { reason } => Err(CoordinatorError::Paused {

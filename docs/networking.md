@@ -281,7 +281,11 @@ over IPv6:
       → pod receives on :3000
 
 Caddy handles TLS termination, ACME certificate management, path-based
-routing, and HTTP/HTTPS redirects.
+routing, and HTTP/HTTPS redirects. Where a certificate comes from Canopy or
+another source Seedling manages, Seedling hands it to Caddy at handshake time
+through a local endpoint, and Caddy's own ACME ordering is held back from a
+hostname until the strategies ahead of it have run out of time (see
+[Deploying](deploying.md#certificates-from-canopy)).
 
 ### TCP/UDP ingress (Caddy L4)
 

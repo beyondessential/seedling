@@ -140,7 +140,8 @@ pub(super) enum DnsProvidersCommand {
 
 #[derive(Subcommand)]
 pub(super) enum PoliciesCommand {
-    /// List per-hostname policies (hostnames absent from the list use the default ACME-HTTP-01)
+    /// List per-hostname policies (hostnames absent from the list follow the default
+    /// chain: Canopy where it applies, then ACME-HTTP-01)
     List,
     /// Bind a hostname (or wildcard pattern) to ACME-DNS issuance via a
     /// configured provider.
@@ -161,7 +162,15 @@ pub(super) enum PoliciesCommand {
         #[arg(long)]
         directory: Option<String>,
     },
-    /// Remove the policy for a hostname, returning it to the default ACME-HTTP-01
+    /// Bind a hostname (or wildcard pattern) to Canopy alone: it is never
+    /// handed on to ACME-HTTP-01 or the proxy's internal CA.
+    ///
+    /// Suited to a hostname the server does not yet receive traffic for, where
+    /// a challenge could not succeed. A hostname that already holds a usable
+    /// certificate keeps it until its renewal point, or until `tls certs retry`.
+    /// `<hostname>` takes the same shapes as `set-acme-dns`.
+    SetCanopy { hostname: String },
+    /// Remove the policy for a hostname, returning it to the default chain
     Clear { hostname: String },
 }
 
@@ -342,6 +351,13 @@ async fn dispatch_policies(client: &OiClient, cmd: PoliciesCommand) {
                 params["directory_url"] = json!(d);
             }
             print_result(client.request("/tls/policies/set-acme-dns", params).await);
+        }
+        PoliciesCommand::SetCanopy { hostname } => {
+            print_result(
+                client
+                    .request("/tls/policies/set-canopy", json!({ "hostname": hostname }))
+                    .await,
+            );
         }
         PoliciesCommand::Clear { hostname } => {
             print_result(

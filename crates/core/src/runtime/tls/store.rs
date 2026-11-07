@@ -11,13 +11,36 @@ use secrecy::{ExposeSecret, SecretString};
 use super::{
     AcmeAccount, AttemptOutcome, AttemptTrigger, DnsProviderEntry, DnsProviderKind,
     DnsProviderSummary, KeyType, RetryBlockSource, TlsCertAttempt, TlsCertForceRetry,
-    TlsCertOrigin, TlsCertRetryBlock, TlsCertState, TlsCertificate, TlsPolicy, TlsPolicyRow,
-    TlsSettings, pattern_matches, pattern_specificity,
+    TlsCertOrigin, TlsCertRetryBlock, TlsCertState, TlsCertificate, TlsChainRow, TlsPolicy,
+    TlsPolicyRow, TlsSettings, chain, pattern_matches, pattern_specificity,
 };
 use crate::runtime::{db::Db, secrets::Cipher};
 
 fn now_secs() -> i64 {
     Timestamp::now().as_second()
+}
+
+/// Run `f` so that everything it writes lands together or not at all.
+///
+/// A savepoint rather than a transaction, so it composes: a caller that has
+/// opened an atomic section of its own can call a function that opens another,
+/// where a second `BEGIN` would fail. Used on its own it is a transaction.
+pub fn atomically<T>(db: &Db, f: impl FnOnce() -> rusqlite::Result<T>) -> rusqlite::Result<T> {
+    db.conn.execute_batch("SAVEPOINT tls_atomic")?;
+    match f() {
+        Ok(value) => {
+            db.conn.execute_batch("RELEASE tls_atomic")?;
+            Ok(value)
+        }
+        Err(e) => {
+            // The failure to report is the one that sent us here, not any this
+            // cleanup meets.
+            let _ = db
+                .conn
+                .execute_batch("ROLLBACK TO tls_atomic; RELEASE tls_atomic");
+            Err(e)
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -211,6 +234,8 @@ pub fn list_policies(db: &Db) -> rusqlite::Result<Vec<TlsPolicyRow>> {
                 },
                 // r[impl ingress.site.tailscale]
                 "tailscale" => TlsPolicy::Tailscale,
+                // r[impl tls.strategy.canopy-only]
+                "canopy" => TlsPolicy::Canopy,
                 "manual" => return Ok(None),
                 _ => return Err(rusqlite::Error::InvalidQuery),
             };
@@ -234,25 +259,77 @@ pub fn get_policy(db: &Db, hostname: &str) -> rusqlite::Result<Option<TlsPolicyR
 // r[impl tls.policy.apply]
 pub fn set_policy_acme_dns(db: &Db, hostname: &str, dns_provider: &str) -> rusqlite::Result<()> {
     let now = now_secs();
-    db.conn.execute(
-        "INSERT INTO tls_policies (hostname, strategy, dns_provider, cert_id, updated_at)
-         VALUES (?1, 'acme_dns', ?2, NULL, ?3)
-         ON CONFLICT(hostname) DO UPDATE SET
-             strategy = excluded.strategy,
-             dns_provider = excluded.dns_provider,
-             cert_id = NULL,
-             updated_at = excluded.updated_at",
-        params![hostname, dns_provider, now],
-    )?;
+    atomically(db, || {
+        db.conn.execute(
+            "INSERT INTO tls_policies (hostname, strategy, dns_provider, cert_id, updated_at)
+             VALUES (?1, 'acme_dns', ?2, NULL, ?3)
+             ON CONFLICT(hostname) DO UPDATE SET
+                 strategy = excluded.strategy,
+                 dns_provider = excluded.dns_provider,
+                 cert_id = NULL,
+                 updated_at = excluded.updated_at",
+            params![hostname, dns_provider, now],
+        )?;
+        forget_chains_under(db, hostname)?;
+        Ok(())
+    })
+}
+
+// r[impl tls.strategy.canopy-only]
+// r[impl tls.policy.apply]
+pub fn set_policy_canopy(db: &Db, hostname: &str) -> rusqlite::Result<()> {
+    let now = now_secs();
+    atomically(db, || {
+        db.conn.execute(
+            "INSERT INTO tls_policies (hostname, strategy, dns_provider, cert_id, updated_at)
+             VALUES (?1, 'canopy', NULL, NULL, ?2)
+             ON CONFLICT(hostname) DO UPDATE SET
+                 strategy = excluded.strategy,
+                 dns_provider = NULL,
+                 cert_id = NULL,
+                 updated_at = excluded.updated_at",
+            params![hostname, now],
+        )?;
+        forget_chains_under(db, hostname)?;
+        Ok(())
+    })
+}
+
+/// Forget where every hostname the pattern covers had got to in its chain.
+///
+/// A chain belongs to the strategies a policy names, so a policy written or
+/// cleared ends the cycles that were running under the one before it. What is
+/// recorded would otherwise outlive the chain it was recorded for: an order
+/// pinned open that nothing will ever answer, which holds off the
+/// acquisition deadline for ever, and a refusal that would resurface the next
+/// time the hostname was on a chain.
+// r[impl tls.policy.apply]
+fn forget_chains_under(db: &Db, pattern: &str) -> rusqlite::Result<()> {
+    let hostnames: Vec<String> = {
+        let mut stmt = db.conn.prepare("SELECT hostname FROM tls_chain_state")?;
+        let rows = stmt.query_map([], |row| row.get::<_, String>(0))?;
+        rows.collect::<rusqlite::Result<Vec<_>>>()?
+            .into_iter()
+            .filter(|hostname| pattern_matches(pattern, hostname))
+            .collect()
+    };
+    for hostname in hostnames {
+        clear_chain_row(db, &hostname)?;
+    }
     Ok(())
 }
 
 // r[impl tls.policy.apply]
 pub fn clear_policy(db: &Db, hostname: &str) -> rusqlite::Result<bool> {
-    let n = db
-        .conn
-        .execute("DELETE FROM tls_policies WHERE hostname = ?1", [hostname])?;
-    Ok(n > 0)
+    atomically(db, || {
+        let n = db
+            .conn
+            .execute("DELETE FROM tls_policies WHERE hostname = ?1", [hostname])?;
+        if n > 0 {
+            forget_chains_under(db, hostname)?;
+        }
+        Ok(n > 0)
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -729,10 +806,26 @@ pub fn supersede_other_active_for_hostname(db: &Db, keep_id: i64) -> rusqlite::R
 }
 
 pub fn delete_certificate(db: &Db, id: i64) -> rusqlite::Result<bool> {
-    let n = db
-        .conn
-        .execute("DELETE FROM tls_certificates WHERE id = ?1", [id])?;
-    Ok(n > 0)
+    atomically(db, || {
+        let n = db
+            .conn
+            .execute("DELETE FROM tls_certificates WHERE id = ?1", [id])?;
+        // A recorded chain position for a certificate that no longer exists
+        // would go on steering a hostname by an expiry nothing holds. Cleared
+        // through `clear_chain_row`, so an order one of them carried is closed
+        // rather than left open for ever.
+        let orphaned: Vec<String> = {
+            let mut stmt = db
+                .conn
+                .prepare("SELECT hostname FROM tls_chain_state WHERE replacing_cert_id = ?1")?;
+            let rows = stmt.query_map([id], |row| row.get::<_, String>(0))?;
+            rows.collect::<rusqlite::Result<Vec<_>>>()?
+        };
+        for hostname in orphaned {
+            clear_chain_row(db, &hostname)?;
+        }
+        Ok(n > 0)
+    })
 }
 
 /// Reads the columns of [`CERT_COLUMNS`], positionally and in that order.
@@ -1032,6 +1125,19 @@ pub fn finalize_attempt(
     Ok(())
 }
 
+/// The newest attempt for `hostname` that has not finished.
+pub fn latest_pending_attempt(db: &Db, hostname: &str) -> rusqlite::Result<Option<i64>> {
+    db.conn
+        .query_row(
+            "SELECT id FROM tls_cert_attempts
+             WHERE hostname = ?1 AND outcome = 'pending'
+             ORDER BY id DESC LIMIT 1",
+            [hostname],
+            |r| r.get(0),
+        )
+        .optional()
+}
+
 /// List recent attempts. When `hostname` is `Some`, scopes to that
 /// hostname; otherwise returns all attempts. Newest first.
 pub fn list_attempts(
@@ -1183,6 +1289,324 @@ pub fn list_force_retries(db: &Db) -> rusqlite::Result<Vec<TlsCertForceRetry>> {
         })?
         .collect::<rusqlite::Result<_>>()?;
     Ok(rows)
+}
+
+// ---------------------------------------------------------------------------
+// Strategy chain position
+// ---------------------------------------------------------------------------
+
+const CHAIN_COLUMNS: &str = "hostname, replacing_cert_id, replacing_not_after, step, step_since, \
+     open_order_since, last_error, updated_at, retry_not_before";
+
+/// Reads the columns of [`CHAIN_COLUMNS`], positionally and in that order.
+fn row_to_chain(row: &rusqlite::Row<'_>) -> rusqlite::Result<TlsChainRow> {
+    let step: i64 = row.get(3)?;
+    Ok(TlsChainRow {
+        hostname: row.get(0)?,
+        row: chain::Row {
+            identity: chain::Identity {
+                cert_id: row.get(1)?,
+                not_after: row.get(2)?,
+            },
+            // A negative step cannot have been written by this code; reading it
+            // as the first strategy would hide that.
+            step: usize::try_from(step).map_err(|_| rusqlite::Error::InvalidQuery)?,
+            since: row.get(4)?,
+            open_order_since: row.get(5)?,
+            retry_not_before: row.get(8)?,
+        },
+        last_error: row.get(6)?,
+        updated_at: row.get(7)?,
+    })
+}
+
+/// Every hostname with a recorded chain position.
+// r[impl tls.chain.ladder]
+pub fn list_chain_rows(db: &Db) -> rusqlite::Result<Vec<TlsChainRow>> {
+    let mut stmt = db.conn.prepare(&format!(
+        "SELECT {CHAIN_COLUMNS} FROM tls_chain_state ORDER BY hostname"
+    ))?;
+    stmt.query_map([], row_to_chain)?.collect()
+}
+
+/// The recorded position of one hostname, by its key.
+pub fn get_chain_row(db: &Db, hostname: &str) -> rusqlite::Result<Option<TlsChainRow>> {
+    db.conn
+        .query_row(
+            &format!("SELECT {CHAIN_COLUMNS} FROM tls_chain_state WHERE hostname = ?1"),
+            [hostname],
+            row_to_chain,
+        )
+        .optional()
+}
+
+/// Record a hostname's chain position, replacing whatever was recorded.
+// r[impl tls.chain.ladder]
+pub fn put_chain_row(
+    db: &Db,
+    hostname: &str,
+    row: &chain::Row,
+    last_error: Option<&str>,
+) -> rusqlite::Result<()> {
+    db.conn.execute(
+        "INSERT INTO tls_chain_state
+            (hostname, replacing_cert_id, replacing_not_after, step, step_since,
+             open_order_since, last_error, updated_at, retry_not_before)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+         ON CONFLICT(hostname) DO UPDATE SET
+             replacing_cert_id = excluded.replacing_cert_id,
+             replacing_not_after = excluded.replacing_not_after,
+             step = excluded.step,
+             step_since = excluded.step_since,
+             open_order_since = excluded.open_order_since,
+             last_error = excluded.last_error,
+             updated_at = excluded.updated_at,
+             retry_not_before = excluded.retry_not_before",
+        params![
+            hostname,
+            row.identity.cert_id,
+            row.identity.not_after,
+            i64::try_from(row.step).map_err(|e| unreadable(e.to_string()))?,
+            row.since,
+            row.open_order_since,
+            last_error,
+            now_secs(),
+            row.retry_not_before,
+        ],
+    )?;
+    Ok(())
+}
+
+/// Forget a hostname's chain position, because a cycle has finished or the
+/// hostname has left its chain.
+///
+/// An order the row carried is closed in the same transaction. Whether an
+/// attempt is open is asked of the log and not of the row, so one left pending
+/// here would never be closed by anything, and the next order for the hostname
+/// would have its outcome booked against it.
+// r[impl tls.canopy.attempts]
+pub fn clear_chain_row(db: &Db, hostname: &str) -> rusqlite::Result<bool> {
+    atomically(db, || {
+        if let Some(existing) = get_chain_row(db, hostname)?
+            && existing.row.open_order_since.is_some()
+            && let Some(id) = latest_pending_attempt(db, hostname)?
+        {
+            finalize_attempt(
+                db,
+                id,
+                AttemptOutcome::Failure,
+                None,
+                Some("the hostname left its chain before the order was answered"),
+            )?;
+        }
+        let n = db.conn.execute(
+            "DELETE FROM tls_chain_state WHERE hostname = ?1",
+            [hostname],
+        )?;
+        Ok(n > 0)
+    })
+}
+
+/// Consume an operator retry for a hostname on a chain and start its cycle in
+/// the same transaction, so a restart between the two cannot lose the retry.
+///
+/// Returns whether a retry was queued. `replacing` is what the cycle replaces,
+/// as [`chain::resolve`] will see it.
+// r[impl tls.cert.force-retry]
+// r[impl tls.chain.return]
+pub fn start_cycle_for_force_retry(
+    db: &Db,
+    hostname: &str,
+    replacing: chain::Identity,
+    now: i64,
+) -> rusqlite::Result<bool> {
+    atomically(db, || {
+        let queued = take_force_retry(db, hostname)?;
+        if queued {
+            put_chain_row(
+                db,
+                hostname,
+                &chain::Row {
+                    identity: replacing,
+                    step: 0,
+                    since: now,
+                    open_order_since: None,
+                    retry_not_before: None,
+                },
+                None,
+            )?;
+        }
+        Ok(queued)
+    })
+}
+
+// ---------------------------------------------------------------------------
+// Canopy certificates
+// ---------------------------------------------------------------------------
+
+/// The key held for a Canopy certificate for `hostname`: the newest row of
+/// origin `canopy` that is waiting for its first certificate or holds one.
+///
+/// A revoked row is never returned, since its key has been destroyed.
+// r[impl tls.canopy.key]
+pub fn find_canopy_key(db: &Db, hostname: &str) -> rusqlite::Result<Option<TlsCertificate>> {
+    db.conn
+        .query_row(
+            &format!(
+                "SELECT {CERT_COLUMNS} FROM tls_certificates
+                 WHERE origin = 'canopy' AND hostname = ?1
+                   AND state IN ('csr_pending', 'active')
+                 ORDER BY id DESC LIMIT 1"
+            ),
+            [hostname],
+            row_to_certificate,
+        )
+        .optional()
+}
+
+/// The Canopy certificates the runtime is serving, with just what comparing
+/// them against what Canopy holds needs.
+///
+/// Narrow on purpose: this runs on every report tick, and the whole certificate
+/// table grows without bound as superseded rows are kept, each carrying its
+/// chain, its signing request and its encrypted key.
+// r[impl tls.canopy.revoked]
+pub fn list_active_canopy_certificates(db: &Db) -> rusqlite::Result<Vec<(i64, String, String)>> {
+    let mut stmt = db.conn.prepare_cached(
+        "SELECT id, hostname, cert_pem FROM tls_certificates
+         WHERE origin = 'canopy' AND state = 'active' AND cert_pem IS NOT NULL",
+    )?;
+    stmt.query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))?
+        .collect()
+}
+
+/// Whether any hostname is bound to the Canopy-only policy.
+pub fn any_canopy_policy(db: &Db) -> rusqlite::Result<bool> {
+    db.conn.query_row(
+        "SELECT EXISTS(SELECT 1 FROM tls_policies WHERE strategy = 'canopy')",
+        [],
+        |row| row.get::<_, i64>(0).map(|n| n != 0),
+    )
+}
+
+/// Every active certificate that could be served, with just what deciding which
+/// hostnames it covers needs.
+///
+/// One pass for a whole set of hostnames, rather than a scan of the table per
+/// hostname: the warm-certificate sweep asks about every one of them on every
+/// reconciler tick, on the one thread every database call is serialised through.
+pub fn list_servable(db: &Db, now: i64) -> rusqlite::Result<Vec<ServableCertificate>> {
+    let mut stmt = db.conn.prepare_cached(
+        "SELECT id, cert_pem, self_signed, created_at, not_after
+         FROM tls_certificates
+         WHERE state = 'active' AND cert_pem IS NOT NULL
+           AND (not_before IS NULL OR not_before <= ?1)
+           AND (not_after IS NULL OR not_after > ?1)",
+    )?;
+    stmt.query_map([now], |row| {
+        let self_signed: i64 = row.get(2)?;
+        Ok(ServableCertificate {
+            id: row.get(0)?,
+            cert_pem: row.get(1)?,
+            self_signed: self_signed != 0,
+            created_at: row.get(3)?,
+            not_after: row.get(4)?,
+        })
+    })?
+    .collect()
+}
+
+/// A certificate inside its validity window, as [`list_servable`] reads it.
+pub struct ServableCertificate {
+    pub id: i64,
+    pub cert_pem: String,
+    pub self_signed: bool,
+    pub created_at: i64,
+    pub not_after: Option<i64>,
+}
+
+/// The recorded chain positions of `hostnames`, by hostname.
+pub fn get_chain_rows(
+    db: &Db,
+    hostnames: &[String],
+) -> rusqlite::Result<std::collections::BTreeMap<String, TlsChainRow>> {
+    let wanted: std::collections::BTreeSet<&str> = hostnames.iter().map(String::as_str).collect();
+    Ok(list_chain_rows(db)?
+        .into_iter()
+        .filter(|row| wanted.contains(row.hostname.as_str()))
+        .map(|row| (row.hostname.clone(), row))
+        .collect())
+}
+
+/// Store the chain Canopy delivered against a key the runtime holds, and
+/// retire what it replaces.
+///
+/// The row is the key's: a first certificate activates a pending row, and a
+/// renewal replaces the chain in place, so there is never a window in which the
+/// key is held by no certificate. `created_at` moves to now, since resolution
+/// ranks certificates by when they came into being.
+///
+/// `Ok(false)` means the row was neither pending nor active any more, because a
+/// revocation or a cancellation got there first, and nothing was written.
+// r[impl tls.canopy.collect]
+// r[impl tls.cert.supersede]
+pub fn activate_canopy_chain(
+    db: &Db,
+    id: i64,
+    cert_pem: &str,
+    metadata: &CertMetadata,
+) -> rusqlite::Result<bool> {
+    atomically(db, || {
+        let now = now_secs();
+        let updated = db.conn.execute(
+            "UPDATE tls_certificates SET
+                state = 'active',
+                cert_pem = ?1,
+                issuer = ?2,
+                not_before = ?3,
+                not_after = ?4,
+                serial = ?5,
+                self_signed = ?6,
+                ari_window_start = NULL,
+                ari_window_end = NULL,
+                ari_polled_at = NULL,
+                created_at = ?7,
+                updated_at = ?7
+             WHERE id = ?8 AND origin = 'canopy' AND state IN ('csr_pending', 'active')",
+            params![
+                cert_pem,
+                metadata.issuer,
+                metadata.not_before,
+                metadata.not_after,
+                metadata.serial,
+                metadata.self_signed as i64,
+                now,
+                id,
+            ],
+        )?;
+        if updated == 0 {
+            return Ok(false);
+        }
+        supersede_other_active_for_hostname(db, id)?;
+        Ok(true)
+    })
+}
+
+/// Mark a Canopy certificate revoked and destroy its key, so it is neither
+/// served nor usable again.
+///
+/// Returns whether a row was changed; a certificate already revoked is not.
+// r[impl tls.canopy.revoked]
+pub fn revoke_canopy_certificate(db: &Db, id: i64) -> rusqlite::Result<bool> {
+    let n = db.conn.execute(
+        "UPDATE tls_certificates SET
+            state = 'revoked',
+            key_ciphertext = x'',
+            updated_at = ?1
+         WHERE id = ?2 AND origin = 'canopy' AND state IN ('csr_pending', 'active')",
+        params![now_secs(), id],
+    )?;
+    Ok(n > 0)
 }
 
 // ---------------------------------------------------------------------------
@@ -2218,5 +2642,90 @@ mod tests {
         let s = get_settings(&db).unwrap();
         assert_eq!(s.contact_email, "ops@example.com");
         assert!(s.updated_at > 0);
+    }
+
+    // r[verify tls.canopy.attempts]
+    #[test]
+    fn a_hostname_that_leaves_its_chain_does_not_strand_its_open_order() {
+        let (db, _) = fresh_db();
+        let attempt = insert_attempt(&db, "shop.example.com", AttemptTrigger::Renewal).unwrap();
+        put_chain_row(
+            &db,
+            "shop.example.com",
+            &chain::Row {
+                identity: chain::Identity::NONE,
+                step: 0,
+                since: 1,
+                open_order_since: Some(1),
+                retry_not_before: None,
+            },
+            None,
+        )
+        .unwrap();
+
+        clear_chain_row(&db, "shop.example.com").unwrap();
+
+        assert_eq!(
+            latest_pending_attempt(&db, "shop.example.com").unwrap(),
+            None,
+            "an attempt nothing will ever close would take the next order's outcome"
+        );
+        let attempts = list_attempts(&db, Some("shop.example.com"), 10).unwrap();
+        let closed = attempts.iter().find(|a| a.id == attempt).unwrap();
+        assert_eq!(closed.outcome, AttemptOutcome::Failure);
+    }
+
+    // r[verify tls.canopy.attempts]
+    #[test]
+    fn deleting_the_certificate_a_cycle_replaces_closes_its_order_too() {
+        let (db, _) = fresh_db();
+        let id = insert_test_cert(&db, "shop.example.com");
+        insert_attempt(&db, "shop.example.com", AttemptTrigger::Renewal).unwrap();
+        put_chain_row(
+            &db,
+            "shop.example.com",
+            &chain::Row {
+                identity: chain::Identity {
+                    cert_id: Some(id),
+                    not_after: Some(10),
+                },
+                step: 0,
+                since: 1,
+                open_order_since: Some(1),
+                retry_not_before: None,
+            },
+            None,
+        )
+        .unwrap();
+
+        delete_certificate(&db, id).unwrap();
+
+        assert!(get_chain_row(&db, "shop.example.com").unwrap().is_none());
+        assert_eq!(
+            latest_pending_attempt(&db, "shop.example.com").unwrap(),
+            None
+        );
+    }
+
+    /// Both run on a timer and name no hostname, so the one index on
+    /// `(hostname, state)` cannot serve them. Without an index of their own
+    /// they scan every superseded row the instance has ever kept.
+    // r[verify tls.cert.serve]
+    #[test]
+    fn the_certificate_queries_asked_on_a_timer_do_not_scan_the_table() {
+        let (db, _) = fresh_db();
+        for sql in [
+            "SELECT id FROM tls_certificates WHERE state = 'active' AND cert_pem IS NOT NULL",
+            "SELECT id FROM tls_certificates WHERE origin = 'canopy' AND state = 'active'",
+        ] {
+            let plan: String = db
+                .conn
+                .query_row(&format!("EXPLAIN QUERY PLAN {sql}"), [], |row| row.get(3))
+                .unwrap();
+            assert!(
+                plan.contains("tls_certificates_state_origin"),
+                "this is asked every tick and must not scan: {sql}\n{plan}"
+            );
+        }
     }
 }

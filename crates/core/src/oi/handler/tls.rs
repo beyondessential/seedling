@@ -23,7 +23,11 @@ use super::HandlerResult;
 use crate::oi::state::OiState;
 use crate::runtime::tls::{
     AttemptOutcome, DnsProviderKind, KeyType, RetryBlockSource, TlsCertOrigin, TlsCertState,
-    TlsPolicy, keypair, parse, state, store,
+    TlsPolicy,
+    chain::{self, Strategy},
+    keypair, parse, state,
+    state::NextSource,
+    store,
     store::CertMetadata,
     validate::{self, ValidateError},
 };
@@ -154,6 +158,12 @@ pub(crate) fn list_policies(state: &OiState) -> HandlerResult {
                 "strategy": "tailscale",
                 "updated_at": row.updated_at,
             }),
+            // r[impl tls.strategy.canopy-only]
+            TlsPolicy::Canopy => json!({
+                "hostname": row.hostname,
+                "strategy": "canopy",
+                "updated_at": row.updated_at,
+            }),
         })
         .collect();
     Ok(json!({ "policies": result }))
@@ -232,6 +242,7 @@ pub(crate) fn set_policy_acme_dns(state: &OiState, params: SetAcmeDnsParams) -> 
     // For wildcard policies there's no concrete hostname to issue against
     // until an ingress for a matching name appears, at which point the
     // reconciler hands it to the coordinator.
+    decisions_have_moved(state);
     let mut auto_issue_kicked = false;
     if !hostname.contains('*') {
         state.tls_coordinator.ensure(&hostname);
@@ -244,6 +255,23 @@ pub(crate) fn set_policy_acme_dns(state: &OiState, params: SetAcmeDnsParams) -> 
 #[derive(Deserialize)]
 pub(crate) struct HostnameParams {
     pub hostname: String,
+}
+
+// i[tls.policy.set-canopy]
+// r[impl tls.strategy.canopy-only]
+pub(crate) fn set_policy_canopy(state: &OiState, params: HostnameParams) -> HandlerResult {
+    let hostname = params.hostname;
+    validate_policy_hostname(&hostname)?;
+    let for_db = hostname.clone();
+    state
+        .db
+        .call(move |db| store::set_policy_canopy(db, &for_db))
+        .map_err(db_error)?;
+    // A usable certificate is left until its renewal point, and a hostname with
+    // none is picked up by the next Canopy report tick, so there is nothing to
+    // kick here. The chain the proxy is told about does change, though.
+    decisions_have_moved(state);
+    Ok(json!({ "ok": true }))
 }
 
 // i[tls.policy.clear]
@@ -259,6 +287,7 @@ pub(crate) fn clear_policy(state: &OiState, params: HostnameParams) -> HandlerRe
             params.hostname
         )));
     }
+    decisions_have_moved(state);
     Ok(json!({ "ok": true }))
 }
 
@@ -446,6 +475,7 @@ pub(crate) fn upload_manual(state: &OiState, params: UploadManualParams) -> Hand
         })
         .map_err(db_error)?;
 
+    decisions_have_moved(state);
     Ok(json!({
         "id": id,
         "primary_san": primary_san,
@@ -483,6 +513,7 @@ pub(crate) fn delete_certificate(state: &OiState, params: CertIdParams) -> Handl
     if !removed {
         return Err(OiError::not_found(format!("certificate not found: {id}")));
     }
+    decisions_have_moved(state);
     Ok(json!({ "ok": true }))
 }
 
@@ -706,6 +737,7 @@ pub(crate) fn csr_upload_cert(state: &OiState, params: CsrUploadCertParams) -> H
         ));
     }
 
+    decisions_have_moved(state);
     Ok(json!({
         "id": id,
         "primary_san": primary_san,
@@ -743,6 +775,19 @@ pub(crate) fn csr_cancel(state: &OiState, params: CertIdParams) -> HandlerResult
     Ok(json!({ "ok": true }))
 }
 
+/// Forget the chain decisions, because what was just written is something they
+/// rest on.
+///
+/// Every handler that writes a policy or a certificate calls this. The
+/// decisions are made against one reading of the world, held for a window, and
+/// served from there to the certificate endpoint, to the proxy's renewal points
+/// and to an operator retry: without this they would all go on acting on the
+/// world as it was before the write.
+// r[impl tls.chain.cycle]
+fn decisions_have_moved(state: &OiState) {
+    state.tls_coordinator.forget_chain_state();
+}
+
 fn map_validate_error(e: ValidateError) -> OiError {
     OiError::new(ErrorCode::RequirementsInvalid, e.to_string())
 }
@@ -771,6 +816,12 @@ pub(crate) fn retry(state: &OiState, params: RetryParams) -> HandlerResult {
         })
         .map_err(db_error)?;
     state.tls_coordinator.ensure(&hostname);
+    // The decision below is to rest on what was just written, not on what the
+    // coordinator read up to half a minute ago.
+    decisions_have_moved(state);
+    // A hostname on a chain Canopy is not part of has nothing else to take the
+    // retry; the coordinator knows which that is.
+    state.tls_coordinator.settle_retry(&hostname);
     Ok(json!({ "ok": true }))
 }
 
@@ -795,19 +846,20 @@ pub(crate) fn list_hostnames(state: &OiState, params: ListHostnamesParams) -> Ha
     // managing. A hostname may be claimed by more than one app (shared
     // ingress); collect all of them.
     let mut hostname_apps: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
-    {
+    let all_managed = {
         let reg = state.registry.read();
-        for managed in state::managed_ingresses(&reg) {
-            if let Some(filter) = params.app.as_deref()
-                && managed.app.as_str() != filter
-            {
-                continue;
-            }
-            hostname_apps
-                .entry(managed.hostname)
-                .or_default()
-                .insert(managed.app.as_str().to_owned());
+        state::managed_ingresses(&reg)
+    };
+    for managed in &all_managed {
+        if let Some(filter) = params.app.as_deref()
+            && managed.app.as_str() != filter
+        {
+            continue;
         }
+        hostname_apps
+            .entry(managed.hostname.clone())
+            .or_default()
+            .insert(managed.app.as_str().to_owned());
     }
 
     // Load the unified snapshot once. The OI then asks the same
@@ -815,76 +867,44 @@ pub(crate) fn list_hostnames(state: &OiState, params: ListHostnamesParams) -> Ha
     // the result into the JSON shape the operator UI expects. Because
     // both call sites read from the same function, what the operator
     // sees here is exactly what the runtime will do.
-    let snapshot = state.db.call(state::Snapshot::load).map_err(db_error)?;
-
-    // Resolve Caddy's data volume once per request (cached on OiState
-    // after first hit). For hostnames whose strategy is "default"
-    // (no operator policy bound) we read Caddy's certmagic store off
-    // disk to surface issuer / expiry / last-issued, since the runtime
-    // has no DB rows for those certs.
-    let caddy_data_path = resolve_caddy_data_path(state);
+    // The chain depends on what Canopy and the proxy are doing as well as on
+    // the database, and on every app declaring a hostname, not just the ones
+    // the filter keeps.
+    let env = state
+        .chain_env_for_display(&all_managed)
+        .map_err(db_error)?;
+    let snapshot = state
+        .db
+        .call(move |db| state::Snapshot::load(db, env))
+        .map_err(db_error)?;
 
     let result: Vec<Value> = hostname_apps
         .into_iter()
         .map(|(hostname, apps)| {
             let st = state::compute_state(&snapshot, &hostname);
-            let caddy_cert = if matches!(st.decision, state::Decision::Default) {
-                caddy_data_path
-                    .as_deref()
-                    .and_then(|p| crate::system::caddy::read_caddy_cert(p, &hostname))
-            } else {
-                None
+            // What the proxy holds was read when the chain's facts were
+            // gathered, so it is taken from there rather than read and parsed a
+            // second time for the display.
+            let caddy_cert = match snapshot.env.proxy.get(&hostname) {
+                Some(state::ProxyHolding::Holds(cert)) => Some(cert),
+                Some(state::ProxyHolding::Nothing | state::ProxyHolding::Unreadable) | None => None,
             };
-            project_hostname_state(&hostname, &apps, &st, caddy_cert.as_ref())
+            project_hostname_state(&hostname, &apps, &st, caddy_cert)
         })
         .collect();
 
     Ok(json!({ "hostnames": result }))
 }
 
-/// Resolve (and cache) the host filesystem path of the Caddy data
-/// volume. Returns `None` if the volume can't be located right now —
-/// e.g. Caddy hasn't started yet, or the runtime is using a container
-/// driver whose mount-point query failed. The cell is one-shot success;
-/// transient failures retry on the next call.
-fn resolve_caddy_data_path(state: &OiState) -> Option<std::path::PathBuf> {
-    if let Some(p) = state.caddy_data_path.get() {
-        return Some(p.clone());
-    }
-    let runtime = Arc::clone(&state.container_runtime);
-    let resolved: Result<std::path::PathBuf, _> = tokio::task::block_in_place(|| {
-        tokio::runtime::Handle::current().block_on(async move {
-            runtime
-                .volume_mountpoint(crate::system::caddy::CADDY_DATA_VOLUME)
-                .await
-        })
-    });
-    match resolved {
-        Ok(p) => {
-            // Best-effort fill; if another caller raced ahead and won
-            // we use whatever they stored.
-            let _ = state.caddy_data_path.set(p.clone());
-            Some(p)
-        }
-        Err(e) => {
-            tracing::debug!(
-                error = %e,
-                "tls/hostnames: caddy data volume unresolved; default-strategy hostnames will not show cert metadata"
-            );
-            None
-        }
-    }
-}
-
 /// Render a [`state::HostnameState`] as the JSON the OI rollup serves.
-/// `caddy_cert` is supplied for default-strategy hostnames: it carries
-/// what Caddy's own automatic TLS has on disk, so the rollup can show
-/// issuer / expiry / "last issued" for certs the runtime doesn't own.
+/// `caddy_cert` is what the proxy holds in its own cache, so the rollup can
+/// show issuer / expiry / "last issued" for certificates the runtime does not
+/// own.
 fn project_hostname_state(
     hostname: &str,
     apps: &BTreeSet<String>,
     st: &state::HostnameState<'_>,
-    caddy_cert: Option<&crate::system::caddy::CaddyCertView>,
+    caddy_cert: Option<&state::ProxyCert>,
 ) -> Value {
     let policy_json = match st.policy.map(|p| (&p.policy, p.hostname.as_str())) {
         None => json!({ "strategy": "default" }),
@@ -897,6 +917,12 @@ fn project_hostname_state(
         // r[impl ingress.site.tailscale]
         Some((TlsPolicy::Tailscale, pattern)) => json!({
             "strategy": "tailscale",
+            "pattern": pattern,
+            "is_wildcard_match": pattern != hostname,
+        }),
+        // r[impl tls.strategy.canopy-only]
+        Some((TlsPolicy::Canopy, pattern)) => json!({
+            "strategy": "canopy",
             "pattern": pattern,
             "is_wildcard_match": pattern != hostname,
         }),
@@ -931,7 +957,12 @@ fn project_hostname_state(
     let last_error = st
         .last_attempt
         .filter(|a| a.outcome == AttemptOutcome::Failure)
-        .and_then(|a| a.error.clone());
+        .and_then(|a| a.error.clone())
+        .or_else(|| match &st.decision {
+            state::Decision::Chain(c) => c.last_error.clone(),
+            _ => None,
+        });
+    let chain_json = project_chain(st);
     let status = decision_status(st, caddy_cert);
     let (next_issuance_at, next_issuance_source) = decision_next_issuance(st);
     let block_json = st.retry_block.map_or(
@@ -944,6 +975,7 @@ fn project_hostname_state(
         "apps": apps.iter().cloned().collect::<Vec<_>>(),
         "policy": policy_json,
         "status": status,
+        "chain": chain_json,
         "active_cert": active_cert_json,
         "last_issuance": last_issuance_json,
         "last_error": last_error,
@@ -967,20 +999,34 @@ fn project_hostname_state(
 /// disk.
 fn decision_status(
     st: &state::HostnameState<'_>,
-    caddy_cert: Option<&crate::system::caddy::CaddyCertView>,
+    caddy_cert: Option<&state::ProxyCert>,
 ) -> &'static str {
     use state::Decision::*;
     use state::IssueReason as R;
     let now = jiff::Timestamp::now().as_second();
     let active_not_after = st.active_cert.and_then(|c| c.not_after);
     match &st.decision {
-        Default => match (active_not_after, caddy_cert.and_then(|c| c.not_after)) {
-            (Some(na), _) if na < now => "expired",
-            (Some(_), _) => "active",
-            (None, Some(na)) if na < now => "expired",
-            (None, Some(_)) => "active",
-            (None, None) => "default",
-        },
+        Default => serving_status(active_not_after, caddy_cert, now).unwrap_or("default"),
+        Chain(c) => {
+            if matches!(c.act, state::ChainAct::Blocked { .. }) {
+                return "blocked";
+            }
+            if let Some(status) = serving_status(active_not_after, caddy_cert, now) {
+                return status;
+            }
+            // Nothing is serving the hostname. Canopy cannot be asked about it,
+            // so nothing is in progress and the operator has something to fix.
+            if c.act == state::ChainAct::CannotAskCanopy {
+                return "error";
+            }
+            // Canopy being asked is an acquisition in progress, and a failure it
+            // reported is an error.
+            match (&c.cycle, &c.last_error) {
+                (chain::Cycle::Running(r), Some(_)) if r.responsible == Strategy::Canopy => "error",
+                (chain::Cycle::Running(r), None) if r.responsible == Strategy::Canopy => "pending",
+                _ => "default",
+            }
+        }
         Blocked { .. } => "blocked",
         NoContactEmail | Debounced { .. } => "error",
         Scheduled { .. } => "active",
@@ -1002,12 +1048,84 @@ fn decision_status(
     }
 }
 
+/// The status a hostname reflects from whichever certificate is actually
+/// serving it: a stored one, or whatever the proxy has on disk. `None` when
+/// there is neither.
+fn serving_status(
+    stored_not_after: Option<i64>,
+    caddy_cert: Option<&state::ProxyCert>,
+    now: i64,
+) -> Option<&'static str> {
+    match (stored_not_after, caddy_cert.and_then(|c| c.not_after)) {
+        (Some(na), _) if na < now => Some("expired"),
+        (Some(_), _) => Some("active"),
+        (None, Some(na)) if na < now => Some("expired"),
+        (None, Some(_)) => Some("active"),
+        (None, None) => None,
+    }
+}
+
+/// The `chain` object of the hostname view: the strategy responsible, when it
+/// falls through, and when the next cycle starts. Null for a hostname with no
+/// chain to report.
+// r[impl tls.cert.hostname-view]
+fn project_chain(st: &state::HostnameState<'_>) -> Value {
+    use state::Decision::*;
+    match &st.decision {
+        Chain(c) => match &c.cycle {
+            // Nothing running, so the strategy named is the one that will act
+            // when the next cycle starts. What produced the certificate serving
+            // the hostname meanwhile is its own origin, under `active_cert`.
+            chain::Cycle::Idle { next_cycle_at } => json!({
+                "responsible": c.strategies.first().map_or("acme_http01", |s| s.as_str()),
+                "fall_through_at": null,
+                "next_cycle_at": (*next_cycle_at != i64::MAX).then_some(*next_cycle_at),
+            }),
+            chain::Cycle::Running(r) => json!({
+                "responsible": r.responsible.as_str(),
+                "fall_through_at": r.fall_through_at,
+                "next_cycle_at": null,
+            }),
+        },
+        // A hostname bound to a policy that names one strategy is on no chain:
+        // there is no ladder to report, and what it is doing and when is in the
+        // policy and the next-issuance fields already.
+        Default
+        | Blocked { .. }
+        | NoContactEmail
+        | Debounced { .. }
+        | Scheduled { .. }
+        | IssueNow { .. } => Value::Null,
+    }
+}
+
 /// Map the unified decision to `(next_issuance_at, source)`.
 fn decision_next_issuance(st: &state::HostnameState<'_>) -> (Option<i64>, Option<&'static str>) {
     use state::Decision::*;
     use state::IssueReason as R;
     match &st.decision {
         Default | Blocked { .. } | NoContactEmail => (None, None),
+        Chain(c) => match &c.cycle {
+            chain::Cycle::Idle { next_cycle_at } if *next_cycle_at != i64::MAX => {
+                let source = if st.active_cert.is_some_and(|c| c.ari_window_start.is_some()) {
+                    NextSource::Ari
+                } else {
+                    NextSource::Fallback
+                };
+                (Some(*next_cycle_at), Some(source.as_str()))
+            }
+            chain::Cycle::Idle { .. } => (None, None),
+            // Waiting out the after-failure cadence: say when, as the ACME-DNS
+            // path does, rather than claiming the next ask is immediate.
+            chain::Cycle::Running(r) if r.responsible == Strategy::Canopy => match &c.act {
+                state::ChainAct::Debounced { until } => (Some(*until), Some("debounce")),
+                // Nothing asks Canopy until an operator acts, so no issuance is
+                // coming to be promised.
+                state::ChainAct::Blocked { .. } | state::ChainAct::CannotAskCanopy => (None, None),
+                _ => (None, Some("immediate")),
+            },
+            chain::Cycle::Running(_) => (None, None),
+        },
         // Debounce after a failure: surface the time the runtime is
         // willing to retry, with a distinct source so the UI can render
         // "retry blocked until …" rather than "queued for next tick".
@@ -1032,7 +1150,7 @@ fn decision_next_issuance(st: &state::HostnameState<'_>) -> (Option<i64>, Option
 /// hostnames — to whatever Caddy's on-disk store has.
 fn build_last_issuance(
     st: &state::HostnameState<'_>,
-    caddy_cert: Option<&crate::system::caddy::CaddyCertView>,
+    caddy_cert: Option<&state::ProxyCert>,
 ) -> Value {
     if let Some(cert) = st.active_cert
         && cert.origin == TlsCertOrigin::Manual
@@ -1043,11 +1161,21 @@ fn build_last_issuance(
             "cert_id": cert.id,
         });
     }
+    if let Some(cert) = st.active_cert
+        && cert.origin == TlsCertOrigin::Canopy
+    {
+        // r[impl tls.canopy.serve]
+        return json!({
+            "kind": "canopy",
+            "at": cert.created_at,
+            "cert_id": cert.id,
+        });
+    }
     if let Some(att) = st.last_success {
         let provider = st.policy.and_then(|p| match &p.policy {
             TlsPolicy::AcmeDns { dns_provider } => Some(dns_provider.clone()),
             // r[impl ingress.site.tailscale]
-            TlsPolicy::Tailscale => None,
+            TlsPolicy::Tailscale | TlsPolicy::Canopy => None,
         });
         return json!({
             "kind": "acme_dns",

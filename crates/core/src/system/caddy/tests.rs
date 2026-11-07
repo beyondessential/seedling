@@ -62,6 +62,7 @@ fn http_only_vhost_goes_in_http_server() {
         l4_routes: vec![],
         warm_cert_hostnames: Default::default(),
         cert_endpoint_url: None,
+        renewal_ratios: Default::default(),
     };
     let json = build_caddy_config(&config);
     let servers = &json["apps"]["http"]["servers"];
@@ -86,6 +87,7 @@ fn https_vhost_goes_in_https_server_redirect_in_http() {
         l4_routes: vec![],
         warm_cert_hostnames: Default::default(),
         cert_endpoint_url: None,
+        renewal_ratios: Default::default(),
     };
     let json = build_caddy_config(&config);
     let servers = &json["apps"]["http"]["servers"];
@@ -130,6 +132,7 @@ fn tls_acme_subjects_appear_in_automation() {
         l4_routes: vec![],
         warm_cert_hostnames: Default::default(),
         cert_endpoint_url: None,
+        renewal_ratios: Default::default(),
     };
     let json = build_caddy_config(&config);
     let subjects = &json["apps"]["tls"]["automation"]["policies"][0]["subjects"];
@@ -182,6 +185,7 @@ fn warm_cert_skipped_when_already_routed() {
         l4_routes: vec![],
         warm_cert_hostnames: Default::default(),
         cert_endpoint_url: None,
+        renewal_ratios: Default::default(),
     };
     // Asking to warm a hostname that's already routed should be a no-op
     // (the hostname is already covered by lazy acquisition via the server block).
@@ -229,6 +233,7 @@ fn dial_strips_http_scheme() {
         l4_routes: vec![],
         warm_cert_hostnames: Default::default(),
         cert_endpoint_url: None,
+        renewal_ratios: Default::default(),
     };
     let json = build_caddy_config(&config);
     let dial = &json["apps"]["http"]["servers"]["seedling_https"]["routes"][0]["handle"][1]["upstreams"]
@@ -264,6 +269,7 @@ fn https_server_includes_quic_listener() {
         l4_routes: vec![],
         warm_cert_hostnames: Default::default(),
         cert_endpoint_url: None,
+        renewal_ratios: Default::default(),
     };
     let json = build_caddy_config(&config);
     let listen = &json["apps"]["http"]["servers"]["seedling_https"]["listen"];
@@ -294,6 +300,7 @@ fn cert_endpoint_url_is_emitted_inside_automation_policy() {
         l4_routes: vec![],
         warm_cert_hostnames: Default::default(),
         cert_endpoint_url: Some("http://[fd5e::ff:1]:8443/get".to_string()),
+        renewal_ratios: Default::default(),
     };
     let json = build_caddy_config(&config);
     // Per Caddy's schema, get_certificate is a per-policy field, not
@@ -340,6 +347,7 @@ fn internal_hostnames_pin_caddy_internal_issuer() {
         l4_routes: vec![],
         warm_cert_hostnames: Default::default(),
         cert_endpoint_url: None,
+        renewal_ratios: Default::default(),
     };
     let json = build_caddy_config(&config);
     let policies = json["apps"]["tls"]["automation"]["policies"]
@@ -377,6 +385,7 @@ fn only_internal_hostnames_emit_just_internal_policy() {
         l4_routes: vec![],
         warm_cert_hostnames: Default::default(),
         cert_endpoint_url: None,
+        renewal_ratios: Default::default(),
     };
     let json = build_caddy_config(&config);
     let policies = json["apps"]["tls"]["automation"]["policies"]
@@ -423,6 +432,7 @@ fn vhost_with_multiple_prefixes_emits_per_prefix_routes_longest_first() {
         l4_routes: vec![],
         warm_cert_hostnames: Default::default(),
         cert_endpoint_url: None,
+        renewal_ratios: Default::default(),
     };
     let json = build_caddy_config(&config);
     let routes = &json["apps"]["http"]["servers"]["seedling_https"]["routes"];
@@ -449,6 +459,7 @@ fn cert_endpoint_url_without_subjects_emits_no_tls_app() {
         l4_routes: vec![],
         warm_cert_hostnames: Default::default(),
         cert_endpoint_url: Some("http://[fd5e::ff:1]:8443/get".to_string()),
+        renewal_ratios: Default::default(),
     };
     let json = build_caddy_config(&config);
     assert!(json["apps"]["tls"].is_null());
@@ -475,6 +486,7 @@ fn l4_routes_emit_layer4_servers_per_port_and_proto() {
         ],
         warm_cert_hostnames: Default::default(),
         cert_endpoint_url: None,
+        renewal_ratios: Default::default(),
     };
     let json = build_caddy_config(&config);
 
@@ -537,6 +549,7 @@ fn redirect_handler_emits_static_response_with_and_without_path_preservation() {
         l4_routes: vec![],
         warm_cert_hostnames: Default::default(),
         cert_endpoint_url: None,
+        renewal_ratios: Default::default(),
     };
     let json = build_caddy_config(&config);
     let routes = json["apps"]["http"]["servers"]["seedling_https"]["routes"]
@@ -584,6 +597,7 @@ fn http_to_https_redirect_targets_nonstandard_https_port() {
         l4_routes: vec![],
         warm_cert_hostnames: Default::default(),
         cert_endpoint_url: None,
+        renewal_ratios: Default::default(),
     };
     let json = build_caddy_config(&config);
     let redirect = &json["apps"]["http"]["servers"]["seedling_http"]["routes"][0]["handle"][0];
@@ -692,6 +706,7 @@ fn plaintext_only_config_requests_no_certificate() {
         l4_routes: vec![],
         warm_cert_hostnames: Default::default(),
         cert_endpoint_url: None,
+        renewal_ratios: Default::default(),
     };
     let json = build_caddy_config(&config);
 
@@ -714,6 +729,7 @@ fn plaintext_vhost_gets_no_redirect_route() {
         l4_routes: vec![],
         warm_cert_hostnames: Default::default(),
         cert_endpoint_url: None,
+        renewal_ratios: Default::default(),
     };
     let json = build_caddy_config(&config);
     let routes = json["apps"]["http"]["servers"]["seedling_http"]["routes"].to_string();
@@ -1881,6 +1897,7 @@ fn an_ingress_redirect_answers_ahead_of_a_redirect_route_on_the_plaintext_vhost(
         l4_routes: vec![],
         warm_cert_hostnames: Default::default(),
         cert_endpoint_url: None,
+        renewal_ratios: Default::default(),
     };
     let json = build_caddy_config(&config);
 
@@ -1929,4 +1946,86 @@ fn a_redirect_route_round_trips_through_the_cached_document() {
     assert_eq!(*code, 308);
     assert_eq!(target.len(), 3);
     assert_eq!(target[1], RedirectSegment::Tail);
+}
+
+// r[verify tls.chain.proxy-gate]
+#[test]
+fn a_hostname_held_back_from_renewing_gets_a_policy_of_its_own() {
+    let config = ProxyConfig {
+        listeners: vec![ProxyListener {
+            port: 443,
+            proto: ProxyListenerProto::Https,
+        }],
+        virtual_hosts: vec![
+            https_vhost("plain.example.com", "[fd5e::1]:3000"),
+            https_vhost("held.example.com", "[fd5e::1]:3001"),
+            https_vhost("also-held.example.com", "[fd5e::1]:3002"),
+            https_vhost("later.example.com", "[fd5e::1]:3003"),
+        ],
+        l4_routes: vec![],
+        warm_cert_hostnames: Default::default(),
+        cert_endpoint_url: Some("http://[fd5e::ff:1]:8443/get".to_string()),
+        renewal_ratios: std::collections::BTreeMap::from([
+            ("held.example.com".to_owned(), 0.1666),
+            ("also-held.example.com".to_owned(), 0.1666),
+            ("later.example.com".to_owned(), 0.05),
+        ]),
+    };
+    let json = build_caddy_config(&config);
+    let policies = json["apps"]["tls"]["automation"]["policies"]
+        .as_array()
+        .expect("policies array");
+    assert_eq!(policies.len(), 3, "the default, and one per distinct ratio");
+
+    let default = policies
+        .iter()
+        .find(|p| p["subjects"][0] == "plain.example.com")
+        .expect("the default policy");
+    assert!(
+        default["renewal_window_ratio"].is_null(),
+        "a hostname with no ratio renews on the proxy's own schedule"
+    );
+    assert_eq!(default["subjects"].as_array().unwrap().len(), 1);
+
+    let shared = policies
+        .iter()
+        .find(|p| p["renewal_window_ratio"] == 0.1666)
+        .expect("a policy for the shared ratio");
+    let mut subjects: Vec<&str> = shared["subjects"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|s| s.as_str().unwrap())
+        .collect();
+    subjects.sort();
+    assert_eq!(subjects, ["also-held.example.com", "held.example.com"]);
+    for policy in policies {
+        assert_eq!(
+            policy["get_certificate"][0]["url"], "http://[fd5e::ff:1]:8443/get",
+            "every policy still asks the daemon first"
+        );
+        assert!(policy["issuers"].is_null(), "and still orders over HTTP-01");
+    }
+}
+
+// r[verify tls.chain.proxy-gate]
+#[test]
+fn a_ratio_for_a_hostname_the_proxy_does_not_serve_is_ignored() {
+    let config = ProxyConfig {
+        listeners: vec![ProxyListener {
+            port: 443,
+            proto: ProxyListenerProto::Https,
+        }],
+        virtual_hosts: vec![https_vhost("plain.example.com", "[fd5e::1]:3000")],
+        l4_routes: vec![],
+        warm_cert_hostnames: Default::default(),
+        cert_endpoint_url: None,
+        renewal_ratios: std::collections::BTreeMap::from([("gone.example.com".to_owned(), 0.1)]),
+    };
+    let json = build_caddy_config(&config);
+    let policies = json["apps"]["tls"]["automation"]["policies"]
+        .as_array()
+        .unwrap();
+    assert_eq!(policies.len(), 1);
+    assert!(policies[0]["renewal_window_ratio"].is_null());
 }

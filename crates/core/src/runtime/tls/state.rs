@@ -17,15 +17,16 @@
 //! state; the snapshot is loaded once and reused per call.
 
 use std::borrow::Cow;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use jiff::Timestamp;
 use seedling_protocol::names::AppName;
 
 use super::{
     AttemptOutcome, TlsCertAttempt, TlsCertForceRetry, TlsCertOrigin, TlsCertRetryBlock,
-    TlsCertState, TlsCertificate, TlsPolicy, TlsPolicyRow, TlsSettings, pattern_matches,
-    pattern_specificity, store,
+    TlsCertState, TlsCertificate, TlsChainRow, TlsPolicy, TlsPolicyRow, TlsSettings,
+    chain::{self, Strategy},
+    pattern_matches, pattern_specificity, store,
 };
 use crate::defs::resource::Resource;
 use crate::runtime::apps::{AppPhase, AppRegistry};
@@ -108,6 +109,78 @@ pub fn managed_ingresses(registry: &AppRegistry) -> Vec<ManagedIngress> {
     out
 }
 
+/// A certificate the proxy holds for a hostname in its own cache. The runtime
+/// has no row for it, only what its certificate says.
+///
+/// Carries what the operator's view shows as well as what the chain decides on,
+/// so the cache is read once for both rather than once each.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProxyCert {
+    pub not_before: Option<i64>,
+    pub not_after: Option<i64>,
+    /// The issuer's name for its directory in the proxy's cache: `local` for its
+    /// internal CA, otherwise the host of the ACME directory.
+    pub issuer_kind: String,
+    /// The issuer as the certificate itself gives it.
+    pub issuer: Option<String>,
+    pub self_signed: bool,
+}
+
+/// What the proxy's cache holds for a hostname, when it could be read.
+///
+/// Three answers, because they lead to different things: a hostname the proxy
+/// holds nothing for may be withheld from it, one it holds a certificate for
+/// must not be, and one whose cache could not be read must be left as it is.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ProxyHolding {
+    Holds(ProxyCert),
+    Nothing,
+    Unreadable,
+}
+
+/// Facts about the world that decide a hostname's chain and are not in the
+/// database. Gathered by the caller, so [`compute_state`] stays a pure
+/// function of its inputs.
+#[derive(Debug, Clone)]
+pub struct ChainEnv {
+    /// Whether these facts were gathered at all.
+    ///
+    /// False is not a set of facts that happens to be empty: it is a caller
+    /// that holds none, and a hostname's chain cannot be decided without them.
+    /// [`compute_state`] then reports [`Decision::Default`] for every hostname,
+    /// so what a caller gets is no chain decision rather than one made up from
+    /// what it did not know. Set by [`crate::runtime::tls::env::collect`], which
+    /// is the one thing that gathers them.
+    pub known: bool,
+    /// Whether a Canopy offer is live.
+    pub offer_live: bool,
+    /// The Canopy application types of the apps declaring each hostname.
+    /// A hostname absent from the map, or mapped to an empty set, is declared
+    /// by no app with a Canopy type.
+    pub canopy_types: BTreeMap<String, BTreeSet<String>>,
+    /// What the proxy holds, by hostname. A hostname missing from the map was
+    /// not looked at, which is not the same as the proxy holding nothing for
+    /// it.
+    pub proxy: BTreeMap<String, ProxyHolding>,
+}
+
+impl ChainEnv {
+    /// For a caller that holds none of these facts: the expiring-certificate
+    /// sweep and the renewal scheduler, which read a snapshot only for what is
+    /// stored, and the issuance coordinator's own ACME flow.
+    ///
+    /// A snapshot built on it answers no chain decision at all, rather than one
+    /// made up from the absence of the facts: see [`known`](Self::known).
+    pub fn none() -> Self {
+        Self {
+            known: false,
+            offer_live: false,
+            canopy_types: BTreeMap::new(),
+            proxy: BTreeMap::new(),
+        }
+    }
+}
+
 /// Snapshot of every DB row that drives a hostname's decision. Loaded
 /// once per OI rollup or coordinator run; reused across hostnames.
 #[derive(Debug, Clone)]
@@ -120,7 +193,12 @@ pub struct Snapshot {
     pub attempts: Vec<TlsCertAttempt>,
     pub retry_blocks: Vec<TlsCertRetryBlock>,
     pub force_retries: Vec<TlsCertForceRetry>,
+    pub chain_rows: Vec<TlsChainRow>,
     pub settings: TlsSettings,
+    /// What the database cannot say about a hostname's chain: whether an offer
+    /// is live, which apps declare it, what the proxy holds for it. Supplied by
+    /// the caller when the snapshot is loaded; see [`Snapshot::load`].
+    pub env: ChainEnv,
     pub now: i64,
     /// SAN list per certificate id, parsed once when the snapshot is built.
     ///
@@ -145,7 +223,13 @@ pub struct Snapshot {
 
 impl Snapshot {
     /// Load a fresh snapshot of TLS state from the DB.
-    pub fn load(db: &Db) -> rusqlite::Result<Self> {
+    ///
+    /// `env` is required rather than filled in later, because its default is
+    /// not a neutral value: it says no app has a Canopy type and no offer is
+    /// live, which is a different chain for every hostname. A caller that holds
+    /// no such facts says so with [`ChainEnv::none`], and the chain decisions of
+    /// that snapshot are not to be acted on.
+    pub fn load(db: &Db, env: ChainEnv) -> rusqlite::Result<Self> {
         let certificates = store::list_certificates(db)?;
         let sans = index_sans(&certificates);
         Ok(Self {
@@ -154,10 +238,23 @@ impl Snapshot {
             attempts: store::list_attempts(db, None, 1000)?,
             retry_blocks: store::list_retry_blocks(db)?,
             force_retries: store::list_force_retries(db)?,
+            chain_rows: store::list_chain_rows(db)?,
             settings: store::get_settings(db)?,
+            env,
             now: Timestamp::now().as_second(),
             sans,
         })
+    }
+
+    /// Take in the one write an operator retry makes for `hostname`: the row it
+    /// put in the hostname's chain, and the retry it consumed.
+    ///
+    /// For a caller that wrote it after loading and wants the decision to
+    /// rest on it, without reading the world again to learn about one row.
+    pub fn with_cycle_started(&mut self, hostname: &str, row: Option<TlsChainRow>) {
+        self.chain_rows.retain(|r| r.hostname != hostname);
+        self.chain_rows.extend(row);
+        self.force_retries.retain(|r| r.hostname != hostname);
     }
 
     /// The certificate's SAN list, from the memo when it is there and by
@@ -267,6 +364,136 @@ pub enum Decision {
     /// ACME-DNS, the runtime should issue (or renew) now. The
     /// coordinator runs an ACME flow in this state.
     IssueNow { reason: IssueReason },
+    /// The hostname is on a strategy chain: no policy, or the Canopy-only
+    /// policy.
+    Chain(Box<ChainDecision>),
+}
+
+/// Where a hostname on a strategy chain stands, and what the runtime does about
+/// it.
+// r[impl tls.chain.cycle]
+#[derive(Debug, Clone)]
+pub struct ChainDecision {
+    pub strategies: Vec<Strategy>,
+    pub cycle: chain::Cycle,
+    pub act: ChainAct,
+    /// Canopy is to be asked whichever strategy is responsible: an order is
+    /// open, or a Canopy certificate has reached its renewal point and Canopy
+    /// carries the renewal out itself.
+    // r[impl tls.canopy.collect]
+    pub collect_canopy: bool,
+    /// When the proxy may start ordering a certificate of its own.
+    pub proxy_from: chain::ProxyFrom,
+    pub canopy: CanopyStanding,
+    /// What is serving the hostname, if anything usable is.
+    pub serving: Option<ServingSource>,
+    /// What a cycle starting now would replace, for a hostname with none
+    /// running: read through [`ChainDecision::replacing`].
+    replacing_when_idle: chain::Identity,
+    /// What the proxy's cache holds, when it was looked at.
+    pub proxy: Option<ProxyHolding>,
+    /// Why the responsible strategy last failed to produce a certificate.
+    pub last_error: Option<String>,
+}
+
+/// The least of a certificate's lifetime the proxy is left to renew in, so that
+/// it is never told to renew over a window of no time at all.
+const MIN_RENEWAL_RATIO: f64 = 0.0001;
+
+impl ChainDecision {
+    /// What a cycle starting now for this hostname would be replacing.
+    ///
+    /// One answer for every caller that starts one, because getting it wrong is
+    /// silent: a cycle recorded against an identity that is not the one serving
+    /// the hostname is read as belonging to an earlier cycle and ignored, and
+    /// the ladder is then measured from the wrong expiry.
+    // r[impl tls.chain.cycle]
+    pub fn replacing(&self) -> chain::Identity {
+        match &self.cycle {
+            // A cycle already running is replacing something, and that is what
+            // a retry restarts against.
+            chain::Cycle::Running(r) => r.identity,
+            // Nothing running, so a cycle starting now replaces whatever serves
+            // the hostname, which is why it was left alone until now.
+            chain::Cycle::Idle { .. } => self.replacing_when_idle,
+        }
+    }
+
+    /// How much of the proxy-held certificate's lifetime may be left when the
+    /// proxy renews it, for a hostname the proxy must be held back on.
+    ///
+    /// `None` leaves the proxy to its own schedule: it holds no certificate,
+    /// or it may order whenever it likes. The ratio is the fraction left at the
+    /// moment the strategies ahead of the proxy run out of theirs, so the proxy
+    /// renews over HTTP-01 from that point and not before.
+    // r[impl tls.chain.proxy-gate]
+    pub fn proxy_renewal_ratio(&self) -> Option<f64> {
+        let Some(ProxyHolding::Holds(cert)) = &self.proxy else {
+            return None;
+        };
+        let (not_before, not_after) = (cert.not_before?, cert.not_after?);
+        let lifetime = not_after.checked_sub(not_before).filter(|l| *l > 0)? as f64;
+        match self.proxy_from {
+            chain::ProxyFrom::Always => None,
+            chain::ProxyFrom::At(from) => {
+                let left = (not_after - from) as f64 / lifetime;
+                Some(left.clamp(MIN_RENEWAL_RATIO, 1.0))
+            }
+            // No chain strategy of the proxy's will ever be responsible, or no
+            // clock says when one would be. The proxy has no way to be told
+            // never, so it is held to the smallest window it can be given, which
+            // lets it renew over HTTP-01 in the last moments of the certificate
+            // it holds. That is the bound the spec states for this case, and not
+            // an enforcement of the rule that HTTP-01 must be responsible:
+            // taking the certificate out of service to enforce it would serve
+            // nothing for the hostname.
+            chain::ProxyFrom::Never | chain::ProxyFrom::Unknown => Some(MIN_RENEWAL_RATIO),
+        }
+    }
+}
+
+/// What the runtime does for a hostname on a chain this tick.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ChainAct {
+    /// Nothing: no cycle is running, or the proxy carries out the strategy
+    /// that is responsible.
+    Wait,
+    /// Canopy is responsible but an operator retry block pauses the runtime.
+    Blocked { reason: Option<String> },
+    /// Canopy is responsible: ask it on the next Canopy report tick.
+    AskCanopy,
+    /// Canopy is responsible but was refused or its request rejected, and is
+    /// not asked again until `until`. An order already open is still asked
+    /// about on every tick.
+    Debounced { until: i64 },
+    /// Canopy is responsible but cannot be asked about the hostname.
+    CannotAskCanopy,
+}
+
+/// Whether Canopy can be asked about a hostname at all.
+// r[impl tls.strategy.canopy]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CanopyStanding {
+    /// `app_type` is the application type to send: the one the typed apps
+    /// declaring the hostname share, and none when they do not agree.
+    Applies { app_type: Option<String> },
+    /// No public CA can issue for the name.
+    NotPublicName,
+    /// No app declaring the hostname has a Canopy type.
+    NoTypedApp,
+}
+
+impl CanopyStanding {
+    pub fn applies(&self) -> bool {
+        matches!(self, Self::Applies { .. })
+    }
+}
+
+/// What is serving a hostname.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ServingSource {
+    Store { cert_id: i64, origin: TlsCertOrigin },
+    Proxy,
 }
 
 #[derive(Debug, Clone)]
@@ -348,6 +575,15 @@ pub fn compute_state<'a>(snap: &'a Snapshot, hostname: &str) -> HostnameState<'a
         .find(|f| f.hostname == hostname)
         .map(|f| f.requested_at);
 
+    let chain_ctx = ChainContext::gather(
+        snap,
+        hostname,
+        active_cert,
+        staged_from,
+        retry_block,
+        force_retry_at.is_some(),
+    );
+
     let decision = decide(
         snap.now,
         policy.map(|p| &p.policy),
@@ -357,6 +593,7 @@ pub fn compute_state<'a>(snap: &'a Snapshot, hostname: &str) -> HostnameState<'a
         retry_block,
         force_retry_at.is_some(),
         &snap.settings,
+        &chain_ctx,
     );
 
     HostnameState {
@@ -507,15 +744,24 @@ fn decide(
     retry_block: Option<&TlsCertRetryBlock>,
     force_retry: bool,
     settings: &TlsSettings,
+    chain_ctx: &ChainContext,
 ) -> Decision {
     match policy {
-        // No operator policy bound: the runtime takes no action. If a
-        // manual cert (or proxy-managed cert) happens to cover this
-        // hostname, the rollup surfaces it via `active_cert`; the
-        // runtime doesn't drive issuance because nothing has asked it
-        // to. Manual-near-expiry-via-acme-dns is handled separately by
-        // [`decide_acme_dns`] when an acme_dns policy *also* applies.
-        None => Decision::Default,
+        // Without the facts a chain rests on there is no chain to decide: a
+        // caller that gathered none reads a snapshot for what is stored, and
+        // must not be handed a decision made from their absence. The decisions
+        // of a bound policy are unaffected, since they rest on the database
+        // alone.
+        None | Some(TlsPolicy::Canopy) if !chain_ctx.facts_known => Decision::Default,
+        // No operator policy bound: the default chain. A stored certificate
+        // that covers the hostname, or one the proxy holds, is left alone
+        // until its renewal point (see [`chain::resolve`]).
+        None => decide_chain(
+            chain_ctx,
+            chain::default_chain(chain_ctx.internal_name, chain_ctx.canopy.applies()),
+        ),
+        // r[impl tls.strategy.canopy-only]
+        Some(TlsPolicy::Canopy) => decide_chain(chain_ctx, chain::CANOPY_ONLY.to_vec()),
         Some(TlsPolicy::AcmeDns { .. }) => decide_acme_dns(
             now,
             active_cert,
@@ -533,6 +779,248 @@ fn decide(
         // this branch keeps the decision pipeline exhaustive.
         Some(TlsPolicy::Tailscale) => Decision::Default,
     }
+}
+
+/// Everything [`decide_chain`] needs about one hostname, gathered from the
+/// snapshot before the decision so the decision itself is a plain function of
+/// it.
+struct ChainContext {
+    /// Whether the facts a chain rests on were gathered; see [`ChainEnv::known`].
+    facts_known: bool,
+    now: i64,
+    internal_name: bool,
+    canopy: CanopyStanding,
+    offer_live: bool,
+    serving: Option<(chain::Serving, ServingSource)>,
+    row: Option<chain::Row>,
+    last_error: Option<String>,
+    /// The proxy's cache holds something for this hostname that could not be
+    /// read. Not a certificate, and not an absence either.
+    proxy_unreadable: bool,
+    proxy: Option<ProxyHolding>,
+    staged_from: Option<i64>,
+    retry_block: Option<Option<String>>,
+    force: bool,
+}
+
+impl ChainContext {
+    fn gather(
+        snap: &Snapshot,
+        hostname: &str,
+        active_cert: Option<&TlsCertificate>,
+        staged_from: Option<i64>,
+        retry_block: Option<&TlsCertRetryBlock>,
+        force: bool,
+    ) -> Self {
+        let now = snap.now;
+        let internal_name = is_caddy_internal(hostname);
+        let chain_row = snap.chain_rows.iter().find(|r| r.hostname == hostname);
+        let types = snap.env.canopy_types.get(hostname);
+        let canopy = if internal_name {
+            CanopyStanding::NotPublicName
+        } else {
+            match types {
+                Some(types) if !types.is_empty() => CanopyStanding::Applies {
+                    // Several types on one hostname cannot be told apart by
+                    // the request, so it carries none rather than guessing.
+                    app_type: (types.len() == 1)
+                        .then(|| types.iter().next().cloned())
+                        .flatten(),
+                },
+                _ => CanopyStanding::NoTypedApp,
+            }
+        };
+
+        // What Caddy serves for the hostname: the endpoint is consulted ahead
+        // of its own cache, so a stored certificate wins over one it holds.
+        let serving = active_cert
+            .filter(|c| c.not_after.is_none_or(|na| na > now))
+            .map(|c| {
+                (
+                    chain::Serving {
+                        identity: chain::Identity {
+                            cert_id: Some(c.id),
+                            not_after: c.not_after,
+                        },
+                        renewal_point: next_renewal_at(c).0,
+                    },
+                    ServingSource::Store {
+                        cert_id: c.id,
+                        origin: c.origin,
+                    },
+                )
+            })
+            .or_else(|| {
+                match snap.env.proxy.get(hostname) {
+                    Some(ProxyHolding::Holds(c)) => Some(c),
+                    Some(ProxyHolding::Nothing | ProxyHolding::Unreadable) | None => None,
+                }
+                .filter(|c| c.not_after.is_none_or(|na| na > now))
+                .map(|c| {
+                    (
+                        chain::Serving {
+                            identity: chain::Identity {
+                                cert_id: None,
+                                not_after: c.not_after,
+                            },
+                            renewal_point: renewal_point_for(c.not_before, c.not_after),
+                        },
+                        ServingSource::Proxy,
+                    )
+                })
+            });
+
+        Self {
+            facts_known: snap.env.known,
+            now,
+            internal_name,
+            canopy,
+            offer_live: snap.env.offer_live,
+            serving,
+            row: chain_row.map(|r| r.row.clone()),
+            last_error: chain_row.and_then(|r| r.last_error.clone()),
+            proxy: snap.env.proxy.get(hostname).cloned(),
+            proxy_unreadable: matches!(
+                snap.env.proxy.get(hostname),
+                Some(ProxyHolding::Unreadable)
+            ),
+            staged_from,
+            retry_block: retry_block.map(|b| b.reason.clone()),
+            force,
+        }
+    }
+}
+
+// r[impl tls.chain.cycle]
+// r[impl tls.chain.ladder]
+fn decide_chain(ctx: &ChainContext, strategies: Vec<Strategy>) -> Decision {
+    let cycle = match (&ctx.serving, ctx.staged_from) {
+        // A certificate about to start serving is not absent, and asking for
+        // another now would only produce a duplicate.
+        (None, Some(from)) if !ctx.force => chain::Cycle::Idle {
+            next_cycle_at: from,
+        },
+        // r[impl tls.chain.cycle]
+        // The proxy holds something for the hostname that could not be read.
+        // That is not an absence: starting a cycle on it would have Canopy
+        // asked to replace a certificate the proxy may be serving perfectly
+        // well, which is the early replacement a cycle exists to avoid. An
+        // operator retry still starts one, since the operator can see what the
+        // runtime cannot.
+        (None, _) if ctx.proxy_unreadable && !ctx.force => chain::Cycle::Idle {
+            next_cycle_at: i64::MAX,
+        },
+        _ => chain::resolve(&chain::Inputs {
+            chain: &strategies,
+            now: ctx.now,
+            serving: ctx.serving.map(|(s, _)| s),
+            row: ctx.row.as_ref(),
+            offer_live: ctx.offer_live,
+            force: ctx.force,
+        }),
+    };
+
+    let act = match &cycle {
+        chain::Cycle::Running(r) if r.responsible == Strategy::Canopy => {
+            if let Some(reason) = &ctx.retry_block {
+                ChainAct::Blocked {
+                    reason: reason.clone(),
+                }
+            } else if !ctx.canopy.applies() {
+                ChainAct::CannotAskCanopy
+            } else {
+                // r[impl tls.chain.no-certificate]
+                // A refusal is asked again at the after-failure cadence, not on
+                // every tick. An open order is collected on every tick, and an
+                // operator retry asks at once.
+                match ctx
+                    .row
+                    .as_ref()
+                    .filter(|row| row.identity == r.identity)
+                    .and_then(|row| row.retry_not_before)
+                {
+                    Some(until) if until > ctx.now && !r.open_order && !ctx.force => {
+                        ChainAct::Debounced { until }
+                    }
+                    _ => ChainAct::AskCanopy,
+                }
+            }
+        }
+        _ => ChainAct::Wait,
+    };
+
+    // r[impl tls.canopy.collect]
+    // A refusal recorded for this cycle moved the hostname on, and it stays
+    // with the later strategy until the next cycle: collecting a renewal Canopy
+    // has refused would ask it again on every tick for nothing.
+    let refused = match (&ctx.row, ctx.serving) {
+        (Some(row), Some((serving, _))) => {
+            row.identity == serving.identity && row.retry_not_before.is_some()
+        }
+        _ => false,
+    };
+    // The after-failure cadence holds for collection as much as for a first
+    // request: an answer that refused or rejected what was asked is not asked
+    // again sooner for being asked by the other path.
+    let waiting = ctx
+        .row
+        .as_ref()
+        .and_then(|row| row.retry_not_before)
+        .is_some_and(|until| until > ctx.now)
+        && !ctx.force;
+    let collect_canopy = ctx.canopy.applies()
+        && !waiting
+        && match &cycle {
+            // An order Canopy has not answered for is outstanding whoever is
+            // serving the hostname meanwhile, which is how a replacement for a
+            // revoked certificate goes on being asked for while the proxy serves
+            // the hostname. One fact, recorded in one place: a refusal clears it,
+            // and the hostname then stays where it is until the next cycle.
+            // r[impl tls.canopy.revoked]
+            chain::Cycle::Running(r) => {
+                r.open_order
+                    || (!refused
+                        && matches!(
+                            ctx.serving,
+                            Some((
+                                _,
+                                ServingSource::Store {
+                                    origin: TlsCertOrigin::Canopy,
+                                    ..
+                                }
+                            ))
+                        ))
+            }
+            chain::Cycle::Idle { .. } => false,
+        };
+
+    let proxy_from = match (&cycle, ctx.staged_from) {
+        // A certificate is staged and starts serving at its own time, so no
+        // strategy is working on the hostname and none is being waited for.
+        // Holding the proxy back for one would leave the hostname serving
+        // nothing at all until the staged certificate started: the endpoint
+        // must not serve that certificate early, so the proxy is all the
+        // hostname has meanwhile.
+        // r[impl tls.chain.proxy-gate]
+        (chain::Cycle::Idle { .. }, Some(_)) if ctx.serving.is_none() => chain::ProxyFrom::Always,
+        _ => chain::proxy_from(&strategies, ctx.serving.map(|(s, _)| s), &cycle),
+    };
+
+    Decision::Chain(Box::new(ChainDecision {
+        strategies,
+        cycle,
+        act,
+        collect_canopy,
+        proxy_from,
+        replacing_when_idle: ctx
+            .serving
+            .as_ref()
+            .map_or(chain::Identity::NONE, |(s, _)| s.identity),
+        canopy: ctx.canopy.clone(),
+        serving: ctx.serving.map(|(_, source)| source),
+        proxy: ctx.proxy.clone(),
+        last_error: ctx.last_error.clone(),
+    }))
 }
 
 fn decide_acme_dns(
@@ -610,18 +1098,27 @@ pub fn next_renewal_at(cert: &TlsCertificate) -> (i64, NextSource) {
     if let Some(start) = cert.ari_window_start {
         return (start, NextSource::Ari);
     }
-    let (Some(nb), Some(na)) = (cert.not_before, cert.not_after) else {
-        // Caller filters this case; returning a far-future time keeps
-        // the decision logic from accidentally firing.
-        return (i64::MAX, NextSource::Fallback);
+    (
+        renewal_point_for(cert.not_before, cert.not_after),
+        NextSource::Fallback,
+    )
+}
+
+/// The moment a third of a certificate's lifetime remains, which is when a
+/// certificate with no CA-suggested window is due for renewal. A certificate
+/// whose validity is unrecorded or empty is never due: the caller filters the
+/// case, and a far-future time keeps the decision logic from accidentally
+/// firing.
+// r[impl tls.chain.cycle]
+pub fn renewal_point_for(not_before: Option<i64>, not_after: Option<i64>) -> i64 {
+    let (Some(nb), Some(na)) = (not_before, not_after) else {
+        return i64::MAX;
     };
     if na <= nb {
-        return (i64::MAX, NextSource::Fallback);
+        return i64::MAX;
     }
     let lifetime = na - nb;
-    let due =
-        nb + lifetime * (RENEW_AT_FRACTION_DEN - RENEW_AT_FRACTION_NUM) / RENEW_AT_FRACTION_DEN;
-    (due, NextSource::Fallback)
+    nb + lifetime * (RENEW_AT_FRACTION_DEN - RENEW_AT_FRACTION_NUM) / RENEW_AT_FRACTION_DEN
 }
 
 /// If the most recent attempt was a failure within the debounce window,
@@ -686,10 +1183,15 @@ mod tests {
             attempts,
             retry_blocks: blocks,
             force_retries,
+            chain_rows: vec![],
             settings: TlsSettings {
                 contact_email: contact_email.to_owned(),
                 cert_profile: None,
                 updated_at: now,
+            },
+            env: ChainEnv {
+                known: true,
+                ..ChainEnv::none()
             },
             now,
             sans,
@@ -796,25 +1298,384 @@ mod tests {
         assert_eq!(found.id, 2);
     }
 
-    #[test]
-    fn no_policy_yields_default() {
-        let s = snap(vec![], vec![], vec![], vec![], vec![], "ops@x", 1000);
-        let st = compute_state(&s, "host.example.com");
-        assert!(matches!(st.decision, Decision::Default));
+    fn chain_of<'a>(st: &'a HostnameState<'_>) -> &'a ChainDecision {
+        match &st.decision {
+            Decision::Chain(c) => c,
+            other => panic!("expected a chain decision, got {other:?}"),
+        }
     }
 
+    // r[verify tls.strategy.default]
+    #[test]
+    fn no_policy_yields_the_default_chain() {
+        let s = snap(vec![], vec![], vec![], vec![], vec![], "ops@x", 1000);
+        let st = compute_state(&s, "host.example.com");
+        let c = chain_of(&st);
+        assert_eq!(
+            c.strategies,
+            vec![Strategy::Http01],
+            "an app with no Canopy type is not given a Canopy window"
+        );
+        assert_eq!(c.act, ChainAct::Wait, "the proxy carries out HTTP-01");
+    }
+
+    // r[verify tls.cert.hostname-view]
     #[test]
     fn manual_cert_auto_binds_without_policy() {
         // No policy bound, but a manual cert exists for this hostname.
-        // compute_state should surface the cert via active_cert and
-        // keep the decision at Default (runtime takes no action; the
-        // cert just covers what its SANs say).
+        // compute_state surfaces the cert via active_cert and leaves it
+        // alone until its renewal point.
         let mut cert = fake_cert("host.example.com", 7, 0, 100);
         cert.origin = TlsCertOrigin::Manual;
         let s = snap(vec![], vec![cert], vec![], vec![], vec![], "ops@x", 50);
         let st = compute_state(&s, "host.example.com");
-        assert!(matches!(st.decision, Decision::Default));
+        let c = chain_of(&st);
+        assert!(matches!(c.cycle, chain::Cycle::Idle { next_cycle_at } if next_cycle_at == 66));
         assert_eq!(st.active_cert.map(|c| c.id), Some(7));
+    }
+
+    fn canopy_env(hostname: &str, types: &[&str], offer_live: bool) -> ChainEnv {
+        ChainEnv {
+            known: true,
+            offer_live,
+            canopy_types: BTreeMap::from([(
+                hostname.to_owned(),
+                types.iter().map(|t| (*t).to_owned()).collect(),
+            )]),
+            proxy: BTreeMap::new(),
+        }
+    }
+
+    // r[verify tls.strategy.canopy]
+    #[test]
+    fn a_typed_app_puts_canopy_first_in_the_chain() {
+        let mut s = snap(vec![], vec![], vec![], vec![], vec![], "ops@x", 1000);
+        s.env = canopy_env("host.example.com", &["tamanu"], true);
+        let st = compute_state(&s, "host.example.com");
+        let c = chain_of(&st);
+        assert_eq!(c.strategies, vec![Strategy::Canopy, Strategy::Http01]);
+        assert_eq!(c.act, ChainAct::AskCanopy);
+        assert_eq!(
+            c.canopy,
+            CanopyStanding::Applies {
+                app_type: Some("tamanu".to_owned())
+            }
+        );
+    }
+
+    // r[verify tls.canopy.request]
+    #[test]
+    fn apps_of_different_types_on_one_hostname_send_no_type() {
+        let mut s = snap(vec![], vec![], vec![], vec![], vec![], "ops@x", 1000);
+        s.env = canopy_env("host.example.com", &["tamanu", "other"], true);
+        let st = compute_state(&s, "host.example.com");
+        assert_eq!(
+            chain_of(&st).canopy,
+            CanopyStanding::Applies { app_type: None }
+        );
+    }
+
+    // r[verify tls.chain.no-certificate]
+    #[test]
+    fn a_new_hostname_without_a_live_offer_goes_straight_to_the_proxy() {
+        let mut s = snap(vec![], vec![], vec![], vec![], vec![], "ops@x", 1000);
+        s.env = canopy_env("host.example.com", &["tamanu"], false);
+        let st = compute_state(&s, "host.example.com");
+        let c = chain_of(&st);
+        assert_eq!(c.act, ChainAct::Wait);
+        assert!(matches!(&c.cycle, chain::Cycle::Running(r) if r.responsible == Strategy::Http01));
+    }
+
+    // r[verify tls.chain.cycle]
+    #[test]
+    fn a_proxy_held_certificate_is_left_alone_until_its_renewal_point() {
+        let mut s = snap(vec![], vec![], vec![], vec![], vec![], "ops@x", 100);
+        s.env = canopy_env("host.example.com", &["tamanu"], true);
+        s.env.proxy.insert(
+            "host.example.com".to_owned(),
+            ProxyHolding::Holds(ProxyCert {
+                not_before: Some(0),
+                not_after: Some(300),
+                issuer_kind: "local".to_owned(),
+                issuer: None,
+                self_signed: false,
+            }),
+        );
+        let st = compute_state(&s, "host.example.com");
+        let c = chain_of(&st);
+        assert_eq!(c.serving, Some(ServingSource::Proxy));
+        assert!(
+            matches!(c.cycle, chain::Cycle::Idle { next_cycle_at } if next_cycle_at == 200),
+            "an offer connecting does not start a cycle for a working certificate"
+        );
+        assert_eq!(c.act, ChainAct::Wait);
+    }
+
+    // r[verify tls.chain.ladder]
+    #[test]
+    fn a_proxy_held_certificate_past_its_renewal_point_starts_with_canopy() {
+        let mut s = snap(vec![], vec![], vec![], vec![], vec![], "ops@x", 200);
+        s.env = canopy_env("host.example.com", &["tamanu"], true);
+        s.env.proxy.insert(
+            "host.example.com".to_owned(),
+            ProxyHolding::Holds(ProxyCert {
+                not_before: Some(0),
+                not_after: Some(300),
+                issuer_kind: "local".to_owned(),
+                issuer: None,
+                self_signed: false,
+            }),
+        );
+        let st = compute_state(&s, "host.example.com");
+        let c = chain_of(&st);
+        assert_eq!(c.act, ChainAct::AskCanopy);
+        match &c.cycle {
+            chain::Cycle::Running(r) => assert_eq!(r.fall_through_at, Some(250)),
+            other => panic!("expected a running cycle, got {other:?}"),
+        }
+    }
+
+    // r[verify tls.chain.cycle]
+    #[test]
+    fn an_unreadable_proxy_cache_is_not_a_certificate_and_not_an_absence() {
+        let mut s = snap(vec![], vec![], vec![], vec![], vec![], "ops@x", 100);
+        s.env = canopy_env("host.example.com", &["tamanu"], true);
+        s.env
+            .proxy
+            .insert("host.example.com".to_owned(), ProxyHolding::Unreadable);
+        let st = compute_state(&s, "host.example.com");
+        let c = chain_of(&st);
+        assert_eq!(c.serving, None);
+        assert_eq!(c.proxy, Some(ProxyHolding::Unreadable));
+        assert!(
+            matches!(c.cycle, chain::Cycle::Idle { .. }),
+            "no cycle starts on it, so Canopy is not asked to replace what the proxy may be serving"
+        );
+        assert_eq!(c.act, ChainAct::Wait);
+
+        // A hostname the proxy holds nothing for is a different answer.
+        s.env
+            .proxy
+            .insert("host.example.com".to_owned(), ProxyHolding::Nothing);
+        assert_eq!(
+            chain_of(&compute_state(&s, "host.example.com")).act,
+            ChainAct::AskCanopy
+        );
+
+        // And one that was never looked at, because the proxy's cache could not
+        // be located at all, still gets a first certificate: the alternative is
+        // that nothing is ever issued while it cannot be found.
+        s.env.proxy.remove("host.example.com");
+        assert_eq!(
+            chain_of(&compute_state(&s, "host.example.com")).act,
+            ChainAct::AskCanopy
+        );
+    }
+
+    // r[verify tls.cert.force-retry]
+    #[test]
+    fn an_operator_retry_starts_a_cycle_the_unreadable_cache_was_deferring() {
+        let mut s = snap(
+            vec![],
+            vec![],
+            vec![],
+            vec![],
+            vec![TlsCertForceRetry {
+                hostname: "host.example.com".to_owned(),
+                requested_at: 90,
+            }],
+            "ops@x",
+            100,
+        );
+        s.env = canopy_env("host.example.com", &["tamanu"], true);
+        s.env
+            .proxy
+            .insert("host.example.com".to_owned(), ProxyHolding::Unreadable);
+        assert_eq!(
+            chain_of(&compute_state(&s, "host.example.com")).act,
+            ChainAct::AskCanopy
+        );
+    }
+
+    // r[verify tls.strategy.canopy-only]
+    #[test]
+    fn a_canopy_only_policy_never_leaves_canopy() {
+        let mut s = snap(
+            vec![TlsPolicyRow {
+                hostname: "host.example.com".to_owned(),
+                policy: TlsPolicy::Canopy,
+                updated_at: 0,
+            }],
+            vec![],
+            vec![],
+            vec![],
+            vec![],
+            "ops@x",
+            1000,
+        );
+        s.env = canopy_env("host.example.com", &["tamanu"], false);
+        let st = compute_state(&s, "host.example.com");
+        let c = chain_of(&st);
+        assert_eq!(c.strategies, vec![Strategy::Canopy]);
+        assert_eq!(c.act, ChainAct::AskCanopy);
+    }
+
+    // r[verify tls.canopy-only.untyped]
+    #[test]
+    fn a_canopy_only_hostname_with_no_typed_app_cannot_be_asked() {
+        let s = snap(
+            vec![TlsPolicyRow {
+                hostname: "host.example.com".to_owned(),
+                policy: TlsPolicy::Canopy,
+                updated_at: 0,
+            }],
+            vec![],
+            vec![],
+            vec![],
+            vec![],
+            "ops@x",
+            1000,
+        );
+        let st = compute_state(&s, "host.example.com");
+        let c = chain_of(&st);
+        assert_eq!(c.act, ChainAct::CannotAskCanopy);
+        assert_eq!(c.canopy, CanopyStanding::NoTypedApp);
+    }
+
+    // r[verify tls.cert.retry-block]
+    #[test]
+    fn a_retry_block_pauses_asking_canopy() {
+        let mut s = snap(
+            vec![],
+            vec![],
+            vec![],
+            vec![TlsCertRetryBlock {
+                hostname: "host.example.com".to_owned(),
+                set_at: 0,
+                set_by: RetryBlockSource::Operator,
+                reason: Some("paused".to_owned()),
+            }],
+            vec![],
+            "ops@x",
+            1000,
+        );
+        s.env = canopy_env("host.example.com", &["tamanu"], true);
+        let st = compute_state(&s, "host.example.com");
+        assert_eq!(
+            chain_of(&st).act,
+            ChainAct::Blocked {
+                reason: Some("paused".to_owned())
+            }
+        );
+    }
+
+    fn refused_row(open_order_since: Option<i64>) -> TlsChainRow {
+        TlsChainRow {
+            hostname: "host.example.com".to_owned(),
+            row: chain::Row {
+                identity: chain::Identity::NONE,
+                step: 0,
+                since: 0,
+                open_order_since,
+                retry_not_before: Some(2000),
+            },
+            last_error: Some("refused".to_owned()),
+            updated_at: 1000,
+        }
+    }
+
+    // r[verify tls.chain.no-certificate]
+    #[test]
+    fn a_refused_hostname_is_asked_again_at_the_after_failure_cadence() {
+        let mut s = snap(vec![], vec![], vec![], vec![], vec![], "ops@x", 1000);
+        s.env = canopy_env("host.example.com", &["tamanu"], true);
+        s.chain_rows = vec![refused_row(None)];
+        let st = compute_state(&s, "host.example.com");
+        assert_eq!(chain_of(&st).act, ChainAct::Debounced { until: 2000 });
+
+        s.now = 2000;
+        let st = compute_state(&s, "host.example.com");
+        assert_eq!(chain_of(&st).act, ChainAct::AskCanopy);
+    }
+
+    // r[verify tls.canopy.collect]
+    #[test]
+    fn an_open_order_is_asked_about_whatever_the_cadence() {
+        let mut s = snap(vec![], vec![], vec![], vec![], vec![], "ops@x", 1000);
+        s.env = canopy_env("host.example.com", &["tamanu"], true);
+        s.chain_rows = vec![refused_row(Some(900))];
+        let st = compute_state(&s, "host.example.com");
+        assert_eq!(chain_of(&st).act, ChainAct::AskCanopy);
+    }
+
+    // r[verify tls.cert.force-retry]
+    #[test]
+    fn an_operator_retry_bypasses_the_cadence() {
+        let mut s = snap(
+            vec![],
+            vec![],
+            vec![],
+            vec![],
+            vec![TlsCertForceRetry {
+                hostname: "host.example.com".to_owned(),
+                requested_at: 990,
+            }],
+            "ops@x",
+            1000,
+        );
+        s.env = canopy_env("host.example.com", &["tamanu"], true);
+        s.chain_rows = vec![refused_row(None)];
+        let st = compute_state(&s, "host.example.com");
+        assert_eq!(chain_of(&st).act, ChainAct::AskCanopy);
+    }
+
+    // r[verify tls.cert.force-retry]
+    #[test]
+    fn a_queued_retry_starts_a_cycle_for_a_working_certificate() {
+        let mut cert = fake_cert("host.example.com", 7, 0, 300);
+        cert.origin = TlsCertOrigin::Canopy;
+        let mut s = snap(
+            vec![],
+            vec![cert],
+            vec![],
+            vec![],
+            vec![TlsCertForceRetry {
+                hostname: "host.example.com".to_owned(),
+                requested_at: 90,
+            }],
+            "ops@x",
+            100,
+        );
+        s.env = canopy_env("host.example.com", &["tamanu"], true);
+        let st = compute_state(&s, "host.example.com");
+        assert_eq!(chain_of(&st).act, ChainAct::AskCanopy);
+    }
+
+    // r[verify tls.chain.cycle]
+    #[test]
+    fn a_stored_certificate_outranks_one_the_proxy_holds() {
+        let mut cert = fake_cert("host.example.com", 7, 0, 3000);
+        cert.origin = TlsCertOrigin::Canopy;
+        let mut s = snap(vec![], vec![cert], vec![], vec![], vec![], "ops@x", 100);
+        s.env.proxy.insert(
+            "host.example.com".to_owned(),
+            ProxyHolding::Holds(ProxyCert {
+                not_before: Some(0),
+                not_after: Some(300),
+                issuer_kind: "local".to_owned(),
+                issuer: None,
+                self_signed: false,
+            }),
+        );
+        let st = compute_state(&s, "host.example.com");
+        assert_eq!(
+            chain_of(&st).serving,
+            Some(ServingSource::Store {
+                cert_id: 7,
+                origin: TlsCertOrigin::Canopy
+            }),
+            "the endpoint is consulted ahead of the proxy's own cache"
+        );
     }
 
     #[test]
@@ -1102,10 +1963,11 @@ mod tests {
                 1000,
             );
             let st = compute_state(&s, host);
-            assert!(
-                matches!(st.decision, Decision::Default),
-                "{host} should fall through to default (got {:?})",
-                st.decision
+            let c = chain_of(&st);
+            assert_eq!(
+                c.strategies,
+                vec![Strategy::InternalCa],
+                "{host} is the proxy's internal CA alone"
             );
             assert!(st.policy.is_none(), "{host} policy should be unresolved");
         }
@@ -1178,5 +2040,235 @@ mod tests {
             }
             d => panic!("unexpected: {d:?}"),
         }
+    }
+
+    fn held_by_proxy(not_before: i64, not_after: i64) -> ProxyHolding {
+        ProxyHolding::Holds(ProxyCert {
+            not_before: Some(not_before),
+            not_after: Some(not_after),
+            issuer_kind: "local".to_owned(),
+            issuer: None,
+            self_signed: false,
+        })
+    }
+
+    /// The endpoint must not serve a staged certificate before it starts, so
+    /// holding the proxy back as well would leave the hostname with nothing at
+    /// all for the whole staging window.
+    // r[verify tls.chain.proxy-gate]
+    // r[verify tls.cert.serve]
+    #[test]
+    fn a_hostname_waiting_for_a_staged_certificate_is_not_held_back() {
+        let now = 1_000_000;
+        let mut staged = fake_cert("host.example.com", 1, 0, now + 90 * 86_400);
+        staged.not_before = Some(now + 3_600);
+        let mut s = snap(vec![], vec![staged], vec![], vec![], vec![], "ops@x", now);
+        s.env = canopy_env("host.example.com", &["tamanu"], true);
+        s.env
+            .proxy
+            .insert("host.example.com".to_owned(), ProxyHolding::Nothing);
+
+        let st = compute_state(&s, "host.example.com");
+        let c = chain_of(&st);
+        assert_eq!(
+            c.proxy_from,
+            chain::ProxyFrom::Always,
+            "nothing is working on the hostname, so nothing is holding the proxy back"
+        );
+        assert_eq!(
+            super::super::serve::endpoint_gate(c),
+            super::super::serve::FallThrough::Allow,
+            "withholding here would fail every handshake until the staged certificate started"
+        );
+    }
+
+    // r[verify tls.chain.proxy-gate]
+    #[test]
+    fn the_proxy_is_held_to_the_point_canopy_falls_through() {
+        let mut s = snap(vec![], vec![], vec![], vec![], vec![], "ops@x", 100);
+        s.env = canopy_env("host.example.com", &["tamanu"], true);
+        s.env
+            .proxy
+            .insert("host.example.com".to_owned(), held_by_proxy(0, 600));
+        let st = compute_state(&s, "host.example.com");
+        let ratio = chain_of(&st).proxy_renewal_ratio().expect("held back");
+        // Renewal at 400, Canopy falls through at 500, a sixth of 600 left.
+        assert!((ratio - 100.0 / 600.0).abs() < 1e-9);
+    }
+
+    // r[verify tls.chain.proxy-gate]
+    #[test]
+    fn a_proxy_that_may_order_keeps_its_own_schedule() {
+        let mut s = snap(vec![], vec![], vec![], vec![], vec![], "ops@x", 100);
+        s.env = canopy_env("host.example.com", &[], true);
+        s.env
+            .proxy
+            .insert("host.example.com".to_owned(), held_by_proxy(0, 600));
+        let st = compute_state(&s, "host.example.com");
+        assert_eq!(chain_of(&st).proxy_renewal_ratio(), None);
+    }
+
+    // r[verify tls.strategy.canopy-only]
+    #[test]
+    fn a_canopy_only_hostname_holds_the_proxy_to_the_last_moment() {
+        let mut s = snap(
+            vec![TlsPolicyRow {
+                hostname: "host.example.com".to_owned(),
+                policy: TlsPolicy::Canopy,
+                updated_at: 0,
+            }],
+            vec![],
+            vec![],
+            vec![],
+            vec![],
+            "ops@x",
+            100,
+        );
+        s.env = canopy_env("host.example.com", &["tamanu"], true);
+        s.env
+            .proxy
+            .insert("host.example.com".to_owned(), held_by_proxy(0, 600));
+        let st = compute_state(&s, "host.example.com");
+        assert_eq!(chain_of(&st).proxy_renewal_ratio(), Some(MIN_RENEWAL_RATIO));
+    }
+
+    // r[verify tls.canopy.collect]
+    // r[verify tls.chain.refusal]
+    #[test]
+    fn a_renewal_canopy_refused_is_not_collected_on_every_tick() {
+        let mut cert = fake_cert("host.example.com", 7, 0, 300);
+        cert.origin = TlsCertOrigin::Canopy;
+        let mut s = snap(vec![], vec![cert], vec![], vec![], vec![], "ops@x", 250);
+        s.env = canopy_env("host.example.com", &["tamanu"], true);
+
+        // At the renewal point and inside Canopy's window, the held chain is
+        // collected on every tick.
+        let st = compute_state(&s, "host.example.com");
+        assert!(chain_of(&st).collect_canopy);
+
+        // Once Canopy refuses, the hostname has passed on and stays there.
+        s.chain_rows = vec![TlsChainRow {
+            hostname: "host.example.com".to_owned(),
+            row: chain::Row {
+                identity: chain::Identity {
+                    cert_id: Some(7),
+                    not_after: Some(300),
+                },
+                step: 1,
+                since: 240,
+                open_order_since: None,
+                retry_not_before: Some(3840),
+            },
+            last_error: Some("refused".to_owned()),
+            updated_at: 240,
+        }];
+        let st = compute_state(&s, "host.example.com");
+        let c = chain_of(&st);
+        assert!(!c.collect_canopy);
+        assert_eq!(c.act, ChainAct::Wait, "the proxy is responsible now");
+    }
+
+    // r[verify tls.canopy.revoked]
+    // r[verify tls.chain.return]
+    #[test]
+    fn a_replacement_canopy_has_not_answered_for_is_asked_about_again() {
+        // What a revocation leaves behind: the revoked certificate recorded as
+        // the one being replaced, the hostname passed to the proxy, and the
+        // replacement outstanding.
+        let mut s = snap(vec![], vec![], vec![], vec![], vec![], "ops@x", 250);
+        s.env = canopy_env("host.example.com", &["tamanu"], true);
+        s.chain_rows = vec![TlsChainRow {
+            hostname: "host.example.com".to_owned(),
+            row: chain::Row {
+                identity: chain::Identity {
+                    cert_id: Some(7),
+                    not_after: Some(300),
+                },
+                step: 1,
+                since: 240,
+                open_order_since: Some(240),
+                retry_not_before: None,
+            },
+            last_error: Some("revoked".to_owned()),
+            updated_at: 240,
+        }];
+
+        let st = compute_state(&s, "host.example.com");
+        let c = chain_of(&st);
+        assert_eq!(c.act, ChainAct::Wait, "the proxy serves the hostname now");
+        assert!(
+            c.collect_canopy,
+            "but the replacement Canopy has not answered for is still asked about"
+        );
+
+        // Canopy refuses the replacement: the hostname stays where it is until
+        // the next cycle rather than asking again for ever.
+        s.chain_rows[0].row.open_order_since = None;
+        s.chain_rows[0].row.retry_not_before = Some(3840);
+        assert!(!chain_of(&compute_state(&s, "host.example.com")).collect_canopy);
+        s.now = 4000;
+        assert!(
+            !chain_of(&compute_state(&s, "host.example.com")).collect_canopy,
+            "nor once the after-failure cadence has lapsed"
+        );
+    }
+
+    // r[verify tls.chain.cycle]
+    // r[verify tls.cert.force-retry]
+    #[test]
+    fn what_a_cycle_starting_now_replaces_is_one_answer() {
+        let mut cert = fake_cert("host.example.com", 7, 0, 300);
+        cert.origin = TlsCertOrigin::Canopy;
+
+        // Nothing running: a retry replaces what is serving, so that the cycle
+        // it records is the one the next decision resolves against.
+        let mut s = snap(vec![], vec![cert], vec![], vec![], vec![], "ops@x", 100);
+        s.env = canopy_env("host.example.com", &["tamanu"], true);
+        let idle = chain_of(&compute_state(&s, "host.example.com")).replacing();
+        assert_eq!(idle.cert_id, Some(7));
+
+        // A cycle running replaces what it was already replacing, whether or not
+        // that certificate is still being served.
+        s.now = 250;
+        let running = chain_of(&compute_state(&s, "host.example.com")).replacing();
+        assert_eq!(running.cert_id, Some(7));
+
+        // And a hostname that has never had one replaces nothing.
+        let bare = snap(vec![], vec![], vec![], vec![], vec![], "ops@x", 100);
+        assert_eq!(
+            chain_of(&compute_state(&bare, "host.example.com")).replacing(),
+            chain::Identity::NONE
+        );
+    }
+
+    // r[verify tls.chain.cycle]
+    #[test]
+    fn a_snapshot_without_the_chains_facts_decides_no_chain() {
+        let mut s = snap(vec![], vec![], vec![], vec![], vec![], "ops@x", 1000);
+        s.env = ChainEnv::none();
+
+        // A hostname that would be on the default chain, and one bound to the
+        // Canopy-only policy: neither is decided from facts nobody gathered.
+        assert!(matches!(
+            compute_state(&s, "host.example.com").decision,
+            Decision::Default
+        ));
+        s.policies = vec![TlsPolicyRow {
+            hostname: "host.example.com".to_owned(),
+            policy: TlsPolicy::Canopy,
+            updated_at: 0,
+        }];
+        assert!(matches!(
+            compute_state(&s, "host.example.com").decision,
+            Decision::Default
+        ));
+
+        // A bound ACME-DNS policy rests on the database alone, so the callers
+        // that read a snapshot only for what is stored still get its decisions.
+        s.policies = vec![policy_acme("*", "p")];
+        assert!(matches!(
+            compute_state(&s, "host.example.com").decision,
+            Decision::IssueNow { .. }
+        ));
     }
 }

@@ -458,6 +458,9 @@ pub struct Reconciler {
     /// lifetime, used to gate `cert_acquisition_failed` faults.
     // r[impl fault.cert-acquisition]
     warm_cert_first_seen: HashMap<String, std::time::Instant>,
+    /// What has been read of the stored certificates, so each is parsed once
+    /// and not on every tick.
+    leaf_facts: crate::runtime::tls::env::LeafFactsCache,
     /// Scratch state for the image reconcile phase (last-GC timestamp).
     // r[impl image.gc]
     image_phase_state: images::ImagePhaseState,
@@ -477,6 +480,12 @@ pub struct Reconciler {
     /// in the background.
     // r[impl tls.cert.eager-issuance]
     tls_coordinator: Option<Arc<crate::runtime::tls::issuance::Coordinator>>,
+    /// The renewal points last handed to the proxy, kept for the ticks on which
+    /// they cannot be worked out: the proxy configuration is rebuilt and applied
+    /// whole, so leaving them out would tell the proxy to renew whenever it
+    /// likes for as long as the facts were unreadable.
+    // r[impl tls.chain.proxy-gate]
+    last_renewal_ratios: std::collections::BTreeMap<String, f64>,
     /// Counter of consecutive resolver inline-health-check failures, owned
     /// by the reconciler so [`resolver::ensure_resolver_running`] can
     /// debounce transient probe misses across ticks instead of bouncing
@@ -588,11 +597,13 @@ impl Reconciler {
             shells,
             caddy_data_path: tokio::sync::OnceCell::new(),
             warm_cert_first_seen: HashMap::new(),
+            leaf_facts: Default::default(),
             image_phase_state: images::ImagePhaseState::new(),
             instance_gc,
             last_instance_gc: None,
             cert_endpoint_url,
             tls_coordinator,
+            last_renewal_ratios: Default::default(),
             resolver_health_fail_count: std::sync::atomic::AtomicU32::new(0),
             site_resolver,
             observe_failure_streaks: HashMap::new(),
@@ -815,6 +826,34 @@ fn desired_slices(apps: &[AppSnapshot]) -> BTreeMap<String, SliceSpec> {
     );
 
     desired
+}
+
+impl Reconciler {
+    /// How long the proxy is to wait before renewing each certificate it holds
+    /// that a strategy ahead of its own has a claim on.
+    ///
+    /// When the decisions cannot be made the last ones stand, rather than an
+    /// empty set that would release every hostname at once.
+    // r[impl tls.chain.proxy-gate]
+    fn resolve_renewal_ratios(&mut self) -> std::collections::BTreeMap<String, f64> {
+        // Asked every tick, and answered from the one state the coordinator
+        // holds for every chain decision: a second copy here would be a second
+        // age for the same decisions, and one no operator action could clear.
+        match self
+            .tls_coordinator
+            .as_ref()
+            .and_then(|coordinator| coordinator.proxy_renewal_ratios())
+        {
+            Some(ratios) => {
+                self.last_renewal_ratios = ratios.clone();
+                ratios
+            }
+            // Not worked out this time: the last ones stand, since the proxy's
+            // configuration is applied whole and leaving them out would tell it
+            // to renew whenever it liked.
+            None => self.last_renewal_ratios.clone(),
+        }
+    }
 }
 
 impl Reconciler {
@@ -1244,6 +1283,9 @@ impl Reconciler {
                 }
             });
 
+        // r[impl tls.chain.proxy-gate]
+        let renewal_ratios = self.resolve_renewal_ratios();
+
         // --- Compute nftables + proxy (sync, gated on caddy) ---
         let nft_and_proxy = caddy_addrs.map(|addrs| {
             let caddy_ip = addrs.v6;
@@ -1266,6 +1308,7 @@ impl Reconciler {
                 &self.node_prefix,
                 &*self.registry,
                 self.cert_endpoint_url.as_deref(),
+                &renewal_ratios,
             );
 
             (nft_build, proxy_build, caddy_ip)

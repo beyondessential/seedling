@@ -885,6 +885,15 @@ async fn main() {
 
     let shells = seedling_core::oi::shells::ShellRegistry::new();
 
+    // r[impl tls.cert.eager-issuance]
+    // The TLS issuance coordinator owns every ACME-DNS flow: the
+    // reconciler hands it the set of TLS-terminating hostnames each
+    // tick, and the OI / CLI route operator-driven retries through it
+    // too. The cert-serve endpoint stays a pure lookup, and asks it only
+    // whether the proxy may go on to order a certificate of its own.
+    let tls_coordinator =
+        seedling_core::runtime::tls::issuance::Coordinator::new(db.clone(), Arc::clone(&cipher));
+
     // r[impl tls.cert.serve]
     // Bind the cert-serving HTTP endpoint on the seedling-proxy bridge
     // gateway so only Caddy + host processes can reach it. Token-in-path
@@ -910,6 +919,7 @@ async fn main() {
         let (resolved_addr, handle) = match seedling_core::runtime::tls::serve::spawn_server(
             db_for_serve,
             cipher_for_serve,
+            Arc::clone(&tls_coordinator),
             token_for_serve,
             bind_addr,
         )
@@ -928,14 +938,6 @@ async fn main() {
         tracing::info!(url = %url, "tls cert serve endpoint listening");
         (Some(url), handle)
     };
-
-    // r[impl tls.cert.eager-issuance]
-    // The TLS issuance coordinator owns every ACME-DNS flow: the
-    // reconciler hands it the set of TLS-terminating hostnames each
-    // tick, and the OI / CLI route operator-driven retries through it
-    // too. The cert-serve endpoint stays a pure lookup.
-    let tls_coordinator =
-        seedling_core::runtime::tls::issuance::Coordinator::new(db.clone(), Arc::clone(&cipher));
 
     // r[impl tls.acme.renewal.auto]
     // Spawn the ACME-DNS renewal task. Each tick (default hourly) it
@@ -1043,6 +1045,12 @@ async fn main() {
         site_resolver: Some(Arc::clone(&site_resolver)),
         definition_registry: Arc::new(seedling_core::runtime::definition::fetch::OciRegistry::new()),
     });
+    // The coordinator and the cert endpoint were built before the state they
+    // read the facts of a strategy chain from, and have decided nothing until
+    // now.
+    tls_coordinator.set_environment(Arc::new(seedling_core::oi::state::OiEnvironment::new(
+        &oi_state,
+    )));
 
     // ---------------------------------------------------------------------------
     // Replay any interrupted lifecycle operation. Runs after OiState is built

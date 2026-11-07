@@ -30,7 +30,13 @@ use serde::Deserialize;
 use snafu::{ResultExt, Snafu};
 use subtle::ConstantTimeEq;
 
-use super::{TlsCertOrigin, TlsCertState, store};
+use super::{
+    TlsCertOrigin, TlsCertState,
+    chain::ProxyFrom,
+    issuance::Coordinator,
+    state::{ChainDecision, ProxyHolding},
+    store,
+};
 use crate::runtime::{db::DbHandle, secrets::Cipher};
 
 #[derive(Debug, Snafu)]
@@ -118,6 +124,9 @@ pub fn format_response(bundle: &CertBundle) -> String {
 struct ServeState {
     db: DbHandle,
     cipher: Arc<Cipher>,
+    /// Decides whether the proxy may go on to order a certificate of its own for
+    /// a hostname the runtime holds none for.
+    coordinator: Arc<Coordinator>,
     /// Hex-encoded shared token; clients embed this in the URL path.
     /// See [`load_or_create_token`].
     token: Arc<String>,
@@ -139,7 +148,12 @@ async fn handle(
     if token.as_bytes().ct_eq(state.token.as_bytes()).unwrap_u8() != 1 {
         return StatusCode::NOT_FOUND.into_response();
     }
-    let Some(hostname) = query.server_name.filter(|s| !s.is_empty()) else {
+    let Some(hostname) = query
+        .server_name
+        .as_deref()
+        .map(normalise_sni)
+        .filter(|s| !s.is_empty())
+    else {
         return (
             StatusCode::BAD_REQUEST,
             "missing server_name query parameter",
@@ -164,11 +178,118 @@ async fn handle(
         }
         // 204 No Content is Caddy's contract for "no cert; fall through to
         // the policy's regular issuer". Any other non-2xx would be treated
-        // as an error rather than a fall-through signal.
-        Ok(None) => StatusCode::NO_CONTENT.into_response(),
+        // as an error rather than a fall-through signal, so it is also what
+        // keeps the proxy from ordering when it must not.
+        Ok(None) => match fall_through(&state.coordinator, &hostname).await {
+            FallThrough::Allow => StatusCode::NO_CONTENT.into_response(),
+            FallThrough::Withhold => (
+                StatusCode::SERVICE_UNAVAILABLE,
+                "a certificate for this hostname is not to be ordered by the proxy yet",
+            )
+                .into_response(),
+        },
+        // The proxy consults this endpoint at each handshake, before its own
+        // cache, and reads anything but 200 or 204 as the handshake failing: an
+        // error answer takes down a certificate it holds. A lookup fails while
+        // a stored key cannot be decrypted as well as on a database that cannot
+        // be read, so answering 500 would serve nothing for the hostname for as
+        // long as that held. Nothing is known, and a fall-through is what this
+        // endpoint says when it knows nothing.
         Err(e) => {
             tracing::warn!(%hostname, error = %e, "cert serve lookup failed");
-            (StatusCode::INTERNAL_SERVER_ERROR, "lookup failed").into_response()
+            StatusCode::NO_CONTENT.into_response()
+        }
+    }
+}
+
+/// Whether the proxy may go on to its own issuer for a hostname the runtime
+/// holds no certificate for.
+// r[impl tls.chain.proxy-gate]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FallThrough {
+    Allow,
+    /// Answer so that the proxy neither orders nor serves anything for the
+    /// hostname.
+    Withhold,
+}
+
+/// What to tell the proxy for a hostname with no stored certificate.
+///
+/// The proxy is only held back where doing so costs nothing it has: asked again
+/// for a hostname it holds a certificate for, any answer but a fall-through
+/// takes that certificate out of service, so it is only withheld from a
+/// hostname the proxy holds nothing for. Where the proxy holds one, its own
+/// renewal is held back by the schedule in its configuration instead.
+// r[impl tls.chain.proxy-gate]
+pub fn endpoint_gate(c: &ChainDecision) -> FallThrough {
+    match (c.proxy_from, &c.proxy) {
+        (ProxyFrom::Always, _) => FallThrough::Allow,
+        (_, Some(ProxyHolding::Nothing)) => FallThrough::Withhold,
+        // The proxy holds a certificate, or what it holds could not be read, or
+        // was not looked at: none of these is licence to take it down.
+        (_, Some(ProxyHolding::Holds(_) | ProxyHolding::Unreadable) | None) => FallThrough::Allow,
+    }
+}
+
+/// The name a client sent as SNI, as the rest of the runtime holds a hostname.
+///
+/// A DNS name is case-insensitive and may carry a trailing dot for the root, but
+/// the hostname an ingress declares is matched exactly: by the policy patterns,
+/// by the managed-ingress set, and by the keys of the chain's facts. A client
+/// chooses what it sends, so a name that differed only in case would resolve as
+/// one no app declares, and the gate would let the proxy order for a hostname
+/// another strategy is responsible for.
+// r[impl tls.chain.proxy-gate]
+fn normalise_sni(name: &str) -> String {
+    name.trim_end_matches('.').to_ascii_lowercase()
+}
+
+/// [`endpoint_gate`] for the hostname, or [`FallThrough::Allow`] when it is on
+/// no chain or the decision could not be made.
+///
+/// Allowing is the answer to not knowing, because the other error is a
+/// hostname that serves nothing, and the cost of the first is one certificate
+/// ordered earlier than the chain would have liked.
+///
+/// Nothing is remembered here: the decision is served from the one state the
+/// coordinator holds for every hostname, which is where it is kept and the only
+/// place to forget it. A second memory of the same answer would be a second age
+/// for it, and one no operator action could clear.
+///
+/// Run on the blocking pool: when the state is stale it is rebuilt here, which
+/// walks the proxy's certificate cache and waits on the database thread, and
+/// every handshake that finds it stale waits on that one rebuild. Parked on an
+/// async worker, a burst of them would take the workers the rest of the daemon's
+/// requests run on.
+async fn fall_through(coordinator: &Arc<Coordinator>, hostname: &str) -> FallThrough {
+    let (coordinator, name) = (Arc::clone(coordinator), hostname.to_owned());
+    let decided = tokio::task::spawn_blocking(move || {
+        let gate = coordinator
+            .chain_decisions(Some(&name))
+            .and_then(|decisions| decisions.get(&name).map(endpoint_gate))
+            .unwrap_or(FallThrough::Allow);
+        if gate == FallThrough::Allow {
+            return FallThrough::Allow;
+        }
+        // The decision rests on what the proxy held when the facts were
+        // gathered, and it may have taken a certificate of its own since: it is
+        // let through the gate while this one is being made, and the next
+        // handshake is for the certificate that arrived. Withholding then takes
+        // that certificate down, so the fact it turns on is read now.
+        match coordinator.proxy_holding_now(&name) {
+            Some(ProxyHolding::Nothing) => FallThrough::Withhold,
+            // It holds one, or what it holds could not be read, or there was
+            // nothing to read it with: none of these is licence to take a
+            // certificate down.
+            _ => FallThrough::Allow,
+        }
+    })
+    .await;
+    match decided {
+        Ok(gate) => gate,
+        Err(e) => {
+            tracing::warn!(%hostname, error = %e, "the gate's decision did not complete");
+            FallThrough::Allow
         }
     }
 }
@@ -270,12 +391,14 @@ pub fn caddy_url(bind_addr: SocketAddr, token: &str) -> String {
 pub async fn spawn_server(
     db: DbHandle,
     cipher: Arc<Cipher>,
+    coordinator: Arc<Coordinator>,
     token: String,
     bind_addr: SocketAddr,
 ) -> std::io::Result<(SocketAddr, tokio::task::JoinHandle<()>)> {
     let app_state = ServeState {
         db,
         cipher,
+        coordinator,
         token: Arc::new(token),
     };
     let app = Router::new()
@@ -392,9 +515,12 @@ mod tests {
         insert_active(&db, &cipher, "served.example.com", key_pem);
 
         let token = "deadbeef".to_owned();
+        let cipher = Arc::new(cipher);
+        let coordinator = Coordinator::new(db.clone(), Arc::clone(&cipher));
         let (addr, _handle) = spawn_server(
             db,
-            Arc::new(cipher),
+            cipher,
+            coordinator,
             token.clone(),
             "127.0.0.1:0".parse().unwrap(),
         )
@@ -415,9 +541,12 @@ mod tests {
         // intended HTTP-01 fallback for hostnames without a stored cert.
         let (db, cipher) = fresh().await;
         let token = "deadbeef".to_owned();
+        let cipher = Arc::new(cipher);
+        let coordinator = Coordinator::new(db.clone(), Arc::clone(&cipher));
         let (addr, _handle) = spawn_server(
             db,
-            Arc::new(cipher),
+            cipher,
+            coordinator,
             token.clone(),
             "127.0.0.1:0".parse().unwrap(),
         )
@@ -436,9 +565,12 @@ mod tests {
         let key_pem = "-----BEGIN PRIVATE KEY-----\nKEY\n-----END PRIVATE KEY-----\n";
         insert_active(&db, &cipher, "host.example.com", key_pem);
 
+        let cipher = Arc::new(cipher);
+        let coordinator = Coordinator::new(db.clone(), Arc::clone(&cipher));
         let (addr, _handle) = spawn_server(
             db,
-            Arc::new(cipher),
+            cipher,
+            coordinator,
             "rightoken".to_owned(),
             "127.0.0.1:0".parse().unwrap(),
         )
@@ -493,5 +625,360 @@ mod tests {
         let body = format_response(&bundle);
         assert!(body.contains("-----END CERTIFICATE-----\n-----BEGIN PRIVATE KEY-----"));
         assert!(body.ends_with('\n'));
+    }
+
+    use std::collections::{BTreeMap, BTreeSet};
+
+    use crate::runtime::tls::{
+        env::Environment,
+        state::{ChainEnv, ManagedIngress, ProxyCert},
+    };
+
+    struct Facts {
+        offer_live: bool,
+        typed: bool,
+        proxy: Option<ProxyHolding>,
+        /// What a reading taken now says, where that differs from what the
+        /// gathered facts said. `None` means it says the same.
+        holds_now: Option<ProxyHolding>,
+        fail: bool,
+    }
+
+    impl Environment for Facts {
+        fn holding(&self, _hostname: &str) -> ProxyHolding {
+            self.holds_now
+                .clone()
+                .or_else(|| self.proxy.clone())
+                .unwrap_or(ProxyHolding::Unreadable)
+        }
+
+        fn gather(&self) -> Option<(Vec<ManagedIngress>, ChainEnv)> {
+            if self.fail {
+                return None;
+            }
+            let managed = vec![ManagedIngress {
+                app: seedling_protocol::names::AppName::new_unchecked("shop"),
+                ingress_name: "web".to_owned(),
+                hostname: "shop.example.com".to_owned(),
+            }];
+            let types: BTreeSet<String> = if self.typed {
+                BTreeSet::from(["tamanu".to_owned()])
+            } else {
+                BTreeSet::new()
+            };
+            let env = ChainEnv {
+                known: true,
+                offer_live: self.offer_live,
+                canopy_types: BTreeMap::from([("shop.example.com".to_owned(), types)]),
+                proxy: self
+                    .proxy
+                    .clone()
+                    .map(|p| BTreeMap::from([("shop.example.com".to_owned(), p)]))
+                    .unwrap_or_default(),
+            };
+            Some((managed, env))
+        }
+    }
+
+    async fn status_for(facts: Option<Facts>) -> u16 {
+        let (db, cipher) = fresh().await;
+        let cipher = Arc::new(cipher);
+        let coordinator = Coordinator::new(db.clone(), Arc::clone(&cipher));
+        if let Some(facts) = facts {
+            coordinator.set_environment(Arc::new(facts));
+        }
+        let (addr, _handle) = spawn_server(
+            db,
+            cipher,
+            coordinator,
+            "tok".to_owned(),
+            "127.0.0.1:0".parse().unwrap(),
+        )
+        .await
+        .unwrap();
+        let url = format!("http://{addr}/cert/tok/get-certificate?server_name=shop.example.com");
+        reqwest::get(&url).await.unwrap().status().as_u16()
+    }
+
+    fn typed(proxy: Option<ProxyHolding>) -> Facts {
+        Facts {
+            offer_live: true,
+            typed: true,
+            proxy,
+            holds_now: None,
+            fail: false,
+        }
+    }
+
+    // r[verify tls.chain.proxy-gate]
+    #[tokio::test(flavor = "multi_thread")]
+    async fn the_proxy_is_kept_from_ordering_while_canopy_is_responsible() {
+        assert_eq!(
+            status_for(Some(typed(Some(ProxyHolding::Nothing)))).await,
+            503,
+            "nothing is ordered, and nothing the proxy held is taken down"
+        );
+    }
+
+    // r[verify tls.chain.proxy-gate]
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_certificate_the_proxy_took_since_the_facts_were_gathered_is_not_taken_down() {
+        let held = ProxyHolding::Holds(ProxyCert {
+            not_before: Some(0),
+            not_after: Some(i64::MAX / 2),
+            issuer_kind: "acme-v02.api.letsencrypt.org".to_owned(),
+            issuer: None,
+            self_signed: false,
+        });
+        let mut facts = typed(Some(ProxyHolding::Nothing));
+        facts.holds_now = Some(held);
+        assert_eq!(
+            status_for(Some(facts)).await,
+            204,
+            "the gathered facts say it holds nothing, but a reading taken now says otherwise"
+        );
+    }
+
+    // r[verify tls.cert.serve]
+    // r[verify tls.chain.proxy-gate]
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_certificate_that_cannot_be_read_falls_through_rather_than_failing_the_handshake() {
+        let (db, cipher) = fresh().await;
+        // Stored active, with a key this runtime cannot decrypt.
+        let host = "broken.example.com".to_owned();
+        db.call(move |db_inner: &Db| {
+            insert_certificate(
+                db_inner,
+                NewCertificate {
+                    hostname: &host,
+                    requested_hostname: None,
+                    state: TlsCertState::Active,
+                    origin: TlsCertOrigin::Manual,
+                    cert_pem: Some(&crate::runtime::tls::test_support::self_signed_pem(&[
+                        &host,
+                    ])),
+                    csr_pem: None,
+                    key_ciphertext: &[0u8; 8],
+                    key_type: KeyType::EcdsaP256,
+                    metadata: CertMetadata {
+                        not_before: Some(jiff::Timestamp::now().as_second() - 86_400),
+                        not_after: Some(jiff::Timestamp::now().as_second() + 86_400),
+                        ..Default::default()
+                    },
+                    note: None,
+                    acme_account_id: None,
+                },
+            )
+            .unwrap()
+        });
+
+        let token = "deadbeef".to_owned();
+        let cipher = Arc::new(cipher);
+        let coordinator = Coordinator::new(db.clone(), Arc::clone(&cipher));
+        let (addr, _handle) = spawn_server(
+            db,
+            cipher,
+            coordinator,
+            token.clone(),
+            "127.0.0.1:0".parse().unwrap(),
+        )
+        .await
+        .unwrap();
+
+        let url =
+            format!("http://{addr}/cert/{token}/get-certificate?server_name=broken.example.com");
+        assert_eq!(
+            reqwest::get(&url).await.unwrap().status().as_u16(),
+            204,
+            "an error answer would fail every handshake for as long as the key stayed unreadable"
+        );
+    }
+
+    // r[verify tls.chain.proxy-gate]
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_certificate_the_proxy_holds_is_never_taken_down_to_hold_it_back() {
+        let held = ProxyHolding::Holds(ProxyCert {
+            not_before: Some(0),
+            not_after: Some(i64::MAX / 2),
+            issuer_kind: "local".to_owned(),
+            issuer: None,
+            self_signed: true,
+        });
+        assert_eq!(status_for(Some(typed(Some(held)))).await, 204);
+        assert_eq!(
+            status_for(Some(typed(Some(ProxyHolding::Unreadable)))).await,
+            204,
+            "what could not be read is not read as absent"
+        );
+        assert_eq!(
+            status_for(Some(typed(None))).await,
+            204,
+            "nor is what was not looked at"
+        );
+    }
+
+    // r[verify tls.chain.proxy-gate]
+    // r[verify tls.chain.no-certificate]
+    #[tokio::test(flavor = "multi_thread")]
+    async fn the_proxy_is_let_order_once_it_is_responsible() {
+        let mut facts = typed(Some(ProxyHolding::Nothing));
+        facts.offer_live = false;
+        assert_eq!(
+            status_for(Some(facts)).await,
+            204,
+            "with no offer to ask, the hostname goes straight to the proxy"
+        );
+        let mut untyped = typed(Some(ProxyHolding::Nothing));
+        untyped.typed = false;
+        assert_eq!(status_for(Some(untyped)).await, 204);
+    }
+
+    // r[verify tls.chain.proxy-gate]
+    #[tokio::test(flavor = "multi_thread")]
+    async fn not_knowing_is_never_a_reason_to_withhold() {
+        assert_eq!(status_for(None).await, 204, "no environment yet");
+        let mut failing = typed(Some(ProxyHolding::Nothing));
+        failing.fail = true;
+        assert_eq!(
+            status_for(Some(failing)).await,
+            204,
+            "facts that could not be gathered"
+        );
+    }
+
+    // r[verify tls.chain.proxy-gate]
+    #[tokio::test(flavor = "multi_thread")]
+    async fn handshakes_for_many_hostnames_read_the_world_once() {
+        struct Counting(std::sync::atomic::AtomicUsize, Facts);
+        impl Environment for Counting {
+            fn holding(&self, hostname: &str) -> ProxyHolding {
+                self.1.holding(hostname)
+            }
+
+            fn gather(&self) -> Option<(Vec<ManagedIngress>, ChainEnv)> {
+                self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                self.1.gather()
+            }
+        }
+        let (db, cipher) = fresh().await;
+        let cipher = Arc::new(cipher);
+        let coordinator = Coordinator::new(db.clone(), Arc::clone(&cipher));
+        let counting = Arc::new(Counting(
+            std::sync::atomic::AtomicUsize::new(0),
+            typed(Some(ProxyHolding::Nothing)),
+        ));
+        coordinator.set_environment(counting.clone());
+
+        // Different names, all decided against the one state.
+        for name in ["shop.example.com", "a.example.com", "b.example.com"] {
+            assert_eq!(
+                fall_through(&coordinator, name).await,
+                if name == "shop.example.com" {
+                    FallThrough::Withhold
+                } else {
+                    FallThrough::Allow
+                }
+            );
+        }
+        assert_eq!(
+            counting.0.load(std::sync::atomic::Ordering::SeqCst),
+            1,
+            "one reading of the world serves every hostname decided against it"
+        );
+
+        coordinator.forget_chain_state();
+        let _ = fall_through(&coordinator, "shop.example.com").await;
+        assert_eq!(
+            counting.0.load(std::sync::atomic::Ordering::SeqCst),
+            2,
+            "and a caller that has just written something gets a fresh one"
+        );
+
+        // The renewal points the proxy is given come from the same reading, so
+        // forgetting it reaches them too.
+        let _ = coordinator.proxy_renewal_ratios();
+        assert_eq!(
+            counting.0.load(std::sync::atomic::Ordering::SeqCst),
+            2,
+            "one state answers the gate and the proxy's renewal points alike"
+        );
+    }
+
+    // r[verify tls.chain.proxy-gate]
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_burst_of_handshakes_decides_once() {
+        // Count how often the facts are gathered.
+        struct Counting(std::sync::atomic::AtomicUsize, Facts);
+        impl Environment for Counting {
+            fn holding(&self, hostname: &str) -> ProxyHolding {
+                self.1.holding(hostname)
+            }
+
+            fn gather(&self) -> Option<(Vec<ManagedIngress>, ChainEnv)> {
+                self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                self.1.gather()
+            }
+        }
+        let (db, cipher) = fresh().await;
+        let cipher = Arc::new(cipher);
+        let coordinator = Coordinator::new(db.clone(), Arc::clone(&cipher));
+        let counting = Arc::new(Counting(
+            std::sync::atomic::AtomicUsize::new(0),
+            typed(Some(ProxyHolding::Nothing)),
+        ));
+        coordinator.set_environment(counting.clone());
+        let (addr, _handle) = spawn_server(
+            db,
+            cipher,
+            coordinator,
+            "tok".to_owned(),
+            "127.0.0.1:0".parse().unwrap(),
+        )
+        .await
+        .unwrap();
+        let url = format!("http://{addr}/cert/tok/get-certificate?server_name=shop.example.com");
+        for _ in 0..5 {
+            assert_eq!(reqwest::get(&url).await.unwrap().status().as_u16(), 503);
+        }
+        assert_eq!(
+            counting.0.load(std::sync::atomic::Ordering::SeqCst),
+            1,
+            "a handshake decides against the state already read, not against a new one"
+        );
+    }
+
+    // r[verify tls.chain.proxy-gate]
+    #[test]
+    fn a_name_is_taken_as_the_runtime_holds_it_however_a_client_sent_it() {
+        assert_eq!(normalise_sni("SHOP.Example.COM"), "shop.example.com");
+        assert_eq!(normalise_sni("shop.example.com."), "shop.example.com");
+        assert_eq!(normalise_sni("shop.example.com"), "shop.example.com");
+        assert_eq!(normalise_sni(""), "");
+    }
+
+    // r[verify tls.chain.proxy-gate]
+    #[tokio::test(flavor = "multi_thread")]
+    async fn the_gate_is_not_evaded_by_the_case_a_client_sends() {
+        let (db, cipher) = fresh().await;
+        let cipher = Arc::new(cipher);
+        let coordinator = Coordinator::new(db.clone(), Arc::clone(&cipher));
+        coordinator.set_environment(Arc::new(typed(Some(ProxyHolding::Nothing))));
+        let (addr, _handle) = spawn_server(
+            db,
+            cipher,
+            coordinator,
+            "tok".to_owned(),
+            "127.0.0.1:0".parse().unwrap(),
+        )
+        .await
+        .unwrap();
+        for name in ["shop.example.com", "SHOP.Example.com", "shop.example.com."] {
+            let url = format!("http://{addr}/cert/tok/get-certificate?server_name={name}");
+            assert_eq!(
+                reqwest::get(&url).await.unwrap().status().as_u16(),
+                503,
+                "{name} is the hostname Canopy is responsible for"
+            );
+        }
     }
 }

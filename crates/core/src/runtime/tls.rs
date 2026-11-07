@@ -14,7 +14,10 @@
 //! re-bootstrapping the account on every restart.
 
 pub mod acme;
+pub mod canopy;
+pub mod chain;
 pub mod dns;
+pub mod env;
 pub mod expiring;
 pub mod issuance;
 pub mod keypair;
@@ -139,6 +142,10 @@ pub enum TlsCertState {
     Active,
     Superseded,
     Failed,
+    /// Canopy reported the certificate revoked or its key condemned. Never
+    /// served and never counted as usable.
+    // r[impl tls.canopy.revoked]
+    Revoked,
 }
 
 impl TlsCertState {
@@ -148,6 +155,7 @@ impl TlsCertState {
             Self::Active => "active",
             Self::Superseded => "superseded",
             Self::Failed => "failed",
+            Self::Revoked => "revoked",
         }
     }
 
@@ -157,6 +165,7 @@ impl TlsCertState {
             "active" => Some(Self::Active),
             "superseded" => Some(Self::Superseded),
             "failed" => Some(Self::Failed),
+            "revoked" => Some(Self::Revoked),
             _ => None,
         }
     }
@@ -172,6 +181,9 @@ pub enum TlsCertOrigin {
     /// hostnames that match a discovered Tailscale site ingress.
     // r[impl ingress.site.tailscale]
     Tailscale,
+    /// Issued by Canopy against a key the runtime holds.
+    // r[impl tls.canopy.serve]
+    Canopy,
 }
 
 impl TlsCertOrigin {
@@ -181,6 +193,7 @@ impl TlsCertOrigin {
             Self::Csr => "csr",
             Self::AcmeDns => "acme_dns",
             Self::Tailscale => "tailscale",
+            Self::Canopy => "canopy",
         }
     }
 
@@ -190,6 +203,7 @@ impl TlsCertOrigin {
             "csr" => Some(Self::Csr),
             "acme_dns" => Some(Self::AcmeDns),
             "tailscale" => Some(Self::Tailscale),
+            "canopy" => Some(Self::Canopy),
             _ => None,
         }
     }
@@ -220,7 +234,7 @@ impl KeyType {
 }
 
 /// Per-hostname operator policy. Hostnames absent from `tls_policies` use
-/// the runtime default (ACME HTTP-01 via Caddy). Manual certs do not
+/// the default chain: Canopy, then ACME HTTP-01 via Caddy. Manual certs do not
 /// require a per-hostname policy: they auto-bind by SAN coverage at
 /// resolution time (see [`store::find_active_for_hostname`]).
 // r[impl tls.strategy.acme-dns]
@@ -236,12 +250,29 @@ pub enum TlsPolicy {
     /// site ingress.
     // r[impl ingress.site.tailscale]
     Tailscale,
+    /// Canopy is the chain's only strategy: the hostname never passes to
+    /// HTTP-01 or the proxy's internal CA.
+    // r[impl tls.strategy.canopy-only]
+    Canopy,
 }
 
 #[derive(Debug, Clone)]
 pub struct TlsPolicyRow {
     pub hostname: String,
     pub policy: TlsPolicy,
+    pub updated_at: i64,
+}
+
+/// A hostname's recorded position in its strategy chain; see
+/// [`chain::Row`] for what the position means and why it is only sometimes
+/// recorded.
+// r[impl tls.chain.ladder]
+#[derive(Debug, Clone)]
+pub struct TlsChainRow {
+    pub hostname: String,
+    pub row: chain::Row,
+    /// Why the responsible strategy last failed to produce a certificate.
+    pub last_error: Option<String>,
     pub updated_at: i64,
 }
 

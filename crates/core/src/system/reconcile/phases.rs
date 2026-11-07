@@ -353,6 +353,7 @@ pub(super) fn compute_proxy_config(
     node_prefix: &Ipv6Net,
     registry: &dyn InstanceRegistry,
     cert_endpoint_url: Option<&str>,
+    renewal_ratios: &std::collections::BTreeMap<String, f64>,
 ) -> ProxyBuildResult {
     let mut all_pairs: Vec<(
         AppName,
@@ -461,6 +462,7 @@ pub(super) fn compute_proxy_config(
     );
     crate::system::translate::proxy::augment_with_warm_certs(&mut config, all_warm);
     config.cert_endpoint_url = cert_endpoint_url.map(str::to_owned);
+    config.renewal_ratios = renewal_ratios.clone();
 
     ProxyBuildResult {
         config,

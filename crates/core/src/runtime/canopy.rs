@@ -25,6 +25,7 @@ use crate::{
 
 pub mod absent;
 mod applications;
+pub mod certificates;
 pub mod store;
 
 pub use store::{CanopySettings, get_settings, set_enabled, set_server_id};
@@ -62,7 +63,8 @@ enum Outcome {
     /// Canopy access is off, or nothing is offering to carry the request. Not a
     /// failure: there is nothing to report through and nothing wrong.
     Skipped,
-    Reported,
+    /// Reported, with what Canopy said this server holds.
+    Reported(Box<bestool_canopy::schema::Entitlements>),
     Failed(String),
 }
 
@@ -89,14 +91,27 @@ pub fn spawn(state: Arc<OiState>) -> tokio::task::JoinHandle<()> {
 async fn report(state: &Arc<OiState>) -> Result<(), String> {
     // Before the skip check: the fault is for the host that cannot report.
     absent::tick(state);
-    match report_once(state).await {
+    let outcome = report_once(state).await;
+    // Whatever the outcome: these faults describe hostnames, and a hostname's
+    // condition does not wait for the relay. One that was filed has to clear when
+    // its policy goes or its app gains a type, whether or not an offer is live.
+    match &outcome {
+        // The answer carries what Canopy holds for this server, which is what
+        // certificate requests are made against.
+        Outcome::Reported(names) => {
+            let tick = certificates::run(state, names).await;
+            certificates::sync_faults_after(state, tick);
+        }
+        Outcome::Skipped | Outcome::Failed(_) => certificates::sync_all_faults(state),
+    }
+    match outcome {
         Outcome::Skipped => {
             // Nothing is expected of an instance with no provider, so a fault
             // left over from when there was one would misdescribe it.
             clear_fault(state);
             Ok(())
         }
-        Outcome::Reported => {
+        Outcome::Reported(_) => {
             record(state, true, None);
             clear_fault(state);
             Ok(())
@@ -144,7 +159,7 @@ async fn report_once(state: &Arc<OiState>) -> Outcome {
         // whichever source owns backups on a host, which is never this one, so it
         // arrives empty and is discarded rather than being read as "nothing to
         // do" and acted on.
-        Ok(_) => Outcome::Reported,
+        Ok(response) => Outcome::Reported(Box::new(response.names)),
         Err(e) => {
             // The cached identity is the most likely thing to be wrong when a
             // report is rejected, so drop it and let the next attempt re-resolve

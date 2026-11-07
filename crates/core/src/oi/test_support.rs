@@ -97,6 +97,13 @@ impl TestOi {
             definition_registry: Arc::clone(&registry) as _,
         });
 
+        // As the daemon does once its state exists: without it the coordinator
+        // can make no chain decision, and a test would see the answer given to
+        // not knowing rather than the one the daemon gives.
+        state
+            .tls_coordinator
+            .set_environment(Arc::new(crate::oi::state::OiEnvironment::new(&state)));
+
         let ctx = RequestCtx {
             events: EventSenderWithActor::new(event_tx, actor),
         };

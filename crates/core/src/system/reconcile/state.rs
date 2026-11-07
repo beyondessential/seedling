@@ -18,6 +18,7 @@ use crate::{
         },
         identity::{InstanceId, ResourceInstance},
         lifecycle::LifecycleState,
+        tls::env::{RuntimeHoldings, runtime_holdings},
     },
 };
 
@@ -142,6 +143,7 @@ impl Reconciler {
 
     // r[impl observe.ingress.certs]
     // r[impl fault.cert-acquisition]
+    // r[impl tls.canopy.serve]
     pub(super) async fn observe_warm_certs(&mut self, apps: &[AppSnapshot]) {
         let targets = super::phases::warm_cert_targets(apps, &*self.registry);
         if targets.is_empty() {
@@ -149,7 +151,9 @@ impl Reconciler {
             return;
         }
 
-        // Lazily resolve the Caddy data volume mount path on the host.
+        // Lazily resolve the Caddy data volume mount path on the host. Without
+        // it the proxy's own certificates cannot be seen, but a certificate the
+        // runtime holds can still be, so this is not a reason to see nothing.
         let path = match self
             .caddy_data_path
             .get_or_try_init(|| async {
@@ -160,10 +164,10 @@ impl Reconciler {
             })
             .await
         {
-            Ok(p) => p.clone(),
+            Ok(p) => Some(p.clone()),
             Err(e) => {
                 warn!(error = %e, "warm_certs: failed to resolve Caddy data volume mount path");
-                return;
+                None
             }
         };
 
@@ -179,7 +183,35 @@ impl Reconciler {
         self.warm_cert_first_seen
             .retain(|h, _| active_hostnames.contains(h));
 
-        let observations = crate::system::caddy::observe_certs(&path, &targets);
+        let mut observations = match &path {
+            Some(path) => crate::system::caddy::observe_certs(path, &targets),
+            None => Vec::new(),
+        };
+
+        // A certificate the runtime holds is served to the proxy by the daemon
+        // and is never written to the proxy's own cache, so the cache cannot
+        // say whether the hostname has one. Ask the store the proxy is served
+        // from, which also applies the validity window the endpoint does.
+        let hostnames: Vec<String> = active_hostnames.iter().cloned().collect();
+        let leaf_facts = self.leaf_facts.clone();
+        let RuntimeHoldings { served, ordering } = self
+            .db
+            .call(move |db| runtime_holdings(db, &hostnames, &leaf_facts));
+        // What could not be read is not what is not held: the deadline below
+        // is for a certificate that is not being acquired, and a store that
+        // could not be asked says nothing of that.
+        let runtime_known = served.is_some() && ordering.is_some();
+        let served = served.unwrap_or_default();
+        let ordering = ordering.unwrap_or_default();
+        for (instance, hostname) in &targets {
+            if served.contains(hostname) {
+                observations.push((
+                    instance.clone(),
+                    "cert_valid",
+                    serde_json::json!({ "hostname": hostname }),
+                ));
+            }
+        }
 
         let observed_hostnames: std::collections::BTreeSet<String> = observations
             .iter()
@@ -195,6 +227,18 @@ impl Reconciler {
             if observed_hostnames.contains(hostname) {
                 self.warm_cert_first_seen.remove(hostname);
                 self.clear_resource_fault(instance, "cert_acquisition_failed");
+            } else if path.is_none() || !runtime_known {
+                // The proxy's cache, or the runtime's own store, could not be
+                // read, so whether a certificate is held for this hostname is
+                // unknown. Unknown is not absent, and faulting a hostname that is
+                // being served perfectly well would report a transient read
+                // failure as the hostname's problem.
+                continue;
+            } else if ordering.contains(hostname) {
+                // An order that is open is an acquisition in progress, and it
+                // can take longer than the proxy's own ordering does: the
+                // deadline is for an acquisition that is not happening.
+                continue;
             } else if let Some(first) = self.warm_cert_first_seen.get(hostname)
                 && now.duration_since(*first) >= CERT_ACQUISITION_DEADLINE
             {

@@ -772,7 +772,7 @@ export interface TlsDnsProvidersResponse {
   providers: TlsDnsProvider[];
 }
 
-export type TlsStrategy = "acme_dns" | "manual";
+export type TlsStrategy = "acme_dns" | "manual" | "canopy";
 
 export interface TlsPolicyAcmeDns {
   hostname: string;
@@ -781,14 +781,26 @@ export interface TlsPolicyAcmeDns {
   updated_at: number;
 }
 
-export type TlsPolicy = TlsPolicyAcmeDns;
+/** The Canopy-only policy: Canopy is the hostname's only source. */
+export interface TlsPolicyCanopy {
+  hostname: string;
+  strategy: "canopy";
+  updated_at: number;
+}
+
+export type TlsPolicy = TlsPolicyAcmeDns | TlsPolicyCanopy;
 
 export interface TlsPoliciesResponse {
   policies: TlsPolicy[];
 }
 
-export type TlsCertState = "csr_pending" | "active" | "superseded" | "failed";
-export type TlsCertOrigin = "manual" | "csr" | "acme_dns";
+export type TlsCertState =
+  | "csr_pending"
+  | "active"
+  | "superseded"
+  | "failed"
+  | "revoked";
+export type TlsCertOrigin = "manual" | "csr" | "acme_dns" | "canopy";
 export type TlsKeyType = "ecdsa_p256";
 
 export interface TlsCertificate {
@@ -872,7 +884,24 @@ export type TlsHostnamePolicy =
     dns_provider: string;
     pattern: string;
     is_wildcard_match: boolean;
+  }
+  | {
+    strategy: "canopy";
+    pattern: string;
+    is_wildcard_match: boolean;
   };
+
+/** The strategy responsible for a hostname's certificate within its chain. */
+export type TlsChainStrategy = "canopy" | "acme_http01" | "internal_ca";
+
+/** Where a hostname stands in its strategy chain. */
+export interface TlsHostnameChain {
+  responsible: TlsChainStrategy;
+  /** When the next strategy takes over, if there is one and it is known. */
+  fall_through_at: number | null;
+  /** When the next cycle starts, for a hostname holding a usable certificate. */
+  next_cycle_at: number | null;
+}
 
 export interface TlsHostnameActiveCert {
   /** Null when the cert is owned by Caddy rather than the runtime DB. */
@@ -909,6 +938,11 @@ export type TlsHostnameLastIssuance =
     cert_id: number | null;
   }
   | {
+    kind: "canopy";
+    at: number;
+    cert_id: number | null;
+  }
+  | {
     kind: "caddy";
     at: number | null;
     cert_id: null;
@@ -923,6 +957,7 @@ export interface TlsHostnameView {
   apps: string[];
   policy: TlsHostnamePolicy;
   status: TlsHostnameStatus;
+  chain: TlsHostnameChain | null;
   active_cert: TlsHostnameActiveCert | null;
   last_issuance: TlsHostnameLastIssuance | null;
   last_error: string | null;

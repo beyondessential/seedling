@@ -496,7 +496,7 @@ Behaviour:
 app.canopy_type("tamanu-central");
 ```
 
-Seedling then reports the app to Canopy as an application of that type, keyed by the app's name, with its status as health and its faults as detail. A type is lowercase letters and digits in hyphen-separated segments, beginning with a letter; anything else throws. It is declared at the top level only, never inside an action. An app that does not call it is not reported as an application. See [Deploying](deploying.md#reaching-canopy-through-bestool) for what reporting needs on the host.
+Seedling then reports the app to Canopy as an application of that type, keyed by the app's name, with its status as health and its faults as detail. A type is lowercase letters and digits in hyphen-separated segments, beginning with a letter; anything else throws. It is declared at the top level only, never inside an action. An app that does not call it is not reported as an application. A type is also what lets Seedling ask Canopy for the certificates of the app's ingress hostnames (see [Deploying](deploying.md#certificates-from-canopy)). See [Deploying](deploying.md#reaching-canopy-through-bestool) for what reporting needs on the host.
 
 ## Definition bundles
 

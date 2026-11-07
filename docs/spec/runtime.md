@@ -1619,9 +1619,13 @@ This section defines the available strategies and their contracts.
 The BSL surface is intentionally strategy-agnostic: scripts declare only that an ingress wants TLS for a hostname, never how the certificate is acquired.
 
 > r[tls.strategy.default]
-> When no operator-defined strategy applies to a hostname declared by a TLS-terminating ingress, the runtime must request a public ACME certificate using the HTTP-01 challenge.
+> When no operator-defined strategy applies to a hostname declared by a TLS-terminating ingress, its certificate comes from the first strategy in the default chain that is available for it.
+> The chain is [Canopy](#r--tls.strategy.canopy), then a public ACME certificate using the HTTP-01 challenge.
+> Canopy is in the chain only for a hostname it [applies to](#r--tls.strategy.canopy); for any other public hostname the chain is HTTP-01 alone.
 > This is the default and applies to any hostname not bound to a different strategy.
-> For hostnames that no public CA can issue for — IP literals, single-label hostnames, and the `.localhost`, `.local`, `.internal` TLDs (the same set excluded from wildcard auto-binding in [tls.policy.wildcard](#r--tls.policy.wildcard)) — the runtime must instead use the proxy's internal CA, producing a self-signed certificate that the proxy serves directly without contacting any external authority.
+> For hostnames that no public CA can issue for — IP literals, single-label hostnames, and the `.localhost`, `.local`, `.internal` TLDs (the same set excluded from wildcard auto-binding in [tls.policy.wildcard](#r--tls.policy.wildcard)) — the chain is the proxy's internal CA alone, producing a self-signed certificate that the proxy serves directly without contacting any external authority.
+> Canopy is never asked for such a hostname.
+> A stored certificate that covers the hostname is not a step in the chain: it serves for as long as it ranks first under [tls.strategy.manual](#r--tls.strategy.manual), and the chain runs when it needs replacing, per [tls.chain.cycle](#r--tls.chain.cycle).
 
 > r[tls.strategy.acme-dns]
 > Operators may bind a hostname or wildcard pattern to a [DNS provider](#r--tls.dns-provider.lifecycle); the runtime must drive ACME for any matching hostname using the DNS-01 challenge against the bound provider.
@@ -1664,7 +1668,7 @@ The BSL surface is intentionally strategy-agnostic: scripts declare only that an
 > r[tls.cert.eager-issuance]
 > The runtime — not the proxy — must drive every certificate-issuance attempt for runtime-managed strategies.
 > The reconciler must hand each TLS-terminating ingress hostname to the issuance coordinator on every tick.
-> The coordinator must dedup in-flight requests, skip hostnames whose policy is not `acme_dns` or that already have an active certificate, debounce after a recent failure, and run the rest in the background.
+> The coordinator must dedup in-flight requests, skip hostnames whose policy is neither `acme_dns` nor `canopy` and that are not on the default chain, skip hostnames that already have an active certificate and are not due under [tls.chain.cycle](#r--tls.chain.cycle), debounce after a recent failure, and run the rest in the background.
 > The cert-serving endpoint must remain a pure lookup: it must never trigger an issuance flow itself (see [tls.cert.serve](#r--tls.cert.serve)).
 
 > r[tls.cert.force-retry]
@@ -1722,7 +1726,7 @@ The BSL surface is intentionally strategy-agnostic: scripts declare only that an
 
 > r[tls.cert.metadata]
 > For every hostname declared by a TLS-terminating ingress, the runtime must surface to the operator interface: the active strategy, the certificate's issuer (when known), `notBefore`, `notAfter`, and the acquisition status as defined in [observe.ingress.certs](#r--observe.ingress.certs).
-> Metadata for default-strategy (ACME HTTP-01) certificates is derived from the proxy's certificate cache; metadata for runtime-managed certificates (ACME DNS-01, manual, CSR) is derived from the runtime's own certificate store.
+> Metadata for certificates the proxy obtained itself (ACME HTTP-01 and its internal CA) is derived from the proxy's certificate cache; metadata for runtime-managed certificates (Canopy, ACME DNS-01, manual, CSR) is derived from the runtime's own certificate store.
 
 > r[tls.cert.hostname-view]
 > The runtime must expose a per-hostname rollup, keyed by the set of TLS-terminating ingress hostnames currently declared by apps the runtime is actively managing — i.e. apps in any phase except `NotInstalled` — combining for each hostname the originating app(s), the resolved policy, the active certificate (if any), the latest issuance attempt's outcome and error, any operator retry block or queued operator retry, and an expected next-issuance time.
@@ -1734,7 +1738,8 @@ The BSL surface is intentionally strategy-agnostic: scripts declare only that an
 > r[tls.cert.serve]
 > For runtime-managed certificates (ACME DNS-01, manual, and CSR-derived), the runtime must deliver certificate and key material to the ingress proxy through a mechanism that does not require including private key material in the proxy's persistent configuration or its restart-replay cache.
 > The proxy must be able to obtain the appropriate certificate by SNI hostname at TLS handshake time.
-> The serving endpoint must be a pure lookup: a stored cert returns 200 with PEM, an unknown hostname returns 204 (no content), and the runtime must never trigger an issuance flow from this path. Issuance is the issuance coordinator's job (see [tls.cert.eager-issuance](#r--tls.cert.eager-issuance)).
+> The serving endpoint must be a pure lookup: a stored cert returns 200 with PEM, an unknown hostname returns 204 (no content), and the runtime must never trigger an issuance flow from this path.
+> A hostname whose stored certificate cannot be read, because the store could not be queried or the key it holds cannot be decrypted, returns 204 as well: the proxy reads anything else as the handshake failing, so an error answer would stop the hostname serving altogether for as long as the condition held. Issuance is the issuance coordinator's job (see [tls.cert.eager-issuance](#r--tls.cert.eager-issuance)).
 > A certificate outside its validity window must not be served: neither one whose `notAfter` has passed, nor one whose `notBefore` has not yet arrived, and neither may take precedence over a stored certificate that is currently valid and covers the hostname.
 > Storing a certificate ahead of its `notBefore` is how an operator stages a cutover (see [tls.cert.validation.expired](#r--tls.cert.validation.expired)), so serving it early would defeat the reason it was accepted.
 > A stored certificate whose expiry is unrecorded is not treated as expired, since that cannot be distinguished from one that has not been parsed.
@@ -1764,7 +1769,124 @@ The BSL surface is intentionally strategy-agnostic: scripts declare only that an
 > r[tls.fault.expiring]
 > For certificates that the runtime cannot autonomously renew (manual uploads and CSR-derived certificates), if `notAfter` is within fourteen days, the runtime must file a fault of kind `cert_expiring_soon` against each ingress that uses the affected hostname, identifying the hostname, the strategy, and the expiry timestamp.
 > ACME-issued certificates are exempt — the proxy is responsible for autonomous renewal.
+> Canopy-issued certificates are exempt too: renewal is the chain's job, and a chain that cannot replace one is reported by [tls.canopy.fault](#r--tls.canopy.fault).
 > The fault is cleared automatically when a non-expiring certificate replaces the expiring one, or when no ingress references the hostname.
+
+## Strategy chains
+
+A strategy chain is the ordered list of strategies that may supply a hostname's certificate.
+The default chain is defined by [tls.strategy.default](#r--tls.strategy.default).
+An operator policy names a chain of one.
+
+> r[tls.chain.cycle]
+> A chain runs in cycles.
+> A cycle starts when a hostname has no usable certificate, and when the certificate serving it, of whatever origin, reaches its renewal point: the start of the CA's suggested renewal window when it supplied one, otherwise the moment a third of the certificate's lifetime remains.
+> A usable certificate is one inside its validity window that has not been revoked.
+> A hostname holding a usable certificate that has not reached its renewal point is left alone, whatever its chain would now resolve to.
+> A change in what is available — an offer connecting, an app gaining a Canopy type, a policy being set — does not start a cycle on its own, since replacing a working certificate early spends the issuing authority's capacity for no gain and leaves no fallback if the new source then fails.
+> A stored certificate that the runtime cannot renew by itself, such as a manual upload, starts a cycle at its renewal point in the same way.
+> It keeps serving until a replacement outranks it.
+
+> r[tls.chain.ladder]
+> Within a cycle the chain's strategies are tried in order, and the strategy currently responsible keeps working on the hostname until it succeeds, refuses, or reaches its fall-through point.
+> The first strategy is responsible from the start of the cycle.
+> A strategy's fall-through point is halfway between the moment it became responsible and the expiry of the certificate being replaced, and the next strategy becomes responsible at that point.
+> With a renewal point two thirds of the way through a certificate's lifetime, the first strategy falls through at five sixths and the second at eleven twelfths.
+> The last strategy in a chain has no fall-through point.
+> The rule is the same for every chain, so that adding a strategy to one does not require a new schedule.
+
+> r[tls.chain.refusal]
+> A strategy that refuses a hostname that has a certificate to replace passes it to the next strategy at once, without waiting for its fall-through point.
+> A hostname with no certificate to replace is the exception, covered by [tls.chain.no-certificate](#r--tls.chain.no-certificate).
+> Only a refusal the strategy's authority has actually given counts.
+> A failure, a timeout, an authority that could not be reached, and a strategy that could not be asked are none of them a refusal, and are retried until the fall-through point, since reading "could not determine" as "no" would move a hostname off a strategy that is merely briefly unavailable.
+
+> r[tls.chain.no-certificate]
+> A hostname with no certificate to replace, because it has never had one or because its last one has expired, does not wait for a fall-through point, because there is no expiry to measure one from.
+> A certificate revoked by its issuer is not in this case: it is still the certificate being replaced, and [tls.canopy.revoked](#r--tls.canopy.revoked) applies.
+> A strategy that is available for it and refuses or fails keeps being asked, at the cadence of the after-failure debounce, and the hostname does not pass to the next strategy.
+> A strategy that is not available — for Canopy, no live offer — is skipped at once, and the next strategy becomes responsible.
+> A hostname that has an open order with a strategy stays with it until the order resolves, so an offer disappearing while an order is pending does not abandon the order.
+
+> r[tls.chain.return]
+> A hostname that passed to a later strategy stays with it until the next cycle starts, and the first strategy is tried again then.
+> An operator retry of the hostname, per [tls.cert.force-retry](#r--tls.cert.force-retry), starts a cycle at once.
+
+> r[tls.chain.proxy-gate]
+> The proxy must not order or renew a certificate through HTTP-01 for a hostname unless HTTP-01 is the strategy responsible for it, or the hostname's chain has no earlier strategy.
+> The proxy's own renewal timing therefore cannot start a cycle, and a hostname whose first strategy is Canopy does not receive an HTTP-01 certificate ahead of Canopy.
+> A certificate the proxy already holds is never taken out of service to enforce this.
+> Where no clock says when HTTP-01 becomes responsible, as for a hostname under the Canopy-only policy, the proxy is held back to the last moments before the certificate it holds expires, and not beyond.
+
+## Canopy
+
+> r[tls.strategy.canopy]
+> The Canopy strategy obtains a hostname's certificate from Canopy, through the [relay](interface.md#i--canopy.relay).
+> Seedling holds the key and submits a signing request, and Canopy proves control of the name, issues, and renews.
+> Canopy applies to a hostname when the name is one a public CA can issue for and at least one app declaring the hostname has a [Canopy application type](language.md#l--app.canopy-type).
+> It is available for such a hostname while an offer is live.
+> The runtime does not consult Canopy's entitlements before asking.
+> The request is how an operator comes to know that a hostname wants a certificate and authorises it, and declining to ask until an operator had set the name up first would make setting up a hostname a race over who configures it first.
+
+> r[tls.canopy.key]
+> The runtime generates the keypair for a Canopy certificate itself, stores the private key encrypted at rest using the [secret key](#r--secret.key), and sends Canopy only a signing request.
+> A hostname's key is reused for every request and collection until Canopy reports that it must be replaced, so that asking again returns what Canopy already holds rather than opening a new order.
+> A replaced key is destroyed once nothing the runtime serves depends on it.
+
+> r[tls.canopy.request]
+> One request is made per hostname, however many apps declare it.
+> The signing request names exactly the hostname, so a wildcard policy results in a request for each concrete hostname it matches and never one for the wildcard.
+> The request carries the Canopy application type when the typed apps declaring the hostname share exactly one, and omits it otherwise.
+
+> r[tls.canopy.collect]
+> Canopy answers a first request as pending and delivers the certificate when asked again.
+> While a request is pending the runtime asks again on every Canopy report tick.
+> Once a certificate is issued the runtime asks again, on every tick, from the certificate's renewal point until the certificate it holds has been replaced by a longer-lived one, which is how a renewal Canopy has carried out is collected.
+> Between those moments nothing is asked.
+
+> r[tls.canopy.outcomes]
+> Canopy's answers are classified as follows:
+>
+> | Answer | Meaning |
+> |---|---|
+> | issued, usable | the certificate is stored and served |
+> | pending | the order is open; asked again on the next tick |
+> | refused, because the server lacks the TLS grant, the name is outside the domains its group controls, an operator has denied the name to it, it contradicts the application type named, or no zone Canopy manages covers the name | a refusal, per [tls.chain.refusal](#r--tls.chain.refusal) |
+> | refused, because the server is paused or not attached to a live server, or because Canopy has no declaration of the name | not a refusal; retried |
+> | order failed | not a refusal; retried, with Canopy's reason recorded |
+> | the relay failed, or no offer is live | not a refusal; retried |
+> | the signing request itself rejected as malformed | not a refusal; retried, and reported as a fault since the fault is the runtime's own |
+>
+> Only a cause Canopy itself names counts, so an answer from anything else on the way between the runtime and Canopy is retried rather than read as any of the above.
+
+> r[tls.canopy.revoked]
+> When Canopy reports a certificate revoked, or its key condemned, the certificate is no longer served and the runtime generates a new key and submits a new request.
+> The hostname has no usable certificate from then, so it passes to the next strategy in its chain at once and stays there until the next cycle, rather than serving nothing while the new order runs.
+> The runtime learns of a revocation from the certificates Canopy lists as held in the response to each report, without waiting for a collection.
+
+> r[tls.canopy.serve]
+> A Canopy certificate is stored with the origin `canopy` and served like any other runtime-managed certificate, per [tls.cert.serve](#r--tls.cert.serve), ranked against other certificates covering the hostname per [tls.strategy.manual](#r--tls.strategy.manual).
+> A Canopy certificate counts as the active certificate for its hostname in [observe.ingress.certs](#r--observe.ingress.certs), so it satisfies [`rt.warm_certs`](language.md#l--rt.warm-certs) barriers and an ingress's `Ready` state like any other runtime-managed certificate.
+> A pending Canopy order is observed as `pending` and holds such a barrier as any acquisition in progress does.
+
+> r[tls.canopy.attempts]
+> Each Canopy order is one entry in the [attempt log](#r--tls.cert.attempt-log), opened by the request that creates it and closed when the certificate is collected, the order fails, or Canopy refuses.
+> Asking again on a tick does not add an entry.
+
+> r[tls.canopy.fault]
+> The runtime files a fault of kind `canopy_certificate_failed` against each ingress declaring a hostname when a Canopy request was refused or failed and the hostname has no usable certificate, or when it has reached the last strategy in its chain without a replacement.
+> The fault names the hostname and Canopy's reason, and is cleared when a usable certificate replaces the one in doubt.
+> A hostname that holds a usable certificate and is still inside a strategy's window files nothing for Canopy trouble, since the chain is still working on it.
+
+> r[tls.strategy.canopy-only]
+> Operators may bind a hostname or wildcard pattern to the Canopy-only policy, which makes Canopy the chain's only strategy.
+> Such a hostname never passes to HTTP-01 or the proxy's internal CA, so it is suited to a hostname whose traffic Seedling does not yet receive and for which a challenge could not succeed.
+> A hostname under the policy follows [tls.chain.cycle](#r--tls.chain.cycle) and [tls.chain.no-certificate](#r--tls.chain.no-certificate): a valid certificate is left alone until its renewal point, and a failing or refused Canopy request is retried rather than abandoned, with no limit and with the fault of [tls.canopy.fault](#r--tls.canopy.fault) while it fails.
+> Canopy is never skipped for want of a live offer, and applies as [tls.strategy.canopy](#r--tls.strategy.canopy) says.
+
+> r[tls.canopy-only.untyped]
+> When Canopy cannot be asked about a Canopy-only hostname, because no app declaring it has a Canopy type or because no public CA can issue for the name, the runtime files a fault of kind `canopy_certificate_failed` against each ingress declaring it, naming the hostname and saying which.
+> The fault is cleared when a declaring app gains a type, when the policy is changed or cleared, or when no ingress declares the hostname.
 
 > r[tls.policy.apply]
 > Changes to operator-defined TLS policy (binding a hostname to a strategy, changing its parameters, or clearing it) must take effect on a subsequent reconciliation tick without operator-initiated apply steps.

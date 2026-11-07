@@ -249,7 +249,7 @@ describe("Certificates", () => {
     expect(await screen.findByText("not set")).toBeTruthy();
     expect(
       screen.getByText(
-        "No operator policies — every TLS-terminating domain uses the Caddy default.",
+        "No operator policies — every TLS-terminating domain follows the default chain.",
       ),
     ).toBeTruthy();
     expect(
@@ -339,6 +339,72 @@ describe("Certificates", () => {
         dns_provider: "r53-main",
       });
     });
+  });
+
+  // w[verify routes.certificates]
+  it("binds a domain to the Canopy-only policy without a DNS provider", async () => {
+    const { request } = renderWithSession(<Certificates />, {
+      fixtures: baseFixtures(),
+      safetyMode: "write",
+    });
+
+    fireEvent.click(await screen.findByRole("button", { name: "Bind domain" }));
+    fireEvent.change(await screen.findByLabelText("Domain or wildcard"), {
+      target: { value: " new.example.com " },
+    });
+    fireEvent.mouseDown(screen.getByLabelText("Strategy"));
+    fireEvent.click(await screen.findByRole("option", { name: "Canopy only" }));
+    expect(screen.queryByLabelText("DNS provider")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+
+    await waitFor(() => {
+      expect(request).toHaveBeenCalledWith("/tls/policies/set-canopy", {
+        hostname: "new.example.com",
+      });
+    });
+  });
+
+  // w[verify routes.certificates]
+  it("offers the Canopy-only policy when there is no DNS provider to bind", async () => {
+    const { request } = renderWithSession(<Certificates />, {
+      fixtures: baseFixtures({
+        "/tls/dns-providers/list": { providers: [] },
+        "/tls/policies/list": { policies: [] },
+      }),
+      safetyMode: "write",
+    });
+
+    const bind = (await screen.findByRole("button", {
+      name: "Bind domain",
+    })) as HTMLButtonElement;
+    expect(bind.disabled).toBe(false);
+    fireEvent.click(bind);
+    fireEvent.change(await screen.findByLabelText("Domain or wildcard"), {
+      target: { value: "*.example.com" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+
+    await waitFor(() => {
+      expect(request).toHaveBeenCalledWith("/tls/policies/set-canopy", {
+        hostname: "*.example.com",
+      });
+    });
+  });
+
+  // w[verify routes.certificates]
+  it("lists a Canopy-only policy without a provider", async () => {
+    renderWithSession(<Certificates />, {
+      fixtures: baseFixtures({
+        "/tls/policies/list": {
+          policies: [
+            { hostname: "later.example.com", strategy: "canopy", updated_at: now - 60 },
+          ],
+        },
+      }),
+    });
+    const row = within(await screen.findByText("later.example.com").then((e) => e.closest("tr") as HTMLElement));
+    expect(row.getByText("canopy only")).toBeTruthy();
+    expect(row.queryByText(/provider:/)).toBeNull();
   });
 
   // w[verify routes.certificates]
