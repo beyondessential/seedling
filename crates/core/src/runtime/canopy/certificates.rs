@@ -88,6 +88,8 @@ pub const FAULT_KIND: &str = "canopy_certificate_failed";
 
 /// What one tick's certificate work did.
 pub struct Tick {
+    /// The ingresses the tick decided for.
+    managed: Vec<ManagedIngress>,
     /// The state as it was read for the tick.
     snapshot: Snapshot,
     /// Whether anything a decision rests on was written.
@@ -124,24 +126,34 @@ pub async fn run(state: &Arc<OiState>, names: &Entitlements) -> Option<Tick> {
         // it for the rest of the window.
         state.tls_coordinator.forget_chain_state();
     }
-    Some(Tick { snapshot, wrote })
+    Some(Tick {
+        managed,
+        snapshot,
+        wrote,
+    })
 }
 
 /// Bring the Canopy faults into line after a tick's certificate work.
 ///
-/// Reuses the tick's own reading where it wrote nothing, which is the steady
-/// state once certificates are issued; where it wrote, what it wrote is what
-/// the faults describe, so they are synced against a fresh one.
+/// Reuses the tick's own reading where it wrote nothing. Where it wrote, what
+/// it wrote is what the faults describe, so the rows are read again — but only
+/// the rows: a tick writes to the database alone, and the facts around them
+/// (whether an offer is live, which apps declare what, what the proxy holds in
+/// its cache) are not changed by it, so the reading of those is kept rather
+/// than walking the proxy's cache a second time in the same minute.
 pub fn sync_faults_after(state: &Arc<OiState>, tick: Option<Tick>) {
-    match tick {
-        Some(tick) if !tick.wrote => {
-            let managed = {
-                let registry = state.registry.read();
-                state::managed_ingresses(&registry)
-            };
-            sync_faults(state, &managed, &tick.snapshot);
+    let Some(tick) = tick else {
+        return sync_all_faults(state);
+    };
+    if !tick.wrote {
+        return sync_faults(state, &tick.managed, &tick.snapshot);
+    }
+    let env = tick.snapshot.env.clone();
+    match state.db.call(move |db| Snapshot::load(db, env)) {
+        Ok(snapshot) => sync_faults(state, &tick.managed, &snapshot),
+        Err(e) => {
+            tracing::error!(error = %e, "canopy certificates: cannot read the TLS state the faults describe");
         }
-        _ => sync_all_faults(state),
     }
 }
 
