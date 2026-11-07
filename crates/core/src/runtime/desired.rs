@@ -385,6 +385,19 @@ pub fn list_dynamic_resources_for_app(
     collect_dynamic_rows(stmt.query_map([app], parse_dynamic_row)?)
 }
 
+/// Load the dynamic resource records recorded against one operation.
+// r[impl barrier.replay.abandoned]
+pub fn list_dynamic_resources_for_operation(
+    db: &Db,
+    operation_id: &str,
+) -> rusqlite::Result<Vec<DynamicResourceRecord>> {
+    let mut stmt = db.conn.prepare(
+        "SELECT instance_id, app, operation_id, kind, display_name, resource_name, description
+         FROM dynamic_resources WHERE operation_id = ?1 ORDER BY instance_id",
+    )?;
+    collect_dynamic_rows(stmt.query_map([operation_id], parse_dynamic_row)?)
+}
+
 fn parse_dynamic_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<DynamicResourceRecord> {
     Ok(DynamicResourceRecord {
         instance_id: row.get(0)?,
