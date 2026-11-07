@@ -2085,3 +2085,80 @@ fn a_barrier_on_a_narrowed_group_still_times_out() {
         other => panic!("a barrier on a narrowed group waited past its deadline: {other:?}"),
     }
 }
+
+// r[verify barrier.replay.positional]
+#[test]
+fn a_stop_replayed_against_a_start_entry_diverges() {
+    // rt.stop took the committed entry at its position whatever kind it
+    // recorded, and its fast-skip accepted any satisfied record on it. So a
+    // satisfied Ready record left by an rt.start made the stop return Ok
+    // having stopped nothing.
+    let (engine, mut scope, app, ast) = setup_with_script(
+        r#"
+        let web = app.deployment("web").image("docker.io/library/nginx:latest");
+        let gate = app.deployment("gate").image("docker.io/library/nginx:latest");
+        app.on_start(|rt, _param| {
+            rt.start(app.deployment("web")).ready();
+            rt.start(app.deployment("gate")).ready();
+        });
+    "#,
+    );
+
+    let oracle = Arc::new(TestWorldOracle::new());
+    oracle.set(dep("web"), LifecycleState::Ready);
+    let log = InMemoryActionLog::new();
+    let op = OperationId::new();
+    let reg: Arc<dyn crate::runtime::InstanceRegistry> = registry();
+
+    // Pass 1 leaves a Start at position 0 with a satisfied Ready record,
+    // and suspends on `gate`.
+    let r = run_pass(
+        &engine,
+        &ast,
+        &app,
+        &mut scope,
+        op.clone(),
+        &log,
+        Arc::clone(&oracle),
+        Arc::clone(&reg),
+    );
+    assert!(matches!(r, OperationResult::Suspended(_)), "pass 1: {r:?}");
+    let entries = log.load().expect("log loads");
+    assert!(
+        entries[0]
+            .barrier
+            .as_ref()
+            .is_some_and(|b| b.satisfied && b.required_state == LifecycleState::Ready),
+        "pass 1 should leave a satisfied Ready record at position 0: {entries:?}"
+    );
+
+    // The script is edited so position 0 is now an rt.stop.
+    let (engine, mut scope, app, ast) = setup_with_script(
+        r#"
+        let web = app.deployment("web").image("docker.io/library/nginx:latest");
+        app.on_start(|rt, _param| {
+            rt.stop(app.deployment("web"));
+        });
+    "#,
+    );
+    let r = run_pass(
+        &engine,
+        &ast,
+        &app,
+        &mut scope,
+        op,
+        &log,
+        Arc::clone(&oracle),
+        Arc::clone(&reg),
+    );
+    match r {
+        OperationResult::Failed(err) => {
+            let msg = err.to_string();
+            assert!(
+                msg.contains("replay diverged"),
+                "expected a divergence naming the recorded kind, got: {msg}"
+            );
+        }
+        other => panic!("a stop replayed against a start's satisfied record: {other:?}"),
+    }
+}

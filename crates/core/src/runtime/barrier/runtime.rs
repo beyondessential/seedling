@@ -14,8 +14,8 @@ use crate::defs::volume::{
     ExternalVolume, OperationVolumeBinding, Volume, validate_volume_write_path,
 };
 use crate::runtime::barrier::{
-    ActionLogEntry, BarrierCondition, BarrierRecord, CallKind, ReplayContext, SharedContext,
-    VolumeWriteTarget,
+    ActionLogEntry, BarrierCondition, BarrierRecord, CallKind, ReplayContext, ReplayMismatch,
+    SharedContext, VolumeWriteTarget,
 };
 use crate::runtime::registry::{InstanceRegistry, InstanceReuse, RegistryError};
 use crate::runtime::{LifecycleState, ResourceInstance, restart_gens};
@@ -1511,12 +1511,19 @@ impl RuntimeInstance {
         }
 
         // r[impl barrier.replay]
-        // On replay, skip a write that was already performed at this call site.
+        // r[impl barrier.replay.positional]
+        // On replay, skip a write that was already performed at this call
+        // site. The entry at this position must be that write: advancing
+        // past whatever occupied the slot would take a different call as
+        // evidence this write had been done, and skip it. The path is not
+        // checked, only the kind, because a path built from the action's
+        // params is as much this call's path as a literal one is.
         {
             let mut g = ctx.lock();
-            if g.is_replaying() {
-                g.call_index += 1;
-                return Ok(());
+            match g.replay_step(CallKind::Write, None) {
+                Ok(Some(_)) => return Ok(()),
+                Ok(None) => {}
+                Err(mismatch) => return Err(Box::<EvalAltResult>::from(mismatch.to_string())),
             }
         }
 
@@ -1586,15 +1593,40 @@ impl RuntimeInstance {
         let mut g = ctx.lock();
 
         // r[impl barrier.replay]
-        // Fast-skip: if the committed entry already records the barrier as
-        // satisfied, advance and return without re-checking the world.
-        if g.is_replaying()
-            && g.committed_entry()
-                .and_then(|e| e.barrier.as_ref())
-                .is_some_and(|b| b.satisfied)
-        {
-            g.call_index += 1;
-            return Ok(());
+        // r[impl barrier.replay.positional]
+        // The entry at this position must be the stop this call is making.
+        // Taking whatever occupied the slot let a satisfied Ready record
+        // left there by an rt.start return Ok from a stop that stopped
+        // nothing, and otherwise let the stop overwrite that entry on
+        // commit. The other rt.* surfaces answer through
+        // `claim_log_position`; this one keeps its own path for the
+        // started_at it preserves, so it makes the same check itself.
+        let recorded = g.committed_entry().map(|e| {
+            (
+                e.call_kind,
+                e.barrier
+                    .as_ref()
+                    .is_some_and(|b| b.required_state == LifecycleState::Terminated && b.satisfied),
+            )
+        });
+        if let Some((kind, already_terminated)) = recorded {
+            if kind != CallKind::Stop {
+                return Err(Box::<EvalAltResult>::from(
+                    ReplayMismatch::Kind {
+                        call_index: g.call_index,
+                        expected: CallKind::Stop,
+                        found: kind,
+                    }
+                    .to_string(),
+                ));
+            }
+            // Fast-skip: the committed entry already records this stop's
+            // barrier as satisfied, so advance without re-checking the
+            // world.
+            if already_terminated {
+                g.call_index += 1;
+                return Ok(());
+            }
         }
 
         let now = (g.now_secs)();
