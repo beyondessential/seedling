@@ -2706,4 +2706,26 @@ mod tests {
             None
         );
     }
+
+    /// Both run on a timer and name no hostname, so the one index on
+    /// `(hostname, state)` cannot serve them. Without an index of their own
+    /// they scan every superseded row the instance has ever kept.
+    // r[verify tls.cert.serve]
+    #[test]
+    fn the_certificate_queries_asked_on_a_timer_do_not_scan_the_table() {
+        let (db, _) = fresh_db();
+        for sql in [
+            "SELECT id FROM tls_certificates WHERE state = 'active' AND cert_pem IS NOT NULL",
+            "SELECT id FROM tls_certificates WHERE origin = 'canopy' AND state = 'active'",
+        ] {
+            let plan: String = db
+                .conn
+                .query_row(&format!("EXPLAIN QUERY PLAN {sql}"), [], |row| row.get(3))
+                .unwrap();
+            assert!(
+                plan.contains("tls_certificates_state_origin"),
+                "this is asked every tick and must not scan: {sql}\n{plan}"
+            );
+        }
+    }
 }
