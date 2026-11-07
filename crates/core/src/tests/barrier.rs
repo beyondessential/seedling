@@ -1679,12 +1679,17 @@ fn one_on_a_started_yields_a_single_resource_and_null_when_empty() {
 }
 
 // r[verify barrier.satisfaction.recorded]
+// r[verify barrier.deadline]
 #[test]
-fn a_second_barrier_on_one_started_does_not_rearm_the_first_record_each_pass() {
+fn a_second_barrier_on_one_started_does_not_rearm_its_wait_each_pass() {
     // One log entry holds one barrier record, and both barriers on a
-    // `Started` anchor to that entry. A take-over that handed the record to
-    // whichever barrier was waiting rewrote its start on every pass, so the
-    // record churned and the wait it was timing restarted each time.
+    // `Started` anchor to that entry. Handing the record to whichever
+    // barrier is waiting rewrote its start on every pass, so the wait it
+    // times restarted each time and the deadline could never expire.
+    //
+    // Which barrier ends up holding the record is not the point: the
+    // waiting one does, so that it can be timed. The point is that its
+    // start stands still.
     let (engine, mut scope, app, ast) = setup_with_script(
         r#"
         let web = app.deployment("web").image("docker.io/library/nginx:latest");
@@ -1697,36 +1702,42 @@ fn a_second_barrier_on_one_started_does_not_rearm_the_first_record_each_pass() {
     );
 
     let oracle = Arc::new(TestWorldOracle::new());
+    oracle.set(dep("web"), LifecycleState::Running);
     let log = InMemoryActionLog::new();
     let op = OperationId::new();
     let reg: Arc<dyn crate::runtime::InstanceRegistry> = registry();
 
-    // Pass 1 suspends on `running()`; from pass 2 on, `running()` is
-    // satisfied and `ready()` is not.
-    oracle.set(dep("web"), LifecycleState::Running);
-    for pass in 1..=3 {
-        let r = run_pass(
-            &engine,
-            &ast,
-            &app,
-            &mut scope,
-            op.clone(),
-            &log,
-            Arc::clone(&oracle),
-            Arc::clone(&reg),
-        );
-        assert!(
-            matches!(r, OperationResult::Suspended(_)),
-            "pass {pass}: {r:?}"
-        );
-    }
+    let starts: Vec<Option<u64>> = (0..3)
+        .map(|pass| {
+            let r = run_pass(
+                &engine,
+                &ast,
+                &app,
+                &mut scope,
+                op.clone(),
+                &log,
+                Arc::clone(&oracle),
+                Arc::clone(&reg),
+            );
+            assert!(
+                matches!(r, OperationResult::Suspended(_)),
+                "pass {pass}: {r:?}"
+            );
+            // A second of real time per pass, so a start that was rewritten
+            // reads as a different second rather than the same one.
+            std::thread::sleep(std::time::Duration::from_millis(1100));
+            let entries = log.load().expect("log loads");
+            assert_eq!(entries.len(), 1, "one call, one entry: {entries:?}");
+            entries[0].barrier.as_ref().and_then(|b| b.started_at_secs)
+        })
+        .collect();
 
-    let entries = log.load().expect("log loads");
-    assert_eq!(entries.len(), 1, "one call, one entry: {entries:?}");
-    let record = entries[0].barrier.as_ref().expect("the call has a record");
-    assert!(
-        record.satisfied,
-        "the record churned between the two barriers instead of holding the one that passed: {record:?}"
+    // The Ready wait begins on the second pass, the first having been spent
+    // reaching Running, and stands from there.
+    assert!(starts[1].is_some(), "the waiting barrier records a start");
+    assert_eq!(
+        starts[2], starts[1],
+        "the wait was restarted on a later pass, so its deadline could never expire: {starts:?}"
     );
 }
 
@@ -1813,4 +1824,133 @@ fn stopping_an_already_stopped_deployment_does_not_mint_instances_to_wait_on() {
         stopped.resources[0].id, existing.id,
         "the stop addressed an instance it had just minted rather than the one the deployment has"
     );
+}
+
+// r[verify barrier.deadline]
+// r[verify barrier.satisfaction.recorded]
+#[test]
+fn the_second_barrier_on_one_started_still_times_out() {
+    // Two barriers on one `Started` share one record. Abstaining whenever
+    // the entry held anything left the second barrier with no start, so its
+    // deadline could never expire; handing it the record on every pass
+    // restarted the wait, which could never expire either. The record's
+    // state is what tells the two apart: a satisfied record is finished
+    // with, a waiting one is still timing something.
+    let (engine, mut scope, app, ast) = setup_with_script(
+        r#"
+        let web = app.deployment("web").image("docker.io/library/nginx:latest");
+        app.on_start(|rt, _param| {
+            let started = rt.start(app.deployment("web"));
+            started.running();
+            started.ready(1);
+        });
+    "#,
+    );
+
+    let oracle = Arc::new(TestWorldOracle::new());
+    oracle.set(dep("web"), LifecycleState::Running);
+    let log = InMemoryActionLog::new();
+    let op = OperationId::new();
+    let reg: Arc<dyn crate::runtime::InstanceRegistry> = registry();
+
+    // The deployment reaches Running and stops there, so `ready(1)` waits
+    // and must eventually give up. Its wait starts on the first pass that
+    // reaches it, and the passes after that must not restart it.
+    let mut outcome = None;
+    for _ in 0..6 {
+        match run_pass(
+            &engine,
+            &ast,
+            &app,
+            &mut scope,
+            op.clone(),
+            &log,
+            Arc::clone(&oracle),
+            Arc::clone(&reg),
+        ) {
+            OperationResult::Suspended(_) => {
+                std::thread::sleep(std::time::Duration::from_millis(400))
+            }
+            other => {
+                outcome = Some(other);
+                break;
+            }
+        }
+    }
+
+    match outcome {
+        Some(OperationResult::Failed(err)) => {
+            let msg = err.to_string();
+            assert!(
+                msg.contains("deadline"),
+                "expected the ready() deadline to expire, got: {msg}"
+            );
+        }
+        other => panic!("the second barrier's wait never timed out: {other:?}"),
+    }
+}
+
+// r[verify barrier.replay.anchor]
+#[test]
+fn a_narrowed_barrier_does_not_satisfy_the_broader_one_beside_it() {
+    // Narrowed groups carry the anchor of the call they came from, so a
+    // barrier over part of a group wrote a satisfied record that a barrier
+    // over the whole of it then read as its own.
+    //
+    // The two barriers need a suspension between them for it to show: in
+    // one pass the broader barrier overwrites the narrowed one's record
+    // before the pass commits, and the satisfied record never survives to
+    // be read. Across a suspension it does.
+    let (engine, mut scope, app, ast) = setup_with_script(
+        r#"
+        let web = app.deployment("web").image("docker.io/library/nginx:latest");
+        let api = app.deployment("api").image("docker.io/library/nginx:latest");
+        let gate = app.deployment("gate").image("docker.io/library/nginx:latest");
+        app.on_start(|rt, _param| {
+            let started = rt.start(app);
+            started.only(app.deployment("web")).ready();
+            rt.start(app.deployment("gate")).ready();
+            started.ready();
+        });
+    "#,
+    );
+
+    // `web` and `gate` come up; `api` never does, so the barrier over the
+    // whole group must keep waiting however often it is replayed.
+    let oracle = Arc::new(TestWorldOracle::new());
+    oracle.set(dep("web"), LifecycleState::Ready);
+    let log = InMemoryActionLog::new();
+    let op = OperationId::new();
+    let reg: Arc<dyn crate::runtime::InstanceRegistry> = registry();
+
+    let r = run_pass(
+        &engine,
+        &ast,
+        &app,
+        &mut scope,
+        op.clone(),
+        &log,
+        Arc::clone(&oracle),
+        Arc::clone(&reg),
+    );
+    assert!(matches!(r, OperationResult::Suspended(_)), "pass 1: {r:?}");
+
+    oracle.set(dep("gate"), LifecycleState::Ready);
+    for pass in 2..=3 {
+        let r = run_pass(
+            &engine,
+            &ast,
+            &app,
+            &mut scope,
+            op.clone(),
+            &log,
+            Arc::clone(&oracle),
+            Arc::clone(&reg),
+        );
+        assert!(
+            matches!(r, OperationResult::Suspended(_)),
+            "pass {pass}: the barrier over the whole group passed on the narrowed one's record, \
+             with api never up: {r:?}"
+        );
+    }
 }

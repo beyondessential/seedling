@@ -370,29 +370,6 @@ pub fn extract_cancel_hit(err: &EvalAltResult) -> bool {
 /// resources arrive with a def attached; named ones are looked up in the
 /// action-context AppDef (the thread-local set by [`ActionClosureGuard`]).
 // r[impl barrier.replay.anchor]
-/// What to do when a barrier's entry already holds a record.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum AnchorWrite {
-    /// Write over it.
-    ///
-    /// For recording that a barrier passed. An entry holds one record and a
-    /// `Started` may carry several barriers, so the one kept is the one
-    /// written last. That is the right one to keep: on the next pass the
-    /// closure reaches the earlier barriers first and they are answered
-    /// from the world, while the barrier the closure is furthest through is
-    /// the one whose passing the world may no longer show — a job that ran
-    /// and exited, say.
-    Replace,
-    /// Leave it, and write only where the entry holds no record.
-    ///
-    /// For recording the start a deadline is measured from. Handing the
-    /// record to whichever barrier is currently waiting would rewrite that
-    /// start on every pass, so the wait it times would restart each time
-    /// and the deadline could never expire.
-    OnlyIfAbsent,
-}
-
-// r[impl barrier.replay.anchor]
 // r[impl barrier.satisfaction.recorded]
 /// Record `record` against the log entry of the call a barrier belongs to,
 /// reporting whether that entry was found.
@@ -404,14 +381,22 @@ enum AnchorWrite {
 /// entry instead would claim a position the committed one already holds and
 /// leave every later `rt.*` call reading the wrong one.
 ///
-/// A start already recorded for the same state is kept whatever is written
-/// over it, since that is the start the state's deadline is measured from.
-fn record_at_anchor(
-    ctx: &mut ReplayContext,
-    call_index: usize,
-    record: BarrierRecord,
-    write: AnchorWrite,
-) -> bool {
+/// An entry holds one record and a `Started` may carry several barriers, so
+/// what the record already holds decides whether it is written over:
+///
+/// - For the same required state, it is the same barrier, and the write
+///   lands. A start already recorded for that state is kept, since that is
+///   the start its deadline is measured from.
+/// - For a different state over a record still waiting, the write is
+///   dropped: another barrier is timing that wait, and rewriting it would
+///   restart the wait on every pass so the deadline could never expire.
+/// - For a different state over a satisfied record, the write lands. The
+///   earlier barrier is finished with the record, and the barrier the
+///   closure is furthest through is the one worth keeping: the earlier ones
+///   are re-reached first and answered from the world, while its own
+///   passing is what the world may no longer show — a job that ran and
+///   exited being the case that matters.
+fn record_at_anchor(ctx: &mut ReplayContext, call_index: usize, record: BarrierRecord) -> bool {
     let pending_pos = ctx.pending.iter().position(|e| e.call_index == call_index);
     let mut entry = match pending_pos {
         Some(pos) => ctx.pending[pos].clone(),
@@ -421,13 +406,12 @@ fn record_at_anchor(
         },
     };
 
-    if write == AnchorWrite::OnlyIfAbsent && entry.barrier.is_some() {
+    let held = entry.barrier.as_ref();
+    if held.is_some_and(|b| b.required_state != record.required_state && !b.satisfied) {
         return true;
     }
 
-    let started = entry
-        .barrier
-        .as_ref()
+    let started = held
         .filter(|b| b.required_state == record.required_state)
         .and_then(|b| b.started_at_secs);
     entry.barrier = Some(BarrierRecord {
@@ -918,6 +902,7 @@ impl RuntimeInstance {
             return Ok(Started {
                 ctx: Some(Arc::clone(ctx)),
                 resources,
+                narrowed: false,
                 origin_index: None,
                 warm: WarmMode::None,
             });
@@ -966,6 +951,7 @@ impl RuntimeInstance {
                 return Ok(Started {
                     ctx: None,
                     resources,
+                    narrowed: false,
                     origin_index: None,
                     warm: WarmMode::None,
                 });
@@ -1009,6 +995,7 @@ impl RuntimeInstance {
         Ok(Started {
             ctx: Some(ctx),
             resources,
+            narrowed: false,
             origin_index: Some(origin_index),
             warm: WarmMode::None,
         })
@@ -1051,6 +1038,7 @@ impl RuntimeInstance {
             return Ok(Started {
                 ctx: Some(Arc::clone(ctx)),
                 resources,
+                narrowed: false,
                 origin_index: None,
                 warm: WarmMode::Certs,
             });
@@ -1068,6 +1056,7 @@ impl RuntimeInstance {
                 return Ok(Started {
                     ctx: None,
                     resources,
+                    narrowed: false,
                     origin_index: None,
                     warm: WarmMode::Certs,
                 });
@@ -1100,6 +1089,7 @@ impl RuntimeInstance {
         Ok(Started {
             ctx: Some(ctx),
             resources,
+            narrowed: false,
             origin_index: Some(origin_index),
             warm: WarmMode::Certs,
         })
@@ -1132,6 +1122,7 @@ impl RuntimeInstance {
             return Ok(Started {
                 ctx: Some(Arc::clone(ctx)),
                 resources,
+                narrowed: false,
                 origin_index: None,
                 warm: WarmMode::Images(pairs),
             });
@@ -1163,6 +1154,7 @@ impl RuntimeInstance {
                 return Ok(Started {
                     ctx: None,
                     resources,
+                    narrowed: false,
                     origin_index: None,
                     warm: WarmMode::Images(pairs),
                 });
@@ -1195,6 +1187,7 @@ impl RuntimeInstance {
         Ok(Started {
             ctx: Some(ctx),
             resources,
+            narrowed: false,
             origin_index: Some(origin_index),
             warm: WarmMode::Images(pairs),
         })
@@ -2174,6 +2167,16 @@ pub struct Started {
     pub ctx: Option<SharedContext>,
     pub resources: Vec<ResourceInstance>,
     pub warm: WarmMode,
+    /// Whether this is a narrowing of the group its call started.
+    ///
+    /// A narrowed group is a different barrier from the one its call's
+    /// entry records, even though it came from that call, so it neither
+    /// reads nor writes that record. `s.only(web).ready()` beside
+    /// `s.ready()` would otherwise write a satisfied record the broader
+    /// barrier reads as its own and pass while the rest of the group had
+    /// never come up.
+    // r[impl barrier.replay.anchor]
+    pub narrowed: bool,
     // r[impl barrier.replay.anchor]
     /// The `call_index` of the log entry the originating `rt.*` call
     /// produced. A barrier called on this `Started` is decided from that
@@ -2210,9 +2213,19 @@ impl Started {
         Self {
             ctx: self.ctx.clone(),
             resources: kept.to_vec(),
+            narrowed: true,
             origin_index: self.origin_index,
             warm,
         }
+    }
+
+    // r[impl barrier.replay.anchor]
+    /// The entry a barrier on this group records against, where it has one.
+    fn anchor(&self) -> Option<usize> {
+        if self.narrowed {
+            return None;
+        }
+        self.origin_index
     }
 
     fn filtered(&self, keep: impl Fn(&ResourceInstance) -> bool) -> Self {
@@ -2266,7 +2279,7 @@ impl Started {
         // the two calls carry byte-identical resources and the scan could
         // not tell them apart.
         let already_satisfied = self
-            .origin_index
+            .anchor()
             .and_then(|idx| g.committed.iter().find(|e| e.call_index == idx))
             .and_then(|e| e.barrier.as_ref())
             .is_some_and(|b| b.required_state == required && b.satisfied);
@@ -2328,7 +2341,7 @@ impl Started {
             // takes the maximum elapsed across unsatisfied records, so one
             // long wait that had since passed went on inflating the
             // re-poll cadence of every barrier after it.
-            if let Some(idx) = self.origin_index {
+            if let Some(idx) = self.anchor() {
                 record_at_anchor(
                     &mut g,
                     idx,
@@ -2338,7 +2351,6 @@ impl Started {
                         satisfied: true,
                         started_at_secs: Some(now),
                     },
-                    AnchorWrite::Replace,
                 );
             }
             return Ok(self.clone());
@@ -2349,7 +2361,7 @@ impl Started {
         // call's own entry.
         // r[impl barrier.replay.anchor]
         let started_at = self
-            .origin_index
+            .anchor()
             .and_then(|idx| {
                 g.committed
                     .iter()
@@ -2388,9 +2400,12 @@ impl Started {
             started_at_secs: Some(now),
         };
         let anchored = self
-            .origin_index
-            .is_some_and(|idx| record_at_anchor(&mut g, idx, waiting, AnchorWrite::OnlyIfAbsent));
-        if !anchored {
+            .anchor()
+            .is_some_and(|idx| record_at_anchor(&mut g, idx, waiting));
+        // Only a barrier with no entry behind it at all synthesises one. A
+        // narrowed group has an entry, it just is not that barrier's to
+        // write to.
+        if !anchored && self.origin_index.is_none() {
             // No entry behind this barrier: the closure asserted it on a
             // resource set never tracked via rt.start. The language spec
             // does not promise that works, but it is given an entry rather
