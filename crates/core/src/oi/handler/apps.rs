@@ -1578,6 +1578,26 @@ pub(crate) fn uninstall_app(state: &OiState, params: AppParams) -> HandlerResult
         Arc::clone(&entry.phase)
     };
 
+    // r[impl app.uninstall.exclusive]
+    // Reaching here means the phase is `Installed`, which is also the phase an
+    // app sits in while an action closure runs: the phase does not distinguish
+    // an idle app from one mid-action. Ask the scheduler, which holds the
+    // operations. Without this the reconciler starts tearing down the very
+    // resources the closure is still driving.
+    {
+        let sched = state.scheduler.lock();
+        if sched.has_operation_for(&params.app) {
+            let holder = match sched.active().filter(|a| a.app == params.app) {
+                Some(a) => format!("'{}' is in progress", a.action),
+                None => "an action is queued".to_owned(),
+            };
+            return Err(OiError::new(
+                ErrorCode::OperationInProgress,
+                format!("cannot uninstall {name} while {holder}; cancel it first, then uninstall"),
+            ));
+        }
+    }
+
     // Persist the transition before waking the reconciler.
     let name_owned = params.app.clone();
     state.db.call(move |db| {
