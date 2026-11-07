@@ -732,6 +732,7 @@ impl RuntimeInstance {
             return Ok(Started {
                 ctx: Some(Arc::clone(ctx)),
                 resources,
+                origin_index: None,
                 warm: WarmMode::None,
             });
         }
@@ -779,18 +780,19 @@ impl RuntimeInstance {
                 return Ok(Started {
                     ctx: None,
                     resources,
+                    origin_index: None,
                     warm: WarmMode::None,
                 });
             }
             Some(c) => Arc::clone(c),
         };
 
-        {
+        let origin_index = {
             let mut g = ctx.lock();
+            let idx = g.call_index;
             if g.is_replaying() {
                 g.call_index += 1;
             } else {
-                let idx = g.call_index;
                 g.pending.push(ActionLogEntry {
                     call_index: idx,
                     call_kind,
@@ -815,11 +817,13 @@ impl RuntimeInstance {
                 };
                 emit_breadcrumb(breadcrumb);
             }
-        }
+            idx
+        };
 
         Ok(Started {
             ctx: Some(ctx),
             resources,
+            origin_index: Some(origin_index),
             warm: WarmMode::None,
         })
     }
@@ -861,6 +865,7 @@ impl RuntimeInstance {
             return Ok(Started {
                 ctx: Some(Arc::clone(ctx)),
                 resources,
+                origin_index: None,
                 warm: WarmMode::Certs,
             });
         }
@@ -877,18 +882,19 @@ impl RuntimeInstance {
                 return Ok(Started {
                     ctx: None,
                     resources,
+                    origin_index: None,
                     warm: WarmMode::Certs,
                 });
             }
             Some(c) => Arc::clone(c),
         };
 
-        {
+        let origin_index = {
             let mut g = ctx.lock();
+            let idx = g.call_index;
             if g.is_replaying() {
                 g.call_index += 1;
             } else {
-                let idx = g.call_index;
                 g.pending.push(ActionLogEntry {
                     call_index: idx,
                     call_kind: CallKind::WarmCerts,
@@ -902,11 +908,13 @@ impl RuntimeInstance {
                     resources: &resources,
                 });
             }
-        }
+            idx
+        };
 
         Ok(Started {
             ctx: Some(ctx),
             resources,
+            origin_index: Some(origin_index),
             warm: WarmMode::Certs,
         })
     }
@@ -942,6 +950,7 @@ impl RuntimeInstance {
             return Ok(Started {
                 ctx: Some(Arc::clone(ctx)),
                 resources,
+                origin_index: None,
                 warm: WarmMode::Images(refs),
             });
         }
@@ -972,18 +981,19 @@ impl RuntimeInstance {
                 return Ok(Started {
                     ctx: None,
                     resources,
+                    origin_index: None,
                     warm: WarmMode::Images(refs),
                 });
             }
             Some(c) => Arc::clone(c),
         };
 
-        {
+        let origin_index = {
             let mut g = ctx.lock();
+            let idx = g.call_index;
             if g.is_replaying() {
                 g.call_index += 1;
             } else {
-                let idx = g.call_index;
                 g.pending.push(ActionLogEntry {
                     call_index: idx,
                     call_kind: CallKind::WarmImages,
@@ -997,11 +1007,13 @@ impl RuntimeInstance {
                     refs: &refs,
                 });
             }
-        }
+            idx
+        };
 
         Ok(Started {
             ctx: Some(ctx),
             resources,
+            origin_index: Some(origin_index),
             warm: WarmMode::Images(refs),
         })
     }
@@ -1962,6 +1974,17 @@ pub struct Started {
     pub ctx: Option<SharedContext>,
     pub resources: Vec<ResourceInstance>,
     pub warm: WarmMode,
+    // r[impl barrier.replay.anchor]
+    /// The `call_index` of the log entry the originating `rt.*` call
+    /// produced. A barrier called on this `Started` is decided from that
+    /// entry and no other.
+    ///
+    /// `None` for a `Started` that has no entry behind it — a stub context
+    /// or probe mode — where there is nothing to anchor to and barriers
+    /// resolve immediately anyway. Collection methods carry the anchor
+    /// through, so `rt.start(x).except(y).ready()` is still the `rt.start`
+    /// call's barrier.
+    pub origin_index: Option<usize>,
 }
 
 impl Started {
@@ -2000,13 +2023,20 @@ impl Started {
         let now = (g.now_secs)();
 
         // r[impl barrier.replay]
-        // Check if this barrier was already satisfied in the committed log.
-        let already_satisfied = g.committed.iter().any(|e| {
-            e.resources == self.resources
-                && e.barrier
-                    .as_ref()
-                    .is_some_and(|b| b.required_state == required && b.satisfied)
-        });
+        // r[impl barrier.replay.anchor]
+        // Ask the entry of the call this barrier was called on, and no
+        // other. Matching by resources and required state instead let a
+        // `.terminated()` barrier short-circuit against the record an
+        // earlier `rt.stop` over the same resources had left satisfied —
+        // `do_stop` being the one writer of a satisfied Terminated record.
+        // A named job resolves to one operation-scoped instance UUID, so
+        // the two calls carry byte-identical resources and the scan could
+        // not tell them apart.
+        let already_satisfied = self
+            .origin_index
+            .and_then(|idx| g.committed.iter().find(|e| e.call_index == idx))
+            .and_then(|e| e.barrier.as_ref())
+            .is_some_and(|b| b.required_state == required && b.satisfied);
         if already_satisfied {
             return Ok(self.clone());
         }
@@ -2065,18 +2095,21 @@ impl Started {
             return Ok(self.clone());
         }
 
-        // Not yet reached — check deadline: find when we first started waiting.
-        let started_at = g
-            .committed
-            .iter()
-            .chain(g.pending.iter())
-            .find(|e| {
-                e.resources == self.resources
-                    && e.barrier
-                        .as_ref()
-                        .is_some_and(|b| b.required_state == required && !b.satisfied)
+        // Not yet reached — check deadline: find when we first started
+        // waiting. The wait belongs to this call, so it is read off this
+        // call's own entry.
+        // r[impl barrier.replay.anchor]
+        let started_at = self
+            .origin_index
+            .and_then(|idx| {
+                g.committed
+                    .iter()
+                    .chain(g.pending.iter())
+                    .find(|e| e.call_index == idx)
             })
-            .and_then(|e| e.barrier.as_ref()?.started_at_secs);
+            .and_then(|e| e.barrier.as_ref())
+            .filter(|b| b.required_state == required && !b.satisfied)
+            .and_then(|b| b.started_at_secs);
 
         // r[impl barrier.deadline]
         if let (Some(d), Some(started_at)) = (deadline_secs, started_at)
@@ -2095,28 +2128,27 @@ impl Started {
             deadline_secs,
         };
 
-        // Attach the barrier record to the most recent pending entry
-        // for these resources. The synthetic-push fallback below is
-        // only for the rare case where the closure asserts a barrier
-        // on a resource set that was never tracked via rt.start (the
-        // language spec doesn't promise that scenario works, but the
-        // code handles it without UB).
+        // Attach the barrier record to this call's own pending entry. The
+        // synthetic-push fallback below is only for the rare case where the
+        // closure asserts a barrier on a resource set that was never tracked
+        // via rt.start (the language spec doesn't promise that scenario
+        // works, but the code handles it without UB), which is also the case
+        // where there is no anchor to attach to.
         //
-        // On replay, pending is empty until the closure makes its
-        // first fresh rt.* call, so the attached lookup misses by
-        // default. The previous implementation then synthesised a
-        // Start at the current call_index — but the corresponding
-        // committed entry already exists (we just replayed past it),
-        // so the synthesis pushed a phantom entry one slot ahead and
-        // advanced call_index. Subsequent rt.* calls then read the
-        // wrong slot. The fix: skip the synthesis when *any*
-        // committed entry for the same resources exists. The barrier
-        // is already represented; just throw to re-suspend.
-        let attached = g
-            .pending
-            .iter_mut()
-            .rev()
-            .find(|e| e.resources == self.resources && e.barrier.is_none());
+        // On replay, pending is empty until the closure makes its first
+        // fresh rt.* call, so the attached lookup misses by default. The
+        // synthesis must not fire then: the corresponding committed entry
+        // already exists (we just replayed past it), so synthesising would
+        // push a phantom entry one slot ahead and advance call_index,
+        // leaving subsequent rt.* calls reading the wrong slot. An anchored
+        // barrier is already represented by its own entry; just throw to
+        // re-suspend.
+        // r[impl barrier.replay.anchor]
+        let attached = self.origin_index.and_then(|idx| {
+            g.pending
+                .iter_mut()
+                .find(|e| e.call_index == idx && e.barrier.is_none())
+        });
         if let Some(entry) = attached {
             entry.barrier = Some(BarrierRecord {
                 required_state: required,
@@ -2125,7 +2157,12 @@ impl Started {
                 started_at_secs: Some(now),
             });
         } else {
-            let already_tracked = g.committed.iter().any(|e| e.resources == self.resources);
+            let already_tracked = self.origin_index.is_some_and(|idx| {
+                g.committed
+                    .iter()
+                    .chain(g.pending.iter())
+                    .any(|e| e.call_index == idx)
+            });
             if !already_tracked {
                 let idx = g.call_index;
                 g.call_index += 1;

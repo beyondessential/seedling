@@ -1180,3 +1180,133 @@ fn rt_stop_deadline_is_enforced() {
         other => panic!("expected Failed with deadline message, got {other:?}"),
     }
 }
+
+/// Run one pass of `start` for an operation, with the boilerplate of
+/// `OperationContext` filled in from the pieces a replay test varies.
+fn run_pass(
+    engine: &rhai::Engine,
+    ast: &rhai::AST,
+    app: &defs::app::App,
+    scope: &mut rhai::Scope<'static>,
+    operation_id: OperationId,
+    log: &InMemoryActionLog,
+    world: Arc<TestWorldOracle>,
+    registry: Arc<dyn crate::runtime::InstanceRegistry>,
+) -> OperationResult {
+    run_operation(
+        OperationContext {
+            engine,
+            script_ast: ast,
+            operation_id,
+            app,
+            action_name: "start",
+            log,
+            world,
+            registry,
+            active_progress: None,
+            tick_notify: None,
+            params: serde_json::Map::new(),
+            is_shell: false,
+            db: None,
+            source_generation: 0,
+            target_generation: 0,
+            script_limits: None,
+            cipher: None,
+            operation_volume_bindings: std::collections::HashMap::new(),
+            cancel_token: Arc::new(crate::runtime::barrier::CancelToken::new()),
+            container_signaler: None,
+            volume_writer: None,
+            executor: None,
+        },
+        scope,
+    )
+}
+
+fn job(name: &str) -> ResourceInstance {
+    ResourceInstance::new_singleton(
+        seedling_protocol::names::AppName::new("test-app").unwrap(),
+        ResourceKind::Job,
+        name,
+    )
+}
+
+// r[verify barrier.replay.anchor]
+#[test]
+fn terminated_barrier_does_not_short_circuit_against_an_earlier_stop() {
+    // `do_stop` is the only writer of a satisfied record with
+    // required_state=Terminated. A `.terminated()` barrier later in the same
+    // closure resolves to the same instance UUID for a named job, so a fast
+    // path matching on resources and required state alone took the stop's
+    // record as its own and passed without the job having terminated.
+    //
+    // The deployment barrier in the middle is a suspension point, so the
+    // world can move between the stop being satisfied and the later barrier
+    // being checked — which is what the real system does when `rt.start`
+    // brings the job back up.
+    let (engine, mut scope, app, ast) = setup_with_script(
+        r#"
+        let web = app.deployment("web").image("docker.io/library/nginx:latest");
+        let runner = app.job("runner").image("docker.io/library/busybox:latest");
+        app.on_start(|rt, _param| {
+            rt.stop(app.job("runner"));
+            rt.start(app.deployment("web")).ready();
+            rt.start(app.job("runner")).terminated();
+        });
+    "#,
+    );
+
+    let oracle = Arc::new(TestWorldOracle::new());
+    let log = InMemoryActionLog::new();
+    let op = OperationId::new();
+    let reg: Arc<dyn crate::runtime::InstanceRegistry> = registry();
+
+    // Pass 1: the job is still running, so the stop suspends.
+    oracle.set(job("runner"), LifecycleState::Running);
+    let r = run_pass(
+        &engine,
+        &ast,
+        &app,
+        &mut scope,
+        op.clone(),
+        &log,
+        Arc::clone(&oracle),
+        Arc::clone(&reg),
+    );
+    assert!(matches!(r, OperationResult::Suspended(_)), "pass 1: {r:?}");
+
+    // Pass 2: the job has terminated, so the stop is satisfied and commits a
+    // satisfied Terminated record. The deployment is not ready yet, so the
+    // closure suspends again before reaching the `.terminated()` barrier.
+    oracle.set(job("runner"), LifecycleState::Terminated);
+    let r = run_pass(
+        &engine,
+        &ast,
+        &app,
+        &mut scope,
+        op.clone(),
+        &log,
+        Arc::clone(&oracle),
+        Arc::clone(&reg),
+    );
+    assert!(matches!(r, OperationResult::Suspended(_)), "pass 2: {r:?}");
+
+    // Pass 3: the deployment is ready, so the closure reaches
+    // `.terminated()` — with the job running again. The barrier must consult
+    // the world and suspend, not take the stop's record as its own.
+    oracle.set(dep("web"), LifecycleState::Ready);
+    oracle.set(job("runner"), LifecycleState::Running);
+    let r = run_pass(
+        &engine,
+        &ast,
+        &app,
+        &mut scope,
+        op,
+        &log,
+        Arc::clone(&oracle),
+        Arc::clone(&reg),
+    );
+    assert!(
+        matches!(r, OperationResult::Suspended(_)),
+        "the terminated() barrier took the earlier stop's record as its own: {r:?}"
+    );
+}

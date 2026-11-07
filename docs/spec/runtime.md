@@ -718,6 +718,12 @@ Some operations must hand a writable or read-only path to an action closure with
 > 5. Barrier calls whose conditions are already satisfied (according to the current world observation history) return immediately.
 > 6. Execution fast-forwards to the first unsatisfied barrier, where it suspends normally.
 
+> r[barrier.replay.anchor]
+> A barrier is anchored to the log entry of the call that produced the `Started` it was called on.
+> Whether the barrier has already been satisfied is decided from that entry alone, never from another entry that happens to record the same resources and the same required state.
+> Resources and required state do not identify a barrier: distinct calls within one closure can resolve to the same resource set, and [`rt.stop`](#r--barrier.replay.rt-stop) records the same terminal state that a later `.terminated()` barrier waits for.
+> A barrier whose anchoring entry records no satisfied barrier for its required state is decided against the [world observation history](#r--history.world.state-derivation).
+
 > r[barrier.replay.determinism]
 > BSL action closures must not have side effects beyond `rt.*` calls.
 > Re-execution of a closure given the same AppDef and parameters must produce the same sequence of `rt.*` calls up to any given barrier point.
