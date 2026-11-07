@@ -308,10 +308,10 @@ async fn replace_condemned<R: CertificateRelay>(
             Some(ask) => {
                 budget.asked += 1;
                 if let Err(e) = engine
-                    .revoke_and_reorder(ask.clone(), c.cert_id, c.reason.clone())
+                    .revoke_and_reorder(ask, c.cert_id, c.reason.clone())
                     .await
                 {
-                    record_engine_failure(state, &ask, &e);
+                    record_engine_failure(state, &e);
                 }
             }
             // The hostname has left its chain: the certificate must still stop
@@ -471,9 +471,9 @@ async fn ask_canopy<R: CertificateRelay>(
         };
         budget.asked += 1;
         state.canopy.set_asked_through(hostname);
-        match engine.ask(ask.clone()).await {
+        match engine.ask(ask).await {
             Ok(outcome) => tracing::debug!(%hostname, ?outcome, "asked Canopy"),
-            Err(e) => record_engine_failure(state, &ask, &e),
+            Err(e) => record_engine_failure(state, &e),
         }
     }
 }
@@ -486,8 +486,13 @@ async fn ask_canopy<R: CertificateRelay>(
 /// pass (a key that no longer decrypts) retried for ever and visible only in the
 /// log. Recorded where every answer is recorded, so the cadence and the fault
 /// follow from it.
+///
+/// Against the position the engine hands back and never the one the caller
+/// asked from: a revocation writes where the hostname now stands before the
+/// replacement is asked for, and recording the earlier position would undo it.
 // r[impl tls.canopy.fault]
-fn record_engine_failure(state: &Arc<OiState>, ask: &Ask, error: &canopy::Error) {
+fn record_engine_failure(state: &Arc<OiState>, failed: &canopy::Failed) {
+    let canopy::Failed { ask, error } = failed;
     let reason = format!("the request to Canopy could not be made: {error}");
     tracing::error!(hostname = %ask.hostname, "{reason}");
     let hostname = ask.hostname.clone();
@@ -1287,6 +1292,83 @@ mod tests {
             active_faults(&oi).len(),
             1,
             "a condition that may never pass is faulted rather than retried in silence"
+        );
+    }
+
+    /// The revocation writes where the hostname now stands and only then asks
+    /// for the replacement. A failure in between belongs to what the revocation
+    /// wrote: recorded against the position it was asked from, the hostname
+    /// would read as back on Canopy with nothing to replace and no order
+    /// outstanding, and would wait out the after-failure hour for a
+    /// replacement it is supposed to be collecting every tick.
+    // r[verify tls.canopy.revoked]
+    // r[verify tls.canopy.fault]
+    #[test]
+    fn a_failure_after_a_revocation_does_not_undo_it() {
+        let oi = TestOi::new();
+        register(&oi, "shop", &script_for("tamanu", "shop.example.com", 443));
+        let now = jiff::Timestamp::now().as_second();
+        // Well inside its life, so no cycle is running and the revocation is
+        // what starts one: the position it writes differs from the one it was
+        // asked from in every field.
+        let cert_id = canopy_cert(
+            &oi,
+            "shop.example.com",
+            now - 10 * 86_400,
+            now + 80 * 86_400,
+        );
+        // Newer than the revoked row and not revoked, so the replacement's key
+        // is looked for here and cannot be read: the engine fails after the
+        // revocation and before the relay.
+        oi.state.db.call(|db| {
+            store::insert_certificate(
+                db,
+                NewCertificate {
+                    hostname: "shop.example.com",
+                    requested_hostname: Some("shop.example.com"),
+                    state: TlsCertState::CsrPending,
+                    origin: TlsCertOrigin::Canopy,
+                    cert_pem: None,
+                    csr_pem: Some("not a signing request"),
+                    key_ciphertext: b"not a key",
+                    key_type: KeyType::EcdsaP256,
+                    metadata: CertMetadata::default(),
+                    note: None,
+                    acme_account_id: None,
+                },
+            )
+            .unwrap();
+        });
+
+        let managed = managed_in(&oi);
+        let names = revoking(&oi, cert_id, "shop.example.com");
+        oi.block_on(async {
+            let snap = snapshot(&oi.state, &managed).expect("the state can be read");
+            let engine = Engine::new(oi.state.db.clone(), Arc::clone(&oi.state.cipher), &Broken);
+            replace_condemned(&oi.state, &engine, &snap, &names, &mut Budget::new()).await;
+        });
+
+        let row = oi
+            .state
+            .db
+            .call(|db| store::get_chain_row(db, "shop.example.com").unwrap())
+            .expect("the hostname records where it stands");
+        assert_eq!(
+            row.row.step, 1,
+            "the revocation passed it to the next strategy, and the failure does not put it back"
+        );
+        assert!(
+            row.row.open_order_since.is_some(),
+            "the replacement is still outstanding, so it is collected rather than waited out"
+        );
+        assert_eq!(
+            row.row.identity.cert_id,
+            Some(cert_id),
+            "and what it is replacing is the certificate that was revoked"
+        );
+        assert!(
+            row.last_error.unwrap().contains("could not be made"),
+            "with the failure itself recorded"
         );
     }
 

@@ -350,10 +350,11 @@ impl<R: CertificateRelay> Engine<R> {
     /// The same call opens an order and collects it, and is safe to repeat.
     // r[impl tls.canopy.request]
     // r[impl tls.canopy.collect]
-    pub async fn ask(&self, ask: Ask) -> Result<Outcome> {
-        match self.request_and_apply(&ask).await? {
-            ApplyResult::Done(outcome) => Ok(outcome),
-            ApplyResult::Replaced(replacement) => self.reorder(ask, replacement).await,
+    pub async fn ask(&self, ask: Ask) -> std::result::Result<Outcome, Failed> {
+        match self.request_and_apply(&ask).await {
+            Ok(ApplyResult::Done(outcome)) => Ok(outcome),
+            Ok(ApplyResult::Replaced(replacement)) => self.reorder(ask, replacement).await,
+            Err(error) => Err(Failed { ask, error }),
         }
     }
 
@@ -365,9 +366,11 @@ impl<R: CertificateRelay> Engine<R> {
         ask: Ask,
         cert_id: i64,
         reason: String,
-    ) -> Result<Outcome> {
-        let replacement = self.revoke(&ask, cert_id, reason)?;
-        self.reorder(ask, replacement).await
+    ) -> std::result::Result<Outcome, Failed> {
+        match self.revoke(&ask, cert_id, reason) {
+            Ok(replacement) => self.reorder(ask, replacement).await,
+            Err(error) => Err(Failed { ask, error }),
+        }
     }
 
     /// Stop serving a revoked certificate and pass the hostname to the next
@@ -395,16 +398,25 @@ impl<R: CertificateRelay> Engine<R> {
     ///
     /// Once, not in a loop: an answer that condemns the new key as well is left
     /// for the next opportunity rather than chased here.
-    async fn reorder(&self, ask: Ask, replacement: Replacement) -> Result<Outcome> {
+    async fn reorder(
+        &self,
+        ask: Ask,
+        replacement: Replacement,
+    ) -> std::result::Result<Outcome, Failed> {
         let reason = replacement.reason.clone();
+        // The revocation has already written where the hostname stands, so a
+        // failure from here belongs to that position and not to the one the
+        // caller asked from.
         let next = Ask {
             replacing: replacement.replacing,
             step: replacement.step,
             since: replacement.since,
             ..ask
         };
-        self.request_and_apply(&next).await?;
-        Ok(Outcome::Replaced(reason))
+        match self.request_and_apply(&next).await {
+            Ok(_) => Ok(Outcome::Replaced(reason)),
+            Err(error) => Err(Failed { ask: next, error }),
+        }
     }
 
     async fn request_and_apply(&self, ask: &Ask) -> Result<ApplyResult> {
@@ -496,6 +508,21 @@ impl<R: CertificateRelay> Engine<R> {
 enum ApplyResult {
     Done(Outcome),
     Replaced(Replacement),
+}
+
+/// A request that could not be put, and where the hostname stands as the
+/// engine left it.
+///
+/// The position is carried because the engine may have moved the hostname
+/// before the failure: a revocation writes where the hostname now stands and
+/// then asks for the replacement, so a failure between the two belongs to what
+/// the revocation wrote. Recording it against the position the caller started
+/// from would undo the revocation, putting the hostname back on Canopy with
+/// nothing to replace and no order outstanding.
+#[derive(Debug)]
+pub struct Failed {
+    pub ask: Ask,
+    pub error: Error,
 }
 
 /// Where a hostname stands after its certificate was revoked.
