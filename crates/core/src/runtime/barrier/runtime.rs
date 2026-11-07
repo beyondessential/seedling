@@ -369,6 +369,47 @@ pub fn extract_cancel_hit(err: &EvalAltResult) -> bool {
 /// pairs for those that declare a non-empty image reference. Anonymous
 /// resources arrive with a def attached; named ones are looked up in the
 /// action-context AppDef (the thread-local set by [`ActionClosureGuard`]).
+// r[impl barrier.replay.positional]
+// r[impl history.action-log.entries]
+/// Claim this call's position in the action log, returning the index of the
+/// entry the call belongs to.
+///
+/// On a replay pass the committed entry at that position is consumed, and
+/// a divergence is reported rather than guessed at: a script edit that puts
+/// a different kind of call at this position cannot be replayed from an
+/// entry describing the call it replaced, whose barrier record and
+/// resources belong to something else. The sub-action surface answered that
+/// way already; every `rt.*` surface that records an entry now does.
+///
+/// On a pass that is making the call for the first time the entry is
+/// recorded and `breadcrumb` is emitted, with the context lock released
+/// first so it is not held across the journald send.
+fn claim_log_position(
+    ctx: &SharedContext,
+    call_kind: CallKind,
+    resources: &[ResourceInstance],
+    breadcrumb: impl FnOnce(),
+) -> Result<usize, Box<EvalAltResult>> {
+    let mut g = ctx.lock();
+    let idx = g.call_index;
+    match g.replay_step(call_kind, None) {
+        Ok(Some(_)) => return Ok(idx),
+        Ok(None) => {}
+        Err(mismatch) => return Err(Box::<EvalAltResult>::from(mismatch.to_string())),
+    }
+    g.pending.push(ActionLogEntry {
+        call_index: idx,
+        call_kind,
+        resources: resources.to_vec(),
+        barrier: None,
+        extra: None,
+    });
+    g.call_index += 1;
+    drop(g);
+    breadcrumb();
+    Ok(idx)
+}
+
 // r[impl barrier.replay.anchor]
 // r[impl barrier.satisfaction.recorded]
 /// Record `record` against the log entry of the call a barrier belongs to,
@@ -959,38 +1000,21 @@ impl RuntimeInstance {
             Some(c) => Arc::clone(c),
         };
 
-        let origin_index = {
-            let mut g = ctx.lock();
-            let idx = g.call_index;
-            if g.is_replaying() {
-                g.call_index += 1;
-            } else {
-                g.pending.push(ActionLogEntry {
-                    call_index: idx,
-                    call_kind,
-                    resources: resources.clone(),
-                    barrier: None,
-                    extra: None,
-                });
-                g.call_index += 1;
-                drop(g);
-                let defs: Vec<Option<&crate::defs::resource::Resource>> = resources_with_defs
-                    .iter()
-                    .map(|(_, d)| d.as_ref())
-                    .collect();
-                let breadcrumb = match call_kind {
-                    CallKind::Query => crate::system::breadcrumb::BreadcrumbKind::Query {
-                        resources: &resources,
-                    },
-                    _ => crate::system::breadcrumb::BreadcrumbKind::Start {
-                        resources: &resources,
-                        defs: &defs,
-                    },
-                };
-                emit_breadcrumb(breadcrumb);
-            }
-            idx
-        };
+        let origin_index = claim_log_position(&ctx, call_kind, &resources, || {
+            let defs: Vec<Option<&crate::defs::resource::Resource>> = resources_with_defs
+                .iter()
+                .map(|(_, d)| d.as_ref())
+                .collect();
+            emit_breadcrumb(match call_kind {
+                CallKind::Query => crate::system::breadcrumb::BreadcrumbKind::Query {
+                    resources: &resources,
+                },
+                _ => crate::system::breadcrumb::BreadcrumbKind::Start {
+                    resources: &resources,
+                    defs: &defs,
+                },
+            });
+        })?;
 
         Ok(Started {
             ctx: Some(ctx),
@@ -1064,27 +1088,11 @@ impl RuntimeInstance {
             Some(c) => Arc::clone(c),
         };
 
-        let origin_index = {
-            let mut g = ctx.lock();
-            let idx = g.call_index;
-            if g.is_replaying() {
-                g.call_index += 1;
-            } else {
-                g.pending.push(ActionLogEntry {
-                    call_index: idx,
-                    call_kind: CallKind::WarmCerts,
-                    resources: resources.clone(),
-                    barrier: None,
-                    extra: None,
-                });
-                g.call_index += 1;
-                drop(g);
-                emit_breadcrumb(crate::system::breadcrumb::BreadcrumbKind::WarmCerts {
-                    resources: &resources,
-                });
-            }
-            idx
-        };
+        let origin_index = claim_log_position(&ctx, CallKind::WarmCerts, &resources, || {
+            emit_breadcrumb(crate::system::breadcrumb::BreadcrumbKind::WarmCerts {
+                resources: &resources,
+            });
+        })?;
 
         Ok(Started {
             ctx: Some(ctx),
@@ -1162,27 +1170,9 @@ impl RuntimeInstance {
             Some(c) => Arc::clone(c),
         };
 
-        let origin_index = {
-            let mut g = ctx.lock();
-            let idx = g.call_index;
-            if g.is_replaying() {
-                g.call_index += 1;
-            } else {
-                g.pending.push(ActionLogEntry {
-                    call_index: idx,
-                    call_kind: CallKind::WarmImages,
-                    resources: resources.clone(),
-                    barrier: None,
-                    extra: None,
-                });
-                g.call_index += 1;
-                drop(g);
-                emit_breadcrumb(crate::system::breadcrumb::BreadcrumbKind::WarmImages {
-                    refs: &refs,
-                });
-            }
-            idx
-        };
+        let origin_index = claim_log_position(&ctx, CallKind::WarmImages, &resources, || {
+            emit_breadcrumb(crate::system::breadcrumb::BreadcrumbKind::WarmImages { refs: &refs });
+        })?;
 
         Ok(Started {
             ctx: Some(ctx),

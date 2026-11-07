@@ -1954,3 +1954,69 @@ fn a_narrowed_barrier_does_not_satisfy_the_broader_one_beside_it() {
         );
     }
 }
+
+// r[verify barrier.replay.positional]
+#[test]
+fn a_start_replayed_against_a_stop_entry_diverges() {
+    // The rt.* surfaces advanced past the committed entry at their position
+    // without checking what kind of call it recorded, so a script edit that
+    // swapped the call there replayed silently against an entry describing
+    // something else — taking over whatever barrier record it held.
+    let stop_then_barrier = r#"
+        let web = app.deployment("web").image("docker.io/library/nginx:latest");
+        app.on_start(|rt, _param| {
+            rt.stop(app.deployment("web"));
+        });
+    "#;
+    let (engine, mut scope, app, ast) = setup_with_script(stop_then_barrier);
+
+    let oracle = Arc::new(TestWorldOracle::new());
+    oracle.set(dep("web"), LifecycleState::Running);
+    let log = InMemoryActionLog::new();
+    let op = OperationId::new();
+    let reg: Arc<dyn crate::runtime::InstanceRegistry> = registry();
+
+    // Pass 1 records a Stop at position 0 and suspends on it.
+    let r = run_pass(
+        &engine,
+        &ast,
+        &app,
+        &mut scope,
+        op.clone(),
+        &log,
+        Arc::clone(&oracle),
+        Arc::clone(&reg),
+    );
+    assert!(matches!(r, OperationResult::Suspended(_)), "pass 1: {r:?}");
+
+    // The script is edited so position 0 is now an rt.start.
+    let (engine, mut scope, app, ast) = setup_with_script(
+        r#"
+        let web = app.deployment("web").image("docker.io/library/nginx:latest");
+        app.on_start(|rt, _param| {
+            rt.start(app.deployment("web")).ready();
+        });
+    "#,
+    );
+    oracle.set(dep("web"), LifecycleState::Ready);
+    let r = run_pass(
+        &engine,
+        &ast,
+        &app,
+        &mut scope,
+        op,
+        &log,
+        Arc::clone(&oracle),
+        Arc::clone(&reg),
+    );
+    match r {
+        OperationResult::Failed(err) => {
+            let msg = err.to_string();
+            assert!(
+                msg.contains("replay diverged"),
+                "expected a divergence naming the recorded kind, got: {msg}"
+            );
+        }
+        other => panic!("a start replayed against a stop's entry without complaint: {other:?}"),
+    }
+}
