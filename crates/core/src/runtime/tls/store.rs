@@ -811,11 +811,19 @@ pub fn delete_certificate(db: &Db, id: i64) -> rusqlite::Result<bool> {
             .conn
             .execute("DELETE FROM tls_certificates WHERE id = ?1", [id])?;
         // A recorded chain position for a certificate that no longer exists
-        // would go on steering a hostname by an expiry nothing holds.
-        db.conn.execute(
-            "DELETE FROM tls_chain_state WHERE replacing_cert_id = ?1",
-            [id],
-        )?;
+        // would go on steering a hostname by an expiry nothing holds. Cleared
+        // through `clear_chain_row`, so an order one of them carried is closed
+        // rather than left open for ever.
+        let orphaned: Vec<String> = {
+            let mut stmt = db
+                .conn
+                .prepare("SELECT hostname FROM tls_chain_state WHERE replacing_cert_id = ?1")?;
+            let rows = stmt.query_map([id], |row| row.get::<_, String>(0))?;
+            rows.collect::<rusqlite::Result<Vec<_>>>()?
+        };
+        for hostname in orphaned {
+            clear_chain_row(db, &hostname)?;
+        }
         Ok(n > 0)
     })
 }
@@ -1369,13 +1377,34 @@ pub fn put_chain_row(
     Ok(())
 }
 
-/// Forget a hostname's chain position, because a cycle has finished.
+/// Forget a hostname's chain position, because a cycle has finished or the
+/// hostname has left its chain.
+///
+/// An order the row carried is closed in the same transaction. Whether an
+/// attempt is open is asked of the log and not of the row, so one left pending
+/// here would never be closed by anything, and the next order for the hostname
+/// would have its outcome booked against it.
+// r[impl tls.canopy.attempts]
 pub fn clear_chain_row(db: &Db, hostname: &str) -> rusqlite::Result<bool> {
-    let n = db.conn.execute(
-        "DELETE FROM tls_chain_state WHERE hostname = ?1",
-        [hostname],
-    )?;
-    Ok(n > 0)
+    atomically(db, || {
+        if let Some(existing) = get_chain_row(db, hostname)?
+            && existing.row.open_order_since.is_some()
+            && let Some(id) = latest_pending_attempt(db, hostname)?
+        {
+            finalize_attempt(
+                db,
+                id,
+                AttemptOutcome::Failure,
+                None,
+                Some("the hostname left its chain before the order was answered"),
+            )?;
+        }
+        let n = db.conn.execute(
+            "DELETE FROM tls_chain_state WHERE hostname = ?1",
+            [hostname],
+        )?;
+        Ok(n > 0)
+    })
 }
 
 /// Consume an operator retry for a hostname on a chain and start its cycle in
@@ -2613,5 +2642,68 @@ mod tests {
         let s = get_settings(&db).unwrap();
         assert_eq!(s.contact_email, "ops@example.com");
         assert!(s.updated_at > 0);
+    }
+
+    // r[verify tls.canopy.attempts]
+    #[test]
+    fn a_hostname_that_leaves_its_chain_does_not_strand_its_open_order() {
+        let (db, _) = fresh_db();
+        let attempt = insert_attempt(&db, "shop.example.com", AttemptTrigger::Renewal).unwrap();
+        put_chain_row(
+            &db,
+            "shop.example.com",
+            &chain::Row {
+                identity: chain::Identity::NONE,
+                step: 0,
+                since: 1,
+                open_order_since: Some(1),
+                retry_not_before: None,
+            },
+            None,
+        )
+        .unwrap();
+
+        clear_chain_row(&db, "shop.example.com").unwrap();
+
+        assert_eq!(
+            latest_pending_attempt(&db, "shop.example.com").unwrap(),
+            None,
+            "an attempt nothing will ever close would take the next order's outcome"
+        );
+        let attempts = list_attempts(&db, Some("shop.example.com"), 10).unwrap();
+        let closed = attempts.iter().find(|a| a.id == attempt).unwrap();
+        assert_eq!(closed.outcome, AttemptOutcome::Failure);
+    }
+
+    // r[verify tls.canopy.attempts]
+    #[test]
+    fn deleting_the_certificate_a_cycle_replaces_closes_its_order_too() {
+        let (db, _) = fresh_db();
+        let id = insert_test_cert(&db, "shop.example.com");
+        insert_attempt(&db, "shop.example.com", AttemptTrigger::Renewal).unwrap();
+        put_chain_row(
+            &db,
+            "shop.example.com",
+            &chain::Row {
+                identity: chain::Identity {
+                    cert_id: Some(id),
+                    not_after: Some(10),
+                },
+                step: 0,
+                since: 1,
+                open_order_since: Some(1),
+                retry_not_before: None,
+            },
+            None,
+        )
+        .unwrap();
+
+        delete_certificate(&db, id).unwrap();
+
+        assert!(get_chain_row(&db, "shop.example.com").unwrap().is_none());
+        assert_eq!(
+            latest_pending_attempt(&db, "shop.example.com").unwrap(),
+            None
+        );
     }
 }
