@@ -215,7 +215,9 @@ pub(crate) fn create_site_ingress(
 
     let def = SiteIngressDef {
         name: params.name.clone(),
-        hostname: params.hostname.clone(),
+        // The same one form an app's ingress is held in, so the two sides of a
+        // (hostname, port) claim are comparable.
+        hostname: params.hostname.to_ascii_lowercase(),
         description: params.description.clone(),
         source: SiteIngressSource::Manual,
         tls_provider: params.tls_provider,

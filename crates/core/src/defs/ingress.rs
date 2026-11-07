@@ -54,6 +54,14 @@ impl super::Freezable for Ingress {
 
 impl Ingress {
     pub fn new(service: Service, hostname: String, port: Port) -> Self {
+        // One form for a hostname, from the moment it is declared. A DNS name
+        // is case-insensitive, a script may write one in any case, and what a
+        // client sends as SNI is matched against this exactly: declared in
+        // another case, the hostname would be one no handshake ever names, and
+        // every decision made for it would be made for a name nothing asks
+        // about.
+        // l[impl ingress.hostname]
+        let hostname = hostname.to_ascii_lowercase();
         // The ingress's resource name is its (hostname, port) tuple,
         // not the underlying service's name: a single service is
         // allowed multiple ingresses (different hostnames, redirect

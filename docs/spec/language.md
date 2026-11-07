@@ -676,6 +676,8 @@ This is currently the only value.
 > Wildcard labels (e.g. `*.example.com`) are not permitted. If wildcard matching is needed in the future it will be designed as a separate feature.
 >
 > If the hostname is not valid, the method must throw.
+>
+> A DNS name is case-insensitive, so the hostname is held in lower case whatever case it is written in, and everything derived from it — the ingress's identity, the proxy's configuration, the name a certificate is obtained for — uses that one form.
 
 > l[ingress.conflicts]
 > If more than one ingress matches the same (hostname, port) tuple...
