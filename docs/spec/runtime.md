@@ -1343,6 +1343,15 @@ Two levers set how a workload competes for host resources under pressure. Each D
 > A scan by name prefix is permitted only to enumerate candidates that are then matched exactly against recorded identity.
 > Having no recorded identities is not on its own evidence that teardown has finished: where the runtime cannot rule out that resources of the app are still present, it must not declare the app uninstalled, and must raise a fault that clears when teardown does complete.
 
+> r[app.uninstall.exclusive]
+> An uninstall must be rejected while a [lifecycle operation](#r--operation.lifecycle) for that app is in progress or queued, and the rejection must name the action that holds the app so the operator knows what to cancel.
+> Uninstall must determine this from the scheduler's record of operations rather than from the app's phase: an action closure runs with its app in the `Installed` phase, so the phase does not distinguish an idle app from one mid-action.
+> Where the runtime cannot determine whether an operation holds the app, it must reject.
+>
+> Rejecting rather than cancelling the operation keeps uninstall consistent with [operation.lifecycle.single.intra-app](#r--operation.lifecycle.single.intra-app), which rejects a competing request rather than pre-empting the operation in flight.
+> Cancelling on the operator's behalf would need a bound on how long uninstall waits for the closure to unwind, and an uninstall that abandons the wait leaves the app in exactly the half-torn-down state the rejection exists to prevent.
+> [Cancel](#r--operation.cancel) is already an operator-reachable action, so an operator who wants the uninstall to win cancels and retries.
+
 > r[infra.pod.subnet]
 > No two concurrently running pod instances may share a network prefix.
 > A prefix must therefore not be derived from a part of an instance's identity that distinct instances can share: in particular, instances carrying no unique identifier of their own must still be distinguished by the rest of their identity.

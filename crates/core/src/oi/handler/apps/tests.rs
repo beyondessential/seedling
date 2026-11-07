@@ -189,6 +189,42 @@ fn uninstall_requires_installed_phase() {
     assert_eq!(code, "not_found");
 }
 
+// r[verify app.uninstall.exclusive]
+// The app stays in `Installed` for the whole of an action, so the phase gate
+// let an uninstall through mid-action and the reconciler began tearing down
+// what the closure was still driving. Only the scheduler knows.
+#[test]
+fn uninstall_is_refused_while_an_action_holds_the_app() {
+    use seedling_protocol::names::{ActionName, AppName};
+
+    let oi = TestOi::with_app("demo");
+    oi.install("demo");
+
+    let app = AppName::new("demo").expect("app name");
+    let action = ActionName::new("backup").expect("action name");
+    oi.state
+        .scheduler
+        .lock()
+        .request(&app, &action, serde_json::Map::new(), 1, 1, "test");
+
+    let (code, message) = oi
+        .call("/apps/uninstall", json!({ "app": "demo" }))
+        .unwrap_err();
+    assert_eq!(code, "operation_in_progress");
+    assert!(message.contains("backup"), "names the action: {message}");
+
+    // The refusal left the app alone: still installed, not torn down.
+    let desc = oi.call("/apps/show", json!({ "app": "demo" })).unwrap();
+    assert_eq!(desc["status"], "installed");
+
+    // Once the action is done the uninstall goes through.
+    oi.state.scheduler.lock().complete_current();
+    oi.call("/apps/uninstall", json!({ "app": "demo" }))
+        .unwrap();
+    let desc = oi.call("/apps/show", json!({ "app": "demo" })).unwrap();
+    assert_eq!(desc["status"], "uninstalling");
+}
+
 // i[verify scale.reset-on-uninstall]
 #[test]
 fn uninstall_transitions_phase_and_resets_scaling() {
