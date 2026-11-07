@@ -97,7 +97,17 @@ pub struct Tick {
 }
 
 /// Run one tick's worth of certificate work.
+///
+/// `None` when there was nothing to do, or when the state could not be read.
 pub async fn run(state: &Arc<OiState>, names: &Entitlements) -> Option<Tick> {
+    // Before anything is read: on an install Canopy plays no part in, the rest
+    // of this walks the proxy's cache and loads every certificate row for a
+    // tick that can only decide to do nothing. The fault sync asks the same
+    // narrow question for the same reason, and three small queries twice a
+    // minute is what that costs.
+    if !canopy_is_in_play(state) {
+        return None;
+    }
     let managed = {
         let registry = state.registry.read();
         state::managed_ingresses(&registry)
@@ -1589,6 +1599,12 @@ mod tests {
             !canopy_is_in_play(&oi.state),
             "no app declares a type, no policy names Canopy and no fault of its is filed"
         );
+        let nothing_held = revoking_all(&oi, &[]);
+        assert!(
+            oi.block_on(async { run(&oi.state, &nothing_held).await })
+                .is_none(),
+            "so the tick does not read the world to decide nothing"
+        );
 
         // Any one of the three is enough to look.
         oi.call(
@@ -1597,6 +1613,11 @@ mod tests {
         )
         .unwrap();
         assert!(canopy_is_in_play(&oi.state));
+        assert!(
+            oi.block_on(async { run(&oi.state, &nothing_held).await })
+                .is_some(),
+            "and it does once Canopy has something to do with the install"
+        );
         oi.call(
             "/tls/policies/clear",
             json!({ "hostname": "shop.example.com" }),
