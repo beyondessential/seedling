@@ -427,6 +427,8 @@ Absent specification bugs, anything that is not defined here is either defined i
 > i[scale.describe]
 > `/apps/show` includes, for each Deployment resource, a `scale` object with fields `low` (lower bound), `high` (upper bound), and `current` (the effective scale).
 > `current` is the stored scaling decision clamped to the declared bounds, or the lower bound if no decision has been stored.
+> Where the decision cannot be read, `current` is null, per [scaling.decision.unreadable](runtime.md#r--scaling.decision.unreadable); `low` and `high` come from the app definition and are still reported.
+> A null must not be read as a scale: a client adjusting a deployment by one instance has nothing to adjust from, and must say the figure is unavailable rather than counting from zero or from a bound.
 
 # App Priority
 
