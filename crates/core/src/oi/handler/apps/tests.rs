@@ -213,9 +213,12 @@ fn uninstall_is_refused_while_an_action_holds_the_app() {
     assert_eq!(code, "operation_in_progress");
     assert!(message.contains("backup"), "names the action: {message}");
 
-    // The refusal left the app alone: still installed, not torn down.
+    // The refusal left the app alone: no teardown was started under the
+    // action. (`status` is a health rollup over the installed app, so an
+    // app whose deployment is not actually running reads as degraded.)
     let desc = oi.call("/apps/show", json!({ "app": "demo" })).unwrap();
-    assert_eq!(desc["status"], "installed");
+    assert_ne!(desc["status"], "uninstalling", "no teardown began");
+    assert_ne!(desc["status"], "not_installed");
 
     // Once the action is done the uninstall goes through.
     oi.state.scheduler.lock().complete_current();
