@@ -2189,20 +2189,18 @@ impl Started {
     /// resources are waited on, it does not make a new call. A warm-images
     /// group narrows what its barrier waits on too, since the references it
     /// checks are held against the resources they came from.
-    fn narrowed_to(&self, kept: &[ResourceInstance]) -> Self {
+    fn narrowed_to(&self, keep: impl Fn(&ResourceInstance) -> bool) -> Self {
+        // One predicate decides both. Filtering the pairs by membership of
+        // the kept resources instead would rescan that list for every pair.
         let warm = match &self.warm {
-            WarmMode::Images(pairs) => WarmMode::Images(
-                pairs
-                    .iter()
-                    .filter(|(r, _)| kept.contains(r))
-                    .cloned()
-                    .collect(),
-            ),
+            WarmMode::Images(pairs) => {
+                WarmMode::Images(pairs.iter().filter(|(r, _)| keep(r)).cloned().collect())
+            }
             other => other.clone(),
         };
         Self {
             ctx: self.ctx.clone(),
-            resources: kept.to_vec(),
+            resources: self.resources.iter().filter(|r| keep(r)).cloned().collect(),
             narrowed: true,
             origin_index: self.origin_index,
             warm,
@@ -2216,12 +2214,6 @@ impl Started {
             return None;
         }
         self.origin_index
-    }
-
-    fn filtered(&self, keep: impl Fn(&ResourceInstance) -> bool) -> Self {
-        let kept: Vec<ResourceInstance> =
-            self.resources.iter().filter(|r| keep(r)).cloned().collect();
-        self.narrowed_to(&kept)
     }
 
     // r[impl barrier.suspension]
@@ -2560,8 +2552,8 @@ impl CustomType for Started {
             // went on waiting for the resource the author had excluded.
             // l[impl collection.one]
             .with_fn("one", |this: &mut Self| -> Dynamic {
-                match this.resources.first() {
-                    Some(first) => Dynamic::from(this.narrowed_to(std::slice::from_ref(first))),
+                match this.resources.first().map(|r| r.id) {
+                    Some(first) => Dynamic::from(this.narrowed_to(|r| r.id == first)),
                     // `collection.one` is null on an empty collection, and
                     // a Started over no resources is worse than null here:
                     // its barriers would have nothing to wait on.
@@ -2571,19 +2563,19 @@ impl CustomType for Started {
             // l[impl collection.only]
             .with_fn("only", |this: &mut Self, other: Dynamic| -> Self {
                 let keys = resource_keys(other);
-                this.filtered(|r| keys_hold(&keys, r))
+                this.narrowed_to(|r| keys_hold(&keys, r))
             })
             // l[impl collection.except]
             .with_fn("except", |this: &mut Self, other: Dynamic| -> Self {
                 let keys = resource_keys(other);
-                this.filtered(|r| !keys_hold(&keys, r))
+                this.narrowed_to(|r| !keys_hold(&keys, r))
             })
             // l[impl collection.select]
             .with_fn(
                 "select",
                 |this: &mut Self, criterion: Map| -> Result<Self, Box<EvalAltResult>> {
                     let selector = Selector::from_map(&criterion)?;
-                    Ok(this.filtered(|r| {
+                    Ok(this.narrowed_to(|r| {
                         selector.matches_resource(r.kind, r.name.as_deref().unwrap_or(""))
                     }))
                 },
