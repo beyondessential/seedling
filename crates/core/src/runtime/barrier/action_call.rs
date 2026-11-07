@@ -151,6 +151,7 @@ fn resolve_call_params(
         return validate_call_params(rt, action_name, params);
     };
 
+    // r[impl operation.composition.params.replay]
     // r[impl barrier.replay.positional]
     // The recorded action name is a literal in the script, so unlike the
     // params it must match the log: a script edit that changes which
@@ -199,7 +200,7 @@ fn resolve_call_params(
     Ok(validated)
 }
 
-// r[impl operation.composition.params]
+// r[impl operation.composition.params.replay]
 /// Read the called action's name and its post-validation params back out of
 /// a committed `SubAction` entry.
 fn recover_recorded_params(
