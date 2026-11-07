@@ -901,6 +901,10 @@ fn a_hostname_nothing_can_ask_canopy_about_does_not_read_as_in_progress() {
         host["status"], "error",
         "no app declaring it has a Canopy type, so nothing will ever ask"
     );
+    assert!(
+        host["next_issuance_source"].is_null(),
+        "nothing is coming, so the view does not promise issuance"
+    );
 }
 
 // i[verify tls.hostname.list]
