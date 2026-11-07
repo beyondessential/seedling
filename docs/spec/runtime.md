@@ -857,6 +857,14 @@ Some operations must hand a writable or read-only path to an action closure with
 > A named Deployment named by an action resolves to the replicas its effective scale calls for, the same number the reconciler resolves it to, rather than to the lower bound of its declared range.
 > An action that addresses a Deployment addresses the whole of it: a `rt.stop` that reached only part of a scaled deployment would report the workload stopped while the rest of it went on serving, which is the opposite of what a maintenance action that stops a deployment before acting on its data is for.
 
+> r[scaling.decision.unreadable]
+> Where the record of operator-chosen scale cannot be read, the runtime must not fall back to a declared bound: how many instances the operator asked for is unknown, not known to be the minimum.
+> The app must not be actuated for that pass, so whatever is already running keeps running, and the condition must be visible to an operator for as long as it lasts.
+> An operator asking what a deployment's scale is must be told the figure is unavailable rather than given the bound.
+>
+> The lower bound is the floor of what an operator may choose, so using it here answers the question with the smallest answer it could have had.
+> A deployment scaled well above its floor is then converged down to it, tearing down instances on the strength of a question that was never answered, and building them back up on the next pass that can read the record.
+
 > r[scaling.clamp]
 > When an app's BSL script is re-evaluated (e.g. via an update), any stored scaling decision for a Deployment whose declared bounds have changed must be clamped to the new bounds.
 > If the stored value falls below the new lower bound it is raised; if it exceeds the new upper bound it is lowered.
