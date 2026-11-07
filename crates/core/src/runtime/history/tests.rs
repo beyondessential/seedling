@@ -848,3 +848,42 @@ fn a_row_written_before_an_entry_held_several_barriers_still_loads_its_wait() {
         "the wait it was already timing carries over"
     );
 }
+
+// r[verify history.world.source]
+#[test]
+fn observations_for_a_group_come_back_per_instance_in_order() {
+    let db = Db::open_in_memory().unwrap();
+    let web = dep("app", "web");
+    let api = dep("app", "api");
+    let absent = dep("app", "absent");
+    for inst in [&web, &api] {
+        insert_instance(&db, inst).unwrap();
+    }
+    for kind in ["container_running", "health_check_pass"] {
+        insert_observation(&db, &web, kind, &serde_json::json!({})).unwrap();
+    }
+    insert_observation(&db, &api, "container_removed", &serde_json::json!({})).unwrap();
+
+    let got = query_observations_for(&db, &[web.clone(), api.clone(), absent.clone()]).unwrap();
+
+    let kinds = |inst: &ResourceInstance| -> Vec<String> {
+        got[&inst.id].iter().map(|o| o.obs_kind.clone()).collect()
+    };
+    assert_eq!(kinds(&web), ["container_running", "health_check_pass"]);
+    assert_eq!(kinds(&api), ["container_removed"]);
+    assert!(
+        got[&absent.id].is_empty(),
+        "an instance with no observations is present and empty, not missing"
+    );
+
+    // Each instance's own history, matched one at a time, is what the
+    // batched read returns for it.
+    for inst in [&web, &api] {
+        let one: Vec<String> = query_observations(&db, inst)
+            .unwrap()
+            .iter()
+            .map(|o| o.obs_kind.clone())
+            .collect();
+        assert_eq!(one, kinds(inst), "{}", inst.display_name);
+    }
+}

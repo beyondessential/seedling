@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use rusqlite::params;
@@ -283,6 +284,68 @@ pub fn query_observations(
         })
     })?;
     rows.collect()
+}
+
+// r[impl history.world.source]
+/// The observations of every instance given, each instance's in the same
+/// order [`query_observations`] returns them.
+///
+/// One statement for the group rather than one per instance. The callers
+/// that resolve a scaled group want every replica's history at once, and
+/// asking per replica put a prepare and a round trip between each.
+pub fn query_observations_for(
+    db: &Db,
+    instances: &[ResourceInstance],
+) -> rusqlite::Result<HashMap<InstanceId, Vec<WorldObservation>>> {
+    let mut by_instance: HashMap<InstanceId, Vec<WorldObservation>> =
+        instances.iter().map(|inst| (inst.id, Vec::new())).collect();
+    if instances.is_empty() {
+        return Ok(by_instance);
+    }
+    let by_hex: HashMap<String, &ResourceInstance> =
+        instances.iter().map(|i| (i.id.to_hex(), i)).collect();
+
+    let placeholders = vec!["?"; instances.len()].join(", ");
+    let mut stmt = db.conn.prepare(&format!(
+        "SELECT instance_id, id, recorded_at, obs_kind, payload
+         FROM world_observations
+         WHERE instance_id IN ({placeholders})
+         ORDER BY recorded_at ASC, id ASC"
+    ))?;
+    let params: Vec<String> = instances.iter().map(|i| i.id.to_hex()).collect();
+    let rows = stmt.query_map(rusqlite::params_from_iter(params.iter()), |row| {
+        let hex: String = row.get(0)?;
+        Ok((
+            hex,
+            row.get::<_, i64>(1)?,
+            row.get::<_, i64>(2)?,
+            row.get::<_, String>(3)?,
+            row.get::<_, String>(4)?,
+        ))
+    })?;
+
+    for row in rows {
+        let (hex, id, recorded_at, obs_kind, payload) = row?;
+        // An id the query did not ask for cannot be matched to an instance,
+        // so it is not silently filed under one.
+        let Some(instance) = by_hex.get(&hex) else {
+            continue;
+        };
+        let payload = serde_json::from_str(&payload).map_err(|e| {
+            rusqlite::Error::FromSqlConversionFailure(4, rusqlite::types::Type::Text, Box::new(e))
+        })?;
+        by_instance
+            .entry(instance.id)
+            .or_default()
+            .push(WorldObservation {
+                id,
+                recorded_at,
+                resource: (*instance).clone(),
+                obs_kind,
+                payload,
+            });
+    }
+    Ok(by_instance)
 }
 
 // ---------------------------------------------------------------------------

@@ -284,17 +284,23 @@ impl InstanceRegistry for DbInstanceRegistry {
                 }
             }
 
-            // Read each instance's observations once: the keep order is
-            // drawn from them, and so is whether the instance has already
-            // been torn down. A failed read is an error rather than an
-            // empty history, which would say both "not ready" and, worse,
-            // "not torn down" — handing the keep set an instance on the
-            // strength of a query that did not answer.
+            // Read the group's observations in one query: the keep order
+            // is drawn from them, and so is whether each instance has
+            // already been torn down. Asking per instance put a prepared
+            // statement and a round trip between every replica, on each
+            // reconcile tick and each pass of every action that names the
+            // deployment.
+            //
+            // A failed read is an error rather than an empty history, which
+            // would say both "not ready" and, worse, "not torn down" —
+            // handing the keep set an instance on the strength of a query
+            // that did not answer.
+            let observations = history::query_observations_for(db, &scaled)?;
             let mut observed: Vec<(ResourceInstance, LifecycleState, bool)> =
                 Vec::with_capacity(scaled.len());
             for inst in scaled {
-                let obs = history::query_observations(db, &inst)?;
-                let state = crate::runtime::barrier::oracle::derive_lifecycle_state(&inst, &obs);
+                let obs = observations.get(&inst.id).map_or(&[][..], Vec::as_slice);
+                let state = crate::runtime::barrier::oracle::derive_lifecycle_state(&inst, obs);
                 // Latest wins, because that is what the retirement sweep
                 // this mirrors does: it selects on the most recent
                 // observation being a terminal kind. Asking whether a
@@ -306,8 +312,8 @@ impl InstanceRegistry for DbInstanceRegistry {
                 // `rt.stop` would leave it serving, which is the split
                 // r[scaling.decision.actions] exists to prevent.
                 //
-                // `query_observations` orders by recorded_at then id, so the
-                // last is the most recent.
+                // The observations are ordered by recorded_at then id, so
+                // the last is the most recent.
                 let latest_is_terminal = obs
                     .last()
                     .is_some_and(|o| UNSCHEDULED_OBS_KINDS.contains(&o.obs_kind.as_str()));
