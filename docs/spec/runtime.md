@@ -1814,6 +1814,8 @@ An operator policy names a chain of one.
 > r[tls.chain.proxy-gate]
 > The proxy must not order or renew a certificate through HTTP-01 for a hostname unless HTTP-01 is the strategy responsible for it, or the hostname's chain has no earlier strategy.
 > The proxy's own renewal timing therefore cannot start a cycle, and a hostname whose first strategy is Canopy does not receive an HTTP-01 certificate ahead of Canopy.
+> A certificate the proxy already holds is never taken out of service to enforce this.
+> Where no clock says when HTTP-01 becomes responsible, as for a hostname under the Canopy-only policy, the proxy is held back to the last moments before the certificate it holds expires, and not beyond.
 
 ## Canopy
 

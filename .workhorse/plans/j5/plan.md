@@ -154,6 +154,6 @@ Gate design that follows:
 
 - A hostname that falls through to HTTP-01 with no traffic, such as a warm-only one: the spike saw Caddy order nothing for such a name while `get_certificate` is configured on its policy. If production behaves the same, an idle default-chain hostname is not ordered at all, which may be an existing gap and not one this card introduced.
 - Whether Caddy's use of ACME Renewal Information overrides `renewal_window_ratio` on the production image. If it does, a Caddy-held certificate renews at the CA's suggested point regardless of the ratio.
-- A Canopy-only hostname that Caddy already holds a certificate for is held back by the smallest ratio, so Caddy would still order in the last moments before that certificate expires.
+- A Canopy-only hostname that Caddy already holds a certificate for is held back by the smallest ratio, so Caddy would still order in the last moments before that certificate expires. The proxy-gate spec states this bound.
 - The certificate endpoint decides per handshake it cannot answer from the store, loading the TLS snapshot each time. If that shows in practice it wants a short-lived cache.
 - The status response Seedling reads (`names`) must be present for the report to parse at all. That predates this card.

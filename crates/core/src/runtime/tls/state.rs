@@ -440,7 +440,13 @@ impl ChainDecision {
                 Some(left.clamp(MIN_RENEWAL_RATIO, 1.0))
             }
             // No chain strategy of the proxy's will ever be responsible, or no
-            // clock says when one would be.
+            // clock says when one would be. The proxy has no way to be told
+            // never, so it is held to the smallest window it can be given, which
+            // lets it renew over HTTP-01 in the last moments of the certificate
+            // it holds. That is the bound the spec states for this case, and not
+            // an enforcement of the rule that HTTP-01 must be responsible:
+            // taking the certificate out of service to enforce it would serve
+            // nothing for the hostname.
             chain::ProxyFrom::Never | chain::ProxyFrom::Unknown => Some(MIN_RENEWAL_RATIO),
         }
     }
