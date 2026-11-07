@@ -818,6 +818,10 @@ Some operations must hand a writable or read-only path to an action closure with
 > The runtime maintains a persistent record of operator-chosen scale for each Deployment that has been explicitly scaled.
 > When present, this record determines the effective scale used by the reconciler instead of the lower bound default.
 
+> r[scaling.decision.actions]
+> A named Deployment named by an action resolves to the replicas its effective scale calls for, the same number the reconciler resolves it to, rather than to the lower bound of its declared range.
+> An action that addresses a Deployment addresses the whole of it: a `rt.stop` that reached only part of a scaled deployment would report the workload stopped while the rest of it went on serving, which is the opposite of what a maintenance action that stops a deployment before acting on its data is for.
+
 > r[scaling.clamp]
 > When an app's BSL script is re-evaluated (e.g. via an update), any stored scaling decision for a Deployment whose declared bounds have changed must be clamped to the new bounds.
 > If the stored value falls below the new lower bound it is raised; if it exceeds the new upper bound it is lowered.

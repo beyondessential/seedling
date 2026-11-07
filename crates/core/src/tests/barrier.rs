@@ -1183,7 +1183,11 @@ fn rt_stop_deadline_is_enforced() {
 
 /// Run one pass of `start` for an operation, with the boilerplate of
 /// `OperationContext` filled in from the pieces a replay test varies.
-fn run_pass(
+#[expect(
+    clippy::too_many_arguments,
+    reason = "one argument per piece of OperationContext a replay test varies"
+)]
+fn run_pass_with_db(
     engine: &rhai::Engine,
     ast: &rhai::AST,
     app: &defs::app::App,
@@ -1192,6 +1196,7 @@ fn run_pass(
     log: &InMemoryActionLog,
     world: Arc<TestWorldOracle>,
     registry: Arc<dyn crate::runtime::InstanceRegistry>,
+    db: Option<crate::runtime::db::DbHandle>,
 ) -> OperationResult {
     run_operation(
         OperationContext {
@@ -1207,7 +1212,7 @@ fn run_pass(
             tick_notify: None,
             params: serde_json::Map::new(),
             is_shell: false,
-            db: None,
+            db,
             source_generation: 0,
             target_generation: 0,
             script_limits: None,
@@ -1219,6 +1224,25 @@ fn run_pass(
             executor: None,
         },
         scope,
+    )
+}
+
+#[expect(
+    clippy::too_many_arguments,
+    reason = "one argument per piece of OperationContext a replay test varies"
+)]
+fn run_pass(
+    engine: &rhai::Engine,
+    ast: &rhai::AST,
+    app: &defs::app::App,
+    scope: &mut rhai::Scope<'static>,
+    operation_id: OperationId,
+    log: &InMemoryActionLog,
+    world: Arc<TestWorldOracle>,
+    registry: Arc<dyn crate::runtime::InstanceRegistry>,
+) -> OperationResult {
+    run_pass_with_db(
+        engine, ast, app, scope, operation_id, log, world, registry, None,
     )
 }
 
@@ -1469,5 +1493,65 @@ fn a_replayed_sub_action_call_recovers_its_recorded_params() {
     assert!(
         matches!(r, OperationResult::Completed),
         "a committed sub-action call was validated again instead of replayed: {r:?}"
+    );
+}
+
+// r[verify scaling.decision.actions]
+#[test]
+fn an_action_addresses_every_replica_the_deployment_is_scaled_to() {
+    // The replica set was sized from `scale.start`, the low end of the
+    // declared range, so a deployment declared scale(2..10) and scaled to 5
+    // resolved to 2 instances. A maintenance action that stopped it stopped
+    // 2 of the 5 and carried on as though the workload were down.
+    let (engine, mut scope, app, ast) = setup_with_script(
+        r#"
+        let web = app.deployment("web")
+            .image("docker.io/library/nginx:latest")
+            .scale(2..10);
+        app.on_start(|rt, _param| {
+            rt.start(app.deployment("web")).ready();
+        });
+    "#,
+    );
+
+    let db = crate::runtime::db::DbHandle::open_in_memory().expect("in-memory db");
+    // The decision is keyed by the app the operation runs as, which is the
+    // name on the app def rather than the one `dep()` builds instances with.
+    let app_name = app.def.load().name.clone();
+    db.call({
+        let app_name = app_name.clone();
+        move |db| crate::runtime::scaling::save_scaling_decision(db, &app_name, "web", 5)
+    })
+    .expect("scaling decision saves");
+
+    let oracle = Arc::new(TestWorldOracle::new());
+    oracle.set(dep("web"), LifecycleState::Ready);
+    let log = InMemoryActionLog::new();
+    let reg: Arc<dyn crate::runtime::InstanceRegistry> =
+        Arc::new(crate::runtime::registry::DbInstanceRegistry::new(db.clone()));
+
+    let r = run_pass_with_db(
+        &engine,
+        &ast,
+        &app,
+        &mut scope,
+        OperationId::new(),
+        &log,
+        Arc::clone(&oracle),
+        Arc::clone(&reg),
+        Some(db),
+    );
+    assert!(matches!(r, OperationResult::Completed), "{r:?}");
+
+    let entries = log.load().expect("log loads");
+    let started = entries
+        .iter()
+        .find(|e| matches!(e.call_kind, crate::runtime::barrier::CallKind::Start))
+        .expect("the start call is recorded");
+    assert_eq!(
+        started.resources.len(),
+        5,
+        "the action reached {} of the 5 replicas the deployment is scaled to",
+        started.resources.len()
     );
 }

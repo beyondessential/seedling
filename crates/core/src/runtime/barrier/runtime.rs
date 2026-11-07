@@ -456,6 +456,33 @@ impl RuntimeInstance {
         }
     }
 
+    // r[impl scaling.decision.actions]
+    /// How many replicas a named Deployment currently has, as the reconciler
+    /// resolves it: the stored scaling decision clamped to the declared
+    /// range, or the lower bound where no decision has been stored.
+    ///
+    /// A read that fails is an error rather than the lower bound. Falling
+    /// back would resolve the deployment to fewer replicas than it has, and
+    /// a `rt.stop` that silently reached only some of them is exactly the
+    /// failure this answers.
+    ///
+    /// Without a database there are no stored decisions to read, so the
+    /// lower bound is the answer rather than a failure. The floor of one
+    /// holds whatever the bounds say: an action resolving a deployment to
+    /// no instances at all would leave its barriers with nothing to wait
+    /// on, which never completes.
+    fn effective_scale(&self, deployment: &str, low: u16, high: u16) -> Result<u16, RegistryError> {
+        let Some(db) = &self.db else {
+            return Ok(low.max(1));
+        };
+        let app = self.app_name.clone();
+        let deployment = deployment.to_owned();
+        let effective = db.call(move |db| {
+            crate::runtime::scaling::effective_scale(db, &app, &deployment, low, high)
+        })?;
+        Ok(effective.max(1))
+    }
+
     /// Extract ResourceInstance values from a Rhai Dynamic argument.
     ///
     /// Recognises the concrete resource types registered with the engine and
@@ -502,11 +529,21 @@ impl RuntimeInstance {
             // steady-state reconciler keeps every replica as `is_scaled=1`,
             // so creating a singleton here would only produce a transient
             // placeholder that the next reconciliation tick has to retire.
-            // The group's declared scale (low end of the range, default 1)
-            // determines how many instances exist; an action that needs to
-            // refer to all of them — `rt.signal`, `rt.stop`, `rt.query` —
-            // gets every replica back from this single call.
-            let scale = dep.def.lock().scale.start.max(1);
+            // An action that needs to refer to all of them — `rt.signal`,
+            // `rt.stop`, `rt.query` — gets every replica back from this
+            // single call.
+            // r[impl scaling.decision.actions]
+            // Which is the effective scale, as the reconciler resolves it,
+            // and not the low end of the declared range. A deployment
+            // declared `scale(2..10)` and scaled to 5 used to yield 2
+            // instances here, so a maintenance action stopped 2 of the 5
+            // and carried on as though the workload were down while 3 went
+            // on serving.
+            let scale = {
+                let def = dep.def.lock();
+                (def.scale.start, def.scale.end)
+            };
+            let scale = self.effective_scale(&dep.name, scale.0, scale.1)?;
             let group = self.registry.ensure_scaled_group(
                 &self.app_name,
                 ResourceKind::Deployment,
