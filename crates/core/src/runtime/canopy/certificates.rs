@@ -47,14 +47,40 @@ use crate::{
 /// one, which decides again from what is recorded.
 const MOST_ASKED_PER_TICK: usize = 8;
 
-/// The longest a tick spends asking.
+/// The longest a tick spends before it stops starting new requests.
 ///
 /// The count alone does not bound the time: the relay answers within a minute
 /// at worst, so eight of them could hold the reporting loop for eight. The
 /// loop's other work — the app statuses, the missing-offer fault, the
-/// certificate faults — waits behind it, so the asking gives way well inside
-/// one report interval.
+/// certificate faults — waits behind it, so no request is started once this has
+/// passed. One already in flight is let finish, since stopping it between the
+/// relay's answer and the recording of it could lose the order it opened, so a
+/// tick holds the loop for at most this and one relay timeout.
 const LONGEST_ASKING: std::time::Duration = std::time::Duration::from_secs(20);
+
+/// What one tick may still spend on requests to Canopy.
+///
+/// One budget for the whole tick: the replacements for revoked certificates and
+/// the ordinary asking draw on the same count and the same clock, since either
+/// can be what holds the reporting loop. What is left unasked is decided again
+/// on the next tick from what is recorded.
+struct Budget {
+    started: std::time::Instant,
+    asked: usize,
+}
+
+impl Budget {
+    fn new() -> Self {
+        Self {
+            started: std::time::Instant::now(),
+            asked: 0,
+        }
+    }
+
+    fn spent(&self) -> bool {
+        self.asked >= MOST_ASKED_PER_TICK || self.started.elapsed() >= LONGEST_ASKING
+    }
+}
 
 /// The fault kind for a Canopy certificate that cannot be had.
 // r[impl tls.canopy.fault]
@@ -86,10 +112,11 @@ pub async fn run(state: &Arc<OiState>, names: &Entitlements) -> Option<Tick> {
     // back on Canopy and overwrite the reason. They are asked on the next tick,
     // which decides from what the revocation recorded.
     let snapshot = snapshot(state, &managed)?;
-    let replaced = replace_condemned(state, &engine, &snapshot, names).await;
-    let asked = ask_canopy(state, &engine, &managed, &snapshot, &replaced).await;
+    let mut budget = Budget::new();
+    let replaced = replace_condemned(state, &engine, &snapshot, names, &mut budget).await;
+    ask_canopy(state, &engine, &managed, &snapshot, &replaced, &mut budget).await;
 
-    let wrote = !replaced.is_empty() || asked > 0;
+    let wrote = !replaced.is_empty() || budget.asked > 0;
     if wrote {
         // The decisions have moved on, and the gate and the proxy's renewal
         // points are answered from a reading of them: a revocation is exactly
@@ -224,6 +251,7 @@ async fn replace_condemned<R: CertificateRelay>(
     engine: &Engine<R>,
     snap: &Snapshot,
     names: &Entitlements,
+    budget: &mut Budget,
 ) -> BTreeSet<String> {
     let mut replaced = BTreeSet::new();
     let held = names.certificates.clone();
@@ -234,8 +262,11 @@ async fn replace_condemned<R: CertificateRelay>(
             return replaced;
         }
     };
+    // Every hostname with a condemned certificate is kept out of the asking that
+    // follows, including those this tick has no budget for: asking about one
+    // would be asking with the key that was condemned.
+    replaced.extend(condemned.iter().map(|c| c.hostname.clone()));
     for c in condemned {
-        replaced.insert(c.hostname.clone());
         let st = state::compute_state(snap, &c.hostname);
         let ask = match &st.decision {
             Decision::Chain(chain) => revocation_ask(&c.hostname, chain, snap.now),
@@ -247,7 +278,15 @@ async fn replace_condemned<R: CertificateRelay>(
             "Canopy certificate no longer to be served; replacing its key"
         );
         match ask {
+            Some(_) if budget.spent() => {
+                // Still active, so found again on the next tick.
+                tracing::debug!(
+                    hostname = %c.hostname,
+                    "canopy certificates: the replacement is left to the next tick"
+                );
+            }
             Some(ask) => {
+                budget.asked += 1;
                 if let Err(e) = engine
                     .revoke_and_reorder(ask.clone(), c.cert_id, c.reason.clone())
                     .await
@@ -309,7 +348,8 @@ async fn ask_canopy<R: CertificateRelay>(
     managed: &[ManagedIngress],
     snap: &Snapshot,
     skip: &BTreeSet<String>,
-) -> usize {
+    budget: &mut Budget,
+) {
     // Each tick starts after the hostname the last one stopped at, so a few
     // whose orders stay open cannot hold the whole budget: in name order alone,
     // eight slow hostnames at the front would be re-asked every tick and the
@@ -323,22 +363,20 @@ async fn ask_canopy<R: CertificateRelay>(
         from.into_iter().chain(before).collect()
     };
 
-    let started = std::time::Instant::now();
-    let mut asked = 0;
     for hostname in names {
         if skip.contains(hostname) {
             // A revocation wrote for this hostname after the reading below was
             // taken, so nothing here knows where it now stands.
             continue;
         }
-        if asked >= MOST_ASKED_PER_TICK || started.elapsed() >= LONGEST_ASKING {
+        if budget.spent() {
             // The rest are asked on the next tick, which starts from here: the
             // decision is made again from what is recorded, so nothing is lost
             // by stopping, and a relay that answers slowly cannot make one tick
             // run for the sum of every hostname's wait while the revocations and
             // the faults wait behind it.
             tracing::debug!(
-                asked,
+                asked = budget.asked,
                 "canopy certificates: the rest of the hostnames are left to the next tick"
             );
             break;
@@ -398,14 +436,13 @@ async fn ask_canopy<R: CertificateRelay>(
         let Some(ask) = ask_for(hostname, c, forced) else {
             continue;
         };
-        asked += 1;
+        budget.asked += 1;
         state.canopy.set_asked_through(hostname);
         match engine.ask(ask.clone()).await {
             Ok(outcome) => tracing::debug!(%hostname, ?outcome, "asked Canopy"),
             Err(e) => record_engine_failure(state, &ask, &e),
         }
     }
-    asked
 }
 
 /// Record a failure that stopped the question being put at all.
@@ -835,6 +872,7 @@ mod tests {
             managed,
             &snap,
             &BTreeSet::new(),
+            &mut Budget::new(),
         )
         .await;
     }
@@ -1095,7 +1133,14 @@ mod tests {
             .build();
         oi.block_on(async {
             let snap = snapshot(&oi.state, &managed).expect("the state can be read");
-            replace_condemned(&oi.state, &engine(&oi, &recorder), &snap, &names).await;
+            replace_condemned(
+                &oi.state,
+                &engine(&oi, &recorder),
+                &snap,
+                &names,
+                &mut Budget::new(),
+            )
+            .await;
         });
 
         let (row, revoked) = oi.state.db.call(move |db| {
@@ -1179,7 +1224,15 @@ mod tests {
         let managed = managed_in(&oi);
         oi.block_on(async {
             let snap = snapshot(&oi.state, &managed).expect("the state can be read");
-            ask_canopy(&oi.state, &engine, &managed, &snap, &BTreeSet::new()).await;
+            ask_canopy(
+                &oi.state,
+                &engine,
+                &managed,
+                &snap,
+                &BTreeSet::new(),
+                &mut Budget::new(),
+            )
+            .await;
         });
 
         let row = oi
@@ -1291,9 +1344,10 @@ mod tests {
         oi.block_on(async {
             let snap = snapshot(&oi.state, &managed).expect("the state can be read");
             let engine = engine(&oi, &recorder);
-            let replaced = replace_condemned(&oi.state, &engine, &snap, &names).await;
+            let mut budget = Budget::new();
+            let replaced = replace_condemned(&oi.state, &engine, &snap, &names, &mut budget).await;
             assert!(replaced.contains("shop.example.com"));
-            ask_canopy(&oi.state, &engine, &managed, &snap, &replaced).await;
+            ask_canopy(&oi.state, &engine, &managed, &snap, &replaced, &mut budget).await;
         });
 
         assert_eq!(
@@ -1318,24 +1372,83 @@ mod tests {
 
     /// What Canopy says of a certificate it has revoked.
     fn revoking(oi: &TestOi, cert_id: i64, hostname: &str) -> Entitlements {
+        revoking_all(oi, &[(cert_id, hostname)])
+    }
+
+    /// What Canopy says of several certificates it has revoked.
+    fn revoking_all(oi: &TestOi, held: &[(i64, &str)]) -> Entitlements {
         Entitlements::builder()
             .applications(vec![])
             .certificate_names(vec![])
-            .certificates(vec![
-                bestool_canopy::schema::HeldCertificate::builder()
-                    .key_fingerprint(canopy_key_fingerprint(oi, cert_id))
-                    .key_must_be_replaced(false)
-                    .name(hostname.to_owned())
-                    .revoked(true)
-                    .usable(false)
-                    .build(),
-            ])
+            .certificates(
+                held.iter()
+                    .map(|(cert_id, hostname)| {
+                        bestool_canopy::schema::HeldCertificate::builder()
+                            .key_fingerprint(canopy_key_fingerprint(oi, *cert_id))
+                            .key_must_be_replaced(false)
+                            .name((*hostname).to_owned())
+                            .revoked(true)
+                            .usable(false)
+                            .build()
+                    })
+                    .collect(),
+            )
             .domains(vec![])
             .may_manage_dns(false)
             .may_manage_tls(true)
             .paused(false)
             .registered_names(vec![])
             .build()
+    }
+
+    // r[verify tls.canopy.revoked]
+    #[test]
+    fn replacing_revoked_certificates_draws_on_the_same_budget_as_asking() {
+        let oi = TestOi::new();
+        let now = jiff::Timestamp::now().as_second();
+        let mut held = Vec::new();
+        for i in 0..(MOST_ASKED_PER_TICK + 2) {
+            let hostname = format!("h{i:02}.example.com");
+            register(
+                &oi,
+                &format!("app{i}"),
+                &script_for("tamanu", &hostname, 443),
+            );
+            let cert_id = canopy_cert(&oi, &hostname, now - 70 * 86_400, now + 20 * 86_400);
+            held.push((cert_id, hostname));
+        }
+        let held: Vec<(i64, &str)> = held.iter().map(|(i, h)| (*i, h.as_str())).collect();
+        let names = revoking_all(&oi, &held);
+
+        let recorder = Recorder::default();
+        let managed = managed_in(&oi);
+        let replaced = oi.block_on(async {
+            let snap = snapshot(&oi.state, &managed).expect("the state can be read");
+            let engine = engine(&oi, &recorder);
+            let mut budget = Budget::new();
+            let replaced = replace_condemned(&oi.state, &engine, &snap, &names, &mut budget).await;
+            ask_canopy(&oi.state, &engine, &managed, &snap, &replaced, &mut budget).await;
+            replaced
+        });
+
+        assert_eq!(
+            recorder.0.lock().len(),
+            MOST_ASKED_PER_TICK,
+            "revocations are not an unbounded phase ahead of the budgeted one"
+        );
+        assert_eq!(
+            replaced.len(),
+            MOST_ASKED_PER_TICK + 2,
+            "every hostname with a condemned certificate stays out of the ordinary asking"
+        );
+        let still_active = oi
+            .state
+            .db
+            .call(|db| store::list_active_canopy_certificates(db).unwrap().len());
+        assert_eq!(
+            still_active, 2,
+            "the two left over are still to be found, and replaced, on the next tick"
+        );
     }
 
     // r[verify tls.canopy.fault]
