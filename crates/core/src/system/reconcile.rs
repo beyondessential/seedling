@@ -623,10 +623,6 @@ impl Reconciler {
         let reg = self.app_registry.read();
         let mut snapshots = Vec::new();
         let mut skipped = 0usize;
-        // Cleared once at the end rather than per app: the fault is node-wide,
-        // so clearing it inside the loop would mean an app that still reads
-        // fine clears what the app before it just filed.
-        let mut scaling_decisions_unreadable = false;
         // r[impl priority.settings]
         // One read of every app's standing for the whole tick, rather than a
         // round trip per app. A failure is not an answer: the standings decide
@@ -664,6 +660,41 @@ impl Reconciler {
                 return (Vec::new(), reg.list().len().max(1));
             }
         };
+        // r[impl scaling.decision]
+        // r[impl scaling.decision.unreadable]
+        // One read of every operator scaling decision for the whole tick,
+        // rather than a round trip per app. A failure is not an answer: the
+        // decisions say how many instances each deployment is owed, so rather
+        // than standing the declared floor in and converging every scaled-up
+        // deployment down to it, every app is reported as dropped and the tick
+        // holds what is running.
+        let scaling_decisions = match self
+            .db
+            .call(crate::runtime::scaling::load_all_scaling_decisions)
+        {
+            Ok(d) => {
+                self.clear_system_fault("scaling_decisions_unreadable");
+                d
+            }
+            Err(e) => {
+                error!(
+                    error = %e,
+                    "could not read the operator scaling decisions; holding this tick rather \
+                     than converging deployments to a scale nobody chose"
+                );
+                self.file_system_fault(
+                    "scaling_decisions_unreadable",
+                    &format!(
+                        "could not read the record of operator-chosen scale, which says how \
+                         many instances each deployment is owed, so reconciliation is held \
+                         rather than converging them to a scale nobody chose. Nothing else \
+                         advances while this persists. Error: {e}"
+                    ),
+                );
+                return (Vec::new(), reg.list().len().max(1));
+            }
+        };
+
         for (name, status) in reg.list() {
             let entry = match reg.get(name.as_str()) {
                 Some(e) => e,
@@ -686,21 +717,8 @@ impl Reconciler {
             let app_def_arc = entry.app.def.load_full();
             let app_def = (*app_def_arc).clone();
             // r[impl autonomous.scale]
-            // r[impl scaling.decision.unreadable]
-            let effective_scales = match self.compute_effective_scales(&name, &app_def) {
-                Ok(scales) => scales,
-                Err(e) => {
-                    error!(
-                        app = %name,
-                        error = %e,
-                        "could not read this app's scaling decisions; skipping it this tick \
-                         rather than converging it to a scale nobody chose"
-                    );
-                    scaling_decisions_unreadable = true;
-                    skipped += 1;
-                    continue;
-                }
-            };
+            let effective_scales =
+                self.compute_effective_scales(&name, &app_def, &scaling_decisions);
             // i[impl resource.stop]
             let stopped_set = {
                 let app_name_for_stop = name.clone();
@@ -778,20 +796,6 @@ impl Reconciler {
                 current_generation,
                 app_priority,
             });
-        }
-        // r[impl scaling.decision.unreadable]
-        // Node-scoped rather than per app: the decisions live in the one
-        // database, so a read that fails for one app fails for all of them,
-        // and a fault each would be the same news as many times over.
-        if scaling_decisions_unreadable {
-            self.file_system_fault(
-                "scaling_decisions_unreadable",
-                "could not read the record of operator-chosen scale, so the apps it covers are \
-                 left running as they are rather than converged to a scale nobody chose. They \
-                 do not advance while this persists.",
-            );
-        } else {
-            self.clear_system_fault("scaling_decisions_unreadable");
         }
         (snapshots, skipped)
     }
@@ -953,17 +957,16 @@ impl Reconciler {
 impl Reconciler {
     /// Build the effective-scale map for every Deployment in an app.
     ///
-    /// Fails as a whole when any deployment's scaling decision cannot be read.
-    /// A map missing one deployment is not a smaller map, it is a map the
-    /// caller would read a wrong scale out of, so there is nothing useful to
-    /// hand back short of all of it.
+    /// Reads from the decisions the tick already loaded: the table is read
+    /// once for the node, not once per app, because this runs for every app on
+    /// every tick.
     // r[impl update.rolling.over-provision]
-    // r[impl scaling.decision.unreadable]
     fn compute_effective_scales(
         &self,
         app_name: &AppName,
         app_def: &AppDef,
-    ) -> rusqlite::Result<EffectiveScales> {
+        decisions: &crate::runtime::scaling::ScalingDecisions,
+    ) -> EffectiveScales {
         // Collect the data we need before entering db.call().
         let deployments: Vec<(String, u16, u16)> = app_def
             .resources
@@ -981,27 +984,16 @@ impl Reconciler {
                 }
             })
             .collect();
-        let app_name_owned = app_name.clone();
-        // r[impl scaling.decision.unreadable]
-        // A read that failed is not a deployment the operator left at its
-        // floor. Folding the two together converges a deployment scaled above
-        // that floor back down to it, tearing down instances to answer a
-        // question nobody managed to ask.
-        //
-        // One statement for the app, not one per deployment: this runs for
-        // every app on every tick.
-        type ScaleRows = Vec<(String, u16, u16, u16)>;
-        let scale_data: ScaleRows = self.db.call(move |db| -> rusqlite::Result<ScaleRows> {
-            let decisions = scaling::load_scaling_decisions_for_app(db, &app_name_owned)?;
-            Ok(deployments
-                .into_iter()
-                .map(|(dep_name, low, high)| {
-                    let stored = decisions.get(&dep_name).copied();
-                    let effective = scaling::effective_scale_from(stored, low, high);
-                    (dep_name, low, high, effective)
-                })
-                .collect())
-        })?;
+        let scale_data: Vec<(String, u16, u16, u16)> = deployments
+            .into_iter()
+            .map(|(dep_name, low, high)| {
+                let stored = decisions
+                    .get(&(app_name.clone(), dep_name.clone()))
+                    .copied();
+                let effective = scaling::effective_scale_from(stored, low, high);
+                (dep_name, low, high, effective)
+            })
+            .collect();
         let mut scales = EffectiveScales::new();
         for (dep_name, low, high, mut effective) in scale_data {
             // r[impl autonomous.healthcheck-replace.guard]
@@ -1029,7 +1021,7 @@ impl Reconciler {
             }
             scales.insert(dep_name, (low, high, effective));
         }
-        Ok(scales)
+        scales
     }
 
     // -----------------------------------------------------------------------
