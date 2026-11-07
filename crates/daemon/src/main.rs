@@ -1263,15 +1263,19 @@ async fn main() {
 /// container that may have outlived it, clears the faults a previous run filed
 /// against the instance, and deletes the row.
 ///
-/// Only the records handled here are deleted. One that could not be read is
-/// never in this list, so it stays on the books rather than being written off
-/// as a teardown that did not happen.
+/// Only records actually torn down are deleted. One that could not be read is
+/// never in this list, and one whose teardown failed is left out of it, so
+/// both stay on the books rather than being written off as a teardown that did
+/// not happen. The next start finds them again.
+// r[impl barrier.replay.abandoned]
 // r[fault.image-pull] r[fault.container-start]
 fn tear_down_dynamic_resources(
     driver: &Arc<seedling_core::system::System>,
     db: &DbHandle,
     records: &[seedling_core::runtime::desired::DynamicResourceRecord],
 ) {
+    let mut handled: Vec<(AppName, String)> = Vec::new();
+    let mut retained = 0usize;
     for record in records {
         tracing::info!(
             instance = %record.display_name,
@@ -1286,29 +1290,80 @@ fn tear_down_dynamic_resources(
         let net_name = format!("seedling-{}", record.display_name);
         let display = record.display_name.clone();
         let driver_ref = Arc::clone(driver);
-        tokio::task::block_in_place(|| {
+        // r[impl barrier.replay.abandoned]
+        // Whether the world actually gave the resource up. A teardown that
+        // failed, or one whose outcome could not be established, is not a
+        // teardown: deleting the row on either would leave a live container
+        // with no record, no fault and no reconciler covering it, since the
+        // reconciler ignores instances absent from the desired state and the
+        // next start's orphan scan has nothing left to find it by.
+        let torn_down = tokio::task::block_in_place(|| {
             tokio::runtime::Handle::current().block_on(async {
-                if let Ok(Some(_)) = driver_ref.process.unit_state(&unit).await {
-                    let _ = driver_ref.process.stop_unit(&unit).await;
-                    let _ = driver_ref.process.reset_failed_unit(&unit).await;
+                let mut torn_down = true;
+                match driver_ref.process.unit_state(&unit).await {
+                    Ok(Some(_)) => {
+                        if let Err(e) = driver_ref.process.stop_unit(&unit).await {
+                            tracing::warn!(unit = %unit, "could not stop the unit: {e}");
+                            torn_down = false;
+                        } else if let Err(e) = driver_ref.process.reset_failed_unit(&unit).await {
+                            tracing::warn!(unit = %unit, "could not reset the unit: {e}");
+                            torn_down = false;
+                        }
+                    }
+                    Ok(None) => {}
+                    Err(e) => {
+                        tracing::warn!(
+                            unit = %unit,
+                            "could not tell whether the unit is still loaded: {e}"
+                        );
+                        torn_down = false;
+                    }
                 }
-                if driver_ref
-                    .container
-                    .network_exists(&net_name)
-                    .await
-                    .unwrap_or(false)
-                {
-                    let _ = driver_ref.container.remove_network(&net_name).await;
+                match driver_ref.container.network_exists(&net_name).await {
+                    Ok(true) => {
+                        if let Err(e) = driver_ref.container.remove_network(&net_name).await {
+                            tracing::warn!(network = %net_name, "could not remove the network: {e}");
+                            torn_down = false;
+                        }
+                    }
+                    Ok(false) => {}
+                    Err(e) => {
+                        tracing::warn!(
+                            network = %net_name,
+                            "could not tell whether the network is still there: {e}"
+                        );
+                        torn_down = false;
+                    }
                 }
+                // A failure here is not counted: the runtime reports a
+                // container that is not there as an error, and a dynamic
+                // resource's container has routinely already gone, removed on
+                // exit. The actuator's own teardown ignores it for the same
+                // reason. A runtime that is genuinely unreachable fails the
+                // network check above, so the case this would otherwise catch
+                // is caught there.
                 let _ = driver_ref.container.remove_container(&display, true).await;
-            });
+                torn_down
+            })
         });
+        if torn_down {
+            handled.push((record.app.clone(), record.instance_id.clone()));
+        } else {
+            tracing::warn!(
+                instance = %record.display_name,
+                operation_id = %record.operation_id,
+                "dynamic resource not torn down; keeping its record so the next start finds it"
+            );
+            retained += 1;
+        }
     }
 
-    let handled: Vec<(AppName, String)> = records
-        .iter()
-        .map(|r| (r.app.clone(), r.instance_id.clone()))
-        .collect();
+    if retained > 0 {
+        tracing::warn!(
+            retained,
+            "some dynamic resources could not be torn down and stay on the books"
+        );
+    }
     db.call(move |db| {
         for (app, instance_id) in &handled {
             if let Err(e) =
@@ -1715,12 +1770,61 @@ mod tests {
 
         // Two resources spared for the operation that will not replay, and
         // one belonging to a different operation that must be left alone.
-        db.call(|db| {
-            for (instance, op) in [
+        insert_dynamic_resources(
+            &db,
+            &[
                 ("inst-a", "op-abandoned"),
                 ("inst-b", "op-abandoned"),
                 ("inst-c", "op-other"),
-            ] {
+            ],
+        );
+
+        super::abandon_spared_resources(&driver, &db, "op-abandoned");
+
+        assert_eq!(
+            recorded_instances(&db),
+            vec!["inst-c".to_owned()],
+            "the abandoned operation's resources are forgotten, another operation's are not"
+        );
+    }
+
+    // r[verify barrier.replay.abandoned]
+    // Every teardown call fails against an unreachable backend, so nothing was
+    // actually torn down. Deleting the rows anyway would leave live containers
+    // with no record, no fault and nothing left to find them by: the
+    // reconciler ignores instances absent from the desired state, and the next
+    // start's orphan scan reads this same table.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn resources_that_could_not_be_torn_down_stay_on_the_books() {
+        use seedling_core::runtime::db::DbHandle;
+        use seedling_core::system::System;
+
+        let data_dir = tempfile::tempdir().expect("temp data dir");
+        let (driver, _caddy_admin) =
+            System::setup_unavailable(data_dir.path(), false).expect("unavailable system");
+        let db = DbHandle::open_in_memory().expect("in-memory db");
+
+        insert_dynamic_resources(
+            &db,
+            &[("inst-a", "op-abandoned"), ("inst-b", "op-abandoned")],
+        );
+
+        super::abandon_spared_resources(&driver, &db, "op-abandoned");
+
+        assert_eq!(
+            recorded_instances(&db),
+            vec!["inst-a".to_owned(), "inst-b".to_owned()],
+            "a teardown that did not happen must not be recorded as one that did"
+        );
+    }
+
+    fn insert_dynamic_resources(db: &seedling_core::runtime::db::DbHandle, rows: &[(&str, &str)]) {
+        let rows: Vec<(String, String)> = rows
+            .iter()
+            .map(|(i, o)| ((*i).to_owned(), (*o).to_owned()))
+            .collect();
+        db.call(move |db| {
+            for (instance, op) in &rows {
                 db.conn
                     .execute(
                         &format!(
@@ -1733,10 +1837,10 @@ mod tests {
                     .expect("insert dynamic resource");
             }
         });
+    }
 
-        super::abandon_spared_resources(&driver, &db, "op-abandoned");
-
-        let left: Vec<String> = db.call(|db| {
+    fn recorded_instances(db: &seedling_core::runtime::db::DbHandle) -> Vec<String> {
+        db.call(|db| {
             let mut stmt = db
                 .conn
                 .prepare("SELECT instance_id FROM dynamic_resources ORDER BY instance_id")
@@ -1745,12 +1849,7 @@ mod tests {
                 .query_map([], |r| r.get::<_, String>(0))
                 .expect("query");
             rows.collect::<Result<_, _>>().expect("collect")
-        });
-        assert_eq!(
-            left,
-            vec!["inst-c".to_owned()],
-            "the abandoned operation's resources are forgotten, another operation's are not"
-        );
+        })
     }
 
     // i[verify transport.listen]
