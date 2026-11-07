@@ -489,96 +489,7 @@ async fn main() {
                     count = records.len(),
                     "found orphaned dynamic resources from a previous run; cleaning up"
                 );
-                for record in &records {
-                    // Stop any lingering systemd unit for this instance.
-                    let unit = format!("seedling-{}.service", record.display_name);
-                    tracing::info!(
-                        instance = %record.display_name,
-                        kind = %record.kind,
-                        operation_id = %record.operation_id,
-                        "cleaning up orphaned dynamic resource"
-                    );
-                    // The actual container/unit stop will be handled by the
-                    // reconciler on the first tick — it won't see these in the
-                    // desired state and will ignore them. For systemd units that
-                    // are still loaded, reset them so they don't linger.
-                    let driver_ref = Arc::clone(&driver);
-                    let unit_name = unit.clone();
-                    tokio::task::block_in_place(|| {
-                        tokio::runtime::Handle::current().block_on(async {
-                            if let Ok(Some(_)) = driver_ref.process.unit_state(&unit_name).await {
-                                let _ = driver_ref.process.stop_unit(&unit_name).await;
-                                let _ = driver_ref.process.reset_failed_unit(&unit_name).await;
-                            }
-                        });
-                    });
-
-                    // Remove the pod network if it exists.
-                    let net_name = format!("seedling-{}", record.display_name);
-                    let driver_ref = Arc::clone(&driver);
-                    tokio::task::block_in_place(|| {
-                        tokio::runtime::Handle::current().block_on(async {
-                            if driver_ref
-                                .container
-                                .network_exists(&net_name)
-                                .await
-                                .unwrap_or(false)
-                            {
-                                let _ = driver_ref.container.remove_network(&net_name).await;
-                            }
-                        });
-                    });
-
-                    // Force-remove the container if it outlived the unit.
-                    let display = record.display_name.clone();
-                    let driver_ref = Arc::clone(&driver);
-                    tokio::task::block_in_place(|| {
-                        tokio::runtime::Handle::current().block_on(async {
-                            let _ = driver_ref.container.remove_container(&display, true).await;
-                        });
-                    });
-                }
-
-                // Clear per-instance faults for every orphan we just tore
-                // down, so image_pull_failed / container_start_failed
-                // filed in a previous run don't linger after restart.
-                // r[fault.image-pull] r[fault.container-start]
-                let faulted_instances: Vec<(AppName, String)> = records
-                    .iter()
-                    .filter(|r| Some(&r.operation_id) != replay_op_id.as_ref())
-                    .map(|r| (r.app.clone(), r.instance_id.clone()))
-                    .collect();
-                db.call(move |db| {
-                    for (app, instance_id) in &faulted_instances {
-                        if let Err(e) = seedling_core::runtime::faults::clear_faults_for_instance(
-                            db,
-                            app,
-                            instance_id,
-                        ) {
-                            tracing::warn!(
-                                app = %app,
-                                instance_id = %instance_id,
-                                "failed to clear per-instance faults during orphan cleanup: {e}"
-                            );
-                        }
-                    }
-                });
-
-                // Clear cleaned records but keep rows owned by the operation
-                // we are about to replay.
-                let preserve_op_id = replay_op_id.clone();
-                db.call(move |db| {
-                    let result = match &preserve_op_id {
-                        Some(op_id) => db.conn.execute(
-                            "DELETE FROM dynamic_resources WHERE operation_id != ?1",
-                            [op_id],
-                        ),
-                        None => db.conn.execute("DELETE FROM dynamic_resources", []),
-                    };
-                    if let Err(e) = result {
-                        tracing::warn!("failed to clear orphaned dynamic resource records: {e}");
-                    }
-                });
+                tear_down_dynamic_resources(&driver, &db, &records);
                 tracing::info!("orphaned dynamic resource cleanup complete");
             }
             Ok(_) => {}
@@ -1346,10 +1257,200 @@ async fn main() {
 /// app no longer registered, decrypt failure), the function clears the
 /// current_operation row, reverts any Installing phase to NotInstalled, and
 /// files an install_interrupted fault so the operator can see why.
+/// Tear `records` down in the world and forget them.
+///
+/// Stops and resets the unit, removes the pod network, force-removes the
+/// container that may have outlived it, clears the faults a previous run filed
+/// against the instance, and deletes the row.
+///
+/// Only records actually torn down are deleted. One that could not be read is
+/// never in this list, and one whose teardown failed is left out of it, so
+/// both stay on the books rather than being written off as a teardown that did
+/// not happen. The next start finds them again.
+// r[impl barrier.replay.abandoned]
+// r[fault.image-pull] r[fault.container-start]
+fn tear_down_dynamic_resources(
+    driver: &Arc<seedling_core::system::System>,
+    db: &DbHandle,
+    records: &[seedling_core::runtime::desired::DynamicResourceRecord],
+) {
+    let mut handled: Vec<(AppName, String)> = Vec::new();
+    let mut retained = 0usize;
+    for record in records {
+        tracing::info!(
+            instance = %record.display_name,
+            kind = %record.kind,
+            operation_id = %record.operation_id,
+            "tearing down dynamic resource"
+        );
+        // The reconciler will not do this for us: these instances are absent
+        // from the desired state, so it ignores them rather than stopping
+        // them. A unit still loaded is reset so it does not linger.
+        let unit = format!("seedling-{}.service", record.display_name);
+        let net_name = format!("seedling-{}", record.display_name);
+        let display = record.display_name.clone();
+        let driver_ref = Arc::clone(driver);
+        // r[impl barrier.replay.abandoned]
+        // Whether the world actually gave the resource up. A teardown that
+        // failed, or one whose outcome could not be established, is not a
+        // teardown: deleting the row on either would leave a live container
+        // with no record, no fault and no reconciler covering it, since the
+        // reconciler ignores instances absent from the desired state and the
+        // next start's orphan scan has nothing left to find it by.
+        let torn_down = tokio::task::block_in_place(|| {
+            tokio::runtime::Handle::current().block_on(async {
+                let mut torn_down = true;
+                match driver_ref.process.unit_state(&unit).await {
+                    Ok(Some(_)) => {
+                        if let Err(e) = driver_ref.process.stop_unit(&unit).await {
+                            tracing::warn!(unit = %unit, "could not stop the unit: {e}");
+                            torn_down = false;
+                        } else if let Err(e) = driver_ref.process.reset_failed_unit(&unit).await {
+                            tracing::warn!(unit = %unit, "could not reset the unit: {e}");
+                            torn_down = false;
+                        }
+                    }
+                    Ok(None) => {}
+                    Err(e) => {
+                        tracing::warn!(
+                            unit = %unit,
+                            "could not tell whether the unit is still loaded: {e}"
+                        );
+                        torn_down = false;
+                    }
+                }
+                match driver_ref.container.network_exists(&net_name).await {
+                    Ok(true) => {
+                        if let Err(e) = driver_ref.container.remove_network(&net_name).await {
+                            tracing::warn!(network = %net_name, "could not remove the network: {e}");
+                            torn_down = false;
+                        }
+                    }
+                    Ok(false) => {}
+                    Err(e) => {
+                        tracing::warn!(
+                            network = %net_name,
+                            "could not tell whether the network is still there: {e}"
+                        );
+                        torn_down = false;
+                    }
+                }
+                // A failure here is not counted: the runtime reports a
+                // container that is not there as an error, and a dynamic
+                // resource's container has routinely already gone, removed on
+                // exit. The actuator's own teardown ignores it for the same
+                // reason. A runtime that is genuinely unreachable fails the
+                // network check above, so the case this would otherwise catch
+                // is caught there.
+                let _ = driver_ref.container.remove_container(&display, true).await;
+                torn_down
+            })
+        });
+        if torn_down {
+            handled.push((record.app.clone(), record.instance_id.clone()));
+        } else {
+            tracing::warn!(
+                instance = %record.display_name,
+                operation_id = %record.operation_id,
+                "dynamic resource not torn down; keeping its record so the next start finds it"
+            );
+            retained += 1;
+        }
+    }
+
+    if retained > 0 {
+        tracing::warn!(
+            retained,
+            "some dynamic resources could not be torn down and stay on the books"
+        );
+    }
+    db.call(move |db| {
+        for (app, instance_id) in &handled {
+            if let Err(e) =
+                seedling_core::runtime::faults::clear_faults_for_instance(db, app, instance_id)
+            {
+                tracing::warn!(
+                    app = %app,
+                    instance_id = %instance_id,
+                    "failed to clear per-instance faults while tearing down dynamic resources: {e}"
+                );
+            }
+            if let Err(e) = db.conn.execute(
+                "DELETE FROM dynamic_resources WHERE instance_id = ?1",
+                [instance_id],
+            ) {
+                tracing::warn!(
+                    instance_id = %instance_id,
+                    "failed to delete dynamic resource record: {e}"
+                );
+            }
+        }
+    });
+}
+
+/// Give back the dynamic resources startup spared for a replay that did not
+/// start.
+///
+/// Startup cleanup skips the rows carrying this `operation_id` on the promise
+/// that the replay adopts them. Nothing else ever will: the rows name an
+/// operation no live operation claims, and the next start reads the same
+/// persisted row and spares them again on the same reasoning.
+// r[impl barrier.replay.abandoned]
+fn abandon_spared_resources(
+    driver: &Arc<seedling_core::system::System>,
+    db: &DbHandle,
+    operation_id: &str,
+) {
+    let wanted = operation_id.to_owned();
+    let records = db.call(move |db| {
+        seedling_core::runtime::desired::list_dynamic_resources_for_operation(db, &wanted)
+    });
+    match records {
+        Ok(records) if !records.is_empty() => {
+            tracing::warn!(
+                operation_id = %operation_id,
+                count = records.len(),
+                "replay did not start; tearing down the resources startup spared for it"
+            );
+            tear_down_dynamic_resources(driver, db, &records);
+        }
+        Ok(_) => {}
+        Err(e) => {
+            // The resources stay recorded, so the next start spares them
+            // again and arrives back here. Say so rather than leaving a
+            // silent leak.
+            tracing::error!(
+                operation_id = %operation_id,
+                "could not list the resources spared for an abandoned replay; \
+                 they remain recorded and will not be reclaimed: {e}"
+            );
+        }
+    }
+}
+
+// r[impl barrier.replay.abandoned]
+/// Replay an interrupted lifecycle operation, and where it does not start,
+/// hand back the resources startup spared on its behalf.
+///
+/// The decision of whether to replay is [`start_replay`]'s alone; this is the
+/// one place that acts on its answer, so no abort path can reach the world
+/// without settling what it owes.
 fn replay_interrupted_operation(
     state: Arc<OiState>,
     op: seedling_core::runtime::history::CurrentOperation,
 ) {
+    let operation_id = op.operation_id.0.clone();
+    if !start_replay(Arc::clone(&state), op) {
+        abandon_spared_resources(&state.driver, &state.db, &operation_id);
+    }
+}
+
+/// Decide whether the interrupted operation can be replayed, and start it if
+/// so. Returns whether the replay was handed to the lifecycle runtime.
+fn start_replay(
+    state: Arc<OiState>,
+    op: seedling_core::runtime::history::CurrentOperation,
+) -> bool {
     use seedling_core::runtime::{
         apps::AppPhase,
         history::{clear_current_operation, load_current_operation_params},
@@ -1376,7 +1477,7 @@ fn replay_interrupted_operation(
         state.db.call(|db| {
             let _ = clear_current_operation(db);
         });
-        return;
+        return false;
     };
 
     // r[impl operation.params]
@@ -1398,7 +1499,7 @@ fn replay_interrupted_operation(
                         "interrupted install has no persisted params; reverting to NotInstalled"
                     );
                     revert_install_and_fault(&state, &app_name);
-                    return;
+                    return false;
                 }
                 tracing::warn!(
                     app = %app_name,
@@ -1420,7 +1521,7 @@ fn replay_interrupted_operation(
                         let _ = clear_current_operation(db);
                     });
                 }
-                return;
+                return false;
             }
         }
     };
@@ -1437,7 +1538,7 @@ fn replay_interrupted_operation(
         state.db.call(|db| {
             let _ = clear_current_operation(db);
         });
-        return;
+        return false;
     }
     // r[impl schedule.fire.installed-only]
     // A non-install operation only makes sense on an Installed app. If a
@@ -1454,7 +1555,7 @@ fn replay_interrupted_operation(
         state.db.call(|db| {
             let _ = clear_current_operation(db);
         });
-        return;
+        return false;
     }
 
     // Register with the scheduler so concurrency gates report "in progress"
@@ -1474,7 +1575,7 @@ fn replay_interrupted_operation(
             app = %app_name,
             "scheduler refused to accept replay slot: {sched_result:?}"
         );
-        return;
+        return false;
     }
 
     // r[impl operation.cancel.persistence]
@@ -1513,6 +1614,7 @@ fn replay_interrupted_operation(
         "replay".to_owned(),
         None,
     );
+    true
 }
 
 /// Flip a persisted Installing row back to NotInstalled and file a fault
@@ -1645,6 +1747,105 @@ mod tests {
             #[cfg(windows)]
             adapter_name: String::new(),
         }
+    }
+
+    // r[verify barrier.replay.abandoned]
+    // Startup cleanup spares the replay's resources, and before this every
+    // abort path in the replay returned without them: they survived carrying
+    // an operation_id no live operation claims, and the next start read the
+    // same persisted row and spared them again.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn an_abandoned_replay_hands_back_the_resources_it_was_spared() {
+        use seedling_core::runtime::db::DbHandle;
+        use seedling_core::system::System;
+
+        let data_dir = tempfile::tempdir().expect("temp data dir");
+        let (driver, _caddy_admin) =
+            System::setup_stubbed(data_dir.path(), false).expect("stub system");
+        let db = DbHandle::open_in_memory().expect("in-memory db");
+
+        // Two resources spared for the operation that will not replay, and
+        // one belonging to a different operation that must be left alone.
+        insert_dynamic_resources(
+            &db,
+            &[
+                ("inst-a", "op-abandoned"),
+                ("inst-b", "op-abandoned"),
+                ("inst-c", "op-other"),
+            ],
+        );
+
+        super::abandon_spared_resources(&driver, &db, "op-abandoned");
+
+        assert_eq!(
+            recorded_instances(&db),
+            vec!["inst-c".to_owned()],
+            "the abandoned operation's resources are forgotten, another operation's are not"
+        );
+    }
+
+    // r[verify barrier.replay.abandoned]
+    // Every teardown call fails against an unreachable backend, so nothing was
+    // actually torn down. Deleting the rows anyway would leave live containers
+    // with no record, no fault and nothing left to find them by: the
+    // reconciler ignores instances absent from the desired state, and the next
+    // start's orphan scan reads this same table.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn resources_that_could_not_be_torn_down_stay_on_the_books() {
+        use seedling_core::runtime::db::DbHandle;
+        use seedling_core::system::System;
+
+        let data_dir = tempfile::tempdir().expect("temp data dir");
+        let (driver, _caddy_admin) =
+            System::setup_unavailable(data_dir.path(), false).expect("unavailable system");
+        let db = DbHandle::open_in_memory().expect("in-memory db");
+
+        insert_dynamic_resources(
+            &db,
+            &[("inst-a", "op-abandoned"), ("inst-b", "op-abandoned")],
+        );
+
+        super::abandon_spared_resources(&driver, &db, "op-abandoned");
+
+        assert_eq!(
+            recorded_instances(&db),
+            vec!["inst-a".to_owned(), "inst-b".to_owned()],
+            "a teardown that did not happen must not be recorded as one that did"
+        );
+    }
+
+    fn insert_dynamic_resources(db: &seedling_core::runtime::db::DbHandle, rows: &[(&str, &str)]) {
+        let rows: Vec<(String, String)> = rows
+            .iter()
+            .map(|(i, o)| ((*i).to_owned(), (*o).to_owned()))
+            .collect();
+        db.call(move |db| {
+            for (instance, op) in &rows {
+                db.conn
+                    .execute(
+                        &format!(
+                            "INSERT INTO dynamic_resources
+                                 (instance_id, app, operation_id, kind, display_name)
+                             VALUES ('{instance}', 'demo', '{op}', 'Job', '{instance}')"
+                        ),
+                        [],
+                    )
+                    .expect("insert dynamic resource");
+            }
+        });
+    }
+
+    fn recorded_instances(db: &seedling_core::runtime::db::DbHandle) -> Vec<String> {
+        db.call(|db| {
+            let mut stmt = db
+                .conn
+                .prepare("SELECT instance_id FROM dynamic_resources ORDER BY instance_id")
+                .expect("prepare");
+            let rows = stmt
+                .query_map([], |r| r.get::<_, String>(0))
+                .expect("query");
+            rows.collect::<Result<_, _>>().expect("collect")
+        })
     }
 
     // i[verify transport.listen]

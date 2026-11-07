@@ -238,6 +238,29 @@ impl PriorityLevel {
     }
 }
 
+/// Resolve a relative scale request against the declared bounds and what the
+/// deployment is running now.
+///
+/// `current` is `None` where the daemon could not read the operator's scaling
+/// decision and reported it unavailable. Returns `None` for a direction that
+/// needs a figure there is none of, so the caller says so rather than counting
+/// from zero: zero would turn a scale up into a scale down to the floor, which
+/// is the harm the daemon withheld the figure to avoid.
+// i[impl scale.describe]
+fn resolve_relative_scale(
+    direction: &ScaleDirection,
+    current: Option<u16>,
+    low: u16,
+    high: u16,
+) -> Option<u16> {
+    match direction {
+        ScaleDirection::Up => Some(current?.saturating_add(1).min(high)),
+        ScaleDirection::Down => Some(current?.saturating_sub(1).max(low)),
+        ScaleDirection::ToMin => Some(low),
+        ScaleDirection::To { .. } => unreachable!("an exact count is resolved by its caller"),
+    }
+}
+
 #[derive(Subcommand)]
 pub(super) enum ScaleDirection {
     /// Scale up by one instance
@@ -556,14 +579,18 @@ pub(super) async fn dispatch(client: &OiClient, cmd: AppsCommand) {
                             std::process::exit(1);
                         }
                     };
-                    let current = scale_obj["current"].as_u64().unwrap_or(0) as u16;
+                    let current = scale_obj["current"].as_u64().map(|c| c as u16);
                     let low = scale_obj["low"].as_u64().unwrap_or(0) as u16;
                     let high = scale_obj["high"].as_u64().unwrap_or(0) as u16;
-                    match relative {
-                        ScaleDirection::Up => current.saturating_add(1).min(high),
-                        ScaleDirection::Down => current.saturating_sub(1).max(low),
-                        ScaleDirection::ToMin => low,
-                        ScaleDirection::To { .. } => unreachable!(),
+                    match resolve_relative_scale(&relative, current, low, high) {
+                        Some(scale) => scale,
+                        None => {
+                            eprintln!(
+                                "error: the current scale of {deployment:?} is unavailable, so it \
+                                 cannot be adjusted by one instance; set an exact count instead"
+                            );
+                            std::process::exit(1);
+                        }
                     }
                 }
             };
@@ -707,6 +734,52 @@ mod tests {
     struct TestCli {
         #[command(subcommand)]
         cmd: AppsCommand,
+    }
+
+    // i[verify scale.describe]
+    // `current` was read with `unwrap_or(0)`, so a deployment whose scaling
+    // decision the daemon could not read answered `--up` with 0 + 1 = 1 and
+    // scaled it down to its floor. That is the harm the null exists to
+    // prevent, arriving by another route.
+    #[test]
+    fn a_scale_that_is_unavailable_cannot_be_adjusted_by_one() {
+        assert_eq!(
+            resolve_relative_scale(&ScaleDirection::Up, None, 1, 5),
+            None,
+            "nothing to add one to"
+        );
+        assert_eq!(
+            resolve_relative_scale(&ScaleDirection::Down, None, 1, 5),
+            None
+        );
+        assert_eq!(
+            resolve_relative_scale(&ScaleDirection::ToMin, None, 1, 5),
+            Some(1),
+            "the floor is declared, so it needs no current figure"
+        );
+    }
+
+    // i[verify scale.describe]
+    #[test]
+    fn a_known_scale_is_adjusted_within_its_bounds() {
+        assert_eq!(
+            resolve_relative_scale(&ScaleDirection::Up, Some(3), 1, 5),
+            Some(4)
+        );
+        assert_eq!(
+            resolve_relative_scale(&ScaleDirection::Up, Some(5), 1, 5),
+            Some(5),
+            "held at the upper bound"
+        );
+        assert_eq!(
+            resolve_relative_scale(&ScaleDirection::Down, Some(3), 1, 5),
+            Some(2)
+        );
+        assert_eq!(
+            resolve_relative_scale(&ScaleDirection::Down, Some(1), 1, 5),
+            Some(1),
+            "held at the lower bound"
+        );
     }
 
     // i[verify ctl.definition.source]

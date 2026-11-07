@@ -449,6 +449,31 @@ impl System {
         });
         Ok((system, caddy_admin_client))
     }
+
+    /// A `System` whose container runtime and process manager fail every call,
+    /// as they do when neither could be reached at startup and the daemon came
+    /// up in degraded mode.
+    ///
+    /// The counterpart to [`Self::setup_stubbed`], which fakes success: this
+    /// one lets a test exercise what the daemon does when the world will not
+    /// answer, rather than only what it does when the world agrees.
+    pub fn setup_unavailable(data_dir: &Path, use_btrfs: bool) -> Result<SystemSetup, BoxError> {
+        let volume_store = volume_store::VolumeStore::new(data_dir, use_btrfs)?;
+        let placeholder_client = reqwest::Client::builder()
+            .build()
+            .expect("default reqwest client builds");
+        let caddy_admin_client = Arc::new(tokio::sync::RwLock::new(placeholder_client));
+
+        let system = Arc::new(Self {
+            container: Arc::new(unavailable::UnavailableContainerRuntime),
+            process: Arc::new(unavailable::UnavailableProcessManager),
+            proxy: Arc::new(stub::StubNetworkProxy),
+            data_plane: Arc::new(stub::StubDataPlane),
+            volume_store,
+            degraded: Some("backends unavailable".to_owned()),
+        });
+        Ok((system, caddy_admin_client))
+    }
 }
 
 #[cfg(test)]

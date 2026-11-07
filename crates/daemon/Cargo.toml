@@ -24,3 +24,6 @@ tokio.workspace = true
 tracing.workspace = true
 whoami.workspace = true
 if-addrs.workspace = true
+
+[dev-dependencies]
+tempfile = "3.27.0"

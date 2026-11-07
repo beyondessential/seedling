@@ -129,6 +129,10 @@ struct ObservedInstance<'a> {
     spec_stale: bool,
     unit_failed: bool,
     unit_active: bool,
+    /// The supervisor is bringing the unit up: its first start, or the pause
+    /// before an automatic restart. Not a broken unit, and not ours to touch.
+    // r[impl autonomous.restart.backoff.undisturbed]
+    unit_activating: bool,
     // r[impl autonomous.restart.start-limit-hit]
     unit_start_limit_hit: bool,
     container_exists: bool,
@@ -265,6 +269,10 @@ async fn observe_one_pod<'a>(
     let unit_active = facts
         .iter()
         .any(|(f, _)| matches!(f, ObservationFact::UnitActive));
+    // r[impl autonomous.restart.backoff.undisturbed]
+    let unit_activating = facts
+        .iter()
+        .any(|(f, _)| matches!(f, ObservationFact::UnitActivating));
     // r[impl autonomous.restart.start-limit-hit]
     let unit_start_limit_hit = facts
         .iter()
@@ -354,6 +362,7 @@ async fn observe_one_pod<'a>(
         spec_stale,
         unit_failed,
         unit_active,
+        unit_activating,
         unit_start_limit_hit,
         container_exists,
         has_exited,
@@ -469,6 +478,12 @@ async fn actuate_one_pod(
                 cause: CrashLoopCause::StartLimitHit,
             });
         } else if obs.unit_failed || (obs.unit_active && !obs.is_running) {
+            // r[impl autonomous.restart.backoff.undisturbed]
+            // `unit_active` is now `active` alone. A unit still activating —
+            // starting, or paused between automatic restarts — is between
+            // attempts rather than faulty, so it files nothing: the fault for
+            // a container that keeps failing is the crash loop, raised from
+            // the recorded restart rate or from the start limit.
             result.unit_failure = Some(dr.instance.clone());
         }
     }
@@ -514,6 +529,19 @@ async fn actuate_one_pod(
         LifecycleState::Ready if !obs.is_running || obs.spec_stale => {
             if obs.spec_stale && inhibit_stop {
                 // Rolling strategy decided to keep this stale instance alive.
+                return Some(obs.result);
+            }
+
+            // r[impl autonomous.restart.backoff.undisturbed]
+            // The supervisor is bringing this unit up — its first start, or
+            // the pause before an automatic restart. Both are its window, not
+            // ours: tearing the unit down and starting a fresh transient one
+            // resets the start-limit accounting, so a container that keeps
+            // crashing never reaches the limit and never escalates to a
+            // crash_loop fault. Starting it ourselves would just race the
+            // supervisor. A stale spec is the exception — replacing the unit
+            // is the whole point, and the supervisor cannot see the AppDef.
+            if obs.unit_activating && !obs.spec_stale {
                 return Some(obs.result);
             }
 
