@@ -663,6 +663,31 @@ mod canopy_tests {
         state.canopy.count()
     }
 
+    fn active_fault_count(state: &Arc<OiState>) -> usize {
+        state.db.call(|db| {
+            crate::runtime::faults::list_active_faults(db, None)
+                .unwrap_or_default()
+                .len()
+        })
+    }
+
+    /// Wait for the count of active faults to reach `want`.
+    ///
+    /// Losing a connection removes the offer and then clears the fault, in
+    /// that order on the one path. [`await_offers`] returns the moment the
+    /// offer goes, which is before the clear, so a reader synchronising on it
+    /// alone can arrive in between and find the fault still there.
+    async fn await_faults(state: &Arc<OiState>, want: usize) -> usize {
+        for _ in 0..100 {
+            let count = active_fault_count(state);
+            if count == want {
+                return count;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        active_fault_count(state)
+    }
+
     // i[verify canopy.offer]
     // i[verify canopy.offer.lifetime]
     #[test]
@@ -749,13 +774,9 @@ mod canopy_tests {
             drop(client);
             assert_eq!(await_offers(&oi.state, 0).await, 0);
 
-            let remaining = oi.state.db.call(|db| {
-                crate::runtime::faults::list_active_faults(db, None)
-                    .unwrap_or_default()
-                    .len()
-            });
             assert_eq!(
-                remaining, 0,
+                await_faults(&oi.state, 0).await,
+                0,
                 "nothing is expected of an instance with no provider, so the \
                  fault must go with the connection rather than linger until the \
                  next scheduled tick"
