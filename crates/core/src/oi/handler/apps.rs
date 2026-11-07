@@ -787,9 +787,30 @@ pub(crate) fn describe_app(state: &OiState, params: AppParams) -> HandlerResult 
 
                 // i[impl scale.describe]
                 if let Some((low, high)) = info.scale_bounds {
-                    let current =
-                        scaling::effective_scale(db, &name_owned, &info.name_str, low, high)
-                            .unwrap_or(low);
+                    // r[impl scaling.decision.unreadable]
+                    // Null rather than the lower bound. The bounds come from
+                    // the app definition and are known; what the operator
+                    // chose within them is not, and reporting the floor would
+                    // have someone who scaled up read it back as a scale-down
+                    // that never happened.
+                    let current = match scaling::effective_scale(
+                        db,
+                        &name_owned,
+                        &info.name_str,
+                        low,
+                        high,
+                    ) {
+                        Ok(current) => json!(current),
+                        Err(e) => {
+                            tracing::warn!(
+                                app = %name_owned,
+                                deployment = %info.name_str,
+                                "could not read the scaling decision; reporting the current \
+                                 scale as unavailable: {e}"
+                            );
+                            Value::Null
+                        }
+                    };
                     resource_obj["scale"] = json!({
                         "low": low,
                         "high": high,

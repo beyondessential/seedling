@@ -147,6 +147,22 @@ mod tests {
         assert_eq!(effective_scale(&db, &app(), "web", 2, 10).unwrap(), 2);
     }
 
+    // r[verify scaling.decision.unreadable]
+    // The two cases have to stay apart here, because the callers decide
+    // between them: a read that failed must not arrive looking like an
+    // operator who chose nothing, or the reconciler converges the deployment
+    // down to a floor nobody asked for.
+    #[test]
+    fn a_failed_read_is_not_a_choice_of_the_lower_bound() {
+        let db = Db::open_in_memory().unwrap();
+        save_scaling_decision(&db, &app(), "web", 7).unwrap();
+        db.conn.execute("DROP TABLE scaling_decisions", []).unwrap();
+        assert!(
+            effective_scale(&db, &app(), "web", 2, 10).is_err(),
+            "an unreadable record must not read as the lower bound"
+        );
+    }
+
     // r[verify scaling.decision]
     #[test]
     fn effective_scale_clamps_stored_decision_to_bounds() {
