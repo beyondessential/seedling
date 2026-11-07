@@ -544,11 +544,16 @@ impl RuntimeInstance {
                 (def.scale.start, def.scale.end)
             };
             let scale = self.effective_scale(&dep.name, scale.0, scale.1)?;
+            // r[impl gc.instances.operation-keep-set]
+            // An operation holds its keep set across suspensions, so it must
+            // not take an instance the reconciler's retirement sweep is
+            // about to delete.
             let group = self.registry.ensure_scaled_group(
                 &self.app_name,
                 ResourceKind::Deployment,
                 Some(&dep.name),
                 scale,
+                crate::runtime::registry::InstanceReuse::Live,
             )?;
             return Ok(group.keep.into_iter().map(|inst| (inst, None)).collect());
         }
