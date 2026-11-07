@@ -2208,11 +2208,36 @@ impl Started {
     }
 
     // r[impl barrier.replay.anchor]
-    /// The entry a barrier on this group records against, where it has one.
-    fn anchor(&self) -> Option<usize> {
+    /// The entry this barrier may take a satisfied record from, or leave
+    /// one on.
+    ///
+    /// A narrowed group has none. A satisfied record says the resources
+    /// this entry names have reached a state, and a narrowed group is not
+    /// those resources: reading one would let it pass on another barrier's
+    /// evidence, and leaving one would let the barrier over the whole
+    /// group pass on its.
+    fn satisfaction_anchor(&self) -> Option<usize> {
         if self.narrowed {
             return None;
         }
+        self.origin_index
+    }
+
+    // r[impl barrier.replay.anchor]
+    /// The entry this barrier records its wait against.
+    ///
+    /// A narrowed group uses the entry of the call it came from. An
+    /// unsatisfied record carries no claim that anything has been reached,
+    /// so it cannot be mistaken for another barrier's passing, and without
+    /// one there is nothing to measure a deadline from — which left a
+    /// narrowed barrier suspended for good.
+    ///
+    /// Where a narrowed barrier and the barrier over the whole group both
+    /// wait on the same state, they share the one record and so the one
+    /// start. The broader of them is then timed from the earlier wait and
+    /// can give up early, which is the lesser fault against waiting for
+    /// ever, and goes with the rest of one-record-per-entry.
+    fn wait_anchor(&self) -> Option<usize> {
         self.origin_index
     }
 
@@ -2261,7 +2286,7 @@ impl Started {
         // the two calls carry byte-identical resources and the scan could
         // not tell them apart.
         let already_satisfied = self
-            .anchor()
+            .satisfaction_anchor()
             .and_then(|idx| g.committed.iter().find(|e| e.call_index == idx))
             .and_then(|e| e.barrier.as_ref())
             .is_some_and(|b| b.required_state == required && b.satisfied);
@@ -2323,7 +2348,7 @@ impl Started {
             // takes the maximum elapsed across unsatisfied records, so one
             // long wait that had since passed went on inflating the
             // re-poll cadence of every barrier after it.
-            if let Some(idx) = self.anchor() {
+            if let Some(idx) = self.satisfaction_anchor() {
                 record_at_anchor(
                     &mut g,
                     idx,
@@ -2343,7 +2368,7 @@ impl Started {
         // call's own entry.
         // r[impl barrier.replay.anchor]
         let started_at = self
-            .anchor()
+            .wait_anchor()
             .and_then(|idx| {
                 g.committed
                     .iter()
@@ -2382,7 +2407,7 @@ impl Started {
             started_at_secs: Some(now),
         };
         let anchored = self
-            .anchor()
+            .wait_anchor()
             .is_some_and(|idx| record_at_anchor(&mut g, idx, waiting));
         // Only a barrier with no entry behind it at all synthesises one. A
         // narrowed group has an entry, it just is not that barrier's to

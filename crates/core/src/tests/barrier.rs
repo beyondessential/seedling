@@ -2024,3 +2024,64 @@ fn a_start_replayed_against_a_stop_entry_diverges() {
         other => panic!("a start replayed against a stop's entry without complaint: {other:?}"),
     }
 }
+
+// r[verify barrier.deadline]
+#[test]
+fn a_barrier_on_a_narrowed_group_still_times_out() {
+    // Keeping narrowed groups off the shared record stopped them aliasing
+    // the barrier over the whole group, but it also left them recording no
+    // wait — so nothing measured their deadline and they suspended for
+    // good. Before narrowing did anything, the deadline applied to the
+    // whole group, so an operation that used to fail now hangs.
+    let (engine, mut scope, app, ast) = setup_with_script(
+        r#"
+        let web = app.deployment("web").image("docker.io/library/nginx:latest");
+        let optional = app.deployment("optional").image("docker.io/library/nginx:latest");
+        app.on_start(|rt, _param| {
+            rt.start(app).except(app.deployment("optional")).ready(1);
+        });
+    "#,
+    );
+
+    // Neither comes up. The narrowed group is `web` alone, and its barrier
+    // must give up rather than wait on it for ever.
+    let oracle = Arc::new(TestWorldOracle::new());
+    let log = InMemoryActionLog::new();
+    let op = OperationId::new();
+    let reg: Arc<dyn crate::runtime::InstanceRegistry> = registry();
+
+    let r = run_pass(
+        &engine,
+        &ast,
+        &app,
+        &mut scope,
+        op.clone(),
+        &log,
+        Arc::clone(&oracle),
+        Arc::clone(&reg),
+    );
+    assert!(matches!(r, OperationResult::Suspended(_)), "pass 1: {r:?}");
+
+    std::thread::sleep(std::time::Duration::from_millis(1100));
+
+    let r = run_pass(
+        &engine,
+        &ast,
+        &app,
+        &mut scope,
+        op,
+        &log,
+        Arc::clone(&oracle),
+        Arc::clone(&reg),
+    );
+    match r {
+        OperationResult::Failed(err) => {
+            let msg = err.to_string();
+            assert!(
+                msg.contains("deadline"),
+                "expected the narrowed barrier's deadline to expire, got: {msg}"
+            );
+        }
+        other => panic!("a barrier on a narrowed group waited past its deadline: {other:?}"),
+    }
+}

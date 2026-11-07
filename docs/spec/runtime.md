@@ -734,7 +734,8 @@ Some operations must hand a writable or read-only path to an action closure with
 > r[barrier.replay.anchor]
 > A barrier is anchored to the log entry of the call that produced the `Started` it was called on.
 > Whether the barrier has already been satisfied is decided from that entry alone, never from another entry that happens to record the same resources and the same required state.
-> A barrier on a group that a [Collection](language.md#l--collection.interface) method has narrowed is anchored to no entry: it came from that call but is not that call's barrier, and reading the entry would let it pass on a record written for a different set of resources, or write one the barrier over the whole group would read as its own.
+> A barrier on a group that a [Collection](language.md#l--collection.interface) method has narrowed neither takes a satisfied record from that entry nor leaves one on it: it came from that call but is not that call's barrier, so a record saying those resources have been reached is neither its evidence nor evidence it may offer.
+> It records its wait against that entry all the same, since a record of a wait claims nothing has been reached and a barrier with no wait recorded has no [deadline](#r--barrier.deadline) to expire.
 > Resources and required state do not identify a barrier: distinct calls within one closure can resolve to the same resource set, and [`rt.stop`](#r--barrier.replay.rt-stop) records the same terminal state that a later `.terminated()` barrier waits for.
 > A barrier whose anchoring entry records no satisfied barrier for its required state is decided against the [world observation history](#r--history.world.state-derivation).
 
