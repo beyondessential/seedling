@@ -800,10 +800,12 @@ pub(crate) fn retry(state: &OiState, params: RetryParams) -> HandlerResult {
         })
         .map_err(db_error)?;
     state.tls_coordinator.ensure(&hostname);
+    // The decision below is to rest on what was just written, not on what the
+    // coordinator read up to half a minute ago.
+    state.tls_coordinator.forget_chain_state();
     // A hostname on a chain Canopy is not part of has nothing else to take the
     // retry; the coordinator knows which that is.
     state.tls_coordinator.settle_retry(&hostname);
-    state.tls_coordinator.forget_chain_state();
     Ok(json!({ "ok": true }))
 }
 
@@ -1101,6 +1103,9 @@ fn decision_next_issuance(st: &state::HostnameState<'_>) -> (Option<i64>, Option
             // path does, rather than claiming the next ask is immediate.
             chain::Cycle::Running(r) if r.responsible == Strategy::Canopy => match &c.act {
                 state::ChainAct::Debounced { until } => (Some(*until), Some("debounce")),
+                // Nothing asks Canopy until an operator acts, so no issuance is
+                // coming to be promised.
+                state::ChainAct::Blocked { .. } | state::ChainAct::CannotAskCanopy => (None, None),
                 _ => (None, Some("immediate")),
             },
             chain::Cycle::Running(_) => (None, None),

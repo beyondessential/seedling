@@ -171,11 +171,14 @@ impl Coordinator {
         }
         let (replacing, now) = (c.replacing(), state.snapshot.now);
         let host = hostname.to_owned();
-        if let Err(e) = self
+        match self
             .db
             .call(move |db| store::start_cycle_for_force_retry(db, &host, replacing, now))
         {
-            tracing::warn!(%hostname, error = %e, "cannot start the cycle an operator retry asked for");
+            Ok(_) => self.forget_chain_state(),
+            Err(e) => {
+                tracing::warn!(%hostname, error = %e, "cannot start the cycle an operator retry asked for");
+            }
         }
     }
 
