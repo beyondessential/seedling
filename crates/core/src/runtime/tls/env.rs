@@ -31,6 +31,36 @@ pub trait Environment: Send + Sync {
     /// `None` when they could not be gathered. That is not an empty answer, and
     /// no caller may act on it as one.
     fn gather(&self) -> Option<(Vec<ManagedIngress>, ChainEnv)>;
+
+    /// What the proxy holds for one hostname, read now.
+    ///
+    /// The one fact the gate cannot take from the gathered facts: those are as
+    /// old as the moment they were gathered, and the proxy may have taken a
+    /// certificate for the hostname since. Answering anything but a
+    /// fall-through for a hostname it holds one for fails that hostname's
+    /// handshakes, so this is read at the moment it is acted on.
+    fn holding(&self, hostname: &str) -> ProxyHolding;
+}
+
+/// What the proxy's cache holds for one hostname.
+///
+/// `caddy_data` is where the cache lives, and `None` when it could not be
+/// located, which is not the proxy holding nothing.
+pub fn proxy_holding(caddy_data: Option<&Path>, hostname: &str) -> ProxyHolding {
+    let Some(path) = caddy_data else {
+        return ProxyHolding::Unreadable;
+    };
+    match crate::system::caddy::read_caddy_cert_state(path, hostname) {
+        CertRead::Present(view) => ProxyHolding::Holds(ProxyCert {
+            not_before: view.not_before,
+            not_after: view.not_after,
+            issuer_kind: view.issuer_kind,
+            issuer: view.issuer,
+            self_signed: view.self_signed,
+        }),
+        CertRead::Absent => ProxyHolding::Nothing,
+        CertRead::Unreadable => ProxyHolding::Unreadable,
+    }
 }
 
 /// Read what the proxy holds for each of `managed`, from its certificate cache.
@@ -51,18 +81,7 @@ pub fn proxy_holdings(
     };
     let hostnames: BTreeSet<&str> = managed.iter().map(|m| m.hostname.as_str()).collect();
     for hostname in hostnames {
-        let holding = match crate::system::caddy::read_caddy_cert_state(path, hostname) {
-            CertRead::Present(view) => ProxyHolding::Holds(ProxyCert {
-                not_before: view.not_before,
-                not_after: view.not_after,
-                issuer_kind: view.issuer_kind,
-                issuer: view.issuer,
-                self_signed: view.self_signed,
-            }),
-            CertRead::Absent => ProxyHolding::Nothing,
-            CertRead::Unreadable => ProxyHolding::Unreadable,
-        };
-        proxy.insert(hostname.to_owned(), holding);
+        proxy.insert(hostname.to_owned(), proxy_holding(Some(path), hostname));
     }
     proxy
 }

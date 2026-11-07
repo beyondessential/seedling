@@ -192,6 +192,16 @@ impl Coordinator {
         Some(self.chain_state()?.snapshot.env.proxy.clone())
     }
 
+    /// What the proxy holds for one hostname, read now rather than from the
+    /// state the decisions are made against.
+    ///
+    /// `None` when there is nothing to read it with, which is not the proxy
+    /// holding nothing.
+    // r[impl tls.chain.proxy-gate]
+    pub fn proxy_holding_now(&self, hostname: &str) -> Option<state::ProxyHolding> {
+        Some(self.environment.get()?.holding(hostname))
+    }
+
     /// Forget the state chain decisions are made against, so the next one is
     /// made afresh. For a caller that has just written something a decision
     /// rests on and wants it acted on now rather than within the window.

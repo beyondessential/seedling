@@ -98,6 +98,16 @@ impl crate::runtime::tls::env::Environment for OiEnvironment {
             }
         }
     }
+
+    fn holding(&self, hostname: &str) -> crate::runtime::tls::state::ProxyHolding {
+        let Some(state) = self.0.upgrade() else {
+            return crate::runtime::tls::state::ProxyHolding::Unreadable;
+        };
+        crate::runtime::tls::env::proxy_holding(
+            state.resolve_caddy_data_path().as_deref(),
+            hostname,
+        )
+    }
 }
 
 impl OiState {
