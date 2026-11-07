@@ -350,26 +350,21 @@ impl<R: CertificateRelay> Engine<R> {
     /// The same call opens an order and collects it, and is safe to repeat.
     // r[impl tls.canopy.request]
     // r[impl tls.canopy.collect]
-    pub async fn ask(&self, ask: Ask) -> std::result::Result<Outcome, Failed> {
+    pub async fn ask(&self, ask: Ask) -> Asked {
         match self.request_and_apply(&ask).await {
             Ok(ApplyResult::Done(outcome)) => Ok(outcome),
             Ok(ApplyResult::Replaced(replacement)) => self.reorder(ask, replacement).await,
-            Err(error) => Err(Failed { ask, error }),
+            Err(error) => Err(Box::new(Failed { ask, error })),
         }
     }
 
     /// A certificate Canopy reported revoked, or whose key it reported
     /// condemned: stop serving it, replace the key and open a new order.
     // r[impl tls.canopy.revoked]
-    pub async fn revoke_and_reorder(
-        &self,
-        ask: Ask,
-        cert_id: i64,
-        reason: String,
-    ) -> std::result::Result<Outcome, Failed> {
+    pub async fn revoke_and_reorder(&self, ask: Ask, cert_id: i64, reason: String) -> Asked {
         match self.revoke(&ask, cert_id, reason) {
             Ok(replacement) => self.reorder(ask, replacement).await,
-            Err(error) => Err(Failed { ask, error }),
+            Err(error) => Err(Box::new(Failed { ask, error })),
         }
     }
 
@@ -398,11 +393,7 @@ impl<R: CertificateRelay> Engine<R> {
     ///
     /// Once, not in a loop: an answer that condemns the new key as well is left
     /// for the next opportunity rather than chased here.
-    async fn reorder(
-        &self,
-        ask: Ask,
-        replacement: Replacement,
-    ) -> std::result::Result<Outcome, Failed> {
+    async fn reorder(&self, ask: Ask, replacement: Replacement) -> Asked {
         let reason = replacement.reason.clone();
         // The revocation has already written where the hostname stands, so a
         // failure from here belongs to that position and not to the one the
@@ -415,7 +406,7 @@ impl<R: CertificateRelay> Engine<R> {
         };
         match self.request_and_apply(&next).await {
             Ok(_) => Ok(Outcome::Replaced(reason)),
-            Err(error) => Err(Failed { ask: next, error }),
+            Err(error) => Err(Box::new(Failed { ask: next, error })),
         }
     }
 
@@ -524,6 +515,14 @@ pub struct Failed {
     pub ask: Ask,
     pub error: Error,
 }
+
+/// What asking Canopy produced: the answer, or the failure and where the
+/// hostname stands.
+///
+/// The failure is boxed because it carries the whole question, several times
+/// the size of any answer, and these calls answer rather than fail in all but
+/// the exceptional case.
+pub type Asked = std::result::Result<Outcome, Box<Failed>>;
 
 /// Where a hostname stands after its certificate was revoked.
 #[derive(Debug, Clone)]
