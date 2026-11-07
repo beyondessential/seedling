@@ -246,6 +246,17 @@ impl Snapshot {
         })
     }
 
+    /// Take in the one write an operator retry makes for `hostname`: the row it
+    /// put in the hostname's chain, and the retry it consumed.
+    ///
+    /// For a caller that wrote it after loading and wants the decision to
+    /// rest on it, without reading the world again to learn about one row.
+    pub fn with_cycle_started(&mut self, hostname: &str, row: Option<TlsChainRow>) {
+        self.chain_rows.retain(|r| r.hostname != hostname);
+        self.chain_rows.extend(row);
+        self.force_retries.retain(|r| r.hostname != hostname);
+    }
+
     /// The certificate's SAN list, from the memo when it is there and by
     /// parsing when it is not.
     /// Borrowed on a memo hit, so a hit costs nothing: the memo exists to take

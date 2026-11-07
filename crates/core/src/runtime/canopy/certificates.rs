@@ -350,6 +350,9 @@ async fn ask_canopy<R: CertificateRelay>(
     skip: &BTreeSet<String>,
     budget: &mut Budget,
 ) {
+    // The reading as it stands, amended in place by an operator retry's write
+    // rather than loaded again.
+    let mut snap = std::borrow::Cow::Borrowed(snap);
     // Each tick starts after the hostname the last one stopped at, so a few
     // whose orders stay open cannot hold the whole budget: in name order alone,
     // eight slow hostnames at the front would be re-asked every tick and the
@@ -381,15 +384,25 @@ async fn ask_canopy<R: CertificateRelay>(
             );
             break;
         }
-        let st = state::compute_state(snap, hostname);
-        let Decision::Chain(c) = &st.decision else {
-            continue;
-        };
-        let due = match &c.act {
-            ChainAct::AskCanopy => true,
-            ChainAct::Debounced { .. } | ChainAct::Wait => c.collect_canopy,
-            // An operator pause, or nothing that can be asked.
-            ChainAct::Blocked { .. } | ChainAct::CannotAskCanopy => false,
+        // What the decision says, taken out of it so that the reading can be
+        // amended below without a borrow of it outstanding.
+        let (due, retry_queued, replacing, unforced) = {
+            let st = state::compute_state(&snap, hostname);
+            let Decision::Chain(c) = &st.decision else {
+                continue;
+            };
+            let due = match &c.act {
+                ChainAct::AskCanopy => true,
+                ChainAct::Debounced { .. } | ChainAct::Wait => c.collect_canopy,
+                // An operator pause, or nothing that can be asked.
+                ChainAct::Blocked { .. } | ChainAct::CannotAskCanopy => false,
+            };
+            (
+                due,
+                st.force_retry_at.is_some(),
+                c.replacing(),
+                ask_for(hostname, c, false),
+            )
         };
         if !due {
             continue;
@@ -397,15 +410,24 @@ async fn ask_canopy<R: CertificateRelay>(
 
         // An operator retry is consumed here, in the same write that records
         // the cycle it starts, so a restart cannot lose it.
-        let forced = if st.force_retry_at.is_some() {
-            let replacing = c.replacing();
+        let forced = if retry_queued {
             let now = snap.now;
             let host = hostname.to_owned();
-            match state
-                .db
-                .call(move |db| store::start_cycle_for_force_retry(db, &host, replacing, now))
-            {
-                Ok(queued) => queued,
+            match state.db.call(move |db| {
+                let queued = store::start_cycle_for_force_retry(db, &host, replacing, now)?;
+                let row = store::get_chain_row(db, &host)?;
+                Ok::<_, rusqlite::Error>((queued, row))
+            }) {
+                Ok((queued, row)) => {
+                    if queued {
+                        // The retry has just written the position the cycle
+                        // starts from, so the question to Canopy is built from
+                        // what stands now and not from the decision made before
+                        // it. Only that row changed, so it is all that is read.
+                        snap.to_mut().with_cycle_started(hostname, row);
+                    }
+                    queued
+                }
                 Err(e) => {
                     tracing::error!(%hostname, error = %e, "canopy certificates: cannot start the cycle an operator retry asked for");
                     continue;
@@ -415,25 +437,16 @@ async fn ask_canopy<R: CertificateRelay>(
             false
         };
 
-        // The retry has just written the position the cycle starts from, so the
-        // question to Canopy is built from what stands now and not from the
-        // decision that was made before it.
-        let fresh_snap;
-        let fresh;
-        let c = if forced {
-            let Some(reloaded) = snapshot(state, managed) else {
+        let ask = if forced {
+            let st = state::compute_state(&snap, hostname);
+            let Decision::Chain(c) = &st.decision else {
                 continue;
             };
-            fresh_snap = reloaded;
-            fresh = state::compute_state(&fresh_snap, hostname);
-            match &fresh.decision {
-                Decision::Chain(c) => c,
-                _ => continue,
-            }
+            ask_for(hostname, c, true)
         } else {
-            c
+            unforced
         };
-        let Some(ask) = ask_for(hostname, c, forced) else {
+        let Some(ask) = ask else {
             continue;
         };
         budget.asked += 1;
