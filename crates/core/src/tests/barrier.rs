@@ -961,7 +961,7 @@ fn terminated_eventually_never_times_out() {
     // The persisted log entry must also carry None, so replay after a
     // restart still produces a deadline-less barrier.
     let entries = log.load().unwrap();
-    let barrier = entries[0].barrier.as_ref().expect("barrier recorded");
+    let barrier = entries[0].barrier(0).expect("barrier recorded");
     assert_eq!(barrier.deadline_secs, None);
 
     // Pass 2: still pending and the recorded started_at is old enough that a
@@ -969,7 +969,7 @@ fn terminated_eventually_never_times_out() {
     // barrier must stay in Suspended, never Failed.
     {
         let mut es = log.load().unwrap();
-        if let Some(b) = es[0].barrier.as_mut() {
+        for b in &mut es[0].barriers {
             b.started_at_secs = Some(0); // epoch — "waited" for >50 years
         }
         log.commit(&es);
@@ -1179,4 +1179,1056 @@ fn rt_stop_deadline_is_enforced() {
         }
         other => panic!("expected Failed with deadline message, got {other:?}"),
     }
+}
+
+/// Run one pass of `start` for an operation, with the boilerplate of
+/// `OperationContext` filled in from the pieces a replay test varies.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "one argument per piece of OperationContext a replay test varies"
+)]
+fn run_pass_with_db(
+    engine: &rhai::Engine,
+    ast: &rhai::AST,
+    app: &defs::app::App,
+    scope: &mut rhai::Scope<'static>,
+    operation_id: OperationId,
+    log: &InMemoryActionLog,
+    world: Arc<TestWorldOracle>,
+    registry: Arc<dyn crate::runtime::InstanceRegistry>,
+    db: Option<crate::runtime::db::DbHandle>,
+) -> OperationResult {
+    run_operation(
+        OperationContext {
+            engine,
+            script_ast: ast,
+            operation_id,
+            app,
+            action_name: "start",
+            log,
+            world,
+            registry,
+            active_progress: None,
+            tick_notify: None,
+            params: serde_json::Map::new(),
+            is_shell: false,
+            db,
+            source_generation: 0,
+            target_generation: 0,
+            script_limits: None,
+            cipher: None,
+            operation_volume_bindings: std::collections::HashMap::new(),
+            cancel_token: Arc::new(crate::runtime::barrier::CancelToken::new()),
+            container_signaler: None,
+            volume_writer: None,
+            executor: None,
+        },
+        scope,
+    )
+}
+
+#[expect(
+    clippy::too_many_arguments,
+    reason = "one argument per piece of OperationContext a replay test varies"
+)]
+fn run_pass(
+    engine: &rhai::Engine,
+    ast: &rhai::AST,
+    app: &defs::app::App,
+    scope: &mut rhai::Scope<'static>,
+    operation_id: OperationId,
+    log: &InMemoryActionLog,
+    world: Arc<TestWorldOracle>,
+    registry: Arc<dyn crate::runtime::InstanceRegistry>,
+) -> OperationResult {
+    run_pass_with_db(
+        engine,
+        ast,
+        app,
+        scope,
+        operation_id,
+        log,
+        world,
+        registry,
+        None,
+    )
+}
+
+fn job(name: &str) -> ResourceInstance {
+    ResourceInstance::new_singleton(
+        seedling_protocol::names::AppName::new("test-app").unwrap(),
+        ResourceKind::Job,
+        name,
+    )
+}
+
+// r[verify barrier.replay.anchor]
+#[test]
+fn terminated_barrier_does_not_short_circuit_against_an_earlier_stop() {
+    // `do_stop` is the only writer of a satisfied record with
+    // required_state=Terminated. A `.terminated()` barrier later in the same
+    // closure resolves to the same instance UUID for a named job, so a fast
+    // path matching on resources and required state alone took the stop's
+    // record as its own and passed without the job having terminated.
+    //
+    // The deployment barrier in the middle is a suspension point, so the
+    // world can move between the stop being satisfied and the later barrier
+    // being checked — which is what the real system does when `rt.start`
+    // brings the job back up.
+    let (engine, mut scope, app, ast) = setup_with_script(
+        r#"
+        let web = app.deployment("web").image("docker.io/library/nginx:latest");
+        let runner = app.job("runner").image("docker.io/library/busybox:latest");
+        app.on_start(|rt, _param| {
+            rt.stop(app.job("runner"));
+            rt.start(app.deployment("web")).ready();
+            rt.start(app.job("runner")).terminated();
+        });
+    "#,
+    );
+
+    let oracle = Arc::new(TestWorldOracle::new());
+    let log = InMemoryActionLog::new();
+    let op = OperationId::new();
+    let reg: Arc<dyn crate::runtime::InstanceRegistry> = registry();
+
+    // Pass 1: the job is still running, so the stop suspends.
+    oracle.set(job("runner"), LifecycleState::Running);
+    let r = run_pass(
+        &engine,
+        &ast,
+        &app,
+        &mut scope,
+        op.clone(),
+        &log,
+        Arc::clone(&oracle),
+        Arc::clone(&reg),
+    );
+    assert!(matches!(r, OperationResult::Suspended(_)), "pass 1: {r:?}");
+
+    // Pass 2: the job has terminated, so the stop is satisfied and commits a
+    // satisfied Terminated record. The deployment is not ready yet, so the
+    // closure suspends again before reaching the `.terminated()` barrier.
+    oracle.set(job("runner"), LifecycleState::Terminated);
+    let r = run_pass(
+        &engine,
+        &ast,
+        &app,
+        &mut scope,
+        op.clone(),
+        &log,
+        Arc::clone(&oracle),
+        Arc::clone(&reg),
+    );
+    assert!(matches!(r, OperationResult::Suspended(_)), "pass 2: {r:?}");
+
+    // Pass 3: the deployment is ready, so the closure reaches
+    // `.terminated()` — with the job running again. The barrier must consult
+    // the world and suspend, not take the stop's record as its own.
+    oracle.set(dep("web"), LifecycleState::Ready);
+    oracle.set(job("runner"), LifecycleState::Running);
+    let r = run_pass(
+        &engine,
+        &ast,
+        &app,
+        &mut scope,
+        op,
+        &log,
+        Arc::clone(&oracle),
+        Arc::clone(&reg),
+    );
+    assert!(
+        matches!(r, OperationResult::Suspended(_)),
+        "the terminated() barrier took the earlier stop's record as its own: {r:?}"
+    );
+}
+
+// r[verify barrier.satisfaction.recorded]
+#[test]
+fn a_barrier_that_passes_on_a_replay_pass_is_recorded_as_satisfied() {
+    // Satisfaction was marked on pending entries only, and on a replay pass
+    // pending is empty until the closure makes its first fresh rt.* call.
+    // The first barrier's committed record therefore kept satisfied=false
+    // and its original started_at for the rest of the operation, and
+    // `earliest_unsatisfied_barrier_wait_secs` takes the maximum elapsed
+    // across unsatisfied records — so a long first wait went on inflating
+    // the re-poll cadence of every barrier after it.
+    let (engine, mut scope, app, ast) = setup_with_script(
+        r#"
+        let web = app.deployment("web").image("docker.io/library/nginx:latest");
+        let api = app.deployment("api").image("docker.io/library/nginx:latest");
+        app.on_start(|rt, _param| {
+            rt.start(app.deployment("web")).ready();
+            rt.start(app.deployment("api")).ready();
+        });
+    "#,
+    );
+
+    let oracle = Arc::new(TestWorldOracle::new());
+    let log = InMemoryActionLog::new();
+    let op = OperationId::new();
+    let reg: Arc<dyn crate::runtime::InstanceRegistry> = registry();
+
+    // Pass 1: neither is ready, so the closure suspends on web's barrier.
+    let r = run_pass(
+        &engine,
+        &ast,
+        &app,
+        &mut scope,
+        op.clone(),
+        &log,
+        Arc::clone(&oracle),
+        Arc::clone(&reg),
+    );
+    assert!(matches!(r, OperationResult::Suspended(_)), "pass 1: {r:?}");
+
+    // Pass 2: web is ready, so its barrier passes while the closure is
+    // replaying; api is not, so the closure suspends on api's barrier.
+    oracle.set(dep("web"), LifecycleState::Ready);
+    let r = run_pass(
+        &engine,
+        &ast,
+        &app,
+        &mut scope,
+        op,
+        &log,
+        Arc::clone(&oracle),
+        Arc::clone(&reg),
+    );
+    assert!(matches!(r, OperationResult::Suspended(_)), "pass 2: {r:?}");
+
+    let entries = log.load().expect("log loads");
+    let web_barrier = entries
+        .iter()
+        .find(|e| e.resources.iter().any(|r| r.name.as_deref() == Some("web")))
+        .and_then(|e| e.barrier(0))
+        .expect("web's call has a barrier record");
+    assert!(
+        web_barrier.satisfied,
+        "web's barrier passed but its record still says it is waiting: {web_barrier:?}"
+    );
+
+    let unsatisfied: Vec<_> = entries
+        .iter()
+        .filter(|e| e.barrier(0).is_some_and(|b| !b.satisfied))
+        .filter_map(|e| e.resources.first())
+        .map(|r| r.name.clone().unwrap_or_default())
+        .collect();
+    assert_eq!(
+        unsatisfied,
+        vec!["api".to_owned()],
+        "only the barrier actually still waiting should count toward the poll cadence"
+    );
+}
+
+// r[verify operation.composition.params.replay]
+// r[verify barrier.replay.positional]
+//
+// Lives here rather than beside the other `Action.invoke` tests because it
+// needs the real replay context: the stub runtime those use has no action
+// log to commit a call to or recover one from.
+#[test]
+fn a_replayed_sub_action_call_recovers_its_recorded_params() {
+    // Validation answers to the world, which is why the entry carries the
+    // post-validation params. Re-running it on every pass meant an update
+    // that changed the sub-action's schema stopped a call that had already
+    // been committed with valid params from replaying at all.
+    let outer = |inner_params: &str| {
+        format!(
+            r#"
+            let web = app.deployment("web").image("docker.io/library/nginx:latest");
+            app.on_action("inner", |rt, p| {{
+                if p["note"] != "hello" {{
+                    throw "inner did not observe the recorded params";
+                }}
+            }}, #{{ params: #{{ {inner_params} }} }});
+            app.on_start(|rt, _param| {{
+                app.action("inner").invoke(#{{ note: "hello" }});
+                rt.start(app.deployment("web")).ready();
+            }});
+        "#
+        )
+    };
+
+    let (engine, mut scope, app, ast) = setup_with_script(&outer(r#""note": #{ kind: "text" },"#));
+
+    let oracle = Arc::new(TestWorldOracle::new());
+    let log = InMemoryActionLog::new();
+    let op = OperationId::new();
+    let reg: Arc<dyn crate::runtime::InstanceRegistry> = registry();
+
+    // Pass 1: the sub-action call is committed, then the barrier suspends.
+    let r = run_pass(
+        &engine,
+        &ast,
+        &app,
+        &mut scope,
+        op.clone(),
+        &log,
+        Arc::clone(&oracle),
+        Arc::clone(&reg),
+    );
+    assert!(matches!(r, OperationResult::Suspended(_)), "pass 1: {r:?}");
+
+    let recorded = log.load().expect("log loads");
+    assert!(
+        recorded.iter().any(|e| matches!(
+            e.call_kind,
+            crate::runtime::barrier::CallKind::SubAction
+        ) && e.extra.as_deref().is_some_and(|x| x.contains("hello"))),
+        "pass 1 should commit the call with its post-validation params: {recorded:?}"
+    );
+
+    // Pass 2: an update has given `inner` a second required param that the
+    // call site does not supply, so validating again would throw. The call
+    // is already committed, so it replays with the params it was committed
+    // with and the operation finishes.
+    let (engine, mut scope, app, ast) = setup_with_script(&outer(
+        r#""note": #{ kind: "text" }, "target": #{ kind: "text" },"#,
+    ));
+    oracle.set(dep("web"), LifecycleState::Ready);
+    let r = run_pass(
+        &engine,
+        &ast,
+        &app,
+        &mut scope,
+        op,
+        &log,
+        Arc::clone(&oracle),
+        Arc::clone(&reg),
+    );
+    assert!(
+        matches!(r, OperationResult::Completed),
+        "a committed sub-action call was validated again instead of replayed: {r:?}"
+    );
+}
+
+// r[verify scaling.decision.actions]
+#[test]
+fn an_action_addresses_every_replica_the_deployment_is_scaled_to() {
+    // The replica set was sized from `scale.start`, the low end of the
+    // declared range, so a deployment declared scale(2..10) and scaled to 5
+    // resolved to 2 instances. A maintenance action that stopped it stopped
+    // 2 of the 5 and carried on as though the workload were down.
+    let (engine, mut scope, app, ast) = setup_with_script(
+        r#"
+        let web = app.deployment("web")
+            .image("docker.io/library/nginx:latest")
+            .scale(2..10);
+        app.on_start(|rt, _param| {
+            rt.start(app.deployment("web")).ready();
+        });
+    "#,
+    );
+
+    let db = crate::runtime::db::DbHandle::open_in_memory().expect("in-memory db");
+    // The decision is keyed by the app the operation runs as, which is the
+    // name on the app def rather than the one `dep()` builds instances with.
+    let app_name = app.def.load().name.clone();
+    db.call({
+        let app_name = app_name.clone();
+        move |db| crate::runtime::scaling::save_scaling_decision(db, &app_name, "web", 5)
+    })
+    .expect("scaling decision saves");
+
+    let oracle = Arc::new(TestWorldOracle::new());
+    oracle.set(dep("web"), LifecycleState::Ready);
+    let log = InMemoryActionLog::new();
+    let reg: Arc<dyn crate::runtime::InstanceRegistry> = Arc::new(
+        crate::runtime::registry::DbInstanceRegistry::new(db.clone()),
+    );
+
+    let r = run_pass_with_db(
+        &engine,
+        &ast,
+        &app,
+        &mut scope,
+        OperationId::new(),
+        &log,
+        Arc::clone(&oracle),
+        Arc::clone(&reg),
+        Some(db),
+    );
+    assert!(matches!(r, OperationResult::Completed), "{r:?}");
+
+    let entries = log.load().expect("log loads");
+    let started = entries
+        .iter()
+        .find(|e| matches!(e.call_kind, crate::runtime::barrier::CallKind::Start))
+        .expect("the start call is recorded");
+    assert_eq!(
+        started.resources.len(),
+        5,
+        "the action reached {} of the 5 replicas the deployment is scaled to",
+        started.resources.len()
+    );
+}
+
+// l[verify rt.started.type]
+// l[verify collection.except]
+#[test]
+fn except_on_a_started_stops_waiting_for_the_excluded_resource() {
+    // The collection methods returned the whole group whatever they were
+    // given, so a resource the author excluded was still waited on — which
+    // hung the operation, or failed its deadline, on a resource the script
+    // had said to leave out.
+    let (engine, mut scope, app, ast) = setup_with_script(
+        r#"
+        let web = app.deployment("web").image("docker.io/library/nginx:latest");
+        let optional = app.deployment("optional").image("docker.io/library/nginx:latest");
+        app.on_start(|rt, _param| {
+            rt.start(app).except(app.deployment("optional")).ready();
+        });
+    "#,
+    );
+
+    let oracle = Arc::new(TestWorldOracle::new());
+    // `optional` never becomes Ready.
+    oracle.set(dep("web"), LifecycleState::Ready);
+    let log = InMemoryActionLog::new();
+
+    let r = run_pass(
+        &engine,
+        &ast,
+        &app,
+        &mut scope,
+        OperationId::new(),
+        &log,
+        Arc::clone(&oracle),
+        registry(),
+    );
+    assert!(
+        matches!(r, OperationResult::Completed),
+        "the barrier waited for the excluded resource: {r:?}"
+    );
+}
+
+// l[verify rt.started.type]
+// l[verify collection.only]
+// l[verify collection.select]
+#[test]
+fn only_and_select_narrow_a_started_to_the_resources_they_name() {
+    let (engine, mut scope, app, ast) = setup_with_script(
+        r#"
+        let web = app.deployment("web").image("docker.io/library/nginx:latest");
+        let other = app.deployment("other").image("docker.io/library/nginx:latest");
+        app.on_start(|rt, _param| {
+            let started = rt.start(app);
+            started.only(app.deployment("web")).ready();
+            started.select(#{ names: ["web"] }).ready();
+        });
+    "#,
+    );
+
+    let oracle = Arc::new(TestWorldOracle::new());
+    oracle.set(dep("web"), LifecycleState::Ready);
+    let log = InMemoryActionLog::new();
+
+    let r = run_pass(
+        &engine,
+        &ast,
+        &app,
+        &mut scope,
+        OperationId::new(),
+        &log,
+        Arc::clone(&oracle),
+        registry(),
+    );
+    assert!(
+        matches!(r, OperationResult::Completed),
+        "only/select waited for a resource they did not name: {r:?}"
+    );
+}
+
+// l[verify rt.started.type]
+// l[verify collection.one]
+#[test]
+fn one_on_a_started_yields_a_single_resource_and_null_when_empty() {
+    let (engine, mut scope, app, ast) = setup_with_script(
+        r#"
+        let web = app.deployment("web").image("docker.io/library/nginx:latest");
+        let other = app.deployment("other").image("docker.io/library/nginx:latest");
+        app.on_start(|rt, _param| {
+            let started = rt.start(app);
+            if started.select(#{ names: ["web"] }).one() == () {
+                throw "one() returned null for a non-empty group";
+            }
+            if started.select(#{ names: ["absent"] }).one() != () {
+                throw "one() returned a group for an empty selection";
+            }
+            started.select(#{ names: ["web"] }).one().ready();
+        });
+    "#,
+    );
+
+    let oracle = Arc::new(TestWorldOracle::new());
+    oracle.set(dep("web"), LifecycleState::Ready);
+    let log = InMemoryActionLog::new();
+
+    let r = run_pass(
+        &engine,
+        &ast,
+        &app,
+        &mut scope,
+        OperationId::new(),
+        &log,
+        Arc::clone(&oracle),
+        registry(),
+    );
+    assert!(matches!(r, OperationResult::Completed), "{r:?}");
+}
+
+// r[verify barrier.satisfaction.recorded]
+// r[verify barrier.deadline]
+#[test]
+fn a_second_barrier_on_one_started_does_not_rearm_its_wait_each_pass() {
+    // One log entry holds one barrier record, and both barriers on a
+    // `Started` anchor to that entry. Handing the record to whichever
+    // barrier is waiting rewrote its start on every pass, so the wait it
+    // times restarted each time and the deadline could never expire.
+    //
+    // Which barrier ends up holding the record is not the point: the
+    // waiting one does, so that it can be timed. The point is that its
+    // start stands still.
+    let (engine, mut scope, app, ast) = setup_with_script(
+        r#"
+        let web = app.deployment("web").image("docker.io/library/nginx:latest");
+        app.on_start(|rt, _param| {
+            let started = rt.start(app.deployment("web"));
+            started.running();
+            started.ready();
+        });
+    "#,
+    );
+
+    let oracle = Arc::new(TestWorldOracle::new());
+    oracle.set(dep("web"), LifecycleState::Running);
+    let log = InMemoryActionLog::new();
+    let op = OperationId::new();
+    let reg: Arc<dyn crate::runtime::InstanceRegistry> = registry();
+
+    let recorded_start = |log: &InMemoryActionLog| {
+        let entries = log.load().expect("log loads");
+        assert_eq!(entries.len(), 1, "one call, one entry: {entries:?}");
+        entries[0].barrier(0).and_then(|b| b.started_at_secs)
+    };
+    let pass = |scope: &mut rhai::Scope<'static>| {
+        let r = run_pass(
+            &engine,
+            &ast,
+            &app,
+            scope,
+            op.clone(),
+            &log,
+            Arc::clone(&oracle),
+            Arc::clone(&reg),
+        );
+        assert!(matches!(r, OperationResult::Suspended(_)), "{r:?}");
+    };
+
+    // The first pass reaches Running and records the Ready wait behind it.
+    pass(&mut scope);
+    let first = recorded_start(&log);
+    assert!(first.is_some(), "the waiting barrier records a start");
+
+    // A second of real time, so a start that was rewritten reads as a
+    // different second rather than the same one.
+    std::thread::sleep(std::time::Duration::from_millis(1100));
+
+    pass(&mut scope);
+    assert_eq!(
+        recorded_start(&log),
+        first,
+        "the wait was restarted on a later pass, so its deadline could never expire"
+    );
+}
+
+// r[verify gc.instances.operation-keep-set]
+#[test]
+fn stopping_an_already_stopped_deployment_does_not_mint_instances_to_wait_on() {
+    // rt.stop addresses the instances a deployment has, so refusing to
+    // reuse torn-down ones leaves it minting fresh identities and waiting
+    // for them to terminate — which nothing will ever do, since the
+    // reconciler desires none of them.
+    let (engine, mut scope, app, ast) = setup_with_script(
+        r#"
+        let web = app.deployment("web").image("docker.io/library/nginx:latest");
+        app.on_start(|rt, _param| {
+            rt.stop(app.deployment("web"));
+        });
+    "#,
+    );
+
+    let db = crate::runtime::db::DbHandle::open_in_memory().expect("in-memory db");
+    let app_name = app.def.load().name.clone();
+    let reg: Arc<dyn crate::runtime::InstanceRegistry> = Arc::new(
+        crate::runtime::registry::DbInstanceRegistry::new(db.clone()),
+    );
+
+    // The deployment's one replica has been torn down already.
+    let existing = reg
+        .ensure_scaled_group(
+            &app_name,
+            ResourceKind::Deployment,
+            Some("web"),
+            1,
+            crate::runtime::registry::InstanceReuse::Any,
+        )
+        .expect("group resolves")
+        .keep[0]
+        .clone();
+    db.call({
+        let existing = existing.clone();
+        move |db| {
+            for kind in ["container_running", "container_removed"] {
+                crate::runtime::history::insert_observation(
+                    db,
+                    &existing,
+                    kind,
+                    &serde_json::json!({}),
+                )
+                .unwrap();
+            }
+        }
+    });
+
+    let oracle = Arc::new(TestWorldOracle::new());
+    oracle.set(dep("web"), LifecycleState::Unscheduled);
+    let log = InMemoryActionLog::new();
+
+    let r = run_pass_with_db(
+        &engine,
+        &ast,
+        &app,
+        &mut scope,
+        OperationId::new(),
+        &log,
+        Arc::clone(&oracle),
+        Arc::clone(&reg),
+        Some(db),
+    );
+    assert!(matches!(r, OperationResult::Completed), "{r:?}");
+
+    // The oracle keys on kind and name, so it cannot tell a minted
+    // instance from the real one; the identity in the log can.
+    let entries = log.load().expect("log loads");
+    let stopped = entries
+        .iter()
+        .find(|e| matches!(e.call_kind, crate::runtime::barrier::CallKind::Stop))
+        .expect("the stop is recorded");
+    assert_eq!(
+        stopped.resources.len(),
+        1,
+        "one replica, one instance to stop: {:?}",
+        stopped.resources
+    );
+    assert_eq!(
+        stopped.resources[0].id, existing.id,
+        "the stop addressed an instance it had just minted rather than the one the deployment has"
+    );
+}
+
+// r[verify barrier.deadline]
+// r[verify barrier.satisfaction.recorded]
+#[test]
+fn the_second_barrier_on_one_started_still_times_out() {
+    // Two barriers on one `Started` share one record. Abstaining whenever
+    // the entry held anything left the second barrier with no start, so its
+    // deadline could never expire; handing it the record on every pass
+    // restarted the wait, which could never expire either. The record's
+    // state is what tells the two apart: a satisfied record is finished
+    // with, a waiting one is still timing something.
+    let (engine, mut scope, app, ast) = setup_with_script(
+        r#"
+        let web = app.deployment("web").image("docker.io/library/nginx:latest");
+        app.on_start(|rt, _param| {
+            let started = rt.start(app.deployment("web"));
+            started.running();
+            started.ready(1);
+        });
+    "#,
+    );
+
+    let oracle = Arc::new(TestWorldOracle::new());
+    oracle.set(dep("web"), LifecycleState::Running);
+    let log = InMemoryActionLog::new();
+    let op = OperationId::new();
+    let reg: Arc<dyn crate::runtime::InstanceRegistry> = registry();
+
+    // The deployment reaches Running and stops there, so the first pass
+    // records the Ready wait behind the Running barrier it satisfies.
+    let r = run_pass(
+        &engine,
+        &ast,
+        &app,
+        &mut scope,
+        op.clone(),
+        &log,
+        Arc::clone(&oracle),
+        Arc::clone(&reg),
+    );
+    assert!(matches!(r, OperationResult::Suspended(_)), "pass 1: {r:?}");
+
+    // Past the one-second deadline that wait was recorded with.
+    std::thread::sleep(std::time::Duration::from_millis(1100));
+
+    let r = run_pass(
+        &engine,
+        &ast,
+        &app,
+        &mut scope,
+        op,
+        &log,
+        Arc::clone(&oracle),
+        Arc::clone(&reg),
+    );
+    match r {
+        OperationResult::Failed(err) => {
+            let msg = err.to_string();
+            assert!(
+                msg.contains("deadline"),
+                "expected the ready() deadline to expire, got: {msg}"
+            );
+        }
+        other => panic!("the second barrier's wait never timed out: {other:?}"),
+    }
+}
+
+// r[verify barrier.replay.anchor]
+#[test]
+fn a_narrowed_barrier_does_not_satisfy_the_broader_one_beside_it() {
+    // Narrowed groups carry the anchor of the call they came from, so a
+    // barrier over part of a group wrote a satisfied record that a barrier
+    // over the whole of it then read as its own.
+    //
+    // The two barriers need a suspension between them for it to show: in
+    // one pass the broader barrier overwrites the narrowed one's record
+    // before the pass commits, and the satisfied record never survives to
+    // be read. Across a suspension it does.
+    let (engine, mut scope, app, ast) = setup_with_script(
+        r#"
+        let web = app.deployment("web").image("docker.io/library/nginx:latest");
+        let api = app.deployment("api").image("docker.io/library/nginx:latest");
+        let gate = app.deployment("gate").image("docker.io/library/nginx:latest");
+        app.on_start(|rt, _param| {
+            let started = rt.start(app);
+            started.only(app.deployment("web")).ready();
+            rt.start(app.deployment("gate")).ready();
+            started.ready();
+        });
+    "#,
+    );
+
+    // `web` and `gate` come up; `api` never does, so the barrier over the
+    // whole group must keep waiting however often it is replayed.
+    let oracle = Arc::new(TestWorldOracle::new());
+    oracle.set(dep("web"), LifecycleState::Ready);
+    let log = InMemoryActionLog::new();
+    let op = OperationId::new();
+    let reg: Arc<dyn crate::runtime::InstanceRegistry> = registry();
+
+    let r = run_pass(
+        &engine,
+        &ast,
+        &app,
+        &mut scope,
+        op.clone(),
+        &log,
+        Arc::clone(&oracle),
+        Arc::clone(&reg),
+    );
+    assert!(matches!(r, OperationResult::Suspended(_)), "pass 1: {r:?}");
+
+    oracle.set(dep("gate"), LifecycleState::Ready);
+    for pass in 2..=3 {
+        let r = run_pass(
+            &engine,
+            &ast,
+            &app,
+            &mut scope,
+            op.clone(),
+            &log,
+            Arc::clone(&oracle),
+            Arc::clone(&reg),
+        );
+        assert!(
+            matches!(r, OperationResult::Suspended(_)),
+            "pass {pass}: the barrier over the whole group passed on the narrowed one's record, \
+             with api never up: {r:?}"
+        );
+    }
+}
+
+// r[verify barrier.replay.positional]
+#[test]
+fn a_start_replayed_against_a_stop_entry_diverges() {
+    // The rt.* surfaces advanced past the committed entry at their position
+    // without checking what kind of call it recorded, so a script edit that
+    // swapped the call there replayed silently against an entry describing
+    // something else — taking over whatever barrier record it held.
+    let stop_then_barrier = r#"
+        let web = app.deployment("web").image("docker.io/library/nginx:latest");
+        app.on_start(|rt, _param| {
+            rt.stop(app.deployment("web"));
+        });
+    "#;
+    let (engine, mut scope, app, ast) = setup_with_script(stop_then_barrier);
+
+    let oracle = Arc::new(TestWorldOracle::new());
+    oracle.set(dep("web"), LifecycleState::Running);
+    let log = InMemoryActionLog::new();
+    let op = OperationId::new();
+    let reg: Arc<dyn crate::runtime::InstanceRegistry> = registry();
+
+    // Pass 1 records a Stop at position 0 and suspends on it.
+    let r = run_pass(
+        &engine,
+        &ast,
+        &app,
+        &mut scope,
+        op.clone(),
+        &log,
+        Arc::clone(&oracle),
+        Arc::clone(&reg),
+    );
+    assert!(matches!(r, OperationResult::Suspended(_)), "pass 1: {r:?}");
+
+    // The script is edited so position 0 is now an rt.start.
+    let (engine, mut scope, app, ast) = setup_with_script(
+        r#"
+        let web = app.deployment("web").image("docker.io/library/nginx:latest");
+        app.on_start(|rt, _param| {
+            rt.start(app.deployment("web")).ready();
+        });
+    "#,
+    );
+    oracle.set(dep("web"), LifecycleState::Ready);
+    let r = run_pass(
+        &engine,
+        &ast,
+        &app,
+        &mut scope,
+        op,
+        &log,
+        Arc::clone(&oracle),
+        Arc::clone(&reg),
+    );
+    match r {
+        OperationResult::Failed(err) => {
+            let msg = err.to_string();
+            assert!(
+                msg.contains("replay diverged"),
+                "expected a divergence naming the recorded kind, got: {msg}"
+            );
+        }
+        other => panic!("a start replayed against a stop's entry without complaint: {other:?}"),
+    }
+}
+
+// r[verify barrier.deadline]
+#[test]
+fn a_barrier_on_a_narrowed_group_still_times_out() {
+    // Keeping narrowed groups off the shared record stopped them aliasing
+    // the barrier over the whole group, but it also left them recording no
+    // wait — so nothing measured their deadline and they suspended for
+    // good. Before narrowing did anything, the deadline applied to the
+    // whole group, so an operation that used to fail now hangs.
+    let (engine, mut scope, app, ast) = setup_with_script(
+        r#"
+        let web = app.deployment("web").image("docker.io/library/nginx:latest");
+        let optional = app.deployment("optional").image("docker.io/library/nginx:latest");
+        app.on_start(|rt, _param| {
+            rt.start(app).except(app.deployment("optional")).ready(1);
+        });
+    "#,
+    );
+
+    // Neither comes up. The narrowed group is `web` alone, and its barrier
+    // must give up rather than wait on it for ever.
+    let oracle = Arc::new(TestWorldOracle::new());
+    let log = InMemoryActionLog::new();
+    let op = OperationId::new();
+    let reg: Arc<dyn crate::runtime::InstanceRegistry> = registry();
+
+    let r = run_pass(
+        &engine,
+        &ast,
+        &app,
+        &mut scope,
+        op.clone(),
+        &log,
+        Arc::clone(&oracle),
+        Arc::clone(&reg),
+    );
+    assert!(matches!(r, OperationResult::Suspended(_)), "pass 1: {r:?}");
+
+    std::thread::sleep(std::time::Duration::from_millis(1100));
+
+    let r = run_pass(
+        &engine,
+        &ast,
+        &app,
+        &mut scope,
+        op,
+        &log,
+        Arc::clone(&oracle),
+        Arc::clone(&reg),
+    );
+    match r {
+        OperationResult::Failed(err) => {
+            let msg = err.to_string();
+            assert!(
+                msg.contains("deadline"),
+                "expected the narrowed barrier's deadline to expire, got: {msg}"
+            );
+        }
+        other => panic!("a barrier on a narrowed group waited past its deadline: {other:?}"),
+    }
+}
+
+// r[verify barrier.replay.positional]
+#[test]
+fn a_stop_replayed_against_a_start_entry_diverges() {
+    // rt.stop took the committed entry at its position whatever kind it
+    // recorded, and its fast-skip accepted any satisfied record on it. So a
+    // satisfied Ready record left by an rt.start made the stop return Ok
+    // having stopped nothing.
+    let (engine, mut scope, app, ast) = setup_with_script(
+        r#"
+        let web = app.deployment("web").image("docker.io/library/nginx:latest");
+        let gate = app.deployment("gate").image("docker.io/library/nginx:latest");
+        app.on_start(|rt, _param| {
+            rt.start(app.deployment("web")).ready();
+            rt.start(app.deployment("gate")).ready();
+        });
+    "#,
+    );
+
+    let oracle = Arc::new(TestWorldOracle::new());
+    oracle.set(dep("web"), LifecycleState::Ready);
+    let log = InMemoryActionLog::new();
+    let op = OperationId::new();
+    let reg: Arc<dyn crate::runtime::InstanceRegistry> = registry();
+
+    // Pass 1 leaves a Start at position 0 with a satisfied Ready record,
+    // and suspends on `gate`.
+    let r = run_pass(
+        &engine,
+        &ast,
+        &app,
+        &mut scope,
+        op.clone(),
+        &log,
+        Arc::clone(&oracle),
+        Arc::clone(&reg),
+    );
+    assert!(matches!(r, OperationResult::Suspended(_)), "pass 1: {r:?}");
+    let entries = log.load().expect("log loads");
+    assert!(
+        entries[0]
+            .barrier(0)
+            .as_ref()
+            .is_some_and(|b| b.satisfied && b.required_state == LifecycleState::Ready),
+        "pass 1 should leave a satisfied Ready record at position 0: {entries:?}"
+    );
+
+    // The script is edited so position 0 is now an rt.stop.
+    let (engine, mut scope, app, ast) = setup_with_script(
+        r#"
+        let web = app.deployment("web").image("docker.io/library/nginx:latest");
+        app.on_start(|rt, _param| {
+            rt.stop(app.deployment("web"));
+        });
+    "#,
+    );
+    let r = run_pass(
+        &engine,
+        &ast,
+        &app,
+        &mut scope,
+        op,
+        &log,
+        Arc::clone(&oracle),
+        Arc::clone(&reg),
+    );
+    match r {
+        OperationResult::Failed(err) => {
+            let msg = err.to_string();
+            assert!(
+                msg.contains("replay diverged"),
+                "expected a divergence naming the recorded kind, got: {msg}"
+            );
+        }
+        other => panic!("a stop replayed against a start's satisfied record: {other:?}"),
+    }
+}
+
+// r[verify barrier.satisfaction.recorded]
+// r[verify barrier.replay.anchor]
+#[test]
+fn each_barrier_on_one_call_keeps_its_own_record() {
+    // Three barriers on one call: a narrowed one, and two over the whole
+    // group. They held one record between them, so whichever wrote last
+    // displaced the rest — which is how a barrier came to take another's
+    // passing for its own, and how a wait lost the start it was timed from.
+    let (engine, mut scope, app, ast) = setup_with_script(
+        r#"
+        let web = app.deployment("web").image("docker.io/library/nginx:latest");
+        let api = app.deployment("api").image("docker.io/library/nginx:latest");
+        app.on_start(|rt, _param| {
+            let started = rt.start(app);
+            started.only(app.deployment("web")).ready();
+            started.running();
+            started.ready();
+        });
+    "#,
+    );
+
+    // `web` is up and `api` is running but never ready, so the narrowed
+    // barrier and the Running one pass while the last keeps waiting.
+    let oracle = Arc::new(TestWorldOracle::new());
+    oracle.set(dep("web"), LifecycleState::Ready);
+    oracle.set(dep("api"), LifecycleState::Running);
+    let log = InMemoryActionLog::new();
+    let op = OperationId::new();
+    let reg: Arc<dyn crate::runtime::InstanceRegistry> = registry();
+
+    for pass in 1..=2 {
+        let r = run_pass(
+            &engine,
+            &ast,
+            &app,
+            &mut scope,
+            op.clone(),
+            &log,
+            Arc::clone(&oracle),
+            Arc::clone(&reg),
+        );
+        assert!(
+            matches!(r, OperationResult::Suspended(_)),
+            "pass {pass}: the Ready barrier over the whole group passed on another's record: {r:?}"
+        );
+    }
+
+    let entries = log.load().expect("log loads");
+    assert_eq!(entries.len(), 1, "one call: {entries:?}");
+    let mut barriers = entries[0].barriers.clone();
+    barriers.sort_by_key(|b| b.seq);
+    let seen: Vec<(usize, LifecycleState, bool)> = barriers
+        .iter()
+        .map(|b| (b.seq, b.required_state, b.satisfied))
+        .collect();
+    assert_eq!(
+        seen,
+        vec![
+            (0, LifecycleState::Ready, true),
+            (1, LifecycleState::Running, true),
+            (2, LifecycleState::Ready, false),
+        ],
+        "each barrier keeps its own record, under its own position on the call"
+    );
+    assert!(
+        barriers[2].started_at_secs.is_some(),
+        "the barrier still waiting records the start it is timed from"
+    );
 }

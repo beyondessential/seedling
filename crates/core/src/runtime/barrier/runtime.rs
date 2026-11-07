@@ -1,17 +1,23 @@
-use std::{cell::RefCell, collections::HashMap, sync::Arc};
+use std::{
+    cell::RefCell,
+    collections::{HashMap, HashSet},
+    sync::Arc,
+};
 
 use rhai::{CustomType, Dynamic, EvalAltResult, Map, TypeBuilder};
 use seedling_protocol::names::AppName;
 
 use crate::defs::app::AppDef;
+use crate::defs::collection::Selector;
 use crate::defs::container::canonicalise_signal_name;
 use crate::defs::volume::{
     ExternalVolume, OperationVolumeBinding, Volume, validate_volume_write_path,
 };
 use crate::runtime::barrier::{
-    ActionLogEntry, BarrierCondition, BarrierRecord, CallKind, SharedContext, VolumeWriteTarget,
+    ActionLogEntry, BarrierCondition, BarrierRecord, CallKind, ReplayContext, ReplayMismatch,
+    SharedContext, VolumeWriteTarget,
 };
-use crate::runtime::registry::{InstanceRegistry, RegistryError};
+use crate::runtime::registry::{InstanceRegistry, InstanceReuse, RegistryError};
 use crate::runtime::{LifecycleState, ResourceInstance, restart_gens};
 
 // ---------------------------------------------------------------------------
@@ -363,6 +369,158 @@ pub fn extract_cancel_hit(err: &EvalAltResult) -> bool {
 /// pairs for those that declare a non-empty image reference. Anonymous
 /// resources arrive with a def attached; named ones are looked up in the
 /// action-context AppDef (the thread-local set by [`ActionClosureGuard`]).
+// r[impl barrier.replay.positional]
+// r[impl history.action-log.entries]
+/// `rt.stop` blocks on exactly one barrier, which is therefore the first
+/// and only one on its entry.
+const STOP_BARRIER_SEQ: usize = 0;
+
+/// Claim this call's position in the action log, returning the index of the
+/// entry the call belongs to.
+///
+/// On a replay pass the committed entry at that position is consumed, and
+/// a divergence is reported rather than guessed at: a script edit that puts
+/// a different kind of call at this position cannot be replayed from an
+/// entry describing the call it replaced, whose barrier record and
+/// resources belong to something else. The sub-action surface answered that
+/// way already; every `rt.*` surface that records an entry now does.
+///
+/// On a pass that is making the call for the first time the entry is
+/// recorded and `breadcrumb` is emitted, with the context lock released
+/// first so it is not held across the journald send.
+fn claim_log_position(
+    ctx: &SharedContext,
+    call_kind: CallKind,
+    resources: &[ResourceInstance],
+    breadcrumb: impl FnOnce(),
+) -> Result<usize, Box<EvalAltResult>> {
+    let mut g = ctx.lock();
+    let idx = g.call_index;
+    match g.replay_step(call_kind, None) {
+        Ok(Some(_)) => return Ok(idx),
+        Ok(None) => {}
+        Err(mismatch) => return Err(Box::<EvalAltResult>::from(mismatch.to_string())),
+    }
+    g.pending.push(ActionLogEntry {
+        call_index: idx,
+        call_kind,
+        resources: resources.to_vec(),
+        barriers: Vec::new(),
+        extra: None,
+    });
+    g.call_index += 1;
+    drop(g);
+    breadcrumb();
+    Ok(idx)
+}
+
+// r[impl barrier.replay.anchor]
+// r[impl barrier.satisfaction.recorded]
+/// Record `record` against the log entry of the call a barrier belongs to,
+/// reporting whether that entry was found.
+///
+/// The entry is this pass's own where the pass has made the call, and the
+/// committed one where the pass is replaying past it. Correcting a
+/// committed entry means re-emitting it, so the copy carries the rest of
+/// the entry unchanged and only its barriers differ; synthesising a fresh
+/// entry instead would claim a position the committed one already holds and
+/// leave every later `rt.*` call reading the wrong one.
+///
+/// The record goes under the barrier's own position on the call, so the
+/// other barriers on it are untouched. A start already recorded for that
+/// barrier, for the state being recorded, is kept: that is the start its
+/// deadline is measured from, and rewriting it on each pass would restart
+/// the wait it measures.
+fn record_at_anchor(ctx: &mut ReplayContext, call_index: usize, record: BarrierRecord) -> bool {
+    /// The start to record: an earlier one for this same barrier and state,
+    /// or the one being written.
+    fn started_at(held: Option<&BarrierRecord>, record: &BarrierRecord) -> Option<u64> {
+        held.filter(|b| b.required_state == record.required_state)
+            .and_then(|b| b.started_at_secs)
+            .or(record.started_at_secs)
+    }
+
+    // This pass's own entry is already held mutably, so it is corrected in
+    // place rather than copied out and back: the copy carried the whole
+    // resource list, on every poll of every anchored barrier.
+    if let Some(entry) = ctx.pending.iter_mut().find(|e| e.call_index == call_index) {
+        let started_at_secs = started_at(entry.barrier(record.seq), &record);
+        entry.set_barrier(BarrierRecord {
+            started_at_secs,
+            ..record
+        });
+        return true;
+    }
+
+    let Some(committed) = ctx.committed.iter().find(|e| e.call_index == call_index) else {
+        return false;
+    };
+    let started_at_secs = started_at(committed.barrier(record.seq), &record);
+    let mut corrected = committed.clone();
+    corrected.set_barrier(BarrierRecord {
+        started_at_secs,
+        ..record
+    });
+    ctx.pending.push(corrected);
+    true
+}
+
+// l[impl collection.only]
+// l[impl collection.except]
+/// How a `Started`'s resources are matched against another collection: by
+/// type and name, which is all a
+/// [`ResourceId`](crate::defs::resource::ResourceId) carries. Two instances
+/// of one scaled deployment share a key, so naming the deployment selects
+/// every replica of it, which is what naming a deployment means.
+///
+/// Held as names under their type so an instance can be looked up from the
+/// name it borrows, without building an owned key per resource tested.
+type ResourceKeys = HashMap<crate::defs::resource::ResourceKind, HashSet<String>>;
+
+/// The keys of whatever a collection method was given: another `Started`, a
+/// Collection, or a bare resource.
+///
+/// A `Started` is read through its lock rather than cast out of the
+/// `Dynamic`, which would clone every resource it holds, and the warm pairs
+/// besides, only to read the names off them and drop the copy.
+fn resource_keys(other: Dynamic) -> ResourceKeys {
+    let mut keys = ResourceKeys::new();
+    if let Some(started) = other.read_lock::<Started>() {
+        for r in &started.resources {
+            keys.entry(r.kind)
+                .or_default()
+                .insert(r.name.clone().unwrap_or_default());
+        }
+        return keys;
+    }
+    for handle in crate::defs::collection::col(other).resolve() {
+        keys.entry(handle.kind())
+            .or_default()
+            .insert(handle.name().to_owned());
+    }
+    keys
+}
+
+fn keys_hold(keys: &ResourceKeys, instance: &ResourceInstance) -> bool {
+    keys.get(&instance.kind)
+        .is_some_and(|names| names.contains(instance.name.as_deref().unwrap_or("")))
+}
+
+/// The distinct image references in a resource-to-image pairing, in the
+/// order they first appear.
+///
+/// Borrows rather than clones: this runs on every poll of a warm-images
+/// barrier, for the life of the wait.
+fn dedup_image_refs(pairs: &[(ResourceInstance, String)]) -> Vec<&str> {
+    let mut refs: Vec<&str> = Vec::new();
+    for (_, img) in pairs {
+        if !refs.contains(&img.as_str()) {
+            refs.push(img);
+        }
+    }
+    refs
+}
+
 pub(crate) fn extract_container_images(
     resources_with_defs: &[(ResourceInstance, Option<crate::defs::resource::Resource>)],
 ) -> Vec<(ResourceInstance, String)> {
@@ -456,15 +614,54 @@ impl RuntimeInstance {
         }
     }
 
+    // r[impl scaling.decision.actions]
+    /// How many replicas a named Deployment currently has, as the reconciler
+    /// resolves it: the stored scaling decision clamped to the declared
+    /// range, or the lower bound where no decision has been stored.
+    ///
+    /// A read that fails is an error rather than the lower bound. Falling
+    /// back would resolve the deployment to fewer replicas than it has, and
+    /// a `rt.stop` that silently reached only some of them is exactly the
+    /// failure this answers.
+    ///
+    /// Without a database there are no stored decisions to read, so the
+    /// lower bound is the answer rather than a failure.
+    ///
+    /// The floor of one holds whatever the bounds say, as it did before
+    /// effective scale was consulted here. It is not what keeps a barrier
+    /// from waiting on nothing — a group holding no resources now returns
+    /// at once — so it stands only to leave `scale(0..n)` resolving as it
+    /// always has.
+    fn effective_scale(&self, deployment: &str, low: u16, high: u16) -> Result<u16, RegistryError> {
+        let Some(db) = &self.db else {
+            return Ok(low.max(1));
+        };
+        let app = self.app_name.clone();
+        let deployment = deployment.to_owned();
+        let effective = db.call(move |db| {
+            crate::runtime::scaling::effective_scale(db, &app, &deployment, low, high)
+        })?;
+        Ok(effective.max(1))
+    }
+
     /// Extract ResourceInstance values from a Rhai Dynamic argument.
     ///
     /// Recognises the concrete resource types registered with the engine and
     /// resolves them through the instance registry so the returned instances
     /// carry stable UUIDs.  Unknown types yield an empty vec (stub behaviour
     /// that leaves barriers trivially satisfied in language-only tests).
+    ///
+    /// `reuse` says whether a scaled group may resolve to instances that
+    /// have already been torn down. Only `rt.start` passes
+    /// [`InstanceReuse::Live`]: it is the call that brings replicas up, so
+    /// it is the one that must not adopt an instance retirement is about to
+    /// delete. Every other call addresses the instances the deployment
+    /// already has, and refusing the torn-down ones would have it mint
+    /// fresh identities and address those instead.
     fn extract_instances(
         &self,
         resources: Dynamic,
+        reuse: InstanceReuse,
     ) -> Result<Vec<(ResourceInstance, Option<crate::defs::resource::Resource>)>, RegistryError>
     {
         use crate::defs::deployment::Deployment;
@@ -502,16 +699,28 @@ impl RuntimeInstance {
             // steady-state reconciler keeps every replica as `is_scaled=1`,
             // so creating a singleton here would only produce a transient
             // placeholder that the next reconciliation tick has to retire.
-            // The group's declared scale (low end of the range, default 1)
-            // determines how many instances exist; an action that needs to
-            // refer to all of them — `rt.signal`, `rt.stop`, `rt.query` —
-            // gets every replica back from this single call.
-            let scale = dep.def.lock().scale.start.max(1);
+            // An action that needs to refer to all of them — `rt.signal`,
+            // `rt.stop`, `rt.query` — gets every replica back from this
+            // single call.
+            // r[impl scaling.decision.actions]
+            // Which is the effective scale, as the reconciler resolves it,
+            // and not the low end of the declared range. A deployment
+            // declared `scale(2..10)` and scaled to 5 used to yield 2
+            // instances here, so a maintenance action stopped 2 of the 5
+            // and carried on as though the workload were down while 3 went
+            // on serving.
+            let scale = {
+                let def = dep.def.lock();
+                (def.scale.start, def.scale.end)
+            };
+            let scale = self.effective_scale(&dep.name, scale.0, scale.1)?;
+            // r[impl gc.instances.operation-keep-set]
             let group = self.registry.ensure_scaled_group(
                 &self.app_name,
                 ResourceKind::Deployment,
                 Some(&dep.name),
                 scale,
+                reuse,
             )?;
             return Ok(group.keep.into_iter().map(|inst| (inst, None)).collect());
         }
@@ -671,7 +880,7 @@ impl RuntimeInstance {
                     if dyn_val.is_unit() {
                         continue;
                     }
-                    out.extend(self.extract_instances(dyn_val)?);
+                    out.extend(self.extract_instances(dyn_val, reuse)?);
                 }
                 return Ok(out);
             }
@@ -732,6 +941,7 @@ impl RuntimeInstance {
             return Ok(Started {
                 ctx: Some(Arc::clone(ctx)),
                 resources,
+                origin_index: None,
                 warm: WarmMode::None,
             });
         }
@@ -779,47 +989,33 @@ impl RuntimeInstance {
                 return Ok(Started {
                     ctx: None,
                     resources,
+                    origin_index: None,
                     warm: WarmMode::None,
                 });
             }
             Some(c) => Arc::clone(c),
         };
 
-        {
-            let mut g = ctx.lock();
-            if g.is_replaying() {
-                g.call_index += 1;
-            } else {
-                let idx = g.call_index;
-                g.pending.push(ActionLogEntry {
-                    call_index: idx,
-                    call_kind,
-                    resources: resources.clone(),
-                    barrier: None,
-                    extra: None,
-                });
-                g.call_index += 1;
-                drop(g);
-                let defs: Vec<Option<&crate::defs::resource::Resource>> = resources_with_defs
-                    .iter()
-                    .map(|(_, d)| d.as_ref())
-                    .collect();
-                let breadcrumb = match call_kind {
-                    CallKind::Query => crate::system::breadcrumb::BreadcrumbKind::Query {
-                        resources: &resources,
-                    },
-                    _ => crate::system::breadcrumb::BreadcrumbKind::Start {
-                        resources: &resources,
-                        defs: &defs,
-                    },
-                };
-                emit_breadcrumb(breadcrumb);
-            }
-        }
+        let origin_index = claim_log_position(&ctx, call_kind, &resources, || {
+            let defs: Vec<Option<&crate::defs::resource::Resource>> = resources_with_defs
+                .iter()
+                .map(|(_, d)| d.as_ref())
+                .collect();
+            emit_breadcrumb(match call_kind {
+                CallKind::Query => crate::system::breadcrumb::BreadcrumbKind::Query {
+                    resources: &resources,
+                },
+                _ => crate::system::breadcrumb::BreadcrumbKind::Start {
+                    resources: &resources,
+                    defs: &defs,
+                },
+            });
+        })?;
 
         Ok(Started {
             ctx: Some(ctx),
             resources,
+            origin_index: Some(origin_index),
             warm: WarmMode::None,
         })
     }
@@ -861,6 +1057,7 @@ impl RuntimeInstance {
             return Ok(Started {
                 ctx: Some(Arc::clone(ctx)),
                 resources,
+                origin_index: None,
                 warm: WarmMode::Certs,
             });
         }
@@ -877,36 +1074,23 @@ impl RuntimeInstance {
                 return Ok(Started {
                     ctx: None,
                     resources,
+                    origin_index: None,
                     warm: WarmMode::Certs,
                 });
             }
             Some(c) => Arc::clone(c),
         };
 
-        {
-            let mut g = ctx.lock();
-            if g.is_replaying() {
-                g.call_index += 1;
-            } else {
-                let idx = g.call_index;
-                g.pending.push(ActionLogEntry {
-                    call_index: idx,
-                    call_kind: CallKind::WarmCerts,
-                    resources: resources.clone(),
-                    barrier: None,
-                    extra: None,
-                });
-                g.call_index += 1;
-                drop(g);
-                emit_breadcrumb(crate::system::breadcrumb::BreadcrumbKind::WarmCerts {
-                    resources: &resources,
-                });
-            }
-        }
+        let origin_index = claim_log_position(&ctx, CallKind::WarmCerts, &resources, || {
+            emit_breadcrumb(crate::system::breadcrumb::BreadcrumbKind::WarmCerts {
+                resources: &resources,
+            });
+        })?;
 
         Ok(Started {
             ctx: Some(ctx),
             resources,
+            origin_index: Some(origin_index),
             warm: WarmMode::Certs,
         })
     }
@@ -918,15 +1102,11 @@ impl RuntimeInstance {
         resources_with_defs: Vec<(ResourceInstance, Option<crate::defs::resource::Resource>)>,
     ) -> Result<Started, Box<EvalAltResult>> {
         let pairs = extract_container_images(&resources_with_defs);
-
-        // Deduplicate image refs while keeping the resource list for audit.
-        let mut refs: Vec<String> = Vec::new();
-        for (_, img) in &pairs {
-            if !refs.contains(img) {
-                refs.push(img.clone());
-            }
-        }
-        let resources: Vec<ResourceInstance> = pairs.into_iter().map(|(r, _)| r).collect();
+        let refs: Vec<String> = dedup_image_refs(&pairs)
+            .into_iter()
+            .map(str::to_owned)
+            .collect();
+        let resources: Vec<ResourceInstance> = pairs.iter().map(|(r, _)| r.clone()).collect();
 
         // r[impl image.discover]
         // Probe mode: capture refs, skip pin writes and log entries, and
@@ -942,7 +1122,8 @@ impl RuntimeInstance {
             return Ok(Started {
                 ctx: Some(Arc::clone(ctx)),
                 resources,
-                warm: WarmMode::Images(refs),
+                origin_index: None,
+                warm: WarmMode::Images(pairs),
             });
         }
 
@@ -972,37 +1153,22 @@ impl RuntimeInstance {
                 return Ok(Started {
                     ctx: None,
                     resources,
-                    warm: WarmMode::Images(refs),
+                    origin_index: None,
+                    warm: WarmMode::Images(pairs),
                 });
             }
             Some(c) => Arc::clone(c),
         };
 
-        {
-            let mut g = ctx.lock();
-            if g.is_replaying() {
-                g.call_index += 1;
-            } else {
-                let idx = g.call_index;
-                g.pending.push(ActionLogEntry {
-                    call_index: idx,
-                    call_kind: CallKind::WarmImages,
-                    resources: resources.clone(),
-                    barrier: None,
-                    extra: None,
-                });
-                g.call_index += 1;
-                drop(g);
-                emit_breadcrumb(crate::system::breadcrumb::BreadcrumbKind::WarmImages {
-                    refs: &refs,
-                });
-            }
-        }
+        let origin_index = claim_log_position(&ctx, CallKind::WarmImages, &resources, || {
+            emit_breadcrumb(crate::system::breadcrumb::BreadcrumbKind::WarmImages { refs: &refs });
+        })?;
 
         Ok(Started {
             ctx: Some(ctx),
             resources,
-            warm: WarmMode::Images(refs),
+            origin_index: Some(origin_index),
+            warm: WarmMode::Images(pairs),
         })
     }
 
@@ -1132,7 +1298,7 @@ impl RuntimeInstance {
                 call_index: idx,
                 call_kind: CallKind::Signal,
                 resources: expanded.clone(),
-                barrier: None,
+                barriers: Vec::new(),
                 extra: Some(canonical.clone()),
             });
             g.call_index += 1;
@@ -1206,10 +1372,20 @@ impl RuntimeInstance {
                             e.call_index,
                             e.call_kind,
                             e.resources.len(),
-                            e.barrier
-                                .as_ref()
-                                .map(|b| format!("{:?}/sat={}", b.required_state, b.satisfied))
-                                .unwrap_or_else(|| "none".to_string()),
+                            if e.barriers.is_empty() {
+                                "none".to_string()
+                            } else {
+                                e.barriers
+                                    .iter()
+                                    .map(|b| {
+                                        format!(
+                                            "{}:{:?}/sat={}",
+                                            b.seq, b.required_state, b.satisfied
+                                        )
+                                    })
+                                    .collect::<Vec<_>>()
+                                    .join(",")
+                            },
                             e.extra
                         )
                     })
@@ -1227,7 +1403,7 @@ impl RuntimeInstance {
                         entry.call_kind,
                         entry.resources.len(),
                         entry.extra,
-                        entry.barrier,
+                        entry.barriers,
                         summary.join("\n"),
                     )
                     .into());
@@ -1279,7 +1455,7 @@ impl RuntimeInstance {
                 call_index: idx,
                 call_kind: CallKind::Exec,
                 resources: vec![target],
-                barrier: None,
+                barriers: Vec::new(),
                 extra: Some(exit_code.to_string()),
             });
             g.call_index += 1;
@@ -1334,12 +1510,19 @@ impl RuntimeInstance {
         }
 
         // r[impl barrier.replay]
-        // On replay, skip a write that was already performed at this call site.
+        // r[impl barrier.replay.positional]
+        // On replay, skip a write that was already performed at this call
+        // site. The entry at this position must be that write: advancing
+        // past whatever occupied the slot would take a different call as
+        // evidence this write had been done, and skip it. The path is not
+        // checked, only the kind, because a path built from the action's
+        // params is as much this call's path as a literal one is.
         {
             let mut g = ctx.lock();
-            if g.is_replaying() {
-                g.call_index += 1;
-                return Ok(());
+            match g.replay_step(CallKind::Write, None) {
+                Ok(Some(_)) => return Ok(()),
+                Ok(None) => {}
+                Err(mismatch) => return Err(Box::<EvalAltResult>::from(mismatch.to_string())),
             }
         }
 
@@ -1364,7 +1547,7 @@ impl RuntimeInstance {
                 call_index: idx,
                 call_kind: CallKind::Write,
                 resources: vec![target_resource],
-                barrier: None,
+                barriers: Vec::new(),
                 extra: Some(path.to_owned()),
             });
             g.call_index += 1;
@@ -1409,15 +1592,39 @@ impl RuntimeInstance {
         let mut g = ctx.lock();
 
         // r[impl barrier.replay]
-        // Fast-skip: if the committed entry already records the barrier as
-        // satisfied, advance and return without re-checking the world.
-        if g.is_replaying()
-            && g.committed_entry()
-                .and_then(|e| e.barrier.as_ref())
-                .is_some_and(|b| b.satisfied)
-        {
-            g.call_index += 1;
-            return Ok(());
+        // r[impl barrier.replay.positional]
+        // The entry at this position must be the stop this call is making.
+        // Taking whatever occupied the slot let a satisfied Ready record
+        // left there by an rt.start return Ok from a stop that stopped
+        // nothing, and otherwise let the stop overwrite that entry on
+        // commit. The other rt.* surfaces answer through
+        // `claim_log_position`; this one keeps its own path for the
+        // started_at it preserves, so it makes the same check itself.
+        let recorded = g.committed_entry().map(|e| {
+            (
+                e.call_kind,
+                e.barrier(STOP_BARRIER_SEQ)
+                    .is_some_and(|b| b.required_state == LifecycleState::Terminated && b.satisfied),
+            )
+        });
+        if let Some((kind, already_terminated)) = recorded {
+            if kind != CallKind::Stop {
+                return Err(Box::<EvalAltResult>::from(
+                    ReplayMismatch::Kind {
+                        call_index: g.call_index,
+                        expected: CallKind::Stop,
+                        found: kind,
+                    }
+                    .to_string(),
+                ));
+            }
+            // Fast-skip: the committed entry already records this stop's
+            // barrier as satisfied, so advance without re-checking the
+            // world.
+            if already_terminated {
+                g.call_index += 1;
+                return Ok(());
+            }
         }
 
         let now = (g.now_secs)();
@@ -1445,11 +1652,11 @@ impl RuntimeInstance {
                 .chain(g.pending.iter())
                 .find(|e| {
                     e.resources == resources
-                        && e.barrier.as_ref().is_some_and(|b| {
+                        && e.barrier(STOP_BARRIER_SEQ).is_some_and(|b| {
                             b.required_state == LifecycleState::Terminated && !b.satisfied
                         })
                 })
-                .and_then(|e| e.barrier.as_ref()?.started_at_secs);
+                .and_then(|e| e.barrier(STOP_BARRIER_SEQ)?.started_at_secs);
             if let (Some(d), Some(started_at)) = (deadline_secs, started_at)
                 && now.saturating_sub(started_at) >= d
             {
@@ -1478,19 +1685,20 @@ impl RuntimeInstance {
         let started_at_secs = g
             .committed
             .get(idx)
-            .and_then(|e| e.barrier.as_ref()?.started_at_secs)
+            .and_then(|e| e.barrier(STOP_BARRIER_SEQ)?.started_at_secs)
             .or(Some(now));
         g.call_index += 1;
         g.pending.push(ActionLogEntry {
             call_index: idx,
             call_kind: CallKind::Stop,
             resources: resources.clone(),
-            barrier: Some(BarrierRecord {
+            barriers: vec![BarrierRecord {
+                seq: STOP_BARRIER_SEQ,
                 required_state: LifecycleState::Terminated,
                 deadline_secs,
                 satisfied: all_terminated,
                 started_at_secs,
-            }),
+            }],
             extra: None,
         });
         // Drop the lock before the breadcrumb's journald send so we
@@ -1563,12 +1771,17 @@ impl CustomType for RuntimeInstance {
             .with_fn(
                 "start",
                 |this: &mut Self, resources: Dynamic| -> Result<Started, Box<EvalAltResult>> {
-                    let resources_with_defs = this.extract_instances(resources).map_err(|e| {
-                        Box::new(EvalAltResult::ErrorRuntime(
-                            e.to_string().into(),
-                            rhai::Position::NONE,
-                        ))
-                    })?;
+                    // r[impl gc.instances.operation-keep-set]
+                    // The call that brings replicas up is the one that must
+                    // not adopt an instance retirement is about to delete.
+                    let resources_with_defs = this
+                        .extract_instances(resources, InstanceReuse::Live)
+                        .map_err(|e| {
+                            Box::new(EvalAltResult::ErrorRuntime(
+                                e.to_string().into(),
+                                rhai::Position::NONE,
+                            ))
+                        })?;
                     this.do_start(resources_with_defs)
                 },
             )
@@ -1577,7 +1790,7 @@ impl CustomType for RuntimeInstance {
                 "stop",
                 |this: &mut Self, resources: Dynamic| -> Result<(), Box<EvalAltResult>> {
                     let instances = this
-                        .extract_instances(resources)
+                        .extract_instances(resources, InstanceReuse::Any)
                         .map_err(|e| {
                             Box::new(EvalAltResult::ErrorRuntime(
                                 e.to_string().into(),
@@ -1597,7 +1810,7 @@ impl CustomType for RuntimeInstance {
                  deadline: i64|
                  -> Result<(), Box<EvalAltResult>> {
                     let instances = this
-                        .extract_instances(resources)
+                        .extract_instances(resources, InstanceReuse::Any)
                         .map_err(|e| {
                             Box::new(EvalAltResult::ErrorRuntime(
                                 e.to_string().into(),
@@ -1617,12 +1830,14 @@ impl CustomType for RuntimeInstance {
             .with_fn(
                 "query",
                 |this: &mut Self, resources: Dynamic| -> Result<Started, Box<EvalAltResult>> {
-                    let resources_with_defs = this.extract_instances(resources).map_err(|e| {
-                        Box::new(EvalAltResult::ErrorRuntime(
-                            e.to_string().into(),
-                            rhai::Position::NONE,
-                        ))
-                    })?;
+                    let resources_with_defs = this
+                        .extract_instances(resources, InstanceReuse::Any)
+                        .map_err(|e| {
+                            Box::new(EvalAltResult::ErrorRuntime(
+                                e.to_string().into(),
+                                rhai::Position::NONE,
+                            ))
+                        })?;
                     this.do_query(resources_with_defs)
                 },
             )
@@ -1630,12 +1845,14 @@ impl CustomType for RuntimeInstance {
             .with_fn(
                 "warm_certs",
                 |this: &mut Self, resources: Dynamic| -> Result<Started, Box<EvalAltResult>> {
-                    let resources_with_defs = this.extract_instances(resources).map_err(|e| {
-                        Box::new(EvalAltResult::ErrorRuntime(
-                            e.to_string().into(),
-                            rhai::Position::NONE,
-                        ))
-                    })?;
+                    let resources_with_defs = this
+                        .extract_instances(resources, InstanceReuse::Any)
+                        .map_err(|e| {
+                            Box::new(EvalAltResult::ErrorRuntime(
+                                e.to_string().into(),
+                                rhai::Position::NONE,
+                            ))
+                        })?;
                     this.do_warm_certs(resources_with_defs)
                 },
             )
@@ -1643,12 +1860,14 @@ impl CustomType for RuntimeInstance {
             .with_fn(
                 "warm_images",
                 |this: &mut Self, resources: Dynamic| -> Result<Started, Box<EvalAltResult>> {
-                    let resources_with_defs = this.extract_instances(resources).map_err(|e| {
-                        Box::new(EvalAltResult::ErrorRuntime(
-                            e.to_string().into(),
-                            rhai::Position::NONE,
-                        ))
-                    })?;
+                    let resources_with_defs = this
+                        .extract_instances(resources, InstanceReuse::Any)
+                        .map_err(|e| {
+                            Box::new(EvalAltResult::ErrorRuntime(
+                                e.to_string().into(),
+                                rhai::Position::NONE,
+                            ))
+                        })?;
                     this.do_warm_images(resources_with_defs)
                 },
             )
@@ -1659,12 +1878,14 @@ impl CustomType for RuntimeInstance {
                  target: Dynamic,
                  signal: &str|
                  -> Result<(), Box<EvalAltResult>> {
-                    let resources_with_defs = this.extract_instances(target).map_err(|e| {
-                        Box::new(EvalAltResult::ErrorRuntime(
-                            e.to_string().into(),
-                            rhai::Position::NONE,
-                        ))
-                    })?;
+                    let resources_with_defs = this
+                        .extract_instances(target, InstanceReuse::Any)
+                        .map_err(|e| {
+                            Box::new(EvalAltResult::ErrorRuntime(
+                                e.to_string().into(),
+                                rhai::Position::NONE,
+                            ))
+                        })?;
                     let resources: Vec<ResourceInstance> =
                         resources_with_defs.into_iter().map(|(r, _)| r).collect();
                     this.do_signal(resources, signal)
@@ -1834,7 +2055,7 @@ fn resolve_exec_target(
             .into());
         }
         let with_defs = rt
-            .extract_instances(Dynamic::from(dep))
+            .extract_instances(Dynamic::from(dep), InstanceReuse::Any)
             .map_err(|e| -> Box<EvalAltResult> { format!("rt.exec: {e}").into() })?;
         let mut iter = with_defs.into_iter();
         let first = iter.next().ok_or_else(|| -> Box<EvalAltResult> {
@@ -1851,7 +2072,7 @@ fn resolve_exec_target(
             return Err("rt.exec: anonymous jobs must be passed via the Started returned by rt.start, not directly".into());
         }
         let with_defs = rt
-            .extract_instances(Dynamic::from(job))
+            .extract_instances(Dynamic::from(job), InstanceReuse::Any)
             .map_err(|e| -> Box<EvalAltResult> { format!("rt.exec: {e}").into() })?;
         let mut iter = with_defs.into_iter();
         let first = iter.next().ok_or_else(|| -> Box<EvalAltResult> {
@@ -1952,8 +2173,13 @@ pub enum WarmMode {
     Certs,
     /// `rt.warm_images` returned this `Started`. `.ready()` waits until each
     /// image reference is present in local container storage.
+    /// Each image reference the warm covers, with the resource it came
+    /// from. Keeping the pairing rather than the bare references is what
+    /// lets a [`Started`] that has been narrowed by a collection method
+    /// narrow what its barrier waits on: the references alone could not say
+    /// which resource had been selected away.
     // l[impl rt.warm-images]
-    Images(Vec<String>),
+    Images(Vec<(ResourceInstance, String)>),
 }
 
 // l[impl rt.started.type]
@@ -1962,9 +2188,57 @@ pub struct Started {
     pub ctx: Option<SharedContext>,
     pub resources: Vec<ResourceInstance>,
     pub warm: WarmMode,
+    // r[impl barrier.replay.anchor]
+    /// The `call_index` of the log entry the originating `rt.*` call
+    /// produced. A barrier called on this `Started` is decided from that
+    /// entry and no other.
+    ///
+    /// `None` for a `Started` that has no entry behind it — a stub context
+    /// or probe mode — where there is nothing to anchor to and barriers
+    /// resolve immediately anyway. Collection methods carry the anchor
+    /// through, so `rt.start(x).except(y).ready()` is still the `rt.start`
+    /// call's barrier.
+    pub origin_index: Option<usize>,
 }
 
 impl Started {
+    // l[impl rt.started.type]
+    /// This `Started` over `kept` alone.
+    ///
+    /// The anchor carries through, so a barrier on the narrowed group is
+    /// still the originating `rt.*` call's barrier: narrowing selects which
+    /// resources are waited on, it does not make a new call. A warm-images
+    /// group narrows what its barrier waits on too, since the references it
+    /// checks are held against the resources they came from.
+    fn narrowed_to(&self, keep: impl Fn(&ResourceInstance) -> bool) -> Self {
+        // One predicate decides both. Filtering the pairs by membership of
+        // the kept resources instead would rescan that list for every pair.
+        let warm = match &self.warm {
+            WarmMode::Images(pairs) => {
+                WarmMode::Images(pairs.iter().filter(|(r, _)| keep(r)).cloned().collect())
+            }
+            other => other.clone(),
+        };
+        Self {
+            ctx: self.ctx.clone(),
+            resources: self.resources.iter().filter(|r| keep(r)).cloned().collect(),
+            origin_index: self.origin_index,
+            warm,
+        }
+    }
+
+    // r[impl barrier.replay.anchor]
+    /// The entry this barrier's record belongs to.
+    ///
+    /// A group a collection method narrowed uses the entry of the call it
+    /// came from, as the whole group does. The two do not collide: each
+    /// barrier holds its record under its own position on that call, so a
+    /// narrowed one neither takes the broader one's passing for its own nor
+    /// displaces the start the broader one is timed from.
+    fn anchor(&self) -> Option<usize> {
+        self.origin_index
+    }
+
     // r[impl barrier.suspension]
     fn check_barrier(
         &mut self,
@@ -1999,14 +2273,27 @@ impl Started {
         let mut g = ctx.lock();
         let now = (g.now_secs)();
 
+        // r[impl barrier.replay.anchor]
+        // Which barrier on its call this is. Drawn afresh each pass, in the
+        // order the closure asserts them, so the same barrier draws the
+        // same number every time and reads back its own record.
+        let anchor = self.anchor();
+        let seq = anchor.map_or(0, |idx| g.next_barrier_seq(idx));
+
         // r[impl barrier.replay]
-        // Check if this barrier was already satisfied in the committed log.
-        let already_satisfied = g.committed.iter().any(|e| {
-            e.resources == self.resources
-                && e.barrier
-                    .as_ref()
-                    .is_some_and(|b| b.required_state == required && b.satisfied)
-        });
+        // r[impl barrier.replay.anchor]
+        // Ask the entry of the call this barrier was called on, and no
+        // other. Matching by resources and required state instead let a
+        // `.terminated()` barrier short-circuit against the record an
+        // earlier `rt.stop` over the same resources had left satisfied —
+        // `do_stop` being the one writer of a satisfied Terminated record.
+        // A named job resolves to one operation-scoped instance UUID, so
+        // the two calls carry byte-identical resources and the scan could
+        // not tell them apart.
+        let already_satisfied = anchor
+            .and_then(|idx| g.committed.iter().find(|e| e.call_index == idx))
+            .and_then(|e| e.barrier(seq))
+            .is_some_and(|b| b.required_state == required && b.satisfied);
         if already_satisfied {
             return Ok(self.clone());
         }
@@ -2032,16 +2319,18 @@ impl Started {
             // r[impl actuate.image.warm]
             // Empty `refs` means the selection contained no container
             // resources with an image to warm — immediately satisfied.
-            (WarmMode::Images(refs), LifecycleState::Ready) => {
-                refs.iter().all(|r| g.world.image_present(r))
+            (WarmMode::Images(pairs), LifecycleState::Ready) => {
+                pairs.iter().all(|(_, image)| g.world.image_present(image))
             }
-            _ => {
-                !self.resources.is_empty()
-                    && self
-                        .resources
-                        .iter()
-                        .all(|r| g.world.lifecycle_state(r).has_reached(required))
-            }
+            // l[impl rt.started.state-methods]
+            // A group holding no resources has nothing to wait on. The warm
+            // variants above already answered that way; this arm did not,
+            // so a group a collection method had narrowed down to nothing
+            // would have waited forever rather than returning at once.
+            _ => self
+                .resources
+                .iter()
+                .all(|r| g.world.lifecycle_state(r).has_reached(required)),
         };
 
         // r[impl barrier.resume]
@@ -2053,30 +2342,46 @@ impl Started {
         // so deadline-then-oracle would spuriously time out a barrier whose
         // resources have actually reached the required state.
         if all_reached {
-            // Mark the relevant pending entry's barrier as satisfied.
-            for e in g.pending.iter_mut() {
-                if e.resources == self.resources
-                    && let Some(b) = e.barrier.as_mut()
-                    && b.required_state == required
-                {
-                    b.satisfied = true;
-                }
+            // r[impl barrier.satisfaction.recorded]
+            // r[impl barrier.replay.anchor]
+            // Record the pass against this barrier's own entry. Marking
+            // pending entries only lost it on a replay pass, where pending
+            // is empty until the closure makes its first fresh rt.* call:
+            // the committed record kept satisfied=false and its original
+            // started_at forever. `earliest_unsatisfied_barrier_wait_secs`
+            // takes the maximum elapsed across unsatisfied records, so one
+            // long wait that had since passed went on inflating the
+            // re-poll cadence of every barrier after it.
+            if let Some(idx) = anchor {
+                record_at_anchor(
+                    &mut g,
+                    idx,
+                    BarrierRecord {
+                        seq,
+                        required_state: required,
+                        deadline_secs,
+                        satisfied: true,
+                        started_at_secs: Some(now),
+                    },
+                );
             }
             return Ok(self.clone());
         }
 
-        // Not yet reached — check deadline: find when we first started waiting.
-        let started_at = g
-            .committed
-            .iter()
-            .chain(g.pending.iter())
-            .find(|e| {
-                e.resources == self.resources
-                    && e.barrier
-                        .as_ref()
-                        .is_some_and(|b| b.required_state == required && !b.satisfied)
+        // Not yet reached — check deadline: find when we first started
+        // waiting. The wait belongs to this call, so it is read off this
+        // call's own entry.
+        // r[impl barrier.replay.anchor]
+        let started_at = anchor
+            .and_then(|idx| {
+                g.pending
+                    .iter()
+                    .chain(g.committed.iter())
+                    .find(|e| e.call_index == idx)
             })
-            .and_then(|e| e.barrier.as_ref()?.started_at_secs);
+            .and_then(|e| e.barrier(seq))
+            .filter(|b| b.required_state == required && !b.satisfied)
+            .and_then(|b| b.started_at_secs);
 
         // r[impl barrier.deadline]
         if let (Some(d), Some(started_at)) = (deadline_secs, started_at)
@@ -2095,53 +2400,39 @@ impl Started {
             deadline_secs,
         };
 
-        // Attach the barrier record to the most recent pending entry
-        // for these resources. The synthetic-push fallback below is
-        // only for the rare case where the closure asserts a barrier
-        // on a resource set that was never tracked via rt.start (the
-        // language spec doesn't promise that scenario works, but the
-        // code handles it without UB).
-        //
-        // On replay, pending is empty until the closure makes its
-        // first fresh rt.* call, so the attached lookup misses by
-        // default. The previous implementation then synthesised a
-        // Start at the current call_index — but the corresponding
-        // committed entry already exists (we just replayed past it),
-        // so the synthesis pushed a phantom entry one slot ahead and
-        // advanced call_index. Subsequent rt.* calls then read the
-        // wrong slot. The fix: skip the synthesis when *any*
-        // committed entry for the same resources exists. The barrier
-        // is already represented; just throw to re-suspend.
-        let attached = g
-            .pending
-            .iter_mut()
-            .rev()
-            .find(|e| e.resources == self.resources && e.barrier.is_none());
-        if let Some(entry) = attached {
-            entry.barrier = Some(BarrierRecord {
-                required_state: required,
-                deadline_secs,
-                satisfied: false,
-                started_at_secs: Some(now),
+        // The barrier records the start its deadline is measured from
+        // under its own position on its call's entry.
+        // r[impl barrier.satisfaction.recorded]
+        // r[impl barrier.replay.anchor]
+        let waiting = BarrierRecord {
+            seq,
+            required_state: required,
+            deadline_secs,
+            satisfied: false,
+            started_at_secs: Some(now),
+        };
+        let anchored = anchor.is_some_and(|idx| record_at_anchor(&mut g, idx, waiting));
+        // Only a barrier with no entry behind it at all synthesises one.
+        if !anchored {
+            // No entry behind this barrier: the closure asserted it on a
+            // resource set never tracked via rt.start. The language spec
+            // does not promise that works, but it is given an entry rather
+            // than silently going unrecorded.
+            let idx = g.call_index;
+            g.call_index += 1;
+            g.pending.push(ActionLogEntry {
+                call_index: idx,
+                call_kind: CallKind::Start,
+                resources: self.resources.clone(),
+                barriers: vec![BarrierRecord {
+                    seq,
+                    required_state: required,
+                    deadline_secs,
+                    satisfied: false,
+                    started_at_secs: Some(now),
+                }],
+                extra: None,
             });
-        } else {
-            let already_tracked = g.committed.iter().any(|e| e.resources == self.resources);
-            if !already_tracked {
-                let idx = g.call_index;
-                g.call_index += 1;
-                g.pending.push(ActionLogEntry {
-                    call_index: idx,
-                    call_kind: CallKind::Start,
-                    resources: self.resources.clone(),
-                    barrier: Some(BarrierRecord {
-                        required_state: required,
-                        deadline_secs,
-                        satisfied: false,
-                        started_at_secs: Some(now),
-                    }),
-                    extra: None,
-                });
-            }
         }
         g.pending_barrier = Some(condition.clone());
         drop(g);
@@ -2280,11 +2571,42 @@ impl CustomType for Started {
                     Ok(this.compute_termination())
                 },
             )
-            // l[impl rt.started.type]: Collection methods on Started return Started
-            .with_fn("one", |this: &mut Self| this.clone())
-            .with_fn("only", |this: &mut Self, _: Dynamic| this.clone())
-            .with_fn("except", |this: &mut Self, _: Dynamic| this.clone())
-            .with_fn("select", |this: &mut Self, _: Map| this.clone());
+            // l[impl rt.started.type]
+            // Collection's methods on a Started return Starteds over the
+            // selected resources. These used to ignore their arguments and
+            // return the whole group, so
+            // `rt.start(app).except(app.deployment("optional")).ready()`
+            // went on waiting for the resource the author had excluded.
+            // l[impl collection.one]
+            .with_fn("one", |this: &mut Self| -> Dynamic {
+                match this.resources.first().map(|r| r.id) {
+                    Some(first) => Dynamic::from(this.narrowed_to(|r| r.id == first)),
+                    // `collection.one` is null on an empty collection, and
+                    // a Started over no resources is worse than null here:
+                    // its barriers would have nothing to wait on.
+                    None => Dynamic::UNIT,
+                }
+            })
+            // l[impl collection.only]
+            .with_fn("only", |this: &mut Self, other: Dynamic| -> Self {
+                let keys = resource_keys(other);
+                this.narrowed_to(|r| keys_hold(&keys, r))
+            })
+            // l[impl collection.except]
+            .with_fn("except", |this: &mut Self, other: Dynamic| -> Self {
+                let keys = resource_keys(other);
+                this.narrowed_to(|r| !keys_hold(&keys, r))
+            })
+            // l[impl collection.select]
+            .with_fn(
+                "select",
+                |this: &mut Self, criterion: Map| -> Result<Self, Box<EvalAltResult>> {
+                    let selector = Selector::from_map(&criterion)?;
+                    Ok(this.narrowed_to(|r| {
+                        selector.matches_resource(r.kind, r.name.as_deref().unwrap_or(""))
+                    }))
+                },
+            );
     }
 }
 

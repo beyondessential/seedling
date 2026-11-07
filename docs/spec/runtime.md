@@ -519,6 +519,14 @@ Absent specification bugs, anything that is not defined here is either defined i
 > A stopped singleton remains part of the active desired state.
 > Membership is judged against the desired state the reconciler computed from the app's definition, so an instance belonging to an app whose desired state is not known must not be deleted: while a lifecycle operation is in progress for the app, while it is installing or uninstalling, when its desired state could not be computed, or when the runtime could not load the app.
 
+> r[gc.instances.operation-keep-set]
+> An action starting a scaled group takes only instances the observation history does not already show torn down, allocating fresh ones in place of those it leaves out.
+> The instances it leaves out are the ones retirement deletes, so what an action starts and what the reconciler may delete never name the same instance, and an action that starts between the reconciler reading desired state and acting on it cannot have an instance deleted under it.
+>
+> This holds for starting a group and not for addressing one. An action that stops, queries, signals or warms a deployment names the instances that deployment has, torn down or not: resolving those to fresh instances instead would have it address replicas that do not exist and never will, while the ones it meant to address carried on.
+>
+> It holds for actions and not for the reconciler, whose steady-state desired state keeps a scaled instance whatever its containers have done, because re-identifying it would discard the [restart record](#r--autonomous.restart.record) and observation history held against its identity.
+
 > r[gc.instances.atomic]
 > The deletion of an instance's records must be atomic across the world observation rows, fault rows, and the resource instance row.
 > A partial deletion that leaves any of these three out of sync with the others is a defect: it allows orphan faults and registry rows to linger indefinitely, since subsequent garbage-collection passes select instances by observation history that no longer exists.
@@ -645,6 +653,11 @@ Some operations must hand a writable or read-only path to an action closure with
 > The runtime applies the called action's declared param schema to the supplied `params` map before invoking the closure, using the same validation rules as operator invocation: required-field enforcement, default application, [reserved-key](language.md#l--action.params) rejection, and `kind: "volume"` resolution against the [operation-scoped volume bindings](#r--operation.volume-param). Validation errors throw before the closure runs.
 > The result of validation must be deterministic across replays so that the action log entry recorded for the call (see [history.action-log.entries](#r--history.action-log.entries)) faithfully describes what the closure observed.
 
+> r[operation.composition.params.replay]
+> A sub-action call already recorded in the action log is replayed with the params its entry holds, and is not validated again.
+> Validation answers to the world as it stands — it resolves `kind: "volume"` params against the [operation-scoped volume bindings](#r--operation.volume-param) and applies the action's declared schema as the current definition declares it — so re-running it would let a call that was committed with valid params stop replaying because an operator deleted the referenced site volume or an update changed the schema.
+> A recorded call whose entry names a different action than the one the closure is now calling is a [replay divergence](#r--barrier.replay.positional), not a call to replay.
+
 ## Shell Sessions
 
 > r[operation.shell]
@@ -717,6 +730,23 @@ Some operations must hand a writable or read-only path to an action closure with
 > 4. `rt.*` calls that are already recorded in the log are idempotent: they produce the same desired state mutations but do not duplicate real-world operations.
 > 5. Barrier calls whose conditions are already satisfied (according to the current world observation history) return immediately.
 > 6. Execution fast-forwards to the first unsatisfied barrier, where it suspends normally.
+
+> r[barrier.replay.anchor]
+> A barrier is anchored to the log entry of the call that produced the `Started` it was called on.
+> Whether the barrier has already been satisfied is decided from that entry alone, never from another entry that happens to record the same resources and the same required state.
+> A call's entry holds a record for each barrier asserted on it, under that barrier's position among them, counted in the order the closure asserts them.
+> A barrier is identified by that position and not by what it waits for: its resources are not usable for the purpose, since a replica may be added or retired between passes and it is still the same barrier, and neither is its required state, since nothing stops a closure asserting the same state twice on one call.
+> A barrier on a group that a [Collection](language.md#l--collection.interface) method has narrowed is a barrier on that call like any other, and holds its own record there.
+> Resources and required state do not identify a barrier: distinct calls within one closure can resolve to the same resource set, and [`rt.stop`](#r--barrier.replay.rt-stop) records the same terminal state that a later `.terminated()` barrier waits for.
+> A barrier whose anchoring entry records no satisfied barrier for its required state is decided against the [world observation history](#r--history.world.state-derivation).
+
+> r[barrier.satisfaction.recorded]
+> That a barrier's condition was met is recorded against that barrier's own record on its [anchoring entry](#r--barrier.replay.anchor), whether it was met on the pass that first reached the barrier or on a later one.
+> Each barrier likewise records when its own wait began, and that start stands until the barrier is satisfied: re-recording it on each pass would restart the wait it measures, and the [deadline](#r--barrier.deadline) could never expire.
+> Recording against the barrier rather than against the call is what lets a `Started` carry several: `s.running()` then `s.ready()` neither take each other's passing for their own nor displace the start the other is timed from.
+>
+> A barrier still recorded as waiting counts toward the [poll cadence](#r--barrier.suspension.poll-backoff) for as long as the record stands.
+> A barrier that has passed but was never recorded as passed therefore goes on lengthening the cadence of every barrier after it, so an operation whose first barrier waited a long time re-polls the next one slowly even though it is ready to proceed.
 
 > r[barrier.replay.determinism]
 > BSL action closures must not have side effects beyond `rt.*` calls.
@@ -799,6 +829,10 @@ Some operations must hand a writable or read-only path to an action closure with
 > r[scaling.decision]
 > The runtime maintains a persistent record of operator-chosen scale for each Deployment that has been explicitly scaled.
 > When present, this record determines the effective scale used by the reconciler instead of the lower bound default.
+
+> r[scaling.decision.actions]
+> A named Deployment named by an action resolves to the replicas its effective scale calls for, the same number the reconciler resolves it to, rather than to the lower bound of its declared range.
+> An action that addresses a Deployment addresses the whole of it: a `rt.stop` that reached only part of a scaled deployment would report the workload stopped while the rest of it went on serving, which is the opposite of what a maintenance action that stops a deployment before acting on its data is for.
 
 > r[scaling.clamp]
 > When an app's BSL script is re-evaluated (e.g. via an update), any stored scaling decision for a Deployment whose declared bounds have changed must be clamped to the new bounds.

@@ -5,8 +5,10 @@ use seedling_protocol::names::AppName;
 
 use crate::defs::resource::ResourceKind;
 use crate::runtime::db::DbHandle;
+use crate::runtime::gc::UNSCHEDULED_OBS_KINDS;
 use crate::runtime::history;
 use crate::runtime::identity::{InstanceVariant, ResourceInstance};
+use crate::runtime::lifecycle::LifecycleState;
 
 #[cfg(test)]
 mod tests;
@@ -44,6 +46,28 @@ impl RegistryError {
     }
 }
 
+// r[impl gc.instances.operation-keep-set]
+/// Whether a group may take an instance that has already been torn down back
+/// into its keep set.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InstanceReuse {
+    /// Reuse any instance recorded for the group.
+    ///
+    /// What the reconciler resolves steady-state desired state with. An
+    /// instance whose container has exited is still that replica, and
+    /// re-identifying it every tick would lose the restart record and the
+    /// observation history kept against its identity.
+    Any,
+    /// Leave instances whose observations say they have been torn down out
+    /// of the keep set, allocating fresh ones in their place.
+    ///
+    /// What an operation resolves its groups with. Those are precisely the
+    /// instances the reconciler's retirement sweep deletes, so an operation
+    /// that does not hold any of them cannot have its keep set deleted out
+    /// from under it.
+    Live,
+}
+
 /// The result of resolving a scaled deployment group.
 pub struct ScaledGroup {
     /// Instances that should be kept (length == the requested count).
@@ -70,13 +94,15 @@ pub trait InstanceRegistry: Send + Sync {
 
     /// Return exactly `count` scaled instances for the given group, creating
     /// new ones if fewer than `count` exist, and returning any excess.
-    /// Existing instances are kept in creation order (oldest first).
+    /// Existing instances are kept in creation order (oldest first), subject
+    /// to `reuse`.
     fn ensure_scaled_group(
         &self,
         app: &AppName,
         kind: ResourceKind,
         name: Option<&str>,
         count: u16,
+        reuse: InstanceReuse,
     ) -> Result<ScaledGroup, RegistryError>;
 
     /// Return all existing instances (singleton + scaled) for the group.
@@ -145,12 +171,15 @@ impl InstanceRegistry for EphemeralInstanceRegistry {
         Ok(instance)
     }
 
+    /// `reuse` has no bearing here: this registry keeps no observations, so
+    /// it has no record of an instance having been torn down.
     fn ensure_scaled_group(
         &self,
         app: &AppName,
         kind: ResourceKind,
         name: Option<&str>,
         count: u16,
+        _reuse: InstanceReuse,
     ) -> Result<ScaledGroup, RegistryError> {
         let key: InstanceRegistryKey = (app.clone(), kind, name.map(|s| s.to_owned()));
         let mut scaled_cache = self.scaled_cache.lock();
@@ -237,6 +266,7 @@ impl InstanceRegistry for DbInstanceRegistry {
         kind: ResourceKind,
         name: Option<&str>,
         count: u16,
+        reuse: InstanceReuse,
     ) -> Result<ScaledGroup, RegistryError> {
         let app = app.clone();
         let name = name.map(|s| s.to_owned());
@@ -254,12 +284,63 @@ impl InstanceRegistry for DbInstanceRegistry {
                 }
             }
 
+            // Read the group's observations in one query: the keep order
+            // is drawn from them, and so is whether each instance has
+            // already been torn down. Asking per instance put a prepared
+            // statement and a round trip between every replica, on each
+            // reconcile tick and each pass of every action that names the
+            // deployment.
+            //
+            // A failed read is an error rather than an empty history, which
+            // would say both "not ready" and, worse, "not torn down" —
+            // handing the keep set an instance on the strength of a query
+            // that did not answer.
+            let observations = history::query_observations_for(db, &scaled)?;
+            let mut observed: Vec<(ResourceInstance, LifecycleState, bool)> =
+                Vec::with_capacity(scaled.len());
+            for inst in scaled {
+                let obs = observations.get(&inst.id).map_or(&[][..], Vec::as_slice);
+                let state = crate::runtime::barrier::oracle::derive_lifecycle_state(&inst, obs);
+                // Latest wins, because that is what the retirement sweep
+                // this mirrors does: it selects on the most recent
+                // observation being a terminal kind. Asking whether a
+                // terminal observation appears anywhere in the history
+                // instead would mark an instance torn down for the rest of
+                // its life the first time its container was removed, so a
+                // replica that had since been brought back would be dropped
+                // from the keep set while it was still running — and a
+                // `rt.stop` would leave it serving, which is the split
+                // r[scaling.decision.actions] exists to prevent.
+                //
+                // The observations are ordered by recorded_at then id, so
+                // the last is the most recent.
+                let latest_is_terminal = obs
+                    .last()
+                    .is_some_and(|o| UNSCHEDULED_OBS_KINDS.contains(&o.obs_kind.as_str()));
+                let torn_down = state == LifecycleState::Unscheduled || latest_is_terminal;
+                observed.push((inst, state, torn_down));
+            }
+
+            // r[impl gc.instances.operation-keep-set]
+            // An instance that has been torn down is one the retirement
+            // sweep deletes, so a caller that must not have its keep set
+            // deleted under it does not take one. Set them aside before the
+            // count is filled, so fresh instances are minted in their place
+            // rather than the group coming up short.
+            let mut retired = Vec::new();
+            if reuse == InstanceReuse::Live {
+                let (live, torn_down): (Vec<_>, Vec<_>) =
+                    observed.into_iter().partition(|(_, _, torn)| !torn);
+                retired = torn_down.into_iter().map(|(i, _, _)| i).collect();
+                observed = live;
+            }
+
             let count = usize::from(count);
-            while scaled.len() < count {
+            while observed.len() < count {
                 let instance =
                     ResourceInstance::new_scaled(app.clone(), kind, name.as_deref().unwrap_or(""));
                 history::insert_instance(db, &instance)?;
-                scaled.push(instance);
+                observed.push((instance, LifecycleState::Pending, false));
             }
 
             // Sort the scaled instances by (currently-Ready desc, original
@@ -270,24 +351,17 @@ impl InstanceRegistry for DbInstanceRegistry {
             // The original order produced by `find_instances_for_group` is
             // ASC by `created_at`, so a stable sort_by_key preserves that as
             // the secondary criterion when the primary is tied.
-            let mut tagged: Vec<(ResourceInstance, bool)> = scaled
-                .into_iter()
-                .map(|inst| {
-                    let obs = history::query_observations(db, &inst).unwrap_or_default();
-                    let state =
-                        crate::runtime::barrier::oracle::derive_lifecycle_state(&inst, &obs);
-                    let is_ready =
-                        matches!(state, crate::runtime::lifecycle::LifecycleState::Ready);
-                    (inst, is_ready)
-                })
-                .collect();
+            //
             // Stable sort: false (not ready) > true (ready) in usize, so
             // negate by sorting on `!is_ready`.
-            tagged.sort_by_key(|(_, is_ready)| !*is_ready);
-            let scaled: Vec<ResourceInstance> = tagged.into_iter().map(|(i, _)| i).collect();
+            observed.sort_by_key(|(_, state, _)| *state != LifecycleState::Ready);
+            let scaled: Vec<ResourceInstance> = observed.into_iter().map(|(i, _, _)| i).collect();
 
             let keep = scaled[..count].to_vec();
             let mut excess = scaled[count..].to_vec();
+            // The instances left out of the keep set are still the group's
+            // to tear down.
+            excess.extend(retired);
 
             // Lingering singletons are always excess — the reconciler will
             // unschedule them so the old container is torn down cleanly.

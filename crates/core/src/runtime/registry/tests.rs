@@ -1,6 +1,6 @@
 use seedling_protocol::names::AppName;
 
-use super::{DbInstanceRegistry, InstanceRegistry};
+use super::{DbInstanceRegistry, InstanceRegistry, InstanceReuse};
 use crate::defs::resource::ResourceKind;
 use crate::runtime::db::DbHandle;
 use crate::runtime::history;
@@ -21,7 +21,13 @@ fn ensure_scaled_group_prefers_healthy_in_keep() {
 
     // Initial provision: two scaled instances created in order.
     let group = reg
-        .ensure_scaled_group(&app("myapp"), ResourceKind::Deployment, Some("web"), 2)
+        .ensure_scaled_group(
+            &app("myapp"),
+            ResourceKind::Deployment,
+            Some("web"),
+            2,
+            InstanceReuse::Any,
+        )
         .unwrap();
     assert_eq!(group.keep.len(), 2);
     assert!(group.excess.is_empty());
@@ -47,7 +53,13 @@ fn ensure_scaled_group_prefers_healthy_in_keep() {
     // Asking for count=1 must prefer the Ready instance even though it was
     // created later than the unhealthy one.
     let group = reg
-        .ensure_scaled_group(&app("myapp"), ResourceKind::Deployment, Some("web"), 1)
+        .ensure_scaled_group(
+            &app("myapp"),
+            ResourceKind::Deployment,
+            Some("web"),
+            1,
+            InstanceReuse::Any,
+        )
         .unwrap();
     assert_eq!(group.keep.len(), 1);
     assert_eq!(
@@ -73,7 +85,13 @@ fn ensure_scaled_group_keeps_oldest_when_all_equally_unhealthy() {
     let reg = DbInstanceRegistry::new(db.clone());
 
     let group = reg
-        .ensure_scaled_group(&app("myapp"), ResourceKind::Deployment, Some("web"), 2)
+        .ensure_scaled_group(
+            &app("myapp"),
+            ResourceKind::Deployment,
+            Some("web"),
+            2,
+            InstanceReuse::Any,
+        )
         .unwrap();
     let older = group.keep[0].clone();
     let younger = group.keep[1].clone();
@@ -91,7 +109,13 @@ fn ensure_scaled_group_keeps_oldest_when_all_equally_unhealthy() {
     });
 
     let group = reg
-        .ensure_scaled_group(&app("myapp"), ResourceKind::Deployment, Some("web"), 1)
+        .ensure_scaled_group(
+            &app("myapp"),
+            ResourceKind::Deployment,
+            Some("web"),
+            1,
+            InstanceReuse::Any,
+        )
         .unwrap();
     assert_eq!(group.keep.len(), 1);
     assert_eq!(
@@ -100,4 +124,137 @@ fn ensure_scaled_group_keeps_oldest_when_all_equally_unhealthy() {
     );
     assert_eq!(group.excess.len(), 1);
     assert_eq!(group.excess[0].id, younger.id);
+}
+
+// r[verify gc.instances.operation-keep-set]
+#[test]
+fn an_operation_does_not_reuse_an_instance_that_has_been_torn_down() {
+    // The keep set is drawn in readiness-then-creation order, so an excess
+    // instance that lingered past a terminal observation could be picked up
+    // by an operation just as the reconciler's retirement sweep deleted it.
+    let db = DbHandle::open_in_memory().unwrap();
+    let reg = DbInstanceRegistry::new(db.clone());
+
+    let group = reg
+        .ensure_scaled_group(
+            &app("myapp"),
+            ResourceKind::Deployment,
+            Some("web"),
+            1,
+            InstanceReuse::Any,
+        )
+        .unwrap();
+    let torn_down = group.keep[0].clone();
+
+    db.call({
+        let torn_down = torn_down.clone();
+        move |db| {
+            history::insert_observation(
+                db,
+                &torn_down,
+                "container_running",
+                &serde_json::json!({}),
+            )
+            .unwrap();
+            history::insert_observation(
+                db,
+                &torn_down,
+                "container_removed",
+                &serde_json::json!({}),
+            )
+            .unwrap();
+        }
+    });
+
+    // The reconciler keeps it: it is still that replica, and re-identifying
+    // it would lose the history held against its identity.
+    let steady = reg
+        .ensure_scaled_group(
+            &app("myapp"),
+            ResourceKind::Deployment,
+            Some("web"),
+            1,
+            InstanceReuse::Any,
+        )
+        .unwrap();
+    assert_eq!(
+        steady.keep[0].id, torn_down.id,
+        "steady-state desired state must keep the instance it already has"
+    );
+
+    // An operation does not, and gets a fresh one instead.
+    let operation = reg
+        .ensure_scaled_group(
+            &app("myapp"),
+            ResourceKind::Deployment,
+            Some("web"),
+            1,
+            InstanceReuse::Live,
+        )
+        .unwrap();
+    assert_eq!(operation.keep.len(), 1);
+    assert_ne!(
+        operation.keep[0].id, torn_down.id,
+        "an operation took an instance the retirement sweep deletes into its keep set"
+    );
+    assert!(
+        operation.excess.iter().any(|i| i.id == torn_down.id),
+        "the instance left out of the keep set is still the group's to tear down"
+    );
+}
+
+// r[verify gc.instances.operation-keep-set]
+#[test]
+fn an_instance_brought_back_after_a_teardown_is_reused() {
+    // Whether an instance has been torn down is the latest observation's
+    // question, not the whole history's. Asking the history marked a
+    // replica torn down for good the first time its container was removed,
+    // so a scale-down then scale-up left an operation dropping a running
+    // replica from its keep set and minting a duplicate beside it — and a
+    // rt.stop over the deployment then never reached the live one.
+    let db = DbHandle::open_in_memory().unwrap();
+    let reg = DbInstanceRegistry::new(db.clone());
+
+    let group = reg
+        .ensure_scaled_group(
+            &app("myapp"),
+            ResourceKind::Deployment,
+            Some("web"),
+            1,
+            InstanceReuse::Any,
+        )
+        .unwrap();
+    let instance = group.keep[0].clone();
+
+    db.call({
+        let instance = instance.clone();
+        move |db| {
+            for kind in [
+                "container_running",
+                "container_removed",
+                "container_running",
+                "health_check_pass",
+            ] {
+                history::insert_observation(db, &instance, kind, &serde_json::json!({})).unwrap();
+            }
+        }
+    });
+
+    let operation = reg
+        .ensure_scaled_group(
+            &app("myapp"),
+            ResourceKind::Deployment,
+            Some("web"),
+            1,
+            InstanceReuse::Live,
+        )
+        .unwrap();
+    assert_eq!(
+        operation.keep[0].id, instance.id,
+        "a replica that was brought back after a teardown is still live, and reusable"
+    );
+    assert!(
+        operation.excess.is_empty(),
+        "no duplicate should be minted beside the live replica"
+    );
 }

@@ -51,6 +51,12 @@ jobs:
       - name: cargo llvm-cov
         run: cargo llvm-cov --workspace --locked --cobertura --output-path cobertura-rust.xml
       - uses: actions/upload-code-coverage@v1.4.2
+        # Reporting coverage is not a gate on the change, and this step
+        # fails for reasons that say nothing about it: having uploaded the
+        # report, the action polls GitHub for processing status through a
+        # bare urllib call with no retry, so a dropped connection fails the
+        # check after the work it exists to do has succeeded.
+        continue-on-error: true
         with:
           file: cobertura-rust.xml
           language: Rust
@@ -74,6 +80,8 @@ jobs:
       - name: Vitest coverage
         run: npx --no-install vitest run --coverage
       - uses: actions/upload-code-coverage@v1.4.2
+        # Best-effort for the same reason as the Rust job's upload.
+        continue-on-error: true
         # `uses` steps run from the workspace root, not the job's
         # working-directory, so give the full path to the report.
         with:

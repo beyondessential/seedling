@@ -956,10 +956,10 @@ pub(crate) fn describe_app(state: &OiState, params: AppParams) -> HandlerResult 
             entries
                 .into_iter()
                 .filter_map(|e| {
-                    let b = e.barrier?;
-                    if b.satisfied {
-                        return None;
-                    }
+                    // i[impl action.describe.barrier]
+                    // A call can hold several barriers; the one blocking it
+                    // is whichever of them is still waiting.
+                    let b = e.barriers.iter().find(|b| !b.satisfied)?;
                     let started_at = b.started_at_secs?;
                     Some((e.resources, b.required_state, b.deadline_secs, started_at))
                 })

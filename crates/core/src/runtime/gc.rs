@@ -119,7 +119,7 @@ fn gc_completed_operations(db: &Db, retain: Duration) -> rusqlite::Result<usize>
 }
 
 /// Terminal observation kinds that correspond to the Unscheduled lifecycle state.
-const UNSCHEDULED_OBS_KINDS: &[&str] = &[
+pub(crate) const UNSCHEDULED_OBS_KINDS: &[&str] = &[
     "container_removed",
     "network_cleaned_up",
     "ingress_cleaned_up",
@@ -271,7 +271,7 @@ mod tests {
             call_index,
             call_kind: CallKind::Start,
             resources: vec![dep("app", "web")],
-            barrier: None,
+            barriers: Vec::new(),
             extra: None,
         }
     }

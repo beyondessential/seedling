@@ -184,18 +184,29 @@ mod tests {
         drop(probe);
 
         let _handle = spawn_dns_forwarder(forwarder_listen, upstream_addr);
-        time::sleep(Duration::from_millis(100)).await;
 
         let client = UdpSocket::bind(SocketAddr::from((Ipv4Addr::LOCALHOST, 0)))
             .await
             .unwrap();
-        client.send_to(b"query", forwarder_listen).await.unwrap();
 
+        // The forwarder binds on a task of its own, and a datagram that
+        // arrives before it does is dropped with nothing to retransmit it.
+        // So the query is repeated until one is answered, rather than sent
+        // once after a sleep long enough to hope the bind has happened:
+        // on a busy machine neither that sleep nor a single reply's window
+        // is long enough, and the test fails having proved nothing.
+        let give_up_at = std::time::Instant::now() + Duration::from_secs(30);
         let mut buf = [0u8; 512];
-        let (n, _) = time::timeout(Duration::from_secs(2), client.recv_from(&mut buf))
-            .await
-            .expect("reply before timeout")
-            .unwrap();
+        let n = loop {
+            client.send_to(b"query", forwarder_listen).await.unwrap();
+            match time::timeout(Duration::from_millis(100), client.recv_from(&mut buf)).await {
+                Ok(received) => break received.unwrap().0,
+                Err(_) => assert!(
+                    std::time::Instant::now() < give_up_at,
+                    "the forwarder never answered a query"
+                ),
+            }
+        };
         assert_eq!(&buf[..n], b"\xaa\xbb\xcc");
     }
 

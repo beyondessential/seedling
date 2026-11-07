@@ -231,8 +231,16 @@ fn compute_steady(
             // i[impl resource.stop]
             // r[impl autonomous.scale]
             let scale = if is_stopped { 0 } else { effective };
-            let group =
-                registry.ensure_scaled_group(app_name, id.kind, Some(id.name.as_str()), scale)?;
+            // Steady-state desired state keeps an instance whatever its
+            // containers have done: re-identifying it would lose the restart
+            // record and observation history held against its identity.
+            let group = registry.ensure_scaled_group(
+                app_name,
+                id.kind,
+                Some(id.name.as_str()),
+                scale,
+                crate::runtime::registry::InstanceReuse::Any,
+            )?;
             for inst in group.keep {
                 resources.push(DesiredResource {
                     instance: inst,

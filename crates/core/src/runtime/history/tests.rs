@@ -509,7 +509,7 @@ fn make_entry(
         call_index,
         call_kind,
         resources: vec![dep("app", "web")],
-        barrier,
+        barriers: barrier.into_iter().collect(),
         extra: None,
     }
 }
@@ -527,7 +527,7 @@ fn insert_and_load_action_log_entry_without_barrier() {
     assert_eq!(loaded.len(), 1);
     assert_eq!(loaded[0].call_index, 0);
     assert!(matches!(loaded[0].call_kind, CallKind::Start));
-    assert!(loaded[0].barrier.is_none());
+    assert!(loaded[0].barrier(0).is_none());
 }
 
 // r[verify history.action-log.entries]
@@ -536,6 +536,7 @@ fn insert_and_load_action_log_entry_with_barrier() {
     let db = Db::open_in_memory().unwrap();
     let op = OperationId("op-1".into());
     let barrier = BarrierRecord {
+        seq: 0,
         required_state: LifecycleState::Ready,
         deadline_secs: Some(30),
         satisfied: false,
@@ -545,7 +546,7 @@ fn insert_and_load_action_log_entry_with_barrier() {
     insert_action_log_entry(&db, &op, &app_name("myapp"), &action_name("start"), &entry).unwrap();
 
     let loaded = load_action_log(&db, &op).unwrap();
-    let b = loaded[0].barrier.as_ref().unwrap();
+    let b = loaded[0].barrier(0).unwrap();
     assert_eq!(b.required_state, LifecycleState::Ready);
     assert_eq!(b.deadline_secs, Some(30));
     assert!(!b.satisfied);
@@ -558,6 +559,7 @@ fn barrier_satisfaction_update_via_replace() {
     let db = Db::open_in_memory().unwrap();
     let op = OperationId("op-1".into());
     let barrier = BarrierRecord {
+        seq: 0,
         required_state: LifecycleState::Ready,
         deadline_secs: Some(30),
         satisfied: false,
@@ -570,12 +572,13 @@ fn barrier_satisfaction_update_via_replace() {
         call_index: 0,
         call_kind: CallKind::Start,
         resources: vec![dep("app", "web")],
-        barrier: Some(BarrierRecord {
+        barriers: vec![BarrierRecord {
+            seq: 0,
             required_state: LifecycleState::Ready,
             deadline_secs: Some(30),
             satisfied: true,
             started_at_secs: Some(1000),
-        }),
+        }],
         extra: None,
     };
     insert_action_log_entry(
@@ -589,7 +592,7 @@ fn barrier_satisfaction_update_via_replace() {
 
     let loaded = load_action_log(&db, &op).unwrap();
     assert_eq!(loaded.len(), 1, "INSERT OR REPLACE should not duplicate");
-    assert!(loaded[0].barrier.as_ref().unwrap().satisfied);
+    assert!(loaded[0].barrier(0).unwrap().satisfied);
 }
 
 // r[verify history.action-log.entries]
@@ -806,5 +809,81 @@ fn every_resource_kind_round_trips_through_the_kind_column() {
         // The column has existing rows written with Debug, so the spelling
         // must not drift from it.
         assert_eq!(s, format!("{kind:?}"), "spelling changed for {kind:?}");
+    }
+}
+
+// r[verify barrier.satisfaction.recorded]
+#[test]
+fn a_row_written_before_an_entry_held_several_barriers_still_loads_its_wait() {
+    // Rows written before the barriers column existed carry their one
+    // record in the four barrier_* columns and nothing in `barriers`. An
+    // operation suspended across the upgrade has to come back with the wait
+    // it was already timing, or its deadline restarts from the upgrade.
+    let db = Db::open_in_memory().unwrap();
+    let op = OperationId("op-legacy".into());
+    let resources = serde_json::to_string(&vec![dep("app", "web")]).unwrap();
+
+    db.conn
+        .execute(
+            "INSERT INTO action_log
+                 (recorded_at, operation_id, app, action_name, call_index, call_kind,
+                  resources, barrier_state, barrier_deadline, barrier_satisfied,
+                  barrier_started_at, extra, barriers)
+             VALUES (?1, ?2, 'myapp', 'start', 0, 'Start', ?3, 'Ready', 30, 0, 1000, NULL, NULL)",
+            rusqlite::params![0_i64, op.0, resources],
+        )
+        .unwrap();
+
+    let loaded = load_action_log(&db, &op).unwrap();
+    assert_eq!(loaded.len(), 1);
+    let barrier = loaded[0]
+        .barrier(0)
+        .expect("the one record it carries reads as the call's first barrier");
+    assert_eq!(barrier.required_state, LifecycleState::Ready);
+    assert_eq!(barrier.deadline_secs, Some(30));
+    assert!(!barrier.satisfied);
+    assert_eq!(
+        barrier.started_at_secs,
+        Some(1000),
+        "the wait it was already timing carries over"
+    );
+}
+
+// r[verify history.world.source]
+#[test]
+fn observations_for_a_group_come_back_per_instance_in_order() {
+    let db = Db::open_in_memory().unwrap();
+    let web = dep("app", "web");
+    let api = dep("app", "api");
+    let absent = dep("app", "absent");
+    for inst in [&web, &api] {
+        insert_instance(&db, inst).unwrap();
+    }
+    for kind in ["container_running", "health_check_pass"] {
+        insert_observation(&db, &web, kind, &serde_json::json!({})).unwrap();
+    }
+    insert_observation(&db, &api, "container_removed", &serde_json::json!({})).unwrap();
+
+    let got = query_observations_for(&db, &[web.clone(), api.clone(), absent.clone()]).unwrap();
+
+    let kinds = |inst: &ResourceInstance| -> Vec<String> {
+        got[&inst.id].iter().map(|o| o.obs_kind.clone()).collect()
+    };
+    assert_eq!(kinds(&web), ["container_running", "health_check_pass"]);
+    assert_eq!(kinds(&api), ["container_removed"]);
+    assert!(
+        got[&absent.id].is_empty(),
+        "an instance with no observations is present and empty, not missing"
+    );
+
+    // Each instance's own history, matched one at a time, is what the
+    // batched read returns for it.
+    for inst in [&web, &api] {
+        let one: Vec<String> = query_observations(&db, inst)
+            .unwrap()
+            .iter()
+            .map(|o| o.obs_kind.clone())
+            .collect();
+        assert_eq!(one, kinds(inst), "{}", inst.display_name);
     }
 }

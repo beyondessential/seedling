@@ -2202,11 +2202,13 @@ mod tests {
             kind: crate::defs::resource::ResourceKind,
             name: Option<&str>,
             count: u16,
+            reuse: crate::runtime::registry::InstanceReuse,
         ) -> Result<ScaledGroup, RegistryError> {
             if app == &self.broken {
                 return Err(RegistryError::message("registry unavailable"));
             }
-            self.inner.ensure_scaled_group(app, kind, name, count)
+            self.inner
+                .ensure_scaled_group(app, kind, name, count, reuse)
         }
 
         fn find_all_instances(

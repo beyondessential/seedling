@@ -91,7 +91,18 @@ pub struct ActionLogEntry {
     pub call_index: usize,
     pub call_kind: CallKind,
     pub resources: Vec<ResourceInstance>,
-    pub barrier: Option<BarrierRecord>,
+    /// The barriers asserted on this call, each under its own
+    /// [`BarrierRecord::seq`].
+    ///
+    /// A call carries as many as the closure asserts on it: `s.running()`
+    /// then `s.ready()` are two, and a group a collection method narrowed
+    /// is another. They were one record between them until each got its
+    /// own, which meant whichever wrote last displaced the rest — so a
+    /// barrier could take another's passing for its own, or lose the start
+    /// its deadline was measured from.
+    // r[impl barrier.satisfaction.recorded]
+    #[serde(default, alias = "barrier", deserialize_with = "de_barriers")]
+    pub barriers: Vec<BarrierRecord>,
     /// Per-call_kind metadata. For `CallKind::Signal` this carries the
     /// canonical signal name (e.g. `"SIGHUP"`). Other kinds leave it `None`.
     // l[impl rt.signal]
@@ -99,9 +110,54 @@ pub struct ActionLogEntry {
     pub extra: Option<String>,
 }
 
+impl ActionLogEntry {
+    // r[impl barrier.replay.anchor]
+    /// The record of the `seq`th barrier on this call, if it has one.
+    pub fn barrier(&self, seq: usize) -> Option<&BarrierRecord> {
+        self.barriers.iter().find(|b| b.seq == seq)
+    }
+
+    /// Record `record` against the barrier it names, replacing any record
+    /// that barrier already had and leaving the others alone.
+    pub fn set_barrier(&mut self, record: BarrierRecord) {
+        match self.barriers.iter_mut().find(|b| b.seq == record.seq) {
+            Some(existing) => *existing = record,
+            None => self.barriers.push(record),
+        }
+    }
+}
+
+/// Reads a `barriers` list, and also a lone `barrier` as written before
+/// an entry could hold more than one.
+fn de_barriers<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Vec<BarrierRecord>, D::Error> {
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum OneOrMany {
+        Many(Vec<BarrierRecord>),
+        One(Option<BarrierRecord>),
+    }
+    Ok(match OneOrMany::deserialize(d)? {
+        OneOrMany::Many(v) => v,
+        OneOrMany::One(Some(b)) => vec![b],
+        OneOrMany::One(None) => Vec::new(),
+    })
+}
+
 // r[impl barrier.deadline]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BarrierRecord {
+    /// Which barrier on the call this is: the position of the barrier
+    /// among those the closure asserts on that call, counted from zero.
+    ///
+    /// The closure makes the same calls in the same order on every pass,
+    /// so a barrier is at the same position on each, and this names it
+    /// without depending on what it waits for. Its resources are not usable
+    /// for that — a replica may come or go between passes and it is still
+    /// the same barrier — and neither is its required state, since nothing
+    /// stops a closure asserting the same state twice on one call.
+    // r[impl barrier.replay.anchor]
+    #[serde(default)]
+    pub seq: usize,
     pub required_state: LifecycleState,
     /// `None` means the barrier has no deadline.
     #[serde(default)]
@@ -192,6 +248,10 @@ pub struct ReplayContext {
     pub call_index: usize,
     pub committed: Vec<ActionLogEntry>,
     pub pending: Vec<ActionLogEntry>,
+    /// How many barriers each call has had asserted on it so far this pass,
+    /// which is where the next one's position comes from.
+    // r[impl barrier.replay.anchor]
+    pub barrier_seq: std::collections::HashMap<usize, usize>,
     pub pending_barrier: Option<BarrierCondition>,
     pub now_secs: Arc<dyn Fn() -> u64 + Send + Sync>,
     pub world: Arc<dyn oracle::WorldStateOracle>,
@@ -323,6 +383,7 @@ impl ReplayContext {
             call_index: 0,
             committed,
             pending: Vec::new(),
+            barrier_seq: std::collections::HashMap::new(),
             pending_barrier: None,
             now_secs: Arc::new(|| {
                 std::time::SystemTime::now()
@@ -362,6 +423,19 @@ impl ReplayContext {
 
     pub fn is_replaying(&self) -> bool {
         self.call_index < self.committed.len()
+    }
+
+    // r[impl barrier.replay.anchor]
+    /// Hand out the position of the next barrier asserted on `call_index`.
+    ///
+    /// Counted afresh each pass, which is what makes it the same number for
+    /// the same barrier every time: the closure is re-executed from the
+    /// start and makes the same calls in the same order.
+    pub fn next_barrier_seq(&mut self, call_index: usize) -> usize {
+        let next = self.barrier_seq.entry(call_index).or_default();
+        let seq = *next;
+        *next += 1;
+        seq
     }
 
     pub fn committed_entry(&self) -> Option<&ActionLogEntry> {
