@@ -788,17 +788,27 @@ function ResourcesSection({
                   <IconActionButton
                     safety="write"
                     tooltip="Scale down"
-                    onClick={() => void scale(r.name, r.scale!.current - 1)}
-                    disabled={scaling || r.scale.current <= r.scale.low}
+                    onClick={() => void scale(r.name, r.scale!.current! - 1)}
+                    disabled={
+                      scaling ||
+                      r.scale.current === null ||
+                      r.scale.current <= r.scale.low
+                    }
                   >
                     <RemoveIcon sx={{ fontSize: 14 }} />
                   </IconActionButton>
-                  <Typography variant="caption">{r.scale.current}</Typography>
+                  <Typography variant="caption">
+                    {r.scale.current ?? "unavailable"}
+                  </Typography>
                   <IconActionButton
                     safety="write"
                     tooltip="Scale up"
-                    onClick={() => void scale(r.name, r.scale!.current + 1)}
-                    disabled={scaling || r.scale.current >= r.scale.high}
+                    onClick={() => void scale(r.name, r.scale!.current! + 1)}
+                    disabled={
+                      scaling ||
+                      r.scale.current === null ||
+                      r.scale.current >= r.scale.high
+                    }
                   >
                     <AddIcon sx={{ fontSize: 14 }} />
                   </IconActionButton>

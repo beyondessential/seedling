@@ -77,7 +77,10 @@ export interface RestartSummary {
 export interface ScaleBounds {
   low: number;
   high: number;
-  current: number;
+  /** The operator's chosen scale, clamped to the bounds. Null where the
+   * daemon could not read the decision: unknown, not zero and not the floor,
+   * so nothing may be computed relative to it. */
+  current: number | null;
 }
 
 export interface ContainerSummary {
