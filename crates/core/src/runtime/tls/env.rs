@@ -7,9 +7,12 @@
 //! responsible.
 
 use std::{
-    collections::{BTreeMap, BTreeSet},
+    collections::{BTreeMap, BTreeSet, HashMap},
     path::Path,
+    sync::Arc,
 };
+
+use parking_lot::Mutex;
 
 use super::state::{ChainEnv, ManagedIngress, ProxyCert, ProxyHolding};
 use crate::runtime::{canopy::store as canopy_store, db::Db};
@@ -97,40 +100,77 @@ pub fn collect(
 }
 
 /// What the runtime itself holds for some hostnames.
+///
+/// Each part is `None` when the store could not be read for it. That is not an
+/// empty set: not knowing is not holding nothing, and a caller must treat it as
+/// not yet seen rather than as failed.
 #[derive(Debug, Default, PartialEq, Eq)]
 pub struct RuntimeHoldings {
     /// Hostnames a certificate the runtime stores can be served for right now.
-    pub served: BTreeSet<String>,
+    pub served: Option<BTreeSet<String>>,
     /// Hostnames with a Canopy order open.
-    pub ordering: BTreeSet<String>,
+    pub ordering: Option<BTreeSet<String>>,
+}
+
+/// The facts read from stored certificates, kept from one read to the next.
+///
+/// A certificate is parsed once and not on every reconciler tick: nearly all of
+/// what is stored is the same at the next tick as it was at this one. An entry
+/// is trusted only while the PEM it was read from is the PEM stored, since a
+/// renewal replaces a Canopy certificate's chain under the same id.
+#[derive(Clone, Default)]
+pub struct LeafFactsCache(Arc<Mutex<HashMap<i64, CachedFacts>>>);
+
+type CachedFacts = (String, Option<Arc<super::parse::LeafFacts>>);
+
+impl LeafFactsCache {
+    /// The facts of the certificate `id` stored as `pem`, or `None` when it
+    /// cannot be read. An unreadable certificate is remembered as such too, so
+    /// it is not parsed again on every tick.
+    fn facts(&self, id: i64, pem: &str) -> Option<Arc<super::parse::LeafFacts>> {
+        let mut entries = self.0.lock();
+        if let Some((cached_pem, facts)) = entries.get(&id)
+            && cached_pem == pem
+        {
+            return facts.clone();
+        }
+        let facts = super::parse::leaf_facts(pem).ok().map(Arc::new);
+        entries.insert(id, (pem.to_owned(), facts.clone()));
+        facts
+    }
+
+    /// Forget every certificate not in `ids`, so what is no longer stored does
+    /// not stay.
+    fn keep_only(&self, ids: &BTreeSet<i64>) {
+        self.0.lock().retain(|id, _| ids.contains(id));
+    }
 }
 
 /// Which of `hostnames` the runtime serves a certificate for, and which have an
 /// order open.
 ///
 /// The proxy's own cache cannot answer the first: a certificate the runtime
-/// serves to the proxy is never written there. A hostname the store could not be
-/// read for appears in neither set, since not knowing is not the same as holding
-/// nothing, and a caller treats it as not yet seen rather than as failed.
+/// serves to the proxy is never written there.
 // r[impl tls.canopy.serve]
-pub fn runtime_holdings(db: &Db, hostnames: &[String]) -> RuntimeHoldings {
-    let mut holdings = RuntimeHoldings::default();
+pub fn runtime_holdings(db: &Db, hostnames: &[String], cache: &LeafFactsCache) -> RuntimeHoldings {
     let now = jiff::Timestamp::now().as_second();
 
     // One pass over the certificates that could be served, ranking each against
     // every hostname at once: the same ranking the serving lookup applies, so a
     // hostname counts as served here exactly when the proxy would be handed
     // something for it.
-    match super::store::list_servable(db, now) {
+    let served = match super::store::list_servable(db, now) {
         Ok(certificates) => {
+            cache.keep_only(&certificates.iter().map(|c| c.id).collect());
+            let mut served = BTreeSet::new();
             for cert in certificates {
-                let Ok(facts) = super::parse::leaf_facts(&cert.cert_pem) else {
+                let Some(facts) = cache.facts(cert.id, &cert.cert_pem) else {
                     // Unreadable is not "covers nothing", and the serving
                     // lookup reports it; nothing more is said here.
                     continue;
                 };
                 for hostname in hostnames {
-                    if holdings.served.contains(hostname) {
+                    if served.contains(hostname) {
                         continue;
                     }
                     if super::resolve::rank(
@@ -144,28 +184,32 @@ pub fn runtime_holdings(db: &Db, hostnames: &[String]) -> RuntimeHoldings {
                     )
                     .is_some()
                     {
-                        holdings.served.insert(hostname.clone());
+                        served.insert(hostname.clone());
                     }
                 }
             }
+            Some(served)
         }
-        // Not knowing is not holding nothing: every hostname is left out of
-        // both sets, and the caller treats it as not yet seen.
-        Err(e) => tracing::warn!(error = %e, "cannot read the certificate store"),
-    }
-
-    match super::store::get_chain_rows(db, hostnames) {
-        Ok(rows) => {
-            for (hostname, row) in rows {
-                if row.row.open_order_since.is_some() {
-                    holdings.ordering.insert(hostname);
-                }
-            }
+        Err(e) => {
+            tracing::warn!(error = %e, "cannot read the certificate store");
+            None
         }
-        Err(e) => tracing::warn!(error = %e, "cannot read the chain state"),
-    }
+    };
 
-    holdings
+    let ordering = match super::store::get_chain_rows(db, hostnames) {
+        Ok(rows) => Some(
+            rows.into_iter()
+                .filter(|(_, row)| row.row.open_order_since.is_some())
+                .map(|(hostname, _)| hostname)
+                .collect(),
+        ),
+        Err(e) => {
+            tracing::warn!(error = %e, "cannot read the chain state");
+            None
+        }
+    };
+
+    RuntimeHoldings { served, ordering }
 }
 
 #[cfg(test)]
@@ -220,10 +264,10 @@ mod tests {
         ]
         .map(String::from)
         .into();
-        let holdings = runtime_holdings(&db, &hostnames);
+        let holdings = runtime_holdings(&db, &hostnames, &LeafFactsCache::default());
         assert_eq!(
             holdings.served,
-            BTreeSet::from(["ok.example.com".to_owned()]),
+            Some(BTreeSet::from(["ok.example.com".to_owned()])),
             "an expired, revoked or not-yet-delivered certificate does not satisfy a barrier"
         );
     }
@@ -262,10 +306,10 @@ mod tests {
             "ordering.example.com".to_owned(),
             "refused.example.com".to_owned(),
         ];
-        let holdings = runtime_holdings(&db, &hostnames);
+        let holdings = runtime_holdings(&db, &hostnames, &LeafFactsCache::default());
         assert_eq!(
             holdings.ordering,
-            BTreeSet::from(["ordering.example.com".to_owned()])
+            Some(BTreeSet::from(["ordering.example.com".to_owned()]))
         );
     }
 
@@ -286,10 +330,13 @@ mod tests {
         ]
         .map(String::from)
         .into();
-        let holdings = runtime_holdings(&db, &hostnames);
+        let holdings = runtime_holdings(&db, &hostnames, &LeafFactsCache::default());
         assert_eq!(
             holdings.served,
-            BTreeSet::from(["a.example.com".to_owned(), "b.example.com".to_owned()]),
+            Some(BTreeSet::from([
+                "a.example.com".to_owned(),
+                "b.example.com".to_owned()
+            ])),
             "each hostname is answered by the one pass, and an expired one is not served"
         );
     }
@@ -322,11 +369,46 @@ mod tests {
         .unwrap();
 
         let hostnames = vec!["one.example.com".to_owned(), "two.example.org".to_owned()];
-        let holdings = runtime_holdings(&db, &hostnames);
+        let holdings = runtime_holdings(&db, &hostnames, &LeafFactsCache::default());
         assert_eq!(
             holdings.served,
-            BTreeSet::from(["one.example.com".to_owned()]),
+            Some(BTreeSet::from(["one.example.com".to_owned()])),
             "coverage is what binds a certificate to a hostname, not its label"
         );
+    }
+
+    // r[verify tls.canopy.serve]
+    #[test]
+    fn a_renewed_chain_under_the_same_id_is_read_again() {
+        let cache = LeafFactsCache::default();
+        let one = test_support::self_signed_pem(&["one.example.com"]);
+        let two = test_support::self_signed_pem(&["two.example.com"]);
+        assert_eq!(
+            cache.facts(1, &one).unwrap().san_dns_names,
+            ["one.example.com"]
+        );
+        assert_eq!(
+            cache.facts(1, &two).unwrap().san_dns_names,
+            ["two.example.com"],
+            "what was read from other PEM is not what the stored one says"
+        );
+        cache.keep_only(&BTreeSet::new());
+        assert!(cache.0.lock().is_empty());
+    }
+
+    // r[verify tls.canopy.serve]
+    #[test]
+    fn a_store_that_cannot_be_read_is_not_a_store_that_holds_nothing() {
+        let db = Db::open_in_memory().unwrap();
+        db.conn
+            .execute_batch("DROP TABLE tls_certificates")
+            .unwrap();
+        let holdings = runtime_holdings(
+            &db,
+            &["a.example.com".to_owned()],
+            &LeafFactsCache::default(),
+        );
+        assert_eq!(holdings.served, None);
+        assert_eq!(holdings.ordering, Some(BTreeSet::new()));
     }
 }

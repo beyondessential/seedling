@@ -458,6 +458,9 @@ pub struct Reconciler {
     /// lifetime, used to gate `cert_acquisition_failed` faults.
     // r[impl fault.cert-acquisition]
     warm_cert_first_seen: HashMap<String, std::time::Instant>,
+    /// What has been read of the stored certificates, so each is parsed once
+    /// and not on every tick.
+    leaf_facts: crate::runtime::tls::env::LeafFactsCache,
     /// Scratch state for the image reconcile phase (last-GC timestamp).
     // r[impl image.gc]
     image_phase_state: images::ImagePhaseState,
@@ -594,6 +597,7 @@ impl Reconciler {
             shells,
             caddy_data_path: tokio::sync::OnceCell::new(),
             warm_cert_first_seen: HashMap::new(),
+            leaf_facts: Default::default(),
             image_phase_state: images::ImagePhaseState::new(),
             instance_gc,
             last_instance_gc: None,

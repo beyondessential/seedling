@@ -193,8 +193,16 @@ impl Reconciler {
         // say whether the hostname has one. Ask the store the proxy is served
         // from, which also applies the validity window the endpoint does.
         let hostnames: Vec<String> = active_hostnames.iter().cloned().collect();
-        let RuntimeHoldings { served, ordering } =
-            self.db.call(move |db| runtime_holdings(db, &hostnames));
+        let leaf_facts = self.leaf_facts.clone();
+        let RuntimeHoldings { served, ordering } = self
+            .db
+            .call(move |db| runtime_holdings(db, &hostnames, &leaf_facts));
+        // What could not be read is not what is not held: the deadline below
+        // is for a certificate that is not being acquired, and a store that
+        // could not be asked says nothing of that.
+        let runtime_known = served.is_some() && ordering.is_some();
+        let served = served.unwrap_or_default();
+        let ordering = ordering.unwrap_or_default();
         for (instance, hostname) in &targets {
             if served.contains(hostname) {
                 observations.push((
@@ -219,12 +227,12 @@ impl Reconciler {
             if observed_hostnames.contains(hostname) {
                 self.warm_cert_first_seen.remove(hostname);
                 self.clear_resource_fault(instance, "cert_acquisition_failed");
-            } else if path.is_none() {
-                // The proxy's cache could not be read, so whether it holds a
-                // certificate for this hostname is unknown. Unknown is not
-                // absent, and faulting a hostname the proxy is serving perfectly
-                // well would report a transient mount failure as the hostname's
-                // problem.
+            } else if path.is_none() || !runtime_known {
+                // The proxy's cache, or the runtime's own store, could not be
+                // read, so whether a certificate is held for this hostname is
+                // unknown. Unknown is not absent, and faulting a hostname that is
+                // being served perfectly well would report a transient read
+                // failure as the hostname's problem.
                 continue;
             } else if ordering.contains(hostname) {
                 // An order that is open is an acquisition in progress, and it
