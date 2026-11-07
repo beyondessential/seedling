@@ -159,7 +159,7 @@ pub(crate) fn invoke_action(
     let mut action_params = params.params.unwrap_or_default();
     validate_action_params(&action_params)?;
 
-    {
+    let phase_handle = {
         let reg = state.registry.read();
         let entry = reg
             .get(app_name.as_str())
@@ -201,7 +201,9 @@ pub(crate) fn invoke_action(
         apply_action_param_schema(&action_def.params, &mut action_params)?;
         // l[impl action.params.volume]
         validate_volume_params(state, &action_def.params, &action_params)?;
-    }
+
+        Arc::clone(&entry.phase)
+    };
 
     // Operator-invoked action: source and target generation are equal to the
     // app's current generation at dispatch.
@@ -213,6 +215,19 @@ pub(crate) fn invoke_action(
     };
     let (result, op_id_str) = {
         let mut sched = state.scheduler.lock();
+        // r[impl app.uninstall.exclusive]
+        // i[action.not-installed-gate]
+        // The phase read above was taken and released before this lock, so an
+        // uninstall could have landed in between and this action would run its
+        // closure under the teardown. Uninstall holds this same lock across
+        // its own transition, so reading the phase here is reading it after
+        // the uninstall either happened or did not.
+        if !matches!(*phase_handle.lock(), AppPhase::Installed) {
+            return Err(OiError::new(
+                ErrorCode::NotInstalled,
+                format!("app is not installed: {app_name}"),
+            ));
+        }
         let result = sched.request(
             app_name,
             action_name,

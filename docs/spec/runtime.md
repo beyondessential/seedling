@@ -1344,6 +1344,7 @@ Two levers set how a workload competes for host resources under pressure. Each D
 > An uninstall must be rejected while a [lifecycle operation](#r--operation.lifecycle) for that app is in progress or queued, and the rejection must name the action that holds the app so the operator knows what to cancel.
 > Uninstall must determine this from the scheduler's record of operations rather than from the app's phase: an action closure runs with its app in the `Installed` phase, so the phase does not distinguish an idle app from one mid-action.
 > Where the runtime cannot determine whether an operation holds the app, it must reject.
+> The check and the app's departure from the installed phase must be indivisible with respect to admitting an action, so an action cannot be admitted between the two and then run its closure under the teardown.
 >
 > Rejecting rather than cancelling the operation keeps uninstall consistent with [operation.lifecycle.single.intra-app](#r--operation.lifecycle.single.intra-app), which rejects a competing request rather than pre-empting the operation in flight.
 > Cancelling on the operator's behalf would need a bound on how long uninstall waits for the closure to unwind, and an uninstall that abandons the wait leaves the app in exactly the half-torn-down state the rejection exists to prevent.

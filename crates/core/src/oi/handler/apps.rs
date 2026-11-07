@@ -1605,8 +1605,17 @@ pub(crate) fn uninstall_app(state: &OiState, params: AppParams) -> HandlerResult
     // an idle app from one mid-action. Ask the scheduler, which holds the
     // operations. Without this the reconciler starts tearing down the very
     // resources the closure is still driving.
+    //
+    // The lock is held across the phase transition below, not just the check.
+    // An action admitted in between would have passed `invoke_action`'s phase
+    // gate while the app still read `Installed`, and would then run its
+    // closure under the teardown: the same bug over a narrower window.
+    // `invoke_action` re-checks the phase under this same lock, so only two
+    // orderings remain — the action is admitted and the uninstall is refused,
+    // or the uninstall lands and the action is refused.
+    let scheduled = state.scheduler.lock();
     {
-        let sched = state.scheduler.lock();
+        let sched = &*scheduled;
         if sched.has_operation_for(&params.app) {
             let holder = match sched.active().filter(|a| a.app == params.app) {
                 Some(a) => format!("'{}' is in progress", a.action),
@@ -1619,7 +1628,8 @@ pub(crate) fn uninstall_app(state: &OiState, params: AppParams) -> HandlerResult
         }
     }
 
-    // Persist the transition before waking the reconciler.
+    // Persist the transition before waking the reconciler, and before the
+    // scheduler lock goes, so no action is admitted against the old phase.
     let name_owned = params.app.clone();
     state.db.call(move |db| {
         transition_phase(&phase_arc, AppPhase::Uninstalling, db, &name_owned, "");
@@ -1638,6 +1648,9 @@ pub(crate) fn uninstall_app(state: &OiState, params: AppParams) -> HandlerResult
             tracing::warn!(app = %name_owned, "failed to clear stopped resources on uninstall: {e}");
         }
     });
+    // The app now reads `Uninstalling`, so an action waiting on this lock
+    // finds a phase it is refused against.
+    drop(scheduled);
 
     // i[impl event.types]
     // Notify clients the app entered Uninstalling. The reconciler will emit a
