@@ -271,7 +271,7 @@ mod tests {
             call_index,
             call_kind: CallKind::Start,
             resources: vec![dep("app", "web")],
-            barrier: None,
+            barriers: Vec::new(),
             extra: None,
         }
     }

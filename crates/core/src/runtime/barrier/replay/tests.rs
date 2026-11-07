@@ -95,10 +95,7 @@ fn db_action_log_barrier_suspends_then_resumes() {
 
     let entries = log.load().unwrap();
     assert_eq!(entries.len(), 1, "one entry after first pass");
-    let barrier = entries[0]
-        .barrier
-        .as_ref()
-        .expect("barrier should be recorded");
+    let barrier = entries[0].barrier(0).expect("barrier should be recorded");
     assert!(!barrier.satisfied, "barrier not yet satisfied");
 
     oracle.set(dep("web"), LifecycleState::Ready);
@@ -302,7 +299,7 @@ mod positional {
             call_index: index,
             call_kind: kind,
             resources,
-            barrier: None,
+            barriers: Vec::new(),
             extra: Some("SIGHUP".to_owned()),
         }
     }

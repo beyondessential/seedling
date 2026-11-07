@@ -181,7 +181,7 @@ fn resolve_call_params(
         call_index: idx,
         call_kind: CallKind::SubAction,
         resources: Vec::new(),
-        barrier: None,
+        barriers: Vec::new(),
         extra: Some(payload),
     });
     g.call_index += 1;

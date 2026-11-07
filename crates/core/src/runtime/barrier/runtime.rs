@@ -371,6 +371,10 @@ pub fn extract_cancel_hit(err: &EvalAltResult) -> bool {
 /// action-context AppDef (the thread-local set by [`ActionClosureGuard`]).
 // r[impl barrier.replay.positional]
 // r[impl history.action-log.entries]
+/// `rt.stop` blocks on exactly one barrier, which is therefore the first
+/// and only one on its entry.
+const STOP_BARRIER_SEQ: usize = 0;
+
 /// Claim this call's position in the action log, returning the index of the
 /// entry the call belongs to.
 ///
@@ -401,7 +405,7 @@ fn claim_log_position(
         call_index: idx,
         call_kind,
         resources: resources.to_vec(),
-        barrier: None,
+        barriers: Vec::new(),
         extra: None,
     });
     g.call_index += 1;
@@ -418,46 +422,30 @@ fn claim_log_position(
 /// The entry is this pass's own where the pass has made the call, and the
 /// committed one where the pass is replaying past it. Correcting a
 /// committed entry means re-emitting it, so the copy carries the rest of
-/// the entry unchanged and only its barrier differs; synthesising a fresh
+/// the entry unchanged and only its barriers differ; synthesising a fresh
 /// entry instead would claim a position the committed one already holds and
 /// leave every later `rt.*` call reading the wrong one.
 ///
-/// An entry holds one record and a `Started` may carry several barriers, so
-/// what the record already holds decides whether it is written over:
-///
-/// - For the same required state, it is the same barrier, and the write
-///   lands. A start already recorded for that state is kept, since that is
-///   the start its deadline is measured from.
-/// - For a different state over a record still waiting, the write is
-///   dropped: another barrier is timing that wait, and rewriting it would
-///   restart the wait on every pass so the deadline could never expire.
-/// - For a different state over a satisfied record, the write lands. The
-///   earlier barrier is finished with the record, and the barrier the
-///   closure is furthest through is the one worth keeping: the earlier ones
-///   are re-reached first and answered from the world, while its own
-///   passing is what the world may no longer show — a job that ran and
-///   exited being the case that matters.
+/// The record goes under the barrier's own position on the call, so the
+/// other barriers on it are untouched. A start already recorded for that
+/// barrier, for the state being recorded, is kept: that is the start its
+/// deadline is measured from, and rewriting it on each pass would restart
+/// the wait it measures.
 fn record_at_anchor(ctx: &mut ReplayContext, call_index: usize, record: BarrierRecord) -> bool {
-    /// What the record already there decides, given the one being written.
-    fn resolve(held: Option<&BarrierRecord>, record: &BarrierRecord) -> Option<Option<u64>> {
-        if held.is_some_and(|b| b.required_state != record.required_state && !b.satisfied) {
-            return None;
-        }
-        Some(
-            held.filter(|b| b.required_state == record.required_state)
-                .and_then(|b| b.started_at_secs)
-                .or(record.started_at_secs),
-        )
+    /// The start to record: an earlier one for this same barrier and state,
+    /// or the one being written.
+    fn started_at(held: Option<&BarrierRecord>, record: &BarrierRecord) -> Option<u64> {
+        held.filter(|b| b.required_state == record.required_state)
+            .and_then(|b| b.started_at_secs)
+            .or(record.started_at_secs)
     }
 
     // This pass's own entry is already held mutably, so it is corrected in
     // place rather than copied out and back: the copy carried the whole
     // resource list, on every poll of every anchored barrier.
     if let Some(entry) = ctx.pending.iter_mut().find(|e| e.call_index == call_index) {
-        let Some(started_at_secs) = resolve(entry.barrier.as_ref(), &record) else {
-            return true;
-        };
-        entry.barrier = Some(BarrierRecord {
+        let started_at_secs = started_at(entry.barrier(record.seq), &record);
+        entry.set_barrier(BarrierRecord {
             started_at_secs,
             ..record
         });
@@ -467,11 +455,9 @@ fn record_at_anchor(ctx: &mut ReplayContext, call_index: usize, record: BarrierR
     let Some(committed) = ctx.committed.iter().find(|e| e.call_index == call_index) else {
         return false;
     };
-    let Some(started_at_secs) = resolve(committed.barrier.as_ref(), &record) else {
-        return true;
-    };
+    let started_at_secs = started_at(committed.barrier(record.seq), &record);
     let mut corrected = committed.clone();
-    corrected.barrier = Some(BarrierRecord {
+    corrected.set_barrier(BarrierRecord {
         started_at_secs,
         ..record
     });
@@ -955,7 +941,6 @@ impl RuntimeInstance {
             return Ok(Started {
                 ctx: Some(Arc::clone(ctx)),
                 resources,
-                narrowed: false,
                 origin_index: None,
                 warm: WarmMode::None,
             });
@@ -1004,7 +989,6 @@ impl RuntimeInstance {
                 return Ok(Started {
                     ctx: None,
                     resources,
-                    narrowed: false,
                     origin_index: None,
                     warm: WarmMode::None,
                 });
@@ -1031,7 +1015,6 @@ impl RuntimeInstance {
         Ok(Started {
             ctx: Some(ctx),
             resources,
-            narrowed: false,
             origin_index: Some(origin_index),
             warm: WarmMode::None,
         })
@@ -1074,7 +1057,6 @@ impl RuntimeInstance {
             return Ok(Started {
                 ctx: Some(Arc::clone(ctx)),
                 resources,
-                narrowed: false,
                 origin_index: None,
                 warm: WarmMode::Certs,
             });
@@ -1092,7 +1074,6 @@ impl RuntimeInstance {
                 return Ok(Started {
                     ctx: None,
                     resources,
-                    narrowed: false,
                     origin_index: None,
                     warm: WarmMode::Certs,
                 });
@@ -1109,7 +1090,6 @@ impl RuntimeInstance {
         Ok(Started {
             ctx: Some(ctx),
             resources,
-            narrowed: false,
             origin_index: Some(origin_index),
             warm: WarmMode::Certs,
         })
@@ -1142,7 +1122,6 @@ impl RuntimeInstance {
             return Ok(Started {
                 ctx: Some(Arc::clone(ctx)),
                 resources,
-                narrowed: false,
                 origin_index: None,
                 warm: WarmMode::Images(pairs),
             });
@@ -1174,7 +1153,6 @@ impl RuntimeInstance {
                 return Ok(Started {
                     ctx: None,
                     resources,
-                    narrowed: false,
                     origin_index: None,
                     warm: WarmMode::Images(pairs),
                 });
@@ -1189,7 +1167,6 @@ impl RuntimeInstance {
         Ok(Started {
             ctx: Some(ctx),
             resources,
-            narrowed: false,
             origin_index: Some(origin_index),
             warm: WarmMode::Images(pairs),
         })
@@ -1321,7 +1298,7 @@ impl RuntimeInstance {
                 call_index: idx,
                 call_kind: CallKind::Signal,
                 resources: expanded.clone(),
-                barrier: None,
+                barriers: Vec::new(),
                 extra: Some(canonical.clone()),
             });
             g.call_index += 1;
@@ -1395,10 +1372,20 @@ impl RuntimeInstance {
                             e.call_index,
                             e.call_kind,
                             e.resources.len(),
-                            e.barrier
-                                .as_ref()
-                                .map(|b| format!("{:?}/sat={}", b.required_state, b.satisfied))
-                                .unwrap_or_else(|| "none".to_string()),
+                            if e.barriers.is_empty() {
+                                "none".to_string()
+                            } else {
+                                e.barriers
+                                    .iter()
+                                    .map(|b| {
+                                        format!(
+                                            "{}:{:?}/sat={}",
+                                            b.seq, b.required_state, b.satisfied
+                                        )
+                                    })
+                                    .collect::<Vec<_>>()
+                                    .join(",")
+                            },
                             e.extra
                         )
                     })
@@ -1416,7 +1403,7 @@ impl RuntimeInstance {
                         entry.call_kind,
                         entry.resources.len(),
                         entry.extra,
-                        entry.barrier,
+                        entry.barriers,
                         summary.join("\n"),
                     )
                     .into());
@@ -1468,7 +1455,7 @@ impl RuntimeInstance {
                 call_index: idx,
                 call_kind: CallKind::Exec,
                 resources: vec![target],
-                barrier: None,
+                barriers: Vec::new(),
                 extra: Some(exit_code.to_string()),
             });
             g.call_index += 1;
@@ -1560,7 +1547,7 @@ impl RuntimeInstance {
                 call_index: idx,
                 call_kind: CallKind::Write,
                 resources: vec![target_resource],
-                barrier: None,
+                barriers: Vec::new(),
                 extra: Some(path.to_owned()),
             });
             g.call_index += 1;
@@ -1616,8 +1603,7 @@ impl RuntimeInstance {
         let recorded = g.committed_entry().map(|e| {
             (
                 e.call_kind,
-                e.barrier
-                    .as_ref()
+                e.barrier(STOP_BARRIER_SEQ)
                     .is_some_and(|b| b.required_state == LifecycleState::Terminated && b.satisfied),
             )
         });
@@ -1666,11 +1652,11 @@ impl RuntimeInstance {
                 .chain(g.pending.iter())
                 .find(|e| {
                     e.resources == resources
-                        && e.barrier.as_ref().is_some_and(|b| {
+                        && e.barrier(STOP_BARRIER_SEQ).is_some_and(|b| {
                             b.required_state == LifecycleState::Terminated && !b.satisfied
                         })
                 })
-                .and_then(|e| e.barrier.as_ref()?.started_at_secs);
+                .and_then(|e| e.barrier(STOP_BARRIER_SEQ)?.started_at_secs);
             if let (Some(d), Some(started_at)) = (deadline_secs, started_at)
                 && now.saturating_sub(started_at) >= d
             {
@@ -1699,19 +1685,20 @@ impl RuntimeInstance {
         let started_at_secs = g
             .committed
             .get(idx)
-            .and_then(|e| e.barrier.as_ref()?.started_at_secs)
+            .and_then(|e| e.barrier(STOP_BARRIER_SEQ)?.started_at_secs)
             .or(Some(now));
         g.call_index += 1;
         g.pending.push(ActionLogEntry {
             call_index: idx,
             call_kind: CallKind::Stop,
             resources: resources.clone(),
-            barrier: Some(BarrierRecord {
+            barriers: vec![BarrierRecord {
+                seq: STOP_BARRIER_SEQ,
                 required_state: LifecycleState::Terminated,
                 deadline_secs,
                 satisfied: all_terminated,
                 started_at_secs,
-            }),
+            }],
             extra: None,
         });
         // Drop the lock before the breadcrumb's journald send so we
@@ -2201,16 +2188,6 @@ pub struct Started {
     pub ctx: Option<SharedContext>,
     pub resources: Vec<ResourceInstance>,
     pub warm: WarmMode,
-    /// Whether this is a narrowing of the group its call started.
-    ///
-    /// A narrowed group is a different barrier from the one its call's
-    /// entry records, even though it came from that call, so it neither
-    /// reads nor writes that record. `s.only(web).ready()` beside
-    /// `s.ready()` would otherwise write a satisfied record the broader
-    /// barrier reads as its own and pass while the rest of the group had
-    /// never come up.
-    // r[impl barrier.replay.anchor]
-    pub narrowed: bool,
     // r[impl barrier.replay.anchor]
     /// The `call_index` of the log entry the originating `rt.*` call
     /// produced. A barrier called on this `Started` is decided from that
@@ -2245,43 +2222,20 @@ impl Started {
         Self {
             ctx: self.ctx.clone(),
             resources: self.resources.iter().filter(|r| keep(r)).cloned().collect(),
-            narrowed: true,
             origin_index: self.origin_index,
             warm,
         }
     }
 
     // r[impl barrier.replay.anchor]
-    /// The entry this barrier may take a satisfied record from, or leave
-    /// one on.
+    /// The entry this barrier's record belongs to.
     ///
-    /// A narrowed group has none. A satisfied record says the resources
-    /// this entry names have reached a state, and a narrowed group is not
-    /// those resources: reading one would let it pass on another barrier's
-    /// evidence, and leaving one would let the barrier over the whole
-    /// group pass on its.
-    fn satisfaction_anchor(&self) -> Option<usize> {
-        if self.narrowed {
-            return None;
-        }
-        self.origin_index
-    }
-
-    // r[impl barrier.replay.anchor]
-    /// The entry this barrier records its wait against.
-    ///
-    /// A narrowed group uses the entry of the call it came from. An
-    /// unsatisfied record carries no claim that anything has been reached,
-    /// so it cannot be mistaken for another barrier's passing, and without
-    /// one there is nothing to measure a deadline from — which left a
-    /// narrowed barrier suspended for good.
-    ///
-    /// Where a narrowed barrier and the barrier over the whole group both
-    /// wait on the same state, they share the one record and so the one
-    /// start. The broader of them is then timed from the earlier wait and
-    /// can give up early, which is the lesser fault against waiting for
-    /// ever, and goes with the rest of one-record-per-entry.
-    fn wait_anchor(&self) -> Option<usize> {
+    /// A group a collection method narrowed uses the entry of the call it
+    /// came from, as the whole group does. The two do not collide: each
+    /// barrier holds its record under its own position on that call, so a
+    /// narrowed one neither takes the broader one's passing for its own nor
+    /// displaces the start the broader one is timed from.
+    fn anchor(&self) -> Option<usize> {
         self.origin_index
     }
 
@@ -2319,6 +2273,13 @@ impl Started {
         let mut g = ctx.lock();
         let now = (g.now_secs)();
 
+        // r[impl barrier.replay.anchor]
+        // Which barrier on its call this is. Drawn afresh each pass, in the
+        // order the closure asserts them, so the same barrier draws the
+        // same number every time and reads back its own record.
+        let anchor = self.anchor();
+        let seq = anchor.map_or(0, |idx| g.next_barrier_seq(idx));
+
         // r[impl barrier.replay]
         // r[impl barrier.replay.anchor]
         // Ask the entry of the call this barrier was called on, and no
@@ -2329,10 +2290,9 @@ impl Started {
         // A named job resolves to one operation-scoped instance UUID, so
         // the two calls carry byte-identical resources and the scan could
         // not tell them apart.
-        let already_satisfied = self
-            .satisfaction_anchor()
+        let already_satisfied = anchor
             .and_then(|idx| g.committed.iter().find(|e| e.call_index == idx))
-            .and_then(|e| e.barrier.as_ref())
+            .and_then(|e| e.barrier(seq))
             .is_some_and(|b| b.required_state == required && b.satisfied);
         if already_satisfied {
             return Ok(self.clone());
@@ -2392,11 +2352,12 @@ impl Started {
             // takes the maximum elapsed across unsatisfied records, so one
             // long wait that had since passed went on inflating the
             // re-poll cadence of every barrier after it.
-            if let Some(idx) = self.satisfaction_anchor() {
+            if let Some(idx) = anchor {
                 record_at_anchor(
                     &mut g,
                     idx,
                     BarrierRecord {
+                        seq,
                         required_state: required,
                         deadline_secs,
                         satisfied: true,
@@ -2411,15 +2372,14 @@ impl Started {
         // waiting. The wait belongs to this call, so it is read off this
         // call's own entry.
         // r[impl barrier.replay.anchor]
-        let started_at = self
-            .wait_anchor()
+        let started_at = anchor
             .and_then(|idx| {
-                g.committed
+                g.pending
                     .iter()
-                    .chain(g.pending.iter())
+                    .chain(g.committed.iter())
                     .find(|e| e.call_index == idx)
             })
-            .and_then(|e| e.barrier.as_ref())
+            .and_then(|e| e.barrier(seq))
             .filter(|b| b.required_state == required && !b.satisfied)
             .and_then(|b| b.started_at_secs);
 
@@ -2441,22 +2401,19 @@ impl Started {
         };
 
         // The barrier records the start its deadline is measured from
-        // against its own entry, where the entry has no record yet.
+        // under its own position on its call's entry.
         // r[impl barrier.satisfaction.recorded]
         // r[impl barrier.replay.anchor]
         let waiting = BarrierRecord {
+            seq,
             required_state: required,
             deadline_secs,
             satisfied: false,
             started_at_secs: Some(now),
         };
-        let anchored = self
-            .wait_anchor()
-            .is_some_and(|idx| record_at_anchor(&mut g, idx, waiting));
-        // Only a barrier with no entry behind it at all synthesises one. A
-        // narrowed group has an entry, it just is not that barrier's to
-        // write to.
-        if !anchored && self.origin_index.is_none() {
+        let anchored = anchor.is_some_and(|idx| record_at_anchor(&mut g, idx, waiting));
+        // Only a barrier with no entry behind it at all synthesises one.
+        if !anchored {
             // No entry behind this barrier: the closure asserted it on a
             // resource set never tracked via rt.start. The language spec
             // does not promise that works, but it is given an entry rather
@@ -2467,12 +2424,13 @@ impl Started {
                 call_index: idx,
                 call_kind: CallKind::Start,
                 resources: self.resources.clone(),
-                barrier: Some(BarrierRecord {
+                barriers: vec![BarrierRecord {
+                    seq,
                     required_state: required,
                     deadline_secs,
                     satisfied: false,
                     started_at_secs: Some(now),
-                }),
+                }],
                 extra: None,
             });
         }

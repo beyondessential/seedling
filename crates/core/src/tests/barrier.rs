@@ -961,7 +961,7 @@ fn terminated_eventually_never_times_out() {
     // The persisted log entry must also carry None, so replay after a
     // restart still produces a deadline-less barrier.
     let entries = log.load().unwrap();
-    let barrier = entries[0].barrier.as_ref().expect("barrier recorded");
+    let barrier = entries[0].barrier(0).expect("barrier recorded");
     assert_eq!(barrier.deadline_secs, None);
 
     // Pass 2: still pending and the recorded started_at is old enough that a
@@ -969,7 +969,7 @@ fn terminated_eventually_never_times_out() {
     // barrier must stay in Suspended, never Failed.
     {
         let mut es = log.load().unwrap();
-        if let Some(b) = es[0].barrier.as_mut() {
+        for b in &mut es[0].barriers {
             b.started_at_secs = Some(0); // epoch — "waited" for >50 years
         }
         log.commit(&es);
@@ -1401,7 +1401,7 @@ fn a_barrier_that_passes_on_a_replay_pass_is_recorded_as_satisfied() {
     let web_barrier = entries
         .iter()
         .find(|e| e.resources.iter().any(|r| r.name.as_deref() == Some("web")))
-        .and_then(|e| e.barrier.as_ref())
+        .and_then(|e| e.barrier(0))
         .expect("web's call has a barrier record");
     assert!(
         web_barrier.satisfied,
@@ -1410,7 +1410,7 @@ fn a_barrier_that_passes_on_a_replay_pass_is_recorded_as_satisfied() {
 
     let unsatisfied: Vec<_> = entries
         .iter()
-        .filter(|e| e.barrier.as_ref().is_some_and(|b| !b.satisfied))
+        .filter(|e| e.barrier(0).is_some_and(|b| !b.satisfied))
         .filter_map(|e| e.resources.first())
         .map(|r| r.name.clone().unwrap_or_default())
         .collect();
@@ -1710,7 +1710,7 @@ fn a_second_barrier_on_one_started_does_not_rearm_its_wait_each_pass() {
     let recorded_start = |log: &InMemoryActionLog| {
         let entries = log.load().expect("log loads");
         assert_eq!(entries.len(), 1, "one call, one entry: {entries:?}");
-        entries[0].barrier.as_ref().and_then(|b| b.started_at_secs)
+        entries[0].barrier(0).and_then(|b| b.started_at_secs)
     };
     let pass = |scope: &mut rhai::Scope<'static>| {
         let r = run_pass(
@@ -2126,7 +2126,7 @@ fn a_stop_replayed_against_a_start_entry_diverges() {
     let entries = log.load().expect("log loads");
     assert!(
         entries[0]
-            .barrier
+            .barrier(0)
             .as_ref()
             .is_some_and(|b| b.satisfied && b.required_state == LifecycleState::Ready),
         "pass 1 should leave a satisfied Ready record at position 0: {entries:?}"
@@ -2161,4 +2161,74 @@ fn a_stop_replayed_against_a_start_entry_diverges() {
         }
         other => panic!("a stop replayed against a start's satisfied record: {other:?}"),
     }
+}
+
+// r[verify barrier.satisfaction.recorded]
+// r[verify barrier.replay.anchor]
+#[test]
+fn each_barrier_on_one_call_keeps_its_own_record() {
+    // Three barriers on one call: a narrowed one, and two over the whole
+    // group. They held one record between them, so whichever wrote last
+    // displaced the rest — which is how a barrier came to take another's
+    // passing for its own, and how a wait lost the start it was timed from.
+    let (engine, mut scope, app, ast) = setup_with_script(
+        r#"
+        let web = app.deployment("web").image("docker.io/library/nginx:latest");
+        let api = app.deployment("api").image("docker.io/library/nginx:latest");
+        app.on_start(|rt, _param| {
+            let started = rt.start(app);
+            started.only(app.deployment("web")).ready();
+            started.running();
+            started.ready();
+        });
+    "#,
+    );
+
+    // `web` is up and `api` is running but never ready, so the narrowed
+    // barrier and the Running one pass while the last keeps waiting.
+    let oracle = Arc::new(TestWorldOracle::new());
+    oracle.set(dep("web"), LifecycleState::Ready);
+    oracle.set(dep("api"), LifecycleState::Running);
+    let log = InMemoryActionLog::new();
+    let op = OperationId::new();
+    let reg: Arc<dyn crate::runtime::InstanceRegistry> = registry();
+
+    for pass in 1..=2 {
+        let r = run_pass(
+            &engine,
+            &ast,
+            &app,
+            &mut scope,
+            op.clone(),
+            &log,
+            Arc::clone(&oracle),
+            Arc::clone(&reg),
+        );
+        assert!(
+            matches!(r, OperationResult::Suspended(_)),
+            "pass {pass}: the Ready barrier over the whole group passed on another's record: {r:?}"
+        );
+    }
+
+    let entries = log.load().expect("log loads");
+    assert_eq!(entries.len(), 1, "one call: {entries:?}");
+    let mut barriers = entries[0].barriers.clone();
+    barriers.sort_by_key(|b| b.seq);
+    let seen: Vec<(usize, LifecycleState, bool)> = barriers
+        .iter()
+        .map(|b| (b.seq, b.required_state, b.satisfied))
+        .collect();
+    assert_eq!(
+        seen,
+        vec![
+            (0, LifecycleState::Ready, true),
+            (1, LifecycleState::Running, true),
+            (2, LifecycleState::Ready, false),
+        ],
+        "each barrier keeps its own record, under its own position on the call"
+    );
+    assert!(
+        barriers[2].started_at_secs.is_some(),
+        "the barrier still waiting records the start it is timed from"
+    );
 }

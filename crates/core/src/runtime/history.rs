@@ -383,8 +383,18 @@ pub fn insert_action_log_entry(
     entry: &ActionLogEntry,
 ) -> rusqlite::Result<()> {
     let resources_json = serde_json::to_string(&entry.resources).unwrap_or_default();
+    // r[impl barrier.satisfaction.recorded]
+    // Every barrier of the call goes in `barriers`. The four single-record
+    // columns are still written, from the call's first barrier, so a row
+    // this version writes is still legible to the reader that only knows
+    // them.
+    let barriers_json = if entry.barriers.is_empty() {
+        None
+    } else {
+        Some(serde_json::to_string(&entry.barriers).unwrap_or_default())
+    };
     let (barrier_state, barrier_deadline, barrier_satisfied, barrier_started_at) =
-        match &entry.barrier {
+        match entry.barriers.first() {
             Some(b) => (
                 Some(format!("{:?}", b.required_state)),
                 b.deadline_secs.map(|d| d as i64),
@@ -398,8 +408,8 @@ pub fn insert_action_log_entry(
         "INSERT OR REPLACE INTO action_log
              (recorded_at, operation_id, app, action_name, call_index, call_kind,
               resources, barrier_state, barrier_deadline, barrier_satisfied,
-              barrier_started_at, extra)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+              barrier_started_at, extra, barriers)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
         params![
             now_ms(),
             operation_id.0,
@@ -413,6 +423,7 @@ pub fn insert_action_log_entry(
             barrier_satisfied,
             barrier_started_at,
             entry.extra,
+            barriers_json,
         ],
     )?;
     Ok(())
@@ -425,7 +436,7 @@ pub fn load_action_log(
 ) -> rusqlite::Result<Vec<ActionLogEntry>> {
     let mut stmt = db.conn.prepare(
         "SELECT call_index, call_kind, resources, barrier_state, barrier_deadline,
-                barrier_satisfied, barrier_started_at, extra
+                barrier_satisfied, barrier_started_at, extra, barriers
          FROM action_log
          WHERE operation_id = ?1
          ORDER BY call_index ASC",
@@ -440,6 +451,7 @@ pub fn load_action_log(
         let barrier_satisfied: Option<i32> = row.get(5)?;
         let barrier_started_at: Option<i64> = row.get(6)?;
         let extra: Option<String> = row.get(7)?;
+        let barriers_json: Option<String> = row.get(8)?;
 
         let call_kind = match call_kind_str.as_str() {
             "Start" => CallKind::Start,
@@ -469,24 +481,37 @@ pub fn load_action_log(
                 )
             })?;
 
-        let barrier = match (barrier_state, barrier_satisfied) {
-            (Some(state_str), Some(satisfied)) => {
-                let required_state = parse_lifecycle_state(&state_str)?;
-                Some(BarrierRecord {
-                    required_state,
+        // r[impl barrier.satisfaction.recorded]
+        // A row written before the call could hold more than one barrier
+        // has nothing in `barriers`, and its one record is read from the
+        // columns that do carry it — so an operation suspended across the
+        // upgrade resumes on the wait it was already timing rather than
+        // starting a fresh one.
+        let barriers = match barriers_json {
+            Some(json) => serde_json::from_str(&json).map_err(|e| {
+                rusqlite::Error::FromSqlConversionFailure(
+                    8,
+                    rusqlite::types::Type::Text,
+                    Box::new(e),
+                )
+            })?,
+            None => match (barrier_state, barrier_satisfied) {
+                (Some(state_str), Some(satisfied)) => vec![BarrierRecord {
+                    seq: 0,
+                    required_state: parse_lifecycle_state(&state_str)?,
                     deadline_secs: barrier_deadline.map(|d| d as u64),
                     satisfied: satisfied != 0,
                     started_at_secs: barrier_started_at.map(|s| s as u64),
-                })
-            }
-            _ => None,
+                }],
+                _ => Vec::new(),
+            },
         };
 
         Ok(ActionLogEntry {
             call_index: call_index as usize,
             call_kind,
             resources,
-            barrier,
+            barriers,
             extra,
         })
     })?;

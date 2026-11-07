@@ -71,7 +71,7 @@ fn log_entry(call_kind: CallKind, resources: Vec<ResourceInstance>) -> ActionLog
         call_index: 0,
         call_kind,
         resources,
-        barrier: None,
+        barriers: Vec::new(),
         extra: None,
     }
 }

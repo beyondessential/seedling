@@ -485,7 +485,7 @@ fn earliest_unsatisfied_barrier_wait_secs(log: &DbActionLog) -> u64 {
     let now = now_secs();
     entries
         .iter()
-        .filter_map(|e| e.barrier.as_ref())
+        .flat_map(|e| e.barriers.iter())
         .filter(|b| !b.satisfied)
         .filter_map(|b| b.started_at_secs)
         .map(|started| now.saturating_sub(started))

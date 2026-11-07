@@ -1,0 +1,14 @@
+-- r[impl barrier.satisfaction.recorded]
+-- Hold every barrier of a call, not one between them.
+--
+-- A call carries as many barriers as the closure asserts on it: `s.running()`
+-- then `s.ready()` are two, and a group narrowed by a collection method is
+-- another. The four barrier_* columns describe one, so whichever barrier wrote
+-- last displaced the rest — a barrier could take another's passing for its own,
+-- or lose the start its deadline was measured from.
+--
+-- The new column holds them all as JSON, each under its position on the call.
+-- The old columns stay as they are: rows written before this still carry their
+-- one record there, and are read from there when the new column is null, so an
+-- operation suspended across the upgrade resumes rather than losing its wait.
+ALTER TABLE action_log ADD COLUMN barriers TEXT;

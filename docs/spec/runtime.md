@@ -734,16 +734,16 @@ Some operations must hand a writable or read-only path to an action closure with
 > r[barrier.replay.anchor]
 > A barrier is anchored to the log entry of the call that produced the `Started` it was called on.
 > Whether the barrier has already been satisfied is decided from that entry alone, never from another entry that happens to record the same resources and the same required state.
-> A barrier on a group that a [Collection](language.md#l--collection.interface) method has narrowed neither takes a satisfied record from that entry nor leaves one on it: it came from that call but is not that call's barrier, so a record saying those resources have been reached is neither its evidence nor evidence it may offer.
-> It records its wait against that entry all the same, since a record of a wait claims nothing has been reached and a barrier with no wait recorded has no [deadline](#r--barrier.deadline) to expire.
+> A call's entry holds a record for each barrier asserted on it, under that barrier's position among them, counted in the order the closure asserts them.
+> A barrier is identified by that position and not by what it waits for: its resources are not usable for the purpose, since a replica may be added or retired between passes and it is still the same barrier, and neither is its required state, since nothing stops a closure asserting the same state twice on one call.
+> A barrier on a group that a [Collection](language.md#l--collection.interface) method has narrowed is a barrier on that call like any other, and holds its own record there.
 > Resources and required state do not identify a barrier: distinct calls within one closure can resolve to the same resource set, and [`rt.stop`](#r--barrier.replay.rt-stop) records the same terminal state that a later `.terminated()` barrier waits for.
 > A barrier whose anchoring entry records no satisfied barrier for its required state is decided against the [world observation history](#r--history.world.state-derivation).
 
 > r[barrier.satisfaction.recorded]
-> That a barrier's condition was met is recorded against the barrier's [anchoring entry](#r--barrier.replay.anchor), whether it was met on the pass that first reached the barrier or on a later one.
-> An entry carries one such record, so where a `Started` carries several barriers what the record already holds decides whether the next barrier writes over it.
-> A record for the state being recorded is written over, and a record for another state is written over only once that state is satisfied.
-> A barrier still waiting therefore keeps the record for as long as it waits, and the start its [deadline](#r--barrier.deadline) is measured from stands: re-recording that start on each pass would restart the wait it measures, and the deadline could never expire.
+> That a barrier's condition was met is recorded against that barrier's own record on its [anchoring entry](#r--barrier.replay.anchor), whether it was met on the pass that first reached the barrier or on a later one.
+> Each barrier likewise records when its own wait began, and that start stands until the barrier is satisfied: re-recording it on each pass would restart the wait it measures, and the [deadline](#r--barrier.deadline) could never expire.
+> Recording against the barrier rather than against the call is what lets a `Started` carry several: `s.running()` then `s.ready()` neither take each other's passing for their own nor displace the start the other is timed from.
 >
 > A barrier still recorded as waiting counts toward the [poll cadence](#r--barrier.suspension.poll-backoff) for as long as the record stands.
 > A barrier that has passed but was never recorded as passed therefore goes on lengthening the cadence of every barrier after it, so an operation whose first barrier waited a long time re-polls the next one slowly even though it is ready to proceed.
