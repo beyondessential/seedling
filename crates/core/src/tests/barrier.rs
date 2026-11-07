@@ -1310,3 +1310,81 @@ fn terminated_barrier_does_not_short_circuit_against_an_earlier_stop() {
         "the terminated() barrier took the earlier stop's record as its own: {r:?}"
     );
 }
+
+// r[verify barrier.satisfaction.recorded]
+#[test]
+fn a_barrier_that_passes_on_a_replay_pass_is_recorded_as_satisfied() {
+    // Satisfaction was marked on pending entries only, and on a replay pass
+    // pending is empty until the closure makes its first fresh rt.* call.
+    // The first barrier's committed record therefore kept satisfied=false
+    // and its original started_at for the rest of the operation, and
+    // `earliest_unsatisfied_barrier_wait_secs` takes the maximum elapsed
+    // across unsatisfied records — so a long first wait went on inflating
+    // the re-poll cadence of every barrier after it.
+    let (engine, mut scope, app, ast) = setup_with_script(
+        r#"
+        let web = app.deployment("web").image("docker.io/library/nginx:latest");
+        let api = app.deployment("api").image("docker.io/library/nginx:latest");
+        app.on_start(|rt, _param| {
+            rt.start(app.deployment("web")).ready();
+            rt.start(app.deployment("api")).ready();
+        });
+    "#,
+    );
+
+    let oracle = Arc::new(TestWorldOracle::new());
+    let log = InMemoryActionLog::new();
+    let op = OperationId::new();
+    let reg: Arc<dyn crate::runtime::InstanceRegistry> = registry();
+
+    // Pass 1: neither is ready, so the closure suspends on web's barrier.
+    let r = run_pass(
+        &engine,
+        &ast,
+        &app,
+        &mut scope,
+        op.clone(),
+        &log,
+        Arc::clone(&oracle),
+        Arc::clone(&reg),
+    );
+    assert!(matches!(r, OperationResult::Suspended(_)), "pass 1: {r:?}");
+
+    // Pass 2: web is ready, so its barrier passes while the closure is
+    // replaying; api is not, so the closure suspends on api's barrier.
+    oracle.set(dep("web"), LifecycleState::Ready);
+    let r = run_pass(
+        &engine,
+        &ast,
+        &app,
+        &mut scope,
+        op,
+        &log,
+        Arc::clone(&oracle),
+        Arc::clone(&reg),
+    );
+    assert!(matches!(r, OperationResult::Suspended(_)), "pass 2: {r:?}");
+
+    let entries = log.load().expect("log loads");
+    let web_barrier = entries
+        .iter()
+        .find(|e| e.resources.iter().any(|r| r.name.as_deref() == Some("web")))
+        .and_then(|e| e.barrier.as_ref())
+        .expect("web's call has a barrier record");
+    assert!(
+        web_barrier.satisfied,
+        "web's barrier passed but its record still says it is waiting: {web_barrier:?}"
+    );
+
+    let unsatisfied: Vec<_> = entries
+        .iter()
+        .filter(|e| e.barrier.as_ref().is_some_and(|b| !b.satisfied))
+        .filter_map(|e| e.resources.first())
+        .map(|r| r.name.clone().unwrap_or_default())
+        .collect();
+    assert_eq!(
+        unsatisfied,
+        vec!["api".to_owned()],
+        "only the barrier actually still waiting should count toward the poll cadence"
+    );
+}

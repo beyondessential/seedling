@@ -2083,13 +2083,49 @@ impl Started {
         // so deadline-then-oracle would spuriously time out a barrier whose
         // resources have actually reached the required state.
         if all_reached {
-            // Mark the relevant pending entry's barrier as satisfied.
-            for e in g.pending.iter_mut() {
-                if e.resources == self.resources
-                    && let Some(b) = e.barrier.as_mut()
-                    && b.required_state == required
-                {
-                    b.satisfied = true;
+            // r[impl barrier.satisfaction.recorded]
+            // r[impl barrier.replay.anchor]
+            // Record the pass against this barrier's own entry. Marking
+            // pending entries only lost it on a replay pass, where pending
+            // is empty until the closure makes its first fresh rt.* call:
+            // the committed record kept satisfied=false and its original
+            // started_at forever. `earliest_unsatisfied_barrier_wait_secs`
+            // takes the maximum elapsed across unsatisfied records, so one
+            // long wait that had since passed went on inflating the
+            // re-poll cadence of every barrier after it.
+            if let Some(idx) = self.origin_index {
+                let record = BarrierRecord {
+                    required_state: required,
+                    deadline_secs,
+                    satisfied: true,
+                    started_at_secs: Some(now),
+                };
+                if let Some(entry) = g.pending.iter_mut().find(|e| e.call_index == idx) {
+                    let started = entry
+                        .barrier
+                        .as_ref()
+                        .filter(|b| b.required_state == required)
+                        .and_then(|b| b.started_at_secs);
+                    entry.barrier = Some(BarrierRecord {
+                        started_at_secs: started.or(Some(now)),
+                        ..record
+                    });
+                } else if let Some(committed) = g.committed.iter().find(|e| e.call_index == idx) {
+                    // The entry lives in the committed log, so correcting it
+                    // means re-emitting it. The persisted form is replaced
+                    // wholesale on commit, so the copy carries the rest of
+                    // the entry unchanged and only the barrier differs.
+                    let started = committed
+                        .barrier
+                        .as_ref()
+                        .filter(|b| b.required_state == required)
+                        .and_then(|b| b.started_at_secs);
+                    let mut corrected = committed.clone();
+                    corrected.barrier = Some(BarrierRecord {
+                        started_at_secs: started.or(Some(now)),
+                        ..record
+                    });
+                    g.pending.push(corrected);
                 }
             }
             return Ok(self.clone());
@@ -2128,57 +2164,72 @@ impl Started {
             deadline_secs,
         };
 
-        // Attach the barrier record to this call's own pending entry. The
-        // synthetic-push fallback below is only for the rare case where the
-        // closure asserts a barrier on a resource set that was never tracked
-        // via rt.start (the language spec doesn't promise that scenario
-        // works, but the code handles it without UB), which is also the case
-        // where there is no anchor to attach to.
-        //
-        // On replay, pending is empty until the closure makes its first
-        // fresh rt.* call, so the attached lookup misses by default. The
-        // synthesis must not fire then: the corresponding committed entry
-        // already exists (we just replayed past it), so synthesising would
-        // push a phantom entry one slot ahead and advance call_index,
-        // leaving subsequent rt.* calls reading the wrong slot. An anchored
-        // barrier is already represented by its own entry; just throw to
-        // re-suspend.
+        // The barrier records its wait against its own entry. A record
+        // already timing a wait for this same state is left alone, since
+        // replacing it would reset the start its deadline is measured from.
+        // Anything else is this barrier's to take over: no record at all,
+        // or one an earlier barrier on the same `Started` left satisfied.
+        // `s.running()` then `s.ready()` share one entry, and keeping the
+        // satisfied Running record would leave the Ready wait with no
+        // start, so its deadline could never expire.
+        // r[impl barrier.satisfaction.recorded]
         // r[impl barrier.replay.anchor]
-        let attached = self.origin_index.and_then(|idx| {
-            g.pending
+        let waiting = BarrierRecord {
+            required_state: required,
+            deadline_secs,
+            satisfied: false,
+            started_at_secs: Some(now),
+        };
+        let records_this_wait = |e: &ActionLogEntry| {
+            e.barrier
+                .as_ref()
+                .is_some_and(|b| b.required_state == required && !b.satisfied)
+        };
+        let anchor = self.origin_index;
+        let in_pending = anchor.is_some_and(|idx| g.pending.iter().any(|e| e.call_index == idx));
+        let in_committed =
+            anchor.is_some_and(|idx| g.committed.iter().any(|e| e.call_index == idx));
+
+        if in_pending {
+            let entry = g
+                .pending
                 .iter_mut()
-                .find(|e| e.call_index == idx && e.barrier.is_none())
-        });
-        if let Some(entry) = attached {
-            entry.barrier = Some(BarrierRecord {
-                required_state: required,
-                deadline_secs,
-                satisfied: false,
-                started_at_secs: Some(now),
-            });
-        } else {
-            let already_tracked = self.origin_index.is_some_and(|idx| {
-                g.committed
-                    .iter()
-                    .chain(g.pending.iter())
-                    .any(|e| e.call_index == idx)
-            });
-            if !already_tracked {
-                let idx = g.call_index;
-                g.call_index += 1;
-                g.pending.push(ActionLogEntry {
-                    call_index: idx,
-                    call_kind: CallKind::Start,
-                    resources: self.resources.clone(),
-                    barrier: Some(BarrierRecord {
-                        required_state: required,
-                        deadline_secs,
-                        satisfied: false,
-                        started_at_secs: Some(now),
-                    }),
-                    extra: None,
-                });
+                .find(|e| Some(e.call_index) == anchor)
+                .expect("checked just above");
+            if !records_this_wait(entry) {
+                entry.barrier = Some(waiting);
             }
+        } else if in_committed {
+            // On replay the entry is in the committed log, so correcting it
+            // means re-emitting it; the persisted form is replaced
+            // wholesale, so the copy carries the rest of the entry
+            // unchanged. Synthesising a fresh entry here instead would
+            // claim a slot the committed entry already holds and leave
+            // every later rt.* call reading the wrong one.
+            let committed = g
+                .committed
+                .iter()
+                .find(|e| Some(e.call_index) == anchor)
+                .expect("checked just above");
+            if !records_this_wait(committed) {
+                let mut corrected = committed.clone();
+                corrected.barrier = Some(waiting);
+                g.pending.push(corrected);
+            }
+        } else {
+            // No entry behind this barrier: the closure asserted it on a
+            // resource set never tracked via rt.start. The language spec
+            // does not promise that works, but it is given an entry rather
+            // than silently going unrecorded.
+            let idx = g.call_index;
+            g.call_index += 1;
+            g.pending.push(ActionLogEntry {
+                call_index: idx,
+                call_kind: CallKind::Start,
+                resources: self.resources.clone(),
+                barrier: Some(waiting),
+                extra: None,
+            });
         }
         g.pending_barrier = Some(condition.clone());
         drop(g);
