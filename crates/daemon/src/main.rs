@@ -1403,11 +1403,7 @@ fn abandon_spared_resources(
 ) {
     let wanted = operation_id.to_owned();
     let records = db.call(move |db| {
-        seedling_core::runtime::desired::list_dynamic_resources(db).map(|rs| {
-            rs.into_iter()
-                .filter(|r| r.operation_id == wanted)
-                .collect::<Vec<_>>()
-        })
+        seedling_core::runtime::desired::list_dynamic_resources_for_operation(db, &wanted)
     });
     match records {
         Ok(records) if !records.is_empty() => {
