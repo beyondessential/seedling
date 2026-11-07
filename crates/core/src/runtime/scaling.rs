@@ -92,34 +92,16 @@ pub fn clamp_scaling_decisions(
     Ok(())
 }
 
-// r[impl scaling.decision]
-/// Load every stored scaling decision for one app, keyed by deployment.
-///
-/// One statement for the whole app rather than one per deployment: the table
-/// is keyed on `(app, deployment)`, so an app's rows come back from a single
-/// scan. A caller resolving several deployments reads them through
-/// [`effective_scale_from`].
-pub fn load_scaling_decisions_for_app(
-    db: &Db,
-    app: &AppName,
-) -> rusqlite::Result<HashMap<String, u16>> {
-    let mut stmt = db
-        .conn
-        .prepare("SELECT deployment, scale FROM scaling_decisions WHERE app = ?1")?;
-    let rows = stmt.query_map(params![app], |row| {
-        let deployment: String = row.get(0)?;
-        let scale: i64 = row.get(1)?;
-        Ok((deployment, scale as u16))
-    })?;
-    rows.collect()
-}
+/// Every stored scaling decision in the node, keyed by app and deployment.
+pub type ScalingDecisions = HashMap<(AppName, String), u16>;
 
 // r[impl scaling.decision]
 /// Load every stored scaling decision in the node, keyed by app and deployment.
 ///
-/// For a caller walking deployments across apps, which would otherwise be a
-/// query per app on top of a query per deployment.
-pub fn load_all_scaling_decisions(db: &Db) -> rusqlite::Result<HashMap<(AppName, String), u16>> {
+/// One statement for the node. A reconcile tick walks every deployment of
+/// every app, so reading per app or per deployment grows a round trip at a
+/// time with what is installed, on the path that runs most often.
+pub fn load_all_scaling_decisions(db: &Db) -> rusqlite::Result<ScalingDecisions> {
     let mut stmt = db
         .conn
         .prepare("SELECT app, deployment, scale FROM scaling_decisions")?;
@@ -236,29 +218,26 @@ mod tests {
     // answers, or the reconciler and the describe path drift apart on what the
     // operator chose.
     #[test]
-    fn the_batched_reads_agree_with_the_single_one() {
+    fn the_batched_read_agrees_with_the_single_one() {
         let db = Db::open_in_memory().unwrap();
         let other = AppName::new("other").unwrap();
         save_scaling_decision(&db, &app(), "web", 15).unwrap();
         save_scaling_decision(&db, &app(), "api", 3).unwrap();
         save_scaling_decision(&db, &other, "web", 4).unwrap();
 
-        let for_app = load_scaling_decisions_for_app(&db, &app()).unwrap();
-        assert_eq!(for_app.len(), 2, "only this app's deployments");
+        let all = load_all_scaling_decisions(&db).unwrap();
+        assert_eq!(all.len(), 3);
         for (dep, low, high) in [("web", 2, 10), ("api", 1, 5), ("ghost", 2, 10)] {
             assert_eq!(
-                effective_scale_from(for_app.get(dep).copied(), low, high),
+                effective_scale_from(all.get(&(app(), dep.to_owned())).copied(), low, high),
                 effective_scale(&db, &app(), dep, low, high).unwrap(),
                 "{dep} must read the same either way"
             );
         }
-
-        let all = load_all_scaling_decisions(&db).unwrap();
-        assert_eq!(all.len(), 3);
         assert_eq!(
             all.get(&(other, "web".to_owned())),
             Some(&4),
-            "the node-wide read keys on the app as well as the deployment"
+            "another app's deployment of the same name is a decision of its own"
         );
     }
 
