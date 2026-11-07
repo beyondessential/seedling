@@ -1,4 +1,8 @@
-use std::{cell::RefCell, collections::HashMap, sync::Arc};
+use std::{
+    cell::RefCell,
+    collections::{HashMap, HashSet},
+    sync::Arc,
+};
 
 use rhai::{CustomType, Dynamic, EvalAltResult, Map, TypeBuilder};
 use seedling_protocol::names::AppName;
@@ -440,35 +444,55 @@ fn record_at_anchor(
 
 // l[impl collection.only]
 // l[impl collection.except]
-/// How a `Started`'s resources are matched against another collection:
-/// by type and name, which is all a [`ResourceId`](crate::defs::resource::ResourceId)
-/// carries. Two instances of one scaled deployment share a key, so naming
-/// the deployment selects every replica of it, which is what naming a
-/// deployment means.
-fn resource_key(instance: &ResourceInstance) -> (crate::defs::resource::ResourceKind, String) {
-    (instance.kind, instance.name.clone().unwrap_or_default())
-}
+/// How a `Started`'s resources are matched against another collection: by
+/// type and name, which is all a
+/// [`ResourceId`](crate::defs::resource::ResourceId) carries. Two instances
+/// of one scaled deployment share a key, so naming the deployment selects
+/// every replica of it, which is what naming a deployment means.
+///
+/// Held as names under their type so an instance can be looked up from the
+/// name it borrows, without building an owned key per resource tested.
+type ResourceKeys = HashMap<crate::defs::resource::ResourceKind, HashSet<String>>;
 
 /// The keys of whatever a collection method was given: another `Started`, a
 /// Collection, or a bare resource.
-fn resource_keys(other: Dynamic) -> Vec<(crate::defs::resource::ResourceKind, String)> {
-    if let Some(started) = other.clone().try_cast::<Started>() {
-        return started.resources.iter().map(resource_key).collect();
+///
+/// A `Started` is read through its lock rather than cast out of the
+/// `Dynamic`, which would clone every resource it holds, and the warm pairs
+/// besides, only to read the names off them and drop the copy.
+fn resource_keys(other: Dynamic) -> ResourceKeys {
+    let mut keys = ResourceKeys::new();
+    if let Some(started) = other.read_lock::<Started>() {
+        for r in &started.resources {
+            keys.entry(r.kind)
+                .or_default()
+                .insert(r.name.clone().unwrap_or_default());
+        }
+        return keys;
     }
-    crate::defs::collection::col(other)
-        .resolve()
-        .into_iter()
-        .map(|h| (h.kind(), h.name().to_owned()))
-        .collect()
+    for handle in crate::defs::collection::col(other).resolve() {
+        keys.entry(handle.kind())
+            .or_default()
+            .insert(handle.name().to_owned());
+    }
+    keys
+}
+
+fn keys_hold(keys: &ResourceKeys, instance: &ResourceInstance) -> bool {
+    keys.get(&instance.kind)
+        .is_some_and(|names| names.contains(instance.name.as_deref().unwrap_or("")))
 }
 
 /// The distinct image references in a resource-to-image pairing, in the
 /// order they first appear.
-fn dedup_image_refs(pairs: &[(ResourceInstance, String)]) -> Vec<String> {
-    let mut refs: Vec<String> = Vec::new();
+///
+/// Borrows rather than clones: this runs on every poll of a warm-images
+/// barrier, for the life of the wait.
+fn dedup_image_refs(pairs: &[(ResourceInstance, String)]) -> Vec<&str> {
+    let mut refs: Vec<&str> = Vec::new();
     for (_, img) in pairs {
-        if !refs.contains(img) {
-            refs.push(img.clone());
+        if !refs.contains(&img.as_str()) {
+            refs.push(img);
         }
     }
     refs
@@ -1079,7 +1103,10 @@ impl RuntimeInstance {
         resources_with_defs: Vec<(ResourceInstance, Option<crate::defs::resource::Resource>)>,
     ) -> Result<Started, Box<EvalAltResult>> {
         let pairs = extract_container_images(&resources_with_defs);
-        let refs = dedup_image_refs(&pairs);
+        let refs: Vec<String> = dedup_image_refs(&pairs)
+            .into_iter()
+            .map(str::to_owned)
+            .collect();
         let resources: Vec<ResourceInstance> = pairs.iter().map(|(r, _)| r.clone()).collect();
 
         // r[impl image.discover]
@@ -1097,7 +1124,7 @@ impl RuntimeInstance {
                 ctx: Some(Arc::clone(ctx)),
                 resources,
                 origin_index: None,
-                warm: WarmMode::Images(pairs.clone()),
+                warm: WarmMode::Images(pairs),
             });
         }
 
@@ -1128,7 +1155,7 @@ impl RuntimeInstance {
                     ctx: None,
                     resources,
                     origin_index: None,
-                    warm: WarmMode::Images(pairs.clone()),
+                    warm: WarmMode::Images(pairs),
                 });
             }
             Some(c) => Arc::clone(c),
@@ -2517,12 +2544,12 @@ impl CustomType for Started {
             // l[impl collection.only]
             .with_fn("only", |this: &mut Self, other: Dynamic| -> Self {
                 let keys = resource_keys(other);
-                this.filtered(|r| keys.contains(&resource_key(r)))
+                this.filtered(|r| keys_hold(&keys, r))
             })
             // l[impl collection.except]
             .with_fn("except", |this: &mut Self, other: Dynamic| -> Self {
                 let keys = resource_keys(other);
-                this.filtered(|r| !keys.contains(&resource_key(r)))
+                this.filtered(|r| !keys_hold(&keys, r))
             })
             // l[impl collection.select]
             .with_fn(
