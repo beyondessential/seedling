@@ -820,6 +820,12 @@ pub enum ObservationFact {
 
     // Systemd unit
     UnitActive,
+    /// The unit is on its way up: the supervisor's own first start, or the
+    /// pause before an automatic restart. Distinct from [`UnitActive`]
+    /// because a unit that is not up *yet* is not a unit that is up with
+    /// nothing running under it, and only the latter is broken.
+    // r[impl autonomous.restart.backoff.undisturbed]
+    UnitActivating,
     UnitInactive,
     UnitFailed,
     /// The unit reached `failed` state with sub-state `start-limit-hit`:
@@ -910,6 +916,7 @@ impl ObservationFact {
             | ObservationFact::RoutePresent { .. }
             | ObservationFact::RouteAbsent { .. }
             | ObservationFact::UnitActive
+            | ObservationFact::UnitActivating
             | ObservationFact::UnitInactive
             | ObservationFact::UnitGone
             // Restart counters are reconciled against a stored baseline and

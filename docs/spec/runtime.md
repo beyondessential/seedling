@@ -767,6 +767,16 @@ Some operations must hand a writable or read-only path to an action closure with
 >
 > The exact values are an implementation concern — they need only be loose enough that a slow-failing container gets multiple chances, and tight enough that a permanently broken container reaches the start limit on a human-meaningful timescale. These are pacing parameters, not the definition of a crash loop; that is [autonomous.restart.rate](#r--autonomous.restart.rate).
 
+> r[autonomous.restart.backoff.undisturbed]
+> While the supervisor is itself bringing a unit up — its first start, or the pause before an automatic restart — the reconciler must neither tear the unit down nor start it again.
+> It must distinguish a unit the supervisor reports as starting from one the supervisor reports as fully started, and treat only the latter as evidence of a broken unit when no container is running under it.
+> A unit whose spec no longer matches the app's definition is exempt: replacing it is the point, and the supervisor has no view of the definition.
+>
+> A unit the supervisor is pacing is not faulty, it is between attempts, so no unit-failure fault arises from this window.
+>
+> Replacing a unit mid-backoff restarts the supervisor's restart accounting from zero, so the [start limit](#r--autonomous.restart.start-limit-hit) is never reached and the crash-loop escalation that depends on it never happens.
+> This is not a narrow race: a container that fails shortly after each start spends most of every restart cycle in this state, so a reconciler that acts on it replaces the unit on nearly every pass and the limit the backoff exists to reach recedes indefinitely.
+
 > r[autonomous.restart.start-limit-hit]
 > When a container unit reaches `failed/start-limit-hit` (systemd has refused further restarts because the unit exhausted [`StartLimitBurst`](#r--autonomous.restart.backoff)) the reconciler must:
 >
