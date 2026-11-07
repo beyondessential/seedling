@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use rusqlite::params;
 use seedling_protocol::names::AppName;
 
@@ -91,6 +93,46 @@ pub fn clamp_scaling_decisions(
 }
 
 // r[impl scaling.decision]
+/// Load every stored scaling decision for one app, keyed by deployment.
+///
+/// One statement for the whole app rather than one per deployment: the table
+/// is keyed on `(app, deployment)`, so an app's rows come back from a single
+/// scan. A caller resolving several deployments reads them through
+/// [`effective_scale_from`].
+pub fn load_scaling_decisions_for_app(
+    db: &Db,
+    app: &AppName,
+) -> rusqlite::Result<HashMap<String, u16>> {
+    let mut stmt = db
+        .conn
+        .prepare("SELECT deployment, scale FROM scaling_decisions WHERE app = ?1")?;
+    let rows = stmt.query_map(params![app], |row| {
+        let deployment: String = row.get(0)?;
+        let scale: i64 = row.get(1)?;
+        Ok((deployment, scale as u16))
+    })?;
+    rows.collect()
+}
+
+// r[impl scaling.decision]
+/// Load every stored scaling decision in the node, keyed by app and deployment.
+///
+/// For a caller walking deployments across apps, which would otherwise be a
+/// query per app on top of a query per deployment.
+pub fn load_all_scaling_decisions(db: &Db) -> rusqlite::Result<HashMap<(AppName, String), u16>> {
+    let mut stmt = db
+        .conn
+        .prepare("SELECT app, deployment, scale FROM scaling_decisions")?;
+    let rows = stmt.query_map([], |row| {
+        let app: AppName = row.get(0)?;
+        let deployment: String = row.get(1)?;
+        let scale: i64 = row.get(2)?;
+        Ok(((app, deployment), scale as u16))
+    })?;
+    rows.collect()
+}
+
+// r[impl scaling.decision]
 /// Compute the effective scale for a deployment: the stored decision
 /// clamped to bounds, or the lower bound if no decision exists.
 pub fn effective_scale(
@@ -100,9 +142,24 @@ pub fn effective_scale(
     low: u16,
     high: u16,
 ) -> rusqlite::Result<u16> {
-    match load_scaling_decision(db, app, deployment)? {
-        Some(stored) => Ok(stored.clamp(low, high)),
-        None => Ok(low),
+    Ok(effective_scale_from(
+        load_scaling_decision(db, app, deployment)?,
+        low,
+        high,
+    ))
+}
+
+// r[impl scaling.decision]
+/// The effective scale rule, for a decision that is already loaded: the
+/// operator's choice clamped to the declared bounds, or the lower bound where
+/// they have made none.
+///
+/// Held in one place so a caller resolving many deployments from a loaded map
+/// reads them by the same rule as one querying for a single deployment.
+pub fn effective_scale_from(stored: Option<u16>, low: u16, high: u16) -> u16 {
+    match stored {
+        Some(stored) => stored.clamp(low, high),
+        None => low,
     }
 }
 
@@ -171,6 +228,38 @@ mod tests {
         assert_eq!(effective_scale(&db, &app(), "web", 2, 10).unwrap(), 10);
         save_scaling_decision(&db, &app(), "web", 1).unwrap();
         assert_eq!(effective_scale(&db, &app(), "web", 2, 10).unwrap(), 2);
+    }
+
+    // r[verify scaling.decision]
+    // The batched reads exist so a reconcile tick does not query per
+    // deployment. They have to answer exactly what the single-deployment read
+    // answers, or the reconciler and the describe path drift apart on what the
+    // operator chose.
+    #[test]
+    fn the_batched_reads_agree_with_the_single_one() {
+        let db = Db::open_in_memory().unwrap();
+        let other = AppName::new("other").unwrap();
+        save_scaling_decision(&db, &app(), "web", 15).unwrap();
+        save_scaling_decision(&db, &app(), "api", 3).unwrap();
+        save_scaling_decision(&db, &other, "web", 4).unwrap();
+
+        let for_app = load_scaling_decisions_for_app(&db, &app()).unwrap();
+        assert_eq!(for_app.len(), 2, "only this app's deployments");
+        for (dep, low, high) in [("web", 2, 10), ("api", 1, 5), ("ghost", 2, 10)] {
+            assert_eq!(
+                effective_scale_from(for_app.get(dep).copied(), low, high),
+                effective_scale(&db, &app(), dep, low, high).unwrap(),
+                "{dep} must read the same either way"
+            );
+        }
+
+        let all = load_all_scaling_decisions(&db).unwrap();
+        assert_eq!(all.len(), 3);
+        assert_eq!(
+            all.get(&(other, "web".to_owned())),
+            Some(&4),
+            "the node-wide read keys on the app as well as the deployment"
+        );
     }
 
     // r[verify scaling.decision]

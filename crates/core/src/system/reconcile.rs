@@ -987,15 +987,20 @@ impl Reconciler {
         // floor. Folding the two together converges a deployment scaled above
         // that floor back down to it, tearing down instances to answer a
         // question nobody managed to ask.
-        let scale_data: Vec<(String, u16, u16, u16)> = self.db.call(move |db| {
-            deployments
+        //
+        // One statement for the app, not one per deployment: this runs for
+        // every app on every tick.
+        type ScaleRows = Vec<(String, u16, u16, u16)>;
+        let scale_data: ScaleRows = self.db.call(move |db| -> rusqlite::Result<ScaleRows> {
+            let decisions = scaling::load_scaling_decisions_for_app(db, &app_name_owned)?;
+            Ok(deployments
                 .into_iter()
                 .map(|(dep_name, low, high)| {
-                    let effective =
-                        scaling::effective_scale(db, &app_name_owned, &dep_name, low, high)?;
-                    Ok((dep_name, low, high, effective))
+                    let stored = decisions.get(&dep_name).copied();
+                    let effective = scaling::effective_scale_from(stored, low, high);
+                    (dep_name, low, high, effective)
                 })
-                .collect::<rusqlite::Result<_>>()
+                .collect())
         })?;
         let mut scales = EffectiveScales::new();
         for (dep_name, low, high, mut effective) in scale_data {
@@ -1848,18 +1853,23 @@ impl Reconciler {
         // loses an instance has four healthy against a target of one, and is
         // never found short — so the further it was scaled up, the less
         // likely it was to get a replacement at all.
+        // One statement for the node, not one per deployment: `seen` spans
+        // every app, so a query each would be a round trip per deployment per
+        // tick on top of the one `compute_effective_scales` already makes.
         let read_targets: rusqlite::Result<Vec<u16>> = {
             let wanted: Vec<(AppName, String, u16, u16)> = seen
                 .iter()
                 .map(|d| (d.key.0.clone(), d.key.1.clone(), d.scale.0, d.scale.1))
                 .collect();
             self.db.call(move |db| {
-                wanted
+                let decisions = scaling::load_all_scaling_decisions(db)?;
+                Ok(wanted
                     .into_iter()
                     .map(|(app, dep, low, high)| {
-                        scaling::effective_scale(db, &app, &dep, low, high)
+                        let stored = decisions.get(&(app, dep)).copied();
+                        scaling::effective_scale_from(stored, low, high)
                     })
-                    .collect()
+                    .collect())
             })
         };
         // r[impl scaling.decision.unreadable]
