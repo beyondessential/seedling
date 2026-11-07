@@ -438,32 +438,44 @@ fn claim_log_position(
 ///   passing is what the world may no longer show — a job that ran and
 ///   exited being the case that matters.
 fn record_at_anchor(ctx: &mut ReplayContext, call_index: usize, record: BarrierRecord) -> bool {
-    let pending_pos = ctx.pending.iter().position(|e| e.call_index == call_index);
-    let mut entry = match pending_pos {
-        Some(pos) => ctx.pending[pos].clone(),
-        None => match ctx.committed.iter().find(|e| e.call_index == call_index) {
-            Some(committed) => committed.clone(),
-            None => return false,
-        },
-    };
+    /// What the record already there decides, given the one being written.
+    fn resolve(held: Option<&BarrierRecord>, record: &BarrierRecord) -> Option<Option<u64>> {
+        if held.is_some_and(|b| b.required_state != record.required_state && !b.satisfied) {
+            return None;
+        }
+        Some(
+            held.filter(|b| b.required_state == record.required_state)
+                .and_then(|b| b.started_at_secs)
+                .or(record.started_at_secs),
+        )
+    }
 
-    let held = entry.barrier.as_ref();
-    if held.is_some_and(|b| b.required_state != record.required_state && !b.satisfied) {
+    // This pass's own entry is already held mutably, so it is corrected in
+    // place rather than copied out and back: the copy carried the whole
+    // resource list, on every poll of every anchored barrier.
+    if let Some(entry) = ctx.pending.iter_mut().find(|e| e.call_index == call_index) {
+        let Some(started_at_secs) = resolve(entry.barrier.as_ref(), &record) else {
+            return true;
+        };
+        entry.barrier = Some(BarrierRecord {
+            started_at_secs,
+            ..record
+        });
         return true;
     }
 
-    let started = held
-        .filter(|b| b.required_state == record.required_state)
-        .and_then(|b| b.started_at_secs);
-    entry.barrier = Some(BarrierRecord {
-        started_at_secs: started.or(record.started_at_secs),
+    let Some(committed) = ctx.committed.iter().find(|e| e.call_index == call_index) else {
+        return false;
+    };
+    let Some(started_at_secs) = resolve(committed.barrier.as_ref(), &record) else {
+        return true;
+    };
+    let mut corrected = committed.clone();
+    corrected.barrier = Some(BarrierRecord {
+        started_at_secs,
         ..record
     });
-
-    match pending_pos {
-        Some(pos) => ctx.pending[pos] = entry,
-        None => ctx.pending.push(entry),
-    }
+    ctx.pending.push(corrected);
     true
 }
 
@@ -2347,9 +2359,9 @@ impl Started {
             // r[impl actuate.image.warm]
             // Empty `refs` means the selection contained no container
             // resources with an image to warm — immediately satisfied.
-            (WarmMode::Images(pairs), LifecycleState::Ready) => dedup_image_refs(pairs)
-                .iter()
-                .all(|r| g.world.image_present(r)),
+            (WarmMode::Images(pairs), LifecycleState::Ready) => {
+                pairs.iter().all(|(_, image)| g.world.image_present(image))
+            }
             // l[impl rt.started.state-methods]
             // A group holding no resources has nothing to wait on. The warm
             // variants above already answered that way; this arm did not,
