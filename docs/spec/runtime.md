@@ -813,6 +813,10 @@ Some operations must hand a writable or read-only path to an action closure with
 > - File a fault per [fault.healthcheck-replace-failed](#r--fault.healthcheck-replace-failed).
 > - Refuse to spawn further replacement attempts for this Deployment — whether rolling-driven or healthcheck-driven — until the AppDef generation changes (i.e. the operator pushes new code) or the operator clears the fault.
 >
+> The `on_failure` policy decides which deployments are replaced, not which are watched.
+> A deployment declaring `on_failure: monitor` is never bumped by a replacement, but a rolling update of it brings up a fresh instance like any other, and the guard must evaluate that instance.
+> Every deployment that declares a healthcheck therefore has a grace window, whatever its policy.
+>
 > The pre-existing instance must continue to run in degraded mode (under its old spec hash if it was a rolling-update target). The runtime must not allow the guard to trigger an indefinite churn of replacement attempts; the guard exists precisely to bound the cost of a permanently-broken workload — whether the breakage was introduced by a script change or arose spontaneously.
 
 > r[scaling.decision]

@@ -1762,42 +1762,33 @@ impl Reconciler {
                 let target = dep_def.scale.start;
                 let pod_def = dep_def.pod.lock();
                 let container = pod_def.container.lock();
-                let (policy, grace_secs) = match &container.healthcheck {
-                    Some(hc) => (
-                        Some(hc.on_failure),
+                let healthcheck = container.healthcheck.as_ref().map(|hc| {
+                    (
+                        hc.on_failure,
                         (hc.start_period_secs + hc.retries as u64 * hc.interval_secs) as i64,
-                    ),
-                    None => (None, 0),
-                };
+                    )
+                });
                 drop(container);
                 drop(pod_def);
                 drop(dep_def);
-                if !matches!(
-                    policy,
-                    Some(crate::defs::container::HealthcheckOnFailure::Replace)
-                ) {
-                    continue;
-                }
+
                 let dep_name = id.name.as_str();
-                grace_secs_by_dep.insert((app.name.clone(), dep_name.to_owned()), grace_secs);
-                if self
-                    .replace_failed
-                    .contains(&(app.name.clone(), dep_name.to_owned()))
-                {
-                    continue;
-                }
-                let dep_pods: Vec<&RunningPod> = pods
+                let key = (app.name.clone(), dep_name.to_owned());
+                let instance_health: Vec<bool> = pods
                     .iter()
                     .filter(|p| {
                         p.instance.kind == crate::defs::resource::ResourceKind::Deployment
                             && p.instance.name.as_deref() == Some(dep_name)
                     })
+                    .map(|p| p.observed_healthy)
                     .collect();
-                let healthy = dep_pods.iter().filter(|p| p.observed_healthy).count();
-                let any_unhealthy = dep_pods.iter().any(|p| !p.observed_healthy);
-                if any_unhealthy && healthy < usize::from(target) {
-                    self.unhealthy_replace_deployments
-                        .insert((app.name.clone(), dep_name.to_owned()));
+
+                let standing = deployment_standing(healthcheck, &instance_health, target);
+                if let Some(grace_secs) = standing.grace_secs {
+                    grace_secs_by_dep.insert(key.clone(), grace_secs);
+                }
+                if standing.wants_replacement && !self.replace_failed.contains(&key) {
+                    self.unhealthy_replace_deployments.insert(key);
                 }
             }
         }
@@ -2044,8 +2035,104 @@ impl Reconciler {
     }
 }
 
+/// What the replace-loop guard and the replacement bump each need to know
+/// about one deployment.
+struct DeploymentStanding {
+    /// How long a fresh instance of this deployment has to become healthy.
+    /// `None` where the deployment declares no healthcheck, which is also
+    /// what puts it outside the guard.
+    grace_secs: Option<i64>,
+    /// The deployment replaces unhealthy instances, and is short of healthy
+    /// ones against what it should be running.
+    wants_replacement: bool,
+}
+
+/// Decide both of a deployment's standings together, so the two questions
+/// stay apart.
+///
+/// The grace window follows the declared healthcheck: the guard watches every
+/// fresh instance, whether a replacement or a rolling update brought it up,
+/// so any deployment declaring a healthcheck has one whatever its policy.
+/// Wanting a replacement follows the policy as well, and the observed health
+/// of the instances running against the count that should be.
+///
+/// Reading both off the policy left a rolling update of a deployment with a
+/// healthcheck but `on_failure: monitor` with no grace window at all, so the
+/// guard never evaluated it and a stuck update inhibited its stale instances
+/// for good.
+// r[impl autonomous.healthcheck-replace]
+// r[impl autonomous.healthcheck-replace.guard]
+fn deployment_standing(
+    healthcheck: Option<(crate::defs::container::HealthcheckOnFailure, i64)>,
+    instance_health: &[bool],
+    target: u16,
+) -> DeploymentStanding {
+    let Some((on_failure, grace_secs)) = healthcheck else {
+        return DeploymentStanding {
+            grace_secs: None,
+            wants_replacement: false,
+        };
+    };
+    let healthy = instance_health.iter().filter(|h| **h).count();
+    DeploymentStanding {
+        grace_secs: Some(grace_secs),
+        wants_replacement: matches!(
+            on_failure,
+            crate::defs::container::HealthcheckOnFailure::Replace
+        ) && instance_health.contains(&false)
+            && healthy < usize::from(target),
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    use super::{DeploymentStanding, deployment_standing};
+    use crate::defs::container::HealthcheckOnFailure;
+
+    fn standing(
+        on_failure: HealthcheckOnFailure,
+        health: &[bool],
+        target: u16,
+    ) -> DeploymentStanding {
+        deployment_standing(Some((on_failure, 90)), health, target)
+    }
+
+    // r[verify autonomous.healthcheck-replace.guard]
+    // The grace window was recorded only after the on_failure=replace filter,
+    // and the guard's candidate list is looked up through that map. A rolling
+    // update of a deployment with a healthcheck but on_failure=monitor had no
+    // entry, so the guard never evaluated it and a stuck update inhibited its
+    // stale instances indefinitely.
+    #[test]
+    fn a_healthcheck_earns_a_grace_window_whatever_the_policy() {
+        assert_eq!(
+            standing(HealthcheckOnFailure::Monitor, &[true], 1).grace_secs,
+            Some(90),
+            "a monitor deployment is still watched by the guard"
+        );
+        assert_eq!(
+            standing(HealthcheckOnFailure::Replace, &[true], 1).grace_secs,
+            Some(90)
+        );
+        assert_eq!(
+            deployment_standing(None, &[true], 1).grace_secs,
+            None,
+            "no healthcheck, nothing to wait for"
+        );
+    }
+
+    // r[verify autonomous.healthcheck-replace]
+    // Only `replace` spawns a replacement; `monitor` keeps its routing-pool
+    // preference but is never bumped.
+    #[test]
+    fn only_a_replace_policy_wants_a_replacement() {
+        assert!(standing(HealthcheckOnFailure::Replace, &[true, false], 2).wants_replacement);
+        assert!(!standing(HealthcheckOnFailure::Monitor, &[true, false], 2).wants_replacement);
+        assert!(
+            !standing(HealthcheckOnFailure::Replace, &[true, true], 2).wants_replacement,
+            "nothing unhealthy to replace"
+        );
+    }
 
     // r[verify observe.persist]
     // `OBS_KINDS` exists to intern what `to_obs_kinds` persists, so a kind in
