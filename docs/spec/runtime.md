@@ -1379,6 +1379,10 @@ Two levers set how a workload competes for host resources under pressure. Each D
 > Uninstall must determine this from the scheduler's record of operations rather than from the app's phase: an action closure runs with its app in the `Installed` phase, so the phase does not distinguish an idle app from one mid-action.
 > Where the runtime cannot determine whether an operation holds the app, it must reject.
 > The check and the app's departure from the installed phase must be indivisible with respect to admitting an action, so an action cannot be admitted between the two and then run its closure under the teardown.
+> Once the app has left the installed phase to be torn down, no lifecycle operation may be admitted for it, whatever asked for one: an operator action, a param change's handler, a scheduled firing, or an install.
+>
+> Admission is one decision and belongs wherever operations are admitted, not with each caller that asks for one.
+> A rule each caller is expected to apply for itself holds only for the callers that know it, and the next one added will not.
 >
 > Rejecting rather than cancelling the operation keeps uninstall consistent with [operation.lifecycle.single.intra-app](#r--operation.lifecycle.single.intra-app), which rejects a competing request rather than pre-empting the operation in flight.
 > Cancelling on the operator's behalf would need a bound on how long uninstall waits for the closure to unwind, and an uninstall that abandons the wait leaves the app in exactly the half-torn-down state the rejection exists to prevent.
