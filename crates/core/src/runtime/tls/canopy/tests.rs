@@ -102,11 +102,23 @@ fn revoked_and_condemned_keys_call_for_a_new_key() {
     );
 }
 
+/// A problem document as Canopy sends one: its `type` is a URI reference under
+/// `/errors/`, not an absolute URL.
 fn status(status: u16, slug: &str) -> RelayFailure {
     RelayFailure::Status {
         status,
         body: format!(
-            r#"{{"type":"https://canopy.example/errors/{slug}","title":"t","status":{status},"detail":"because {slug}"}}"#
+            r#"{{"type":"/errors/{slug}","title":"t","status":{status},"detail":"because {slug}"}}"#
+        ),
+    }
+}
+
+/// The same cause, named by something other than Canopy on the relay path.
+fn from_elsewhere(status: u16, slug: &str) -> RelayFailure {
+    RelayFailure::Status {
+        status,
+        body: format!(
+            r#"{{"type":"https://gateway.example/errors/{slug}","title":"t","status":{status},"detail":"because {slug}"}}"#
         ),
     }
 }
@@ -116,9 +128,11 @@ fn status(status: u16, slug: &str) -> RelayFailure {
 #[test]
 fn only_the_authoritys_own_no_is_a_refusal() {
     for failure in [
-        status(403, "name-not-entitled"),
         status(403, "auth-insufficient-permissions"),
+        status(403, "name-not-entitled"),
+        status(403, "dns-name-denied"),
         status(409, "conflict"),
+        status(409, "dns-name-type-mismatch"),
     ] {
         assert!(
             matches!(classify_failure(&failure), Answer::Refused { .. }),
@@ -140,6 +154,9 @@ fn only_the_authoritys_own_no_is_a_refusal() {
 fn trouble_that_may_pass_is_not_a_refusal() {
     for failure in [
         status(409, "name-management-paused"),
+        // Canopy has no declaration of the name, which it asks an agent to wait
+        // out rather than treat as a decision against it.
+        status(403, "dns-name-undeclared"),
         status(409, "something-new"),
         status(403, "something-new"),
         RelayFailure::Status {
@@ -160,6 +177,32 @@ fn trouble_that_may_pass_is_not_a_refusal() {
             "{failure:?} is not a refusal"
         );
     }
+}
+
+// r[verify tls.canopy.outcomes]
+// r[verify tls.chain.refusal]
+#[test]
+fn only_canopy_can_name_the_cause_of_a_refusal() {
+    for slug in [
+        "auth-insufficient-permissions",
+        "name-not-entitled",
+        "dns-name-denied",
+        "conflict",
+        "dns-name-type-mismatch",
+    ] {
+        let failure = from_elsewhere(if slug == "conflict" { 409 } else { 403 }, slug);
+        assert!(
+            matches!(classify_failure(&failure), Answer::Unavailable { .. }),
+            "a cause under another authority's path is no word of Canopy's: {slug}"
+        );
+    }
+    assert!(
+        matches!(
+            classify_failure(&from_elsewhere(400, "bad-request")),
+            Answer::Unavailable { .. }
+        ),
+        "nor does it make the runtime's own request the thing at fault"
+    );
 }
 
 // r[verify tls.canopy.outcomes]
@@ -842,9 +885,8 @@ async fn a_failed_order_waits_out_the_same_cadence_a_refusal_does() {
 fn what_canopy_says_cannot_forge_a_log_line_or_run_off_the_screen() {
     let forged = RelayFailure::Status {
         status: 403,
-        body:
-            r#"{"type":"https://c/errors/name-not-entitled","detail":"no\n\u001b[31mERROR forged"}"#
-                .to_owned(),
+        body: r#"{"type":"/errors/name-not-entitled","detail":"no\n\u001b[31mERROR forged"}"#
+            .to_owned(),
     };
     let Answer::Refused { reason } = classify_failure(&forged) else {
         panic!("a 403 for a name not entitled is a refusal");

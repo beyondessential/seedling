@@ -1851,11 +1851,13 @@ An operator policy names a chain of one.
 > |---|---|
 > | issued, usable | the certificate is stored and served |
 > | pending | the order is open; asked again on the next tick |
-> | refused, because the server lacks the TLS grant or the name is outside the group's domains, or because no managed zone covers the name | a refusal, per [tls.chain.refusal](#r--tls.chain.refusal) |
-> | refused, because the server is paused or not attached to a live server | not a refusal; retried |
+> | refused, because the server lacks the TLS grant, the name is outside the domains its group controls, an operator has denied the name to it, it contradicts the application type named, or no zone Canopy manages covers the name | a refusal, per [tls.chain.refusal](#r--tls.chain.refusal) |
+> | refused, because the server is paused or not attached to a live server, or because Canopy has no declaration of the name | not a refusal; retried |
 > | order failed | not a refusal; retried, with Canopy's reason recorded |
 > | the relay failed, or no offer is live | not a refusal; retried |
 > | the signing request itself rejected as malformed | not a refusal; retried, and reported as a fault since the fault is the runtime's own |
+>
+> Only a cause Canopy itself names counts, so an answer from anything else on the way between the runtime and Canopy is retried rather than read as any of the above.
 
 > r[tls.canopy.revoked]
 > When Canopy reports a certificate revoked, or its key condemned, the certificate is no longer served and the runtime generates a new key and submits a new request.

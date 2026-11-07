@@ -210,17 +210,29 @@ pub fn classify_response(response: &CertificateResponse) -> Answer {
     }
 }
 
+/// Where Canopy names the cause of a problem.
+///
+/// The `type` of a problem document from Canopy is a URI reference under this,
+/// so the whole reference identifies the cause. Matching the last path segment
+/// instead would read `https://gateway.example/errors/conflict` from something
+/// on the relay path as Canopy's own word, and a refusal is the one answer that
+/// moves a hostname off its strategy for the rest of the cycle.
+const CANOPY_CAUSE: &str = "/errors/";
+
 /// Classify a request that did not produce an answer about the certificate.
 ///
-/// Canopy's errors carry a status and a problem-details body whose `type` names
-/// the cause. A refusal is the authority's own no, so it is only recognised by
-/// its cause: a 403 for a name outside what the server may have or for a server
-/// without the TLS grant, and a 409 for no managed zone. A paused server is not
-/// a refusal, and a condemned key calls for a new one. A 403 from somewhere else
-/// on the way (an intermediary, the carrying client's own authorisation) and any
-/// cause not recognised are never a refusal: they carry no word of Canopy's, and
-/// moving a hostname off its strategy on one would be a one-way step taken on
-/// something nobody can attribute.
+/// Canopy's errors carry a status and a problem-details body naming the cause.
+/// A refusal is the authority's own no, and stands until someone acts: the
+/// server lacks the TLS grant, the name is outside the domains its group
+/// controls, an operator has denied the name to this server, the server
+/// contradicts the application type named, or no zone Canopy manages covers the
+/// name at all.
+///
+/// Everything else is retried. A paused server and a name Canopy has no
+/// declaration of are both conditions that pass without anyone acting on this
+/// side, a condemned key calls for a new one, and a cause this runtime does not
+/// recognise, or one named by something other than Canopy, is no word of
+/// Canopy's to act on.
 // r[impl tls.canopy.outcomes]
 pub fn classify_failure(failure: &RelayFailure) -> Answer {
     let (status, body) = match failure {
@@ -232,27 +244,33 @@ pub fn classify_failure(failure: &RelayFailure) -> Answer {
         }
     };
     let problem: Option<Value> = serde_json::from_str(body).ok();
-    let slug = problem
+    let cause = problem
         .as_ref()
         .and_then(|p| p.get("type"))
         .and_then(Value::as_str)
-        .and_then(|t| t.rsplit('/').next())
+        .and_then(|t| t.strip_prefix(CANOPY_CAUSE))
         .map(tidy);
     let detail = problem
         .as_ref()
         .and_then(|p| p.get("detail"))
         .and_then(Value::as_str)
         .map(tidy)
-        .or_else(|| slug.clone())
+        .or_else(|| cause.clone())
         .unwrap_or_else(|| format!("Canopy answered {status}"));
 
-    match (status, slug.as_deref()) {
-        (403, Some("name-not-entitled" | "auth-insufficient-permissions")) => {
+    match (status, cause.as_deref()) {
+        // The grant is withheld, the name is outside the group's domains, or an
+        // operator has denied it to this server.
+        (403, Some("auth-insufficient-permissions" | "name-not-entitled" | "dns-name-denied")) => {
             Answer::Refused { reason: detail }
         }
-        (409, Some("conflict")) => Answer::Refused { reason: detail },
+        // No zone Canopy manages covers the name, so it can publish nothing for
+        // it; or the server contradicts the application type the request named.
+        (409, Some("conflict" | "dns-name-type-mismatch")) => Answer::Refused { reason: detail },
         (409, Some("certificate-key-compromised")) => Answer::Revoked { reason: detail },
-        (400, _) => Answer::Malformed { reason: detail },
+        // The runtime's own request was rejected. Only Canopy saying so makes
+        // it the runtime's fault to report.
+        (400, Some("bad-request")) => Answer::Malformed { reason: detail },
         _ => Answer::Unavailable {
             reason: format!("Canopy answered {status}: {detail}"),
         },
