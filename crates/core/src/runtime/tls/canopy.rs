@@ -348,17 +348,29 @@ impl<R: CertificateRelay> Engine<R> {
         cert_id: i64,
         reason: String,
     ) -> Result<Outcome> {
+        let replacement = self.revoke(&ask, cert_id, reason)?;
+        self.reorder(ask, replacement).await
+    }
+
+    /// Stop serving a revoked certificate and pass the hostname to the next
+    /// strategy, without going on to ask for the replacement.
+    ///
+    /// Database work alone, reaching no relay, so a caller bounding what it
+    /// spends on the relay does not hold this back: a certificate Canopy has
+    /// revoked stops being served the moment the runtime learns of it. The
+    /// chain row it leaves carries the open order, which is what has a later
+    /// opportunity ask for the replacement.
+    // r[impl tls.canopy.revoked]
+    pub fn revoke(&self, ask: &Ask, cert_id: i64, reason: String) -> Result<Replacement> {
         let for_apply = ask.clone();
         let now = jiff::Timestamp::now().as_second();
-        let replacement = self
-            .db
+        self.db
             .call(move |db| {
                 store::atomically(db, || {
                     apply_revocation(db, &for_apply, cert_id, &reason, now)
                 })
             })
-            .context(StorageSnafu)?;
-        self.reorder(ask, replacement).await
+            .context(StorageSnafu)
     }
 
     /// Open the order for the key that replaced a condemned one.
@@ -470,7 +482,7 @@ enum ApplyResult {
 
 /// Where a hostname stands after its certificate was revoked.
 #[derive(Debug, Clone)]
-struct Replacement {
+pub struct Replacement {
     replacing: Identity,
     step: usize,
     since: i64,

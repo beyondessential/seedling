@@ -278,12 +278,20 @@ async fn replace_condemned<R: CertificateRelay>(
             "Canopy certificate no longer to be served; replacing its key"
         );
         match ask {
-            Some(_) if budget.spent() => {
-                // Still active, so found again on the next tick.
-                tracing::debug!(
-                    hostname = %c.hostname,
-                    "canopy certificates: the replacement is left to the next tick"
-                );
+            // Stopping the certificate being served reaches no relay, so it is
+            // not what the budget bounds, and a revoked certificate must not go
+            // on being served because a tick was full. Only the request for the
+            // replacement waits, and the open order the revocation records is
+            // what carries it to a later tick.
+            Some(ask) if budget.spent() => {
+                if let Err(e) = engine.revoke(&ask, c.cert_id, c.reason.clone()) {
+                    tracing::error!(hostname = %c.hostname, error = %e, "canopy certificates: stopping a revoked certificate failed");
+                } else {
+                    tracing::debug!(
+                        hostname = %c.hostname,
+                        "canopy certificates: the replacement is left to a later tick"
+                    );
+                }
             }
             Some(ask) => {
                 budget.asked += 1;
@@ -1416,7 +1424,7 @@ mod tests {
 
     // r[verify tls.canopy.revoked]
     #[test]
-    fn replacing_revoked_certificates_draws_on_the_same_budget_as_asking() {
+    fn a_revocation_stops_the_certificate_at_once_and_budgets_only_its_replacement() {
         let oi = TestOi::new();
         let now = jiff::Timestamp::now().as_second();
         let mut held = Vec::new();
@@ -1459,9 +1467,23 @@ mod tests {
             .db
             .call(|db| store::list_active_canopy_certificates(db).unwrap().len());
         assert_eq!(
-            still_active, 2,
-            "the two left over are still to be found, and replaced, on the next tick"
+            still_active, 0,
+            "a revoked certificate stops being served whether or not the tick had budget for its replacement"
         );
+        for (_, hostname) in &held {
+            let row = oi
+                .state
+                .db
+                .call({
+                    let hostname = (*hostname).to_owned();
+                    move |db| store::get_chain_row(db, &hostname).unwrap()
+                })
+                .unwrap_or_else(|| panic!("{hostname} records where it stands"));
+            assert!(
+                row.row.open_order_since.is_some(),
+                "{hostname} has a replacement outstanding, which is what a later tick asks for"
+            );
+        }
     }
 
     // r[verify tls.canopy.fault]
