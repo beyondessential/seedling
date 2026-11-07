@@ -958,6 +958,50 @@ fn a_canopy_only_hostname_is_waiting_on_canopy_even_with_no_offer() {
     assert_eq!(host["next_issuance_source"], "immediate");
 }
 
+// i[verify tls.cert.upload-manual]
+// r[verify tls.chain.cycle]
+#[test]
+fn a_certificate_an_operator_uploads_is_acted_on_at_once() {
+    let oi = TestOi::new();
+    tls_app(&oi, TLS_APP);
+    oi.call(
+        "/tls/policies/set-canopy",
+        json!({ "hostname": "shop.example.com" }),
+    )
+    .unwrap();
+
+    // The decisions read the proxy's cache, which wants a reactor.
+    let asking = |oi: &TestOi| {
+        oi.block_on(async {
+            oi.state
+                .tls_coordinator
+                .chain_decisions(Some("shop.example.com"))
+                .expect("the decisions can be made")
+                .remove("shop.example.com")
+                .expect("the hostname is on a chain")
+                .act
+        })
+    };
+    assert_eq!(
+        asking(&oi),
+        crate::runtime::tls::state::ChainAct::AskCanopy,
+        "with nothing serving it, Canopy is to be asked"
+    );
+
+    let (pem, key) = self_signed("shop.example.com");
+    oi.call(
+        "/tls/certificates/upload-manual",
+        json!({ "cert_pem": pem, "key_pem": key }),
+    )
+    .unwrap();
+
+    assert_eq!(
+        asking(&oi),
+        crate::runtime::tls::state::ChainAct::Wait,
+        "the certificate the operator uploaded is what the next decision rests on"
+    );
+}
+
 // i[verify tls.cert.retry]
 // r[verify tls.cert.force-retry]
 #[test]

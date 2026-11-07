@@ -242,7 +242,7 @@ pub(crate) fn set_policy_acme_dns(state: &OiState, params: SetAcmeDnsParams) -> 
     // For wildcard policies there's no concrete hostname to issue against
     // until an ingress for a matching name appears, at which point the
     // reconciler hands it to the coordinator.
-    state.tls_coordinator.forget_chain_state();
+    decisions_have_moved(state);
     let mut auto_issue_kicked = false;
     if !hostname.contains('*') {
         state.tls_coordinator.ensure(&hostname);
@@ -270,7 +270,7 @@ pub(crate) fn set_policy_canopy(state: &OiState, params: HostnameParams) -> Hand
     // A usable certificate is left until its renewal point, and a hostname with
     // none is picked up by the next Canopy report tick, so there is nothing to
     // kick here. The chain the proxy is told about does change, though.
-    state.tls_coordinator.forget_chain_state();
+    decisions_have_moved(state);
     Ok(json!({ "ok": true }))
 }
 
@@ -287,7 +287,7 @@ pub(crate) fn clear_policy(state: &OiState, params: HostnameParams) -> HandlerRe
             params.hostname
         )));
     }
-    state.tls_coordinator.forget_chain_state();
+    decisions_have_moved(state);
     Ok(json!({ "ok": true }))
 }
 
@@ -475,6 +475,7 @@ pub(crate) fn upload_manual(state: &OiState, params: UploadManualParams) -> Hand
         })
         .map_err(db_error)?;
 
+    decisions_have_moved(state);
     Ok(json!({
         "id": id,
         "primary_san": primary_san,
@@ -512,6 +513,7 @@ pub(crate) fn delete_certificate(state: &OiState, params: CertIdParams) -> Handl
     if !removed {
         return Err(OiError::not_found(format!("certificate not found: {id}")));
     }
+    decisions_have_moved(state);
     Ok(json!({ "ok": true }))
 }
 
@@ -735,6 +737,7 @@ pub(crate) fn csr_upload_cert(state: &OiState, params: CsrUploadCertParams) -> H
         ));
     }
 
+    decisions_have_moved(state);
     Ok(json!({
         "id": id,
         "primary_san": primary_san,
@@ -772,6 +775,19 @@ pub(crate) fn csr_cancel(state: &OiState, params: CertIdParams) -> HandlerResult
     Ok(json!({ "ok": true }))
 }
 
+/// Forget the chain decisions, because what was just written is something they
+/// rest on.
+///
+/// Every handler that writes a policy or a certificate calls this. The
+/// decisions are made against one reading of the world, held for a window, and
+/// served from there to the certificate endpoint, to the proxy's renewal points
+/// and to an operator retry: without this they would all go on acting on the
+/// world as it was before the write.
+// r[impl tls.chain.cycle]
+fn decisions_have_moved(state: &OiState) {
+    state.tls_coordinator.forget_chain_state();
+}
+
 fn map_validate_error(e: ValidateError) -> OiError {
     OiError::new(ErrorCode::RequirementsInvalid, e.to_string())
 }
@@ -802,7 +818,7 @@ pub(crate) fn retry(state: &OiState, params: RetryParams) -> HandlerResult {
     state.tls_coordinator.ensure(&hostname);
     // The decision below is to rest on what was just written, not on what the
     // coordinator read up to half a minute ago.
-    state.tls_coordinator.forget_chain_state();
+    decisions_have_moved(state);
     // A hostname on a chain Canopy is not part of has nothing else to take the
     // retry; the coordinator knows which that is.
     state.tls_coordinator.settle_retry(&hostname);
