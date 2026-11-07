@@ -1388,3 +1388,86 @@ fn a_barrier_that_passes_on_a_replay_pass_is_recorded_as_satisfied() {
         "only the barrier actually still waiting should count toward the poll cadence"
     );
 }
+
+// r[verify operation.composition.params.replay]
+// r[verify barrier.replay.positional]
+//
+// Lives here rather than beside the other `Action.invoke` tests because it
+// needs the real replay context: the stub runtime those use has no action
+// log to commit a call to or recover one from.
+#[test]
+fn a_replayed_sub_action_call_recovers_its_recorded_params() {
+    // Validation answers to the world, which is why the entry carries the
+    // post-validation params. Re-running it on every pass meant an update
+    // that changed the sub-action's schema stopped a call that had already
+    // been committed with valid params from replaying at all.
+    let outer = |inner_params: &str| {
+        format!(
+            r#"
+            let web = app.deployment("web").image("docker.io/library/nginx:latest");
+            app.on_action("inner", |rt, p| {{
+                if p["note"] != "hello" {{
+                    throw "inner did not observe the recorded params";
+                }}
+            }}, #{{ params: #{{ {inner_params} }} }});
+            app.on_start(|rt, _param| {{
+                app.action("inner").invoke(#{{ note: "hello" }});
+                rt.start(app.deployment("web")).ready();
+            }});
+        "#
+        )
+    };
+
+    let (engine, mut scope, app, ast) =
+        setup_with_script(&outer(r#""note": #{ kind: "text" },"#));
+
+    let oracle = Arc::new(TestWorldOracle::new());
+    let log = InMemoryActionLog::new();
+    let op = OperationId::new();
+    let reg: Arc<dyn crate::runtime::InstanceRegistry> = registry();
+
+    // Pass 1: the sub-action call is committed, then the barrier suspends.
+    let r = run_pass(
+        &engine,
+        &ast,
+        &app,
+        &mut scope,
+        op.clone(),
+        &log,
+        Arc::clone(&oracle),
+        Arc::clone(&reg),
+    );
+    assert!(matches!(r, OperationResult::Suspended(_)), "pass 1: {r:?}");
+
+    let recorded = log.load().expect("log loads");
+    assert!(
+        recorded.iter().any(|e| matches!(
+            e.call_kind,
+            crate::runtime::barrier::CallKind::SubAction
+        ) && e.extra.as_deref().is_some_and(|x| x.contains("hello"))),
+        "pass 1 should commit the call with its post-validation params: {recorded:?}"
+    );
+
+    // Pass 2: an update has given `inner` a second required param that the
+    // call site does not supply, so validating again would throw. The call
+    // is already committed, so it replays with the params it was committed
+    // with and the operation finishes.
+    let (engine, mut scope, app, ast) = setup_with_script(&outer(
+        r#""note": #{ kind: "text" }, "target": #{ kind: "text" },"#,
+    ));
+    oracle.set(dep("web"), LifecycleState::Ready);
+    let r = run_pass(
+        &engine,
+        &ast,
+        &app,
+        &mut scope,
+        op,
+        &log,
+        Arc::clone(&oracle),
+        Arc::clone(&reg),
+    );
+    assert!(
+        matches!(r, OperationResult::Completed),
+        "a committed sub-action call was validated again instead of replayed: {r:?}"
+    );
+}

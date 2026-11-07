@@ -24,7 +24,7 @@ use crate::defs::app::{SubActionFrame, action_call_lookup, action_call_stack};
 use crate::defs::install::ParamDef;
 use crate::runtime::action_params::{self, ParamValidationError, VolumeLookup};
 use crate::runtime::barrier::runtime::{RuntimeInstance, active_rt, is_in_action_closure};
-use crate::runtime::barrier::{ActionLogEntry, CallKind};
+use crate::runtime::barrier::{ActionLogEntry, CallKind, ReplayMismatch};
 
 // l[impl action.call]
 // r[impl operation.composition]
@@ -71,15 +71,13 @@ pub fn call_action(
     })?;
 
     // r[impl operation.composition.params]
-    let validated_params = validate_call_params(&rt, action_name, params)?;
-
     // r[impl history.action-log.entries]
-    record_subaction_entry(&rt, action_name, &validated_params)?;
+    let call_params = resolve_call_params(&rt, action_name, params)?;
 
     let _frame = SubActionFrame::enter(action_name.clone());
 
     let rt_dyn = Dynamic::from(rt);
-    let params_dyn = json_to_rhai_map(&validated_params);
+    let params_dyn = json_to_rhai_map(&call_params);
 
     let _result = fnptr.call_within_context::<Dynamic>(ctx, (rt_dyn, params_dyn))?;
     Ok(())
@@ -127,35 +125,55 @@ fn action_schema(
         .map(|a| a.params.clone()))
 }
 
+// r[impl operation.composition.params]
 // r[impl history.action-log.entries]
-fn record_subaction_entry(
+/// The params the called closure runs with, and the log entry recording the
+/// call.
+///
+/// A call already in the committed log takes its params from that entry
+/// rather than validating the supplied map again. Validation resolves
+/// `kind: "volume"` params against the site-volume registry and applies the
+/// action's current schema, so it answers to the world rather than to the
+/// script alone: deleting the referenced site volume, or updating the
+/// sub-action's schema, makes it fail on the next pass. The call was
+/// already committed with valid params by then, and the payload exists so
+/// that it can replay with the params it was committed with — which is also
+/// what `r[operation.composition.params]` requires the closure to observe.
+fn resolve_call_params(
     rt: &RuntimeInstance,
     action_name: &ActionName,
-    params: &JsonMap<String, JsonValue>,
-) -> Result<(), Box<EvalAltResult>> {
+    params: Map,
+) -> Result<JsonMap<String, JsonValue>, Box<EvalAltResult>> {
     let Some(ctx) = rt.ctx.as_ref() else {
-        // Stub / language-only context — nothing to record. Tests that
-        // exercise the call surface without a real runtime context
-        // still execute the closure inline.
-        return Ok(());
+        // Stub / language-only context — nothing to record and nothing to
+        // recover. Tests that exercise the call surface without a real
+        // runtime context still execute the closure inline.
+        return validate_call_params(rt, action_name, params);
     };
 
-    let mut g = ctx.lock();
-    if g.is_replaying() {
-        // The committed entry at this call_index already describes
-        // this sub-action invocation; advance past it without
-        // emitting a duplicate. Match the order rt.start / rt.exec
-        // / rt.signal use: check is_replaying *before* incrementing
-        // so the boundary case (consuming the last committed entry)
-        // doesn't flip into fresh mode and double-push.
-        g.call_index += 1;
-        return Ok(());
+    // r[impl barrier.replay.positional]
+    // The recorded action name is a literal in the script, so unlike the
+    // params it must match the log: a script edit that changes which
+    // sub-action is called at this position is a divergence, not a replay.
+    {
+        let mut g = ctx.lock();
+        match g.replay_step(CallKind::SubAction, None) {
+            Ok(Some(entry)) => {
+                drop(g);
+                return recover_recorded_params(action_name, &entry);
+            }
+            Ok(None) => {}
+            Err(mismatch) => return Err(Box::<EvalAltResult>::from(mismatch.to_string())),
+        }
     }
 
+    let validated = validate_call_params(rt, action_name, params)?;
+
+    let mut g = ctx.lock();
     let idx = g.call_index;
     let payload = serde_json::json!({
         "action": action_name.as_str(),
-        "params": params,
+        "params": &validated,
     })
     .to_string();
     g.pending.push(ActionLogEntry {
@@ -173,12 +191,75 @@ fn record_subaction_entry(
         )),
         kind: crate::system::breadcrumb::BreadcrumbKind::SubAction {
             name: action_name,
-            params,
+            params: &validated,
         },
         script_pos: None,
     }
     .emit();
-    Ok(())
+    Ok(validated)
+}
+
+// r[impl operation.composition.params]
+/// Read the called action's name and its post-validation params back out of
+/// a committed `SubAction` entry.
+fn recover_recorded_params(
+    action_name: &ActionName,
+    entry: &ActionLogEntry,
+) -> Result<JsonMap<String, JsonValue>, Box<EvalAltResult>> {
+    let payload: JsonValue = entry
+        .extra
+        .as_deref()
+        .map(serde_json::from_str)
+        .transpose()
+        .map_err(|e| -> Box<EvalAltResult> {
+            format!(
+                "replay diverged at call {}: the log records a sub-action call whose \
+                 payload cannot be read ({e})",
+                entry.call_index
+            )
+            .into()
+        })?
+        .ok_or_else(|| -> Box<EvalAltResult> {
+            // An entry with no payload cannot say what it called or with
+            // what, so there is nothing to replay and nothing that could
+            // stand in for it.
+            format!(
+                "replay diverged at call {}: the log records a sub-action call with no \
+                 recorded action or params",
+                entry.call_index
+            )
+            .into()
+        })?;
+
+    let recorded_action = payload.get("action").and_then(JsonValue::as_str);
+    if recorded_action != Some(action_name.as_str()) {
+        return Err(ReplayMismatch::Extra {
+            call_index: entry.call_index,
+            kind: CallKind::SubAction,
+            expected: action_name.as_str().to_owned(),
+            found: recorded_action.map(str::to_owned),
+        }
+        .to_string()
+        .into());
+    }
+
+    match payload.get("params") {
+        Some(JsonValue::Object(params)) => Ok(params.clone()),
+        // A call committed with no params is a call with no params.
+        None | Some(JsonValue::Null) => Ok(JsonMap::new()),
+        Some(other) => Err(format!(
+            "replay diverged at call {}: the log records sub-action params that are not a \
+             map but a {}",
+            entry.call_index,
+            match other {
+                JsonValue::Array(_) => "list",
+                JsonValue::String(_) => "string",
+                JsonValue::Bool(_) => "boolean",
+                _ => "number",
+            }
+        )
+        .into()),
+    }
 }
 
 fn cycle_error(action_name: &ActionName, stack: &[ActionName]) -> Box<EvalAltResult> {

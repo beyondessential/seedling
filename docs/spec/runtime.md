@@ -645,6 +645,11 @@ Some operations must hand a writable or read-only path to an action closure with
 > The runtime applies the called action's declared param schema to the supplied `params` map before invoking the closure, using the same validation rules as operator invocation: required-field enforcement, default application, [reserved-key](language.md#l--action.params) rejection, and `kind: "volume"` resolution against the [operation-scoped volume bindings](#r--operation.volume-param). Validation errors throw before the closure runs.
 > The result of validation must be deterministic across replays so that the action log entry recorded for the call (see [history.action-log.entries](#r--history.action-log.entries)) faithfully describes what the closure observed.
 
+> r[operation.composition.params.replay]
+> A sub-action call already recorded in the action log is replayed with the params its entry holds, and is not validated again.
+> Validation answers to the world as it stands — it resolves `kind: "volume"` params against the [operation-scoped volume bindings](#r--operation.volume-param) and applies the action's declared schema as the current definition declares it — so re-running it would let a call that was committed with valid params stop replaying because an operator deleted the referenced site volume or an update changed the schema.
+> A recorded call whose entry names a different action than the one the closure is now calling is a [replay divergence](#r--barrier.replay.positional), not a call to replay.
+
 ## Shell Sessions
 
 > r[operation.shell]
