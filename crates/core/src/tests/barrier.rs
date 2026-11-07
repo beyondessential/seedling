@@ -1677,3 +1677,55 @@ fn one_on_a_started_yields_a_single_resource_and_null_when_empty() {
     );
     assert!(matches!(r, OperationResult::Completed), "{r:?}");
 }
+
+// r[verify barrier.satisfaction.recorded]
+#[test]
+fn a_second_barrier_on_one_started_does_not_rearm_the_first_record_each_pass() {
+    // One log entry holds one barrier record, and both barriers on a
+    // `Started` anchor to that entry. A take-over that handed the record to
+    // whichever barrier was waiting rewrote its start on every pass, so the
+    // record churned and the wait it was timing restarted each time.
+    let (engine, mut scope, app, ast) = setup_with_script(
+        r#"
+        let web = app.deployment("web").image("docker.io/library/nginx:latest");
+        app.on_start(|rt, _param| {
+            let started = rt.start(app.deployment("web"));
+            started.running();
+            started.ready();
+        });
+    "#,
+    );
+
+    let oracle = Arc::new(TestWorldOracle::new());
+    let log = InMemoryActionLog::new();
+    let op = OperationId::new();
+    let reg: Arc<dyn crate::runtime::InstanceRegistry> = registry();
+
+    // Pass 1 suspends on `running()`; from pass 2 on, `running()` is
+    // satisfied and `ready()` is not.
+    oracle.set(dep("web"), LifecycleState::Running);
+    for pass in 1..=3 {
+        let r = run_pass(
+            &engine,
+            &ast,
+            &app,
+            &mut scope,
+            op.clone(),
+            &log,
+            Arc::clone(&oracle),
+            Arc::clone(&reg),
+        );
+        assert!(
+            matches!(r, OperationResult::Suspended(_)),
+            "pass {pass}: {r:?}"
+        );
+    }
+
+    let entries = log.load().expect("log loads");
+    assert_eq!(entries.len(), 1, "one call, one entry: {entries:?}");
+    let record = entries[0].barrier.as_ref().expect("the call has a record");
+    assert!(
+        record.satisfied,
+        "the record churned between the two barriers instead of holding the one that passed: {record:?}"
+    );
+}

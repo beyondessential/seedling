@@ -10,7 +10,8 @@ use crate::defs::volume::{
     ExternalVolume, OperationVolumeBinding, Volume, validate_volume_write_path,
 };
 use crate::runtime::barrier::{
-    ActionLogEntry, BarrierCondition, BarrierRecord, CallKind, SharedContext, VolumeWriteTarget,
+    ActionLogEntry, BarrierCondition, BarrierRecord, CallKind, ReplayContext, SharedContext,
+    VolumeWriteTarget,
 };
 use crate::runtime::registry::{InstanceRegistry, RegistryError};
 use crate::runtime::{LifecycleState, ResourceInstance, restart_gens};
@@ -364,6 +365,79 @@ pub fn extract_cancel_hit(err: &EvalAltResult) -> bool {
 /// pairs for those that declare a non-empty image reference. Anonymous
 /// resources arrive with a def attached; named ones are looked up in the
 /// action-context AppDef (the thread-local set by [`ActionClosureGuard`]).
+// r[impl barrier.replay.anchor]
+/// What to do when a barrier's entry already holds a record.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AnchorWrite {
+    /// Write over it.
+    ///
+    /// For recording that a barrier passed. An entry holds one record and a
+    /// `Started` may carry several barriers, so the one kept is the one
+    /// written last. That is the right one to keep: on the next pass the
+    /// closure reaches the earlier barriers first and they are answered
+    /// from the world, while the barrier the closure is furthest through is
+    /// the one whose passing the world may no longer show — a job that ran
+    /// and exited, say.
+    Replace,
+    /// Leave it, and write only where the entry holds no record.
+    ///
+    /// For recording the start a deadline is measured from. Handing the
+    /// record to whichever barrier is currently waiting would rewrite that
+    /// start on every pass, so the wait it times would restart each time
+    /// and the deadline could never expire.
+    OnlyIfAbsent,
+}
+
+// r[impl barrier.replay.anchor]
+// r[impl barrier.satisfaction.recorded]
+/// Record `record` against the log entry of the call a barrier belongs to,
+/// reporting whether that entry was found.
+///
+/// The entry is this pass's own where the pass has made the call, and the
+/// committed one where the pass is replaying past it. Correcting a
+/// committed entry means re-emitting it, so the copy carries the rest of
+/// the entry unchanged and only its barrier differs; synthesising a fresh
+/// entry instead would claim a position the committed one already holds and
+/// leave every later `rt.*` call reading the wrong one.
+///
+/// A start already recorded for the same state is kept whatever is written
+/// over it, since that is the start the state's deadline is measured from.
+fn record_at_anchor(
+    ctx: &mut ReplayContext,
+    call_index: usize,
+    record: BarrierRecord,
+    write: AnchorWrite,
+) -> bool {
+    let pending_pos = ctx.pending.iter().position(|e| e.call_index == call_index);
+    let mut entry = match pending_pos {
+        Some(pos) => ctx.pending[pos].clone(),
+        None => match ctx.committed.iter().find(|e| e.call_index == call_index) {
+            Some(committed) => committed.clone(),
+            None => return false,
+        },
+    };
+
+    if write == AnchorWrite::OnlyIfAbsent && entry.barrier.is_some() {
+        return true;
+    }
+
+    let started = entry
+        .barrier
+        .as_ref()
+        .filter(|b| b.required_state == record.required_state)
+        .and_then(|b| b.started_at_secs);
+    entry.barrier = Some(BarrierRecord {
+        started_at_secs: started.or(record.started_at_secs),
+        ..record
+    });
+
+    match pending_pos {
+        Some(pos) => ctx.pending[pos] = entry,
+        None => ctx.pending.push(entry),
+    }
+    true
+}
+
 // l[impl collection.only]
 // l[impl collection.except]
 /// How a `Started`'s resources are matched against another collection:
@@ -2206,39 +2280,17 @@ impl Started {
             // long wait that had since passed went on inflating the
             // re-poll cadence of every barrier after it.
             if let Some(idx) = self.origin_index {
-                let record = BarrierRecord {
-                    required_state: required,
-                    deadline_secs,
-                    satisfied: true,
-                    started_at_secs: Some(now),
-                };
-                if let Some(entry) = g.pending.iter_mut().find(|e| e.call_index == idx) {
-                    let started = entry
-                        .barrier
-                        .as_ref()
-                        .filter(|b| b.required_state == required)
-                        .and_then(|b| b.started_at_secs);
-                    entry.barrier = Some(BarrierRecord {
-                        started_at_secs: started.or(Some(now)),
-                        ..record
-                    });
-                } else if let Some(committed) = g.committed.iter().find(|e| e.call_index == idx) {
-                    // The entry lives in the committed log, so correcting it
-                    // means re-emitting it. The persisted form is replaced
-                    // wholesale on commit, so the copy carries the rest of
-                    // the entry unchanged and only the barrier differs.
-                    let started = committed
-                        .barrier
-                        .as_ref()
-                        .filter(|b| b.required_state == required)
-                        .and_then(|b| b.started_at_secs);
-                    let mut corrected = committed.clone();
-                    corrected.barrier = Some(BarrierRecord {
-                        started_at_secs: started.or(Some(now)),
-                        ..record
-                    });
-                    g.pending.push(corrected);
-                }
+                record_at_anchor(
+                    &mut g,
+                    idx,
+                    BarrierRecord {
+                        required_state: required,
+                        deadline_secs,
+                        satisfied: true,
+                        started_at_secs: Some(now),
+                    },
+                    AnchorWrite::Replace,
+                );
             }
             return Ok(self.clone());
         }
@@ -2276,14 +2328,8 @@ impl Started {
             deadline_secs,
         };
 
-        // The barrier records its wait against its own entry. A record
-        // already timing a wait for this same state is left alone, since
-        // replacing it would reset the start its deadline is measured from.
-        // Anything else is this barrier's to take over: no record at all,
-        // or one an earlier barrier on the same `Started` left satisfied.
-        // `s.running()` then `s.ready()` share one entry, and keeping the
-        // satisfied Running record would leave the Ready wait with no
-        // start, so its deadline could never expire.
+        // The barrier records the start its deadline is measured from
+        // against its own entry, where the entry has no record yet.
         // r[impl barrier.satisfaction.recorded]
         // r[impl barrier.replay.anchor]
         let waiting = BarrierRecord {
@@ -2292,43 +2338,10 @@ impl Started {
             satisfied: false,
             started_at_secs: Some(now),
         };
-        let records_this_wait = |e: &ActionLogEntry| {
-            e.barrier
-                .as_ref()
-                .is_some_and(|b| b.required_state == required && !b.satisfied)
-        };
-        let anchor = self.origin_index;
-        let in_pending = anchor.is_some_and(|idx| g.pending.iter().any(|e| e.call_index == idx));
-        let in_committed =
-            anchor.is_some_and(|idx| g.committed.iter().any(|e| e.call_index == idx));
-
-        if in_pending {
-            let entry = g
-                .pending
-                .iter_mut()
-                .find(|e| Some(e.call_index) == anchor)
-                .expect("checked just above");
-            if !records_this_wait(entry) {
-                entry.barrier = Some(waiting);
-            }
-        } else if in_committed {
-            // On replay the entry is in the committed log, so correcting it
-            // means re-emitting it; the persisted form is replaced
-            // wholesale, so the copy carries the rest of the entry
-            // unchanged. Synthesising a fresh entry here instead would
-            // claim a slot the committed entry already holds and leave
-            // every later rt.* call reading the wrong one.
-            let committed = g
-                .committed
-                .iter()
-                .find(|e| Some(e.call_index) == anchor)
-                .expect("checked just above");
-            if !records_this_wait(committed) {
-                let mut corrected = committed.clone();
-                corrected.barrier = Some(waiting);
-                g.pending.push(corrected);
-            }
-        } else {
+        let anchored = self
+            .origin_index
+            .is_some_and(|idx| record_at_anchor(&mut g, idx, waiting, AnchorWrite::OnlyIfAbsent));
+        if !anchored {
             // No entry behind this barrier: the closure asserted it on a
             // resource set never tracked via rt.start. The language spec
             // does not promise that works, but it is given an entry rather
@@ -2339,7 +2352,12 @@ impl Started {
                 call_index: idx,
                 call_kind: CallKind::Start,
                 resources: self.resources.clone(),
-                barrier: Some(waiting),
+                barrier: Some(BarrierRecord {
+                    required_state: required,
+                    deadline_secs,
+                    satisfied: false,
+                    started_at_secs: Some(now),
+                }),
                 extra: None,
             });
         }

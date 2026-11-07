@@ -737,7 +737,8 @@ Some operations must hand a writable or read-only path to an action closure with
 
 > r[barrier.satisfaction.recorded]
 > That a barrier's condition was met is recorded against the barrier's [anchoring entry](#r--barrier.replay.anchor), whether it was met on the pass that first reached the barrier or on a later one.
-> Each barrier likewise records when its own wait began, so a second barrier on the same `Started` is timed from when that barrier began waiting rather than from the first's.
+> An entry carries one such record, so where a `Started` carries several barriers the record is the one most recently written.
+> The start a barrier's [deadline](#r--barrier.deadline) is measured from, once recorded, stands until that barrier is satisfied: re-recording it on each pass would restart the wait it measures, and the deadline could never expire.
 >
 > A barrier still recorded as waiting counts toward the [poll cadence](#r--barrier.suspension.poll-backoff) for as long as the record stands.
 > A barrier that has passed but was never recorded as passed therefore goes on lengthening the cadence of every barrier after it, so an operation whose first barrier waited a long time re-polls the next one slowly even though it is ready to proceed.
