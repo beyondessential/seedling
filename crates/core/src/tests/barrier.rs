@@ -1707,37 +1707,39 @@ fn a_second_barrier_on_one_started_does_not_rearm_its_wait_each_pass() {
     let op = OperationId::new();
     let reg: Arc<dyn crate::runtime::InstanceRegistry> = registry();
 
-    let starts: Vec<Option<u64>> = (0..3)
-        .map(|pass| {
-            let r = run_pass(
-                &engine,
-                &ast,
-                &app,
-                &mut scope,
-                op.clone(),
-                &log,
-                Arc::clone(&oracle),
-                Arc::clone(&reg),
-            );
-            assert!(
-                matches!(r, OperationResult::Suspended(_)),
-                "pass {pass}: {r:?}"
-            );
-            // A second of real time per pass, so a start that was rewritten
-            // reads as a different second rather than the same one.
-            std::thread::sleep(std::time::Duration::from_millis(1100));
-            let entries = log.load().expect("log loads");
-            assert_eq!(entries.len(), 1, "one call, one entry: {entries:?}");
-            entries[0].barrier.as_ref().and_then(|b| b.started_at_secs)
-        })
-        .collect();
+    let recorded_start = |log: &InMemoryActionLog| {
+        let entries = log.load().expect("log loads");
+        assert_eq!(entries.len(), 1, "one call, one entry: {entries:?}");
+        entries[0].barrier.as_ref().and_then(|b| b.started_at_secs)
+    };
+    let pass = |scope: &mut rhai::Scope<'static>| {
+        let r = run_pass(
+            &engine,
+            &ast,
+            &app,
+            scope,
+            op.clone(),
+            &log,
+            Arc::clone(&oracle),
+            Arc::clone(&reg),
+        );
+        assert!(matches!(r, OperationResult::Suspended(_)), "{r:?}");
+    };
 
-    // The Ready wait begins on the second pass, the first having been spent
-    // reaching Running, and stands from there.
-    assert!(starts[1].is_some(), "the waiting barrier records a start");
+    // The first pass reaches Running and records the Ready wait behind it.
+    pass(&mut scope);
+    let first = recorded_start(&log);
+    assert!(first.is_some(), "the waiting barrier records a start");
+
+    // A second of real time, so a start that was rewritten reads as a
+    // different second rather than the same one.
+    std::thread::sleep(std::time::Duration::from_millis(1100));
+
+    pass(&mut scope);
     assert_eq!(
-        starts[2], starts[1],
-        "the wait was restarted on a later pass, so its deadline could never expire: {starts:?}"
+        recorded_start(&log),
+        first,
+        "the wait was restarted on a later pass, so its deadline could never expire"
     );
 }
 
@@ -1853,33 +1855,35 @@ fn the_second_barrier_on_one_started_still_times_out() {
     let op = OperationId::new();
     let reg: Arc<dyn crate::runtime::InstanceRegistry> = registry();
 
-    // The deployment reaches Running and stops there, so `ready(1)` waits
-    // and must eventually give up. Its wait starts on the first pass that
-    // reaches it, and the passes after that must not restart it.
-    let mut outcome = None;
-    for _ in 0..6 {
-        match run_pass(
-            &engine,
-            &ast,
-            &app,
-            &mut scope,
-            op.clone(),
-            &log,
-            Arc::clone(&oracle),
-            Arc::clone(&reg),
-        ) {
-            OperationResult::Suspended(_) => {
-                std::thread::sleep(std::time::Duration::from_millis(400))
-            }
-            other => {
-                outcome = Some(other);
-                break;
-            }
-        }
-    }
+    // The deployment reaches Running and stops there, so the first pass
+    // records the Ready wait behind the Running barrier it satisfies.
+    let r = run_pass(
+        &engine,
+        &ast,
+        &app,
+        &mut scope,
+        op.clone(),
+        &log,
+        Arc::clone(&oracle),
+        Arc::clone(&reg),
+    );
+    assert!(matches!(r, OperationResult::Suspended(_)), "pass 1: {r:?}");
 
-    match outcome {
-        Some(OperationResult::Failed(err)) => {
+    // Past the one-second deadline that wait was recorded with.
+    std::thread::sleep(std::time::Duration::from_millis(1100));
+
+    let r = run_pass(
+        &engine,
+        &ast,
+        &app,
+        &mut scope,
+        op,
+        &log,
+        Arc::clone(&oracle),
+        Arc::clone(&reg),
+    );
+    match r {
+        OperationResult::Failed(err) => {
             let msg = err.to_string();
             assert!(
                 msg.contains("deadline"),
