@@ -180,7 +180,7 @@ async fn handle(
         // the policy's regular issuer". Any other non-2xx would be treated
         // as an error rather than a fall-through signal, so it is also what
         // keeps the proxy from ordering when it must not.
-        Ok(None) => match fall_through(&state.coordinator, &hostname) {
+        Ok(None) => match fall_through(&state.coordinator, &hostname).await {
             FallThrough::Allow => StatusCode::NO_CONTENT.into_response(),
             FallThrough::Withhold => (
                 StatusCode::SERVICE_UNAVAILABLE,
@@ -248,12 +248,27 @@ fn normalise_sni(name: &str) -> String {
 /// coordinator holds for every hostname, which is where it is kept and the only
 /// place to forget it. A second memory of the same answer would be a second age
 /// for it, and one no operator action could clear.
-fn fall_through(coordinator: &Coordinator, hostname: &str) -> FallThrough {
-    match coordinator.chain_decisions(Some(hostname)) {
-        Some(decisions) => decisions
-            .get(hostname)
-            .map_or(FallThrough::Allow, endpoint_gate),
-        None => FallThrough::Allow,
+///
+/// Run on the blocking pool: when the state is stale it is rebuilt here, which
+/// walks the proxy's certificate cache and waits on the database thread, and
+/// every handshake that finds it stale waits on that one rebuild. Parked on an
+/// async worker, a burst of them would take the workers the rest of the daemon's
+/// requests run on.
+async fn fall_through(coordinator: &Arc<Coordinator>, hostname: &str) -> FallThrough {
+    let (coordinator, name) = (Arc::clone(coordinator), hostname.to_owned());
+    let decided = tokio::task::spawn_blocking(move || {
+        coordinator
+            .chain_decisions(Some(&name))
+            .map(|decisions| decisions.get(&name).map(endpoint_gate))
+    })
+    .await;
+    match decided {
+        Ok(Some(Some(gate))) => gate,
+        Ok(Some(None) | None) => FallThrough::Allow,
+        Err(e) => {
+            tracing::warn!(%hostname, error = %e, "the gate's decision did not complete");
+            FallThrough::Allow
+        }
     }
 }
 
@@ -746,7 +761,7 @@ mod tests {
         // Different names, all decided against the one state.
         for name in ["shop.example.com", "a.example.com", "b.example.com"] {
             assert_eq!(
-                fall_through(&coordinator, name),
+                fall_through(&coordinator, name).await,
                 if name == "shop.example.com" {
                     FallThrough::Withhold
                 } else {
@@ -761,7 +776,7 @@ mod tests {
         );
 
         coordinator.forget_chain_state();
-        let _ = fall_through(&coordinator, "shop.example.com");
+        let _ = fall_through(&coordinator, "shop.example.com").await;
         assert_eq!(
             counting.0.load(std::sync::atomic::Ordering::SeqCst),
             2,
