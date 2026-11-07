@@ -1606,33 +1606,57 @@ pub(crate) fn uninstall_app(state: &OiState, params: AppParams) -> HandlerResult
     // operations. Without this the reconciler starts tearing down the very
     // resources the closure is still driving.
     //
-    // The lock is held across the phase transition below, not just the check.
-    // An action admitted in between would have passed `invoke_action`'s phase
-    // gate while the app still read `Installed`, and would then run its
-    // closure under the teardown: the same bug over a narrower window.
-    // `invoke_action` re-checks the phase under this same lock, so only two
-    // orderings remain — the action is admitted and the uninstall is refused,
-    // or the uninstall lands and the action is refused.
+    // The lock is held across the phase transition below, not just the check,
+    // because the transition is what the scheduler reads when it admits an
+    // operation: holding it across both makes them one decision. Only the
+    // transition is inside — every admission for every app waits behind this
+    // lock, so the cleanup that follows, which admission never looks at, is
+    // left outside it.
     let scheduled = state.scheduler.lock();
-    {
-        let sched = &*scheduled;
-        if sched.has_operation_for(&params.app) {
-            let holder = match sched.active().filter(|a| a.app == params.app) {
-                Some(a) => format!("'{}' is in progress", a.action),
-                None => "an action is queued".to_owned(),
-            };
-            return Err(OiError::new(
-                ErrorCode::OperationInProgress,
-                format!("cannot uninstall {name} while {holder}; cancel it first, then uninstall"),
-            ));
-        }
+    if scheduled.has_operation_for(&params.app) {
+        // Name whichever operation holds the app. An operator told only that
+        // "an action is queued" cannot tell what to cancel, which is the whole
+        // point of naming it.
+        let holder = scheduled
+            .active()
+            .filter(|a| a.app == params.app)
+            .map(|a| format!("'{}' is in progress", a.action))
+            .or_else(|| {
+                scheduled
+                    .queue_iter()
+                    .find(|q| q.app == params.app)
+                    .map(|q| format!("'{}' is queued", q.action))
+            })
+            .unwrap_or_else(|| "an action is queued".to_owned());
+        return Err(OiError::new(
+            ErrorCode::OperationInProgress,
+            format!("cannot uninstall {name} while {holder}; cancel it first, then uninstall"),
+        ));
+    }
+    // The phase was read and released before this lock, so a second uninstall
+    // can have arrived in between. Both would otherwise transition, delete the
+    // same rows again and wake the reconciler twice over one teardown.
+    if !matches!(*phase_arc.lock(), AppPhase::Installed) {
+        return Err(OiError::new(
+            ErrorCode::NotInstalled,
+            format!("app is not installed: {name}"),
+        ));
     }
 
     // Persist the transition before waking the reconciler, and before the
-    // scheduler lock goes, so no action is admitted against the old phase.
+    // scheduler lock goes, so no operation is admitted against the old phase.
     let name_owned = params.app.clone();
     state.db.call(move |db| {
         transition_phase(&phase_arc, AppPhase::Uninstalling, db, &name_owned, "");
+    });
+    // The app now reads `Uninstalling`, so an operation waiting on this lock
+    // is refused by the scheduler's own gate.
+    drop(scheduled);
+
+    // Keyed cleanup, outside the lock: none of it bears on what may be
+    // admitted, and holding a node-wide lock across it stalls every app.
+    let name_owned = params.app.clone();
+    state.db.call(move |db| {
         // i[impl scale.reset-on-uninstall]
         if let Err(e) = scaling::delete_scaling_decisions_for_app(db, &name_owned) {
             tracing::warn!(app = %name_owned, "failed to clear scaling decisions on uninstall: {e}");
@@ -1648,9 +1672,6 @@ pub(crate) fn uninstall_app(state: &OiState, params: AppParams) -> HandlerResult
             tracing::warn!(app = %name_owned, "failed to clear stopped resources on uninstall: {e}");
         }
     });
-    // The app now reads `Uninstalling`, so an action waiting on this lock
-    // finds a phase it is refused against.
-    drop(scheduled);
 
     // i[impl event.types]
     // Notify clients the app entered Uninstalling. The reconciler will emit a

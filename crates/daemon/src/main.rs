@@ -1141,7 +1141,10 @@ async fn main() {
                     // excluded — otherwise a permanently-failing install
                     // whose schedule keeps re-acquiring the scheduler slot
                     // would block operator updates.
-                    let app_generations: std::collections::HashMap<AppName, u64> = {
+                    let app_generations: std::collections::HashMap<
+                        AppName,
+                        seedling_core::runtime::schedules::ScheduledApp,
+                    > = {
                         let reg = schedule_registry.read();
                         reg.list()
                             .into_iter()
@@ -1149,7 +1152,14 @@ async fn main() {
                                 let entry = reg.get(name.as_str())?;
                                 let phase = entry.phase.lock().clone();
                                 if matches!(phase, seedling_core::runtime::AppPhase::Installed) {
-                                    Some((name, entry.current_generation))
+                                    // The handle travels on so the scheduler
+                                    // can read the phase again under its own
+                                    // lock: this reading is already stale by
+                                    // the time a firing is admitted.
+                                    Some((
+                                        name,
+                                        (entry.current_generation, Arc::clone(&entry.phase)),
+                                    ))
                                 } else {
                                     None
                                 }
@@ -1163,7 +1173,7 @@ async fn main() {
                             db,
                             &mut sched,
                             now,
-                            &|app_name| app_generations.get(app_name).copied(),
+                            &|app_name| app_generations.get(app_name).cloned(),
                         );
                         drop(sched);
                         fired

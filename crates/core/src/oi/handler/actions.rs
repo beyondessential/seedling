@@ -216,25 +216,18 @@ pub(crate) fn invoke_action(
     let (result, op_id_str) = {
         let mut sched = state.scheduler.lock();
         // r[impl app.uninstall.exclusive]
-        // i[action.not-installed-gate]
         // The phase read above was taken and released before this lock, so an
-        // uninstall could have landed in between and this action would run its
-        // closure under the teardown. Uninstall holds this same lock across
-        // its own transition, so reading the phase here is reading it after
-        // the uninstall either happened or did not.
-        if !matches!(*phase_handle.lock(), AppPhase::Installed) {
-            return Err(OiError::new(
-                ErrorCode::NotInstalled,
-                format!("app is not installed: {app_name}"),
-            ));
-        }
-        let result = sched.request(
+        // uninstall could have landed in between. The scheduler reads the
+        // phase under its own lock and refuses an app being torn down, so the
+        // decision is made where every admission passes rather than here.
+        let result = sched.admit(
             app_name,
             action_name,
             action_params.clone(),
             current_generation,
             current_generation,
             "operator",
+            &phase_handle,
         );
         let op_id = match &result {
             ScheduleResult::Accepted => sched.active().map(|a| a.operation_id.clone()),
@@ -275,6 +268,11 @@ pub(crate) fn invoke_action(
         ScheduleResult::Rejected(RejectReason::SameAppAlreadyQueued) => Err(OiError::new(
             ErrorCode::AlreadyQueued,
             format!("already queued for app: {app_name}"),
+        )),
+        // r[impl app.uninstall.exclusive]
+        ScheduleResult::Rejected(RejectReason::AppUninstalling) => Err(OiError::new(
+            ErrorCode::NotInstalled,
+            format!("app is being uninstalled: {app_name}"),
         )),
     }
 }

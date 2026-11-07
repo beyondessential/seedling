@@ -38,6 +38,59 @@ fn now_from_ms(ms: i64) -> SystemTime {
     UNIX_EPOCH + Duration::from_millis(ms as u64)
 }
 
+fn phase(p: AppPhase) -> Mutex<AppPhase> {
+    Mutex::new(p)
+}
+
+// -----------------------------------------------------------------------
+// Scheduler — admission
+// -----------------------------------------------------------------------
+
+// r[verify app.uninstall.exclusive]
+// The gate used to live in the handlers, one copy each, and only some of them
+// had it: an operator action, a param change's handler, a scheduled firing and
+// an install all admit operations, and a rule applied per caller holds only
+// for the callers that know it. Deciding it here is what makes it hold for all
+// of them, so this is the test that the decision is actually made here.
+#[test]
+fn an_app_being_uninstalled_is_refused() {
+    let mut s = Scheduler::new();
+    assert_eq!(
+        s.admit(
+            &app("app1"),
+            &act("backup"),
+            serde_json::Map::new(),
+            1,
+            1,
+            "operator",
+            &phase(AppPhase::Uninstalling),
+        ),
+        ScheduleResult::Rejected(RejectReason::AppUninstalling)
+    );
+    assert!(
+        s.active().is_none(),
+        "a refused request takes no slot, so the teardown is not held up behind it"
+    );
+}
+
+// r[verify app.uninstall.exclusive]
+#[test]
+fn an_installed_app_is_admitted() {
+    let mut s = Scheduler::new();
+    assert_eq!(
+        s.admit(
+            &app("app1"),
+            &act("backup"),
+            serde_json::Map::new(),
+            1,
+            1,
+            "operator",
+            &phase(AppPhase::Installed),
+        ),
+        ScheduleResult::Accepted
+    );
+}
+
 // -----------------------------------------------------------------------
 // Scheduler — single-app behaviour
 // -----------------------------------------------------------------------

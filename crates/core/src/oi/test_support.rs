@@ -211,10 +211,15 @@ mod tests {
 
         let app = AppName::new("statusapp").expect("app name");
         let action = ActionName::new("install").expect("action name");
-        oi.state
-            .scheduler
-            .lock()
-            .request(&app, &action, serde_json::Map::new(), 1, 1, "test");
+        oi.state.scheduler.lock().admit(
+            &app,
+            &action,
+            serde_json::Map::new(),
+            1,
+            1,
+            "test",
+            &parking_lot::Mutex::new(crate::runtime::apps::AppPhase::Installed),
+        );
 
         let busy = oi.call("/server/status", json!({})).unwrap();
         assert_eq!(busy["active_operations"], 1, "one operation active");

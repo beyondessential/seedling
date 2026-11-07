@@ -1,10 +1,21 @@
+use std::sync::Arc;
+
 use jiff::{SignedDuration, Timestamp};
+use parking_lot::Mutex;
 use seedling_protocol::names::{ActionName, AppName};
 
 use crate::defs::action::parse_cron_expr;
+use crate::runtime::apps::AppPhase;
 use crate::runtime::barrier::OperationId;
 use crate::runtime::db::{self, Db};
 use crate::runtime::scheduler::{ScheduleResult, Scheduler};
+
+/// What firing a schedule needs to know about its app: the generation to fire
+/// against, and the phase the scheduler decides admission on.
+///
+/// The phase travels as a handle rather than a value because the scheduler
+/// reads it under its own lock, after the caller looked the app up.
+pub type ScheduledApp = (u64, Arc<Mutex<AppPhase>>);
 
 pub struct FiredSchedule {
     pub app: AppName,
@@ -29,7 +40,7 @@ pub fn check_due_schedules(
     db: &Db,
     scheduler: &mut Scheduler,
     now: Timestamp,
-    app_generations: &dyn Fn(&AppName) -> Option<u64>,
+    installed_app: &dyn Fn(&AppName) -> Option<ScheduledApp>,
 ) -> Vec<FiredSchedule> {
     let rows = match db::list_all_schedules(db) {
         Ok(r) => r,
@@ -85,7 +96,7 @@ pub fn check_due_schedules(
         // boundary, so we do not fire repeatedly for older missed windows.
         if next_fire <= now {
             // r[impl schedule.fire.installed-only]
-            let Some(generation) = app_generations(&row.app) else {
+            let Some((generation, phase)) = installed_app(&row.app) else {
                 tracing::debug!(
                     app = %row.app,
                     action = %row.action,
@@ -93,13 +104,18 @@ pub fn check_due_schedules(
                 );
                 continue;
             };
-            let result = scheduler.request(
+            // r[impl app.uninstall.exclusive]
+            // The phase behind `installed_app` was read before the scheduler
+            // was locked, so an uninstall can have landed in between. The
+            // scheduler reads it again under its own lock.
+            let result = scheduler.admit(
                 &row.app,
                 &row.action,
                 serde_json::Map::new(),
                 generation,
                 generation,
                 "schedule",
+                &phase,
             );
 
             let accepted = matches!(result, ScheduleResult::Accepted);
@@ -207,6 +223,12 @@ impl ScheduleTicker {
 
 #[cfg(test)]
 mod tests {
+    /// An app the scheduler will admit, for a test driving the firing logic
+    /// rather than the phase gate.
+    fn installed() -> Arc<Mutex<AppPhase>> {
+        Arc::new(Mutex::new(AppPhase::Installed))
+    }
+
     use super::*;
     use crate::runtime::db::Db;
 
@@ -286,7 +308,7 @@ mod tests {
         .unwrap();
 
         let mut scheduler = Scheduler::new();
-        let fired = check_due_schedules(&db, &mut scheduler, now, &|_| Some(1));
+        let fired = check_due_schedules(&db, &mut scheduler, now, &|_| Some((1, installed())));
         assert_eq!(fired.len(), 1);
         assert_eq!(fired[0].app, "myapp");
         assert_eq!(fired[0].action, "backup");
@@ -319,12 +341,13 @@ mod tests {
 
         let now: Timestamp = "2026-04-21T18:37:22Z".parse().unwrap();
         let mut scheduler = Scheduler::new();
-        let fired = check_due_schedules(&db, &mut scheduler, now, &|_| Some(1));
+        let fired = check_due_schedules(&db, &mut scheduler, now, &|_| Some((1, installed())));
         assert_eq!(fired.len(), 1, "missed hourly schedule must catch up");
 
         // After firing we record last_fired_at = now, so the immediate next
         // check sees the next boundary still in the future.
-        let fired_again = check_due_schedules(&db, &mut scheduler, now, &|_| Some(1));
+        let fired_again =
+            check_due_schedules(&db, &mut scheduler, now, &|_| Some((1, installed())));
         assert!(
             fired_again.is_empty(),
             "second check at same instant must not refire"

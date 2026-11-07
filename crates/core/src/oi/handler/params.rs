@@ -207,7 +207,7 @@ pub(crate) fn schedule_on_change(
     param_name: &ParamName,
     generation: generations::Generation,
 ) -> Result<&'static str, OiError> {
-    let (has_on_change, is_installed, tick_notify) = {
+    let (has_on_change, is_installed, tick_notify, phase_handle) = {
         let reg = state.registry.read();
         let entry = reg.get(app.as_str()).expect("confirmed registered");
         let has = entry.app.def.load().param_changes.contains(param_name);
@@ -216,7 +216,7 @@ pub(crate) fn schedule_on_change(
             AppPhase::Installed | AppPhase::Uninstalling
         );
         let notify = Arc::clone(&entry.tick_notify);
-        (has, installed, notify)
+        (has, installed, notify, Arc::clone(&entry.phase))
     };
 
     if !(has_on_change && is_installed) {
@@ -227,13 +227,18 @@ pub(crate) fn schedule_on_change(
     // action identifier. Param names follow the same bsl.name rules.
     let param_action = seedling_protocol::names::ActionName::new_unchecked(param_name.as_str());
     let mut sched = state.scheduler.lock();
-    let result = sched.request(
+    // r[impl app.uninstall.exclusive]
+    // The phase above was read before this lock and admits `Uninstalling`, so
+    // a handler could be dispatched into a teardown already under way. The
+    // scheduler reads the phase under its own lock and refuses it.
+    let result = sched.admit(
         app,
         &param_action,
         serde_json::Map::new(),
         source_generation,
         generation,
         "param_change",
+        &phase_handle,
     );
     match result {
         ScheduleResult::Accepted => {
@@ -273,6 +278,11 @@ pub(crate) fn schedule_on_change(
         ScheduleResult::Rejected(RejectReason::SameAppAlreadyQueued) => Err(OiError::new(
             ErrorCode::AlreadyQueued,
             format!("already queued for app: {app}"),
+        )),
+        // r[impl app.uninstall.exclusive]
+        ScheduleResult::Rejected(RejectReason::AppUninstalling) => Err(OiError::new(
+            ErrorCode::NotInstalled,
+            format!("app is being uninstalled: {app}"),
         )),
     }
 }
