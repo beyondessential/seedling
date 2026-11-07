@@ -62,20 +62,26 @@ impl ActionLog for InMemoryActionLog {
     fn commit(&self, new_entries: &[ActionLogEntry]) {
         let mut entries = self.entries.lock();
         // r[impl reconciliation.idempotency]
+        // r[impl history.action-log.entries]
+        // A re-emitted entry replaces the one at its position outright, as
+        // the database log's INSERT OR REPLACE does. This used to merge
+        // only a satisfied flag that had turned true, so a correction that
+        // recorded a barrier as *waiting* — its start and its deadline —
+        // was dropped here while landing in the database. An operation then
+        // behaved differently depending on which log backed it, and the
+        // paths that correction feeds could not be tested against the
+        // in-memory log the tests use.
+        //
+        // A re-emitted entry is always a whole entry: every caller that
+        // claims a position already held clones the committed entry and
+        // changes the one field it means to.
         for entry in new_entries {
-            if let Some(existing) = entries
+            match entries
                 .iter_mut()
                 .find(|e| e.call_index == entry.call_index)
             {
-                // Update satisfaction status if it changed.
-                if let (Some(nb), Some(eb)) = (&entry.barrier, &mut existing.barrier)
-                    && nb.satisfied
-                {
-                    eb.satisfied = true;
-                    eb.started_at_secs = nb.started_at_secs.or(eb.started_at_secs);
-                }
-            } else {
-                entries.push(entry.clone());
+                Some(existing) => *existing = entry.clone(),
+                None => entries.push(entry.clone()),
             }
         }
     }
