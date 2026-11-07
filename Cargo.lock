@@ -5713,6 +5713,7 @@ dependencies = [
  "seedling-core",
  "seedling-protocol",
  "serde_json",
+ "tempfile",
  "tokio",
  "tracing",
  "whoami",
