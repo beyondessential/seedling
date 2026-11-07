@@ -2071,6 +2071,7 @@ mod tests {
             ObservationFact::VolumeMissing,
             ObservationFact::VolumeBackendMismatch,
             ObservationFact::UnitActive,
+            ObservationFact::UnitActivating,
             ObservationFact::UnitInactive,
             ObservationFact::UnitFailed,
             ObservationFact::UnitStartLimitHit,

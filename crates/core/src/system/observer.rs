@@ -8,7 +8,7 @@ use crate::{
     runtime::identity::ResourceInstance,
     system::{
         System,
-        types::{ActiveState, ContainerHealth, ContainerStatus, ObservationFact},
+        types::{ActiveState, ContainerHealth, ContainerStatus, ObservationFact, UnitState},
     },
 };
 
@@ -230,24 +230,7 @@ impl Observer {
             }
         }
 
-        // r[impl autonomous.restart.start-limit-hit]
-        // sub-state `start-limit-hit` is systemd's "I gave up" signal — the
-        // unit has burned through `StartLimitBurst` restarts within
-        // `StartLimitIntervalSec`. It is reported alongside `failed` and is
-        // distinct from a transient failure because no further automatic
-        // recovery will happen.
-        let unit_fact = match unit_state.as_ref() {
-            None => ObservationFact::UnitGone,
-            Some(s) if matches!(s.active, ActiveState::Failed) && s.sub == "start-limit-hit" => {
-                ObservationFact::UnitStartLimitHit
-            }
-            Some(s) => match s.active {
-                ActiveState::Inactive | ActiveState::Deactivating => ObservationFact::UnitInactive,
-                ActiveState::Active | ActiveState::Activating => ObservationFact::UnitActive,
-                ActiveState::Failed => ObservationFact::UnitFailed,
-            },
-        };
-        facts.push((unit_fact, now));
+        facts.push((unit_fact(unit_state.as_ref()), now));
 
         // r[impl autonomous.restart.record]
         // The counter is reported separately from the unit's state because it
@@ -270,6 +253,37 @@ impl Observer {
     }
 }
 
+/// What the supervisor's report of a unit says about it.
+///
+/// Named and separated from the observation pass so the distinction it draws
+/// is one decision in one place: the rest of the runtime reads the fact, not
+/// the supervisor's vocabulary.
+// r[impl autonomous.restart.start-limit-hit]
+// `start-limit-hit` is systemd's "I gave up" signal — the unit has burned
+// through `StartLimitBurst` restarts within `StartLimitIntervalSec`. It is
+// reported alongside `failed` and is distinct from a transient failure
+// because no further automatic recovery will happen.
+fn unit_fact(unit_state: Option<&UnitState>) -> ObservationFact {
+    match unit_state {
+        None => ObservationFact::UnitGone,
+        Some(s) if matches!(s.active, ActiveState::Failed) && s.sub == "start-limit-hit" => {
+            ObservationFact::UnitStartLimitHit
+        }
+        Some(s) => match s.active {
+            ActiveState::Inactive | ActiveState::Deactivating => ObservationFact::UnitInactive,
+            ActiveState::Active => ObservationFact::UnitActive,
+            // r[impl autonomous.restart.backoff.undisturbed]
+            // `activating` covers both the unit's first start and the
+            // `auto-restart` pause between restarts. Reported apart from
+            // `active` so the reconciler can tell a unit that is not up yet
+            // from one that is up with nothing running under it. Folded
+            // together, every backoff window read as a broken unit.
+            ActiveState::Activating => ObservationFact::UnitActivating,
+            ActiveState::Failed => ObservationFact::UnitFailed,
+        },
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -283,6 +297,63 @@ mod tests {
         },
     };
     use seedling_protocol::names::AppName;
+
+    fn unit(active: ActiveState, sub: &str) -> UnitState {
+        UnitState {
+            active,
+            sub: sub.to_owned(),
+            restarts: None,
+            ..Default::default()
+        }
+    }
+
+    // r[verify autonomous.restart.backoff.undisturbed]
+    // A unit in `Restart=` backoff sits in `activating (auto-restart)` with
+    // no container under it. Folded into `active`, it read to the reconciler
+    // as a unit that was up with nothing running — a broken unit — so the
+    // unit was destroyed mid-backoff and systemd's start-limit accounting
+    // restarted from zero on the replacement.
+    #[test]
+    fn a_unit_in_backoff_is_not_reported_as_active() {
+        assert!(
+            matches!(
+                unit_fact(Some(&unit(ActiveState::Activating, "auto-restart"))),
+                ObservationFact::UnitActivating
+            ),
+            "the pause between automatic restarts"
+        );
+        assert!(
+            matches!(
+                unit_fact(Some(&unit(ActiveState::Activating, "start"))),
+                ObservationFact::UnitActivating
+            ),
+            "a unit on its way up for the first time"
+        );
+        assert!(
+            matches!(
+                unit_fact(Some(&unit(ActiveState::Active, "running"))),
+                ObservationFact::UnitActive
+            ),
+            "only a fully started unit is active"
+        );
+    }
+
+    // r[verify autonomous.restart.start-limit-hit]
+    // The sub-state carries the distinction: `failed` alone is a transient
+    // failure the supervisor will retry, `start-limit-hit` is the one it
+    // will not.
+    #[test]
+    fn giving_up_is_distinguished_from_failing() {
+        assert!(matches!(
+            unit_fact(Some(&unit(ActiveState::Failed, "start-limit-hit"))),
+            ObservationFact::UnitStartLimitHit
+        ));
+        assert!(matches!(
+            unit_fact(Some(&unit(ActiveState::Failed, "failed"))),
+            ObservationFact::UnitFailed
+        ));
+        assert!(matches!(unit_fact(None), ObservationFact::UnitGone));
+    }
 
     fn unit_spec(name: &str) -> TransientUnitSpec {
         TransientUnitSpec {
