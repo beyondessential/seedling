@@ -39,7 +39,7 @@ jobs:
       contents: read
       packages: read
     steps:
-      - uses: actions/checkout@v7.0.0
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
@@ -84,7 +84,7 @@ jobs:
       id-token: write
       attestations: write
     steps:
-      - uses: actions/checkout@v7.0.0
+      - uses: actions/checkout@v7
       - uses: docker/setup-qemu-action@v4.2.0
       - uses: docker/setup-buildx-action@v4
 
