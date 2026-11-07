@@ -652,6 +652,30 @@ mod canopy_tests {
     ///
     /// Teardown happens when the handler notices the connection is gone, which
     /// is not synchronous with the client dropping it.
+    /// Wait for the active faults to reach `want`.
+    ///
+    /// Losing a connection removes its offers first and clears the report
+    /// fault several steps later, with an event sent per offer in between.
+    /// Waiting on the offer count and then asserting on the fault reads
+    /// that gap as a failure whenever the machine is busy enough to widen
+    /// it past a poll.
+    async fn await_faults(state: &Arc<OiState>, want: usize) -> usize {
+        let count = |state: &Arc<OiState>| {
+            state.db.call(|db| {
+                crate::runtime::faults::list_active_faults(db, None)
+                    .unwrap_or_default()
+                    .len()
+            })
+        };
+        for _ in 0..100 {
+            if count(state) == want {
+                return want;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        count(state)
+    }
+
     async fn await_offers(state: &Arc<OiState>, want: usize) -> usize {
         for _ in 0..100 {
             let count = state.canopy.count();
@@ -749,11 +773,7 @@ mod canopy_tests {
             drop(client);
             assert_eq!(await_offers(&oi.state, 0).await, 0);
 
-            let remaining = oi.state.db.call(|db| {
-                crate::runtime::faults::list_active_faults(db, None)
-                    .unwrap_or_default()
-                    .len()
-            });
+            let remaining = await_faults(&oi.state, 0).await;
             assert_eq!(
                 remaining, 0,
                 "nothing is expected of an instance with no provider, so the \
