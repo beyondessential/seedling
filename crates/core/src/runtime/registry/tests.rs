@@ -202,3 +202,59 @@ fn an_operation_does_not_reuse_an_instance_that_has_been_torn_down() {
         "the instance left out of the keep set is still the group's to tear down"
     );
 }
+
+// r[verify gc.instances.operation-keep-set]
+#[test]
+fn an_instance_brought_back_after_a_teardown_is_reused() {
+    // Whether an instance has been torn down is the latest observation's
+    // question, not the whole history's. Asking the history marked a
+    // replica torn down for good the first time its container was removed,
+    // so a scale-down then scale-up left an operation dropping a running
+    // replica from its keep set and minting a duplicate beside it — and a
+    // rt.stop over the deployment then never reached the live one.
+    let db = DbHandle::open_in_memory().unwrap();
+    let reg = DbInstanceRegistry::new(db.clone());
+
+    let group = reg
+        .ensure_scaled_group(
+            &app("myapp"),
+            ResourceKind::Deployment,
+            Some("web"),
+            1,
+            InstanceReuse::Any,
+        )
+        .unwrap();
+    let instance = group.keep[0].clone();
+
+    db.call({
+        let instance = instance.clone();
+        move |db| {
+            for kind in [
+                "container_running",
+                "container_removed",
+                "container_running",
+                "health_check_pass",
+            ] {
+                history::insert_observation(db, &instance, kind, &serde_json::json!({})).unwrap();
+            }
+        }
+    });
+
+    let operation = reg
+        .ensure_scaled_group(
+            &app("myapp"),
+            ResourceKind::Deployment,
+            Some("web"),
+            1,
+            InstanceReuse::Live,
+        )
+        .unwrap();
+    assert_eq!(
+        operation.keep[0].id, instance.id,
+        "a replica that was brought back after a teardown is still live, and reusable"
+    );
+    assert!(
+        operation.excess.is_empty(),
+        "no duplicate should be minted beside the live replica"
+    );
+}

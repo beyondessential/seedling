@@ -295,10 +295,23 @@ impl InstanceRegistry for DbInstanceRegistry {
             for inst in scaled {
                 let obs = history::query_observations(db, &inst)?;
                 let state = crate::runtime::barrier::oracle::derive_lifecycle_state(&inst, &obs);
-                let torn_down = state == LifecycleState::Unscheduled
-                    || obs
-                        .iter()
-                        .any(|o| UNSCHEDULED_OBS_KINDS.contains(&o.obs_kind.as_str()));
+                // Latest wins, because that is what the retirement sweep
+                // this mirrors does: it selects on the most recent
+                // observation being a terminal kind. Asking whether a
+                // terminal observation appears anywhere in the history
+                // instead would mark an instance torn down for the rest of
+                // its life the first time its container was removed, so a
+                // replica that had since been brought back would be dropped
+                // from the keep set while it was still running — and a
+                // `rt.stop` would leave it serving, which is the split
+                // r[scaling.decision.actions] exists to prevent.
+                //
+                // `query_observations` orders by recorded_at then id, so the
+                // last is the most recent.
+                let latest_is_terminal = obs
+                    .last()
+                    .is_some_and(|o| UNSCHEDULED_OBS_KINDS.contains(&o.obs_kind.as_str()));
+                let torn_down = state == LifecycleState::Unscheduled || latest_is_terminal;
                 observed.push((inst, state, torn_down));
             }
 
