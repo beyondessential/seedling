@@ -21,7 +21,13 @@ fn ensure_scaled_group_prefers_healthy_in_keep() {
 
     // Initial provision: two scaled instances created in order.
     let group = reg
-        .ensure_scaled_group(&app("myapp"), ResourceKind::Deployment, Some("web"), 2, InstanceReuse::Any)
+        .ensure_scaled_group(
+            &app("myapp"),
+            ResourceKind::Deployment,
+            Some("web"),
+            2,
+            InstanceReuse::Any,
+        )
         .unwrap();
     assert_eq!(group.keep.len(), 2);
     assert!(group.excess.is_empty());
@@ -47,7 +53,13 @@ fn ensure_scaled_group_prefers_healthy_in_keep() {
     // Asking for count=1 must prefer the Ready instance even though it was
     // created later than the unhealthy one.
     let group = reg
-        .ensure_scaled_group(&app("myapp"), ResourceKind::Deployment, Some("web"), 1, InstanceReuse::Any)
+        .ensure_scaled_group(
+            &app("myapp"),
+            ResourceKind::Deployment,
+            Some("web"),
+            1,
+            InstanceReuse::Any,
+        )
         .unwrap();
     assert_eq!(group.keep.len(), 1);
     assert_eq!(
@@ -73,7 +85,13 @@ fn ensure_scaled_group_keeps_oldest_when_all_equally_unhealthy() {
     let reg = DbInstanceRegistry::new(db.clone());
 
     let group = reg
-        .ensure_scaled_group(&app("myapp"), ResourceKind::Deployment, Some("web"), 2, InstanceReuse::Any)
+        .ensure_scaled_group(
+            &app("myapp"),
+            ResourceKind::Deployment,
+            Some("web"),
+            2,
+            InstanceReuse::Any,
+        )
         .unwrap();
     let older = group.keep[0].clone();
     let younger = group.keep[1].clone();
@@ -91,7 +109,13 @@ fn ensure_scaled_group_keeps_oldest_when_all_equally_unhealthy() {
     });
 
     let group = reg
-        .ensure_scaled_group(&app("myapp"), ResourceKind::Deployment, Some("web"), 1, InstanceReuse::Any)
+        .ensure_scaled_group(
+            &app("myapp"),
+            ResourceKind::Deployment,
+            Some("web"),
+            1,
+            InstanceReuse::Any,
+        )
         .unwrap();
     assert_eq!(group.keep.len(), 1);
     assert_eq!(
@@ -125,10 +149,20 @@ fn an_operation_does_not_reuse_an_instance_that_has_been_torn_down() {
     db.call({
         let torn_down = torn_down.clone();
         move |db| {
-            history::insert_observation(db, &torn_down, "container_running", &serde_json::json!({}))
-                .unwrap();
-            history::insert_observation(db, &torn_down, "container_removed", &serde_json::json!({}))
-                .unwrap();
+            history::insert_observation(
+                db,
+                &torn_down,
+                "container_running",
+                &serde_json::json!({}),
+            )
+            .unwrap();
+            history::insert_observation(
+                db,
+                &torn_down,
+                "container_removed",
+                &serde_json::json!({}),
+            )
+            .unwrap();
         }
     });
 

@@ -6,9 +6,9 @@ use seedling_protocol::names::AppName;
 use crate::defs::resource::ResourceKind;
 use crate::runtime::db::DbHandle;
 use crate::runtime::gc::UNSCHEDULED_OBS_KINDS;
-use crate::runtime::lifecycle::LifecycleState;
 use crate::runtime::history;
 use crate::runtime::identity::{InstanceVariant, ResourceInstance};
+use crate::runtime::lifecycle::LifecycleState;
 
 #[cfg(test)]
 mod tests;
@@ -296,9 +296,9 @@ impl InstanceRegistry for DbInstanceRegistry {
                 let obs = history::query_observations(db, &inst)?;
                 let state = crate::runtime::barrier::oracle::derive_lifecycle_state(&inst, &obs);
                 let torn_down = state == LifecycleState::Unscheduled
-                    || obs.iter().any(|o| {
-                        UNSCHEDULED_OBS_KINDS.contains(&o.obs_kind.as_str())
-                    });
+                    || obs
+                        .iter()
+                        .any(|o| UNSCHEDULED_OBS_KINDS.contains(&o.obs_kind.as_str()));
                 observed.push((inst, state, torn_down));
             }
 
@@ -336,8 +336,7 @@ impl InstanceRegistry for DbInstanceRegistry {
             // Stable sort: false (not ready) > true (ready) in usize, so
             // negate by sorting on `!is_ready`.
             observed.sort_by_key(|(_, state, _)| *state != LifecycleState::Ready);
-            let scaled: Vec<ResourceInstance> =
-                observed.into_iter().map(|(i, _, _)| i).collect();
+            let scaled: Vec<ResourceInstance> = observed.into_iter().map(|(i, _, _)| i).collect();
 
             let keep = scaled[..count].to_vec();
             let mut excess = scaled[count..].to_vec();

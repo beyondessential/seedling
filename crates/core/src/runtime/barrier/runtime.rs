@@ -4,6 +4,7 @@ use rhai::{CustomType, Dynamic, EvalAltResult, Map, TypeBuilder};
 use seedling_protocol::names::AppName;
 
 use crate::defs::app::AppDef;
+use crate::defs::collection::Selector;
 use crate::defs::container::canonicalise_signal_name;
 use crate::defs::volume::{
     ExternalVolume, OperationVolumeBinding, Volume, validate_volume_write_path,
@@ -363,6 +364,42 @@ pub fn extract_cancel_hit(err: &EvalAltResult) -> bool {
 /// pairs for those that declare a non-empty image reference. Anonymous
 /// resources arrive with a def attached; named ones are looked up in the
 /// action-context AppDef (the thread-local set by [`ActionClosureGuard`]).
+// l[impl collection.only]
+// l[impl collection.except]
+/// How a `Started`'s resources are matched against another collection:
+/// by type and name, which is all a [`ResourceId`](crate::defs::resource::ResourceId)
+/// carries. Two instances of one scaled deployment share a key, so naming
+/// the deployment selects every replica of it, which is what naming a
+/// deployment means.
+fn resource_key(instance: &ResourceInstance) -> (crate::defs::resource::ResourceKind, String) {
+    (instance.kind, instance.name.clone().unwrap_or_default())
+}
+
+/// The keys of whatever a collection method was given: another `Started`, a
+/// Collection, or a bare resource.
+fn resource_keys(other: Dynamic) -> Vec<(crate::defs::resource::ResourceKind, String)> {
+    if let Some(started) = other.clone().try_cast::<Started>() {
+        return started.resources.iter().map(resource_key).collect();
+    }
+    crate::defs::collection::col(other)
+        .resolve()
+        .into_iter()
+        .map(|h| (h.kind(), h.name().to_owned()))
+        .collect()
+}
+
+/// The distinct image references in a resource-to-image pairing, in the
+/// order they first appear.
+fn dedup_image_refs(pairs: &[(ResourceInstance, String)]) -> Vec<String> {
+    let mut refs: Vec<String> = Vec::new();
+    for (_, img) in pairs {
+        if !refs.contains(img) {
+            refs.push(img.clone());
+        }
+    }
+    refs
+}
+
 pub(crate) fn extract_container_images(
     resources_with_defs: &[(ResourceInstance, Option<crate::defs::resource::Resource>)],
 ) -> Vec<(ResourceInstance, String)> {
@@ -968,15 +1005,8 @@ impl RuntimeInstance {
         resources_with_defs: Vec<(ResourceInstance, Option<crate::defs::resource::Resource>)>,
     ) -> Result<Started, Box<EvalAltResult>> {
         let pairs = extract_container_images(&resources_with_defs);
-
-        // Deduplicate image refs while keeping the resource list for audit.
-        let mut refs: Vec<String> = Vec::new();
-        for (_, img) in &pairs {
-            if !refs.contains(img) {
-                refs.push(img.clone());
-            }
-        }
-        let resources: Vec<ResourceInstance> = pairs.into_iter().map(|(r, _)| r).collect();
+        let refs = dedup_image_refs(&pairs);
+        let resources: Vec<ResourceInstance> = pairs.iter().map(|(r, _)| r.clone()).collect();
 
         // r[impl image.discover]
         // Probe mode: capture refs, skip pin writes and log entries, and
@@ -993,7 +1023,7 @@ impl RuntimeInstance {
                 ctx: Some(Arc::clone(ctx)),
                 resources,
                 origin_index: None,
-                warm: WarmMode::Images(refs),
+                warm: WarmMode::Images(pairs.clone()),
             });
         }
 
@@ -1024,7 +1054,7 @@ impl RuntimeInstance {
                     ctx: None,
                     resources,
                     origin_index: None,
-                    warm: WarmMode::Images(refs),
+                    warm: WarmMode::Images(pairs.clone()),
                 });
             }
             Some(c) => Arc::clone(c),
@@ -1056,7 +1086,7 @@ impl RuntimeInstance {
             ctx: Some(ctx),
             resources,
             origin_index: Some(origin_index),
-            warm: WarmMode::Images(refs),
+            warm: WarmMode::Images(pairs),
         })
     }
 
@@ -2006,8 +2036,13 @@ pub enum WarmMode {
     Certs,
     /// `rt.warm_images` returned this `Started`. `.ready()` waits until each
     /// image reference is present in local container storage.
+    /// Each image reference the warm covers, with the resource it came
+    /// from. Keeping the pairing rather than the bare references is what
+    /// lets a [`Started`] that has been narrowed by a collection method
+    /// narrow what its barrier waits on: the references alone could not say
+    /// which resource had been selected away.
     // l[impl rt.warm-images]
-    Images(Vec<String>),
+    Images(Vec<(ResourceInstance, String)>),
 }
 
 // l[impl rt.started.type]
@@ -2030,6 +2065,39 @@ pub struct Started {
 }
 
 impl Started {
+    // l[impl rt.started.type]
+    /// This `Started` over `kept` alone.
+    ///
+    /// The anchor carries through, so a barrier on the narrowed group is
+    /// still the originating `rt.*` call's barrier: narrowing selects which
+    /// resources are waited on, it does not make a new call. A warm-images
+    /// group narrows what its barrier waits on too, since the references it
+    /// checks are held against the resources they came from.
+    fn narrowed_to(&self, kept: &[ResourceInstance]) -> Self {
+        let warm = match &self.warm {
+            WarmMode::Images(pairs) => WarmMode::Images(
+                pairs
+                    .iter()
+                    .filter(|(r, _)| kept.contains(r))
+                    .cloned()
+                    .collect(),
+            ),
+            other => other.clone(),
+        };
+        Self {
+            ctx: self.ctx.clone(),
+            resources: kept.to_vec(),
+            origin_index: self.origin_index,
+            warm,
+        }
+    }
+
+    fn filtered(&self, keep: impl Fn(&ResourceInstance) -> bool) -> Self {
+        let kept: Vec<ResourceInstance> =
+            self.resources.iter().filter(|r| keep(r)).cloned().collect();
+        self.narrowed_to(&kept)
+    }
+
     // r[impl barrier.suspension]
     fn check_barrier(
         &mut self,
@@ -2104,16 +2172,18 @@ impl Started {
             // r[impl actuate.image.warm]
             // Empty `refs` means the selection contained no container
             // resources with an image to warm — immediately satisfied.
-            (WarmMode::Images(refs), LifecycleState::Ready) => {
-                refs.iter().all(|r| g.world.image_present(r))
-            }
-            _ => {
-                !self.resources.is_empty()
-                    && self
-                        .resources
-                        .iter()
-                        .all(|r| g.world.lifecycle_state(r).has_reached(required))
-            }
+            (WarmMode::Images(pairs), LifecycleState::Ready) => dedup_image_refs(pairs)
+                .iter()
+                .all(|r| g.world.image_present(r)),
+            // l[impl rt.started.state-methods]
+            // A group holding no resources has nothing to wait on. The warm
+            // variants above already answered that way; this arm did not,
+            // so a group a collection method had narrowed down to nothing
+            // would have waited forever rather than returning at once.
+            _ => self
+                .resources
+                .iter()
+                .all(|r| g.world.lifecycle_state(r).has_reached(required)),
         };
 
         // r[impl barrier.resume]
@@ -2410,11 +2480,42 @@ impl CustomType for Started {
                     Ok(this.compute_termination())
                 },
             )
-            // l[impl rt.started.type]: Collection methods on Started return Started
-            .with_fn("one", |this: &mut Self| this.clone())
-            .with_fn("only", |this: &mut Self, _: Dynamic| this.clone())
-            .with_fn("except", |this: &mut Self, _: Dynamic| this.clone())
-            .with_fn("select", |this: &mut Self, _: Map| this.clone());
+            // l[impl rt.started.type]
+            // Collection's methods on a Started return Starteds over the
+            // selected resources. These used to ignore their arguments and
+            // return the whole group, so
+            // `rt.start(app).except(app.deployment("optional")).ready()`
+            // went on waiting for the resource the author had excluded.
+            // l[impl collection.one]
+            .with_fn("one", |this: &mut Self| -> Dynamic {
+                match this.resources.first() {
+                    Some(first) => Dynamic::from(this.narrowed_to(std::slice::from_ref(first))),
+                    // `collection.one` is null on an empty collection, and
+                    // a Started over no resources is worse than null here:
+                    // its barriers would have nothing to wait on.
+                    None => Dynamic::UNIT,
+                }
+            })
+            // l[impl collection.only]
+            .with_fn("only", |this: &mut Self, other: Dynamic| -> Self {
+                let keys = resource_keys(other);
+                this.filtered(|r| keys.contains(&resource_key(r)))
+            })
+            // l[impl collection.except]
+            .with_fn("except", |this: &mut Self, other: Dynamic| -> Self {
+                let keys = resource_keys(other);
+                this.filtered(|r| !keys.contains(&resource_key(r)))
+            })
+            // l[impl collection.select]
+            .with_fn(
+                "select",
+                |this: &mut Self, criterion: Map| -> Result<Self, Box<EvalAltResult>> {
+                    let selector = Selector::from_map(&criterion)?;
+                    Ok(this.filtered(|r| {
+                        selector.matches_resource(r.kind, r.name.as_deref().unwrap_or(""))
+                    }))
+                },
+            );
     }
 }
 

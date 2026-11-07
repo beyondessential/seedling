@@ -1242,7 +1242,15 @@ fn run_pass(
     registry: Arc<dyn crate::runtime::InstanceRegistry>,
 ) -> OperationResult {
     run_pass_with_db(
-        engine, ast, app, scope, operation_id, log, world, registry, None,
+        engine,
+        ast,
+        app,
+        scope,
+        operation_id,
+        log,
+        world,
+        registry,
+        None,
     )
 }
 
@@ -1442,8 +1450,7 @@ fn a_replayed_sub_action_call_recovers_its_recorded_params() {
         )
     };
 
-    let (engine, mut scope, app, ast) =
-        setup_with_script(&outer(r#""note": #{ kind: "text" },"#));
+    let (engine, mut scope, app, ast) = setup_with_script(&outer(r#""note": #{ kind: "text" },"#));
 
     let oracle = Arc::new(TestWorldOracle::new());
     let log = InMemoryActionLog::new();
@@ -1527,8 +1534,9 @@ fn an_action_addresses_every_replica_the_deployment_is_scaled_to() {
     let oracle = Arc::new(TestWorldOracle::new());
     oracle.set(dep("web"), LifecycleState::Ready);
     let log = InMemoryActionLog::new();
-    let reg: Arc<dyn crate::runtime::InstanceRegistry> =
-        Arc::new(crate::runtime::registry::DbInstanceRegistry::new(db.clone()));
+    let reg: Arc<dyn crate::runtime::InstanceRegistry> = Arc::new(
+        crate::runtime::registry::DbInstanceRegistry::new(db.clone()),
+    );
 
     let r = run_pass_with_db(
         &engine,
@@ -1554,4 +1562,118 @@ fn an_action_addresses_every_replica_the_deployment_is_scaled_to() {
         "the action reached {} of the 5 replicas the deployment is scaled to",
         started.resources.len()
     );
+}
+
+// l[verify rt.started.type]
+// l[verify collection.except]
+#[test]
+fn except_on_a_started_stops_waiting_for_the_excluded_resource() {
+    // The collection methods returned the whole group whatever they were
+    // given, so a resource the author excluded was still waited on — which
+    // hung the operation, or failed its deadline, on a resource the script
+    // had said to leave out.
+    let (engine, mut scope, app, ast) = setup_with_script(
+        r#"
+        let web = app.deployment("web").image("docker.io/library/nginx:latest");
+        let optional = app.deployment("optional").image("docker.io/library/nginx:latest");
+        app.on_start(|rt, _param| {
+            rt.start(app).except(app.deployment("optional")).ready();
+        });
+    "#,
+    );
+
+    let oracle = Arc::new(TestWorldOracle::new());
+    // `optional` never becomes Ready.
+    oracle.set(dep("web"), LifecycleState::Ready);
+    let log = InMemoryActionLog::new();
+
+    let r = run_pass(
+        &engine,
+        &ast,
+        &app,
+        &mut scope,
+        OperationId::new(),
+        &log,
+        Arc::clone(&oracle),
+        registry(),
+    );
+    assert!(
+        matches!(r, OperationResult::Completed),
+        "the barrier waited for the excluded resource: {r:?}"
+    );
+}
+
+// l[verify rt.started.type]
+// l[verify collection.only]
+// l[verify collection.select]
+#[test]
+fn only_and_select_narrow_a_started_to_the_resources_they_name() {
+    let (engine, mut scope, app, ast) = setup_with_script(
+        r#"
+        let web = app.deployment("web").image("docker.io/library/nginx:latest");
+        let other = app.deployment("other").image("docker.io/library/nginx:latest");
+        app.on_start(|rt, _param| {
+            let started = rt.start(app);
+            started.only(app.deployment("web")).ready();
+            started.select(#{ names: ["web"] }).ready();
+        });
+    "#,
+    );
+
+    let oracle = Arc::new(TestWorldOracle::new());
+    oracle.set(dep("web"), LifecycleState::Ready);
+    let log = InMemoryActionLog::new();
+
+    let r = run_pass(
+        &engine,
+        &ast,
+        &app,
+        &mut scope,
+        OperationId::new(),
+        &log,
+        Arc::clone(&oracle),
+        registry(),
+    );
+    assert!(
+        matches!(r, OperationResult::Completed),
+        "only/select waited for a resource they did not name: {r:?}"
+    );
+}
+
+// l[verify rt.started.type]
+// l[verify collection.one]
+#[test]
+fn one_on_a_started_yields_a_single_resource_and_null_when_empty() {
+    let (engine, mut scope, app, ast) = setup_with_script(
+        r#"
+        let web = app.deployment("web").image("docker.io/library/nginx:latest");
+        let other = app.deployment("other").image("docker.io/library/nginx:latest");
+        app.on_start(|rt, _param| {
+            let started = rt.start(app);
+            if started.select(#{ names: ["web"] }).one() == () {
+                throw "one() returned null for a non-empty group";
+            }
+            if started.select(#{ names: ["absent"] }).one() != () {
+                throw "one() returned a group for an empty selection";
+            }
+            started.select(#{ names: ["web"] }).one().ready();
+        });
+    "#,
+    );
+
+    let oracle = Arc::new(TestWorldOracle::new());
+    oracle.set(dep("web"), LifecycleState::Ready);
+    let log = InMemoryActionLog::new();
+
+    let r = run_pass(
+        &engine,
+        &ast,
+        &app,
+        &mut scope,
+        OperationId::new(),
+        &log,
+        Arc::clone(&oracle),
+        registry(),
+    );
+    assert!(matches!(r, OperationResult::Completed), "{r:?}");
 }

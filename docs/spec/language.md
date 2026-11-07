@@ -1390,6 +1390,9 @@ This spec defines the semantics of the Runtime Instance as far as BSL is concern
 > The argument `deadline` must be a positive integer number of seconds; if it's zero or absent, the default deadline for that state is used (see [default deadlines](#l--rt.started.default-deadlines)).
 >
 > If the deadline is reached before the method returns, an exception is thrown.
+>
+> A `Started` holding no resources has nothing to wait on, so these methods return at once.
+> This is how a group narrowed by a [Collection](#l--collection.interface) method down to nothing behaves, and narrowing to nothing is an ordinary outcome of `except` or `select`: a barrier that instead waited forever would hang an action over a selection the author wrote deliberately.
 
 > l[rt.started.default-deadlines]
 > The default deadlines for `started.<state>()` barriers with no explicit `deadline` argument are:

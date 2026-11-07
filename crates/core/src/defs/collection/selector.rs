@@ -68,25 +68,33 @@ impl Selector {
     }
 
     pub fn matches(&self, handle: &ResourceHandle) -> bool {
+        self.matches_resource(handle.kind(), handle.name())
+    }
+
+    /// Match the only two things a criterion can name: a resource's type and
+    /// its name.
+    ///
+    /// Taken apart from [`ResourceHandle`] so a `Started`, which holds
+    /// resolved instances rather than handles into a bag, selects by the
+    /// same rules rather than a second copy of them.
+    pub fn matches_resource(&self, kind: ResourceKind, name: &str) -> bool {
         // l[impl collection.select.types]
         if let Some(types) = &self.types
-            && !types.contains(&handle.kind())
+            && !types.contains(&kind)
         {
             return false;
         }
 
         // l[impl collection.select.names]
         if let Some(names) = &self.names
-            && !names.contains(handle.name())
+            && !names.contains(name)
         {
             return false;
         }
 
         // l[impl collection.select.name-patterns]
         if let Some(patterns) = &self.name_patterns
-            && !patterns
-                .iter()
-                .any(|p| WildMatch::new(p).matches(handle.name()))
+            && !patterns.iter().any(|p| WildMatch::new(p).matches(name))
         {
             return false;
         }

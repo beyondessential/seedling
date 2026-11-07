@@ -2207,7 +2207,8 @@ mod tests {
             if app == &self.broken {
                 return Err(RegistryError::message("registry unavailable"));
             }
-            self.inner.ensure_scaled_group(app, kind, name, count, reuse)
+            self.inner
+                .ensure_scaled_group(app, kind, name, count, reuse)
         }
 
         fn find_all_instances(
