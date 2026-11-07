@@ -713,6 +713,16 @@ fn pending(db: &Db, mut row: chain::Row, ask: &Ask, now: i64) -> rusqlite::Resul
 
 /// The question could not be put or answered. Nothing about the order is
 /// learnt, so nothing about it changes but the reason.
+///
+/// No wait is recorded, so the question is put again on the next report tick.
+/// That tick is the back-off, and it is one question per hostname per interval
+/// at the report's own pace, only while an offer is live to carry it. The
+/// causes here (the relay down, a paused server, an answer not understood) are
+/// ones that pass on Canopy's side without the runtime doing anything, and the
+/// hour [`AUTO_RETRY_DEBOUNCE_SECS`] holds a failed order back would leave a
+/// hostname without a certificate for that hour after the relay returned. A
+/// failure to put the question at all, which the runtime itself causes and
+/// which does not pass by waiting, is held back for that hour by the driver.
 fn unavailable(
     db: &Db,
     mut row: chain::Row,
