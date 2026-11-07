@@ -1743,12 +1743,18 @@ impl Reconciler {
 
         // Recompute the bump set from scratch each tick. A deployment is bumped
         // when (a) it has any unhealthy running instance with on_failure=replace,
-        // (b) the count of healthy running instances is below the declared
-        // target, and (c) the replace-loop guard for it has not tripped.
+        // (b) the count of healthy running instances is below the scale the
+        // deployment should be running at, and (c) the replace-loop guard for
+        // it has not tripped.
         self.unhealthy_replace_deployments.clear();
         // Per-deployment grace window in seconds, used downstream to detect
         // replacement-failure from observation history.
         let mut grace_secs_by_dep: HashMap<(AppName, String), i64> = HashMap::new();
+
+        // Gather what each deployment looks like this tick first, so the
+        // scales can be resolved in one pass over the database below rather
+        // than a query per deployment inside the walk.
+        let mut seen: Vec<DeploymentThisTick> = Vec::new();
         for app in apps {
             let pods = match running_pods_by_app.get(&app.name) {
                 Some(p) => p.as_slice(),
@@ -1759,7 +1765,7 @@ impl Reconciler {
                     continue;
                 };
                 let dep_def = dep.def.lock();
-                let target = dep_def.scale.start;
+                let scale = (dep_def.scale.start, dep_def.scale.end);
                 let pod_def = dep_def.pod.lock();
                 let container = pod_def.container.lock();
                 let healthcheck = container.healthcheck.as_ref().map(|hc| {
@@ -1773,23 +1779,51 @@ impl Reconciler {
                 drop(dep_def);
 
                 let dep_name = id.name.as_str();
-                let key = (app.name.clone(), dep_name.to_owned());
-                let instance_health: Vec<bool> = pods
-                    .iter()
-                    .filter(|p| {
-                        p.instance.kind == crate::defs::resource::ResourceKind::Deployment
-                            && p.instance.name.as_deref() == Some(dep_name)
-                    })
-                    .map(|p| p.observed_healthy)
-                    .collect();
+                seen.push(DeploymentThisTick {
+                    key: (app.name.clone(), dep_name.to_owned()),
+                    healthcheck,
+                    instance_health: pods
+                        .iter()
+                        .filter(|p| {
+                            p.instance.kind == crate::defs::resource::ResourceKind::Deployment
+                                && p.instance.name.as_deref() == Some(dep_name)
+                        })
+                        .map(|p| p.observed_healthy)
+                        .collect(),
+                    scale,
+                });
+            }
+        }
 
-                let standing = deployment_standing(healthcheck, &instance_health, target);
-                if let Some(grace_secs) = standing.grace_secs {
-                    grace_secs_by_dep.insert(key.clone(), grace_secs);
-                }
-                if standing.wants_replacement && !self.replace_failed.contains(&key) {
-                    self.unhealthy_replace_deployments.insert(key);
-                }
+        // r[impl scaling.decision]
+        // How many healthy instances a deployment is owed is the scale the
+        // operator chose, not the declared lower bound. Read against the
+        // bound, a deployment declaring `scale 1..5` and scaled to 5 that
+        // loses an instance has four healthy against a target of one, and is
+        // never found short — so the further it was scaled up, the less
+        // likely it was to get a replacement at all.
+        let targets: Vec<u16> = {
+            let wanted: Vec<(AppName, String, u16, u16)> = seen
+                .iter()
+                .map(|d| (d.key.0.clone(), d.key.1.clone(), d.scale.0, d.scale.1))
+                .collect();
+            self.db.call(move |db| {
+                wanted
+                    .into_iter()
+                    .map(|(app, dep, low, high)| {
+                        scaling::effective_scale(db, &app, &dep, low, high).unwrap_or(low)
+                    })
+                    .collect()
+            })
+        };
+
+        for (dep, target) in seen.into_iter().zip(targets) {
+            let standing = deployment_standing(dep.healthcheck, &dep.instance_health, target);
+            if let Some(grace_secs) = standing.grace_secs {
+                grace_secs_by_dep.insert(dep.key.clone(), grace_secs);
+            }
+            if standing.wants_replacement && !self.replace_failed.contains(&dep.key) {
+                self.unhealthy_replace_deployments.insert(dep.key);
             }
         }
 
@@ -2035,6 +2069,18 @@ impl Reconciler {
     }
 }
 
+/// One deployment as this tick found it, gathered before any decision so the
+/// scales can be resolved together.
+struct DeploymentThisTick {
+    key: (AppName, String),
+    /// The declared healthcheck's failure policy and grace window in seconds.
+    healthcheck: Option<(crate::defs::container::HealthcheckOnFailure, i64)>,
+    /// Whether each running instance of this deployment is observed healthy.
+    instance_health: Vec<bool>,
+    /// The declared bounds, which the stored scaling decision is clamped to.
+    scale: (u16, u16),
+}
+
 /// What the replace-loop guard and the replacement bump each need to know
 /// about one deployment.
 struct DeploymentStanding {
@@ -2131,6 +2177,26 @@ mod tests {
         assert!(
             !standing(HealthcheckOnFailure::Replace, &[true, true], 2).wants_replacement,
             "nothing unhealthy to replace"
+        );
+    }
+
+    // r[verify scaling.decision]
+    // The threshold was the declared lower bound while the running instances
+    // follow the operator's effective scale. A deployment declaring
+    // `scale 1..5` and scaled to 5 that loses one instance has four healthy
+    // against a target of one, so `healthy < target` was false and no
+    // replacement was spawned — the more it was scaled up, the less likely it
+    // was to get one.
+    #[test]
+    fn a_scaled_up_deployment_is_short_against_the_scale_it_runs_at() {
+        let health = [true, true, true, true, false];
+        assert!(
+            standing(HealthcheckOnFailure::Replace, &health, 5).wants_replacement,
+            "scaled to 5, one unhealthy: a replacement is owed"
+        );
+        assert!(
+            !standing(HealthcheckOnFailure::Replace, &health, 1).wants_replacement,
+            "against the declared lower bound it looks amply covered, which was the bug"
         );
     }
 
