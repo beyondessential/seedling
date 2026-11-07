@@ -994,7 +994,17 @@ fn decide_chain(ctx: &ChainContext, strategies: Vec<Strategy>) -> Decision {
             chain::Cycle::Idle { .. } => false,
         };
 
-    let proxy_from = chain::proxy_from(&strategies, ctx.serving.map(|(s, _)| s), &cycle);
+    let proxy_from = match (&cycle, ctx.staged_from) {
+        // A certificate is staged and starts serving at its own time, so no
+        // strategy is working on the hostname and none is being waited for.
+        // Holding the proxy back for one would leave the hostname serving
+        // nothing at all until the staged certificate started: the endpoint
+        // must not serve that certificate early, so the proxy is all the
+        // hostname has meanwhile.
+        // r[impl tls.chain.proxy-gate]
+        (chain::Cycle::Idle { .. }, Some(_)) if ctx.serving.is_none() => chain::ProxyFrom::Always,
+        _ => chain::proxy_from(&strategies, ctx.serving.map(|(s, _)| s), &cycle),
+    };
 
     Decision::Chain(Box::new(ChainDecision {
         strategies,
@@ -2040,6 +2050,36 @@ mod tests {
             issuer: None,
             self_signed: false,
         })
+    }
+
+    /// The endpoint must not serve a staged certificate before it starts, so
+    /// holding the proxy back as well would leave the hostname with nothing at
+    /// all for the whole staging window.
+    // r[verify tls.chain.proxy-gate]
+    // r[verify tls.cert.serve]
+    #[test]
+    fn a_hostname_waiting_for_a_staged_certificate_is_not_held_back() {
+        let now = 1_000_000;
+        let mut staged = fake_cert("host.example.com", 1, 0, now + 90 * 86_400);
+        staged.not_before = Some(now + 3_600);
+        let mut s = snap(vec![], vec![staged], vec![], vec![], vec![], "ops@x", now);
+        s.env = canopy_env("host.example.com", &["tamanu"], true);
+        s.env
+            .proxy
+            .insert("host.example.com".to_owned(), ProxyHolding::Nothing);
+
+        let st = compute_state(&s, "host.example.com");
+        let c = chain_of(&st);
+        assert_eq!(
+            c.proxy_from,
+            chain::ProxyFrom::Always,
+            "nothing is working on the hostname, so nothing is holding the proxy back"
+        );
+        assert_eq!(
+            super::super::serve::endpoint_gate(c),
+            super::super::serve::FallThrough::Allow,
+            "withholding here would fail every handshake until the staged certificate started"
+        );
     }
 
     // r[verify tls.chain.proxy-gate]
