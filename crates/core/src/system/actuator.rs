@@ -111,13 +111,13 @@ pub(crate) async fn safe_volume_write(
     rel_path: &str,
     contents: &[u8],
 ) -> Result<(), ActuateError> {
-    super::confined_write::write_async(mountpoint, rel_path, contents)
+    super::confined::write_async(mountpoint, rel_path, contents)
         .await
         .map_err(|e| match e {
-            super::confined_write::ConfinedWriteError::Escape { path, .. } => {
+            super::confined::ConfinedWriteError::Escape { path, .. } => {
                 VolumePathEscapeSnafu { path }.build()
             }
-            super::confined_write::ConfinedWriteError::Io { path, source, .. } => {
+            super::confined::ConfinedWriteError::Io { path, source, .. } => {
                 VolumeWriteSnafu { path }.into_error(source)
             }
         })

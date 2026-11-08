@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 use seedling_protocol::names::HeldVolumeId;
 use serde::{Deserialize, Serialize};
 
-use crate::runtime::identity::VolumeName;
+use crate::{runtime::identity::VolumeName, system::confined::owned_dir_async};
 
 /// Manages host-backed storage for named volumes.
 ///
@@ -40,6 +40,8 @@ impl VolumeStore {
     // r[impl actuate.volume.btrfs]
     pub async fn create(&self, name: &VolumeName) -> std::io::Result<()> {
         let path = self.path(name);
+        // r[impl storage.confinement]
+        owned_dir_async(&path).await?;
         if self.use_btrfs {
             btrfs_create_subvolume(&path).await
         } else {
@@ -65,7 +67,9 @@ impl VolumeStore {
         app: &str,
     ) -> std::io::Result<bool> {
         let legacy_path = self.volumes_dir.join(legacy);
-        if !legacy_path.exists() {
+        // r[impl storage.confinement] — the migration moves the storage, so
+        // a symlink wearing the legacy name is refused rather than rehomed.
+        if !owned_dir_async(&legacy_path).await? {
             return Ok(false);
         }
         let canonical_path = self.path(canonical);
@@ -103,7 +107,10 @@ impl VolumeStore {
 
     pub async fn remove(&self, name: &VolumeName) -> std::io::Result<()> {
         let path = self.path(name);
-        if !path.exists() {
+        // r[impl storage.confinement] — a symlink here is refused rather
+        // than unlinked, so a volume whose storage was relocated by hand
+        // is never reported as deleted while its data stays where it is.
+        if !owned_dir_async(&path).await? {
             return Ok(());
         }
         // Always check whether the path is actually a BTRFS subvolume,
@@ -155,7 +162,10 @@ impl VolumeStore {
         app: &str,
         reason: &str,
     ) -> std::io::Result<HeldVolumeMeta> {
-        if !src.exists() {
+        // r[impl storage.confinement] — holding moves the storage aside,
+        // and moving a symlink would record a held volume with none of the
+        // data behind it.
+        if !owned_dir_async(src).await? {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::NotFound,
                 format!("volume {display_name} does not exist"),
@@ -251,7 +261,8 @@ impl VolumeStore {
                 format!("no held volume with id {id}"),
             ));
         }
-        if !data_path.exists() {
+        // r[impl storage.confinement]
+        if !owned_dir_async(&data_path).await? {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::NotFound,
                 format!("held volume {id} has no backing data directory"),
@@ -259,7 +270,8 @@ impl VolumeStore {
         }
 
         let dest = self.site_path(target_name);
-        if dest.exists() {
+        // r[impl storage.confinement]
+        if owned_dir_async(&dest).await? {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::AlreadyExists,
                 format!("site volume {target_name:?} already exists on disk"),
@@ -294,7 +306,8 @@ impl VolumeStore {
         }
 
         // Remove the data (could be a BTRFS subvolume or plain directory).
-        if data_path.exists() {
+        // r[impl storage.confinement]
+        if owned_dir_async(&data_path).await? {
             if is_btrfs_subvolume(&data_path).await {
                 btrfs_delete_subvolume(&data_path).await?;
             } else {
@@ -350,6 +363,8 @@ impl VolumeStore {
     // r[impl volume.site.lifecycle]
     pub async fn create_site(&self, name: &str) -> std::io::Result<()> {
         let path = self.site_path(name);
+        // r[impl storage.confinement]
+        owned_dir_async(&path).await?;
         if self.use_btrfs {
             btrfs_create_subvolume(&path).await
         } else {
@@ -359,7 +374,8 @@ impl VolumeStore {
 
     pub async fn remove_site(&self, name: &str) -> std::io::Result<()> {
         let path = self.site_path(name);
-        if !path.exists() {
+        // r[impl storage.confinement]
+        if !owned_dir_async(&path).await? {
             return Ok(());
         }
         if is_btrfs_subvolume(&path).await {
@@ -507,4 +523,92 @@ async fn btrfs_snapshot_writable(source: &Path, dest: &Path) -> std::io::Result<
         )));
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn store() -> (tempfile::TempDir, VolumeStore) {
+        let data = tempfile::tempdir().unwrap();
+        let store = VolumeStore::new(data.path(), false).unwrap();
+        (data, store)
+    }
+
+    /// A volume directory that is really a symlink — storage an operator
+    /// relocated by hand, or a link somebody else placed.
+    fn symlinked_volume(store: &VolumeStore, name: &VolumeName, target: &Path) {
+        std::fs::create_dir_all(target).unwrap();
+        std::fs::write(target.join("data.db"), b"the volume's contents").unwrap();
+        std::os::unix::fs::symlink(target, store.path(name)).unwrap();
+    }
+
+    // r[verify storage.confinement]
+    #[tokio::test]
+    async fn removing_a_symlinked_volume_is_refused_rather_than_reported_done() {
+        let (_data, store) = store();
+        let outside = tempfile::tempdir().unwrap();
+        let name = VolumeName::for_app("app", "data");
+        symlinked_volume(&store, &name, &outside.path().join("storage"));
+
+        let err = store.remove(&name).await.unwrap_err();
+
+        assert!(err.to_string().contains("symlink"), "{err}");
+        assert!(
+            outside.path().join("storage/data.db").exists(),
+            "the data must be left alone"
+        );
+        assert!(
+            std::fs::symlink_metadata(store.path(&name)).is_ok(),
+            "refusing leaves the link in place for the operator to resolve"
+        );
+    }
+
+    // r[verify storage.confinement]
+    #[tokio::test]
+    async fn removing_a_site_volume_that_is_a_symlink_is_refused() {
+        let (_data, store) = store();
+        let outside = tempfile::tempdir().unwrap();
+        let target = outside.path().join("storage");
+        std::fs::create_dir_all(&target).unwrap();
+        std::fs::write(target.join("data.db"), b"the volume's contents").unwrap();
+        std::os::unix::fs::symlink(&target, store.site_path("backups")).unwrap();
+
+        let err = store.remove_site("backups").await.unwrap_err();
+
+        assert!(err.to_string().contains("symlink"), "{err}");
+        assert!(
+            target.join("data.db").exists(),
+            "the data must be left alone"
+        );
+    }
+
+    // r[verify storage.confinement]
+    #[tokio::test]
+    async fn holding_a_symlinked_volume_is_refused_rather_than_recorded_empty() {
+        let (_data, store) = store();
+        let outside = tempfile::tempdir().unwrap();
+        let name = VolumeName::for_app("app", "data");
+        symlinked_volume(&store, &name, &outside.path().join("storage"));
+
+        let err = store
+            .hold(&name, "app", "backend changed")
+            .await
+            .unwrap_err();
+
+        assert!(err.to_string().contains("symlink"), "{err}");
+        assert!(
+            store.list_held().unwrap().is_empty(),
+            "a hold that moved only a link would record a volume with no data behind it"
+        );
+    }
+
+    // r[verify storage.confinement]
+    #[tokio::test]
+    async fn removing_a_volume_that_is_not_there_is_still_nothing_to_do() {
+        let (_data, store) = store();
+        let name = VolumeName::for_app("app", "data");
+        store.remove(&name).await.unwrap();
+        store.remove_site("never-made").await.unwrap();
+    }
 }
