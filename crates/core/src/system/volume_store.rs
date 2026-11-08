@@ -57,9 +57,12 @@ impl VolumeStore {
     /// requires rehoming data that containers wrote to the legacy path.
     ///
     /// Returns `Ok(true)` if a rename happened, `Ok(false)` if there was
-    /// nothing to migrate. If the canonical path already exists, it is
-    /// removed (when empty) or held (when not) before the legacy path is
-    /// renamed in place so nothing is silently dropped.
+    /// nothing to migrate. If a directory already stands at the canonical
+    /// path it is removed (when empty) or held (when not) before the legacy
+    /// path is renamed in place, so nothing is silently dropped. Anything
+    /// else at that path is storage the runtime does not own, and the
+    /// migration is refused with an error naming it rather than acting on
+    /// it; both paths are left as they are for an operator to resolve.
     pub async fn migrate_legacy(
         &self,
         legacy: &str,
@@ -77,12 +80,14 @@ impl VolumeStore {
             return Ok(false);
         }
 
-        if canonical_path.exists() {
-            let is_empty = match tokio::fs::read_dir(&canonical_path).await {
-                Ok(mut rd) => rd.next_entry().await?.is_none(),
-                Err(e) => return Err(e),
-            };
-            if is_empty {
+        // r[impl storage.confinement] — classify the canonical path before
+        // deciding what to do with it. A regular file or a symlink wearing
+        // the name is refused with an error naming it, rather than reaching
+        // a directory read that fails with a bare NotADirectory and aborts
+        // the migration with nothing said about what an operator should do.
+        if owned_dir_async(&canonical_path).await? {
+            let mut rd = tokio::fs::read_dir(&canonical_path).await?;
+            if rd.next_entry().await?.is_none() {
                 self.remove(canonical).await?;
             } else {
                 self.hold_inner(
@@ -623,6 +628,81 @@ mod tests {
             store.list_held().unwrap().is_empty(),
             "a hold that moved only a link would record a volume with no data behind it"
         );
+    }
+
+    /// The migration moves storage, so a canonical path that is not a
+    /// directory is refused rather than renamed over or read as empty.
+    // r[verify storage.confinement]
+    #[tokio::test]
+    async fn migrating_onto_a_canonical_path_that_is_a_file_is_refused_by_name() {
+        let (_data, store) = store();
+        let name = VolumeName::for_app("app", "data");
+        let legacy = store.volumes_dir().join("app-data");
+        std::fs::create_dir_all(&legacy).unwrap();
+        std::fs::write(legacy.join("data.db"), b"the volume's contents").unwrap();
+        std::fs::write(store.path(&name), b"not a directory").unwrap();
+
+        let err = store
+            .migrate_legacy("app-data", &name, "app")
+            .await
+            .unwrap_err();
+
+        assert!(err.to_string().contains("not a directory"), "{err}");
+        assert!(
+            err.to_string().contains("app-volume-data"),
+            "the error must name the path: {err}"
+        );
+        assert!(
+            legacy.join("data.db").exists(),
+            "both paths must be left as they are"
+        );
+        assert!(store.list_held().unwrap().is_empty());
+    }
+
+    // r[verify storage.confinement]
+    #[tokio::test]
+    async fn migrating_onto_an_empty_canonical_path_replaces_it() {
+        let (_data, store) = store();
+        let name = VolumeName::for_app("app", "data");
+        let legacy = store.volumes_dir().join("app-data");
+        std::fs::create_dir_all(&legacy).unwrap();
+        std::fs::write(legacy.join("data.db"), b"the volume's contents").unwrap();
+        std::fs::create_dir_all(store.path(&name)).unwrap();
+
+        assert!(
+            store
+                .migrate_legacy("app-data", &name, "app")
+                .await
+                .unwrap()
+        );
+
+        assert!(store.path(&name).join("data.db").exists());
+        assert!(!legacy.exists());
+        assert!(store.list_held().unwrap().is_empty());
+    }
+
+    // r[verify actuate.volume.hold]
+    #[tokio::test]
+    async fn migrating_onto_a_canonical_path_holding_data_holds_it_first() {
+        let (_data, store) = store();
+        let name = VolumeName::for_app("app", "data");
+        let legacy = store.volumes_dir().join("app-data");
+        std::fs::create_dir_all(&legacy).unwrap();
+        std::fs::write(legacy.join("data.db"), b"the volume's contents").unwrap();
+        std::fs::create_dir_all(store.path(&name)).unwrap();
+        std::fs::write(store.path(&name).join("other.db"), b"somebody else's").unwrap();
+
+        assert!(
+            store
+                .migrate_legacy("app-data", &name, "app")
+                .await
+                .unwrap()
+        );
+
+        let held = store.list_held().unwrap();
+        assert_eq!(held.len(), 1);
+        assert!(held[0].path.join("other.db").exists());
+        assert!(store.path(&name).join("data.db").exists());
     }
 
     // r[verify storage.confinement]
