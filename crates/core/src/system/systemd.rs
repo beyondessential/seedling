@@ -680,21 +680,17 @@ impl SystemdManager {
 
     async fn write_unit_impl(&self, name: &str, content: &str) -> Result<(), SystemdError> {
         validate_unit_name(name)?;
-        super::confined_write::write_async(
-            std::path::Path::new(UNIT_DIR),
-            name,
-            content.as_bytes(),
-        )
-        .await
-        .map_err(|e| match e {
-            super::confined_write::ConfinedWriteError::Io { source, .. } => {
-                IoSnafu.into_error(source)
-            }
-            super::confined_write::ConfinedWriteError::Escape { .. } => InvalidUnitNameSnafu {
-                name: name.to_owned(),
-            }
-            .build(),
-        })?;
+        super::confined::write_async(std::path::Path::new(UNIT_DIR), name, content.as_bytes())
+            .await
+            .map_err(|e| match e {
+                super::confined::ConfinedWriteError::Io { source, .. } => {
+                    IoSnafu.into_error(source)
+                }
+                super::confined::ConfinedWriteError::Escape { .. } => InvalidUnitNameSnafu {
+                    name: name.to_owned(),
+                }
+                .build(),
+            })?;
         Ok(())
     }
 

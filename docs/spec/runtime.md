@@ -451,7 +451,7 @@ Absent specification bugs, anything that is not defined here is either defined i
 > r[rt.write]
 > The runtime persists each [`rt.write`](language.md#l--rt.write) invocation to the action execution log. The persisted entry records the target volume and the write path; the file contents are not stored in the log. On replay, the runtime treats a write entry at the same call site as already applied and does not re-execute it; this is the at-most-once-across-replays guarantee from `l[rt.write]`.
 >
-> The runtime resolves the target volume to a host filesystem mountpoint using the same mechanism the actuator uses to apply static `Volume.write` content, then writes through a kernel-confined `openat2(RESOLVE_BENEATH)` so a malicious or buggy path cannot escape the volume's root.
+> The runtime resolves the target volume to a host filesystem mountpoint using the same mechanism the actuator uses to apply static `Volume.write` content, then writes under the [confinement every path the runtime owns is held to](#r--storage.confinement), so a malicious or buggy path cannot escape the volume's root.
 
 > r[rt.exec]
 > The runtime persists each [`rt.exec`](language.md#l--rt.exec) invocation to the action execution log. The persisted entry records the target container instance and the exit code. The argv and any options (e.g. env) are not stored in the log; only the outcome is needed for replay correctness. On replay, the runtime treats an exec entry at the same call site as already executed and recovers the exit code from the entry rather than re-running the command; this is the at-most-once-across-replays guarantee from `l[rt.exec]`.
@@ -1090,6 +1090,13 @@ Some operations must hand a writable or read-only path to an action closure with
 
 > r[actuate.volume.btrfs]
 > When the data directory resides on a BTRFS filesystem, named non-tmpfs volumes must be created as BTRFS subvolumes.
+
+> r[storage.confinement]
+> Every host filesystem path the runtime creates, writes, moves, or deletes on behalf of a definition or an operator command is confined to the root that owns it: a volume's root for content written into that volume, and the volume storage directory under the data directory for a volume's own storage.
+>
+> Confinement covers every component of a path, not only its last. A parent directory created on the way to a write must be resolved under the same confinement as the write itself, so that a symlink placed inside the root cannot lead the runtime to create or write anything outside it. A path that escapes its root must be refused, and nothing along the way to it may be created.
+>
+> Storage whose own path is a symlink is not storage the runtime owns. Creating, holding, or deleting such a path must be refused with an error naming it, rather than acting on what it points at or reporting a deletion that removed only the link.
 
 > r[actuate.volume.hold]
 > When a named non-tmpfs volume or a managed site volume would be removed — either because the volume name has been removed from the app definition, because the volume's storage backend cannot be updated in-place, or because an operator has requested deletion of a managed site volume — the runtime must preserve the volume's data in a held state instead of deleting it. The held volume remains linked to the originating context: app volumes to their app, and site volumes to the site (reported as app name `_site`). If the app still requires a volume under the same name, a fresh volume is created and the old one is held alongside it. Snapshot site volumes are excluded from the hold mechanism (see [volume.site.snapshot.delete](#r--volume.site.snapshot.delete)).
