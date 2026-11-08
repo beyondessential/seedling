@@ -185,3 +185,26 @@ fn legacy_exported_kind_decodes_as_app_target() {
         .expect("mapping present");
     assert_eq!(mapping.target, app_target("producer", "data"));
 }
+
+// r[verify deregister.purge]
+#[test]
+fn deleting_for_an_app_leaves_other_apps_mappings_alone() {
+    let db = Db::open_in_memory().expect("open");
+    for (owner, name) in [("blog", "data"), ("blog", "media"), ("wiki", "data")] {
+        create(
+            &db,
+            &ExternalVolumeMapping {
+                app: app(owner),
+                external_name: ext(name),
+                target: site_target("site-data"),
+                read_only: false,
+            },
+        )
+        .expect("create");
+    }
+
+    assert_eq!(delete_for_app(&db, &app("blog")).expect("delete"), 2);
+
+    assert!(list_for_app(&db, &app("blog")).expect("list").is_empty());
+    assert_eq!(list_for_app(&db, &app("wiki")).expect("list").len(), 1);
+}

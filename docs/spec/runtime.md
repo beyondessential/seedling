@@ -165,6 +165,11 @@ Absent specification bugs, anything that is not defined here is either defined i
 >
 > Forensic reconstruction of a prior app's history (across a deregister/re-register cycle) is the responsibility of the [audit log](#r--audit.log), not the per-app generation history.
 
+> r[deregister.purge]
+> Deregistering an app must discard every piece of state the runtime holds under that app's name, including the operator-configured [external service](#r--service.external.mapping.events) and [external volume](#r--volume.external.mapping.events) mappings made for it. An app name is the runtime's identity for an app, so state surviving the app it names is inherited by the next app registered under that name rather than belonging to nobody.
+>
+> External volume mappings make that inheritance a question of access rather than tidiness: a mapping carries a target volume and a read-only flag, so an app coming up under a reused name would mount another app's data on the strength of a decision an operator made about a different app, having declared only that it wants an external volume by that name.
+
 # Definition Sources
 
 > r[definition.recheck]

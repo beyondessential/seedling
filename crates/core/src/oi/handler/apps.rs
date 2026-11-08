@@ -1562,6 +1562,21 @@ pub(crate) fn deregister_app(
             if let Err(e) = crate::runtime::db::delete_schedules_for_app(db, &name_owned) {
                 tracing::warn!(app = %name_owned, "failed to clean up schedules during deregister: {e}");
             }
+            // r[impl deregister.purge]
+            // Left behind, these are inherited by the next app registered
+            // under this name — and a volume mapping carries a target and a
+            // read-only flag, so that app would come up already mounting
+            // data an operator granted to a different one.
+            if let Err(e) =
+                crate::runtime::external_volume_mappings::delete_for_app(db, &name_owned)
+            {
+                tracing::warn!(app = %name_owned, "failed to clean up external volume mappings during deregister: {e}");
+            }
+            if let Err(e) =
+                crate::runtime::external_service_mappings::delete_for_app(db, &name_owned)
+            {
+                tracing::warn!(app = %name_owned, "failed to clean up external service mappings during deregister: {e}");
+            }
             Ok::<_, OiError>(())
         })?;
 

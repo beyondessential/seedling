@@ -1004,3 +1004,46 @@ fn deregistering_forgets_the_canopy_type() {
     oi.call("/apps/remove", json!({ "app": "demo" })).unwrap();
     assert!(stored_canopy_types(&oi).is_empty());
 }
+
+/// An app name is the runtime's identity for an app, so a mapping outliving
+/// the app it was made for is inherited by the next app of that name rather
+/// than belonging to nobody — and a volume mapping carries a target and a
+/// read-only flag, so the inheritance is access, not clutter.
+// r[verify deregister.purge]
+#[test]
+fn deregistering_discards_the_external_mappings_made_for_the_app() {
+    let oi = TestOi::with_app("demo");
+    oi.call(
+        "/volumes/site/create",
+        json!({ "name": "shared", "kind": "managed" }),
+    )
+    .unwrap();
+    oi.call(
+        "/volumes/external/map",
+        json!({ "app": "demo", "external_name": "store",
+                "target": { "kind": "site", "name": "shared" } }),
+    )
+    .unwrap();
+    oi.call("/services/site/create", json!({ "name": "upstream" }))
+        .unwrap();
+    oi.call(
+        "/services/external/map",
+        json!({ "app": "demo", "external_name": "api",
+                "target": { "kind": "site", "name": "upstream" } }),
+    )
+    .unwrap();
+
+    oi.call("/apps/remove", json!({ "app": "demo" })).unwrap();
+
+    let volumes = oi
+        .call("/volumes/external/list", json!({ "app": "demo" }))
+        .unwrap();
+    assert!(
+        volumes.as_array().unwrap().is_empty(),
+        "a later app of this name must not inherit it: {volumes}"
+    );
+    let services = oi
+        .call("/services/external/list", json!({ "app": "demo" }))
+        .unwrap();
+    assert!(services.as_array().unwrap().is_empty(), "{services}");
+}

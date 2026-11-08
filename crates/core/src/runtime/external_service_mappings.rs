@@ -78,6 +78,18 @@ pub fn delete(
     Ok(count > 0)
 }
 
+/// Discard every mapping held under an app's name, as when it is
+/// deregistered. The app name is the runtime's identity for an app, so a
+/// mapping left behind is inherited by the next app registered under that
+/// name rather than belonging to nobody.
+// r[impl deregister.purge]
+pub fn delete_for_app(db: &Db, app: &AppName) -> rusqlite::Result<usize> {
+    db.conn.execute(
+        "DELETE FROM external_service_mappings WHERE app = ?1",
+        params![app],
+    )
+}
+
 pub fn list_for_app(db: &Db, app: &AppName) -> rusqlite::Result<Vec<ExternalServiceMapping>> {
     let mut stmt = db.conn.prepare(
         "SELECT app, external_name, target_kind, target_app, target_service
