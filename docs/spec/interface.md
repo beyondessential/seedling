@@ -56,6 +56,12 @@ Absent specification bugs, anything that is not defined here is either defined i
 > ```
 > This file is the initial bootstrap mechanism: an operator with write access to the data directory
 > can authorize a client key without requiring a prior authenticated connection.
+>
+> Authorization holds for the life of a connection, not only at its handshake. When a key leaves the
+> authorized set, the server must close every connection that was authenticated with it, ending the
+> event streams, shell sessions and port forwards carried on them. A revoked client cannot
+> reconnect, so revoking a key cuts off the machine holding it rather than waiting for its session
+> to end on its own.
 
 # Streams
 
@@ -941,6 +947,8 @@ Absent specification bugs, anything that is not defined here is either defined i
 > `/keys/revoke` removes a client key from the authorized set.
 > Params: `fingerprint` (string, required).
 > Returns `{}` on success. Returns `not_found` if the fingerprint is not known.
+> Revocation takes effect on connections already open, as
+> [transport.client-auth](#i--transport.client-auth) requires.
 
 > i[key.client.file-permissions]
 > The client identity key file must be created with owner-read/write-only permissions.

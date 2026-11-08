@@ -131,7 +131,7 @@ pub async fn run(
             .map_err(|e| format!("reading bootstrap file: {e}"))?;
     }
 
-    if state.trusted_keys.read().is_empty() {
+    if state.trusted_keys.is_empty() {
         tracing::warn!(
             "no authorized client keys — add fingerprints to {}/authorized_keys and restart",
             data_dir.display()
@@ -221,8 +221,29 @@ async fn handle_connection(
         .or_else(|| client_fp.clone())
         .unwrap_or_else(|| "unauthenticated".to_owned());
 
+    // i[impl transport.client-auth] — the handshake authorised this
+    // connection once; the subscription is how it learns that the key it
+    // was authorised with has since gone.
+    let mut keys_changed = state.trusted_keys.subscribe();
+
     loop {
         tokio::select! {
+            // i[impl key.revoke]
+            Ok(()) = keys_changed.changed() => {
+                // Asked afresh rather than taken from the signal, so a
+                // connection that slept through several changes still sees
+                // the one that matters.
+                if let Some(fp) = client_fp.as_deref()
+                    && !state.trusted_keys.contains(fp)
+                {
+                    tracing::info!(
+                        fingerprint = %fp,
+                        "closing a connection whose key was revoked"
+                    );
+                    conn.close(quinn::VarInt::from_u32(0), b"key revoked");
+                    break;
+                }
+            }
             stream_result = conn.accept_bi() => {
                 match stream_result {
                     Ok(stream) => {
@@ -596,12 +617,14 @@ async fn event_stream_task(
 }
 
 #[cfg(test)]
-mod canopy_tests {
-    //! The offer path over a real connection.
+mod connection_tests {
+    //! What a real connection carries, and what ends it.
     //!
     //! Registering an offer needs the connection it arrived on, and an offer's
     //! lifetime is that connection's, so neither the accept side nor the
     //! teardown hook can be exercised without a connection actually existing.
+    //! Revocation is the same: it is a property of a connection the handshake
+    //! already let through.
 
     use std::{net::SocketAddr, sync::Arc, time::Duration};
 
@@ -696,10 +719,7 @@ mod canopy_tests {
             let _ = rustls::crypto::ring::default_provider().install_default();
 
             let identity = ClientIdentity::ephemeral();
-            oi.state
-                .trusted_keys
-                .write()
-                .insert(identity.fingerprint.clone());
+            oi.state.trusted_keys.insert(identity.fingerprint.clone());
             let addr = spawn_server(Arc::clone(&oi.state));
 
             let client = OiClient::connect(addr, ClientAuth::TrustAny, &identity, Actor::default())
@@ -739,10 +759,7 @@ mod canopy_tests {
             let _ = rustls::crypto::ring::default_provider().install_default();
 
             let identity = ClientIdentity::ephemeral();
-            oi.state
-                .trusted_keys
-                .write()
-                .insert(identity.fingerprint.clone());
+            oi.state.trusted_keys.insert(identity.fingerprint.clone());
             let addr = spawn_server(Arc::clone(&oi.state));
 
             let client = OiClient::connect(addr, ClientAuth::TrustAny, &identity, Actor::default())
@@ -791,10 +808,7 @@ mod canopy_tests {
             let _ = rustls::crypto::ring::default_provider().install_default();
 
             let identity = ClientIdentity::ephemeral();
-            oi.state
-                .trusted_keys
-                .write()
-                .insert(identity.fingerprint.clone());
+            oi.state.trusted_keys.insert(identity.fingerprint.clone());
             let addr = spawn_server(Arc::clone(&oi.state));
 
             let client = OiClient::connect(addr, ClientAuth::TrustAny, &identity, Actor::default())
@@ -834,10 +848,7 @@ mod canopy_tests {
             let _ = rustls::crypto::ring::default_provider().install_default();
 
             let identity = ClientIdentity::ephemeral();
-            oi.state
-                .trusted_keys
-                .write()
-                .insert(identity.fingerprint.clone());
+            oi.state.trusted_keys.insert(identity.fingerprint.clone());
             let addr = spawn_server(Arc::clone(&oi.state));
 
             let client = OiClient::connect(addr, ClientAuth::TrustAny, &identity, Actor::default())
@@ -856,6 +867,93 @@ mod canopy_tests {
                 "the client must be able to tell a refusal from a breakage: {err}"
             );
             assert_eq!(oi.state.canopy.count(), 0);
+        });
+    }
+
+    /// Wait for `conn` to close, or give up: the handler notices the key
+    /// went on its own schedule, not the test's.
+    async fn await_closed(client: &OiClient) -> bool {
+        tokio::time::timeout(Duration::from_secs(5), client.connection().closed())
+            .await
+            .is_ok()
+    }
+
+    // i[verify key.revoke]
+    // i[verify transport.client-auth]
+    #[test]
+    fn revoking_a_key_closes_the_connection_it_authenticated() {
+        let oi = TestOi::new();
+        oi.block_on(async {
+            let _ = rustls::crypto::ring::default_provider().install_default();
+
+            let identity = ClientIdentity::ephemeral();
+            let trusted = Arc::clone(&oi.state.trusted_keys);
+            oi.state.db.call({
+                let fingerprint = identity.fingerprint.clone();
+                let trusted = Arc::clone(&trusted);
+                move |db| {
+                    crate::oi::auth::authorize_key(db, &trusted, &fingerprint, "laptop")
+                        .expect("authorise the key")
+                }
+            });
+            let addr = spawn_server(Arc::clone(&oi.state));
+
+            let client = OiClient::connect(addr, ClientAuth::TrustAny, &identity, Actor::default())
+                .await
+                .expect("connect");
+            client
+                .request(
+                    "/canopy/offer",
+                    json!({ "agent": "test", "endpoint": "https://example.invalid" }),
+                )
+                .await
+                .expect("the connection is usable while the key is authorised");
+
+            oi.state.db.call({
+                let fingerprint = identity.fingerprint.clone();
+                move |db| {
+                    assert!(
+                        crate::oi::auth::revoke_key(db, &trusted, &fingerprint)
+                            .expect("revoke the key"),
+                        "the key was there to revoke"
+                    );
+                }
+            });
+
+            assert!(
+                await_closed(&client).await,
+                "a revoked key must not keep the connection it opened"
+            );
+            assert!(
+                client.request("/status", json!({})).await.is_err(),
+                "and nothing more can be asked over it"
+            );
+        });
+    }
+
+    // i[verify key.revoke]
+    #[test]
+    fn revoking_one_key_leaves_another_clients_connection_alone() {
+        let oi = TestOi::new();
+        oi.block_on(async {
+            let _ = rustls::crypto::ring::default_provider().install_default();
+
+            let staying = ClientIdentity::ephemeral();
+            let going = ClientIdentity::ephemeral();
+            oi.state.trusted_keys.insert(staying.fingerprint.clone());
+            oi.state.trusted_keys.insert(going.fingerprint.clone());
+            let addr = spawn_server(Arc::clone(&oi.state));
+
+            let client = OiClient::connect(addr, ClientAuth::TrustAny, &staying, Actor::default())
+                .await
+                .expect("connect");
+
+            assert!(oi.state.trusted_keys.remove(&going.fingerprint));
+
+            assert!(
+                !await_closed(&client).await,
+                "revoking a key is not a reason to drop everyone else"
+            );
         });
     }
 }
@@ -954,7 +1052,7 @@ mod auth_tests {
         let stranger = ClientIdentity::ephemeral();
 
         let trusted = new_trusted_keys();
-        trusted.write().insert(authorized.fingerprint.clone());
+        trusted.insert(authorized.fingerprint.clone());
 
         let addr = spawn_oi_server(trusted);
 

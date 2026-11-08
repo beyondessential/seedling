@@ -23,11 +23,77 @@ use seedling_protocol::keys;
 // In-memory trusted key set
 // ---------------------------------------------------------------------------
 
-/// Thread-safe in-memory set of trusted client SPKI fingerprints.
-pub type TrustedKeys = Arc<RwLock<HashSet<String>>>;
+/// The client SPKI fingerprints the server trusts, and a signal that the
+/// set has changed.
+///
+/// The TLS verifier reads this at the handshake, but authorisation has to
+/// outlive it: a revoked key must not keep a connection it opened earlier.
+/// Rather than announce which key went — a signal a busy connection could
+/// miss — each change bumps a generation, and a connection woken by it
+/// asks again whether its own key is still here.
+// i[impl transport.client-auth]
+#[derive(Debug)]
+pub struct TrustedKeySet {
+    keys: RwLock<HashSet<String>>,
+    generation: tokio::sync::watch::Sender<u64>,
+}
+
+pub type TrustedKeys = Arc<TrustedKeySet>;
+
+impl Default for TrustedKeySet {
+    fn default() -> Self {
+        Self {
+            keys: RwLock::new(HashSet::new()),
+            generation: tokio::sync::watch::Sender::new(0),
+        }
+    }
+}
+
+impl TrustedKeySet {
+    /// Add a fingerprint. Already being there is not a change.
+    pub fn insert(&self, fingerprint: String) -> bool {
+        let added = self.keys.write().insert(fingerprint);
+        if added {
+            self.changed();
+        }
+        added
+    }
+
+    /// Remove a fingerprint, reporting whether it was there.
+    pub fn remove(&self, fingerprint: &str) -> bool {
+        let removed = self.keys.write().remove(fingerprint);
+        if removed {
+            self.changed();
+        }
+        removed
+    }
+
+    /// Whether `fingerprint` is trusted, compared without leaking where
+    /// two fingerprints first differ.
+    pub fn contains(&self, fingerprint: &str) -> bool {
+        let wanted = fingerprint.as_bytes();
+        self.keys
+            .read()
+            .iter()
+            .any(|t| t.as_bytes().ct_eq(wanted).into())
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.keys.read().is_empty()
+    }
+
+    /// A receiver that wakes whenever the set changes.
+    pub fn subscribe(&self) -> tokio::sync::watch::Receiver<u64> {
+        self.generation.subscribe()
+    }
+
+    fn changed(&self) {
+        self.generation.send_modify(|g| *g = g.wrapping_add(1));
+    }
+}
 
 pub fn new_trusted_keys() -> TrustedKeys {
-    Arc::new(RwLock::new(HashSet::new()))
+    Arc::new(TrustedKeySet::default())
 }
 
 // ---------------------------------------------------------------------------
@@ -40,9 +106,8 @@ pub fn load_from_db(db: &Db, trusted: &TrustedKeys) -> rusqlite::Result<()> {
     let fps: Vec<String> = stmt
         .query_map([], |r| r.get(0))?
         .collect::<rusqlite::Result<_>>()?;
-    let mut set = trusted.write();
     for fp in fps {
-        set.insert(fp);
+        trusted.insert(fp);
     }
     Ok(())
 }
@@ -91,7 +156,7 @@ pub fn import_bootstrap_file(data_dir: &Path, db: &Db, trusted: &TrustedKeys) ->
                 rusqlite::params![fp, label, now],
             ) {
                 Ok(_) => {
-                    trusted.write().insert(fp.to_owned());
+                    trusted.insert(fp.to_owned());
                     imported += 1;
                 }
                 Err(e) => {
@@ -146,7 +211,7 @@ pub fn authorize_key(
          ON CONFLICT(fingerprint) DO UPDATE SET label = excluded.label",
         rusqlite::params![fp, label, now],
     )?;
-    trusted.write().insert(fp.to_owned());
+    trusted.insert(fp.to_owned());
     Ok(())
 }
 
@@ -157,7 +222,9 @@ pub fn revoke_key(db: &Db, trusted: &TrustedKeys, fp: &str) -> rusqlite::Result<
         .conn
         .execute("DELETE FROM authorized_keys WHERE fingerprint = ?1", [fp])?;
     if rows > 0 {
-        trusted.write().remove(fp);
+        // i[impl key.revoke] — out of the set the verifier reads, and the
+        // signal that goes with it ends the connections it had authorised.
+        trusted.remove(fp);
         Ok(true)
     } else {
         Ok(false)
@@ -217,10 +284,7 @@ impl ClientCertVerifier for SeedlingClientVerifier {
         _now: UnixTime,
     ) -> Result<ClientCertVerified, rustls::Error> {
         let fp = keys::fingerprint(end_entity.as_ref());
-        let fp_bytes = fp.as_bytes();
-        let trusted = self.trusted.read();
-        let found = trusted.iter().any(|t| t.as_bytes().ct_eq(fp_bytes).into());
-        if found {
+        if self.trusted.contains(&fp) {
             Ok(ClientCertVerified::assertion())
         } else {
             tracing::warn!(fingerprint = %fp, "rejected client with unrecognized key");
@@ -279,7 +343,7 @@ mod tests {
         assert_eq!(list.len(), 1);
         assert_eq!(list[0].0, "fp-1");
         assert_eq!(list[0].1, "laptop");
-        assert!(trusted.read().contains("fp-1"));
+        assert!(trusted.contains("fp-1"));
     }
 
     // i[verify key.authorize]
@@ -302,7 +366,7 @@ mod tests {
         authorize_key(&db, &trusted, "fp-1", "laptop").unwrap();
         assert!(revoke_key(&db, &trusted, "fp-1").unwrap());
         assert!(list_keys(&db).unwrap().is_empty());
-        assert!(!trusted.read().contains("fp-1"));
+        assert!(!trusted.contains("fp-1"));
     }
 
     // i[verify key.revoke]

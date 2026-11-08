@@ -1,5 +1,4 @@
 use std::{
-    collections::HashSet,
     path::PathBuf,
     sync::{Arc, OnceLock},
     time::Instant,
@@ -25,7 +24,7 @@ pub struct OiState {
     pub db_path: PathBuf,
     /// In-memory set of authorized client SPKI fingerprints, shared with the
     /// TLS client cert verifier so additions/removals take effect immediately.
-    pub trusted_keys: Arc<parking_lot::RwLock<HashSet<String>>>,
+    pub trusted_keys: crate::oi::auth::TrustedKeys,
     pub shells: Arc<crate::oi::shells::ShellRegistry>,
     pub forwards: Arc<parking_lot::Mutex<ForwardRegistry>>,
     /// Live offers to carry Canopy requests, and the settings governing them.
