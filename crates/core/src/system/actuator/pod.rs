@@ -1,5 +1,5 @@
 use ipnet::Ipv6Net;
-use snafu::{IntoError, ResultExt};
+use snafu::ResultExt;
 
 use super::safe_volume_write;
 
@@ -170,22 +170,20 @@ async fn ensure_volumes(driver: &System, volumes: &[ContainerVolume]) -> Result<
                 for (path, contents) in &vol.def.writes {
                     safe_volume_write(host_path, path, contents).await?;
                 }
-            } else if !host_path.exists() {
+            } else {
                 // r[impl actuate.volume.storage]
-                // Named non-tmpfs volume managed by VolumeStore; ensure the
-                // host directory/subvolume exists.
+                // r[impl actuate.volume.start]
+                // Named non-tmpfs volume managed by VolumeStore. This phase
+                // runs alongside the volumes phase, so it may well be the one
+                // that finds the volume absent — in which case it owes the
+                // volume its declared writes, which only ever land at
+                // creation.
                 let bind_name = vol
                     .bind_name
                     .as_ref()
                     .expect("named bind volume must carry a VolumeName");
-                driver.volume_store.create(bind_name).await.map_err(|e| {
-                    super::VolumeWriteSnafu {
-                        path: host_path.clone(),
-                    }
-                    .into_error(e)
-                })?;
-                // Named volumes only get writes on first creation.
-                // (The reconciler handles their lifecycle.)
+                super::ensure_named_volume(&driver.volume_store, bind_name, &vol.def.writes)
+                    .await?;
             }
         } else {
             // Anonymous non-tmpfs volume: managed by the container runtime.

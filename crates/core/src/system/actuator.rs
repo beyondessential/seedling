@@ -38,8 +38,8 @@ use crate::{
 mod pod;
 mod pull;
 
-pub use pod::{TMPFS_VOLUMES_DIR, tmpfs_volume_path};
 use pod::{ContainerVolume, collect_container_volumes, map_on_exit};
+pub use pod::{TMPFS_VOLUMES_DIR, tmpfs_volume_path};
 use pull::PullState;
 
 // ---------------------------------------------------------------------------
@@ -121,6 +121,53 @@ pub(crate) async fn safe_volume_write(
                 VolumeWriteSnafu { path }.into_error(source)
             }
         })
+}
+
+/// Bring a named non-tmpfs volume's storage into existence and seed it with
+/// its declared writes, as one step. Returns whether this call created it.
+///
+/// Both the volumes phase and the pods phase reach a named volume, and they
+/// run concurrently, so either may be the one that finds it absent. Creation
+/// and seeding therefore cannot live in separate places: a volume only ever
+/// receives its declared writes at creation, so whichever phase got there
+/// first would decide whether they were applied at all.
+///
+/// A write that fails takes the storage back out, so the next tick creates
+/// and seeds afresh instead of finding a directory that counts as created and
+/// will never be written to.
+// r[impl actuate.volume.start]
+pub(crate) async fn ensure_named_volume(
+    vol_store: &crate::system::volume_store::VolumeStore,
+    name: &VolumeName,
+    writes: &[(String, bytes::Bytes)],
+) -> Result<bool, ActuateError> {
+    if vol_store.exists(name) {
+        return Ok(false);
+    }
+
+    let mountpoint = vol_store.path(name);
+    vol_store.create(name).await.map_err(|e| {
+        VolumeWriteSnafu {
+            path: mountpoint.clone(),
+        }
+        .into_error(e)
+    })?;
+
+    for (path, contents) in writes {
+        if let Err(e) = safe_volume_write(&mountpoint, path, contents).await {
+            if let Err(cleanup) = vol_store.remove(name).await {
+                tracing::error!(
+                    volume = %name,
+                    path = %mountpoint.display(),
+                    "seeding failed and the storage it created could not be removed, \
+                     so the volume will stay unseeded: {cleanup}"
+                );
+            }
+            return Err(e);
+        }
+    }
+
+    Ok(true)
 }
 
 // ---------------------------------------------------------------------------
@@ -393,23 +440,7 @@ impl Actuator {
                                 .into_error(e)
                             })?;
                     }
-                    let just_created = if !vol_store.exists(&name) {
-                        vol_store.create(&name).await.map_err(|e| {
-                            VolumeWriteSnafu {
-                                path: vol_store.path(&name),
-                            }
-                            .into_error(e)
-                        })?;
-                        true
-                    } else {
-                        false
-                    };
-                    if just_created && !writes.is_empty() {
-                        let mountpoint = vol_store.path(&name);
-                        for (path, contents) in &writes {
-                            safe_volume_write(&mountpoint, path, contents).await?;
-                        }
-                    }
+                    ensure_named_volume(vol_store, &name, &writes).await?;
                 }
                 Ok(None)
             }
@@ -734,4 +765,77 @@ pub fn resolve_external_volumes(
         resolved.insert(mapping.external_name, mount);
     }
     resolved
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::system::volume_store::VolumeStore;
+
+    fn store() -> (tempfile::TempDir, VolumeStore) {
+        let data = tempfile::tempdir().unwrap();
+        let store = VolumeStore::new(data.path(), false).unwrap();
+        (data, store)
+    }
+
+    // r[verify actuate.volume.start]
+    #[tokio::test]
+    async fn creating_a_named_volume_seeds_it_in_the_same_step() {
+        let (_data, store) = store();
+        let name = VolumeName::for_app("app", "data");
+        let writes = vec![("conf/app.toml".to_owned(), bytes::Bytes::from("port = 80"))];
+
+        assert!(ensure_named_volume(&store, &name, &writes).await.unwrap());
+
+        let seeded = store.path(&name).join("conf/app.toml");
+        assert_eq!(std::fs::read_to_string(seeded).unwrap(), "port = 80");
+    }
+
+    /// Whichever phase reaches the volume second must leave its contents
+    /// alone: the declared writes seed the volume, they do not own it.
+    // r[verify actuate.volume.start]
+    #[tokio::test]
+    async fn a_volume_that_is_already_there_is_not_seeded_again() {
+        let (_data, store) = store();
+        let name = VolumeName::for_app("app", "data");
+        let writes = vec![("conf/app.toml".to_owned(), bytes::Bytes::from("port = 80"))];
+
+        ensure_named_volume(&store, &name, &writes).await.unwrap();
+        let seeded = store.path(&name).join("conf/app.toml");
+        std::fs::write(&seeded, "port = 8080").unwrap();
+
+        assert!(!ensure_named_volume(&store, &name, &writes).await.unwrap());
+
+        assert_eq!(
+            std::fs::read_to_string(&seeded).unwrap(),
+            "port = 8080",
+            "the app owns the volume's contents once it has them"
+        );
+    }
+
+    /// A volume only ever receives its writes at creation, so storage left
+    /// behind by a failed seed would stay unseeded for good.
+    // r[verify actuate.volume.start]
+    #[tokio::test]
+    async fn a_failed_write_takes_the_storage_it_created_back_out() {
+        let (_data, store) = store();
+        let name = VolumeName::for_app("app", "data");
+        let writes = vec![
+            ("conf/app.toml".to_owned(), bytes::Bytes::from("port = 80")),
+            ("../escape".to_owned(), bytes::Bytes::from("elsewhere")),
+        ];
+
+        let err = ensure_named_volume(&store, &name, &writes)
+            .await
+            .unwrap_err();
+
+        assert!(
+            matches!(err, ActuateError::VolumePathEscape { .. }),
+            "{err}"
+        );
+        assert!(
+            !store.exists(&name),
+            "the next attempt must create and seed afresh"
+        );
+    }
 }

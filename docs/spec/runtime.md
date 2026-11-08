@@ -1080,6 +1080,10 @@ Some operations must hand a writable or read-only path to an action closure with
 
 > r[actuate.volume.start]
 > Starting a Volume instance must create the named volume if it does not already exist, then apply any declared file writes to the volume.
+>
+> Creating a named non-tmpfs volume and seeding it with its declared writes is one step. Whichever part of the runtime brings the volume's storage into existence must apply the declared writes to it, and a part that finds the storage already there must not apply them again — an app owns its volume's contents once it has them, so re-seeding would overwrite what the app wrote. A volume that was created without being seeded is never seeded afterwards, so the two must not be separable: a workload that happened to materialise the volume ahead of the component nominally responsible for it would otherwise start against empty storage, permanently and with nothing reported.
+>
+> When a declared write fails part-way through seeding, storage the same operation had just created must be removed again, so the next attempt seeds from scratch rather than leaving behind a volume that counts as created and will never receive its writes.
 
 > r[actuate.volume.tmpfs]
 > Tmpfs-backed Volumes (named or anonymous) must be materialised as a host-managed directory under a tmpfs-backed location and bind-mounted into containers. The runtime must not delegate tmpfs storage to the container runtime's own tmpfs volume driver, because such drivers create a fresh tmpfs at every container mount and so silently drop any declared file writes that were applied to the volume's host backing.
