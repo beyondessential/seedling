@@ -131,13 +131,20 @@ impl VolumeStore {
             .join("held-volumes")
     }
 
+    /// Hold a named app volume for operator review.
+    ///
+    /// `Ok(None)` means there was no storage to hold, which is not a failure:
+    /// nothing is preserved because there is nothing to preserve. A hold that
+    /// could not be carried out is an error, and the two must stay distinct —
+    /// callers hold in order to remove something, and removing on the strength
+    /// of a hold that did not happen orphans the data.
     // r[impl actuate.volume.hold]
     pub async fn hold(
         &self,
         name: &VolumeName,
         app: &str,
         reason: &str,
-    ) -> std::io::Result<HeldVolumeMeta> {
+    ) -> std::io::Result<Option<HeldVolumeMeta>> {
         let s = name.as_str();
         self.hold_inner(&self.path(name), s, s, app, reason).await
     }
@@ -147,8 +154,14 @@ impl VolumeStore {
     /// The on-disk path `site-{name}` is moved into the held volumes
     /// directory; the resulting record carries the literal app name `_site`
     /// so UIs can distinguish site-origin holds from app-origin ones.
+    ///
+    /// `Ok(None)` means there was no storage to hold; see [`Self::hold`].
     // r[impl actuate.volume.hold]
-    pub async fn hold_site(&self, name: &str, reason: &str) -> std::io::Result<HeldVolumeMeta> {
+    pub async fn hold_site(
+        &self,
+        name: &str,
+        reason: &str,
+    ) -> std::io::Result<Option<HeldVolumeMeta>> {
         let src = self.site_path(name);
         let display = format!("site-{name}");
         self.hold_inner(&src, &display, name, "_site", reason).await
@@ -161,15 +174,19 @@ impl VolumeStore {
         volume_name: &str,
         app: &str,
         reason: &str,
-    ) -> std::io::Result<HeldVolumeMeta> {
+    ) -> std::io::Result<Option<HeldVolumeMeta>> {
         // r[impl storage.confinement] — holding moves the storage aside,
         // and moving a symlink would record a held volume with none of the
-        // data behind it.
+        // data behind it. That is an error and stops the caller; storage
+        // that is simply not there is not, and lets the caller carry on.
+        // r[impl actuate.volume.hold]
         if !owned_dir_async(src).await? {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::NotFound,
-                format!("volume {display_name} does not exist"),
-            ));
+            tracing::info!(
+                app = app,
+                volume = volume_name,
+                "nothing to hold: the volume has no storage behind it"
+            );
+            return Ok(None);
         }
 
         let held_dir = self.held_dir();
@@ -201,7 +218,7 @@ impl VolumeStore {
             "volume held for operator review"
         );
 
-        Ok(meta)
+        Ok(Some(meta))
     }
 
     /// Host path for a held volume's data directory.

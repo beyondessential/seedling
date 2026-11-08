@@ -422,24 +422,26 @@ pub(crate) fn delete_site_volume(
     // a held copy. Bind kinds only reference an operator-provided host path,
     // so dropping the row is sufficient.
     let held_meta = match def.kind {
-        SiteVolumeKind::Managed => {
-            let meta = tokio::task::block_in_place(|| {
-                tokio::runtime::Handle::current().block_on(async {
-                    state
-                        .driver
-                        .volume_store
-                        .hold_site(params.name.as_str(), "site volume deleted by operator")
-                        .await
-                        .map_err(|e| {
-                            OiError::new(
-                                ErrorCode::Internal,
-                                format!("failed to hold site volume for review: {e}"),
-                            )
-                        })
-                })
-            })?;
-            Some(meta)
-        }
+        // Storage that is not there is held by doing nothing, so the record
+        // goes and the operator is not left with a site volume they cannot
+        // remove. A hold that could not be carried out still stops the
+        // delete: there the data is real, and dropping the record would
+        // orphan it.
+        SiteVolumeKind::Managed => tokio::task::block_in_place(|| {
+            tokio::runtime::Handle::current().block_on(async {
+                state
+                    .driver
+                    .volume_store
+                    .hold_site(params.name.as_str(), "site volume deleted by operator")
+                    .await
+                    .map_err(|e| {
+                        OiError::new(
+                            ErrorCode::Internal,
+                            format!("failed to hold site volume for review: {e}"),
+                        )
+                    })
+            })
+        })?,
         SiteVolumeKind::Snapshot { .. } => {
             tokio::task::block_in_place(|| {
                 tokio::runtime::Handle::current().block_on(async {

@@ -531,3 +531,58 @@ fn storage_standing_at_the_name_with_no_record_is_refused_rather_than_reused() {
         "the data must be left where it is"
     );
 }
+
+/// Storage removed by hand, by a disk recovery, or by the startup sweep of
+/// leftover snapshots leaves a row with nothing behind it. There is nothing
+/// to hold, so there is nothing stopping the deletion.
+// r[verify actuate.volume.hold]
+#[test]
+fn deleting_a_managed_site_volume_whose_storage_is_gone_removes_the_record() {
+    let oi = TestOi::new();
+    oi.call(
+        "/volumes/site/create",
+        json!({ "name": "mydata", "kind": "managed" }),
+    )
+    .unwrap();
+    std::fs::remove_dir_all(oi.state.driver.volume_store.site_path("mydata")).unwrap();
+
+    let deleted = oi
+        .call("/volumes/site/delete", json!({ "name": "mydata" }))
+        .unwrap();
+
+    assert_eq!(deleted["deleted"], true);
+    assert!(site_volume_names(&oi).is_empty());
+    assert!(
+        held_volumes(&oi).is_empty(),
+        "nothing was preserved because there was nothing to preserve"
+    );
+}
+
+/// The data is real and would be orphaned, so a hold that could not be
+/// carried out must still stop the delete.
+// r[verify actuate.volume.hold]
+#[test]
+fn deleting_a_managed_site_volume_that_cannot_be_held_leaves_the_record_alone() {
+    let oi = TestOi::new();
+    oi.call(
+        "/volumes/site/create",
+        json!({ "name": "relocated", "kind": "managed" }),
+    )
+    .unwrap();
+
+    // Storage an operator moved aside and linked back into place: the
+    // runtime does not own it, so it refuses to move it.
+    let path = oi.state.driver.volume_store.site_path("relocated");
+    let elsewhere = path.with_file_name("elsewhere");
+    std::fs::rename(&path, &elsewhere).unwrap();
+    std::os::unix::fs::symlink(&elsewhere, &path).unwrap();
+
+    let (code, msg) = oi
+        .call("/volumes/site/delete", json!({ "name": "relocated" }))
+        .unwrap_err();
+
+    assert_eq!(code, "internal");
+    assert!(msg.contains("failed to hold site volume"), "{msg}");
+    assert_eq!(site_volume_names(&oi), vec!["relocated"]);
+    assert!(elsewhere.exists(), "the data must be left where it is");
+}

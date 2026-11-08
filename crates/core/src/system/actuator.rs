@@ -548,16 +548,16 @@ impl Actuator {
                     // r[impl actuate.volume.hold]
                     let vol_store = &self.driver.volume_store;
                     let name = VolumeName::of_instance(instance);
-                    if vol_store.exists(&name) {
-                        let meta = vol_store
-                            .hold(&name, instance.app.as_str(), "removed from app definition")
-                            .await
-                            .map_err(|e| {
-                                VolumeWriteSnafu {
-                                    path: vol_store.path(&name),
-                                }
-                                .into_error(e)
-                            })?;
+                    let held = vol_store
+                        .hold(&name, instance.app.as_str(), "removed from app definition")
+                        .await
+                        .map_err(|e| {
+                            VolumeWriteSnafu {
+                                path: vol_store.path(&name),
+                            }
+                            .into_error(e)
+                        })?;
+                    if let Some(meta) = held {
                         // r[impl actuate.volume.hold.events]
                         self.event_tx.held_volume_created(
                             meta.id,
@@ -593,16 +593,16 @@ impl Actuator {
             if !tmpfs {
                 let vol_store = &self.driver.volume_store;
                 let name = crate::runtime::identity::VolumeName::of_instance(instance);
-                if vol_store.exists(&name) {
-                    let meta = vol_store
-                        .hold(&name, instance.app.as_str(), reason)
-                        .await
-                        .map_err(|e| {
-                            VolumeWriteSnafu {
-                                path: vol_store.path(&name),
-                            }
-                            .into_error(e)
-                        })?;
+                let held = vol_store
+                    .hold(&name, instance.app.as_str(), reason)
+                    .await
+                    .map_err(|e| {
+                        VolumeWriteSnafu {
+                            path: vol_store.path(&name),
+                        }
+                        .into_error(e)
+                    })?;
+                if let Some(meta) = held {
                     // r[impl actuate.volume.hold.events]
                     self.event_tx.held_volume_created(
                         meta.id,

@@ -2035,7 +2035,7 @@ fn hold_removed_volumes(state: &OiState, app: &AppName, removed: &[String], ctx:
                     "removed from app definition",
                 ))
             }) {
-                Ok(meta) => {
+                Ok(Some(meta)) => {
                     tracing::info!(
                         app = %name,
                         volume = %vol_name,
@@ -2047,7 +2047,7 @@ fn hold_removed_volumes(state: &OiState, app: &AppName, removed: &[String], ctx:
                     ctx.events
                         .held_volume_created(meta.id, app, &meta.volume_name, &meta.reason);
                 }
-                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                Ok(None) => {
                     // Volume declared but never created on disk
                     // (e.g. the app was never installed, or the
                     // user added + removed the volume quickly).

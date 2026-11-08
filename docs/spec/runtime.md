@@ -1105,6 +1105,8 @@ Some operations must hand a writable or read-only path to an action closure with
 
 > r[actuate.volume.hold]
 > When a named non-tmpfs volume or a managed site volume would be removed — either because the volume name has been removed from the app definition, because the volume's storage backend cannot be updated in-place, or because an operator has requested deletion of a managed site volume — the runtime must preserve the volume's data in a held state instead of deleting it. The held volume remains linked to the originating context: app volumes to their app, and site volumes to the site (reported as app name `_site`). If the app still requires a volume under the same name, a fresh volume is created and the old one is held alongside it. Snapshot site volumes are excluded from the hold mechanism (see [volume.site.snapshot.delete](#r--volume.site.snapshot.delete)).
+>
+> A volume with no storage behind it is held by doing nothing: there is no data to preserve, so the removal it was standing in the way of goes ahead and no held volume is recorded. This must be distinguishable from a hold that could not be carried out — storage the runtime does not own, or a move that failed — which still stops the removal, because there the data is real and would be orphaned. A runtime that cannot tell the two apart leaves a managed site volume whose storage an operator removed by hand permanently undeletable, its record stranded in every listing.
 
 > r[actuate.volume.hold.confirm]
 > An operator must explicitly confirm deletion of a held volume before its data is removed.
