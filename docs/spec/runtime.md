@@ -748,6 +748,15 @@ Some operations must hand a writable or read-only path to an action closure with
 > A barrier still recorded as waiting counts toward the [poll cadence](#r--barrier.suspension.poll-backoff) for as long as the record stands.
 > A barrier that has passed but was never recorded as passed therefore goes on lengthening the cadence of every barrier after it, so an operation whose first barrier waited a long time re-polls the next one slowly even though it is ready to proceed.
 
+> r[barrier.replay.abandoned]
+> Startup cleanup of resources left by a previous run must spare the resources recorded against the operation it is about to replay, so the replay can adopt them.
+> Where the replay does not then start, for any reason, those resources must be torn down and their records forgotten before the runtime goes on serving.
+>
+> A resource spared for a replay that never happens is recorded against an operation no live operation will ever claim, and the next start spares it again on the same reasoning, so nothing reclaims it for as long as the node lives.
+> Sparing a resource is therefore a promise, and every path that declines to replay owes it.
+>
+> Only resources actually torn down may be forgotten: a record the runtime could not read or act on must stay on the books, since dropping it would report a teardown that did not happen.
+
 > r[barrier.replay.determinism]
 > BSL action closures must not have side effects beyond `rt.*` calls.
 > Re-execution of a closure given the same AppDef and parameters must produce the same sequence of `rt.*` calls up to any given barrier point.
@@ -788,6 +797,16 @@ Some operations must hand a writable or read-only path to an action closure with
 >
 > The exact values are an implementation concern — they need only be loose enough that a slow-failing container gets multiple chances, and tight enough that a permanently broken container reaches the start limit on a human-meaningful timescale. These are pacing parameters, not the definition of a crash loop; that is [autonomous.restart.rate](#r--autonomous.restart.rate).
 
+> r[autonomous.restart.backoff.undisturbed]
+> While the supervisor is itself bringing a unit up — its first start, or the pause before an automatic restart — the reconciler must neither tear the unit down nor start it again.
+> It must distinguish a unit the supervisor reports as starting from one the supervisor reports as fully started, and treat only the latter as evidence of a broken unit when no container is running under it.
+> A unit whose spec no longer matches the app's definition is exempt: replacing it is the point, and the supervisor has no view of the definition.
+>
+> A unit the supervisor is pacing is not faulty, it is between attempts, so no unit-failure fault arises from this window.
+>
+> Replacing a unit mid-backoff restarts the supervisor's restart accounting from zero, so the [start limit](#r--autonomous.restart.start-limit-hit) is never reached and the crash-loop escalation that depends on it never happens.
+> This is not a narrow race: a container that fails shortly after each start spends most of every restart cycle in this state, so a reconciler that acts on it replaces the unit on nearly every pass and the limit the backoff exists to reach recedes indefinitely.
+
 > r[autonomous.restart.start-limit-hit]
 > When a container unit reaches `failed/start-limit-hit` (systemd has refused further restarts because the unit exhausted [`StartLimitBurst`](#r--autonomous.restart.backoff)) the reconciler must:
 >
@@ -824,6 +843,10 @@ Some operations must hand a writable or read-only path to an action closure with
 > - File a fault per [fault.healthcheck-replace-failed](#r--fault.healthcheck-replace-failed).
 > - Refuse to spawn further replacement attempts for this Deployment — whether rolling-driven or healthcheck-driven — until the AppDef generation changes (i.e. the operator pushes new code) or the operator clears the fault.
 >
+> The `on_failure` policy decides which deployments are replaced, not which are watched.
+> A deployment declaring `on_failure: monitor` is never bumped by a replacement, but a rolling update of it brings up a fresh instance like any other, and the guard must evaluate that instance.
+> Every deployment that declares a healthcheck therefore has a grace window, whatever its policy.
+>
 > The pre-existing instance must continue to run in degraded mode (under its old spec hash if it was a rolling-update target). The runtime must not allow the guard to trigger an indefinite churn of replacement attempts; the guard exists precisely to bound the cost of a permanently-broken workload — whether the breakage was introduced by a script change or arose spontaneously.
 
 > r[scaling.decision]
@@ -833,6 +856,14 @@ Some operations must hand a writable or read-only path to an action closure with
 > r[scaling.decision.actions]
 > A named Deployment named by an action resolves to the replicas its effective scale calls for, the same number the reconciler resolves it to, rather than to the lower bound of its declared range.
 > An action that addresses a Deployment addresses the whole of it: a `rt.stop` that reached only part of a scaled deployment would report the workload stopped while the rest of it went on serving, which is the opposite of what a maintenance action that stops a deployment before acting on its data is for.
+
+> r[scaling.decision.unreadable]
+> Where the record of operator-chosen scale cannot be read, the runtime must not fall back to a declared bound: how many instances the operator asked for is unknown, not known to be the minimum.
+> The app must not be actuated for that pass, so whatever is already running keeps running, and the condition must be visible to an operator for as long as it lasts.
+> An operator asking what a deployment's scale is must be told the figure is unavailable rather than given the bound.
+>
+> The lower bound is the floor of what an operator may choose, so using it here answers the question with the smallest answer it could have had.
+> A deployment scaled well above its floor is then converged down to it, tearing down instances on the strength of a question that was never answered, and building them back up on the next pass that can read the record.
 
 > r[scaling.clamp]
 > When an app's BSL script is re-evaluated (e.g. via an update), any stored scaling decision for a Deployment whose declared bounds have changed must be clamped to the new bounds.
@@ -1342,6 +1373,20 @@ Two levers set how a workload competes for host resources under pressure. Each D
 > Resources are identified by the identities the runtime recorded for them, not by the shape of their names: names are not required to be prefix-free, so one app's name may be a prefix of another's.
 > A scan by name prefix is permitted only to enumerate candidates that are then matched exactly against recorded identity.
 > Having no recorded identities is not on its own evidence that teardown has finished: where the runtime cannot rule out that resources of the app are still present, it must not declare the app uninstalled, and must raise a fault that clears when teardown does complete.
+
+> r[app.uninstall.exclusive]
+> An uninstall must be rejected while a [lifecycle operation](#r--operation.lifecycle) for that app is in progress or queued, and the rejection must name the action that holds the app so the operator knows what to cancel.
+> Uninstall must determine this from the scheduler's record of operations rather than from the app's phase: an action closure runs with its app in the `Installed` phase, so the phase does not distinguish an idle app from one mid-action.
+> Where the runtime cannot determine whether an operation holds the app, it must reject.
+> The check and the app's departure from the installed phase must be indivisible with respect to admitting an action, so an action cannot be admitted between the two and then run its closure under the teardown.
+> Once the app has left the installed phase to be torn down, no lifecycle operation may be admitted for it, whatever asked for one: an operator action, a param change's handler, a scheduled firing, or an install.
+>
+> Admission is one decision and belongs wherever operations are admitted, not with each caller that asks for one.
+> A rule each caller is expected to apply for itself holds only for the callers that know it, and the next one added will not.
+>
+> Rejecting rather than cancelling the operation keeps uninstall consistent with [operation.lifecycle.single.intra-app](#r--operation.lifecycle.single.intra-app), which rejects a competing request rather than pre-empting the operation in flight.
+> Cancelling on the operator's behalf would need a bound on how long uninstall waits for the closure to unwind, and an uninstall that abandons the wait leaves the app in exactly the half-torn-down state the rejection exists to prevent.
+> [Cancel](#r--operation.cancel) is already an operator-reachable action, so an operator who wants the uninstall to win cancels and retries.
 
 > r[infra.pod.subnet]
 > No two concurrently running pod instances may share a network prefix.

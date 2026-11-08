@@ -660,6 +660,41 @@ impl Reconciler {
                 return (Vec::new(), reg.list().len().max(1));
             }
         };
+        // r[impl scaling.decision]
+        // r[impl scaling.decision.unreadable]
+        // One read of every operator scaling decision for the whole tick,
+        // rather than a round trip per app. A failure is not an answer: the
+        // decisions say how many instances each deployment is owed, so rather
+        // than standing the declared floor in and converging every scaled-up
+        // deployment down to it, every app is reported as dropped and the tick
+        // holds what is running.
+        let scaling_decisions = match self
+            .db
+            .call(crate::runtime::scaling::load_all_scaling_decisions)
+        {
+            Ok(d) => {
+                self.clear_system_fault("scaling_decisions_unreadable");
+                d
+            }
+            Err(e) => {
+                error!(
+                    error = %e,
+                    "could not read the operator scaling decisions; holding this tick rather \
+                     than converging deployments to a scale nobody chose"
+                );
+                self.file_system_fault(
+                    "scaling_decisions_unreadable",
+                    &format!(
+                        "could not read the record of operator-chosen scale, which says how \
+                         many instances each deployment is owed, so reconciliation is held \
+                         rather than converging them to a scale nobody chose. Nothing else \
+                         advances while this persists. Error: {e}"
+                    ),
+                );
+                return (Vec::new(), reg.list().len().max(1));
+            }
+        };
+
         for (name, status) in reg.list() {
             let entry = match reg.get(name.as_str()) {
                 Some(e) => e,
@@ -682,7 +717,8 @@ impl Reconciler {
             let app_def_arc = entry.app.def.load_full();
             let app_def = (*app_def_arc).clone();
             // r[impl autonomous.scale]
-            let effective_scales = self.compute_effective_scales(&name, &app_def);
+            let effective_scales =
+                self.compute_effective_scales(&name, &app_def, &scaling_decisions);
             // i[impl resource.stop]
             let stopped_set = {
                 let app_name_for_stop = name.clone();
@@ -920,8 +956,17 @@ impl Reconciler {
 
 impl Reconciler {
     /// Build the effective-scale map for every Deployment in an app.
+    ///
+    /// Reads from the decisions the tick already loaded: the table is read
+    /// once for the node, not once per app, because this runs for every app on
+    /// every tick.
     // r[impl update.rolling.over-provision]
-    fn compute_effective_scales(&self, app_name: &AppName, app_def: &AppDef) -> EffectiveScales {
+    fn compute_effective_scales(
+        &self,
+        app_name: &AppName,
+        app_def: &AppDef,
+        decisions: &crate::runtime::scaling::ScalingDecisions,
+    ) -> EffectiveScales {
         // Collect the data we need before entering db.call().
         let deployments: Vec<(String, u16, u16)> = app_def
             .resources
@@ -939,18 +984,16 @@ impl Reconciler {
                 }
             })
             .collect();
-        let app_name_owned = app_name.clone();
-        let scale_data: Vec<(String, u16, u16, u16)> = self.db.call(move |db| {
-            deployments
-                .into_iter()
-                .map(|(dep_name, low, high)| {
-                    let effective =
-                        scaling::effective_scale(db, &app_name_owned, &dep_name, low, high)
-                            .unwrap_or(low);
-                    (dep_name, low, high, effective)
-                })
-                .collect()
-        });
+        let scale_data: Vec<(String, u16, u16, u16)> = deployments
+            .into_iter()
+            .map(|(dep_name, low, high)| {
+                let stored = decisions
+                    .get(&(app_name.clone(), dep_name.clone()))
+                    .copied();
+                let effective = scaling::effective_scale_from(stored, low, high);
+                (dep_name, low, high, effective)
+            })
+            .collect();
         let mut scales = EffectiveScales::new();
         for (dep_name, low, high, mut effective) in scale_data {
             // r[impl autonomous.healthcheck-replace.guard]
@@ -1743,12 +1786,18 @@ impl Reconciler {
 
         // Recompute the bump set from scratch each tick. A deployment is bumped
         // when (a) it has any unhealthy running instance with on_failure=replace,
-        // (b) the count of healthy running instances is below the declared
-        // target, and (c) the replace-loop guard for it has not tripped.
+        // (b) the count of healthy running instances is below the scale the
+        // deployment should be running at, and (c) the replace-loop guard for
+        // it has not tripped.
         self.unhealthy_replace_deployments.clear();
         // Per-deployment grace window in seconds, used downstream to detect
         // replacement-failure from observation history.
         let mut grace_secs_by_dep: HashMap<(AppName, String), i64> = HashMap::new();
+
+        // Gather what each deployment looks like this tick first, so the
+        // scales can be resolved in one pass over the database below rather
+        // than a query per deployment inside the walk.
+        let mut seen: Vec<DeploymentThisTick> = Vec::new();
         for app in apps {
             let pods = match running_pods_by_app.get(&app.name) {
                 Some(p) => p.as_slice(),
@@ -1759,46 +1808,87 @@ impl Reconciler {
                     continue;
                 };
                 let dep_def = dep.def.lock();
-                let target = dep_def.scale.start;
+                let scale = (dep_def.scale.start, dep_def.scale.end);
                 let pod_def = dep_def.pod.lock();
                 let container = pod_def.container.lock();
-                let (policy, grace_secs) = match &container.healthcheck {
-                    Some(hc) => (
-                        Some(hc.on_failure),
+                let healthcheck = container.healthcheck.as_ref().map(|hc| {
+                    (
+                        hc.on_failure,
                         (hc.start_period_secs + hc.retries as u64 * hc.interval_secs) as i64,
-                    ),
-                    None => (None, 0),
-                };
+                    )
+                });
                 drop(container);
                 drop(pod_def);
                 drop(dep_def);
-                if !matches!(
-                    policy,
-                    Some(crate::defs::container::HealthcheckOnFailure::Replace)
-                ) {
-                    continue;
-                }
+
                 let dep_name = id.name.as_str();
-                grace_secs_by_dep.insert((app.name.clone(), dep_name.to_owned()), grace_secs);
-                if self
-                    .replace_failed
-                    .contains(&(app.name.clone(), dep_name.to_owned()))
-                {
-                    continue;
-                }
-                let dep_pods: Vec<&RunningPod> = pods
-                    .iter()
-                    .filter(|p| {
-                        p.instance.kind == crate::defs::resource::ResourceKind::Deployment
-                            && p.instance.name.as_deref() == Some(dep_name)
+                seen.push(DeploymentThisTick {
+                    key: (app.name.clone(), dep_name.to_owned()),
+                    healthcheck,
+                    instance_health: pods
+                        .iter()
+                        .filter(|p| {
+                            p.instance.kind == crate::defs::resource::ResourceKind::Deployment
+                                && p.instance.name.as_deref() == Some(dep_name)
+                        })
+                        .map(|p| p.observed_healthy)
+                        .collect(),
+                    scale,
+                });
+            }
+        }
+
+        // r[impl scaling.decision]
+        // How many healthy instances a deployment is owed is the scale the
+        // operator chose, not the declared lower bound. Read against the
+        // bound, a deployment declaring `scale 1..5` and scaled to 5 that
+        // loses an instance has four healthy against a target of one, and is
+        // never found short — so the further it was scaled up, the less
+        // likely it was to get a replacement at all.
+        // One statement for the node, not one per deployment: `seen` spans
+        // every app, so a query each would be a round trip per deployment per
+        // tick on top of the one `compute_effective_scales` already makes.
+        let read_targets: rusqlite::Result<Vec<u16>> = {
+            let wanted: Vec<(AppName, String, u16, u16)> = seen
+                .iter()
+                .map(|d| (d.key.0.clone(), d.key.1.clone(), d.scale.0, d.scale.1))
+                .collect();
+            self.db.call(move |db| {
+                let decisions = scaling::load_all_scaling_decisions(db)?;
+                Ok(wanted
+                    .into_iter()
+                    .map(|(app, dep, low, high)| {
+                        let stored = decisions.get(&(app, dep)).copied();
+                        scaling::effective_scale_from(stored, low, high)
                     })
-                    .collect();
-                let healthy = dep_pods.iter().filter(|p| p.observed_healthy).count();
-                let any_unhealthy = dep_pods.iter().any(|p| !p.observed_healthy);
-                if any_unhealthy && healthy < usize::from(target) {
-                    self.unhealthy_replace_deployments
-                        .insert((app.name.clone(), dep_name.to_owned()));
-                }
+                    .collect())
+            })
+        };
+        // r[impl scaling.decision.unreadable]
+        // Carried as `None` rather than as the lower bound. Read against the
+        // bound a deployment scaled above it is never short, so substituting
+        // one would withhold every replacement while reading as a decision to
+        // make none. The guard below still runs: it bounds the churn of
+        // replacements already in flight, which this says nothing about.
+        let targets: Vec<Option<u16>> = match read_targets {
+            Ok(targets) => targets.into_iter().map(Some).collect(),
+            Err(e) => {
+                error!(
+                    error = %e,
+                    "could not read the scaling decisions; leaving replacement state as it \
+                     stands this tick rather than acting on a shortfall nobody measured"
+                );
+                vec![None; seen.len()]
+            }
+        };
+
+        for (dep, target) in seen.into_iter().zip(targets) {
+            let standing = deployment_standing(dep.healthcheck, &dep.instance_health, target);
+            if let Some(grace_secs) = standing.grace_secs {
+                grace_secs_by_dep.insert(dep.key.clone(), grace_secs);
+            }
+            if standing.wants_replacement && !self.replace_failed.contains(&dep.key) {
+                self.unhealthy_replace_deployments.insert(dep.key);
             }
         }
 
@@ -2044,8 +2134,175 @@ impl Reconciler {
     }
 }
 
+/// One deployment as this tick found it, gathered before any decision so the
+/// scales can be resolved together.
+struct DeploymentThisTick {
+    key: (AppName, String),
+    /// The declared healthcheck's failure policy and grace window in seconds.
+    healthcheck: Option<(crate::defs::container::HealthcheckOnFailure, i64)>,
+    /// Whether each running instance of this deployment is observed healthy.
+    instance_health: Vec<bool>,
+    /// The declared bounds, which the stored scaling decision is clamped to.
+    scale: (u16, u16),
+}
+
+/// What the replace-loop guard and the replacement bump each need to know
+/// about one deployment.
+struct DeploymentStanding {
+    /// How long a fresh instance of this deployment has to become healthy.
+    /// `None` where the deployment declares no healthcheck, which is also
+    /// what puts it outside the guard.
+    grace_secs: Option<i64>,
+    /// The deployment replaces unhealthy instances, and is short of healthy
+    /// ones against what it should be running.
+    wants_replacement: bool,
+}
+
+/// Decide both of a deployment's standings together, so the two questions
+/// stay apart.
+///
+/// The grace window follows the declared healthcheck: the guard watches every
+/// fresh instance, whether a replacement or a rolling update brought it up,
+/// so any deployment declaring a healthcheck has one whatever its policy.
+/// Wanting a replacement follows the policy as well, and the observed health
+/// of the instances running against the count that should be.
+///
+/// Reading both off the policy left a rolling update of a deployment with a
+/// healthcheck but `on_failure: monitor` with no grace window at all, so the
+/// guard never evaluated it and a stuck update inhibited its stale instances
+/// for good.
+// r[impl autonomous.healthcheck-replace]
+// r[impl autonomous.healthcheck-replace.guard]
+fn deployment_standing(
+    healthcheck: Option<(crate::defs::container::HealthcheckOnFailure, i64)>,
+    instance_health: &[bool],
+    target: Option<u16>,
+) -> DeploymentStanding {
+    let Some((on_failure, grace_secs)) = healthcheck else {
+        return DeploymentStanding {
+            grace_secs: None,
+            wants_replacement: false,
+        };
+    };
+    // r[impl scaling.decision.unreadable]
+    // A deployment whose target could not be read is not a deployment known to
+    // have enough: how many it is owed is simply unanswered, and spawning a
+    // replacement against a guess is the churn the guard exists to bound. Its
+    // grace window is declared in the app definition, so that much is known
+    // either way.
+    let Some(target) = target else {
+        return DeploymentStanding {
+            grace_secs: Some(grace_secs),
+            wants_replacement: false,
+        };
+    };
+    let healthy = instance_health.iter().filter(|h| **h).count();
+    DeploymentStanding {
+        grace_secs: Some(grace_secs),
+        wants_replacement: matches!(
+            on_failure,
+            crate::defs::container::HealthcheckOnFailure::Replace
+        ) && instance_health.contains(&false)
+            && healthy < usize::from(target),
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    use super::{DeploymentStanding, deployment_standing};
+    use crate::defs::container::HealthcheckOnFailure;
+
+    fn standing(
+        on_failure: HealthcheckOnFailure,
+        health: &[bool],
+        target: u16,
+    ) -> DeploymentStanding {
+        deployment_standing(Some((on_failure, 90)), health, Some(target))
+    }
+
+    // r[verify autonomous.healthcheck-replace.guard]
+    // The grace window was recorded only after the on_failure=replace filter,
+    // and the guard's candidate list is looked up through that map. A rolling
+    // update of a deployment with a healthcheck but on_failure=monitor had no
+    // entry, so the guard never evaluated it and a stuck update inhibited its
+    // stale instances indefinitely.
+    #[test]
+    fn a_healthcheck_earns_a_grace_window_whatever_the_policy() {
+        assert_eq!(
+            standing(HealthcheckOnFailure::Monitor, &[true], 1).grace_secs,
+            Some(90),
+            "a monitor deployment is still watched by the guard"
+        );
+        assert_eq!(
+            standing(HealthcheckOnFailure::Replace, &[true], 1).grace_secs,
+            Some(90)
+        );
+        assert_eq!(
+            deployment_standing(None, &[true], Some(1)).grace_secs,
+            None,
+            "no healthcheck, nothing to wait for"
+        );
+    }
+
+    // r[verify autonomous.healthcheck-replace]
+    // Only `replace` spawns a replacement; `monitor` keeps its routing-pool
+    // preference but is never bumped.
+    #[test]
+    fn only_a_replace_policy_wants_a_replacement() {
+        assert!(standing(HealthcheckOnFailure::Replace, &[true, false], 2).wants_replacement);
+        assert!(!standing(HealthcheckOnFailure::Monitor, &[true, false], 2).wants_replacement);
+        assert!(
+            !standing(HealthcheckOnFailure::Replace, &[true, true], 2).wants_replacement,
+            "nothing unhealthy to replace"
+        );
+    }
+
+    // r[verify scaling.decision.unreadable]
+    // The lower bound carried two wrong answers at once: a scaled-up
+    // deployment never looked short, and one sitting at its floor looked
+    // adequately staffed for a reason nobody had checked. Unknown is carried
+    // as unknown, and nothing is replaced on a guess.
+    #[test]
+    fn an_unreadable_target_asks_for_no_replacement() {
+        let unknown = deployment_standing(
+            Some((HealthcheckOnFailure::Replace, 90)),
+            &[true, false],
+            None,
+        );
+        assert!(
+            !unknown.wants_replacement,
+            "the shortfall is unmeasured, not measured as nil"
+        );
+        assert_eq!(
+            unknown.grace_secs,
+            Some(90),
+            "the window is declared in the app definition, so it is known either way"
+        );
+        assert!(
+            standing(HealthcheckOnFailure::Replace, &[true, false], 2).wants_replacement,
+            "the same deployment with a readable target is owed a replacement"
+        );
+    }
+
+    // r[verify scaling.decision]
+    // The threshold was the declared lower bound while the running instances
+    // follow the operator's effective scale. A deployment declaring
+    // `scale 1..5` and scaled to 5 that loses one instance has four healthy
+    // against a target of one, so `healthy < target` was false and no
+    // replacement was spawned — the more it was scaled up, the less likely it
+    // was to get one.
+    #[test]
+    fn a_scaled_up_deployment_is_short_against_the_scale_it_runs_at() {
+        let health = [true, true, true, true, false];
+        assert!(
+            standing(HealthcheckOnFailure::Replace, &health, 5).wants_replacement,
+            "scaled to 5, one unhealthy: a replacement is owed"
+        );
+        assert!(
+            !standing(HealthcheckOnFailure::Replace, &health, 1).wants_replacement,
+            "against the declared lower bound it looks amply covered, which was the bug"
+        );
+    }
 
     // r[verify observe.persist]
     // `OBS_KINDS` exists to intern what `to_obs_kinds` persists, so a kind in
@@ -2071,6 +2328,7 @@ mod tests {
             ObservationFact::VolumeMissing,
             ObservationFact::VolumeBackendMismatch,
             ObservationFact::UnitActive,
+            ObservationFact::UnitActivating,
             ObservationFact::UnitInactive,
             ObservationFact::UnitFailed,
             ObservationFact::UnitStartLimitHit,

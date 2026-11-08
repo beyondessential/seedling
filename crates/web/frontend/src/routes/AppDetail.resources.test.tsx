@@ -165,6 +165,28 @@ describe("AppDetail resources", () => {
     );
   });
 
+  // w[verify routes.apps]
+  // The daemon reports `current` as null when it could not read the operator's
+  // scaling decision. Read as a number, `null + 1` is 1, so scaling up a
+  // deployment running five instances sent scale=1 and tore four down: the
+  // harm the null exists to prevent, by another route.
+  it("will not adjust a scale it was not given", async () => {
+    const web = makeWebDeployment();
+    const { request } = mount(
+      baseFixtures(
+        makeDetail({
+          resources: [{ ...web, scale: { low: 1, high: 5, current: null } }],
+        }),
+      ),
+      "write",
+    );
+    expect(await screen.findByText("unavailable")).toBeTruthy();
+    expect(iconButton("Scale up").disabled).toBe(true);
+    expect(iconButton("Scale down").disabled).toBe(true);
+    fireEvent.click(iconButton("Scale up"));
+    expect(callsTo(request, "/apps/scale")).toEqual([]);
+  });
+
   it("restarts and stops a deployment", async () => {
     const { request } = mount(baseFixtures(makeDetail()), "write");
     expect(await screen.findByText("web-0")).toBeTruthy();

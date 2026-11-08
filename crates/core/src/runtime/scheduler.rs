@@ -3,8 +3,10 @@ use std::fmt;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+use parking_lot::Mutex;
 use seedling_protocol::names::{ActionName, AppName};
 
+use crate::runtime::apps::AppPhase;
 use crate::runtime::barrier::{CancelToken, OperationId};
 use crate::runtime::history::AutonomousOperation;
 use crate::runtime::identity::InstanceId;
@@ -88,6 +90,10 @@ pub enum RejectReason {
     SameAppOperationInProgress,
     /// A lifecycle operation for this application is already queued.
     SameAppAlreadyQueued,
+    // r[impl app.uninstall.exclusive]
+    /// The application is being torn down, so nothing further may run
+    /// against it.
+    AppUninstalling,
 }
 
 // r[impl operation.composition.cycles]
@@ -149,15 +155,59 @@ impl Scheduler {
             || self.queue.iter().any(|q| q.app == *app)
     }
 
+    // r[impl app.uninstall.exclusive]
+    /// Admit a lifecycle operation for `app` / `action`, subject to its phase.
+    ///
+    /// The only way in from outside this module. [`Self::request`] is the queue
+    /// mechanic underneath and stays private, so the phase gate cannot be
+    /// skipped by a caller that does not know to make it: a caller that has not
+    /// said what phase the app is in has not said enough to be admitted. Four
+    /// call sites admit operations — an operator action, a param change's
+    /// handler, a scheduled firing and an install — and a rule each applies for
+    /// itself holds only for the ones that know it.
+    ///
+    /// `phase` is read under the scheduler's own lock, so an uninstall that
+    /// transitions the app while holding that lock falls wholly before or
+    /// wholly after this decision, never inside it.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "mirrors request() signature plus the phase it decides on"
+    )]
+    pub fn admit(
+        &mut self,
+        app: &AppName,
+        action: &ActionName,
+        params: serde_json::Map<String, serde_json::Value>,
+        source_generation: u64,
+        target_generation: u64,
+        trigger: &str,
+        phase: &Mutex<AppPhase>,
+    ) -> ScheduleResult {
+        if matches!(*phase.lock(), AppPhase::Uninstalling) {
+            return ScheduleResult::Rejected(RejectReason::AppUninstalling);
+        }
+        self.request(
+            app,
+            action,
+            params,
+            source_generation,
+            target_generation,
+            trigger,
+        )
+    }
+
     /// Request a lifecycle operation for `app` / `action`.
     ///
     /// - If no operation is active: the operation starts immediately.
     /// - If a different app is active and this app is not yet queued: queued.
     /// - If this app is active or already queued: rejected.
+    ///
+    /// The queue mechanic alone, with no view of the app's phase: reach it
+    /// through [`Self::admit`], which decides whether the app may have one.
     // r[impl operation.lifecycle.single]
     // r[impl operation.lifecycle.single.intra-app]
     // r[impl operation.lifecycle.single.inter-app]
-    pub fn request(
+    fn request(
         &mut self,
         app: &AppName,
         action: &ActionName,

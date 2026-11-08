@@ -189,6 +189,98 @@ fn uninstall_requires_installed_phase() {
     assert_eq!(code, "not_found");
 }
 
+// r[verify app.uninstall.exclusive]
+// The app stays in `Installed` for the whole of an action, so the phase gate
+// let an uninstall through mid-action and the reconciler began tearing down
+// what the closure was still driving. Only the scheduler knows.
+#[test]
+fn uninstall_is_refused_while_an_action_holds_the_app() {
+    use seedling_protocol::names::{ActionName, AppName};
+
+    let oi = TestOi::with_app("demo");
+    oi.install("demo");
+
+    let app = AppName::new("demo").expect("app name");
+    let action = ActionName::new("backup").expect("action name");
+    oi.state.scheduler.lock().admit(
+        &app,
+        &action,
+        serde_json::Map::new(),
+        1,
+        1,
+        "test",
+        &parking_lot::Mutex::new(crate::runtime::apps::AppPhase::Installed),
+    );
+
+    let (code, message) = oi
+        .call("/apps/uninstall", json!({ "app": "demo" }))
+        .unwrap_err();
+    assert_eq!(code, "operation_in_progress");
+    assert!(message.contains("backup"), "names the action: {message}");
+
+    // The refusal left the app alone: no teardown was started under the
+    // action. (`status` is a health rollup over the installed app, so an
+    // app whose deployment is not actually running reads as degraded.)
+    let desc = oi.call("/apps/show", json!({ "app": "demo" })).unwrap();
+    assert_ne!(desc["status"], "uninstalling", "no teardown began");
+    assert_ne!(desc["status"], "not_installed");
+
+    // Once the action is done the uninstall goes through.
+    oi.state.scheduler.lock().complete_current();
+    oi.call("/apps/uninstall", json!({ "app": "demo" }))
+        .unwrap();
+    let desc = oi.call("/apps/show", json!({ "app": "demo" })).unwrap();
+    assert_eq!(desc["status"], "uninstalling");
+}
+
+// r[verify app.uninstall.exclusive]
+// A queued action came back as the anonymous "an action is queued", which
+// tells an operator nothing they can cancel. The spec asks for the action to
+// be named whether it is running or waiting.
+#[test]
+fn the_refusal_names_a_queued_action_as_well_as_a_running_one() {
+    use seedling_protocol::names::{ActionName, AppName};
+
+    let oi = TestOi::with_app("demo");
+    oi.install("demo");
+
+    let installed = || parking_lot::Mutex::new(crate::runtime::apps::AppPhase::Installed);
+    let demo = AppName::new("demo").expect("app name");
+    let other = AppName::new("other").expect("app name");
+    let backup = ActionName::new("backup").expect("action name");
+
+    // Another app holds the one operation slot, so demo's action queues
+    // behind it rather than running.
+    let mut sched = oi.state.scheduler.lock();
+    sched.admit(
+        &other,
+        &backup,
+        serde_json::Map::new(),
+        1,
+        1,
+        "test",
+        &installed(),
+    );
+    let queued = sched.admit(
+        &demo,
+        &backup,
+        serde_json::Map::new(),
+        1,
+        1,
+        "test",
+        &installed(),
+    );
+    assert_eq!(queued, crate::runtime::scheduler::ScheduleResult::Queued);
+    drop(sched);
+
+    let (code, message) = oi
+        .call("/apps/uninstall", json!({ "app": "demo" }))
+        .unwrap_err();
+    assert_eq!(code, "operation_in_progress");
+    assert!(message.contains("backup"), "names the action: {message}");
+    assert!(message.contains("queued"), "says it is waiting: {message}");
+}
+
 // i[verify scale.reset-on-uninstall]
 #[test]
 fn uninstall_transitions_phase_and_resets_scaling() {

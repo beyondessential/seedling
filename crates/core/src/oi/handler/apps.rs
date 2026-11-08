@@ -787,9 +787,30 @@ pub(crate) fn describe_app(state: &OiState, params: AppParams) -> HandlerResult 
 
                 // i[impl scale.describe]
                 if let Some((low, high)) = info.scale_bounds {
-                    let current =
-                        scaling::effective_scale(db, &name_owned, &info.name_str, low, high)
-                            .unwrap_or(low);
+                    // r[impl scaling.decision.unreadable]
+                    // Null rather than the lower bound. The bounds come from
+                    // the app definition and are known; what the operator
+                    // chose within them is not, and reporting the floor would
+                    // have someone who scaled up read it back as a scale-down
+                    // that never happened.
+                    let current = match scaling::effective_scale(
+                        db,
+                        &name_owned,
+                        &info.name_str,
+                        low,
+                        high,
+                    ) {
+                        Ok(current) => json!(current),
+                        Err(e) => {
+                            tracing::warn!(
+                                app = %name_owned,
+                                deployment = %info.name_str,
+                                "could not read the scaling decision; reporting the current \
+                                 scale as unavailable: {e}"
+                            );
+                            Value::Null
+                        }
+                    };
                     resource_obj["scale"] = json!({
                         "low": low,
                         "high": high,
@@ -1578,10 +1599,64 @@ pub(crate) fn uninstall_app(state: &OiState, params: AppParams) -> HandlerResult
         Arc::clone(&entry.phase)
     };
 
-    // Persist the transition before waking the reconciler.
+    // r[impl app.uninstall.exclusive]
+    // Reaching here means the phase is `Installed`, which is also the phase an
+    // app sits in while an action closure runs: the phase does not distinguish
+    // an idle app from one mid-action. Ask the scheduler, which holds the
+    // operations. Without this the reconciler starts tearing down the very
+    // resources the closure is still driving.
+    //
+    // The lock is held across the phase transition below, not just the check,
+    // because the transition is what the scheduler reads when it admits an
+    // operation: holding it across both makes them one decision. Only the
+    // transition is inside — every admission for every app waits behind this
+    // lock, so the cleanup that follows, which admission never looks at, is
+    // left outside it.
+    let scheduled = state.scheduler.lock();
+    if scheduled.has_operation_for(&params.app) {
+        // Name whichever operation holds the app. An operator told only that
+        // "an action is queued" cannot tell what to cancel, which is the whole
+        // point of naming it.
+        let holder = scheduled
+            .active()
+            .filter(|a| a.app == params.app)
+            .map(|a| format!("'{}' is in progress", a.action))
+            .or_else(|| {
+                scheduled
+                    .queue_iter()
+                    .find(|q| q.app == params.app)
+                    .map(|q| format!("'{}' is queued", q.action))
+            })
+            .unwrap_or_else(|| "an action is queued".to_owned());
+        return Err(OiError::new(
+            ErrorCode::OperationInProgress,
+            format!("cannot uninstall {name} while {holder}; cancel it first, then uninstall"),
+        ));
+    }
+    // The phase was read and released before this lock, so a second uninstall
+    // can have arrived in between. Both would otherwise transition, delete the
+    // same rows again and wake the reconciler twice over one teardown.
+    if !matches!(*phase_arc.lock(), AppPhase::Installed) {
+        return Err(OiError::new(
+            ErrorCode::NotInstalled,
+            format!("app is not installed: {name}"),
+        ));
+    }
+
+    // Persist the transition before waking the reconciler, and before the
+    // scheduler lock goes, so no operation is admitted against the old phase.
     let name_owned = params.app.clone();
     state.db.call(move |db| {
         transition_phase(&phase_arc, AppPhase::Uninstalling, db, &name_owned, "");
+    });
+    // The app now reads `Uninstalling`, so an operation waiting on this lock
+    // is refused by the scheduler's own gate.
+    drop(scheduled);
+
+    // Keyed cleanup, outside the lock: none of it bears on what may be
+    // admitted, and holding a node-wide lock across it stalls every app.
+    let name_owned = params.app.clone();
+    state.db.call(move |db| {
         // i[impl scale.reset-on-uninstall]
         if let Err(e) = scaling::delete_scaling_decisions_for_app(db, &name_owned) {
             tracing::warn!(app = %name_owned, "failed to clear scaling decisions on uninstall: {e}");

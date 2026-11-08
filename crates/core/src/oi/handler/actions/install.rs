@@ -151,22 +151,27 @@ pub(crate) fn invoke_install(
 
     // Operator-invoked install: source and target generation are both the
     // current generation (install does not produce a new generation).
-    let current_generation = {
+    let (current_generation, phase_handle) = {
         let reg = state.registry.read();
-        reg.get(app_name.as_str())
-            .map(|e| e.current_generation)
-            .unwrap_or(0)
+        match reg.get(app_name.as_str()) {
+            Some(e) => (e.current_generation, Arc::clone(&e.phase)),
+            None => {
+                return Err(OiError::not_found(format!("app not found: {app_name}")));
+            }
+        }
     };
     let install_action = ActionName::new_unchecked("install");
     let (result, op_id_str) = {
         let mut sched = state.scheduler.lock();
-        let result = sched.request(
+        // r[impl app.uninstall.exclusive]
+        let result = sched.admit(
             app_name,
             &install_action,
             op_params.clone(),
             current_generation,
             current_generation,
             "operator",
+            &phase_handle,
         );
         let op_id = match &result {
             ScheduleResult::Accepted => sched.active().map(|a| a.operation_id.clone()),
@@ -207,6 +212,11 @@ pub(crate) fn invoke_install(
         ScheduleResult::Rejected(RejectReason::SameAppAlreadyQueued) => Err(OiError::new(
             ErrorCode::AlreadyQueued,
             format!("already queued for app: {app_name}"),
+        )),
+        // r[impl app.uninstall.exclusive]
+        ScheduleResult::Rejected(RejectReason::AppUninstalling) => Err(OiError::new(
+            ErrorCode::NotInstalled,
+            format!("app is being uninstalled: {app_name}"),
         )),
     }
 }

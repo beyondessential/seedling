@@ -159,7 +159,7 @@ pub(crate) fn invoke_action(
     let mut action_params = params.params.unwrap_or_default();
     validate_action_params(&action_params)?;
 
-    {
+    let phase_handle = {
         let reg = state.registry.read();
         let entry = reg
             .get(app_name.as_str())
@@ -201,7 +201,9 @@ pub(crate) fn invoke_action(
         apply_action_param_schema(&action_def.params, &mut action_params)?;
         // l[impl action.params.volume]
         validate_volume_params(state, &action_def.params, &action_params)?;
-    }
+
+        Arc::clone(&entry.phase)
+    };
 
     // Operator-invoked action: source and target generation are equal to the
     // app's current generation at dispatch.
@@ -213,13 +215,19 @@ pub(crate) fn invoke_action(
     };
     let (result, op_id_str) = {
         let mut sched = state.scheduler.lock();
-        let result = sched.request(
+        // r[impl app.uninstall.exclusive]
+        // The phase read above was taken and released before this lock, so an
+        // uninstall could have landed in between. The scheduler reads the
+        // phase under its own lock and refuses an app being torn down, so the
+        // decision is made where every admission passes rather than here.
+        let result = sched.admit(
             app_name,
             action_name,
             action_params.clone(),
             current_generation,
             current_generation,
             "operator",
+            &phase_handle,
         );
         let op_id = match &result {
             ScheduleResult::Accepted => sched.active().map(|a| a.operation_id.clone()),
@@ -260,6 +268,11 @@ pub(crate) fn invoke_action(
         ScheduleResult::Rejected(RejectReason::SameAppAlreadyQueued) => Err(OiError::new(
             ErrorCode::AlreadyQueued,
             format!("already queued for app: {app_name}"),
+        )),
+        // r[impl app.uninstall.exclusive]
+        ScheduleResult::Rejected(RejectReason::AppUninstalling) => Err(OiError::new(
+            ErrorCode::NotInstalled,
+            format!("app is being uninstalled: {app_name}"),
         )),
     }
 }
