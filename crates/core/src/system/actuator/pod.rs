@@ -145,10 +145,15 @@ pub(super) fn collect_container_volumes(
         .collect()
 }
 
-/// The exists-then-create pattern has an inherent TOCTOU gap, but the reconciler is the sole
-/// actor managing volumes on this node so no concurrent race is possible. If concurrent
-/// reconciliation is ever introduced, call create unconditionally and treat "already exists"
-/// as success.
+/// Materialise the volumes a pod's container mounts, before it starts.
+///
+/// The exists-then-create pattern here has an inherent TOCTOU gap. It is
+/// benign for the anonymous volumes the container runtime manages, since the
+/// reconciler is the only actor creating those. It is *not* benign for named
+/// volumes: this phase and the volumes phase run concurrently and both reach
+/// them, which is why creating one goes through `ensure_named_volume` rather
+/// than being open-coded here. Losing that race once meant losing the
+/// volume's declared writes for good.
 async fn ensure_volumes(driver: &System, volumes: &[ContainerVolume]) -> Result<(), ActuateError> {
     for vol in volumes {
         if let Some(host_path) = &vol.host_path {
