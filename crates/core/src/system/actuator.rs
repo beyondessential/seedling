@@ -38,7 +38,7 @@ use crate::{
 mod pod;
 mod pull;
 
-pub use pod::TMPFS_VOLUMES_DIR;
+pub use pod::{TMPFS_VOLUMES_DIR, tmpfs_volume_path};
 use pod::{ContainerVolume, collect_container_volumes, map_on_exit};
 use pull::PullState;
 
@@ -362,33 +362,20 @@ impl Actuator {
                     (def.tmpfs, def.writes.clone())
                 };
                 if tmpfs {
-                    // Tmpfs volumes are managed by podman with the tmpfs driver.
                     // r[impl actuate.volume.tmpfs]
-                    let podman_name = &instance.display_name;
-                    if !self
-                        .driver
-                        .container
-                        .volume_exists(podman_name)
+                    // The directory containers bind-mount *is* the volume, so
+                    // it is what gets created and seeded here. Routing this
+                    // through the container runtime's tmpfs driver instead
+                    // would seed a mountpoint nothing ever mounts.
+                    let host_path = tmpfs_volume_path(&instance.display_name);
+                    tokio::fs::create_dir_all(&host_path)
                         .await
-                        .context(ContainerSnafu)?
-                    {
-                        self.driver
-                            .container
-                            .create_volume(podman_name, true)
-                            .await
-                            .context(ContainerSnafu)?;
-                    }
+                        .context(VolumeWriteSnafu {
+                            path: host_path.clone(),
+                        })?;
                     // Tmpfs contents don't survive a reboot; always re-apply writes.
-                    if !writes.is_empty() {
-                        let mountpoint = self
-                            .driver
-                            .container
-                            .volume_mountpoint(podman_name)
-                            .await
-                            .context(ContainerSnafu)?;
-                        for (path, contents) in &writes {
-                            safe_volume_write(&mountpoint, path, contents).await?;
-                        }
+                    for (path, contents) in &writes {
+                        safe_volume_write(&host_path, path, contents).await?;
                     }
                 } else {
                     // r[impl actuate.volume.storage]
@@ -499,6 +486,19 @@ impl Actuator {
             Resource::Volume(vol) => {
                 let tmpfs = vol.def.lock().tmpfs;
                 if tmpfs {
+                    // r[impl actuate.volume.tmpfs]
+                    // Remove the directory holding the data, not a stand-in
+                    // for it: the tmpfs backing under /run is reclaimed once
+                    // the directory is gone.
+                    let host_path = tmpfs_volume_path(&instance.display_name);
+                    if let Err(e) = tokio::fs::remove_dir_all(&host_path).await
+                        && e.kind() != std::io::ErrorKind::NotFound
+                    {
+                        return Err(VolumeWriteSnafu { path: host_path }.into_error(e));
+                    }
+                    // Earlier releases stood a podman tmpfs-driver volume up
+                    // beside the directory. Reap it on the way past, by the
+                    // exact name those releases gave it.
                     let podman_name = &instance.display_name;
                     if self
                         .driver

@@ -66,6 +66,18 @@ pub(crate) struct ContainerVolume {
 // r[impl actuate.volume.tmpfs]
 pub const TMPFS_VOLUMES_DIR: &str = "/run/seedling/tmpfs-volumes";
 
+/// Host path backing one tmpfs volume, named or anonymous.
+///
+/// Every part of the runtime that touches a tmpfs volume — the actuator that
+/// creates and removes it, the observer that reports whether it is there, the
+/// translator that builds the container's bind mount, and the `rt.write` path
+/// — must address the same directory, so the join lives here rather than
+/// being repeated beside a comment asking callers to keep it in sync.
+// r[impl actuate.volume.tmpfs]
+pub fn tmpfs_volume_path(name: &str) -> std::path::PathBuf {
+    std::path::Path::new(TMPFS_VOLUMES_DIR).join(name)
+}
+
 /// Collect all volumes declared in the pod's container mounts.
 ///
 /// Anonymous volumes (`v.name.is_none()`) get a deterministic podman name
@@ -98,7 +110,7 @@ pub(super) fn collect_container_volumes(
                         // volume driver creates a fresh tmpfs at every mount,
                         // wiping any data we'd written to its host _data path.
                         let host_path = if tmpfs {
-                            Some(std::path::PathBuf::from(TMPFS_VOLUMES_DIR).join(&vol_name))
+                            Some(tmpfs_volume_path(&vol_name))
                         } else {
                             None
                         };
@@ -108,9 +120,7 @@ pub(super) fn collect_container_volumes(
                         let vol_name = VolumeName::for_app(instance.app.as_str(), n.as_str());
                         let host_path = if tmpfs {
                             // r[impl actuate.volume.tmpfs]
-                            Some(
-                                std::path::PathBuf::from(TMPFS_VOLUMES_DIR).join(vol_name.as_str()),
-                            )
+                            Some(tmpfs_volume_path(vol_name.as_str()))
                         } else {
                             volumes_dir.map(|dir| dir.join(vol_name.as_str()))
                         };

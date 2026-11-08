@@ -85,7 +85,7 @@ impl crate::runtime::barrier::VolumeWriter for OperationVolumeWriter {
     ) -> Result<(), String> {
         use crate::runtime::barrier::VolumeWriteTarget;
         use crate::runtime::identity::VolumeName;
-        use crate::system::actuator::{TMPFS_VOLUMES_DIR, safe_volume_write};
+        use crate::system::actuator::{safe_volume_write, tmpfs_volume_path};
         use std::path::PathBuf;
 
         let driver = Arc::clone(&self.driver);
@@ -100,7 +100,7 @@ impl crate::runtime::barrier::VolumeWriter for OperationVolumeWriter {
                         let vol_name = VolumeName::for_app(&app, &name);
                         if tmpfs {
                             // r[impl actuate.volume.tmpfs]
-                            PathBuf::from(TMPFS_VOLUMES_DIR).join(vol_name.as_str())
+                            tmpfs_volume_path(vol_name.as_str())
                         } else {
                             driver.volume_store.path(&vol_name)
                         }
@@ -108,7 +108,7 @@ impl crate::runtime::barrier::VolumeWriter for OperationVolumeWriter {
                     VolumeWriteTarget::AnonymousVolume { anon_id, tmpfs } => {
                         if tmpfs {
                             // r[impl actuate.volume.tmpfs]
-                            PathBuf::from(TMPFS_VOLUMES_DIR).join(&anon_id)
+                            tmpfs_volume_path(&anon_id)
                         } else {
                             driver
                                 .container

@@ -1084,6 +1084,7 @@ Some operations must hand a writable or read-only path to an action closure with
 > r[actuate.volume.tmpfs]
 > Tmpfs-backed Volumes (named or anonymous) must be materialised as a host-managed directory under a tmpfs-backed location and bind-mounted into containers. The runtime must not delegate tmpfs storage to the container runtime's own tmpfs volume driver, because such drivers create a fresh tmpfs at every container mount and so silently drop any declared file writes that were applied to the volume's host backing.
 > Because tmpfs contents do not survive a host reboot, any declared file writes must be re-applied unconditionally each time the volume is materialised — not only when the volume is first created.
+> That directory is the volume for every step of its lifecycle: it is what starting creates and seeds, what observation reports as present or missing, and what stopping removes. The runtime must not create a container-runtime volume to stand for a tmpfs Volume, because a lifecycle step that acts on the stand-in leaves the directory holding the data untouched — a stop that reports a cleanup it did not perform, and a later volume of the same name that silently inherits the previous one's files.
 
 > r[actuate.volume.storage]
 > Named non-tmpfs volumes are stored as host-managed directories under the data directory and bind-mounted into containers. Anonymous non-tmpfs volumes remain managed by the container runtime.

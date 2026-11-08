@@ -334,13 +334,9 @@ fn spec_from_pod(
                     if tmpfs {
                         // r[impl actuate.volume.tmpfs]
                         // Tmpfs volumes (named or anonymous) are bind-mounted
-                        // from a tmpfs-backed host directory under /run.
-                        // Keep the path in sync with the actuator's
-                        // `TMPFS_VOLUMES_DIR`.
-                        MountSource::Bind(
-                            std::path::PathBuf::from(crate::system::actuator::TMPFS_VOLUMES_DIR)
-                                .join(&name),
-                        )
+                        // from the tmpfs-backed host directory the actuator
+                        // creates and seeds.
+                        MountSource::Bind(crate::system::actuator::tmpfs_volume_path(&name))
                     } else if is_named && let Some(dir) = volumes_dir {
                         MountSource::Bind(dir.join(&name))
                     } else {
