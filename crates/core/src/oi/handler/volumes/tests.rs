@@ -438,3 +438,96 @@ fn reserved_prefix_is_rejected_at_creation() {
     )
     .expect("only the claimed prefix is reserved");
 }
+
+/// btrfs snapshots *into* a destination that already exists rather than
+/// refusing it, so the name must be refused before btrfs is reached. The
+/// error distinguishes the two: reaching btrfs on a non-btrfs test host
+/// would report an internal failure instead.
+// r[verify volume.site.name-taken]
+#[test]
+fn snapshotting_onto_a_name_already_taken_is_refused_before_any_btrfs_call() {
+    let oi = TestOi::new();
+    oi.call(
+        "/volumes/site/create",
+        json!({ "name": "data", "kind": "managed" }),
+    )
+    .unwrap();
+
+    let (code, msg) = oi
+        .call(
+            "/volumes/site/snapshot",
+            json!({ "name": "data", "source": "_site/data" }),
+        )
+        .unwrap_err();
+
+    assert_eq!(code, "requirements_invalid");
+    assert!(msg.contains("already exists"), "{msg}");
+    assert_eq!(site_volume_names(&oi), vec!["data"]);
+}
+
+// r[verify volume.site.name-taken]
+#[test]
+fn promoting_onto_a_name_already_taken_is_refused() {
+    let oi = TestOi::new();
+    oi.call(
+        "/volumes/site/create",
+        json!({ "name": "data", "kind": "managed" }),
+    )
+    .unwrap();
+
+    let (code, msg) = oi
+        .call(
+            "/volumes/site/promote",
+            json!({ "source": "some-snapshot", "name": "data" }),
+        )
+        .unwrap_err();
+
+    assert_eq!(code, "requirements_invalid");
+    assert!(msg.contains("already exists"), "{msg}");
+}
+
+// r[verify volume.site.name-taken]
+#[test]
+fn creating_a_site_volume_under_a_name_already_taken_is_refused() {
+    let oi = TestOi::new();
+    oi.call(
+        "/volumes/site/create",
+        json!({ "name": "data", "kind": "managed" }),
+    )
+    .unwrap();
+
+    let (code, msg) = oi
+        .call(
+            "/volumes/site/create",
+            json!({ "name": "data", "kind": "managed" }),
+        )
+        .unwrap_err();
+
+    assert_eq!(code, "requirements_invalid");
+    assert!(msg.contains("already exists"), "{msg}");
+}
+
+/// Storage with no record could be a leftover or an operator's volume whose
+/// record was never written, and the runtime cannot tell which.
+// r[verify volume.site.name-taken]
+#[test]
+fn storage_standing_at_the_name_with_no_record_is_refused_rather_than_reused() {
+    let oi = TestOi::new();
+    let path = oi.state.driver.volume_store.site_path("unrecorded");
+    std::fs::create_dir_all(&path).unwrap();
+    std::fs::write(path.join("data.db"), b"somebody's data").unwrap();
+
+    let (code, msg) = oi
+        .call(
+            "/volumes/site/create",
+            json!({ "name": "unrecorded", "kind": "managed" }),
+        )
+        .unwrap_err();
+
+    assert_eq!(code, "requirements_invalid");
+    assert!(msg.contains("no site volume recorded"), "{msg}");
+    assert!(
+        path.join("data.db").exists(),
+        "the data must be left where it is"
+    );
+}

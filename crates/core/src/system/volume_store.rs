@@ -334,8 +334,13 @@ impl VolumeStore {
         self.volumes_dir.join(format!("site-{name}"))
     }
 
+    /// Whether anything at all stands at this site volume's path: a
+    /// directory, a file, or a symlink whose target is gone. The question
+    /// callers ask is whether the name is free, so a name occupied by
+    /// something the runtime would refuse to act on is not free either.
+    // r[impl volume.site.name-taken]
     pub fn site_exists(&self, name: &str) -> bool {
-        self.site_path(name).exists()
+        std::fs::symlink_metadata(self.site_path(name)).is_ok()
     }
 
     /// Return the names (without the `site-` prefix) of every site volume

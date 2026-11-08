@@ -1126,6 +1126,11 @@ Some operations must hand a writable or read-only path to an action closure with
 > r[volume.site.lifecycle]
 > Site volumes are created and deleted exclusively through operator commands. The runtime must create the backing storage for managed site volumes at creation time. When a managed site volume is deleted, its backing storage must be routed through the [held volume](#r--actuate.volume.hold) mechanism so that an operator must explicitly confirm final removal. Deleting a snapshot site volume removes its backing storage directly without routing through the hold mechanism (see [volume.site.snapshot.delete](#r--volume.site.snapshot.delete)). Deleting a bind site volume must only drop the runtime's reference and must not affect the operator-provided host path.
 
+> r[volume.site.name-taken]
+> Every operation that brings a new site volume into being — creating one, snapshotting to one, promoting a snapshot into one, or [restoring a held volume](#r--actuate.volume.hold.restore) as one — must be rejected as an invalid request when the chosen name is already taken, before any storage is touched. A name is taken when a site volume is recorded under it, and also when storage already stands at the name with no record of it.
+>
+> The check comes first because the storage operations do not refuse a name that is in use on their own terms: a snapshot taken onto an existing directory is placed *inside* it and reported as success, leaving a subvolume nested in an unrelated live volume with no record pointing at it, which only then fails on the record's unique name. Storage with no record is refused rather than taken over, because the runtime cannot tell leftovers from an operator's volume whose record has not been written.
+
 > r[volume.site.lifecycle.events]
 > Site volume creation and deletion must emit events on the event feed and be recorded in the [audit log](#r--audit.log). Deletion events must identify the site volume's kind and, when the deletion routed through the held-volume mechanism, the resulting held volume identifier.
 
