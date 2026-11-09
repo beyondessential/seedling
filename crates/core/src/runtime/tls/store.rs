@@ -595,6 +595,46 @@ pub fn activate_pending_csr(
     Ok(true)
 }
 
+/// What [`cancel_pending_csr`] found.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CsrCancel {
+    Cancelled,
+    NotFound,
+    /// The row exists but is no longer awaiting a certificate, so it was left
+    /// alone.
+    NotPending(TlsCertState),
+}
+
+/// Delete a CSR row, provided it is still pending.
+///
+/// The state is checked in the same step as the deletion. A caller that read
+/// the row first and deleted it afterwards would delete whatever the row had
+/// become in between — an upload activating it in that window would see its
+/// serving certificate deleted by a cancellation that had already been refused
+/// in all but name.
+// r[impl tls.csr.flow]
+pub fn cancel_pending_csr(db: &Db, id: i64) -> rusqlite::Result<CsrCancel> {
+    atomically(db, || {
+        let state: Option<String> = db
+            .conn
+            .query_row(
+                "SELECT state FROM tls_certificates WHERE id = ?1",
+                [id],
+                |row| row.get(0),
+            )
+            .optional()?;
+        let Some(state) = state else {
+            return Ok(CsrCancel::NotFound);
+        };
+        let state = TlsCertState::parse(&state).ok_or(rusqlite::Error::InvalidQuery)?;
+        if state != TlsCertState::CsrPending {
+            return Ok(CsrCancel::NotPending(state));
+        }
+        delete_certificate(db, id)?;
+        Ok(CsrCancel::Cancelled)
+    })
+}
+
 /// A non-SQL failure surfaced through `rusqlite::Error`, as the provider
 /// accessors in this module already do for cipher failures.
 fn unreadable(message: String) -> rusqlite::Error {
@@ -2302,6 +2342,57 @@ mod tests {
             TlsCertState::Active,
             "the incumbent must not be retired for a row that no longer exists",
         );
+    }
+
+    /// The other side of the race: an upload activating the row before the
+    /// cancellation reaches it. The cancellation must be refused rather than
+    /// delete the certificate now serving.
+    // r[verify tls.csr.flow]
+    #[test]
+    fn cancelling_an_activated_csr_leaves_it_serving() {
+        let (db, _) = fresh_db();
+        let pending = insert_certificate(
+            &db,
+            NewCertificate {
+                hostname: "example.com",
+                requested_hostname: Some("example.com"),
+                state: TlsCertState::CsrPending,
+                origin: TlsCertOrigin::Csr,
+                cert_pem: None,
+                csr_pem: Some(
+                    "-----BEGIN CERTIFICATE REQUEST-----\nx\n-----END CERTIFICATE REQUEST-----\n",
+                ),
+                key_ciphertext: b"key",
+                key_type: KeyType::EcdsaP256,
+                metadata: CertMetadata::default(),
+                note: None,
+                acme_account_id: None,
+            },
+        )
+        .unwrap();
+        assert!(
+            activate_pending_csr(
+                &db,
+                pending,
+                "example.com",
+                &super::super::test_support::self_signed_pem(&["example.com"]),
+                &CertMetadata {
+                    not_after: Some(now_secs() + 86_400),
+                    ..Default::default()
+                },
+            )
+            .unwrap()
+        );
+
+        assert_eq!(
+            cancel_pending_csr(&db, pending).unwrap(),
+            CsrCancel::NotPending(TlsCertState::Active)
+        );
+        assert_eq!(
+            get_certificate(&db, pending).unwrap().unwrap().state,
+            TlsCertState::Active
+        );
+        assert_eq!(cancel_pending_csr(&db, 9_999).unwrap(), CsrCancel::NotFound);
     }
 
     #[test]

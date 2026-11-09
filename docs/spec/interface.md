@@ -1193,6 +1193,7 @@ This section covers the operator interface for the ACME-DNS strategy, manual cer
 > i[tls.cert.csr.cancel]
 > `/tls/certificates/csr/cancel { id }` cancels a pending CSR row, deleting the stored private key.
 > Refused with `requirements_invalid` when the row is no longer `csr_pending`; for active certs use [`tls.cert.delete`](#i--tls.cert.delete) instead.
+> The state is checked as part of the deletion, so a certificate uploaded for the CSR while the cancellation is in flight is either never activated or never deleted: a cancellation that loses the race to an upload is refused and the certificate stays active.
 
 > i[tls.cert.issue-acme-dns]
 > `/tls/certificates/issue-acme-dns { hostname }` synchronously runs the ACME-DNS-01 issuance flow for `hostname` via the issuance coordinator.

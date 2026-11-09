@@ -754,25 +754,25 @@ pub(crate) fn csr_upload_cert(state: &OiState, params: CsrUploadCertParams) -> H
 // r[impl tls.csr.flow]
 pub(crate) fn csr_cancel(state: &OiState, params: CertIdParams) -> HandlerResult {
     let CertIdParams { id } = params;
-    let cert = state
+    // One call, so no upload can activate the row between the check and the
+    // deletion.
+    match state
         .db
-        .call(move |db| store::get_certificate(db, id))
+        .call(move |db| store::cancel_pending_csr(db, id))
         .map_err(db_error)?
-        .ok_or_else(|| OiError::not_found(format!("certificate not found: {id}")))?;
-    if cert.state != TlsCertState::CsrPending {
-        return Err(OiError::new(
+    {
+        store::CsrCancel::Cancelled => Ok(json!({ "ok": true })),
+        store::CsrCancel::NotFound => {
+            Err(OiError::not_found(format!("certificate not found: {id}")))
+        }
+        store::CsrCancel::NotPending(cert_state) => Err(OiError::new(
             ErrorCode::RequirementsInvalid,
             format!(
                 "certificate {id} is in state {}; csr_cancel only applies to csr_pending rows",
-                cert.state.as_str()
+                cert_state.as_str()
             ),
-        ));
+        )),
     }
-    state
-        .db
-        .call(move |db| store::delete_certificate(db, id))
-        .map_err(db_error)?;
-    Ok(json!({ "ok": true }))
 }
 
 /// Forget the chain decisions, because what was just written is something they
