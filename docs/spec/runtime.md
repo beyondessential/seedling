@@ -1088,6 +1088,8 @@ Some operations must hand a writable or read-only path to an action closure with
 >
 > Creating a named non-tmpfs volume and seeding it with its declared writes is one step. Whichever part of the runtime brings the volume's storage into existence must apply the declared writes to it, and a part that finds the storage already there must not apply them again — an app owns its volume's contents once it has them, so re-seeding would overwrite what the app wrote. A volume that was created without being seeded is never seeded afterwards, so the two must not be separable: a workload that happened to materialise the volume ahead of the component nominally responsible for it would otherwise start against empty storage, permanently and with nothing reported.
 >
+> Because those parts run concurrently, both may find the storage absent at the same moment, and exactly one of them creates it. Creation must report which one that was. The part whose creation did not take effect is a part that found the storage already there: it owes the volume no writes, and the name already being in use is not an error for it to report. Treating creation as something that can only succeed makes an ordinary overlap fail the start on storage backends whose create refuses an existing name.
+>
 > When a declared write fails part-way through seeding, storage the same operation had just created must be removed again, so the next attempt seeds from scratch rather than leaving behind a volume that counts as created and will never receive its writes.
 
 > r[actuate.volume.tmpfs]

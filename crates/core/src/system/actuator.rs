@@ -134,24 +134,29 @@ pub(crate) async fn safe_volume_write(
 ///
 /// A write that fails takes the storage back out, so the next tick creates
 /// and seeds afresh instead of finding a directory that counts as created and
-/// will never be written to.
+/// will never be written to. Only storage this call created is taken back
+/// out: the loser of a race must not tear out what the winner is seeding.
+///
+/// Creation is the decision, not a look before it. Both phases can find the
+/// volume absent at the same moment, so asking first and creating second
+/// would only narrow the window; `create` reports which call made the
+/// storage, and that answer is what settles who owes the writes.
 // r[impl actuate.volume.start]
 pub(crate) async fn ensure_named_volume(
     vol_store: &crate::system::volume_store::VolumeStore,
     name: &VolumeName,
     writes: &[(String, bytes::Bytes)],
 ) -> Result<bool, ActuateError> {
-    if vol_store.exists(name) {
-        return Ok(false);
-    }
-
     let mountpoint = vol_store.path(name);
-    vol_store.create(name).await.map_err(|e| {
+    let created = vol_store.create(name).await.map_err(|e| {
         VolumeWriteSnafu {
             path: mountpoint.clone(),
         }
         .into_error(e)
     })?;
+    if !created {
+        return Ok(false);
+    }
 
     for (path, contents) in writes {
         if let Err(e) = safe_volume_write(&mountpoint, path, contents).await {
@@ -837,5 +842,42 @@ mod tests {
             !store.exists(&name),
             "the next attempt must create and seed afresh"
         );
+    }
+
+    /// Both phases can find the volume absent at once. The one whose create
+    /// did not take effect owes the volume nothing — it must not report the
+    /// name as an error, and above all must not take the winner's storage
+    /// back out on a write it was never responsible for.
+    // r[verify actuate.volume.start]
+    #[tokio::test]
+    async fn losing_the_race_to_create_is_not_a_failure_and_undoes_nothing() {
+        let (_data, store) = store();
+        let name = VolumeName::for_app("app", "data");
+
+        assert!(store.create(&name).await.unwrap(), "the winner creates it");
+        let seeded = store.path(&name).join("conf/app.toml");
+        std::fs::create_dir_all(seeded.parent().unwrap()).unwrap();
+        std::fs::write(&seeded, "port = 80").unwrap();
+
+        let writes = vec![("../escape".to_owned(), bytes::Bytes::from("elsewhere"))];
+        assert!(
+            !ensure_named_volume(&store, &name, &writes).await.unwrap(),
+            "the loser reports that it did not create the volume"
+        );
+
+        assert!(store.exists(&name));
+        assert_eq!(std::fs::read_to_string(&seeded).unwrap(), "port = 80");
+    }
+
+    /// `create` is the decision about who owns seeding, so it has to answer
+    /// that question rather than fail on a name already in use.
+    // r[verify actuate.volume.start]
+    #[tokio::test]
+    async fn creating_a_volume_that_is_already_there_reports_no_creation() {
+        let (_data, store) = store();
+        let name = VolumeName::for_app("app", "data");
+
+        assert!(store.create(&name).await.unwrap());
+        assert!(!store.create(&name).await.unwrap());
     }
 }

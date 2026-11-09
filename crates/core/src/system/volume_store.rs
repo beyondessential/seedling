@@ -37,15 +37,42 @@ impl VolumeStore {
         self.path(name).exists()
     }
 
+    /// Create a named volume's storage, reporting whether this call is the
+    /// one that created it.
+    ///
+    /// `Ok(false)` means the storage was already there — either standing from
+    /// an earlier tick, or created by a concurrent caller between this one's
+    /// look and its own create. The two are the same answer to the caller:
+    /// somebody else owns seeding it.
     // r[impl actuate.volume.btrfs]
-    pub async fn create(&self, name: &VolumeName) -> std::io::Result<()> {
+    // r[impl actuate.volume.start]
+    pub async fn create(&self, name: &VolumeName) -> std::io::Result<bool> {
         let path = self.path(name);
         // r[impl storage.confinement]
-        owned_dir_async(&path).await?;
+        if owned_dir_async(&path).await? {
+            return Ok(false);
+        }
         if self.use_btrfs {
-            btrfs_create_subvolume(&path).await
+            // `btrfs subvolume create` refuses a name already in use, and
+            // gives no machine-readable way to say so. Ask the filesystem
+            // afterwards instead: storage standing at the name means the
+            // race was lost, not that the create was wrong.
+            match btrfs_create_subvolume(&path).await {
+                Ok(()) => Ok(true),
+                Err(e) => match owned_dir_async(&path).await {
+                    Ok(true) => Ok(false),
+                    _ => Err(e),
+                },
+            }
         } else {
-            tokio::fs::create_dir_all(&path).await
+            if let Some(parent) = path.parent() {
+                tokio::fs::create_dir_all(parent).await?;
+            }
+            match tokio::fs::create_dir(&path).await {
+                Ok(()) => Ok(true),
+                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => Ok(false),
+                Err(e) => Err(e),
+            }
         }
     }
 
