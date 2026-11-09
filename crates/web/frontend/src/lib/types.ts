@@ -803,7 +803,7 @@ export type TlsCertState =
   | "superseded"
   | "failed"
   | "revoked";
-export type TlsCertOrigin = "manual" | "csr" | "acme_dns" | "canopy";
+export type TlsCertOrigin = "manual" | "csr" | "acme_dns" | "tailscale" | "canopy";
 export type TlsKeyType = "ecdsa_p256";
 
 export interface TlsCertificate {
@@ -937,6 +937,11 @@ export type TlsHostnameLastIssuance =
   }
   | {
     kind: "csr";
+    at: number;
+    cert_id: number | null;
+  }
+  | {
+    kind: "tailscale";
     at: number;
     cert_id: number | null;
   }

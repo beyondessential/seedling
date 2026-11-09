@@ -159,7 +159,7 @@ export default function Certificates() {
 
         <ManualCertsSection
           certs={(certs?.certificates ?? []).filter(
-            (c) => c.origin !== "acme_dns" && c.origin !== "canopy",
+            (c) => c.origin === "manual" || c.origin === "csr",
           )}
           loading={certsLoading}
           error={certsError}
