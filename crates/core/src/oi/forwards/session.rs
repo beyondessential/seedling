@@ -1,9 +1,15 @@
 use std::sync::Arc;
 
-use seedling_protocol::names::{AppName, ForwardId};
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use seedling_protocol::{
+    names::{AppName, ForwardId},
+    relay::{abort_forward_stream, relay_forward_stream},
+};
+use tokio::io::AsyncWriteExt;
 
-use super::registry::{ForwardEntry, ForwardProto};
+use super::{
+    registry::{ForwardEntry, ForwardProto, ForwardStatus, plural},
+    target::declares_port,
+};
 use crate::{
     defs::resource::ResourceKind,
     oi::state::OiState,
@@ -13,11 +19,6 @@ use crate::{
     },
     system::translate::proxy::instance_ipv6,
 };
-
-struct StatusMsg {
-    level: &'static str,
-    message: String,
-}
 
 // i[forward.request]
 // i[forward.mtu]
@@ -108,6 +109,12 @@ pub(crate) async fn forward_port_session(
                 format!("service not found: {}", params.service),
             ));
         }
+        if !declares_port(&def, &params.service, params.port, &proto) {
+            return Err((
+                "not_found",
+                undeclared_port(&params.service, &params.proto, params.port),
+            ));
+        }
         Ok(())
     })();
     if let Err((code, msg)) = lookup {
@@ -133,8 +140,64 @@ pub(crate) async fn forward_port_session(
 
     let conn_id = conn.stable_id();
     let forward_id = ForwardId::generate();
-    let forward_key_result = state.forwards.lock().alloc_key(conn_id);
-    let forward_key = match forward_key_result {
+    let (stop_tx, mut stop_rx) = tokio::sync::watch::channel(false);
+
+    // i[forward.mtu]
+    let max_udp_payload: Option<u64> = match proto {
+        ForwardProto::Udp => conn.max_datagram_size().map(|s| s.saturating_sub(2) as u64),
+        ForwardProto::Tcp => None,
+    };
+
+    // i[impl forward.request] — a UDP forward whose relay cannot reach the
+    // service is refused here, rather than reported as started with every
+    // datagram then vanishing.
+    let udp_socket = match proto {
+        ForwardProto::Udp => match open_udp_relay(target_addr, params.port).await {
+            Ok(socket) => Some(socket),
+            Err(e) => {
+                write_err(
+                    &mut send,
+                    "internal",
+                    &format!("UDP relay to the service: {e}"),
+                )
+                .await;
+                return;
+            }
+        },
+        ForwardProto::Tcp => None,
+    };
+
+    let (status_tx, mut status_rx) = tokio::sync::mpsc::channel::<ForwardStatus>(16);
+
+    let (udp_tx, udp_rx) = match proto {
+        ForwardProto::Udp => {
+            let (tx, rx) = tokio::sync::mpsc::channel(64);
+            (Some(tx), Some(rx))
+        }
+        ForwardProto::Tcp => (None, None),
+    };
+
+    let registered_proto = proto.clone();
+    let registered = state
+        .forwards
+        .lock()
+        .register(conn_id, |forward_key| ForwardEntry {
+            forward_id,
+            forward_key,
+            conn_id,
+            app: params.app.clone(),
+            service: params.service.clone(),
+            port: params.port,
+            proto,
+            target_addr,
+            opened_at: jiff::Timestamp::now(),
+            actor: req_actor,
+            stop_tx,
+            udp_tx,
+            status_tx: status_tx.clone(),
+            udp_dropped: 0,
+        });
+    let forward_key = match registered {
         Ok(k) => k,
         Err(e) => {
             write_err(
@@ -147,51 +210,43 @@ pub(crate) async fn forward_port_session(
         }
     };
 
-    let (stop_tx, mut stop_rx) = tokio::sync::watch::channel(false);
+    // i[impl forward.request] — the app's definition may have been replaced
+    // between the check above and this registration, and that update's
+    // teardown pass could not see a forward that was not yet registered.
+    // Checked again now that it is: an update landing after this point finds
+    // the forward and tears it down itself.
+    let still_declared = state
+        .registry
+        .read()
+        .get(params.app.as_str())
+        .is_some_and(|entry| {
+            declares_port(
+                &entry.app.def.load(),
+                &params.service,
+                params.port,
+                &registered_proto,
+            )
+        });
+    if !still_declared {
+        if let Some(entry) = state.forwards.lock().remove(&forward_id) {
+            let _ = entry.stop_tx.send(true);
+        }
+        write_err(
+            &mut send,
+            "not_found",
+            &undeclared_port(&params.service, &params.proto, params.port),
+        )
+        .await;
+        return;
+    }
 
-    // i[forward.mtu]
-    let max_udp_payload: Option<u64> = match proto {
-        ForwardProto::Udp => conn.max_datagram_size().map(|s| s.saturating_sub(2) as u64),
-        ForwardProto::Tcp => None,
-    };
-
-    let (status_tx, status_rx) = tokio::sync::mpsc::channel::<StatusMsg>(16);
-    let mut status_rx: Option<tokio::sync::mpsc::Receiver<StatusMsg>> =
-        if matches!(proto, ForwardProto::Udp) {
-            Some(status_rx)
-        } else {
-            None
-        };
-
-    let udp_tx: Option<tokio::sync::mpsc::Sender<Vec<u8>>> = if matches!(proto, ForwardProto::Udp) {
-        let (tx, rx) = tokio::sync::mpsc::channel(64);
+    if let (Some(rx), Some(socket)) = (udp_rx, udp_socket) {
         let conn_clone = conn.clone();
-        let fkey = forward_key;
-        let taddr = target_addr;
-        let tport = params.port;
         let status_tx = status_tx.clone();
         tokio::spawn(async move {
-            udp_relay_task(rx, conn_clone, fkey, taddr, tport, status_tx).await;
+            udp_relay_task(rx, conn_clone, forward_key, socket, status_tx).await;
         });
-        Some(tx)
-    } else {
-        None
-    };
-
-    state.forwards.lock().insert(ForwardEntry {
-        forward_id,
-        forward_key,
-        conn_id,
-        app: params.app.clone(),
-        service: params.service.clone(),
-        port: params.port,
-        proto,
-        target_addr,
-        opened_at: jiff::Timestamp::now(),
-        actor: req_actor,
-        stop_tx,
-        udp_tx,
-    });
+    }
 
     let resp = serde_json::to_vec(&serde_json::json!({
         "result": {
@@ -222,12 +277,6 @@ pub(crate) async fn forward_port_session(
 
     let mut ctrl_buf = [0u8; 1];
     loop {
-        let status_fut = async {
-            match status_rx.as_mut() {
-                Some(rx) => rx.recv().await,
-                None => std::future::pending().await,
-            }
-        };
         tokio::select! {
             n = recv.read(&mut ctrl_buf) => {
                 match n {
@@ -240,7 +289,7 @@ pub(crate) async fn forward_port_session(
                     break;
                 }
             }
-            msg = status_fut => {
+            msg = status_rx.recv() => {
                 if let Some(msg) = msg {
                     // i[forward.status]
                     let line = serde_json::to_vec(&serde_json::json!({
@@ -285,7 +334,7 @@ pub(crate) async fn handle_forward_stream(
         }
     };
 
-    let Some((target_addr, port)) = state.forwards.lock().get_target(&forward_id) else {
+    let Some((target_addr, port, status_tx)) = state.forwards.lock().get_target(&forward_id) else {
         tracing::warn!(fwd = %forward_id, "TCP forward stream for unknown forward");
         return;
     };
@@ -296,6 +345,11 @@ pub(crate) async fn handle_forward_stream(
         Ok(t) => t,
         Err(e) => {
             tracing::warn!(fwd = %forward_id, "TCP connect to {target} failed: {e}");
+            // i[impl forward.status]
+            let _ = status_tx.try_send(ForwardStatus::warn(format!(
+                "connection to the service failed: {e}"
+            )));
+            abort_forward_stream(&mut send, &mut recv);
             return;
         }
     };
@@ -303,41 +357,40 @@ pub(crate) async fn handle_forward_stream(
 
     let (mut tcp_recv, mut tcp_send) = tcp.split();
 
-    if !leftover.is_empty() && tcp_send.write_all(&leftover).await.is_err() {
-        let _ = send.finish();
+    if !leftover.is_empty()
+        && let Err(e) = tcp_send.write_all(&leftover).await
+    {
+        tracing::debug!(fwd = %forward_id, "TCP relay failed: {e}");
+        abort_forward_stream(&mut send, &mut recv);
         return;
     }
 
-    let mut qbuf = vec![0u8; 8192];
-    let mut tbuf = vec![0u8; 8192];
-
-    loop {
-        tokio::select! {
-            n = recv.read(&mut qbuf) => {
-                match n {
-                    Ok(Some(n)) if n > 0 => {
-                        if tcp_send.write_all(&qbuf[..n]).await.is_err() {
-                            break;
-                        }
-                    }
-                    _ => break,
-                }
-            }
-            n = tcp_recv.read(&mut tbuf) => {
-                match n {
-                    Ok(0) | Err(_) => break,
-                    Ok(n) => {
-                        if send.write_all(&tbuf[..n]).await.is_err() {
-                            break;
-                        }
-                    }
-                }
-            }
-        }
+    match relay_forward_stream(
+        (&mut send, &mut recv),
+        (&mut tcp_recv, &mut tcp_send),
+        |_| {},
+        |_| {},
+    )
+    .await
+    {
+        Ok(()) => tracing::debug!(fwd = %forward_id, "TCP relay: closed"),
+        Err(e) => tracing::debug!(fwd = %forward_id, "TCP relay failed: {e}"),
     }
+}
 
-    let _ = send.finish();
-    tracing::debug!(fwd = %forward_id, "TCP relay: closed");
+fn undeclared_port(service: &str, proto: &str, port: u16) -> String {
+    format!("service {service} declares no {proto} port {port}")
+}
+
+/// Bind and connect the socket a UDP forward relays through.
+async fn open_udp_relay(
+    target_addr: std::net::Ipv6Addr,
+    port: u16,
+) -> std::io::Result<tokio::net::UdpSocket> {
+    let target = std::net::SocketAddr::V6(std::net::SocketAddrV6::new(target_addr, port, 0, 0));
+    let socket = tokio::net::UdpSocket::bind("[::]:0").await?;
+    socket.connect(target).await?;
+    Ok(socket)
 }
 
 // i[forward.tunnel.udp]
@@ -346,35 +399,42 @@ async fn udp_relay_task(
     mut udp_rx: tokio::sync::mpsc::Receiver<Vec<u8>>,
     conn: quinn::Connection,
     forward_key: u16,
-    target_addr: std::net::Ipv6Addr,
-    port: u16,
-    status_tx: tokio::sync::mpsc::Sender<StatusMsg>,
+    socket: tokio::net::UdpSocket,
+    status_tx: tokio::sync::mpsc::Sender<ForwardStatus>,
 ) {
-    let target = std::net::SocketAddr::V6(std::net::SocketAddrV6::new(target_addr, port, 0, 0));
-    let socket = match tokio::net::UdpSocket::bind("[::]:0").await {
-        Ok(s) => s,
-        Err(e) => {
-            tracing::warn!(key = forward_key, "UDP relay bind failed: {e}");
-            return;
-        }
-    };
-    if let Err(e) = socket.connect(target).await {
-        tracing::warn!(key = forward_key, "UDP relay connect failed: {e}");
-        return;
-    }
-
     let key_bytes = forward_key.to_be_bytes();
+    let mut send_failures: u64 = 0;
     let mut buf = vec![0u8; 65535];
 
     loop {
         tokio::select! {
             payload = udp_rx.recv() => {
                 match payload {
-                    Some(data) => {
-                        if let Err(e) = socket.send(&data).await {
-                            tracing::warn!(key = forward_key, "UDP send failed: {e}");
+                    Some(data) => match socket.send(&data).await {
+                        // i[impl forward.status]
+                        // Reported once an episode, as the registry reports
+                        // dropped datagrams: a service that has gone away
+                        // fails every send, and one message per datagram is
+                        // all discarded once the status channel fills.
+                        Ok(_) => {
+                            if send_failures > 0 {
+                                let _ = status_tx.try_send(ForwardStatus::warn(format!(
+                                    "UDP relay recovered after {} to the service",
+                                    plural(send_failures, "failed send")
+                                )));
+                                send_failures = 0;
+                            }
                         }
-                    }
+                        Err(e) => {
+                            if send_failures == 0 {
+                                tracing::warn!(key = forward_key, "UDP send failed: {e}");
+                                let _ = status_tx.try_send(ForwardStatus::warn(format!(
+                                    "UDP send to the service failed: {e}"
+                                )));
+                            }
+                            send_failures += 1;
+                        }
+                    },
                     None => break,
                 }
             }
@@ -403,10 +463,8 @@ async fn udp_relay_task(
                         // all. Report it and keep relaying — the forward is
                         // not over because one datagram bounced.
                         tracing::debug!(key = forward_key, "UDP recv failed: {e}");
-                        let _ = status_tx.try_send(StatusMsg {
-                            level: "warn",
-                            message: format!("UDP receive failed: {e}"),
-                        });
+                        let _ = status_tx
+                            .try_send(ForwardStatus::warn(format!("UDP receive failed: {e}")));
                     }
                     Ok(n) => {
                         let max_size = conn.max_datagram_size().unwrap_or(0);
@@ -415,10 +473,10 @@ async fn udp_relay_task(
                                 key = forward_key, size = n + 2, max = max_size,
                                 "UDP response too large, dropping"
                             );
-                            let _ = status_tx.try_send(StatusMsg {
-                                level: "warn",
-                                message: format!("UDP response too large ({} bytes, max {}), dropping", n + 2, max_size),
-                            });
+                            let _ = status_tx.try_send(ForwardStatus::warn(format!(
+                                "UDP response too large ({} bytes, max {max_size}), dropping",
+                                n + 2
+                            )));
                             continue;
                         }
                         let mut pkt = Vec::with_capacity(2 + n);
@@ -429,10 +487,8 @@ async fn udp_relay_task(
                             Err(quinn::SendDatagramError::ConnectionLost(_)) => break,
                             Err(e) => {
                                 tracing::warn!(key = forward_key, "send_datagram: {e}");
-                                let _ = status_tx.try_send(StatusMsg {
-                                    level: "warn",
-                                    message: format!("send_datagram: {e}"),
-                                });
+                                let _ = status_tx
+                                    .try_send(ForwardStatus::warn(format!("send_datagram: {e}")));
                             }
                         }
                     }
@@ -445,8 +501,7 @@ async fn udp_relay_task(
     // an unannounced exit left the forward in `/forwards/list` looking
     // healthy with no relay behind it.
     tracing::info!(key = forward_key, "UDP relay ended");
-    let _ = status_tx.try_send(StatusMsg {
-        level: "warn",
-        message: "UDP relay ended; no further datagrams will be relayed".to_owned(),
-    });
+    let _ = status_tx.try_send(ForwardStatus::warn(
+        "UDP relay ended; no further datagrams will be relayed",
+    ));
 }

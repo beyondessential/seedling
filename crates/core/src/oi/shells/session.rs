@@ -2,7 +2,7 @@ use std::{collections::BTreeMap, net::Ipv6Addr, sync::Arc, time::Duration};
 
 use parking_lot::Mutex;
 use seedling_protocol::names::{ActionName, AppName, SessionId, ShellName};
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::io::AsyncWriteExt;
 
 use super::registry::ShellSession;
 use crate::{
@@ -19,9 +19,12 @@ use crate::{
         identity::{InstanceVariant, ResourceInstance},
         registry::{DbInstanceRegistry, InstanceRegistry, RegistryError},
     },
-    system::translate::{
-        container::job_spec,
-        proxy::{instance_ipv6, pod_network_prefix},
+    system::{
+        translate::{
+            container::job_spec,
+            proxy::{instance_ipv6, pod_network_prefix},
+        },
+        types::ExecHandle,
     },
 };
 
@@ -511,7 +514,6 @@ pub(crate) async fn open_shell_session(
 
     let _ = stderr_send.finish();
 
-    let mut stdin_buf = vec![0u8; 4096];
     let exit_code: i32;
 
     if !leftover_stdin.is_empty() && exec_handle.stdin.write_all(&leftover_stdin).await.is_err() {
@@ -526,53 +528,26 @@ pub(crate) async fn open_shell_session(
 
     // i[shell.close]
     // i[shell.exit]
-    loop {
-        let mut stdout_buf = vec![0u8; 4096];
-        tokio::select! {
-            n = recv.read(&mut stdin_buf) => {
-                match n {
-                    Ok(Some(n)) if n > 0 => {
-                        if exec_handle.stdin.write_all(&stdin_buf[..n]).await.is_err() {
-                            break;
-                        }
-                    }
-                    _ => break,
-                }
-            }
-            n = exec_handle.stdout.read(&mut stdout_buf) => {
-                match n {
-                    Ok(0) | Err(_) => break,
-                    Ok(n) => {
-                        if stdout_send.write_all(&stdout_buf[..n]).await.is_err() {
-                            break;
-                        }
-                    }
-                }
-            }
-            status = exec_handle.child.wait() => {
-                exit_code = status.ok().and_then(|s| s.code()).unwrap_or(-1);
-                state.shells.remove(&session_id);
-                // i[impl shell.exit]
-                state.event_tx.shell_exited(session_id, exit_code);
-                let _ = state.container_runtime.remove_network(&net_name).await;
-                // i[impl stream.shell.framing]
-                let mut exit_frame =
-                    serde_json::to_vec(&serde_json::json!({ "exit_code": exit_code }))
-                        .unwrap_or_default();
-                exit_frame.push(b'\n');
-                let _ = send.write_all(&exit_frame).await;
-                let _ = send.finish();
-                let _ = stdout_send.finish();
-                tracing::info!(
-                    app = %app_name, shell = %shell_name, %exit_code,
-                    "shell session ended"
-                );
-                return;
-            }
-            _ = &mut stop_rx => {
-                break;
-            }
-        }
+    if let Some(status) =
+        relay_session(&mut recv, &mut exec_handle, &mut stdout_send, &mut stop_rx).await
+    {
+        exit_code = status.ok().and_then(|s| s.code()).unwrap_or(-1);
+        state.shells.remove(&session_id);
+        // i[impl shell.exit]
+        state.event_tx.shell_exited(session_id, exit_code);
+        let _ = state.container_runtime.remove_network(&net_name).await;
+        // i[impl stream.shell.framing]
+        let mut exit_frame =
+            serde_json::to_vec(&serde_json::json!({ "exit_code": exit_code })).unwrap_or_default();
+        exit_frame.push(b'\n');
+        let _ = send.write_all(&exit_frame).await;
+        let _ = send.finish();
+        let _ = stdout_send.finish();
+        tracing::info!(
+            app = %app_name, shell = %shell_name, %exit_code,
+            "shell session ended"
+        );
+        return;
     }
 
     // i[shell.cleanup]
@@ -614,4 +589,32 @@ pub(crate) async fn open_shell_session(
     let _ = stdout_send.finish();
 
     tracing::info!(app = %app_name, shell = %shell_name, %exit_code, "shell session ended");
+}
+
+// i[impl stream.shell]
+/// Relay stdin from the session stream into the job and the job's output onto
+/// the stdout stream until the session ends. Returns the job's exit status when
+/// the job exiting is what ended it, and `None` when the client closed stdin,
+/// the output ended or failed, or a stop was requested.
+///
+/// Each direction is its own future, so output the client is slow to take
+/// never stops stdin being relayed, nor the job's exit or a stop being seen.
+pub(super) async fn relay_session(
+    recv: &mut quinn::RecvStream,
+    exec: &mut ExecHandle,
+    stdout_send: &mut quinn::SendStream,
+    stop_rx: &mut tokio::sync::oneshot::Receiver<()>,
+) -> Option<std::io::Result<std::process::ExitStatus>> {
+    let ExecHandle {
+        stdin,
+        stdout,
+        child,
+        ..
+    } = exec;
+    tokio::select! {
+        status = child.wait() => Some(status),
+        _ = tokio::io::copy(recv, stdin) => None,
+        _ = tokio::io::copy(stdout, stdout_send) => None,
+        _ = stop_rx => None,
+    }
 }

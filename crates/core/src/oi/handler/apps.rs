@@ -1953,26 +1953,22 @@ pub(crate) fn update_app(state: &OiState, params: UpdateParams, ctx: &RequestCtx
         entry.tick_notify.notify_one();
     }
 
-    // i[forward.script-update] — tear down any forward whose target service is
-    // no longer present in the new AppDef.
+    // i[forward.script-update] — tear down any forward whose target service,
+    // or port for its proto, is no longer declared in the new AppDef.
     {
-        let valid_services: std::collections::HashSet<String> = {
-            let reg = state.registry.read();
-            if let Some(entry) = reg.get(name) {
-                let def = entry.app.def.load();
-                def.resources
-                    .keys()
-                    .filter(|rid| rid.kind == ResourceKind::Service)
-                    .map(|rid| rid.name.as_str().to_owned())
-                    .collect()
-            } else {
-                Default::default()
-            }
-        };
-        let stale = state
-            .forwards
-            .lock()
-            .remove_stale_for_app(name, |fwd| !valid_services.contains(&fwd.service));
+        // Collected before the forwards lock is taken: that lock is on the
+        // per-datagram path, and the walk takes a lock per pod that a
+        // concurrent script evaluation may hold.
+        let declared = state
+            .registry
+            .read()
+            .get(name)
+            .map(|e| crate::oi::forwards::target::declared_ports(&e.app.def.load()));
+        let stale = state.forwards.lock().remove_stale_for_app(name, |fwd| {
+            declared.as_ref().is_none_or(|declared| {
+                !declared.contains(&(fwd.service.clone(), fwd.port, fwd.proto.clone()))
+            })
+        });
         for entry in stale {
             let _ = entry.stop_tx.send(true);
         }

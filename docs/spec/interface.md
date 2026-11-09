@@ -77,6 +77,8 @@ Absent specification bugs, anything that is not defined here is either defined i
 > - One client-initiated bidirectional stream (the _session stream_): carries the `/shells/start` handshake and, after the handshake, raw stdin bytes from client to server. The server uses its write-end to deliver the handshake response and a final exit frame when the session ends.
 > - One server-initiated unidirectional stream for stdout bytes.
 > - One server-initiated unidirectional stream for stderr bytes.
+>
+> Both ends relay stdin and output independently: output waiting to be delivered never holds up stdin, nor the server noticing that the session has ended.
 
 > i[stream.shell.framing]
 > The server-to-client direction of the session stream carries newline-delimited JSON: the `/shells/start` response first, then the exit frame when the session ends.
@@ -85,7 +87,7 @@ Absent specification bugs, anything that is not defined here is either defined i
 > i[stream.forward]
 > Each tunneled TCP connection within a port forward uses one client-initiated bidirectional QUIC stream.
 > Both directions carry raw TCP bytes after an initial newline-terminated JSON header line: `{ "forward": "<forward_id>" }`.
-> The stream closes when the tunneled TCP connection closes.
+> Each direction of the stream is finished when the matching direction of the tunneled TCP connection is, and the stream is reset when the tunneled connection fails, as [forward.tunnel.tcp](#i--forward.tunnel.tcp) describes.
 
 > i[datagram.forward]
 > Each tunneled UDP datagram within a port forward is carried as a QUIC datagram (RFC 9221).
@@ -732,10 +734,13 @@ Absent specification bugs, anything that is not defined here is either defined i
 > `service` is the name of a Service defined in the app's BSL script.
 > `port` is a port number on that Service as defined by `service.port()`.
 > `proto` is either `"tcp"` or `"udp"`.
+> The port is declared for `proto` when a pod in the app attaches to that Service Port: with [`pod.tcp()`](language.md#l--pod.tcp) or [`pod.http()`](language.md#l--pod.http) for TCP, with [`pod.udp()`](language.md#l--pod.udp) for UDP.
+> A request for a port the Service does not declare for `proto` fails with `not_found`, and no forward is created.
 > Returns `{ "forward_id": "<string>", "forward_key": <u16>, "max_udp_payload": <uint> | null }` on success.
 > `forward_id` is used for control operations such as `/forwards/stop`.
 > `forward_key` is the compact 2-byte identifier used in QUIC datagram headers for UDP forwards (see [datagram.forward](#i--datagram.forward)); it is not used for TCP forwards.
 > `max_udp_payload` is the maximum UDP payload the server can forward from the service back to the client, as defined in [forward.mtu](#i--forward.mtu); it is `null` for TCP forwards.
+> For a UDP forward the server opens its relay toward the service before replying; if it cannot, the request fails with `internal` and no forward is created.
 > The control stream that carried the request is kept open for the lifetime of the forward; closing it tears down the forward.
 
 > i[forward.relay.resilience]
@@ -754,7 +759,12 @@ Absent specification bugs, anything that is not defined here is either defined i
 
 > i[forward.tunnel.tcp]
 > Each individual TCP connection forwarded through a TCP port forward uses a dedicated bidi stream as defined in [stream.forward](#i--stream.forward).
-> The server accepts the stream, opens a TCP connection to the target service address and port, and relays bytes bidirectionally until either end closes.
+> The server accepts the stream, opens a TCP connection to the target service address and port, and relays bytes between the two.
+> The client relays each local connection it accepts to its own stream in the same way, so both ends of the tunnel behave alike.
+> Each direction is relayed independently: data waiting to be delivered in one direction never holds up the other.
+> When one side finishes sending, the relay finishes that direction toward the other side and keeps relaying the opposite direction, so a connection that half-closes after sending its request still receives the whole response.
+> The tunnel ends once both directions have finished.
+> If either side fails, including the server failing to connect to the target, both directions are torn down and the stream is reset rather than finished, so the other end cannot mistake a truncated transfer for a complete one.
 
 > i[forward.tunnel.udp]
 > Each UDP datagram forwarded through a UDP port forward is carried as a QUIC datagram as defined in [datagram.forward](#i--datagram.forward).
@@ -762,7 +772,8 @@ Absent specification bugs, anything that is not defined here is either defined i
 > Responses from the service are sent back as QUIC datagrams with the same `forward_key` prefix.
 
 > i[forward.key-exhaustion]
-> `forward_key` is a 16-bit value; each connection can therefore have at most 65536 concurrent UDP forwards.
+> `forward_key` is a 16-bit value allocated to every forward, TCP and UDP alike, and held for the forward's lifetime.
+> No two live forwards on one connection hold the same key, so each connection can have at most 65536 concurrent forwards.
 > When allocating a new key, the server scans for an unused slot and reuses keys freed by closed forwards.
 > If all 65536 keys are in use the request fails with an `"internal"` error.
 
@@ -770,7 +781,12 @@ Absent specification bugs, anything that is not defined here is either defined i
 > After the initial response, the server may send additional newline-terminated JSON objects on the control stream's send half to report runtime conditions.
 > Each status message has the shape `{ "status": { "level": "<level>", "message": "<text>" } }` where `level` is `"warn"` or `"error"`.
 > Clients should display these messages but must not treat them as fatal; the forward remains active unless the control stream closes.
-> Conditions reported include oversized UDP datagrams dropped due to path-MTU limits, relay task failures, and datagram backpressure.
+> Conditions reported include:
+>
+> - a UDP datagram dropped because it exceeds the path MTU;
+> - a socket error on a UDP forward's relay toward the service;
+> - a tunneled TCP connection the server could not open to the target;
+> - datagrams toward the service dropped because the forward's relay is not keeping up with them, reported once when dropping starts and again, with the number dropped, when a datagram next gets through.
 
 > i[forward.lifetime]
 > A port forward remains active until any of the following occur:
@@ -782,7 +798,7 @@ Absent specification bugs, anything that is not defined here is either defined i
 
 > i[forward.script-update]
 > When a new AppDef takes effect for an app (either immediately on `/apps/update` or at the next evaluation boundary if an operation was in progress), the server must check all active forwards for that app.
-> Any forward whose target service name or port is no longer declared in the new AppDef must be torn down: all tunneled connections are closed, the control stream is closed, and a `ForwardStopped` event is emitted.
+> Any forward whose target service name, or port for the forward's `proto` as [forward.request](#i--forward.request) defines it, is no longer declared in the new AppDef must be torn down: all tunneled connections are closed, the control stream is closed, and a `ForwardStopped` event is emitted.
 > Forwards whose target service and port still exist in the new AppDef are unaffected.
 
 > i[forward.start]

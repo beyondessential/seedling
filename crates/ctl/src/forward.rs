@@ -1,9 +1,7 @@
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use seedling_protocol::client::OiClient;
-use seedling_protocol::names::AppName;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use seedling_protocol::{client::OiClient, names::AppName, relay::relay_forward_stream};
 
 // i[impl ctl.forward.stats]
 struct ForwardStats {
@@ -194,35 +192,21 @@ pub async fn forward_port(
                                     return;
                                 }
                                 let (mut tcp_read, mut tcp_write) = tcp_conn.into_split();
-                                let mut qbuf = vec![0u8; 8192];
-                                let mut tbuf = vec![0u8; 8192];
-                                loop {
-                                    tokio::select! {
-                                        n = fwd_recv.read(&mut qbuf) => {
-                                            match n {
-                                                Ok(Some(n)) if n > 0 => {
-                                                    task_stats.bytes_from_service.fetch_add(n as u64, Ordering::Relaxed);
-                                                    if tcp_write.write_all(&qbuf[..n]).await.is_err() {
-                                                        break;
-                                                    }
-                                                }
-                                                _ => break,
-                                            }
-                                        }
-                                        n = tcp_read.read(&mut tbuf) => {
-                                            match n {
-                                                Ok(0) | Err(_) => break,
-                                                Ok(n) => {
-                                                    task_stats.bytes_to_service.fetch_add(n as u64, Ordering::Relaxed);
-                                                    if fwd_send.write_all(&tbuf[..n]).await.is_err() {
-                                                        break;
-                                                    }
-                                                }
-                                            }
-                                        }
-                                    }
+                                // i[impl forward.tunnel.tcp]
+                                if let Err(e) = relay_forward_stream(
+                                    (&mut fwd_send, &mut fwd_recv),
+                                    (&mut tcp_read, &mut tcp_write),
+                                    |n| {
+                                        task_stats.bytes_to_service.fetch_add(n as u64, Ordering::Relaxed);
+                                    },
+                                    |n| {
+                                        task_stats.bytes_from_service.fetch_add(n as u64, Ordering::Relaxed);
+                                    },
+                                )
+                                .await
+                                {
+                                    tracing::debug!("forwarded connection failed: {e}");
                                 }
-                                let _ = fwd_send.finish();
                                 task_stats.connections_active.fetch_sub(1, Ordering::Relaxed);
                             });
                         }

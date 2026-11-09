@@ -6,6 +6,7 @@ pub mod error;
 pub mod events;
 pub mod keys;
 pub mod names;
+pub mod relay;
 
 /// Upper bound on an OI request, and on the response to one.
 ///
