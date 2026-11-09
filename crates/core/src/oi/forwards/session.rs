@@ -7,7 +7,7 @@ use seedling_protocol::{
 use tokio::io::AsyncWriteExt;
 
 use super::{
-    registry::{ForwardEntry, ForwardProto, ForwardStatus},
+    registry::{ForwardEntry, ForwardProto, ForwardStatus, plural},
     target::declares_port,
 };
 use crate::{
@@ -371,21 +371,38 @@ async fn udp_relay_task(
     status_tx: tokio::sync::mpsc::Sender<ForwardStatus>,
 ) {
     let key_bytes = forward_key.to_be_bytes();
+    let mut send_failures: u64 = 0;
     let mut buf = vec![0u8; 65535];
 
     loop {
         tokio::select! {
             payload = udp_rx.recv() => {
                 match payload {
-                    Some(data) => {
-                        if let Err(e) = socket.send(&data).await {
-                            tracing::warn!(key = forward_key, "UDP send failed: {e}");
-                            // i[impl forward.status]
-                            let _ = status_tx.try_send(ForwardStatus::warn(format!(
-                                "UDP send to the service failed: {e}"
-                            )));
+                    Some(data) => match socket.send(&data).await {
+                        // i[impl forward.status]
+                        // Reported once an episode, as the registry reports
+                        // dropped datagrams: a service that has gone away
+                        // fails every send, and one message per datagram is
+                        // all discarded once the status channel fills.
+                        Ok(_) => {
+                            if send_failures > 0 {
+                                let _ = status_tx.try_send(ForwardStatus::warn(format!(
+                                    "UDP relay recovered after {} to the service",
+                                    plural(send_failures, "failed send")
+                                )));
+                                send_failures = 0;
+                            }
                         }
-                    }
+                        Err(e) => {
+                            if send_failures == 0 {
+                                tracing::warn!(key = forward_key, "UDP send failed: {e}");
+                                let _ = status_tx.try_send(ForwardStatus::warn(format!(
+                                    "UDP send to the service failed: {e}"
+                                )));
+                            }
+                            send_failures += 1;
+                        }
+                    },
                     None => break,
                 }
             }
