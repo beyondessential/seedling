@@ -441,7 +441,7 @@ mod tests {
                 db_inner,
                 NewCertificate {
                     hostname: &host,
-                    requested_hostname: None,
+                    requested_hostnames: None,
                     state: TlsCertState::Active,
                     origin: TlsCertOrigin::Manual,
                     cert_pem: Some(&crate::runtime::tls::test_support::self_signed_pem(&[
@@ -751,7 +751,7 @@ mod tests {
                 db_inner,
                 NewCertificate {
                     hostname: &host,
-                    requested_hostname: None,
+                    requested_hostnames: None,
                     state: TlsCertState::Active,
                     origin: TlsCertOrigin::Manual,
                     cert_pem: Some(&crate::runtime::tls::test_support::self_signed_pem(&[

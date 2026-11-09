@@ -153,7 +153,7 @@ mod tests {
             db,
             store::NewCertificate {
                 hostname,
-                requested_hostname: None,
+                requested_hostnames: None,
                 state: TlsCertState::Active,
                 origin,
                 cert_pem: Some(&self_signed_cert_pem(hostname)),

@@ -189,6 +189,23 @@ describe("TlsHostnamesTable", () => {
     expect(within(blog).getByText("HTTP-01")).toBeTruthy();
   });
 
+  it("names a Tailscale issuance as Tailscale", async () => {
+    const tailscaleRow: TlsHostnameView = {
+      ...defaultRow,
+      hostname: "node.tail1234.ts.net",
+      apps: ["node"],
+      chain: null,
+      active_cert: null,
+      last_issuance: { kind: "tailscale", at: now - 3600, cert_id: 21 },
+    };
+    renderWithSession(<TlsHostnamesTable />, {
+      fixtures: { "/tls/hostnames/list": { hostnames: [tailscaleRow] } },
+    });
+    const row = (await screen.findByText("node.tail1234.ts.net")).closest("tr") as HTMLElement;
+    expect(within(row).getByText("Tailscale")).toBeTruthy();
+    expect(within(row).queryByText(/ACME-DNS/)).toBeNull();
+  });
+
   // w[verify routes.certificates]
   it("offers a retry wherever Canopy is the one being asked", async () => {
     const { request } = renderWithSession(<TlsHostnamesTable />, {

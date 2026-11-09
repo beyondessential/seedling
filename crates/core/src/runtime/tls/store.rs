@@ -340,23 +340,23 @@ pub fn clear_policy(db: &Db, hostname: &str) -> rusqlite::Result<bool> {
 /// Written once so a new column cannot be added to some of the four
 /// certificate queries and forgotten in the others, which would shift the
 /// positional indices the reader depends on.
-const CERT_COLUMNS: &str = "id, hostname, requested_hostname, state, origin, cert_pem, csr_pem, \
+const CERT_COLUMNS: &str = "id, hostname, requested_hostnames, state, origin, cert_pem, csr_pem, \
      key_ciphertext, key_type, issuer, not_before, not_after, serial, self_signed, note, \
      acme_account_id, ari_window_start, ari_window_end, ari_polled_at, created_at, updated_at";
 
 /// The fields of a new certificate row. A struct rather than a parameter list
-/// because `hostname` and `requested_hostname` are both bare hostnames sitting
-/// next to each other: passed positionally they are exactly the pair a caller
-/// would swap, and telling them apart is the whole point of the second one.
+/// because `hostname` and `requested_hostnames` are both hostnames sitting next
+/// to each other: passed positionally they are exactly the pair a caller would
+/// swap, and telling them apart is the whole point of the second one.
 pub struct NewCertificate<'a> {
     /// The row's label, which must be a name the certificate covers; see
     /// [`TlsCertificate::hostname`]. A row inserted before its certificate
     /// exists — a pending CSR — labels itself with the requested name until the
     /// upload replaces it.
     pub hostname: &'a str,
-    /// The hostname a CSR was requested for; see
-    /// [`TlsCertificate::requested_hostname`]. `None` for every other origin.
-    pub requested_hostname: Option<&'a str>,
+    /// The hostnames a CSR was requested for; see
+    /// [`TlsCertificate::requested_hostnames`]. `None` for every other row.
+    pub requested_hostnames: Option<&'a [&'a str]>,
     pub state: TlsCertState,
     pub origin: TlsCertOrigin,
     pub cert_pem: Option<&'a str>,
@@ -370,15 +370,20 @@ pub struct NewCertificate<'a> {
 
 pub fn insert_certificate(db: &Db, new: NewCertificate<'_>) -> rusqlite::Result<i64> {
     let now = now_secs();
+    let requested = new
+        .requested_hostnames
+        .map(serde_json::to_string)
+        .transpose()
+        .map_err(|e| rusqlite::Error::ToSqlConversionFailure(e.into()))?;
     db.conn.execute(
         "INSERT INTO tls_certificates (
-            hostname, requested_hostname, state, origin, cert_pem, csr_pem,
+            hostname, requested_hostnames, state, origin, cert_pem, csr_pem,
             key_ciphertext, key_type, issuer, not_before, not_after, serial,
             self_signed, note, acme_account_id, created_at, updated_at
         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?16)",
         params![
             new.hostname,
-            new.requested_hostname,
+            requested,
             new.state.as_str(),
             new.origin.as_str(),
             new.cert_pem,
@@ -593,6 +598,46 @@ pub fn activate_pending_csr(
     supersede_other_active_for_hostname(db, id)?;
     tx.commit()?;
     Ok(true)
+}
+
+/// What [`cancel_pending_csr`] found.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CsrCancel {
+    Cancelled,
+    NotFound,
+    /// The row exists but is no longer awaiting a certificate, so it was left
+    /// alone.
+    NotPending(TlsCertState),
+}
+
+/// Delete a CSR row, provided it is still pending.
+///
+/// The state is checked in the same step as the deletion. A caller that read
+/// the row first and deleted it afterwards would delete whatever the row had
+/// become in between — an upload activating it in that window would see its
+/// serving certificate deleted by a cancellation that had already been refused
+/// in all but name.
+// r[impl tls.csr.flow]
+pub fn cancel_pending_csr(db: &Db, id: i64) -> rusqlite::Result<CsrCancel> {
+    atomically(db, || {
+        let state: Option<String> = db
+            .conn
+            .query_row(
+                "SELECT state FROM tls_certificates WHERE id = ?1",
+                [id],
+                |row| row.get(0),
+            )
+            .optional()?;
+        let Some(state) = state else {
+            return Ok(CsrCancel::NotFound);
+        };
+        let state = TlsCertState::parse(&state).ok_or(rusqlite::Error::InvalidQuery)?;
+        if state != TlsCertState::CsrPending {
+            return Ok(CsrCancel::NotPending(state));
+        }
+        delete_certificate(db, id)?;
+        Ok(CsrCancel::Cancelled)
+    })
 }
 
 /// A non-SQL failure surfaced through `rusqlite::Error`, as the provider
@@ -828,6 +873,18 @@ pub fn delete_certificate(db: &Db, id: i64) -> rusqlite::Result<bool> {
     })
 }
 
+/// Decode a stored requested-hostname set. A value that will not decode is an
+/// error rather than no request: the row was written with one, and reading it
+/// as absent would report a CSR's request as never having been made.
+fn requested_hostnames_from(raw: Option<String>) -> rusqlite::Result<Option<Vec<String>>> {
+    raw.map(|json| {
+        serde_json::from_str(&json).map_err(|e| {
+            rusqlite::Error::FromSqlConversionFailure(2, rusqlite::types::Type::Text, e.into())
+        })
+    })
+    .transpose()
+}
+
 /// Reads the columns of [`CERT_COLUMNS`], positionally and in that order.
 fn row_to_certificate(row: &rusqlite::Row<'_>) -> rusqlite::Result<TlsCertificate> {
     let state_str: String = row.get(3)?;
@@ -837,7 +894,7 @@ fn row_to_certificate(row: &rusqlite::Row<'_>) -> rusqlite::Result<TlsCertificat
     Ok(TlsCertificate {
         id: row.get(0)?,
         hostname: row.get(1)?,
-        requested_hostname: row.get(2)?,
+        requested_hostnames: requested_hostnames_from(row.get(2)?)?,
         state: TlsCertState::parse(&state_str).ok_or(rusqlite::Error::InvalidQuery)?,
         origin: TlsCertOrigin::parse(&origin_str).ok_or(rusqlite::Error::InvalidQuery)?,
         cert_pem: row.get(5)?,
@@ -1742,7 +1799,7 @@ mod tests {
             db,
             NewCertificate {
                 hostname,
-                requested_hostname: None,
+                requested_hostnames: None,
                 state: TlsCertState::Active,
                 origin: TlsCertOrigin::Manual,
                 cert_pem: Some(&super::super::test_support::self_signed_pem(&[hostname])),
@@ -1787,7 +1844,7 @@ mod tests {
             db,
             NewCertificate {
                 hostname,
-                requested_hostname: None,
+                requested_hostnames: None,
                 state: TlsCertState::Active,
                 origin: TlsCertOrigin::Manual,
                 cert_pem: Some(&super::super::test_support::self_signed_pem(&[hostname])),
@@ -1852,7 +1909,7 @@ mod tests {
             db,
             NewCertificate {
                 hostname: label,
-                requested_hostname: None,
+                requested_hostnames: None,
                 state: TlsCertState::Active,
                 origin: TlsCertOrigin::Manual,
                 cert_pem: Some(pem),
@@ -2197,7 +2254,7 @@ mod tests {
             &db,
             NewCertificate {
                 hostname: "www.example.com",
-                requested_hostname: Some("www.example.com"),
+                requested_hostnames: Some(&["www.example.com"]),
                 state: TlsCertState::CsrPending,
                 origin: TlsCertOrigin::Csr,
                 cert_pem: None,
@@ -2234,7 +2291,10 @@ mod tests {
         let row = get_certificate(&db, id).unwrap().unwrap();
         assert_eq!(row.state, TlsCertState::Active);
         assert_eq!(row.hostname, "example.com");
-        assert_eq!(row.requested_hostname.as_deref(), Some("www.example.com"));
+        assert_eq!(
+            row.requested_hostnames.as_deref(),
+            Some(&["www.example.com".to_owned()][..])
+        );
         assert!(row.cert_pem.unwrap().contains("BEGIN CERTIFICATE"));
         assert_eq!(row.issuer.as_deref(), Some("CN=Issuer"));
         assert_eq!(row.not_after, Some(1_900_000_000));
@@ -2265,7 +2325,7 @@ mod tests {
             &db,
             NewCertificate {
                 hostname: "example.com",
-                requested_hostname: Some("example.com"),
+                requested_hostnames: Some(&["example.com"]),
                 state: TlsCertState::CsrPending,
                 origin: TlsCertOrigin::Csr,
                 cert_pem: None,
@@ -2302,6 +2362,57 @@ mod tests {
             TlsCertState::Active,
             "the incumbent must not be retired for a row that no longer exists",
         );
+    }
+
+    /// The other side of the race: an upload activating the row before the
+    /// cancellation reaches it. The cancellation must be refused rather than
+    /// delete the certificate now serving.
+    // r[verify tls.csr.flow]
+    #[test]
+    fn cancelling_an_activated_csr_leaves_it_serving() {
+        let (db, _) = fresh_db();
+        let pending = insert_certificate(
+            &db,
+            NewCertificate {
+                hostname: "example.com",
+                requested_hostnames: Some(&["example.com"]),
+                state: TlsCertState::CsrPending,
+                origin: TlsCertOrigin::Csr,
+                cert_pem: None,
+                csr_pem: Some(
+                    "-----BEGIN CERTIFICATE REQUEST-----\nx\n-----END CERTIFICATE REQUEST-----\n",
+                ),
+                key_ciphertext: b"key",
+                key_type: KeyType::EcdsaP256,
+                metadata: CertMetadata::default(),
+                note: None,
+                acme_account_id: None,
+            },
+        )
+        .unwrap();
+        assert!(
+            activate_pending_csr(
+                &db,
+                pending,
+                "example.com",
+                &super::super::test_support::self_signed_pem(&["example.com"]),
+                &CertMetadata {
+                    not_after: Some(now_secs() + 86_400),
+                    ..Default::default()
+                },
+            )
+            .unwrap()
+        );
+
+        assert_eq!(
+            cancel_pending_csr(&db, pending).unwrap(),
+            CsrCancel::NotPending(TlsCertState::Active)
+        );
+        assert_eq!(
+            get_certificate(&db, pending).unwrap().unwrap().state,
+            TlsCertState::Active
+        );
+        assert_eq!(cancel_pending_csr(&db, 9_999).unwrap(), CsrCancel::NotFound);
     }
 
     #[test]

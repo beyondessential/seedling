@@ -245,7 +245,7 @@ mod tests {
             db,
             NewCertificate {
                 hostname,
-                requested_hostname: None,
+                requested_hostnames: None,
                 state,
                 origin: TlsCertOrigin::Canopy,
                 cert_pem: Some(&test_support::self_signed_pem(&[hostname])),
@@ -369,7 +369,7 @@ mod tests {
             &db,
             NewCertificate {
                 hostname: "*.example.com",
-                requested_hostname: None,
+                requested_hostnames: None,
                 state: TlsCertState::Active,
                 origin: TlsCertOrigin::Canopy,
                 cert_pem: Some(&test_support::self_signed_pem(&["*.example.com"])),

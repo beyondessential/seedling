@@ -282,7 +282,8 @@ Absent specification bugs, anything not defined here is either defined in anothe
 > - **Hostnames**: for each hostname, the strategy responsible for it and when it falls through to the next, per [tls.hostname.list](interface.md#i--tls.hostname.list), with Canopy certificates shown alongside the others.
 > - **Settings**: view and edit the ACME contact email and certificate profile used for issuance.
 > - **Stored certificates**: list grouped by the certificate's label, surfacing state, origin, issuer, expiry, and serial; certificates within fourteen days of expiry and self-signed certificates must be visually flagged.
->   A certificate obtained through the CSR flow surfaces the hostname the request was made for wherever that differs from the certificate's own primary SAN, and carries the same visual flagging as the two cases above when the issued certificate does not cover it.
+>   A certificate obtained through the CSR flow surfaces the hostnames the request was made for wherever they differ from the certificate's own primary SAN, and carries the same visual flagging as the two cases above, naming the missed hostnames, when the issued certificate does not cover all of them.
+  Beginning a CSR takes one or more hostnames, each a hostname or a `*.<suffix>` wildcard, as [tls.cert.csr.begin](interface.md#i--tls.cert.csr.begin) accepts.
 > - **DNS providers**: list (without credentials), add (Route 53), and delete (refused while a policy references the provider).
 >
 > Private key material, ACME account keys, and DNS-provider credentials must never be returned to the client.

@@ -227,10 +227,15 @@ fn ca_signed_for_csr(
 
 /// Begin a CSR for `hostname`, returning its row id and CSR PEM.
 fn begin_csr(oi: &TestOi, hostname: &str) -> (i64, String) {
+    begin_csr_for(oi, &[hostname])
+}
+
+/// Begin a CSR for `hostnames`, returning its row id and CSR PEM.
+fn begin_csr_for(oi: &TestOi, hostnames: &[&str]) -> (i64, String) {
     let begun = oi
         .call(
             "/tls/certificates/csr/begin",
-            json!({ "hostname": hostname }),
+            json!({ "hostnames": hostnames }),
         )
         .expect("csr begin succeeds");
     (
@@ -299,14 +304,84 @@ fn csr_upload_binds_to_the_issued_san_and_spares_the_requested_hostname() {
     let row = cert_row(&oi, csr_id);
     assert_eq!(row["state"], "active");
     assert_eq!(row["hostname"], "example.com");
-    assert_eq!(row["requested_hostname"], "www.example.com");
+    assert_eq!(row["requested_hostnames"], json!(["www.example.com"]));
+    assert_eq!(row["requested_not_covered"], json!(["www.example.com"]));
 
     // The certificate that does cover www.example.com is untouched: a cert
     // that does not cover a hostname must not retire the one that does.
     let incumbent_row = cert_row(&oi, incumbent_id);
     assert_eq!(incumbent_row["state"], "active");
     assert_eq!(incumbent_row["hostname"], "www.example.com");
-    assert_eq!(incumbent_row["requested_hostname"], json!(null));
+    assert_eq!(incumbent_row["requested_hostnames"], json!(null));
+    assert_eq!(incumbent_row["requested_not_covered"], json!(null));
+}
+
+/// One CSR for several names, and a CA that signs only some of them: the
+/// certificate is stored for what it covers, and the missed names are said.
+// i[verify tls.cert.csr.begin]
+// i[verify tls.cert.csr.upload-cert]
+// i[verify tls.cert.list]
+// r[verify tls.csr.flow]
+#[test]
+fn a_csr_requests_every_name_and_reports_each_one_missed() {
+    let oi = TestOi::new();
+
+    // A repeat in another case is requested once.
+    let (id, csr_pem) = begin_csr_for(
+        &oi,
+        &[
+            "www.example.com",
+            "api.example.com",
+            "example.com",
+            "WWW.example.com",
+        ],
+    );
+    let csr = CertificateSigningRequestParams::from_pem(&csr_pem).expect("parse csr");
+    assert_eq!(csr.params.subject_alt_names.len(), 3, "{csr_pem}");
+
+    let row = cert_row(&oi, id);
+    assert_eq!(row["hostname"], "www.example.com");
+    assert_eq!(
+        row["requested_hostnames"],
+        json!(["www.example.com", "api.example.com", "example.com"])
+    );
+    assert_eq!(row["requested_not_covered"], json!(null));
+
+    let signed = ca_signed_for_csr(&csr_pem, &["www.example.com", "example.com"], |_| {});
+    let uploaded = oi
+        .call(
+            "/tls/certificates/csr/upload-cert",
+            json!({ "id": id, "cert_pem": signed }),
+        )
+        .unwrap();
+    assert!(
+        warnings(&uploaded).contains(&"request_not_covered".to_owned()),
+        "{uploaded}"
+    );
+    assert_eq!(
+        uploaded["requested_not_covered"],
+        json!(["api.example.com"])
+    );
+    assert_eq!(
+        cert_row(&oi, id)["requested_not_covered"],
+        json!(["api.example.com"])
+    );
+
+    // A certificate covering them all meets the request.
+    let (id, csr_pem) = begin_csr_for(&oi, &["www.example.com", "api.example.com"]);
+    let signed = ca_signed_for_csr(&csr_pem, &["*.example.com"], |_| {});
+    let uploaded = oi
+        .call(
+            "/tls/certificates/csr/upload-cert",
+            json!({ "id": id, "cert_pem": signed }),
+        )
+        .unwrap();
+    assert!(
+        !warnings(&uploaded).contains(&"request_not_covered".to_owned()),
+        "{uploaded}"
+    );
+    assert_eq!(uploaded["requested_not_covered"], json!([]));
+    assert_eq!(cert_row(&oi, id)["requested_not_covered"], json!([]));
 }
 
 // r[verify tls.cert.validation.san-coverage]
@@ -429,7 +504,7 @@ fn csr_upload_rejections_leave_the_row_and_the_incumbent_untouched() {
     // failed upload costs the operator nothing.
     let row = cert_row(&oi, id);
     assert_eq!(row["state"], "csr_pending");
-    assert_eq!(row["requested_hostname"], "www.example.com");
+    assert_eq!(row["requested_hostnames"], json!(["www.example.com"]));
     oi.call("/tls/certificates/csr/get", json!({ "id": id }))
         .expect("the CSR is still retrievable");
     assert_eq!(cert_row(&oi, incumbent_id)["state"], "active");
@@ -523,7 +598,7 @@ fn csr_begin_get_cancel_roundtrip() {
     let begun = oi
         .call(
             "/tls/certificates/csr/begin",
-            json!({ "hostname": "csr.example.com" }),
+            json!({ "hostnames": ["csr.example.com"] }),
         )
         .unwrap();
     let id = begun["id"].as_i64().unwrap();
@@ -551,6 +626,42 @@ fn csr_begin_get_cancel_roundtrip() {
     assert_eq!(code, "not_found");
 }
 
+/// A wildcard is a name a CA will sign, so a CSR may request one — alongside
+/// exact names in the same request.
+// i[verify tls.cert.csr.begin]
+#[test]
+fn a_csr_may_request_a_wildcard() {
+    let oi = TestOi::new();
+
+    let (id, csr_pem) = begin_csr_for(&oi, &["*.example.com", "example.com"]);
+    let csr = CertificateSigningRequestParams::from_pem(&csr_pem).expect("parse csr");
+    let sans: Vec<String> = csr
+        .params
+        .subject_alt_names
+        .iter()
+        .map(|san| match san {
+            rcgen::SanType::DnsName(name) => name.as_str().to_owned(),
+            other => panic!("unexpected SAN {other:?}"),
+        })
+        .collect();
+    assert_eq!(sans, ["*.example.com", "example.com"]);
+    assert_eq!(
+        cert_row(&oi, id)["requested_hostnames"],
+        json!(["*.example.com", "example.com"])
+    );
+
+    // A bare `*` names no suffix to issue under, so it is refused.
+    for hostnames in [json!(["*"]), json!(["*."]), json!(["*.*.example.com"])] {
+        let (code, _) = oi
+            .call(
+                "/tls/certificates/csr/begin",
+                json!({ "hostnames": hostnames }),
+            )
+            .unwrap_err();
+        assert_eq!(code, "requirements_invalid", "{hostnames}");
+    }
+}
+
 // i[verify tls.cert.csr.begin]
 // i[verify tls.cert.csr.get]
 // i[verify tls.cert.csr.upload-cert]
@@ -559,15 +670,28 @@ fn csr_begin_get_cancel_roundtrip() {
 fn csr_flow_validation_errors() {
     let oi = TestOi::new();
 
-    let (code, _) = oi
-        .call("/tls/certificates/csr/begin", json!({ "hostname": "  " }))
-        .unwrap_err();
-    assert_eq!(code, "requirements_invalid");
+    // One over the cap, so an operator cannot have the runtime build, store
+    // and hand back a certificate request of any size they choose.
+    let too_many: Vec<String> = (0..101).map(|n| format!("h{n}.example.com")).collect();
+    for hostnames in [
+        json!([]),
+        json!(["  "]),
+        json!(["ok.example.com", "not a name"]),
+        json!(too_many),
+    ] {
+        let (code, _) = oi
+            .call(
+                "/tls/certificates/csr/begin",
+                json!({ "hostnames": hostnames }),
+            )
+            .unwrap_err();
+        assert_eq!(code, "requirements_invalid", "{hostnames}");
+    }
 
     let (code, msg) = oi
         .call(
             "/tls/certificates/csr/begin",
-            json!({ "hostname": "csr.example.com", "key_type": "rsa4096" }),
+            json!({ "hostnames": ["csr.example.com"], "key_type": "rsa4096" }),
         )
         .unwrap_err();
     assert_eq!(code, "requirements_invalid");
@@ -589,7 +713,7 @@ fn csr_flow_validation_errors() {
     let begun = oi
         .call(
             "/tls/certificates/csr/begin",
-            json!({ "hostname": "csr.example.com" }),
+            json!({ "hostnames": ["csr.example.com"] }),
         )
         .unwrap();
     let id = begun["id"].as_i64().unwrap();
@@ -1081,7 +1205,7 @@ fn a_canopy_certificate_is_in_the_hostname_view_like_any_other() {
             db,
             crate::runtime::tls::store::NewCertificate {
                 hostname: "shop.example.com",
-                requested_hostname: Some("shop.example.com"),
+                requested_hostnames: Some(&["shop.example.com"]),
                 state: crate::runtime::tls::TlsCertState::Active,
                 origin: crate::runtime::tls::TlsCertOrigin::Canopy,
                 cert_pem: Some(&pem),
@@ -1117,6 +1241,76 @@ fn a_canopy_certificate_is_in_the_hostname_view_like_any_other() {
 
     let certs = oi.call("/tls/certificates/list", json!({})).unwrap();
     assert_eq!(certs["certificates"][0]["origin"], "canopy");
+}
+
+/// Tailscale issuance logs attempts just as ACME-DNS does, so the kind of the
+/// last issuance is what the attempt produced, not ACME-DNS by assumption.
+// i[verify tls.hostname.list]
+#[test]
+fn the_last_issuance_is_kinded_by_the_certificate_it_produced() {
+    use crate::runtime::tls::{AttemptOutcome, AttemptTrigger, state, store};
+
+    let oi = TestOi::new();
+    let now = jiff::Timestamp::now().as_second();
+    let (pem, _) = self_signed("node.tail1234.ts.net");
+    let cert_id = oi
+        .state
+        .db
+        .call(move |db| -> rusqlite::Result<i64> {
+            let id = store::insert_certificate(
+                db,
+                store::NewCertificate {
+                    hostname: "node.tail1234.ts.net",
+                    requested_hostnames: None,
+                    state: crate::runtime::tls::TlsCertState::Active,
+                    origin: crate::runtime::tls::TlsCertOrigin::Tailscale,
+                    cert_pem: Some(&pem),
+                    csr_pem: None,
+                    key_ciphertext: &[0u8; 8],
+                    key_type: crate::runtime::tls::KeyType::EcdsaP256,
+                    metadata: store::CertMetadata {
+                        not_before: Some(now - 60),
+                        not_after: Some(now + 89 * 86_400),
+                        ..Default::default()
+                    },
+                    note: None,
+                    acme_account_id: None,
+                },
+            )?;
+            let attempt =
+                store::insert_attempt(db, "node.tail1234.ts.net", AttemptTrigger::OnDemand)?;
+            store::finalize_attempt(db, attempt, AttemptOutcome::Success, Some(id), None)?;
+            Ok(id)
+        })
+        .unwrap();
+
+    let view = |oi: &TestOi| {
+        let snapshot = oi
+            .state
+            .db
+            .call(|db| state::Snapshot::load(db, state::ChainEnv::none()))
+            .unwrap();
+        let st = state::compute_state(&snapshot, "node.tail1234.ts.net");
+        super::project_hostname_state(
+            "node.tail1234.ts.net",
+            &std::collections::BTreeSet::new(),
+            &st,
+            None,
+        )
+    };
+
+    let host = view(&oi);
+    assert_eq!(host["last_issuance"]["kind"], "tailscale");
+    assert_eq!(host["last_issuance"]["cert_id"], cert_id);
+    assert!(host["last_issuance"]["provider"].is_null());
+
+    // With the certificate gone the attempt says nothing about how anything
+    // serving was obtained, so it is not reported under a guessed kind.
+    oi.state
+        .db
+        .call(move |db| store::delete_certificate(db, cert_id))
+        .unwrap();
+    assert!(view(&oi)["last_issuance"].is_null());
 }
 
 // r[verify tls.cert.eager-issuance]

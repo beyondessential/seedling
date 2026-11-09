@@ -134,6 +134,9 @@ function lastIssuanceLabel(
   if (last.kind === "csr") {
     return { primary: "CSR-derived", secondary: when };
   }
+  if (last.kind === "tailscale") {
+    return { primary: "Tailscale", secondary: when };
+  }
   if (last.kind === "canopy") {
     return { primary: "Canopy", secondary: when };
   }

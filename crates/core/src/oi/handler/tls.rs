@@ -301,34 +301,35 @@ pub(crate) fn list_certificates(state: &OiState) -> HandlerResult {
     let result: Vec<Value> = rows
         .into_iter()
         .map(|c| {
-            // Whether the stored certificate covers the hostname its CSR asked
-            // for. Decided here so the RFC 6125 rule has one implementation
-            // rather than one per client. `null` where there is nothing to
-            // decide — no request, no certificate yet — or where the stored
-            // PEM will not parse, which is not the same as "does not cover".
+            // Which of the hostnames its CSR asked for the stored certificate
+            // does not cover. Decided here so the RFC 6125 rule has one
+            // implementation rather than one per client. `null` where there is
+            // nothing to decide — no request, no certificate yet — or where the
+            // stored PEM will not parse, which is not the same as "covers none".
             // r[impl tls.csr.flow]
-            let request_covered = match (c.requested_hostname.as_deref(), c.cert_pem.as_deref()) {
-                (Some(requested), Some(pem)) => match parse::cert_covers(pem, requested) {
-                    Ok(covered) => Some(covered),
-                    // Null here reads as "no flag" to the operator, same as a
-                    // met request, so the reason has to be said somewhere.
-                    Err(e) => {
-                        tracing::warn!(
-                            cert_id = c.id,
-                            error = %e,
-                            "stored certificate could not be parsed; cannot report whether it \
-                             covers the hostname its CSR requested"
-                        );
-                        None
-                    }
-                },
-                _ => None,
-            };
+            let requested_not_covered =
+                match (c.requested_hostnames.as_deref(), c.cert_pem.as_deref()) {
+                    (Some(requested), Some(pem)) => match parse::not_covered(pem, requested) {
+                        Ok(missed) => Some(missed),
+                        // Null here reads as "no flag" to the operator, same as a
+                        // met request, so the reason has to be said somewhere.
+                        Err(e) => {
+                            tracing::warn!(
+                                cert_id = c.id,
+                                error = %e,
+                                "stored certificate could not be parsed; cannot report whether it \
+                                 covers the hostnames its CSR requested"
+                            );
+                            None
+                        }
+                    },
+                    _ => None,
+                };
             json!({
                 "id": c.id,
                 "hostname": c.hostname,
-                "requested_hostname": c.requested_hostname,
-                "request_covered": request_covered,
+                "requested_hostnames": c.requested_hostnames,
+                "requested_not_covered": requested_not_covered,
                 "state": c.state.as_str(),
                 "origin": c.origin.as_str(),
                 "key_type": c.key_type.as_str(),
@@ -460,7 +461,7 @@ pub(crate) fn upload_manual(state: &OiState, params: UploadManualParams) -> Hand
                 db,
                 store::NewCertificate {
                     hostname: &label_for_insert,
-                    requested_hostname: None,
+                    requested_hostnames: None,
                     state: TlsCertState::Active,
                     origin: TlsCertOrigin::Manual,
                     cert_pem: Some(&chain_pem),
@@ -523,14 +524,67 @@ pub(crate) fn delete_certificate(state: &OiState, params: CertIdParams) -> Handl
 
 #[derive(Deserialize)]
 pub(crate) struct CsrBeginParams {
-    pub hostname: String,
+    /// The names the certificate is requested for, in the order the CSR
+    /// carries them.
+    pub hostnames: Vec<String>,
     /// Optional key type. Defaults to `ecdsa_p256`, the only kind
     /// currently supported.
     #[serde(default)]
     pub key_type: Option<String>,
 }
 
-/// Generate a server-side keypair and a CSR for `hostname`. The
+/// Most names one CSR may request.
+///
+/// What public certificate authorities accept in a single certificate. The
+/// request budget leaves room for hundreds of thousands of names in one call,
+/// and each lands in the CSR that is stored on the row and handed back by
+/// `csr_begin` and `tls.cert.csr.get` — so without a bound a single operator
+/// call writes and serves back a request of its own choosing in size.
+const CSR_HOSTNAME_LIMIT: usize = 100;
+
+/// The set of names a CSR is requested for: each a hostname or a `*.<suffix>`
+/// wildcard, at least one of them and at most [`CSR_HOSTNAME_LIMIT`], each
+/// once. Repeats are dropped rather than refused, keeping the first spelling,
+/// since DNS names compare without case.
+// i[tls.cert.csr.begin]
+fn csr_hostname_set(hostnames: Vec<String>) -> Result<Vec<String>, OiError> {
+    // Counted before anything is allocated for it, so an oversized request
+    // costs nothing to refuse.
+    if hostnames.len() > CSR_HOSTNAME_LIMIT {
+        return Err(OiError::new(
+            ErrorCode::RequirementsInvalid,
+            format!(
+                "a CSR may request at most {CSR_HOSTNAME_LIMIT} hostnames; {} were given",
+                hostnames.len()
+            ),
+        ));
+    }
+    let mut set: Vec<String> = Vec::with_capacity(hostnames.len());
+    for name in hostnames {
+        let valid = match name.strip_prefix("*.") {
+            Some(suffix) => super::is_valid_dns_name(suffix),
+            None => super::is_valid_dns_name(&name),
+        };
+        if !valid {
+            return Err(OiError::new(
+                ErrorCode::RequirementsInvalid,
+                format!("hostname {name:?} must be a valid hostname or `*.<suffix>`"),
+            ));
+        }
+        if !set.iter().any(|seen| seen.eq_ignore_ascii_case(&name)) {
+            set.push(name);
+        }
+    }
+    if set.is_empty() {
+        return Err(OiError::new(
+            ErrorCode::RequirementsInvalid,
+            "at least one hostname is required",
+        ));
+    }
+    Ok(set)
+}
+
+/// Generate a server-side keypair and a CSR for `hostnames`. The
 /// private key is encrypted at rest and never leaves the runtime; the
 /// CSR is returned in the response and is also retrievable later via
 /// `tls.cert.csr.get` while the row is still in `csr_pending`. After
@@ -540,13 +594,11 @@ pub(crate) struct CsrBeginParams {
 // i[tls.cert.csr.begin]
 // r[impl tls.csr.flow]
 pub(crate) fn csr_begin(state: &OiState, params: CsrBeginParams) -> HandlerResult {
-    let CsrBeginParams { hostname, key_type } = params;
-    if hostname.trim().is_empty() {
-        return Err(OiError::new(
-            ErrorCode::RequirementsInvalid,
-            "hostname must not be empty",
-        ));
-    }
+    let CsrBeginParams {
+        hostnames,
+        key_type,
+    } = params;
+    let hostnames = csr_hostname_set(hostnames)?;
     let key_type = match key_type.as_deref() {
         None | Some("ecdsa_p256") => KeyType::EcdsaP256,
         Some(other) => {
@@ -563,7 +615,8 @@ pub(crate) fn csr_begin(state: &OiState, params: CsrBeginParams) -> HandlerResul
             format!("keypair generation failed: {e}"),
         )
     })?;
-    let csr = keypair::build_csr(&hostname, &generated.inner)
+    let names: Vec<&str> = hostnames.iter().map(String::as_str).collect();
+    let csr = keypair::build_csr(&names, &generated.inner)
         .map_err(|e| OiError::new(ErrorCode::Internal, format!("csr generation failed: {e}")))?;
 
     let cipher = Arc::clone(&state.cipher);
@@ -574,20 +627,20 @@ pub(crate) fn csr_begin(state: &OiState, params: CsrBeginParams) -> HandlerResul
         )
     })?;
 
-    let host_for_insert = hostname.clone();
     let csr_pem_for_insert = csr.pem.clone();
     let id = state
         .db
         .call(move |db| {
+            let names: Vec<&str> = hostnames.iter().map(String::as_str).collect();
             store::insert_certificate(
                 db,
                 store::NewCertificate {
                     // Until a certificate arrives the row has no primary SAN
-                    // of its own, so the requested name stands in as its
-                    // label. The upload replaces it with the SAN the signed
-                    // certificate actually carries.
-                    hostname: &host_for_insert,
-                    requested_hostname: Some(&host_for_insert),
+                    // of its own, so the first requested name stands in as
+                    // its label. The upload replaces it with the SAN the
+                    // signed certificate actually carries.
+                    hostname: names[0],
+                    requested_hostnames: Some(&names),
                     state: TlsCertState::CsrPending,
                     origin: TlsCertOrigin::Csr,
                     cert_pem: None,
@@ -653,10 +706,10 @@ pub(crate) struct CsrUploadCertParams {
 /// active certificate under that same label is superseded — never one
 /// serving a hostname the arriving certificate does not cover.
 ///
-/// The hostname the CSR was requested for is a record of the request, not
-/// a binding: an issued certificate that does not cover it is still stored
+/// The hostnames the CSR was requested for are a record of the request, not
+/// a binding: an issued certificate that misses some of them is still stored
 /// and still serves what it does cover, with `request_not_covered` in the
-/// response warnings.
+/// response warnings and the missed names in `requested_not_covered`.
 // i[tls.cert.csr.upload-cert]
 // r[impl tls.csr.flow]
 pub(crate) fn csr_upload_cert(state: &OiState, params: CsrUploadCertParams) -> HandlerResult {
@@ -701,20 +754,22 @@ pub(crate) fn csr_upload_cert(state: &OiState, params: CsrUploadCertParams) -> H
 
     // A CA may sign a name set other than the one requested. The certificate
     // is still a real one for a key the runtime holds, so it is accepted and
-    // binds to whatever it does cover; what it cannot do is claim the
-    // requested hostname. Report the unmet request instead: the hostname
-    // keeps whichever certificate is already serving it, and goes on showing
-    // as uncovered in the per-hostname rollup until one arrives.
+    // binds to whatever it does cover; what it cannot do is claim a
+    // requested hostname it misses. Report each one instead: a missed
+    // hostname keeps whichever certificate is already serving it, and goes on
+    // showing as uncovered in the per-hostname rollup until one arrives.
     // r[impl tls.csr.flow]
     // r[impl tls.cert.validation.san-coverage]
     let requested = cert_row
-        .requested_hostname
-        .as_deref()
+        .requested_hostnames
+        .clone()
         // Rows predating the column were backfilled from `hostname`, which is
         // where a pending CSR's requested name has always lived.
-        .unwrap_or(cert_row.hostname.as_str());
+        .unwrap_or_else(|| vec![cert_row.hostname.clone()]);
+    let requested_not_covered =
+        parse::sans_not_covering(&validated.parsed.san_dns_names, &requested);
     let mut warnings = validated.warnings.clone();
-    if !parse::san_covers(&validated.parsed.san_dns_names, requested) {
+    if !requested_not_covered.is_empty() {
         warnings.push("request_not_covered");
     }
 
@@ -742,6 +797,7 @@ pub(crate) fn csr_upload_cert(state: &OiState, params: CsrUploadCertParams) -> H
         "id": id,
         "primary_san": primary_san,
         "san_dns_names": validated.parsed.san_dns_names,
+        "requested_not_covered": requested_not_covered,
         "warnings": warnings,
     }))
 }
@@ -754,25 +810,25 @@ pub(crate) fn csr_upload_cert(state: &OiState, params: CsrUploadCertParams) -> H
 // r[impl tls.csr.flow]
 pub(crate) fn csr_cancel(state: &OiState, params: CertIdParams) -> HandlerResult {
     let CertIdParams { id } = params;
-    let cert = state
+    // One call, so no upload can activate the row between the check and the
+    // deletion.
+    match state
         .db
-        .call(move |db| store::get_certificate(db, id))
+        .call(move |db| store::cancel_pending_csr(db, id))
         .map_err(db_error)?
-        .ok_or_else(|| OiError::not_found(format!("certificate not found: {id}")))?;
-    if cert.state != TlsCertState::CsrPending {
-        return Err(OiError::new(
+    {
+        store::CsrCancel::Cancelled => Ok(json!({ "ok": true })),
+        store::CsrCancel::NotFound => {
+            Err(OiError::not_found(format!("certificate not found: {id}")))
+        }
+        store::CsrCancel::NotPending(cert_state) => Err(OiError::new(
             ErrorCode::RequirementsInvalid,
             format!(
                 "certificate {id} is in state {}; csr_cancel only applies to csr_pending rows",
-                cert.state.as_str()
+                cert_state.as_str()
             ),
-        ));
+        )),
     }
-    state
-        .db
-        .call(move |db| store::delete_certificate(db, id))
-        .map_err(db_error)?;
-    Ok(json!({ "ok": true }))
 }
 
 /// Forget the chain decisions, because what was just written is something they
@@ -1145,7 +1201,8 @@ fn decision_next_issuance(st: &state::HostnameState<'_>) -> (Option<i64>, Option
 
 /// Build the `last_issuance` object: prefer the active cert's metadata
 /// for manual uploads (which never go through the attempt log), fall
-/// back to the latest successful attempt for ACME-DNS, then to the
+/// back to the latest successful attempt whose certificate is still
+/// stored, then to the
 /// active cert's bare creation timestamp, then — for default-strategy
 /// hostnames — to whatever Caddy's on-disk store has.
 fn build_last_issuance(
@@ -1171,14 +1228,17 @@ fn build_last_issuance(
             "cert_id": cert.id,
         });
     }
-    if let Some(att) = st.last_success {
-        let provider = st.policy.and_then(|p| match &p.policy {
-            TlsPolicy::AcmeDns { dns_provider } => Some(dns_provider.clone()),
-            // r[impl ingress.site.tailscale]
-            TlsPolicy::Tailscale | TlsPolicy::Canopy => None,
-        });
+    // ACME-DNS, Tailscale and Canopy all log attempts, so the kind is taken
+    // from the certificate the attempt produced rather than assumed.
+    if let (Some(att), Some(cert)) = (st.last_success, st.last_success_cert) {
+        let provider = match (cert.origin, st.policy.map(|p| &p.policy)) {
+            (TlsCertOrigin::AcmeDns, Some(TlsPolicy::AcmeDns { dns_provider })) => {
+                Some(dns_provider.clone())
+            }
+            _ => None,
+        };
         return json!({
-            "kind": "acme_dns",
+            "kind": cert.origin.as_str(),
             "at": att.started_at,
             "cert_id": att.cert_id,
             "provider": provider,

@@ -759,7 +759,7 @@ mod tests {
                 db,
                 NewCertificate {
                     hostname: "shop.example.com",
-                    requested_hostname: None,
+                    requested_hostnames: None,
                     state: TlsCertState::Active,
                     origin: TlsCertOrigin::Canopy,
                     cert_pem: Some(&pem),
@@ -793,7 +793,7 @@ mod tests {
                 db,
                 NewCertificate {
                     hostname: "shop.example.com",
-                    requested_hostname: None,
+                    requested_hostnames: None,
                     state: TlsCertState::Active,
                     origin: TlsCertOrigin::Canopy,
                     cert_pem: Some(&pem),
@@ -832,7 +832,7 @@ mod tests {
                 db,
                 NewCertificate {
                     hostname: "shop.example.com",
-                    requested_hostname: None,
+                    requested_hostnames: None,
                     state: TlsCertState::Active,
                     origin: TlsCertOrigin::Canopy,
                     cert_pem: Some(&pem),
@@ -1030,7 +1030,7 @@ mod tests {
                 db,
                 NewCertificate {
                     hostname: "shop.example.com",
-                    requested_hostname: None,
+                    requested_hostnames: None,
                     state: TlsCertState::Active,
                     origin: TlsCertOrigin::Manual,
                     cert_pem: Some(&pem),
@@ -1129,7 +1129,7 @@ mod tests {
                 db,
                 NewCertificate {
                     hostname: &hostname,
-                    requested_hostname: None,
+                    requested_hostnames: None,
                     state: TlsCertState::Active,
                     origin: TlsCertOrigin::Canopy,
                     cert_pem: Some(&pem),
@@ -1253,7 +1253,7 @@ mod tests {
                 db,
                 NewCertificate {
                     hostname: "shop.example.com",
-                    requested_hostname: Some("shop.example.com"),
+                    requested_hostnames: Some(&["shop.example.com"]),
                     state: TlsCertState::CsrPending,
                     origin: TlsCertOrigin::Canopy,
                     cert_pem: None,
@@ -1335,7 +1335,7 @@ mod tests {
                 db,
                 NewCertificate {
                     hostname: "shop.example.com",
-                    requested_hostname: Some("shop.example.com"),
+                    requested_hostnames: Some(&["shop.example.com"]),
                     state: TlsCertState::CsrPending,
                     origin: TlsCertOrigin::Canopy,
                     cert_pem: None,

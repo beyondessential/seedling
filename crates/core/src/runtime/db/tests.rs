@@ -13,7 +13,7 @@ fn open_in_memory_succeeds() {
             |r| r.get(0),
         )
         .expect("schema_version should exist");
-    assert_eq!(version, 64);
+    assert_eq!(version, 65);
 }
 
 // r[verify history.persistence]
@@ -45,7 +45,7 @@ fn params_table_exists() {
             |r| r.get(0),
         )
         .expect("schema_version should exist");
-    assert_eq!(version, 64);
+    assert_eq!(version, 65);
 }
 
 // i[verify app.persist]
@@ -260,6 +260,7 @@ fn backup_tables_are_dropped_and_their_active_faults_retired() {
 // r[verify tls.strategy.canopy]
 // r[verify tls.strategy.canopy-only]
 // r[verify tls.chain.ladder]
+// r[verify tls.csr.flow]
 #[test]
 fn canopy_migration_keeps_policies_certificates_and_attempt_links() {
     let db = Db::open_in_memory_through(60).expect("open at v60");
@@ -306,7 +307,7 @@ fn canopy_migration_keeps_policies_certificates_and_attempt_links() {
 
     let certs: Vec<(i64, String, Option<String>)> = db
         .conn
-        .prepare("SELECT id, origin, requested_hostname FROM tls_certificates ORDER BY id")
+        .prepare("SELECT id, origin, requested_hostnames FROM tls_certificates ORDER BY id")
         .unwrap()
         .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
         .unwrap()
@@ -315,7 +316,8 @@ fn canopy_migration_keeps_policies_certificates_and_attempt_links() {
     assert_eq!(
         certs,
         vec![
-            (7, "csr".to_owned(), Some("a.example.com".to_owned())),
+            // A single requested hostname is carried on as a set of one.
+            (7, "csr".to_owned(), Some(r#"["a.example.com"]"#.to_owned())),
             (9, "acme_dns".to_owned(), None),
         ]
     );

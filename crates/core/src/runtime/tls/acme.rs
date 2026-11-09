@@ -11,7 +11,8 @@
 //!    keypair locally, submit a CSR, and download the resulting chain.
 //! 5. Persist the cert+key into `tls_certificates` (origin = `acme_dns`),
 //!    superseding any prior active row for the same hostname.
-//! 6. Best-effort cleanup of the TXT record.
+//! 6. Best-effort cleanup of the TXT records, however the challenge phase
+//!    ended.
 //!
 //! The flow is fully async and reentrant: a renewal just runs this same
 //! function with the same hostname; the new row supersedes the old one
@@ -21,7 +22,7 @@ use std::time::Duration;
 
 use instant_acme::{
     Account, AuthorizationStatus, CertificateIdentifier, ChallengeType, Identifier, LetsEncrypt,
-    NewAccount, NewOrder, OrderStatus, RetryPolicy,
+    NewAccount, NewOrder, Order, OrderStatus, RetryPolicy,
 };
 use rustls_pki_types::Der;
 use secrecy::{ExposeSecret, SecretString};
@@ -172,63 +173,20 @@ pub async fn issue(
 
     let challenge_name = challenge_record_name(params.hostname);
     let mut planted: Vec<String> = Vec::new();
-
-    {
-        let mut auths = order.authorizations();
-        while let Some(auth_result) = auths.next().await {
-            let mut auth = auth_result.context(AcmeSnafu)?;
-            match auth.status {
-                AuthorizationStatus::Pending => {}
-                AuthorizationStatus::Valid => continue,
-                other => return BadAuthStateSnafu { state: other }.fail(),
-            }
-
-            let mut challenge = auth.challenge(ChallengeType::Dns01).ok_or_else(|| {
-                NoDnsChallengeSnafu {
-                    hostname: params.hostname.to_owned(),
-                }
-                .build()
-            })?;
-
-            let dns_value = challenge.key_authorization().dns_value();
-            provider
-                .set_txt(&challenge_name, &dns_value)
-                .await
-                .context(DnsSnafu)?;
-            planted.push(dns_value.clone());
-
-            tokio::time::sleep(DNS_PROPAGATION_DELAY).await;
-
-            challenge.set_ready().await.context(AcmeSnafu)?;
-        }
-    }
-
-    let status = order
-        .poll_ready(&RetryPolicy::default())
-        .await
-        .context(AcmeSnafu)?;
-    if status != OrderStatus::Ready {
-        // Best-effort cleanup before we bail.
-        cleanup_txt(provider.as_ref(), &challenge_name, &planted).await;
-        return TimeoutSnafu {
-            stage: "order_ready",
-        }
-        .fail();
-    }
-
-    // Generate our own keypair + CSR rather than letting instant-acme do
-    // it via its `rcgen` feature, so the same code path serves the manual
-    // CSR flow in phase 4.
-    let key = keypair::generate(KeyType::EcdsaP256).context(KeypairSnafu)?;
-    let csr = keypair::build_csr(params.hostname, &key.inner).context(KeypairSnafu)?;
-    order.finalize_csr(&csr.der).await.context(AcmeSnafu)?;
-
-    let cert_chain_pem = order
-        .poll_certificate(&RetryPolicy::default())
-        .await
-        .context(AcmeSnafu)?;
-
+    let obtained = obtain_chain(
+        &mut order,
+        provider.as_ref(),
+        &challenge_name,
+        params.hostname,
+        &mut planted,
+    )
+    .await;
+    // Whatever way the challenge phase ended, the records it published are
+    // retracted here, outside it, so no early return inside it can leave one
+    // in the operator's zone.
+    // r[impl tls.strategy.acme-dns]
     cleanup_txt(provider.as_ref(), &challenge_name, &planted).await;
+    let (cert_chain_pem, key) = obtained?;
 
     let parsed = parse::parse_chain(&cert_chain_pem).context(ParseSnafu)?;
     let key_ct = cipher.encrypt(&key.pem).context(CipherSnafu)?;
@@ -244,7 +202,7 @@ pub async fn issue(
                 db_inner,
                 store::NewCertificate {
                     hostname: &hostname_owned,
-                    requested_hostname: None,
+                    requested_hostnames: None,
                     state: TlsCertState::Active,
                     origin: TlsCertOrigin::AcmeDns,
                     cert_pem: Some(&chain_pem),
@@ -293,6 +251,74 @@ pub async fn issue(
     }
 
     Ok(Issued { cert_id, not_after })
+}
+
+/// The part of an order during which the CA needs the DNS-01 challenge
+/// records: answer every pending authorization, then finalise the order and
+/// download the chain.
+///
+/// Every record published is pushed onto `planted` as soon as the provider
+/// accepts it, so the caller can retract them however this returns.
+async fn obtain_chain(
+    order: &mut Order,
+    provider: &dyn DnsProvider,
+    challenge_name: &str,
+    hostname: &str,
+    planted: &mut Vec<String>,
+) -> Result<(String, keypair::GeneratedKey), AcmeError> {
+    {
+        let mut auths = order.authorizations();
+        while let Some(auth_result) = auths.next().await {
+            let mut auth = auth_result.context(AcmeSnafu)?;
+            match auth.status {
+                AuthorizationStatus::Pending => {}
+                AuthorizationStatus::Valid => continue,
+                other => return BadAuthStateSnafu { state: other }.fail(),
+            }
+
+            let mut challenge = auth.challenge(ChallengeType::Dns01).ok_or_else(|| {
+                NoDnsChallengeSnafu {
+                    hostname: hostname.to_owned(),
+                }
+                .build()
+            })?;
+
+            let dns_value = challenge.key_authorization().dns_value();
+            provider
+                .set_txt(challenge_name, &dns_value)
+                .await
+                .context(DnsSnafu)?;
+            planted.push(dns_value);
+
+            tokio::time::sleep(DNS_PROPAGATION_DELAY).await;
+
+            challenge.set_ready().await.context(AcmeSnafu)?;
+        }
+    }
+
+    let status = order
+        .poll_ready(&RetryPolicy::default())
+        .await
+        .context(AcmeSnafu)?;
+    if status != OrderStatus::Ready {
+        return TimeoutSnafu {
+            stage: "order_ready",
+        }
+        .fail();
+    }
+
+    // Generate our own keypair + CSR rather than letting instant-acme do
+    // it via its `rcgen` feature, so the same code path serves the manual
+    // CSR flow.
+    let key = keypair::generate(KeyType::EcdsaP256).context(KeypairSnafu)?;
+    let csr = keypair::build_csr(&[hostname], &key.inner).context(KeypairSnafu)?;
+    order.finalize_csr(&csr.der).await.context(AcmeSnafu)?;
+
+    let cert_chain_pem = order
+        .poll_certificate(&RetryPolicy::default())
+        .await
+        .context(AcmeSnafu)?;
+    Ok((cert_chain_pem, key))
 }
 
 /// Try to extract a [`CertificateIdentifier`] from a PEM chain. Returns

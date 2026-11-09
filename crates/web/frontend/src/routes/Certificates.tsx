@@ -159,7 +159,7 @@ export default function Certificates() {
 
         <ManualCertsSection
           certs={(certs?.certificates ?? []).filter(
-            (c) => c.origin !== "acme_dns" && c.origin !== "canopy",
+            (c) => c.origin === "manual" || c.origin === "csr",
           )}
           loading={certsLoading}
           error={certsError}
@@ -701,16 +701,19 @@ function ManualCertsSection({
                     <TableCell sx={{ fontFamily: "monospace" }}>
                       {c.hostname}
                       {/* w[impl routes.certificates] */}
-                      {/* Only worth showing where the CA signed something
-                          other than what was asked for; otherwise it repeats
-                          the primary SAN. */}
-                      {c.requested_hostname !== null &&
-                        c.requested_hostname !== c.hostname && (
+                      {/* Only worth showing where the request was for more
+                          than the primary SAN, or something else; otherwise
+                          it repeats it. */}
+                      {c.requested_hostnames !== null &&
+                        !(
+                          c.requested_hostnames.length === 1 &&
+                          c.requested_hostnames[0] === c.hostname
+                        ) && (
                           <Typography
                             variant="caption"
                             sx={{ color: "text.secondary", display: "block" }}
                           >
-                            requested {c.requested_hostname}
+                            requested {c.requested_hostnames.join(", ")}
                           </Typography>
                         )}
                     </TableCell>
@@ -735,9 +738,10 @@ function ManualCertsSection({
                           <Chip label="self-signed" size="small" color="warning" variant="outlined" />
                         )}
                         {/* w[impl routes.certificates] */}
-                        {c.request_covered === false && (
+                        {c.requested_not_covered !== null &&
+                          c.requested_not_covered.length > 0 && (
                           <Chip
-                            label="request not covered"
+                            label={`not covered: ${c.requested_not_covered.join(", ")}`}
                             size="small"
                             color="warning"
                             variant="outlined"
@@ -1403,12 +1407,14 @@ interface CsrBeginDialogProps {
 }
 
 function CsrBeginDialog({ open, onClose, onSubmitted }: CsrBeginDialogProps) {
-  const [hostname, setHostname] = useState("");
+  const [hostnames, setHostnames] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const { execute, error, clearError } = useOiAction();
 
+  const names = hostnames.split(/[\s,]+/).filter((n) => n.length > 0);
+
   const close = () => {
-    setHostname("");
+    setHostnames("");
     clearError();
     onClose();
   };
@@ -1417,11 +1423,11 @@ function CsrBeginDialog({ open, onClose, onSubmitted }: CsrBeginDialogProps) {
     setSubmitting(true);
     try {
       const result = (await execute("/tls/certificates/csr/begin", {
-        hostname: hostname.trim(),
+        hostnames: names,
         key_type: "ecdsa_p256",
       })) as TlsCsrBeginResponse | null;
       if (result !== null) {
-        setHostname("");
+        setHostnames("");
         onSubmitted(result);
       }
     } finally {
@@ -1429,8 +1435,10 @@ function CsrBeginDialog({ open, onClose, onSubmitted }: CsrBeginDialogProps) {
     }
   };
 
-  const trimmed = hostname.trim();
-  const valid = trimmed.length > 0 && !trimmed.includes("*");
+  // A name the runtime will not take is refused by the runtime, which says
+  // precisely what is wrong with it. The dialog only waits for something to
+  // send.
+  const valid = names.length > 0;
 
   return (
     <Dialog open={open} onClose={close} fullWidth maxWidth="sm">
@@ -1442,15 +1450,18 @@ function CsrBeginDialog({ open, onClose, onSubmitted }: CsrBeginDialogProps) {
               {error.message}
             </Alert>
           )}
+          {/* w[impl routes.certificates] */}
           <TextField
             autoFocus
-            label="Hostname"
-            placeholder="e.g. app.example.com"
-            value={hostname}
-            onChange={(e) => setHostname(e.target.value)}
+            label="Hostnames"
+            placeholder="e.g. app.example.com, *.example.com"
+            value={hostnames}
+            onChange={(e) => setHostnames(e.target.value)}
             fullWidth
+            multiline
+            minRows={2}
             slotProps={{ htmlInput: { style: { fontFamily: "monospace" } } }}
-            helperText="Must be a concrete hostname (no wildcards). The runtime generates an ECDSA P-256 keypair on the server; only the CSR is returned. Get the CSR signed by your CA, then come back to upload the signed cert."
+            helperText="One or more hostnames, or *.suffix wildcards, separated by commas or spaces. The runtime generates an ECDSA P-256 keypair on the server; only the CSR is returned. Get the CSR signed by your CA, then come back to upload the signed cert."
           />
         </Stack>
       </DialogContent>

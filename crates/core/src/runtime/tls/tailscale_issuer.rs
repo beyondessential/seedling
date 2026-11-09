@@ -176,7 +176,7 @@ async fn persist(
                 db_inner,
                 store::NewCertificate {
                     hostname: &hostname_owned,
-                    requested_hostname: None,
+                    requested_hostnames: None,
                     state: TlsCertState::Active,
                     origin: TlsCertOrigin::Tailscale,
                     cert_pem: Some(&chain_pem),
