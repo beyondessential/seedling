@@ -19,7 +19,10 @@ use crate::{
     runtime::identity::{ResourceInstance, VolumeName},
     system::{
         translate::proxy::node_mount_addr,
-        types::{ContainerSpec, HealthCheckSpec, Mount, MountSource, ResolvedExternalMount},
+        types::{
+            ContainerSpec, HealthCheckSpec, Mount, MountSource, ResolvedExternalMount,
+            SPEC_HASH_LABEL,
+        },
     },
 };
 
@@ -228,13 +231,13 @@ pub fn podman_args(spec: &ContainerSpec) -> Vec<String> {
 }
 
 /// Compute a SHA-256 hash of the canonical podman argv for a container spec,
-/// excluding the `seedling.spec-hash` label itself (which would be circular).
+/// excluding the [`SPEC_HASH_LABEL`] label itself (which would be circular).
 /// The hash covers the complete desired container configuration: image, command,
 /// args, env, mounts, health, hosts, and all other labels.
 pub fn spec_hash(spec: &ContainerSpec) -> String {
     use sha2::{Digest, Sha256};
     let mut hashable = spec.clone();
-    hashable.labels.remove("seedling.spec-hash");
+    hashable.labels.remove(SPEC_HASH_LABEL);
     let mut args = podman_args(&hashable);
 
     // `stop_signal` and `stop_timeout_secs` are applied as systemd unit
@@ -416,7 +419,7 @@ fn spec_from_pod(
         stop_timeout_secs: container.stop_timeout_secs,
     };
     let hash = spec_hash(&spec);
-    spec.labels.insert("seedling.spec-hash".to_string(), hash);
+    spec.labels.insert(SPEC_HASH_LABEL.to_string(), hash);
     spec
 }
 

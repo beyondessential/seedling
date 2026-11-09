@@ -13,7 +13,9 @@ use snafu::{ResultExt, Snafu};
 use crate::system::priority;
 use crate::system::{
     ContainerRuntime, ProcessManager,
-    types::{ContainerState, ContainerStatus, TransientRestart, TransientUnitSpec},
+    types::{
+        ContainerState, ContainerStatus, SPEC_HASH_LABEL, TransientRestart, TransientUnitSpec,
+    },
 };
 
 use super::{resolver_addr, resolver_ipv4_subnet, resolver_network_prefix};
@@ -123,11 +125,6 @@ fn slot_unit(container: &str) -> String {
     format!("{container}.service")
 }
 
-/// Label the resolver container carries so a later tick can tell what it was
-/// started with. Shares the name the other containers use for their
-/// configuration hash.
-const CONFIG_HASH_LABEL: &str = "seedling.spec-hash";
-
 /// Fingerprint of what a resolver container is started with: its Corefile and
 /// the address it listens at. The image is compared separately, by id.
 fn config_hash(corefile: &str, resolver_ip: &Ipv6Addr) -> String {
@@ -226,7 +223,7 @@ async fn start_slot(
                 "--ip6".to_owned(),
                 resolver_ip.to_string(),
                 "--label".to_owned(),
-                format!("{CONFIG_HASH_LABEL}={config_hash}"),
+                format!("{SPEC_HASH_LABEL}={config_hash}"),
                 "--volume".to_owned(),
                 format!("{corefile_str}:/Corefile:ro"),
                 RESOLVER_IMAGE.to_owned(),

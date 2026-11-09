@@ -404,17 +404,15 @@ fn spec_hash_changes_when_memory_or_cpus_change() {
 // r[verify update.spec-hash]
 #[test]
 fn spec_hash_ignores_self_label() {
-    // The stored `seedling.spec-hash` label is excluded from the hash input
-    // so that re-hashing a running container's observed spec (which includes
-    // its own hash label) does not produce a different result.
+    // The stored hash label is excluded from the hash input so that
+    // re-hashing a running container's observed spec (which includes its own
+    // hash label) does not produce a different result.
     let mut a = bare_spec();
     let mut b = bare_spec();
     a.labels
-        .insert("seedling.spec-hash".to_string(), "old-hash".to_string());
-    b.labels.insert(
-        "seedling.spec-hash".to_string(),
-        "different-hash".to_string(),
-    );
+        .insert(SPEC_HASH_LABEL.to_string(), "old-hash".to_string());
+    b.labels
+        .insert(SPEC_HASH_LABEL.to_string(), "different-hash".to_string());
     assert_eq!(spec_hash(&a), spec_hash(&b));
 }
 

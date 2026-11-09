@@ -24,7 +24,7 @@ use super::{
     ContainerState, ContainerStatus, ContainerSummary, DataPlane, DataPlaneRules, ExecHandle,
     ImageSummary, NetworkProxy, NetworkSummary, ProcessManager, ProxyConfig, ServiceRoute,
     TransientUnitSpec, UnitState, UnitSummary,
-    types::{ActiveState, SliceSpec, UnitExit},
+    types::{ActiveState, SPEC_HASH_LABEL, SliceSpec, UnitExit},
 };
 
 /// The image reference in a `podman run` argv.
@@ -184,7 +184,7 @@ impl ContainerRuntime for StubContainerRuntime {
                 pod_addr: None,
                 pod_addr_v4: None,
                 image_id: Some(c.image_id.clone()),
-                spec_hash: c.spec.labels.get("seedling.spec-hash").cloned(),
+                spec_hash: c.spec.labels.get(SPEC_HASH_LABEL).cloned(),
             }))
         }
         .boxed()
