@@ -26,6 +26,11 @@ reachable from a unit test as the path stands.
       the directory: stopping the volume reaps that podman volume too.
 - [ ] A declared tmpfs write is re-applied after a host reboot.
       Verifies spec: `actuate.volume.tmpfs`.
+- [ ] With a symlink standing at `/run/seedling/tmpfs-volumes/<app>-volume-<name>`,
+      starting the volume is refused with an error naming the path, and nothing
+      is written through the link. Stopping it refuses likewise and leaves the
+      link in place.
+      Verifies spec: `storage.confinement`.
 
 ## Declared writes and the pods/volumes race
 

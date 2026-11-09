@@ -420,6 +420,15 @@ impl Actuator {
                     // through the container runtime's tmpfs driver instead
                     // would seed a mountpoint nothing ever mounts.
                     let host_path = tmpfs_volume_path(&instance.display_name);
+                    // r[impl storage.confinement] — classify the path before
+                    // making anything at it. `create_dir_all` succeeds
+                    // straight through a symlink standing at the name, and
+                    // the declared writes would then land wherever it points.
+                    crate::system::confined::owned_dir_async(&host_path)
+                        .await
+                        .context(VolumeWriteSnafu {
+                            path: host_path.clone(),
+                        })?;
                     tokio::fs::create_dir_all(&host_path)
                         .await
                         .context(VolumeWriteSnafu {
@@ -527,7 +536,15 @@ impl Actuator {
                     // for it: the tmpfs backing under /run is reclaimed once
                     // the directory is gone.
                     let host_path = tmpfs_volume_path(&instance.display_name);
-                    if let Err(e) = tokio::fs::remove_dir_all(&host_path).await
+                    // r[impl storage.confinement] — a symlink wearing the
+                    // name is refused rather than unlinked, so a stop never
+                    // reports a cleanup that removed only a link.
+                    if crate::system::confined::owned_dir_async(&host_path)
+                        .await
+                        .context(VolumeWriteSnafu {
+                            path: host_path.clone(),
+                        })?
+                        && let Err(e) = tokio::fs::remove_dir_all(&host_path).await
                         && e.kind() != std::io::ErrorKind::NotFound
                     {
                         return Err(VolumeWriteSnafu { path: host_path }.into_error(e));

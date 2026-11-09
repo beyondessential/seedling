@@ -1104,7 +1104,7 @@ Some operations must hand a writable or read-only path to an action closure with
 > When the data directory resides on a BTRFS filesystem, named non-tmpfs volumes must be created as BTRFS subvolumes.
 
 > r[storage.confinement]
-> Every host filesystem path the runtime creates, writes, moves, or deletes on behalf of a definition or an operator command is confined to the root that owns it: a volume's root for content written into that volume, and the volume storage directory under the data directory for a volume's own storage.
+> Every host filesystem path the runtime creates, writes, moves, or deletes on behalf of a definition or an operator command is confined to the root that owns it: a volume's root for content written into that volume, and for a volume's own storage the directory that holds volumes of its kind — under the data directory for a non-tmpfs volume, under the tmpfs-backed location for a tmpfs one. Where a volume's storage lives does not change whether the runtime owns it.
 >
 > Confinement covers every component of a path, not only its last. A parent directory created on the way to a write must be resolved under the same confinement as the write itself, so that a symlink placed inside the root cannot lead the runtime to create or write anything outside it. A path that escapes its root must be refused, and nothing along the way to it may be created.
 >
