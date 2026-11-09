@@ -112,10 +112,7 @@ pub(crate) async fn forward_port_session(
         if !declares_port(&def, &params.service, params.port, &proto) {
             return Err((
                 "not_found",
-                format!(
-                    "service {} declares no {} port {}",
-                    params.service, params.proto, params.port
-                ),
+                undeclared_port(&params.service, &params.proto, params.port),
             ));
         }
         Ok(())
@@ -180,6 +177,7 @@ pub(crate) async fn forward_port_session(
         ForwardProto::Tcp => (None, None),
     };
 
+    let registered_proto = proto.clone();
     let registered = state
         .forwards
         .lock()
@@ -211,6 +209,36 @@ pub(crate) async fn forward_port_session(
             return;
         }
     };
+
+    // i[impl forward.request] — the app's definition may have been replaced
+    // between the check above and this registration, and that update's
+    // teardown pass could not see a forward that was not yet registered.
+    // Checked again now that it is: an update landing after this point finds
+    // the forward and tears it down itself.
+    let still_declared = state
+        .registry
+        .read()
+        .get(params.app.as_str())
+        .is_some_and(|entry| {
+            declares_port(
+                &entry.app.def.load(),
+                &params.service,
+                params.port,
+                &registered_proto,
+            )
+        });
+    if !still_declared {
+        if let Some(entry) = state.forwards.lock().remove(&forward_id) {
+            let _ = entry.stop_tx.send(true);
+        }
+        write_err(
+            &mut send,
+            "not_found",
+            &undeclared_port(&params.service, &params.proto, params.port),
+        )
+        .await;
+        return;
+    }
 
     if let (Some(rx), Some(socket)) = (udp_rx, udp_socket) {
         let conn_clone = conn.clone();
@@ -348,6 +376,10 @@ pub(crate) async fn handle_forward_stream(
         Ok(()) => tracing::debug!(fwd = %forward_id, "TCP relay: closed"),
         Err(e) => tracing::debug!(fwd = %forward_id, "TCP relay failed: {e}"),
     }
+}
+
+fn undeclared_port(service: &str, proto: &str, port: u16) -> String {
+    format!("service {service} declares no {proto} port {port}")
 }
 
 /// Bind and connect the socket a UDP forward relays through.
