@@ -105,7 +105,6 @@ pub struct ShellRecord {
     pub name: String,
     pub opened_at: Timestamp,
     pub actor: Option<Actor>,
-    pub container_name: Option<String>,
 }
 
 pub struct ShellRegistry {
@@ -182,7 +181,6 @@ impl ShellRegistry {
                 name: s.name.clone(),
                 opened_at: s.opened_at,
                 actor: s.actor.clone(),
-                container_name: s.container_name.clone(),
             })
             .collect()
     }
@@ -254,7 +252,6 @@ mod tests {
         let listed = registry.list(None);
         assert_eq!(listed.len(), 1);
         assert_eq!(listed[0].session_id, id);
-        assert_eq!(listed[0].container_name, None);
         assert!(registry.active_container_names().is_empty());
     }
 
