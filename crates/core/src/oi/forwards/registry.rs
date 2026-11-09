@@ -338,8 +338,11 @@ mod tests {
 
         // Wrap the counter back round to the TCP forward's key.
         reg.key_counters.insert(conn, tcp_key);
+        let (udp_tx, _udp_rx) = mpsc::channel(1);
         let udp_key = reg
-            .register(conn, |k| entry(conn, k, ForwardProto::Udp))
+            .register(conn, |k| {
+                entry_with(conn, k, ForwardProto::Udp, Some(udp_tx), mpsc::channel(1).0)
+            })
             .unwrap();
         assert_ne!(udp_key, tcp_key);
 

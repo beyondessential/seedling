@@ -65,24 +65,24 @@ mod tests {
     fn ports_are_declared_per_proto_by_pod_bindings() {
         let def = appdef_from(
             r#"
-            let db = app.service("db");
+            let db = app.service("database");
             let dns = app.service("dns");
             let web = app.service("web");
-            app.deployment("pg").image("docker.io/library/postgres:16").tcp(5432, db.port(5433));
+            app.deployment("postgres").image("docker.io/library/postgres:16").tcp(5432, db.port(5433));
             app.job("resolver").image("docker.io/library/unbound:1").udp(53, dns);
             app.deployment("site").image("docker.io/library/nginx:1").http(8080, web.http(80));
             app.deployment("client").image("docker.io/library/psql:1").mount(db.port(9999));
         "#,
         );
 
-        assert!(declares_port(&def, "db", 5433, &ForwardProto::Tcp));
+        assert!(declares_port(&def, "database", 5433, &ForwardProto::Tcp));
         assert!(
-            !declares_port(&def, "db", 5432, &ForwardProto::Tcp),
+            !declares_port(&def, "database", 5432, &ForwardProto::Tcp),
             "the pod-side port is not the service-side one"
         );
-        assert!(!declares_port(&def, "db", 5433, &ForwardProto::Udp));
+        assert!(!declares_port(&def, "database", 5433, &ForwardProto::Udp));
         assert!(
-            !declares_port(&def, "db", 9999, &ForwardProto::Tcp),
+            !declares_port(&def, "database", 9999, &ForwardProto::Tcp),
             "a mount reaches a service port; it does not serve one"
         );
         assert!(declares_port(&def, "dns", 53, &ForwardProto::Udp));
