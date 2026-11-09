@@ -274,7 +274,12 @@ async fn run_shell(client: &OiClient, method: &str, request_params: serde_json::
                     }
                     Ok(n) => session_send.write_all(&buf[..n]).await?,
                 },
-                Some(()) = etx_rx.recv() => session_send.write_all(b"\x03").await?,
+                // A graceful-terminate ETX the shell is already past — the
+                // job exited and the server tore down its end — must not end
+                // the client: the exit frame it wrote is still to be read.
+                Some(()) = etx_rx.recv() => {
+                    let _ = session_send.write_all(b"\x03").await;
+                }
             }
         }
     };
