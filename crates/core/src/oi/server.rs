@@ -3,14 +3,17 @@ use std::{net::SocketAddr, path::Path, sync::Arc, time::Duration};
 use quinn::Endpoint;
 use rustls::ServerConfig as TlsServerConfig;
 use serde_json::json;
-use tokio::sync::{Semaphore, mpsc};
+use tokio::sync::Semaphore;
 use tracing::Instrument;
 
 use seedling_protocol::{OI_ALPN, actor::Actor, events::EventSenderWithActor, keys};
 
 use super::{
     auth::{SeedlingClientVerifier, TrustedKeys},
-    forwards::session::{forward_port_session, handle_forward_stream},
+    forwards::{
+        Delivery,
+        session::{forward_port_session, handle_forward_stream},
+    },
     handler::{RequestCtx, dispatch},
     shells::{open_shell_session, open_volume_shell_session},
     state::OiState,
@@ -268,13 +271,14 @@ async fn handle_connection(
                     Ok(data) if data.len() >= 2 => {
                         let key = u16::from_be_bytes([data[0], data[1]]);
                         let payload = data[2..].to_vec();
-                        let fwds = state.forwards.lock();
-                        if let Some(sender) = fwds.get_udp_sender(conn_id, key) {
-                            if let Err(mpsc::error::TrySendError::Closed(_)) = sender.try_send(payload) {
+                        match state.forwards.lock().deliver_datagram(conn_id, key, payload) {
+                            Delivery::Delivered | Delivery::Dropped => {}
+                            Delivery::RelayGone => {
                                 tracing::debug!(key, "UDP relay channel closed, dropping datagram");
                             }
-                        } else {
-                            tracing::debug!(key, "datagram for unknown forward key");
+                            Delivery::UnknownKey => {
+                                tracing::debug!(key, "datagram for unknown forward key");
+                            }
                         }
                     }
                     Ok(data) => {

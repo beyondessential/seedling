@@ -740,6 +740,7 @@ Absent specification bugs, anything that is not defined here is either defined i
 > `forward_id` is used for control operations such as `/forwards/stop`.
 > `forward_key` is the compact 2-byte identifier used in QUIC datagram headers for UDP forwards (see [datagram.forward](#i--datagram.forward)); it is not used for TCP forwards.
 > `max_udp_payload` is the maximum UDP payload the server can forward from the service back to the client, as defined in [forward.mtu](#i--forward.mtu); it is `null` for TCP forwards.
+> For a UDP forward the server opens its relay toward the service before replying; if it cannot, the request fails with `internal` and no forward is created.
 > The control stream that carried the request is kept open for the lifetime of the forward; closing it tears down the forward.
 
 > i[forward.relay.resilience]
@@ -780,7 +781,12 @@ Absent specification bugs, anything that is not defined here is either defined i
 > After the initial response, the server may send additional newline-terminated JSON objects on the control stream's send half to report runtime conditions.
 > Each status message has the shape `{ "status": { "level": "<level>", "message": "<text>" } }` where `level` is `"warn"` or `"error"`.
 > Clients should display these messages but must not treat them as fatal; the forward remains active unless the control stream closes.
-> Conditions reported include oversized UDP datagrams dropped due to path-MTU limits, relay task failures, and datagram backpressure.
+> Conditions reported include:
+>
+> - a UDP datagram dropped because it exceeds the path MTU;
+> - a socket error on a UDP forward's relay toward the service;
+> - a tunneled TCP connection the server could not open to the target;
+> - datagrams toward the service dropped because the forward's relay is not keeping up with them, reported once when dropping starts and again, with the number dropped, when a datagram next gets through.
 
 > i[forward.lifetime]
 > A port forward remains active until any of the following occur:

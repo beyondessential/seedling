@@ -3,4 +3,6 @@ pub mod registry;
 pub mod session;
 pub mod target;
 
-pub use registry::{ForwardEntry, ForwardProto, ForwardRecord, ForwardRegistry};
+pub use registry::{
+    Delivery, ForwardEntry, ForwardProto, ForwardRecord, ForwardRegistry, ForwardStatus,
+};

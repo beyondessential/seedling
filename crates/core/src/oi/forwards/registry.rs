@@ -32,6 +32,33 @@ impl fmt::Display for ForwardError {
 
 impl std::error::Error for ForwardError {}
 
+// i[forward.status]
+/// A runtime condition to report on a forward's control stream.
+pub struct ForwardStatus {
+    pub level: &'static str,
+    pub message: String,
+}
+
+impl ForwardStatus {
+    pub fn warn(message: impl Into<String>) -> Self {
+        Self {
+            level: "warn",
+            message: message.into(),
+        }
+    }
+}
+
+/// What became of a datagram handed to a UDP forward's relay.
+pub enum Delivery {
+    Delivered,
+    /// The relay is not keeping up; the datagram was dropped and reported.
+    Dropped,
+    /// The relay has ended.
+    RelayGone,
+    /// No UDP forward holds the key on this connection.
+    UnknownKey,
+}
+
 /// A live port-forward entry held in the registry for the lifetime of the forward.
 pub struct ForwardEntry {
     pub forward_id: ForwardId,
@@ -50,6 +77,10 @@ pub struct ForwardEntry {
     pub stop_tx: watch::Sender<bool>,
     /// UDP only: channel to deliver incoming QUIC datagram payloads to the relay task.
     pub udp_tx: Option<mpsc::Sender<Vec<u8>>>,
+    /// Status messages for the control stream.
+    pub status_tx: mpsc::Sender<ForwardStatus>,
+    /// Datagrams dropped since the relay last kept up.
+    pub udp_dropped: u64,
 }
 
 // i[forward.record]
@@ -139,15 +170,55 @@ impl ForwardRegistry {
         self.by_id.len()
     }
 
-    /// Look up the UDP payload sender for a `(conn_id, forward_key)` pair.
-    pub fn get_udp_sender(&self, conn_id: usize, key: u16) -> Option<&mpsc::Sender<Vec<u8>>> {
-        let fid = self.conn_key_to_id.get(&(conn_id, key))?;
-        self.by_id.get(fid)?.udp_tx.as_ref()
+    // i[impl forward.status]
+    /// Hand a datagram's payload to the UDP forward holding `key` on the
+    /// connection. Datagrams the relay has no room for are dropped, and the
+    /// forward is told once when dropping starts and once, with the count,
+    /// when a datagram next gets through.
+    pub fn deliver_datagram(&mut self, conn_id: usize, key: u16, payload: Vec<u8>) -> Delivery {
+        let Some(entry) = self
+            .conn_key_to_id
+            .get(&(conn_id, key))
+            .and_then(|fid| self.by_id.get_mut(fid))
+        else {
+            return Delivery::UnknownKey;
+        };
+        let Some(udp_tx) = &entry.udp_tx else {
+            return Delivery::UnknownKey;
+        };
+        match udp_tx.try_send(payload) {
+            Ok(()) => {
+                if entry.udp_dropped > 0 {
+                    let _ = entry.status_tx.try_send(ForwardStatus::warn(format!(
+                        "UDP relay caught up after dropping {} datagrams to the service",
+                        entry.udp_dropped
+                    )));
+                    entry.udp_dropped = 0;
+                }
+                Delivery::Delivered
+            }
+            Err(mpsc::error::TrySendError::Full(_)) => {
+                if entry.udp_dropped == 0 {
+                    let _ = entry.status_tx.try_send(ForwardStatus::warn(
+                        "UDP relay is not keeping up; dropping datagrams to the service",
+                    ));
+                }
+                entry.udp_dropped += 1;
+                Delivery::Dropped
+            }
+            Err(mpsc::error::TrySendError::Closed(_)) => Delivery::RelayGone,
+        }
     }
 
-    /// Look up the target address and port for a forward by id.
-    pub fn get_target(&self, id: &ForwardId) -> Option<(Ipv6Addr, u16)> {
-        self.by_id.get(id).map(|e| (e.target_addr, e.port))
+    /// Look up where a TCP forward's tunneled connections go, and where to
+    /// report a failure to reach it.
+    pub fn get_target(
+        &self,
+        id: &ForwardId,
+    ) -> Option<(Ipv6Addr, u16, mpsc::Sender<ForwardStatus>)> {
+        self.by_id
+            .get(id)
+            .map(|e| (e.target_addr, e.port, e.status_tx.clone()))
     }
 
     // i[forward.list]
@@ -217,7 +288,20 @@ mod tests {
     use super::*;
 
     fn entry(conn_id: usize, forward_key: u16, proto: ForwardProto) -> ForwardEntry {
-        let udp_tx = matches!(proto, ForwardProto::Udp).then(|| mpsc::channel(1).0);
+        entry_with(conn_id, forward_key, proto, None, mpsc::channel(1).0)
+    }
+
+    fn entry_with(
+        conn_id: usize,
+        forward_key: u16,
+        proto: ForwardProto,
+        udp_tx: Option<mpsc::Sender<Vec<u8>>>,
+        status_tx: mpsc::Sender<ForwardStatus>,
+    ) -> ForwardEntry {
+        let udp_tx = match proto {
+            ForwardProto::Udp => udp_tx.or_else(|| Some(mpsc::channel(1).0)),
+            ForwardProto::Tcp => None,
+        };
         ForwardEntry {
             forward_id: ForwardId::generate(),
             forward_key,
@@ -231,6 +315,8 @@ mod tests {
             actor: None,
             stop_tx: watch::channel(false).0,
             udp_tx,
+            status_tx,
+            udp_dropped: 0,
         }
     }
 
@@ -259,7 +345,10 @@ mod tests {
 
         reg.remove(&tcp_id.unwrap()).unwrap();
         assert!(
-            reg.get_udp_sender(conn, udp_key).is_some(),
+            matches!(
+                reg.deliver_datagram(conn, udp_key, vec![1]),
+                Delivery::Delivered
+            ),
             "closing the TCP forward must leave the UDP forward routable"
         );
     }
@@ -277,6 +366,53 @@ mod tests {
         assert!(matches!(
             reg.register(conn, |k| entry(conn, k, ForwardProto::Udp)),
             Err(ForwardError::KeySpaceExhausted)
+        ));
+    }
+
+    // i[verify forward.status]
+    #[test]
+    fn backpressure_is_reported_once_per_episode() {
+        let registry = ForwardRegistry::new();
+        let mut reg = registry.lock();
+        let conn = 3;
+        let (udp_tx, mut udp_rx) = mpsc::channel(1);
+        let (status_tx, mut status_rx) = mpsc::channel(16);
+        let key = reg
+            .register(conn, |k| {
+                entry_with(conn, k, ForwardProto::Udp, Some(udp_tx), status_tx)
+            })
+            .unwrap();
+
+        assert!(matches!(
+            reg.deliver_datagram(conn, key, vec![1]),
+            Delivery::Delivered
+        ));
+        for _ in 0..3 {
+            assert!(matches!(
+                reg.deliver_datagram(conn, key, vec![2]),
+                Delivery::Dropped
+            ));
+        }
+        let started = status_rx.try_recv().unwrap();
+        assert!(started.message.contains("dropping"), "{}", started.message);
+        assert!(status_rx.try_recv().is_err(), "one report per episode");
+
+        udp_rx.try_recv().unwrap();
+        assert!(matches!(
+            reg.deliver_datagram(conn, key, vec![3]),
+            Delivery::Delivered
+        ));
+        let ended = status_rx.try_recv().unwrap();
+        assert!(ended.message.contains("dropping 3"), "{}", ended.message);
+
+        drop(udp_rx);
+        assert!(matches!(
+            reg.deliver_datagram(conn, key, vec![4]),
+            Delivery::RelayGone
+        ));
+        assert!(matches!(
+            reg.deliver_datagram(conn, key.wrapping_add(1), vec![5]),
+            Delivery::UnknownKey
         ));
     }
 }
