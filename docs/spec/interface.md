@@ -82,6 +82,9 @@ Absent specification bugs, anything that is not defined here is either defined i
 
 > i[stream.shell.framing]
 > The server-to-client direction of the session stream carries newline-delimited JSON: the `/shells/start` response first, then the exit frame when the session ends.
+> Every frame ends with a newline, so a client reading line by line sees each frame as soon as it is written rather than when the stream closes.
+> A request that fails before the session opens is answered with an error response in place of the handshake response, and nothing follows it.
+> After a handshake response the exit frame is the only frame.
 > The client-to-server direction carries a single newline-terminated JSON request followed by raw stdin bytes for the remainder of the stream's lifetime.
 
 > i[stream.forward]
@@ -693,6 +696,8 @@ Absent specification bugs, anything that is not defined here is either defined i
 > i[shell.exit]
 > When a session ends, the server writes a final JSON frame `{ "exit_code": <int> }` to the server-to-client direction of the session stream, then closes its write-end.
 > Signal-terminated processes report a negative exit code.
+> A session that fails after its handshake response, such as when the shell's script fails, its image cannot be pulled, or its job cannot be started, ends the same way with an `exit_code` of `-1`.
+> The reason for such a failure is written to the stderr stream before it closes.
 > A `ShellExited` event is also emitted on the event feed.
 
 > i[shell.cleanup]
