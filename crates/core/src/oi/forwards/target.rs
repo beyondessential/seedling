@@ -1,3 +1,5 @@
+use std::collections::HashSet;
+
 use super::registry::ForwardProto;
 use crate::defs::{
     app::AppDef,
@@ -6,39 +8,58 @@ use crate::defs::{
     service::{BoundService, ServicePort},
 };
 
+/// The service-side ports an app's pods serve, as `(service, port, proto)`.
+pub type DeclaredPorts = HashSet<(String, u16, ForwardProto)>;
+
 // i[impl forward.request]
 // i[impl forward.script-update]
-/// Whether a pod in `def` attaches to `service` at service-side `port` for
-/// `proto`: the only ports the service's address routes anywhere.
-pub fn declares_port(def: &AppDef, service: &str, port: u16, proto: &ForwardProto) -> bool {
-    def.resources.values().any(|resource| match resource {
-        Resource::Deployment(dep) => {
-            pod_declares_port(&dep.def.lock().pod.lock(), service, port, proto)
+/// Collect the service-side ports an app's pods attach to: the only ports a
+/// service's address routes anywhere.
+///
+/// Collected in one pass so a caller checking many forwards walks the
+/// definition once, rather than once per forward while holding a lock the
+/// datagram path needs.
+pub fn declared_ports(def: &AppDef) -> DeclaredPorts {
+    let mut declared = DeclaredPorts::new();
+    for resource in def.resources.values() {
+        match resource {
+            Resource::Deployment(dep) => {
+                collect_pod_ports(&dep.def.lock().pod.lock(), &mut declared)
+            }
+            Resource::Job(job) => collect_pod_ports(&job.def.lock().pod.lock(), &mut declared),
+            _ => {}
         }
-        Resource::Job(job) => pod_declares_port(&job.def.lock().pod.lock(), service, port, proto),
-        _ => false,
-    })
+    }
+    declared
 }
 
-fn pod_declares_port(pod: &PodDef, service: &str, port: u16, proto: &ForwardProto) -> bool {
-    let is_target = |bound: &BoundService, bound_port: u16| {
-        matches!(bound, BoundService::App(s) if s.name.as_str() == service) && bound_port == port
-    };
-    let in_bindings = |sp: &ServicePort| is_target(&sp.service, sp.port.get());
-    match proto {
-        ForwardProto::Tcp => {
-            pod.tcp_bindings
-                .iter()
-                .any(|b| in_bindings(&b.service_port))
-                || pod
-                    .http_bindings
-                    .iter()
-                    .any(|b| is_target(&b.route.http.service, b.route.http.port.get()))
+/// Whether a pod in `def` attaches to `service` at service-side `port` for
+/// `proto`.
+pub fn declares_port(def: &AppDef, service: &str, port: u16, proto: &ForwardProto) -> bool {
+    declared_ports(def).contains(&(service.to_owned(), port, proto.clone()))
+}
+
+fn collect_pod_ports(pod: &PodDef, declared: &mut DeclaredPorts) {
+    let mut declare = |bound: &BoundService, port: u16, proto: ForwardProto| {
+        if let BoundService::App(service) = bound {
+            declared.insert((service.name.as_str().to_owned(), port, proto));
         }
-        ForwardProto::Udp => pod
-            .udp_bindings
-            .iter()
-            .any(|b| in_bindings(&b.service_port)),
+    };
+    let mut declare_bindings = |bindings: &[crate::defs::pod::TcpUdpBinding],
+                                proto: ForwardProto| {
+        for binding in bindings {
+            let ServicePort { service, port } = &binding.service_port;
+            declare(service, port.get(), proto.clone());
+        }
+    };
+    declare_bindings(&pod.tcp_bindings, ForwardProto::Tcp);
+    declare_bindings(&pod.udp_bindings, ForwardProto::Udp);
+    for binding in &pod.http_bindings {
+        declare(
+            &binding.route.http.service,
+            binding.route.http.port.get(),
+            ForwardProto::Tcp,
+        );
     }
 }
 

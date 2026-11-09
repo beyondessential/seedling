@@ -1956,14 +1956,17 @@ pub(crate) fn update_app(state: &OiState, params: UpdateParams, ctx: &RequestCtx
     // i[forward.script-update] — tear down any forward whose target service,
     // or port for its proto, is no longer declared in the new AppDef.
     {
-        let def = state
+        // Collected before the forwards lock is taken: that lock is on the
+        // per-datagram path, and the walk takes a lock per pod that a
+        // concurrent script evaluation may hold.
+        let declared = state
             .registry
             .read()
             .get(name)
-            .map(|e| e.app.def.load_full());
+            .map(|e| crate::oi::forwards::target::declared_ports(&e.app.def.load()));
         let stale = state.forwards.lock().remove_stale_for_app(name, |fwd| {
-            def.as_deref().is_none_or(|def| {
-                !crate::oi::forwards::target::declares_port(def, &fwd.service, fwd.port, &fwd.proto)
+            declared.as_ref().is_none_or(|declared| {
+                !declared.contains(&(fwd.service.clone(), fwd.port, fwd.proto.clone()))
             })
         });
         for entry in stale {
