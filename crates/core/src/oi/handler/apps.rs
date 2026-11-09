@@ -1953,26 +1953,19 @@ pub(crate) fn update_app(state: &OiState, params: UpdateParams, ctx: &RequestCtx
         entry.tick_notify.notify_one();
     }
 
-    // i[forward.script-update] — tear down any forward whose target service is
-    // no longer present in the new AppDef.
+    // i[forward.script-update] — tear down any forward whose target service,
+    // or port for its proto, is no longer declared in the new AppDef.
     {
-        let valid_services: std::collections::HashSet<String> = {
-            let reg = state.registry.read();
-            if let Some(entry) = reg.get(name) {
-                let def = entry.app.def.load();
-                def.resources
-                    .keys()
-                    .filter(|rid| rid.kind == ResourceKind::Service)
-                    .map(|rid| rid.name.as_str().to_owned())
-                    .collect()
-            } else {
-                Default::default()
-            }
-        };
-        let stale = state
-            .forwards
-            .lock()
-            .remove_stale_for_app(name, |fwd| !valid_services.contains(&fwd.service));
+        let def = state
+            .registry
+            .read()
+            .get(name)
+            .map(|e| e.app.def.load_full());
+        let stale = state.forwards.lock().remove_stale_for_app(name, |fwd| {
+            def.as_deref().is_none_or(|def| {
+                !crate::oi::forwards::target::declares_port(def, &fwd.service, fwd.port, &fwd.proto)
+            })
+        });
         for entry in stale {
             let _ = entry.stop_tx.send(true);
         }

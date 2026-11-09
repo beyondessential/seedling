@@ -732,6 +732,8 @@ Absent specification bugs, anything that is not defined here is either defined i
 > `service` is the name of a Service defined in the app's BSL script.
 > `port` is a port number on that Service as defined by `service.port()`.
 > `proto` is either `"tcp"` or `"udp"`.
+> The port is declared for `proto` when a pod in the app attaches to that Service Port: with [`pod.tcp()`](language.md#l--pod.tcp) or [`pod.http()`](language.md#l--pod.http) for TCP, with [`pod.udp()`](language.md#l--pod.udp) for UDP.
+> A request for a port the Service does not declare for `proto` fails with `not_found`, and no forward is created.
 > Returns `{ "forward_id": "<string>", "forward_key": <u16>, "max_udp_payload": <uint> | null }` on success.
 > `forward_id` is used for control operations such as `/forwards/stop`.
 > `forward_key` is the compact 2-byte identifier used in QUIC datagram headers for UDP forwards (see [datagram.forward](#i--datagram.forward)); it is not used for TCP forwards.
@@ -783,7 +785,7 @@ Absent specification bugs, anything that is not defined here is either defined i
 
 > i[forward.script-update]
 > When a new AppDef takes effect for an app (either immediately on `/apps/update` or at the next evaluation boundary if an operation was in progress), the server must check all active forwards for that app.
-> Any forward whose target service name or port is no longer declared in the new AppDef must be torn down: all tunneled connections are closed, the control stream is closed, and a `ForwardStopped` event is emitted.
+> Any forward whose target service name, or port for the forward's `proto` as [forward.request](#i--forward.request) defines it, is no longer declared in the new AppDef must be torn down: all tunneled connections are closed, the control stream is closed, and a `ForwardStopped` event is emitted.
 > Forwards whose target service and port still exist in the new AppDef are unaffected.
 
 > i[forward.start]

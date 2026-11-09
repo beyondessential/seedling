@@ -3,7 +3,10 @@ use std::sync::Arc;
 use seedling_protocol::names::{AppName, ForwardId};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
-use super::registry::{ForwardEntry, ForwardProto};
+use super::{
+    registry::{ForwardEntry, ForwardProto},
+    target::declares_port,
+};
 use crate::{
     defs::resource::ResourceKind,
     oi::state::OiState,
@@ -106,6 +109,15 @@ pub(crate) async fn forward_port_session(
             return Err((
                 "not_found",
                 format!("service not found: {}", params.service),
+            ));
+        }
+        if !declares_port(&def, &params.service, params.port, &proto) {
+            return Err((
+                "not_found",
+                format!(
+                    "service {} declares no {} port {}",
+                    params.service, params.proto, params.port
+                ),
             ));
         }
         Ok(())
