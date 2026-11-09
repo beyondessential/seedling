@@ -408,7 +408,7 @@ async fn start_app_shell(
     let shell_name_for_task = shell_name.clone();
     let cancel = stop.cancel_token();
 
-    let script = tokio::task::spawn_blocking(move || {
+    let mut script = tokio::task::spawn_blocking(move || {
         let (engine, mut scope, _) = crate::setup_language(&script_limits, Arc::clone(&app.bundle));
         let compiled = app
             .bundle
@@ -507,8 +507,14 @@ async fn start_app_shell(
 
     // i[impl shell.startup]
     let script_ok = tokio::select! {
-        _ = stop.requested() => return Err(StartupFailure::stopped(None)),
-        done = script => done.unwrap_or(false),
+        _ = stop.requested() => {
+            // The script's thread cannot be abandoned: it sees the stop at its
+            // next wait and exits, and until then it may still be creating
+            // things the teardown would miss.
+            let _ = (&mut script).await;
+            return Err(StartupFailure::stopped(None));
+        }
+        done = &mut script => done.unwrap_or(false),
     };
     if stop.is_requested() {
         return Err(StartupFailure::stopped(None));
