@@ -1776,6 +1776,7 @@ The BSL surface is intentionally strategy-agnostic: scripts declare only that an
 > The runtime — not the proxy — must drive every certificate-issuance attempt for runtime-managed strategies.
 > The reconciler must hand each TLS-terminating ingress hostname to the issuance coordinator on every tick.
 > The coordinator must dedup in-flight requests, skip hostnames whose policy is neither `acme_dns` nor `canopy` and that are not on the default chain, skip hostnames that already have an active certificate and are not due under [tls.chain.cycle](#r--tls.chain.cycle), debounce after a recent failure, and run the rest in the background.
+> A hostname counts as in flight until every issuance running for it has finished, whether the reconciler or an operator started it, so an operator-triggered issuance finishing never lets the reconciler start a duplicate alongside a background one still running.
 > The cert-serving endpoint must remain a pure lookup: it must never trigger an issuance flow itself (see [tls.cert.serve](#r--tls.cert.serve)).
 
 > r[tls.cert.force-retry]

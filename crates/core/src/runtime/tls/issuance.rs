@@ -20,7 +20,7 @@
 //! NOT auto-pause subsequent issuance — that's the operator's call via
 //! the retry-blocks endpoint.
 
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 
 use parking_lot::Mutex;
@@ -76,14 +76,70 @@ pub enum CoordinatorError {
 
 pub type Result<T, E = CoordinatorError> = std::result::Result<T, E>;
 
+/// How many issuances are running for each hostname.
+///
+/// A count rather than a set, and released only through the [`InFlightClaim`]
+/// that took it: with a set, whichever of two overlapping issuances finished
+/// first cleared the marker the other still relied on, and the reconciler went
+/// on to start a duplicate flow against the CA.
+#[derive(Default)]
+struct InFlight(Mutex<HashMap<String, usize>>);
+
+impl InFlight {
+    /// Claim `hostname` unless an issuance for it is already running.
+    fn claim_if_idle(self: &Arc<Self>, hostname: &str) -> Option<InFlightClaim> {
+        let mut running = self.0.lock();
+        if running.contains_key(hostname) {
+            return None;
+        }
+        running.insert(hostname.to_owned(), 1);
+        Some(InFlightClaim {
+            in_flight: Arc::clone(self),
+            hostname: hostname.to_owned(),
+        })
+    }
+
+    /// Claim `hostname` whether or not an issuance for it is already running.
+    fn claim(self: &Arc<Self>, hostname: &str) -> InFlightClaim {
+        *self.0.lock().entry(hostname.to_owned()).or_default() += 1;
+        InFlightClaim {
+            in_flight: Arc::clone(self),
+            hostname: hostname.to_owned(),
+        }
+    }
+
+    #[cfg(test)]
+    fn is_running(&self, hostname: &str) -> bool {
+        self.0.lock().contains_key(hostname)
+    }
+}
+
+/// One running issuance's share of [`InFlight`], given back when dropped, so
+/// an issuance that errors, panics or is cancelled still releases it.
+struct InFlightClaim {
+    in_flight: Arc<InFlight>,
+    hostname: String,
+}
+
+impl Drop for InFlightClaim {
+    fn drop(&mut self) {
+        let mut running = self.in_flight.0.lock();
+        if let Some(count) = running.get_mut(&self.hostname) {
+            *count -= 1;
+            if *count == 0 {
+                running.remove(&self.hostname);
+            }
+        }
+    }
+}
+
 /// Runtime-managed issuance coordinator.
 pub struct Coordinator {
     db: DbHandle,
     cipher: Arc<Cipher>,
     /// Hostnames for which an issuance task is currently running. Prevents
-    /// the reconciler from queuing duplicates and the operator endpoint from
-    /// double-firing.
-    in_flight: Arc<Mutex<HashSet<String>>>,
+    /// the reconciler from queuing duplicates.
+    in_flight: Arc<InFlight>,
     /// Process-wide issuance lock. A single ACME flow at a time keeps us
     /// well inside CA rate limits and avoids racing on the ACME account
     /// state during account bootstrap.
@@ -118,7 +174,7 @@ impl Coordinator {
         Arc::new(Self {
             db,
             cipher,
-            in_flight: Arc::new(Mutex::new(HashSet::new())),
+            in_flight: Arc::default(),
             issue_lock: Arc::new(tokio::sync::Mutex::new(())),
             environment: std::sync::OnceLock::new(),
             chain_state: Mutex::new(None),
@@ -298,17 +354,15 @@ impl Coordinator {
     ///
     /// [force-retry]: super::store::set_force_retry
     pub fn ensure(self: &Arc<Self>, hostname: &str) {
+        // r[impl tls.cert.eager-issuance]
+        let Some(claim) = self.in_flight.claim_if_idle(hostname) else {
+            return;
+        };
         let host = hostname.to_owned();
-        {
-            let mut set = self.in_flight.lock();
-            if !set.insert(host.clone()) {
-                return;
-            }
-        }
         let me = Arc::clone(self);
         tokio::spawn(async move {
             let result = me.run(&host, AttemptTrigger::OnDemand).await;
-            me.in_flight.lock().remove(&host);
+            drop(claim);
             if let Err(e) = result {
                 // The reconciler hands every TLS-terminating ingress
                 // hostname to ensure() each tick, including the ones
@@ -469,13 +523,13 @@ impl Coordinator {
     /// (`manual` vs `on_demand` in the attempt log) and that errors flow
     /// to the caller instead of being swallowed.
     pub async fn issue_now(self: &Arc<Self>, hostname: &str) -> Result<Issued> {
-        {
-            let mut set = self.in_flight.lock();
-            set.insert(hostname.to_owned());
-        }
-        let outcome = self.run(hostname, AttemptTrigger::Manual).await;
-        self.in_flight.lock().remove(hostname);
-        outcome
+        // Joins rather than skips a background issuance already running: the
+        // operator asked for this one and waits on its result. The two are
+        // serialised by the issue lock, and the hostname stays in flight until
+        // both have finished.
+        // r[impl tls.cert.eager-issuance]
+        let _claim = self.in_flight.claim(hostname);
+        self.run(hostname, AttemptTrigger::Manual).await
     }
 
     /// Core issuance flow. Loads the unified hostname state, branches on
@@ -799,4 +853,34 @@ fn clear_cert_fault(db: &DbHandle, hostname: &str, kind: &str) {
             }
         }
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// An operator issuance overlapping a background one, finishing first or
+    /// last, must leave the hostname in flight until both are done.
+    // r[verify tls.cert.eager-issuance]
+    #[test]
+    fn a_hostname_stays_in_flight_until_every_issuance_for_it_finishes() {
+        let in_flight = Arc::<InFlight>::default();
+
+        let background = in_flight.claim_if_idle("foo.example.com").unwrap();
+        assert!(in_flight.claim_if_idle("foo.example.com").is_none());
+
+        let operator = in_flight.claim("foo.example.com");
+        drop(operator);
+        assert!(
+            in_flight.claim_if_idle("foo.example.com").is_none(),
+            "the operator's issuance finishing must not release the background one's claim"
+        );
+
+        let operator = in_flight.claim("foo.example.com");
+        drop(background);
+        assert!(in_flight.claim_if_idle("foo.example.com").is_none());
+        drop(operator);
+        assert!(!in_flight.is_running("foo.example.com"));
+        assert!(in_flight.claim_if_idle("foo.example.com").is_some());
+    }
 }
