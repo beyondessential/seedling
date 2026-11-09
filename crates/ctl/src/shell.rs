@@ -2,8 +2,19 @@ use std::time::Duration;
 
 use seedling_protocol::client::OiClient;
 use seedling_protocol::names::AppName;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::io::{AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::time::Instant;
+
+/// Copy a server output stream to a local one until the stream ends. A local
+/// write that fails is dropped rather than ending the copy, so the server is
+/// never held up by an output nobody can take.
+async fn drain_output(recv: &mut quinn::RecvStream, out: &mut (impl AsyncWrite + Unpin)) {
+    let mut buf = vec![0u8; 4096];
+    while let Ok(Some(n)) = recv.read(&mut buf).await {
+        out.write_all(&buf[..n]).await.ok();
+        out.flush().await.ok();
+    }
+}
 
 /// SIGTERM source (Unix only). On other platforms `recv()` never resolves, so
 /// the graceful-terminate select branch simply never fires.
@@ -241,13 +252,36 @@ async fn run_shell(client: &OiClient, method: &str, request_params: serde_json::
     //    - stderr_recv  → local stderr
     //    - session_recv → exit frame accumulation
     //    - SIGWINCH     → /shells/resize control request
-    let mut stdin = tokio::io::stdin();
+    //
+    // i[impl stream.shell]
+    // Stdin and the two outputs each run as their own future, so a write to
+    // the session stream waiting on flow control never stops output being
+    // drained: a shell echoing a large paste otherwise stalls with both
+    // directions full.
     let mut stdout = tokio::io::stdout();
     let mut stderr = tokio::io::stderr();
+    let (etx_tx, mut etx_rx) = tokio::sync::mpsc::channel::<()>(1);
 
-    let mut stdin_buf = vec![0u8; 4096];
-    let mut stdout_buf = vec![0u8; 4096];
-    let mut stderr_buf = vec![0u8; 4096];
+    let stdin_relay = async {
+        let mut stdin = tokio::io::stdin();
+        let mut buf = vec![0u8; 4096];
+        loop {
+            tokio::select! {
+                n = stdin.read(&mut buf) => match n {
+                    Ok(0) | Err(_) => {
+                        let _ = session_send.finish();
+                        return Ok::<(), quinn::WriteError>(());
+                    }
+                    Ok(n) => session_send.write_all(&buf[..n]).await?,
+                },
+                Some(()) = etx_rx.recv() => session_send.write_all(b"\x03").await?,
+            }
+        }
+    };
+    let stdout_relay = drain_output(&mut stdout_recv, &mut stdout);
+    let stderr_relay = drain_output(&mut stderr_recv, &mut stderr);
+    tokio::pin!(stdin_relay, stdout_relay, stderr_relay);
+
     let mut exit_byte = [0u8; 1];
     let mut exit_buf = Vec::<u8>::new();
 
@@ -260,39 +294,16 @@ async fn run_shell(client: &OiClient, method: &str, request_params: serde_json::
     let exit_code = loop {
         tokio::select! {
             // stdin: local terminal → container
-            n = stdin.read(&mut stdin_buf), if !stdin_done => {
-                match n {
-                    Ok(0) | Err(_) => {
-                        stdin_done = true;
-                        let _ = session_send.finish();
-                    }
-                    Ok(n) => {
-                        if session_send.write_all(&stdin_buf[..n]).await.is_err() {
-                            break -1;
-                        }
-                    }
+            res = &mut stdin_relay, if !stdin_done => {
+                stdin_done = true;
+                if res.is_err() {
+                    break -1;
                 }
             }
             // stdout stream: container output → local terminal
-            n = stdout_recv.read(&mut stdout_buf), if !stdout_done => {
-                match n {
-                    Ok(Some(n)) if n > 0 => {
-                        stdout.write_all(&stdout_buf[..n]).await.ok();
-                        stdout.flush().await.ok();
-                    }
-                    _ => stdout_done = true,
-                }
-            }
+            () = &mut stdout_relay, if !stdout_done => stdout_done = true,
             // stderr stream: container stderr → local stderr (empty in PTY mode)
-            n = stderr_recv.read(&mut stderr_buf), if !stderr_done => {
-                match n {
-                    Ok(Some(n)) if n > 0 => {
-                        stderr.write_all(&stderr_buf[..n]).await.ok();
-                        stderr.flush().await.ok();
-                    }
-                    _ => stderr_done = true,
-                }
-            }
+            () = &mut stderr_relay, if !stderr_done => stderr_done = true,
             // session stream server→client: accumulate the exit frame
             n = session_recv.read(&mut exit_byte) => {
                 match n {
@@ -332,7 +343,7 @@ async fn run_shell(client: &OiClient, method: &str, request_params: serde_json::
             }
             // SIGTERM: send ETX to the remote shell, then drain with a timeout.
             _ = sigterm.recv(), if shutdown_deadline.is_none() => {
-                let _ = session_send.write_all(b"\x03").await;
+                let _ = etx_tx.try_send(());
                 shutdown_deadline = Some(Instant::now() + Duration::from_secs(5));
             }
             _ = tokio::time::sleep_until(shutdown_deadline.unwrap_or_else(|| Instant::now() + Duration::from_secs(86400))), if shutdown_deadline.is_some() => {

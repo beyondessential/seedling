@@ -3,9 +3,9 @@ use std::{path::PathBuf, sync::Arc, time::Duration};
 use seedling_protocol::names::{
     AppName, AppVolumeName, HeldVolumeId, SessionId, ShellName, SiteVolumeName,
 };
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::io::AsyncWriteExt;
 
-use super::registry::ShellSession;
+use super::{registry::ShellSession, session::relay_session};
 use crate::{
     defs::resource::ResourceKind,
     oi::state::OiState,
@@ -403,7 +403,6 @@ pub(crate) async fn open_volume_shell_session(
 
     let _ = stderr_send.finish();
 
-    let mut stdin_buf = vec![0u8; 4096];
     let exit_code: i32;
 
     if !leftover_stdin.is_empty() && exec_handle.stdin.write_all(&leftover_stdin).await.is_err() {
@@ -413,51 +412,21 @@ pub(crate) async fn open_volume_shell_session(
         fail!(-1);
     }
 
-    loop {
-        let mut stdout_buf = vec![0u8; 4096];
-        tokio::select! {
-            n = recv.read(&mut stdin_buf) => {
-                match n {
-                    Ok(Some(n)) if n > 0 => {
-                        if exec_handle.stdin.write_all(&stdin_buf[..n]).await.is_err() {
-                            break;
-                        }
-                    }
-                    _ => break,
-                }
-            }
-            n = exec_handle.stdout.read(&mut stdout_buf) => {
-                match n {
-                    Ok(0) | Err(_) => break,
-                    Ok(n) => {
-                        if stdout_send.write_all(&stdout_buf[..n]).await.is_err() {
-                            break;
-                        }
-                    }
-                }
-            }
-            status = exec_handle.child.wait() => {
-                exit_code = status.ok().and_then(|s| s.code()).unwrap_or(-1);
-                state.shells.remove(&session_id);
-                state.event_tx.shell_exited(session_id, exit_code);
-                let _ = state.container_runtime.remove_network(&net_name).await;
-                let mut exit_frame =
-                    serde_json::to_vec(&serde_json::json!({ "exit_code": exit_code }))
-                        .unwrap_or_default();
-                exit_frame.push(b'\n');
-                let _ = send.write_all(&exit_frame).await;
-                let _ = send.finish();
-                let _ = stdout_send.finish();
-                tracing::info!(
-                    %session_name, %exit_code,
-                    "volume shell session ended"
-                );
-                return;
-            }
-            _ = &mut stop_rx => {
-                break;
-            }
-        }
+    if let Some(status) =
+        relay_session(&mut recv, &mut exec_handle, &mut stdout_send, &mut stop_rx).await
+    {
+        exit_code = status.ok().and_then(|s| s.code()).unwrap_or(-1);
+        state.shells.remove(&session_id);
+        state.event_tx.shell_exited(session_id, exit_code);
+        let _ = state.container_runtime.remove_network(&net_name).await;
+        let mut exit_frame =
+            serde_json::to_vec(&serde_json::json!({ "exit_code": exit_code })).unwrap_or_default();
+        exit_frame.push(b'\n');
+        let _ = send.write_all(&exit_frame).await;
+        let _ = send.finish();
+        let _ = stdout_send.finish();
+        tracing::info!(%session_name, %exit_code, "volume shell session ended");
+        return;
     }
 
     if let Some(pid) = exec_handle.child.id() {

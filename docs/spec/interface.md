@@ -77,6 +77,8 @@ Absent specification bugs, anything that is not defined here is either defined i
 > - One client-initiated bidirectional stream (the _session stream_): carries the `/shells/start` handshake and, after the handshake, raw stdin bytes from client to server. The server uses its write-end to deliver the handshake response and a final exit frame when the session ends.
 > - One server-initiated unidirectional stream for stdout bytes.
 > - One server-initiated unidirectional stream for stderr bytes.
+>
+> Both ends relay stdin and output independently: output waiting to be delivered never holds up stdin, nor the server noticing that the session has ended.
 
 > i[stream.shell.framing]
 > The server-to-client direction of the session stream carries newline-delimited JSON: the `/shells/start` response first, then the exit frame when the session ends.
