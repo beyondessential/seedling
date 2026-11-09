@@ -1175,7 +1175,8 @@ This section covers the operator interface for the ACME-DNS strategy, manual cer
 
 > i[tls.cert.csr.begin]
 > `/tls/certificates/csr/begin { hostnames, key_type? }` generates a server-side keypair and a CSR whose SAN set is `hostnames`, and returns `{ id, csr_pem }`.
-> `hostnames` is a non-empty array, each entry a hostname or a `*.<suffix>` wildcard; a name repeated is requested once, and anything else is refused with `requirements_invalid`.
+> `hostnames` is a non-empty array of at most a hundred names, each entry a hostname or a `*.<suffix>` wildcard; a name repeated is requested once, and anything else is refused with `requirements_invalid`.
+> The cap is what public certificate authorities accept in one certificate, and it keeps a single request from storing and serving back a certificate request of unbounded size.
 > The private key is stored encrypted at rest using the [secret key](runtime.md#r--secret.key) and never leaves the runtime; only the CSR is returned, both in this response and via subsequent `tls.cert.csr.get` calls while the row remains in `csr_pending`.
 > `key_type` defaults to `"ecdsa_p256"`, which is currently the only accepted value.
 

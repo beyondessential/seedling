@@ -634,10 +634,14 @@ fn csr_begin_get_cancel_roundtrip() {
 fn csr_flow_validation_errors() {
     let oi = TestOi::new();
 
+    // One over the cap, so an operator cannot have the runtime build, store
+    // and hand back a certificate request of any size they choose.
+    let too_many: Vec<String> = (0..101).map(|n| format!("h{n}.example.com")).collect();
     for hostnames in [
         json!([]),
         json!(["  "]),
         json!(["ok.example.com", "not a name"]),
+        json!(too_many),
     ] {
         let (code, _) = oi
             .call(

@@ -533,11 +533,32 @@ pub(crate) struct CsrBeginParams {
     pub key_type: Option<String>,
 }
 
+/// Most names one CSR may request.
+///
+/// What public certificate authorities accept in a single certificate. The
+/// request budget leaves room for hundreds of thousands of names in one call,
+/// and each lands in the CSR that is stored on the row and handed back by
+/// `csr_begin` and `tls.cert.csr.get` — so without a bound a single operator
+/// call writes and serves back a request of its own choosing in size.
+const CSR_HOSTNAME_LIMIT: usize = 100;
+
 /// The set of names a CSR is requested for: each a hostname or a `*.<suffix>`
-/// wildcard, at least one of them, each once. Repeats are dropped rather than
-/// refused, keeping the first spelling, since DNS names compare without case.
+/// wildcard, at least one of them and at most [`CSR_HOSTNAME_LIMIT`], each
+/// once. Repeats are dropped rather than refused, keeping the first spelling,
+/// since DNS names compare without case.
 // i[tls.cert.csr.begin]
 fn csr_hostname_set(hostnames: Vec<String>) -> Result<Vec<String>, OiError> {
+    // Counted before anything is allocated for it, so an oversized request
+    // costs nothing to refuse.
+    if hostnames.len() > CSR_HOSTNAME_LIMIT {
+        return Err(OiError::new(
+            ErrorCode::RequirementsInvalid,
+            format!(
+                "a CSR may request at most {CSR_HOSTNAME_LIMIT} hostnames; {} were given",
+                hostnames.len()
+            ),
+        ));
+    }
     let mut set: Vec<String> = Vec::with_capacity(hostnames.len());
     for name in hostnames {
         let valid = match name.strip_prefix("*.") {
