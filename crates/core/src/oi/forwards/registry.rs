@@ -48,6 +48,15 @@ impl ForwardStatus {
     }
 }
 
+/// Count a noun for a message an operator reads: "1 datagram", "3 datagrams".
+pub fn plural(count: u64, noun: &str) -> String {
+    if count == 1 {
+        format!("{count} {noun}")
+    } else {
+        format!("{count} {noun}s")
+    }
+}
+
 /// What became of a datagram handed to a UDP forward's relay.
 pub enum Delivery {
     Delivered,
@@ -190,8 +199,8 @@ impl ForwardRegistry {
             Ok(()) => {
                 if entry.udp_dropped > 0 {
                     let _ = entry.status_tx.try_send(ForwardStatus::warn(format!(
-                        "UDP relay caught up after dropping {} datagrams to the service",
-                        entry.udp_dropped
+                        "UDP relay caught up after dropping {} to the service",
+                        plural(entry.udp_dropped, "datagram")
                     )));
                     entry.udp_dropped = 0;
                 }
@@ -372,6 +381,13 @@ mod tests {
         ));
     }
 
+    #[test]
+    fn one_of_a_thing_is_not_pluralised() {
+        assert_eq!(plural(1, "datagram"), "1 datagram");
+        assert_eq!(plural(0, "datagram"), "0 datagrams");
+        assert_eq!(plural(2, "datagram"), "2 datagrams");
+    }
+
     // i[verify forward.status]
     #[test]
     fn backpressure_is_reported_once_per_episode() {
@@ -406,7 +422,11 @@ mod tests {
             Delivery::Delivered
         ));
         let ended = status_rx.try_recv().unwrap();
-        assert!(ended.message.contains("dropping 3"), "{}", ended.message);
+        assert!(
+            ended.message.contains("dropping 3 datagrams"),
+            "{}",
+            ended.message
+        );
 
         drop(udp_rx);
         assert!(matches!(
