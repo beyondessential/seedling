@@ -115,6 +115,9 @@ struct Started {
     stop: StopSignal,
     live: LiveShell,
     pid: u32,
+    /// The job's end of its output. Dropping it ends the output, which ends
+    /// the session, so a test holds it for as long as the job is meant to live.
+    output: tokio::io::DuplexStream,
 }
 
 async fn started(state: &OiState, stdin: impl AsyncWrite + Send + Unpin + 'static) -> Started {
@@ -142,13 +145,14 @@ async fn started(state: &OiState, stdin: impl AsyncWrite + Send + Unpin + 'stati
         .spawn()
         .expect("spawn job");
     let pid = child.id().expect("job pid");
+    let (output, job_stdout) = tokio::io::duplex(64);
     Started {
         session_id,
         stop,
         live: LiveShell {
             exec: ExecHandle {
                 stdin: Box::new(stdin),
-                stdout: Box::new(tokio::io::empty()),
+                stdout: Box::new(job_stdout),
                 pty_master_fd: -1,
                 child,
             },
@@ -156,6 +160,7 @@ async fn started(state: &OiState, stdin: impl AsyncWrite + Send + Unpin + 'stati
             net_name: net_name.to_owned(),
         },
         pid,
+        output,
     }
 }
 
@@ -173,6 +178,7 @@ fn stdin_failure_after_exec_removes_the_job_and_its_network() {
             stop,
             live,
             pid,
+            output: _output,
         } = started(&state, BrokenStdin).await;
         let net_name = live.net_name.clone();
 
@@ -218,6 +224,7 @@ fn stop_that_lands_before_the_job_attaches_ends_the_job() {
             stop,
             live,
             pid,
+            output: _output,
         } = started(&state, tokio::io::sink()).await;
         let net_name = live.net_name.clone();
 
@@ -256,6 +263,7 @@ fn stop_after_the_job_is_running_ends_the_session() {
             stop,
             live,
             pid,
+            output: _output,
         } = started(&state, tokio::io::sink()).await;
 
         let stopper = {
