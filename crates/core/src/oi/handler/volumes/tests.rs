@@ -586,3 +586,44 @@ fn deleting_a_managed_site_volume_that_cannot_be_held_leaves_the_record_alone() 
     assert_eq!(site_volume_names(&oi), vec!["relocated"]);
     assert!(elsewhere.exists(), "the data must be left where it is");
 }
+
+/// Operator commands are served concurrently, so finding the name free and
+/// taking it has to be one step. Standing in as the other request, this
+/// holds the claim and shows that a create cannot get past the check while
+/// it is held — the point at which, unguarded, it would have gone on to
+/// make storage under a name someone else was already taking.
+// r[verify volume.site.name-taken]
+#[test]
+fn taking_a_site_volume_name_excludes_another_request_taking_the_same_one() {
+    let oi = TestOi::new();
+    let (reached_tx, reached_rx) = std::sync::mpsc::channel();
+
+    let claim = oi.state.driver.volume_store.claim_site_name();
+
+    std::thread::scope(|scope| {
+        scope.spawn(|| {
+            let created = oi
+                .call(
+                    "/volumes/site/create",
+                    json!({ "name": "contended", "kind": "managed" }),
+                )
+                .unwrap();
+            reached_tx.send(created).unwrap();
+        });
+
+        assert!(
+            reached_rx
+                .recv_timeout(std::time::Duration::from_millis(250))
+                .is_err(),
+            "the create must wait for the claim rather than check the name beside its holder"
+        );
+
+        drop(claim);
+        let created = reached_rx
+            .recv_timeout(std::time::Duration::from_secs(10))
+            .expect("the create proceeds once the claim is released");
+        assert_eq!(created["created"], true);
+    });
+
+    assert_eq!(site_volume_names(&oi), vec!["contended".to_owned()]);
+}

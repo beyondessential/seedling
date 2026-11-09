@@ -13,6 +13,9 @@ use crate::{runtime::identity::VolumeName, system::confined::owned_dir_async};
 pub struct VolumeStore {
     volumes_dir: PathBuf,
     use_btrfs: bool,
+    /// Held while a site volume's name is found free and then taken.
+    // r[impl volume.site.name-taken]
+    site_name_claim: parking_lot::Mutex<()>,
 }
 
 impl VolumeStore {
@@ -22,7 +25,21 @@ impl VolumeStore {
         Ok(Self {
             volumes_dir,
             use_btrfs,
+            site_name_claim: parking_lot::Mutex::new(()),
         })
+    }
+
+    /// Claim the right to decide whether a site volume name is free.
+    ///
+    /// Taking a site volume name is check-then-act: the name is found free,
+    /// then storage is made and a record written. Operator commands are
+    /// served concurrently, so the guard must be held across the whole of
+    /// that, not around the look alone. One lock covers every name: these
+    /// are rare operator commands, and a per-name map would have to be
+    /// reaped to avoid growing with every name ever used.
+    // r[impl volume.site.name-taken]
+    pub fn claim_site_name(&self) -> parking_lot::MutexGuard<'_, ()> {
+        self.site_name_claim.lock()
     }
 
     pub fn volumes_dir(&self) -> &Path {

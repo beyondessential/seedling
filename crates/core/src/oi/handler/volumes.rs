@@ -128,7 +128,7 @@ pub(crate) fn restore_held(
 
     // r[impl volume.site.name-taken]
     // r[impl actuate.volume.hold.restore]
-    check_site_name_free(state, &target_name)?;
+    let _claim = check_site_name_free(state, &target_name)?;
 
     tokio::task::block_in_place(|| {
         tokio::runtime::Handle::current().block_on(async {
@@ -269,7 +269,7 @@ pub(crate) fn create_site_volume(
     crate::reserved::check_site_volume_name(&params.name)
         .map_err(|e| OiError::new(ErrorCode::RequirementsInvalid, e.to_string()))?;
     // r[impl volume.site.name-taken]
-    check_site_name_free(state, &params.name)?;
+    let _claim = check_site_name_free(state, &params.name)?;
 
     let kind = match params.kind.as_str() {
         "managed" => SiteVolumeKind::Managed,
@@ -505,8 +505,23 @@ pub(crate) fn delete_site_volume(
 /// subvolume. Storage with no record is refused rather than reused because
 /// the runtime cannot tell a leftover from an operator's volume whose record
 /// has yet to be written.
+///
+/// The returned guard is the claim on the name. Hold it until the name has
+/// been taken — until both the storage and the record are in place — so that
+/// no other request can find the name free in the meantime.
 // r[impl volume.site.name-taken]
-fn check_site_name_free(state: &OiState, name: &SiteVolumeName) -> Result<(), OiError> {
+fn check_site_name_free<'a>(
+    state: &'a OiState,
+    name: &SiteVolumeName,
+) -> Result<parking_lot::MutexGuard<'a, ()>, OiError> {
+    // r[impl volume.site.name-taken]
+    // The claim is returned rather than dropped here, and the caller holds
+    // it until the name has actually been taken. Finding the name free is
+    // only worth anything if nothing else can take it in between: two
+    // requests naming the same target would otherwise both pass this and
+    // both go on to make storage.
+    let claim = state.driver.volume_store.claim_site_name();
+
     let name_owned = name.clone();
     let recorded = state
         .db
@@ -536,7 +551,7 @@ fn check_site_name_free(state: &OiState, name: &SiteVolumeName) -> Result<(), Oi
         ));
     }
 
-    Ok(())
+    Ok(claim)
 }
 
 #[derive(Deserialize)]
@@ -559,7 +574,7 @@ pub(crate) fn snapshot_site_volume(
     crate::reserved::check_site_volume_name(&params.name)
         .map_err(|e| OiError::new(ErrorCode::RequirementsInvalid, e.to_string()))?;
     // r[impl volume.site.name-taken]
-    check_site_name_free(state, &params.name)?;
+    let _claim = check_site_name_free(state, &params.name)?;
 
     let (source, source_path) = parse_source_vol_id(&params.source, state)
         .map_err(|e| OiError::new(ErrorCode::RequirementsInvalid, e))?;
@@ -624,7 +639,7 @@ pub(crate) fn promote_site_volume(
     crate::reserved::check_site_volume_name(&params.name)
         .map_err(|e| OiError::new(ErrorCode::RequirementsInvalid, e.to_string()))?;
     // r[impl volume.site.name-taken]
-    check_site_name_free(state, &params.name)?;
+    let _claim = check_site_name_free(state, &params.name)?;
 
     let source_name = params.source.clone();
     let source_def = state
