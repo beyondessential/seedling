@@ -94,14 +94,15 @@ mod tests {
 
     use super::*;
 
-    /// Two peers joined through the relay over small in-memory pipes, as a
-    /// forward joins its client and its service.
+    /// Two peers joined through the relay over in-memory pipes, as a forward
+    /// joins its client and its service. The service's pipe is smaller than
+    /// one relayed chunk, so a write toward it waits on the service reading.
     fn relayed() -> (
         DuplexStream,
         DuplexStream,
         tokio::task::JoinHandle<io::Result<()>>,
     ) {
-        let (client, client_side) = duplex(64);
+        let (client, client_side) = duplex(64 * 1024);
         let (service, service_side) = duplex(64);
         let task = tokio::spawn(async move {
             let (mut cr, mut cw) = split(client_side);
@@ -115,20 +116,29 @@ mod tests {
     #[tokio::test]
     async fn half_closed_client_still_receives_the_response() {
         let (mut client, mut service, task) = relayed();
-
-        client.write_all(b"request").await.unwrap();
-        client.shutdown().await.unwrap();
-
-        let mut request = Vec::new();
-        service.read_to_end(&mut request).await.unwrap();
-        assert_eq!(request, b"request");
-
         let response = vec![7u8; 10_000];
-        service.write_all(&response).await.unwrap();
-        service.shutdown().await.unwrap();
 
-        let mut received = Vec::new();
-        client.read_to_end(&mut received).await.unwrap();
+        let client_side = async {
+            client.write_all(b"request").await.unwrap();
+            client.shutdown().await.unwrap();
+            let mut received = Vec::new();
+            client.read_to_end(&mut received).await.unwrap();
+            received
+        };
+        let service_side = async {
+            let mut request = Vec::new();
+            service.read_to_end(&mut request).await.unwrap();
+            service.write_all(&response).await.unwrap();
+            service.shutdown().await.unwrap();
+            request
+        };
+        let (received, request) = tokio::time::timeout(Duration::from_secs(10), async {
+            tokio::join!(client_side, service_side)
+        })
+        .await
+        .expect("relay stalled");
+
+        assert_eq!(request, b"request");
         assert_eq!(received, response);
         task.await.unwrap().unwrap();
     }
@@ -136,28 +146,39 @@ mod tests {
     // i[verify forward.tunnel.tcp]
     #[tokio::test]
     async fn a_stalled_direction_does_not_hold_up_the_other() {
-        let (client, service, task) = relayed();
+        let (mut client, mut service, task) = relayed();
         let payload = vec![1u8; 256 * 1024];
 
-        // Each peer writes everything before reading anything: a relay that
-        // serves one direction at a time stalls with both pipes full.
-        let peer = |mut end: DuplexStream, payload: Vec<u8>| async move {
-            end.write_all(&payload).await.unwrap();
-            end.shutdown().await.unwrap();
+        // An echo service that writes each chunk back before reading the next:
+        // a relay serving one direction at a time ends up blocked writing to
+        // it while it is blocked writing back to the relay.
+        let echo = async {
+            let mut buf = vec![0u8; 4096];
+            loop {
+                let n = service.read(&mut buf).await.unwrap();
+                if n == 0 {
+                    service.shutdown().await.unwrap();
+                    break;
+                }
+                service.write_all(&buf[..n]).await.unwrap();
+            }
+        };
+        let (mut cr, mut cw) = split(&mut client);
+        let send = async {
+            cw.write_all(&payload).await.unwrap();
+            cw.shutdown().await.unwrap();
+        };
+        let receive = async {
             let mut got = Vec::new();
-            end.read_to_end(&mut got).await.unwrap();
+            cr.read_to_end(&mut got).await.unwrap();
             got.len()
         };
-        let both = async {
-            tokio::join!(
-                peer(client, payload.clone()),
-                peer(service, payload.clone())
-            )
-        };
-        let (a, b) = tokio::time::timeout(Duration::from_secs(10), both)
-            .await
-            .expect("relay deadlocked");
-        assert_eq!((a, b), (payload.len(), payload.len()));
+        let ((), (), echoed) = tokio::time::timeout(Duration::from_secs(10), async {
+            tokio::join!(echo, send, receive)
+        })
+        .await
+        .expect("relay deadlocked");
+        assert_eq!(echoed, payload.len());
         task.await.unwrap().unwrap();
     }
 }
