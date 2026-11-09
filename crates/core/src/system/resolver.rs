@@ -26,15 +26,15 @@ pub fn resolver_network_prefix(node_prefix: &Ipv6Net) -> Ipv6Net {
 
 /// Returns the static IPv6 address assigned to the resolver container.
 ///
-/// This is a well-known address at `::53` within the resolver network prefix,
-/// chosen to match the DNS port for memorability.
+/// This is a well-known address at `::53` (hexadecimal) within the resolver
+/// network prefix, chosen to match the DNS port for memorability.
 // r[impl infra.resolver.address]
 pub fn resolver_addr(node_prefix: &Ipv6Net) -> Ipv6Addr {
     let bytes = node_prefix.network().octets();
     let mut addr = [0u8; 16];
     addr[..6].copy_from_slice(&bytes[..6]);
     addr[6] = 0xfd;
-    addr[15] = 53;
+    addr[15] = 0x53;
     Ipv6Addr::from(addr)
 }
 
@@ -58,4 +58,19 @@ pub fn resolver_gateway_addr(node_prefix: &Ipv6Net) -> Ipv6Addr {
 /// to upstream IPv4 DNS servers.
 pub fn resolver_ipv4_subnet() -> Ipv4Net {
     "10.89.254.0/24".parse().expect("valid IPv4 subnet")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // r[verify infra.resolver.address]
+    #[test]
+    fn resolver_addr_ends_in_hex_53_within_the_resolver_network() {
+        let prefix: Ipv6Net = "fd5e:aabb:ccdd::/48".parse().unwrap();
+        let addr = resolver_addr(&prefix);
+        assert_eq!(addr, "fd5e:aabb:ccdd:fd00::53".parse::<Ipv6Addr>().unwrap());
+        assert!(resolver_network_prefix(&prefix).contains(&addr));
+        assert_ne!(addr, resolver_gateway_addr(&prefix));
+    }
 }

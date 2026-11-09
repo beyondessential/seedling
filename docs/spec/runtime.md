@@ -1610,7 +1610,9 @@ Two levers set how a workload competes for host resources under pressure. Each D
 
 > r[infra.resolver.address]
 > The resolver must listen on a stable node-wide IPv6 address derived from the node prefix,
-> so that all workload containers can reach it at a predictable address.
+> so that all workload containers can reach it at a predictable address. The address is
+> `<prefix>:fd00::53` within the resolver network, where `53` is the hexadecimal last
+> group, so that operators can write firewall and monitoring rules against it.
 
 > r[infra.resolver.startup]
 > The runtime must ensure the resolver container is running and healthy before beginning the
