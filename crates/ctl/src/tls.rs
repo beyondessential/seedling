@@ -58,11 +58,12 @@ pub(super) enum TlsCommand {
 
 #[derive(Subcommand)]
 pub(super) enum CsrCommand {
-    /// Generate a new keypair + CSR for `hostname`. The private key
-    /// stays on the server (encrypted at rest); only the CSR is
-    /// returned for external signing.
+    /// Generate a new keypair + CSR for one or more hostnames, all of
+    /// which the CSR requests. The private key stays on the server
+    /// (encrypted at rest); only the CSR is returned for external signing.
     Begin {
-        hostname: String,
+        #[arg(required = true)]
+        hostnames: Vec<String>,
         /// Key type. Currently only `ecdsa-p256` is supported.
         #[arg(long, default_value = "ecdsa-p256")]
         key_type: String,
@@ -438,13 +439,16 @@ async fn dispatch_certs(client: &OiClient, cmd: CertsCommand) {
 
 async fn dispatch_csr(client: &OiClient, cmd: CsrCommand) {
     match cmd {
-        CsrCommand::Begin { hostname, key_type } => {
+        CsrCommand::Begin {
+            hostnames,
+            key_type,
+        } => {
             let kt = key_type.replace('-', "_");
             print_result(
                 client
                     .request(
                         "/tls/certificates/csr/begin",
-                        json!({ "hostname": hostname, "key_type": kt }),
+                        json!({ "hostnames": hostnames, "key_type": kt }),
                     )
                     .await,
             );

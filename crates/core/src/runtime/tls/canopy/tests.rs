@@ -323,7 +323,7 @@ impl CertificateRelay for &Fake {
                 .build()),
             Reply::IssueForOtherKey => {
                 let other = KeyPair::generate_for(&PKCS_ECDSA_P256_SHA256).unwrap();
-                let csr = keypair::build_csr(name, &other).unwrap();
+                let csr = keypair::build_csr(&[name], &other).unwrap();
                 Ok(base
                     .state("issued".to_owned())
                     .usable(true)
@@ -407,7 +407,10 @@ async fn the_first_request_stores_a_key_and_opens_one_order() {
     let rows = canopy_rows(&db);
     assert_eq!(rows.len(), 1);
     assert_eq!(rows[0].state, TlsCertState::CsrPending);
-    assert_eq!(rows[0].requested_hostname.as_deref(), Some("a.example.com"));
+    assert_eq!(
+        rows[0].requested_hostnames.as_deref(),
+        Some(&["a.example.com".to_owned()][..])
+    );
     assert_eq!(attempts(&db), vec![(AttemptOutcome::Pending, None, None)]);
     assert!(chain_row(&db).unwrap().row.open_order_since.is_some());
 

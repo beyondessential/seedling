@@ -1154,7 +1154,7 @@ mod tests {
         TlsCertificate {
             id,
             hostname: hostname.to_owned(),
-            requested_hostname: None,
+            requested_hostnames: None,
             state: TlsCertState::Active,
             origin: TlsCertOrigin::AcmeDns,
             cert_pem: Some(super::super::test_support::self_signed_pem(&[hostname])),

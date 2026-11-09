@@ -811,12 +811,12 @@ export interface TlsCertificate {
   /** A name the certificate covers, used as its label. What the certificate
    * serves is decided by its full SAN list, never by this field. */
   hostname: string;
-  /** For CSR-derived rows, the hostname the request was made for. May differ
-   * from `hostname` when the CA signed a different name set. */
-  requested_hostname: string | null;
-  /** Whether the stored certificate covers `requested_hostname`. Null when
+  /** For CSR-derived rows, the hostnames the request was made for. May differ
+   * from what the certificate covers when the CA signed a different name set. */
+  requested_hostnames: string[] | null;
+  /** The requested hostnames the stored certificate does not cover. Null when
    * there is nothing to decide, or when the runtime could not tell. */
-  request_covered: boolean | null;
+  requested_not_covered: string[] | null;
   state: TlsCertState;
   origin: TlsCertOrigin;
   key_type: TlsKeyType;

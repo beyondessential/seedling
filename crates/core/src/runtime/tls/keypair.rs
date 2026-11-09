@@ -54,11 +54,18 @@ pub fn from_pem(pem: &str) -> Result<KeyPair> {
     KeyPair::from_pem(pem).context(RcgenSnafu)
 }
 
-/// Build a CSR for `hostname` against the given keypair. The CSR includes
-/// `hostname` as the only DNS SAN; if `hostname` starts with `*.` the
-/// wildcard SAN is preserved.
-pub fn build_csr(hostname: &str, key: &KeyPair) -> Result<Csr> {
-    let mut params = CertificateParams::new(vec![hostname.to_owned()]).context(RcgenSnafu)?;
+/// Build a CSR for `hostnames` against the given keypair. The CSR's DNS SAN
+/// set is exactly `hostnames`, in order; a name starting with `*.` is kept as
+/// a wildcard SAN.
+// r[impl tls.csr.flow]
+pub fn build_csr(hostnames: &[&str], key: &KeyPair) -> Result<Csr> {
+    let mut params = CertificateParams::new(
+        hostnames
+            .iter()
+            .map(|name| (*name).to_owned())
+            .collect::<Vec<_>>(),
+    )
+    .context(RcgenSnafu)?;
     params.distinguished_name = DistinguishedName::new();
     let req = params.serialize_request(key).context(RcgenSnafu)?;
     Ok(Csr {
@@ -88,7 +95,7 @@ mod tests {
     #[test]
     fn build_csr_round_trips() {
         let key = generate(KeyType::EcdsaP256).unwrap();
-        let csr = build_csr("foo.example.com", &key.inner).unwrap();
+        let csr = build_csr(&["foo.example.com"], &key.inner).unwrap();
         assert!(csr.pem.contains("BEGIN CERTIFICATE REQUEST"));
         assert!(!csr.der.is_empty());
     }
@@ -100,8 +107,8 @@ mod tests {
         // The recovered key should produce CSRs with the same SPKI as the
         // original; we don't have direct equality so we sign two CSRs and
         // compare the public key bytes.
-        let csr1 = build_csr("a.example.com", &key.inner).unwrap();
-        let csr2 = build_csr("a.example.com", &restored).unwrap();
+        let csr1 = build_csr(&["a.example.com"], &key.inner).unwrap();
+        let csr2 = build_csr(&["a.example.com"], &restored).unwrap();
         // Both CSRs encode the same public key — compare the public-key
         // section by checking the CSRs share a non-trivial prefix length.
         assert!(csr1.der.len() > 64 && csr2.der.len() > 64);
@@ -110,7 +117,27 @@ mod tests {
     #[test]
     fn build_csr_with_wildcard() {
         let key = generate(KeyType::EcdsaP256).unwrap();
-        let csr = build_csr("*.example.com", &key.inner).unwrap();
+        let csr = build_csr(&["*.example.com"], &key.inner).unwrap();
         assert!(csr.pem.contains("BEGIN CERTIFICATE REQUEST"));
+    }
+
+    /// Every requested name goes into the CSR, not just the first.
+    // r[verify tls.csr.flow]
+    #[test]
+    fn build_csr_carries_every_requested_name() {
+        let key = generate(KeyType::EcdsaP256).unwrap();
+        let names = ["www.example.com", "api.example.com", "example.com"];
+        let csr = build_csr(&names, &key.inner).unwrap();
+        let parsed = rcgen::CertificateSigningRequestParams::from_pem(&csr.pem).unwrap();
+        let sans: Vec<String> = parsed
+            .params
+            .subject_alt_names
+            .iter()
+            .map(|san| match san {
+                rcgen::SanType::DnsName(name) => name.as_str().to_owned(),
+                other => panic!("unexpected SAN {other:?}"),
+            })
+            .collect();
+        assert_eq!(sans, names);
     }
 }

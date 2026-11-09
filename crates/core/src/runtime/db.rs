@@ -144,6 +144,7 @@ const SQL_V61: &str = include_str!("db/migrations/v61.sql");
 const SQL_V62: &str = include_str!("db/migrations/v62.sql");
 const SQL_V63: &str = include_str!("db/migrations/v63.sql");
 const SQL_V64: &str = include_str!("db/migrations/v64.sql");
+const SQL_V65: &str = include_str!("db/migrations/v65.sql");
 
 const MIGRATIONS: &[Migration] = &[
     Migration {
@@ -459,6 +460,11 @@ const MIGRATIONS: &[Migration] = &[
     Migration {
         version: 64,
         sql: SQL_V64,
+        custom_run: None,
+    },
+    Migration {
+        version: 65,
+        sql: SQL_V65,
         custom_run: None,
     },
 ];

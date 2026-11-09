@@ -1816,15 +1816,15 @@ The BSL surface is intentionally strategy-agnostic: scripts declare only that an
 > The runtime does not auto-renew manual certs on its own; however, if an `acme_dns` policy applies to a covered hostname and the manual cert is past its renewal threshold, the runtime must initiate the normal ACME-DNS issuance flow so a renewable cert can take over before the manual cert expires.
 
 > r[tls.csr.flow]
-> Operators may instruct the runtime to generate a keypair and a Certificate Signing Request for a hostname.
+> Operators may instruct the runtime to generate a keypair and a Certificate Signing Request for one or more hostnames, so that a single certificate can be requested for several names.
 > The runtime must:
 >
 > - Generate the keypair on the server, store the private key encrypted at rest using the [secret key](#r--secret.key), and never expose it via any operator interface.
-> - Produce a PEM-encoded CSR whose Subject Alternative Name set covers the target hostname, and make the CSR retrievable via the operator interface for as long as the request is pending.
-> - Record the hostname the request was made for and retain it once a certificate arrives, so an operator can see what was asked for alongside what was issued.
+> - Produce a PEM-encoded CSR whose Subject Alternative Name set is exactly the requested hostnames, and make the CSR retrievable via the operator interface for as long as the request is pending.
+> - Record the hostnames the request was made for and retain them once a certificate arrives, so an operator can see what was asked for alongside what was issued.
 > - Accept a signed certificate uploaded later, provided it matches the stored private key and passes the same validation as a manual upload.
-> - Bind that certificate to the hostnames its own SAN set covers, per [SAN coverage](#r--tls.cert.validation.san-coverage). A CA is free to sign a name set other than the one requested, so the requested hostname does not determine what the accepted certificate serves or what it supersedes.
-> - Report an unmet request: when the issued certificate does not cover the requested hostname, the upload must warn that the request was not met, and the requested hostname must go on appearing in the [per-hostname rollup](#r--tls.cert.hostname-view) as having no active certificate for as long as an ingress declares it.
+> - Bind that certificate to the hostnames its own SAN set covers, per [SAN coverage](#r--tls.cert.validation.san-coverage). A CA is free to sign a name set other than the one requested, so the requested hostnames do not determine what the accepted certificate serves or what it supersedes.
+> - Report an unmet request name by name: when the issued certificate does not cover one or more of the requested hostnames, the upload must warn that the request was not met and say which hostnames were missed, and each missed hostname must go on appearing in the [per-hostname rollup](#r--tls.cert.hostname-view) as having no active certificate for as long as an ingress declares it.
 > - Permit cancellation of a pending CSR by the operator, which must destroy the stored private key.
 
 > r[tls.dns-provider.lifecycle]

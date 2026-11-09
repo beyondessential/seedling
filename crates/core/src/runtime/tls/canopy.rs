@@ -458,7 +458,7 @@ impl<R: CertificateRelay> Engine<R> {
             }
             None => {
                 let generated = keypair::generate(KeyType::EcdsaP256).context(KeySnafu)?;
-                let csr = keypair::build_csr(hostname, &generated.inner).context(KeySnafu)?;
+                let csr = keypair::build_csr(&[hostname], &generated.inner).context(KeySnafu)?;
                 let ciphertext = self.cipher.encrypt(&generated.pem).context(CipherSnafu)?;
                 let host = hostname.to_owned();
                 let id = self
@@ -468,7 +468,7 @@ impl<R: CertificateRelay> Engine<R> {
                             db,
                             NewCertificate {
                                 hostname: &host,
-                                requested_hostname: Some(&host),
+                                requested_hostnames: Some(&[host.as_str()]),
                                 state: TlsCertState::CsrPending,
                                 origin: super::TlsCertOrigin::Canopy,
                                 cert_pem: None,
@@ -485,7 +485,7 @@ impl<R: CertificateRelay> Engine<R> {
                 (id, generated.inner)
             }
         };
-        let csr = keypair::build_csr(hostname, &pair).context(KeySnafu)?;
+        let csr = keypair::build_csr(&[hostname], &pair).context(KeySnafu)?;
         use rcgen::PublicKeyData as _;
         Ok(KeyMaterial {
             id,

@@ -34,8 +34,8 @@ const settings: TlsSettings = {
 const manualCert: TlsCertificate = {
   id: 3,
   hostname: "shop.example.com",
-  requested_hostname: null,
-  request_covered: null,
+  requested_hostnames: null,
+  requested_not_covered: null,
   state: "active",
   origin: "manual",
   key_type: "ecdsa_p256",
@@ -53,8 +53,8 @@ const manualCert: TlsCertificate = {
 const pendingCsr: TlsCertificate = {
   id: 5,
   hostname: "csr.example.com",
-  requested_hostname: "csr.example.com",
-  request_covered: null,
+  requested_hostnames: ["csr.example.com"],
+  requested_not_covered: null,
   state: "csr_pending",
   origin: "csr",
   key_type: "ecdsa_p256",
@@ -73,8 +73,8 @@ const pendingCsr: TlsCertificate = {
 const acmeCert: TlsCertificate = {
   id: 8,
   hostname: "auto.example.com",
-  requested_hostname: null,
-  request_covered: null,
+  requested_hostnames: null,
+  requested_not_covered: null,
   state: "active",
   origin: "acme_dns",
   key_type: "ecdsa_p256",
@@ -202,8 +202,8 @@ describe("Certificates", () => {
       ...manualCert,
       id: 12,
       hostname: "example.com",
-      requested_hostname: "www.example.com",
-      request_covered: false,
+      requested_hostnames: ["www.example.com"],
+      requested_not_covered: ["www.example.com"],
       origin: "csr",
       serial: "0e16",
       self_signed: false,
@@ -212,8 +212,8 @@ describe("Certificates", () => {
       ...manualCert,
       id: 13,
       hostname: "api.example.com",
-      requested_hostname: "api.example.com",
-      request_covered: true,
+      requested_hostnames: ["api.example.com"],
+      requested_not_covered: [],
       origin: "csr",
       serial: "0e17",
       self_signed: false,
@@ -227,13 +227,38 @@ describe("Certificates", () => {
     await screen.findByText("requested www.example.com");
     const rewrittenRow = rowFor("0e16");
     expect(within(rewrittenRow).getByText("requested www.example.com")).toBeTruthy();
-    expect(within(rewrittenRow).getByText("request not covered")).toBeTruthy();
+    expect(within(rewrittenRow).getByText("not covered: www.example.com")).toBeTruthy();
 
     // A request the certificate does meet says nothing extra: the requested
     // name would only repeat the primary SAN.
     const metRow = rowFor("0e17");
     expect(within(metRow).queryByText(/^requested /)).toBeNull();
-    expect(within(metRow).queryByText("request not covered")).toBeNull();
+    expect(within(metRow).queryByText(/^not covered/)).toBeNull();
+  });
+
+  // w[verify routes.certificates]
+  it("names every requested hostname and each one the CA missed", async () => {
+    const partial: TlsCertificate = {
+      ...manualCert,
+      id: 14,
+      hostname: "www.example.com",
+      requested_hostnames: ["www.example.com", "api.example.com", "example.com"],
+      requested_not_covered: ["api.example.com"],
+      origin: "csr",
+      serial: "0e18",
+      self_signed: false,
+    };
+    renderWithSession(<Certificates />, {
+      fixtures: baseFixtures({
+        "/tls/certificates/list": { certificates: [partial] },
+      }),
+    });
+
+    const row = await waitFor(() => rowFor("0e18"));
+    expect(
+      within(row).getByText("requested www.example.com, api.example.com, example.com"),
+    ).toBeTruthy();
+    expect(within(row).getByText("not covered: api.example.com")).toBeTruthy();
   });
 
   it("renders the empty states", async () => {
@@ -585,14 +610,14 @@ describe("Certificates", () => {
     });
 
     fireEvent.click(await screen.findByRole("button", { name: "Generate CSR" }));
-    fireEvent.change(await screen.findByLabelText("Hostname"), {
-      target: { value: "csr2.example.com" },
+    fireEvent.change(await screen.findByLabelText("Hostnames"), {
+      target: { value: "csr2.example.com, www.csr2.example.com" },
     });
     fireEvent.click(screen.getByRole("button", { name: "Generate" }));
 
     await waitFor(() => {
       expect(request).toHaveBeenCalledWith("/tls/certificates/csr/begin", {
-        hostname: "csr2.example.com",
+        hostnames: ["csr2.example.com", "www.csr2.example.com"],
         key_type: "ecdsa_p256",
       });
     });

@@ -94,12 +94,13 @@ pub struct TlsCertificate {
     /// against the certificate rather than trusting it.
     // r[impl tls.cert.validation.san-coverage]
     pub hostname: String,
-    /// For `origin = Csr`: the hostname the CSR was begun for. A CA may
-    /// sign a name set other than the one requested, so this records what
-    /// was asked for and is not necessarily covered by the certificate
-    /// that arrived. `None` for every other origin.
+    /// For a row issued against a CSR the runtime generated: the hostnames
+    /// that CSR requested, in the order they were asked for. A CA may sign a
+    /// name set other than the one requested, so this records what was asked
+    /// for and is not necessarily covered by the certificate that arrived.
+    /// `None` for every other row.
     // r[impl tls.csr.flow]
-    pub requested_hostname: Option<String>,
+    pub requested_hostnames: Option<Vec<String>>,
     pub state: TlsCertState,
     pub origin: TlsCertOrigin,
     /// PEM-encoded leaf chain; populated for `Active` and `Superseded`.

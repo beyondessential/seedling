@@ -202,7 +202,7 @@ pub async fn issue(
                 db_inner,
                 store::NewCertificate {
                     hostname: &hostname_owned,
-                    requested_hostname: None,
+                    requested_hostnames: None,
                     state: TlsCertState::Active,
                     origin: TlsCertOrigin::AcmeDns,
                     cert_pem: Some(&chain_pem),
@@ -311,7 +311,7 @@ async fn obtain_chain(
     // it via its `rcgen` feature, so the same code path serves the manual
     // CSR flow.
     let key = keypair::generate(KeyType::EcdsaP256).context(KeypairSnafu)?;
-    let csr = keypair::build_csr(hostname, &key.inner).context(KeypairSnafu)?;
+    let csr = keypair::build_csr(&[hostname], &key.inner).context(KeypairSnafu)?;
     order.finalize_csr(&csr.der).await.context(AcmeSnafu)?;
 
     let cert_chain_pem = order

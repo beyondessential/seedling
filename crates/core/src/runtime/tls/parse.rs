@@ -250,14 +250,25 @@ pub fn leaf_san_dns_names(pem: &str) -> Result<Vec<String>> {
     Ok(san_dns_names(&cert))
 }
 
-/// Whether the certificate in `pem` covers `hostname`.
+/// Those of `hostnames` the certificate in `pem` does not cover, in the order
+/// given.
 ///
 /// An error means the certificate could not be read, which is not the same
-/// answer as "does not cover" — callers must decide what to do about not
+/// answer as "covers none of them" — callers must decide what to do about not
 /// knowing rather than treating it as a negative.
 // r[impl tls.cert.validation.san-coverage]
-pub fn cert_covers(pem: &str, hostname: &str) -> Result<bool> {
-    Ok(san_covers(&leaf_san_dns_names(pem)?, hostname))
+pub fn not_covered(pem: &str, hostnames: &[String]) -> Result<Vec<String>> {
+    Ok(sans_not_covering(&leaf_san_dns_names(pem)?, hostnames))
+}
+
+/// Those of `hostnames` no DNS name in `sans` covers, in the order given.
+// r[impl tls.cert.validation.san-coverage]
+pub fn sans_not_covering(sans: &[String], hostnames: &[String]) -> Vec<String> {
+    hostnames
+        .iter()
+        .filter(|name| !san_covers(sans, name))
+        .cloned()
+        .collect()
 }
 
 /// Returns true if any DNS name in `sans` covers `hostname`. Wildcard rules
