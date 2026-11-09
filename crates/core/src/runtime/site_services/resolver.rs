@@ -110,6 +110,10 @@ pub struct ResolverStatusEntry {
     pub aaaa: Vec<Ipv6Addr>,
     pub a: Vec<Ipv4Addr>,
     pub last_attempt_failed: bool,
+    /// The family whose lookup is failing while the other answers. The
+    /// records of that family are the last it returned, so a name with a
+    /// degraded family is resolving on less than it appears to.
+    pub degraded_family: Option<Family>,
     pub age: Duration,
     pub ttl_remaining: Duration,
 }
@@ -209,6 +213,9 @@ impl ResolverInner {
         entry.fetched_at = now;
         entry.expires_at = now + FAILURE_BACKOFF;
         entry.last_attempt_failed = true;
+        // The whole lookup failed, so nothing is known about either family
+        // and a previous "this one family is failing" no longer holds.
+        entry.degraded_family = None;
         let became_unresolved_change = count == FAULT_AFTER_FAILURES && entry.is_empty();
         if became_unresolved_change {
             self.fault_hosts.write().insert(host.to_owned());
@@ -301,6 +308,8 @@ impl SiteServiceResolver {
                     aaaa: entry.aaaa.clone(),
                     a: entry.a.clone(),
                     last_attempt_failed: entry.last_attempt_failed,
+                    // r[impl service.site.address.partial-answer]
+                    degraded_family: entry.degraded_family,
                     age,
                     ttl_remaining,
                 }
@@ -783,6 +792,58 @@ mod tests {
             },
         );
         assert!(!newly_degraded);
+    }
+
+    // r[verify service.site.address.partial-answer]
+    #[test]
+    fn status_names_the_degraded_family_until_the_lookup_recovers() {
+        let r = mkresolver();
+        r.inner.record_partial(
+            "dual.example",
+            &PartialLookup::AaaaFailed {
+                a: vec!["10.0.0.1".parse().unwrap()],
+                error: "servfail".to_owned(),
+            },
+        );
+        let entry = |r: &SiteServiceResolver| {
+            r.status()
+                .into_iter()
+                .find(|e| e.host == "dual.example")
+                .expect("host in status")
+        };
+        assert_eq!(entry(&r).degraded_family, Some(Family::Aaaa));
+
+        // A lookup that answers on both families is no longer degraded.
+        r.seed_success(
+            "dual.example",
+            &["2001:db8::1"],
+            &["10.0.0.1"],
+            Duration::from_secs(60),
+        );
+        assert_eq!(entry(&r).degraded_family, None);
+    }
+
+    // r[verify service.site.address.partial-answer]
+    #[test]
+    fn a_wholly_failed_lookup_clears_the_degraded_family() {
+        // Both families failing says nothing about either, so the claim that
+        // one of them alone is at fault must not outlive it.
+        let r = mkresolver();
+        r.inner.record_partial(
+            "dual.example",
+            &PartialLookup::AaaaFailed {
+                a: vec!["10.0.0.1".parse().unwrap()],
+                error: "servfail".to_owned(),
+            },
+        );
+        r.seed_failure("dual.example");
+        let entry = r
+            .status()
+            .into_iter()
+            .find(|e| e.host == "dual.example")
+            .expect("host in status");
+        assert_eq!(entry.degraded_family, None);
+        assert!(entry.last_attempt_failed);
     }
 
     // r[verify service.site.address.partial-answer]

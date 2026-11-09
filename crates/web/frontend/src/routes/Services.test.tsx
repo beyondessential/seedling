@@ -38,6 +38,7 @@ const resolverStatus: SiteServiceResolverStatus = {
       aaaa: ["2001:db8::1"],
       a: [],
       last_attempt_failed: false,
+      degraded_family: null,
       age_seconds: 5,
       ttl_remaining_seconds: 55,
     },
@@ -65,6 +66,20 @@ const mapping: ExternalServiceMapping = {
   app: "shop",
   external_name: "database",
   target: { kind: "site", name: "db" },
+};
+
+const degradedResolverStatus: SiteServiceResolverStatus = {
+  entries: [
+    {
+      host: "db.example.com",
+      aaaa: [],
+      a: ["10.0.0.4"],
+      last_attempt_failed: false,
+      degraded_family: "AAAA",
+      age_seconds: 5,
+      ttl_remaining_seconds: 5,
+    },
+  ],
 };
 
 const populated = {
@@ -126,6 +141,15 @@ describe("Services", () => {
     // External slots: mapped shows the target, unmapped shows the warning.
     expect(screen.getByText("_site/db")).toBeTruthy();
     expect(screen.getByText("unmapped")).toBeTruthy();
+  });
+
+  it("names the failing family on a host resolving on one family only", async () => {
+    renderWithSession(<Services />, {
+      fixtures: { ...populated, "/services/site/resolver-status": degradedResolverStatus },
+    });
+
+    expect(await screen.findByText("AAAA failing")).toBeTruthy();
+    expect(screen.queryByText("resolved")).toBeNull();
   });
 
   it("shows error alerts when the queries fail", async () => {

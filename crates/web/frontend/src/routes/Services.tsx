@@ -66,7 +66,8 @@ const PROTOCOLS: SiteServiceProtocol[] = ["tcp", "udp", "http"];
 /// Render a small inline status hint next to a site-service endpoint's
 /// remote_host. IP literals are routed directly so they get no badge; DNS
 /// names show "resolved", "resolving", or "failed" based on the daemon's
-/// resolver-status snapshot.
+/// resolver-status snapshot. A name resolving on one family while the other
+/// keeps failing names the failing one, since its records are stale.
 function renderResolverBadge(
   host: string,
   status: SiteServiceResolverStatus | null | undefined,
@@ -80,8 +81,13 @@ function renderResolverBadge(
       label = "failed";
       color = "error";
     } else if (entry.aaaa.length > 0 || entry.a.length > 0) {
-      label = "resolved";
-      color = "success";
+      if (entry.degraded_family) {
+        label = `${entry.degraded_family} failing`;
+        color = "warning";
+      } else {
+        label = "resolved";
+        color = "success";
+      }
     } else {
       label = "no records";
       color = "warning";

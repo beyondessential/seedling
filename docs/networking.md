@@ -191,7 +191,10 @@ The A and AAAA queries are independent: when one fails and the other
 returns records, the host resolves from those records, the failed family
 keeps its last answer, and the host is looked up again after a few
 seconds. Only a host with no records from either family, and at least
-one failed query, counts towards the unresolvable threshold.
+one failed query, counts towards the unresolvable threshold. The
+resolver-status entry names the failing family in `degraded_family`, so
+a host resolving on one family alone is visible as such rather than
+looking healthy; a lookup where both families fail clears it.
 
 Endpoints that can't be turned into a routable address surface as
 faults on the affected site service:
