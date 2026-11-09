@@ -1737,6 +1737,7 @@ The BSL surface is intentionally strategy-agnostic: scripts declare only that an
 > r[tls.strategy.acme-dns]
 > Operators may bind a hostname or wildcard pattern to a [DNS provider](#r--tls.dns-provider.lifecycle); the runtime must drive ACME for any matching hostname using the DNS-01 challenge against the bound provider.
 > The runtime must perform the ACME flow itself rather than configuring the proxy to do so, so that DNS-provider credentials are not exposed to the proxy or its persistent configuration.
+> Every challenge record the runtime publishes for an issuance must be removed once the CA no longer needs it, whether the issuance succeeded or failed at any step, so that no record is left behind in the operator's zone.
 
 > r[tls.policy.wildcard]
 > Policies may name a hostname pattern instead of an exact hostname.
