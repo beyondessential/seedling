@@ -66,7 +66,9 @@ pub struct ForwardRecord {
 // i[forward.concurrent]
 pub struct ForwardRegistry {
     by_id: HashMap<ForwardId, ForwardEntry>,
-    /// (conn_id, forward_key) → forward_id, hot-path index for UDP datagram routing.
+    /// (conn_id, forward_key) → forward_id for every live forward: the key
+    /// allocator's record of what is held, and the hot-path index for UDP
+    /// datagram routing.
     conn_key_to_id: HashMap<(usize, u16), ForwardId>,
     /// conn_id → list of forward_ids, for bulk teardown on connection close.
     conn_to_ids: HashMap<usize, Vec<ForwardId>>,
@@ -84,10 +86,30 @@ impl ForwardRegistry {
         }))
     }
 
-    // i[forward.key-exhaustion]
-    /// Allocate the next available `forward_key` for a connection, scanning
-    /// past keys that are still in use by active forwards.
-    pub fn alloc_key(&mut self, conn_id: usize) -> Result<u16, ForwardError> {
+    // i[impl forward.key-exhaustion]
+    /// Allocate a `forward_key` on the entry's connection and record the entry
+    /// under it in the same step, so no other forward can be handed that key
+    /// while this one lives. Every forward holds its key, whatever its proto:
+    /// removal drops the `(conn_id, forward_key)` mapping for every kind, so a
+    /// key only some kinds recorded could be reissued to a UDP forward and
+    /// then unmapped when the TCP forward holding it closed.
+    pub fn register(
+        &mut self,
+        conn_id: usize,
+        build: impl FnOnce(u16) -> ForwardEntry,
+    ) -> Result<u16, ForwardError> {
+        let key = self.alloc_key(conn_id)?;
+        let entry = build(key);
+        debug_assert_eq!((entry.conn_id, entry.forward_key), (conn_id, key));
+        let fid = entry.forward_id;
+        self.conn_to_ids.entry(conn_id).or_default().push(fid);
+        self.conn_key_to_id.insert((conn_id, key), fid);
+        self.by_id.insert(fid, entry);
+        Ok(key)
+    }
+
+    /// Scan from the connection's counter for a key no live forward holds.
+    fn alloc_key(&mut self, conn_id: usize) -> Result<u16, ForwardError> {
         let counter = self.key_counters.entry(conn_id).or_insert(0);
         let start = *counter;
         loop {
@@ -100,18 +122,6 @@ impl ForwardRegistry {
                 return Err(ForwardError::KeySpaceExhausted);
             }
         }
-    }
-
-    pub fn insert(&mut self, entry: ForwardEntry) {
-        let fid = entry.forward_id;
-        let conn_id = entry.conn_id;
-        let key = entry.forward_key;
-        let is_udp = entry.udp_tx.is_some();
-        self.conn_to_ids.entry(conn_id).or_default().push(fid);
-        if is_udp {
-            self.conn_key_to_id.insert((conn_id, key), fid);
-        }
-        self.by_id.insert(fid, entry);
     }
 
     /// Remove the entry and return it so the caller can send the stop signal.
@@ -199,5 +209,74 @@ impl ForwardRegistry {
                 Some(entry)
             })
             .collect()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn entry(conn_id: usize, forward_key: u16, proto: ForwardProto) -> ForwardEntry {
+        let udp_tx = matches!(proto, ForwardProto::Udp).then(|| mpsc::channel(1).0);
+        ForwardEntry {
+            forward_id: ForwardId::generate(),
+            forward_key,
+            conn_id,
+            app: AppName::new("app").unwrap(),
+            service: "svc".to_owned(),
+            port: 53,
+            proto,
+            target_addr: Ipv6Addr::LOCALHOST,
+            opened_at: Timestamp::now(),
+            actor: None,
+            stop_tx: watch::channel(false).0,
+            udp_tx,
+        }
+    }
+
+    // i[verify forward.key-exhaustion]
+    #[test]
+    fn wrapped_key_is_not_reissued_while_a_tcp_forward_holds_it() {
+        let registry = ForwardRegistry::new();
+        let mut reg = registry.lock();
+        let conn = 7;
+
+        let mut tcp_id = None;
+        let tcp_key = reg
+            .register(conn, |k| {
+                let e = entry(conn, k, ForwardProto::Tcp);
+                tcp_id = Some(e.forward_id);
+                e
+            })
+            .unwrap();
+
+        // Wrap the counter back round to the TCP forward's key.
+        reg.key_counters.insert(conn, tcp_key);
+        let udp_key = reg
+            .register(conn, |k| entry(conn, k, ForwardProto::Udp))
+            .unwrap();
+        assert_ne!(udp_key, tcp_key);
+
+        reg.remove(&tcp_id.unwrap()).unwrap();
+        assert!(
+            reg.get_udp_sender(conn, udp_key).is_some(),
+            "closing the TCP forward must leave the UDP forward routable"
+        );
+    }
+
+    // i[verify forward.key-exhaustion]
+    #[test]
+    fn exhausted_key_space_is_refused() {
+        let registry = ForwardRegistry::new();
+        let mut reg = registry.lock();
+        let conn = 1;
+        for _ in 0..=u16::MAX {
+            reg.register(conn, |k| entry(conn, k, ForwardProto::Tcp))
+                .unwrap();
+        }
+        assert!(matches!(
+            reg.register(conn, |k| entry(conn, k, ForwardProto::Udp)),
+            Err(ForwardError::KeySpaceExhausted)
+        ));
     }
 }

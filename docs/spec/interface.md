@@ -762,7 +762,8 @@ Absent specification bugs, anything that is not defined here is either defined i
 > Responses from the service are sent back as QUIC datagrams with the same `forward_key` prefix.
 
 > i[forward.key-exhaustion]
-> `forward_key` is a 16-bit value; each connection can therefore have at most 65536 concurrent UDP forwards.
+> `forward_key` is a 16-bit value allocated to every forward, TCP and UDP alike, and held for the forward's lifetime.
+> No two live forwards on one connection hold the same key, so each connection can have at most 65536 concurrent forwards.
 > When allocating a new key, the server scans for an unused slot and reuses keys freed by closed forwards.
 > If all 65536 keys are in use the request fails with an `"internal"` error.
 

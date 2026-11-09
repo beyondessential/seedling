@@ -133,20 +133,6 @@ pub(crate) async fn forward_port_session(
 
     let conn_id = conn.stable_id();
     let forward_id = ForwardId::generate();
-    let forward_key_result = state.forwards.lock().alloc_key(conn_id);
-    let forward_key = match forward_key_result {
-        Ok(k) => k,
-        Err(e) => {
-            write_err(
-                &mut send,
-                "internal",
-                &format!("forward key allocation: {e}"),
-            )
-            .await;
-            return;
-        }
-    };
-
     let (stop_tx, mut stop_rx) = tokio::sync::watch::channel(false);
 
     // i[forward.mtu]
@@ -163,35 +149,52 @@ pub(crate) async fn forward_port_session(
             None
         };
 
-    let udp_tx: Option<tokio::sync::mpsc::Sender<Vec<u8>>> = if matches!(proto, ForwardProto::Udp) {
-        let (tx, rx) = tokio::sync::mpsc::channel(64);
+    let (udp_tx, udp_rx) = match proto {
+        ForwardProto::Udp => {
+            let (tx, rx) = tokio::sync::mpsc::channel(64);
+            (Some(tx), Some(rx))
+        }
+        ForwardProto::Tcp => (None, None),
+    };
+
+    let registered = state
+        .forwards
+        .lock()
+        .register(conn_id, |forward_key| ForwardEntry {
+            forward_id,
+            forward_key,
+            conn_id,
+            app: params.app.clone(),
+            service: params.service.clone(),
+            port: params.port,
+            proto,
+            target_addr,
+            opened_at: jiff::Timestamp::now(),
+            actor: req_actor,
+            stop_tx,
+            udp_tx,
+        });
+    let forward_key = match registered {
+        Ok(k) => k,
+        Err(e) => {
+            write_err(
+                &mut send,
+                "internal",
+                &format!("forward key allocation: {e}"),
+            )
+            .await;
+            return;
+        }
+    };
+
+    if let Some(rx) = udp_rx {
         let conn_clone = conn.clone();
-        let fkey = forward_key;
-        let taddr = target_addr;
         let tport = params.port;
         let status_tx = status_tx.clone();
         tokio::spawn(async move {
-            udp_relay_task(rx, conn_clone, fkey, taddr, tport, status_tx).await;
+            udp_relay_task(rx, conn_clone, forward_key, target_addr, tport, status_tx).await;
         });
-        Some(tx)
-    } else {
-        None
-    };
-
-    state.forwards.lock().insert(ForwardEntry {
-        forward_id,
-        forward_key,
-        conn_id,
-        app: params.app.clone(),
-        service: params.service.clone(),
-        port: params.port,
-        proto,
-        target_addr,
-        opened_at: jiff::Timestamp::now(),
-        actor: req_actor,
-        stop_tx,
-        udp_tx,
-    });
+    }
 
     let resp = serde_json::to_vec(&serde_json::json!({
         "result": {
