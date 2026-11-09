@@ -659,6 +659,11 @@ Absent specification bugs, anything that is not defined here is either defined i
 > Returns `{ session_id, stdout_stream_id, stderr_stream_id }` as the handshake response on the session stream.
 > After the handshake response is written, the server treats subsequent bytes on the session stream's client-to-server direction as raw stdin for the shell's job.
 
+> i[shell.startup]
+> A session is registered under its `session_id` before the handshake response carrying that id is written, and stays registered while its shell starts, which can include running the shell's script, pulling its image and creating its network.
+> From the moment the client holds the id, the session appears in `/shells/list`, `/shells/resize` records the dimensions to apply as soon as the terminal exists, and `/shells/stop` ends the session without waiting for the shell to start.
+> A session stopped before its job is running ends without the job having started, and anything it had already created, such as its pod network, is removed.
+
 > i[shell.streams]
 > Each session uses the three streams defined in [stream.shell](#i--stream.shell).
 > `stdout_stream_id` and `stderr_stream_id` in the handshake response identify the server-initiated unidirectional streams the client must read for the session's output.
@@ -691,7 +696,8 @@ Absent specification bugs, anything that is not defined here is either defined i
 > On session end, the server closes its write-ends of the stdout and stderr streams.
 
 > i[shell.start]
-> When a session is registered, a `ShellStarted` event is emitted on the event feed.
+> When the handshake response has been written, a `ShellStarted` event is emitted on the event feed.
+> Every session that emits it ends with a `ShellExited` event, including one that ends before its job has started.
 
 > i[shell.exit]
 > When a session ends, the server writes a final JSON frame `{ "exit_code": <int> }` to the server-to-client direction of the session stream, then closes its write-end.

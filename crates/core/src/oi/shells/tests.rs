@@ -9,8 +9,14 @@ use rustls_pki_types::PrivatePkcs8KeyDer;
 use seedling_protocol::names::SessionId;
 use tokio::io::AsyncWrite;
 
-use super::session::{LiveShell, SessionStreams, run_to_exit};
-use crate::{oi::test_support::TestOi, system::types::ExecHandle};
+use super::{
+    registry::{ShellSession, StopSignal},
+    session::{LiveShell, SessionStreams, run_to_exit},
+};
+use crate::{
+    oi::{state::OiState, test_support::TestOi},
+    system::types::ExecHandle,
+};
 
 /// A connected QUIC pair over loopback. The server side is what a shell session
 /// runs on, the client side is the operator's end of it.
@@ -102,6 +108,57 @@ fn process_exists(pid: u32) -> bool {
     unsafe { libc::kill(pid as libc::pid_t, 0) == 0 }
 }
 
+/// A session as it stands once its job has started: registered, with a job
+/// that never exits on its own and a pod network of its own.
+struct Started {
+    session_id: SessionId,
+    stop: StopSignal,
+    live: LiveShell,
+    pid: u32,
+}
+
+async fn started(state: &OiState, stdin: impl AsyncWrite + Send + Unpin + 'static) -> Started {
+    let session_id = SessionId::generate();
+    let stop = StopSignal::new();
+    state.shells.insert(ShellSession::starting(
+        session_id,
+        "app".parse().unwrap(),
+        "shell".to_owned(),
+        None,
+        (24, 80),
+        stop.clone(),
+    ));
+
+    let net_name = "seedling-shell-test";
+    state
+        .container_runtime
+        .create_network(net_name, "fd5e:ed11:9000:1::/64".parse().unwrap(), None)
+        .await
+        .expect("create network");
+
+    let child = tokio::process::Command::new("sleep")
+        .arg("60")
+        .kill_on_drop(true)
+        .spawn()
+        .expect("spawn job");
+    let pid = child.id().expect("job pid");
+    Started {
+        session_id,
+        stop,
+        live: LiveShell {
+            exec: ExecHandle {
+                stdin: Box::new(stdin),
+                stdout: Box::new(tokio::io::empty()),
+                pty_master_fd: -1,
+                child,
+            },
+            container_name: "shell-test".to_owned(),
+            net_name: net_name.to_owned(),
+        },
+        pid,
+    }
+}
+
 // i[verify shell.cleanup]
 #[test]
 fn stdin_failure_after_exec_removes_the_job_and_its_network() {
@@ -111,39 +168,21 @@ fn stdin_failure_after_exec_removes_the_job_and_its_network() {
     oi.block_on(async {
         let link = loopback().await;
         let (streams, mut recv, mut client_recv) = open_streams(&link).await;
+        let Started {
+            session_id,
+            stop,
+            live,
+            pid,
+        } = started(&state, BrokenStdin).await;
+        let net_name = live.net_name.clone();
 
-        let net_name = "seedling-shell-test";
-        state
-            .container_runtime
-            .create_network(net_name, "fd5e:ed11:9000:1::/64".parse().unwrap(), None)
-            .await
-            .expect("create network");
-
-        let child = tokio::process::Command::new("sleep")
-            .arg("60")
-            .kill_on_drop(true)
-            .spawn()
-            .expect("spawn job");
-        let pid = child.id().expect("job pid");
-        let live = LiveShell {
-            exec: ExecHandle {
-                stdin: Box::new(BrokenStdin),
-                stdout: Box::new(tokio::io::empty()),
-                pty_master_fd: -1,
-                child,
-            },
-            container_name: "shell-test".to_owned(),
-            net_name: net_name.to_owned(),
-        };
-
-        let (_stop_tx, mut stop_rx) = tokio::sync::oneshot::channel();
         let exit_code = run_to_exit(
             &state,
-            SessionId::generate(),
+            session_id,
+            &stop,
             live,
             &mut recv,
             b"typed before the shell opened",
-            &mut stop_rx,
             streams,
         )
         .await;
@@ -152,13 +191,85 @@ fn stdin_failure_after_exec_removes_the_job_and_its_network() {
         assert!(
             !state
                 .container_runtime
-                .network_exists(net_name)
+                .network_exists(&net_name)
                 .await
                 .unwrap(),
             "the session's pod network is removed"
         );
         assert!(!process_exists(pid), "the job is terminated and reaped");
+        assert!(state.shells.list(None).is_empty());
 
+        let frame = client_recv.read_to_end(1024).await.expect("exit frame");
+        assert_eq!(frame, b"{\"exit_code\":-1}\n");
+    });
+}
+
+// i[verify shell.startup]
+#[test]
+fn stop_that_lands_before_the_job_attaches_ends_the_job() {
+    let oi = TestOi::new();
+    let state = Arc::clone(&oi.state);
+
+    oi.block_on(async {
+        let link = loopback().await;
+        let (streams, mut recv, mut client_recv) = open_streams(&link).await;
+        let Started {
+            session_id,
+            stop,
+            live,
+            pid,
+        } = started(&state, tokio::io::sink()).await;
+        let net_name = live.net_name.clone();
+
+        // The operator stops the session while its job is still starting, so
+        // the registry entry is gone by the time the job is ready to attach.
+        assert!(state.shells.stop(&session_id));
+
+        let exit_code = run_to_exit(&state, session_id, &stop, live, &mut recv, b"", streams).await;
+
+        assert_eq!(exit_code, -1);
+        assert!(!process_exists(pid), "the job does not run on");
+        assert!(
+            !state
+                .container_runtime
+                .network_exists(&net_name)
+                .await
+                .unwrap()
+        );
+
+        let frame = client_recv.read_to_end(1024).await.expect("exit frame");
+        assert_eq!(frame, b"{\"exit_code\":-1}\n");
+    });
+}
+
+// i[verify shell.stop]
+#[test]
+fn stop_after_the_job_is_running_ends_the_session() {
+    let oi = TestOi::new();
+    let state = Arc::clone(&oi.state);
+
+    oi.block_on(async {
+        let link = loopback().await;
+        let (streams, mut recv, mut client_recv) = open_streams(&link).await;
+        let Started {
+            session_id,
+            stop,
+            live,
+            pid,
+        } = started(&state, tokio::io::sink()).await;
+
+        let stopper = {
+            let state = Arc::clone(&state);
+            tokio::spawn(async move {
+                tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                state.shells.stop(&session_id)
+            })
+        };
+        let exit_code = run_to_exit(&state, session_id, &stop, live, &mut recv, b"", streams).await;
+
+        assert!(stopper.await.unwrap(), "the session was registered to stop");
+        assert_eq!(exit_code, -1);
+        assert!(!process_exists(pid));
         let frame = client_recv.read_to_end(1024).await.expect("exit frame");
         assert_eq!(frame, b"{\"exit_code\":-1}\n");
     });

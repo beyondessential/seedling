@@ -5,8 +5,11 @@ use seedling_protocol::names::{
 };
 
 use super::{
-    registry::ShellSession,
-    session::{LiveShell, SessionStreams, reject, run_to_exit, write_frame},
+    registry::{ShellSession, StopSignal},
+    session::{
+        LiveShell, SessionStreams, StartupFailure, abort_startup, begin_session, reject,
+        run_to_exit,
+    },
 };
 use crate::{
     defs::resource::ResourceKind,
@@ -270,20 +273,28 @@ pub(crate) async fn open_volume_shell_session(
 
     let session_id = SessionId::generate();
 
-    let handshake = write_frame(
+    let stop = StopSignal::new();
+    let volumes_app = AppName::new_unchecked("_volumes");
+    // i[impl volumes.shell]
+    let session = ShellSession::starting(
+        session_id,
+        volumes_app,
+        session_name.clone(),
+        req_actor,
+        (params.rows, params.cols),
+        stop.clone(),
+    );
+    let event_name = ShellName::new_unchecked("volume-shell");
+    if !begin_session(
+        &state,
         &mut send,
-        &serde_json::json!({
-            "result": {
-                "session_id": session_id.to_string(),
-                "stdout_stream_id": stdout_stream_id,
-                "stderr_stream_id": stderr_stream_id,
-            }
-        }),
+        session,
+        &event_name,
+        stdout_stream_id,
+        stderr_stream_id,
     )
-    .await;
-    if let Err(e) = handshake {
-        tracing::warn!("volume shell: write handshake: {e}");
-        let _ = send.finish();
+    .await
+    {
         let _ = state.container_runtime.remove_network(&net_name).await;
         return;
     }
@@ -354,49 +365,32 @@ pub(crate) async fn open_volume_shell_session(
         stop_timeout_secs: None,
     };
 
+    // i[impl shell.startup]
+    if stop.is_requested() {
+        abort_startup(
+            &state,
+            session_id,
+            StartupFailure::stopped(Some(net_name)),
+            streams,
+        )
+        .await;
+        return;
+    }
+
     let exec_handle = match state.container_runtime.exec(spec).await {
         Ok(h) => h,
         Err(e) => {
             tracing::warn!("volume shell: exec failed: {e}");
-            let _ = state.container_runtime.remove_network(&net_name).await;
-            streams.end(-1, Some(&format!("exec failed: {e}"))).await;
+            let failure = StartupFailure::failed(format!("exec failed: {e}"), Some(net_name));
+            abort_startup(&state, session_id, failure, streams).await;
             return;
         }
     };
 
-    {
-        let ws = libc::winsize {
-            ws_row: params.rows,
-            ws_col: params.cols,
-            ws_xpixel: 0,
-            ws_ypixel: 0,
-        };
-        // SAFETY: pty_master_fd is valid until exec_handle is dropped.
-        unsafe { libc::ioctl(exec_handle.pty_master_fd, libc::TIOCSWINSZ as _, &ws) };
-    }
-
-    let (stop_tx, mut stop_rx) = tokio::sync::oneshot::channel::<()>();
-    let pty_master_fd = exec_handle.pty_master_fd;
-    let volumes_app = AppName::new_unchecked("_volumes");
-    state.shells.insert(ShellSession {
-        session_id,
-        app: volumes_app.clone(),
-        name: session_name.clone(),
-        opened_at: jiff::Timestamp::now(),
-        actor: req_actor,
-        container_name: container_name.clone(),
-        pty_master_fd,
-        stop_tx,
-    });
-    // i[impl volumes.shell]
-    let shell_event_name = ShellName::new_unchecked("volume-shell");
-    state
-        .event_tx
-        .shell_started(session_id, &volumes_app, &shell_event_name);
-
     let exit_code = run_to_exit(
         &state,
         session_id,
+        &stop,
         LiveShell {
             exec: exec_handle,
             container_name,
@@ -404,7 +398,6 @@ pub(crate) async fn open_volume_shell_session(
         },
         &mut recv,
         &leftover_stdin,
-        &mut stop_rx,
         streams,
     )
     .await;
