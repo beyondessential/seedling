@@ -1,13 +1,12 @@
-use std::{path::PathBuf, sync::Arc, time::Duration};
+use std::{path::PathBuf, sync::Arc};
 
 use seedling_protocol::names::{
     AppName, AppVolumeName, HeldVolumeId, SessionId, ShellName, SiteVolumeName,
 };
-use tokio::io::AsyncWriteExt;
 
 use super::{
     registry::ShellSession,
-    session::{SessionStreams, reject, relay_session, write_frame},
+    session::{LiveShell, SessionStreams, reject, run_to_exit, write_frame},
 };
 use crate::{
     defs::resource::ResourceKind,
@@ -288,7 +287,7 @@ pub(crate) async fn open_volume_shell_session(
         let _ = state.container_runtime.remove_network(&net_name).await;
         return;
     }
-    let mut streams = SessionStreams {
+    let streams = SessionStreams {
         send,
         stdout: stdout_send,
         stderr: stderr_send,
@@ -355,7 +354,7 @@ pub(crate) async fn open_volume_shell_session(
         stop_timeout_secs: None,
     };
 
-    let mut exec_handle = match state.container_runtime.exec(spec).await {
+    let exec_handle = match state.container_runtime.exec(spec).await {
         Ok(h) => h,
         Err(e) => {
             tracing::warn!("volume shell: exec failed: {e}");
@@ -395,62 +394,20 @@ pub(crate) async fn open_volume_shell_session(
         .event_tx
         .shell_started(session_id, &volumes_app, &shell_event_name);
 
-    let exit_code: i32;
-
-    if !leftover_stdin.is_empty() && exec_handle.stdin.write_all(&leftover_stdin).await.is_err() {
-        state.shells.remove(&session_id);
-        state.event_tx.shell_exited(session_id, -1);
-        let _ = state.container_runtime.remove_network(&net_name).await;
-        streams.end(-1, None).await;
-        return;
-    }
-
-    if let Some(status) = relay_session(
+    let exit_code = run_to_exit(
+        &state,
+        session_id,
+        LiveShell {
+            exec: exec_handle,
+            container_name,
+            net_name,
+        },
         &mut recv,
-        &mut exec_handle,
-        &mut streams.stdout,
+        &leftover_stdin,
         &mut stop_rx,
+        streams,
     )
-    .await
-    {
-        exit_code = status.ok().and_then(|s| s.code()).unwrap_or(-1);
-        state.shells.remove(&session_id);
-        state.event_tx.shell_exited(session_id, exit_code);
-        let _ = state.container_runtime.remove_network(&net_name).await;
-        streams.end(exit_code, None).await;
-        tracing::info!(%session_name, %exit_code, "volume shell session ended");
-        return;
-    }
-
-    if let Some(pid) = exec_handle.child.id() {
-        unsafe { libc::kill(pid as libc::pid_t, libc::SIGTERM) };
-    }
-
-    let graceful = tokio::time::timeout(Duration::from_secs(5), exec_handle.child.wait()).await;
-
-    exit_code = match graceful {
-        Ok(status) => status.ok().and_then(|s| s.code()).unwrap_or(-1),
-        Err(_timeout) => {
-            let _ = state
-                .container_runtime
-                .remove_container(&container_name, true)
-                .await;
-            let _ = exec_handle.child.kill().await;
-            exec_handle
-                .child
-                .wait()
-                .await
-                .ok()
-                .and_then(|s| s.code())
-                .unwrap_or(-1)
-        }
-    };
-
-    state.shells.remove(&session_id);
-    state.event_tx.shell_exited(session_id, exit_code);
-    let _ = state.container_runtime.remove_network(&net_name).await;
-
-    streams.end(exit_code, None).await;
+    .await;
 
     tracing::info!(%session_name, %exit_code, "volume shell session ended");
 }

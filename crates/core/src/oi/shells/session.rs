@@ -244,7 +244,7 @@ pub(crate) async fn open_shell_session(
         let _ = send.finish();
         return;
     }
-    let mut streams = SessionStreams {
+    let streams = SessionStreams {
         send,
         stdout: stdout_send,
         stderr: stderr_send,
@@ -500,7 +500,7 @@ pub(crate) async fn open_shell_session(
         .labels
         .insert("seedling.session".to_string(), "shell".to_string());
 
-    let mut exec_handle = match state.container_runtime.exec(container_spec).await {
+    let exec_handle = match state.container_runtime.exec(container_spec).await {
         Ok(h) => h,
         Err(e) => {
             tracing::warn!(app = %app_name, shell = %shell_name, "exec failed: {e}");
@@ -538,72 +538,98 @@ pub(crate) async fn open_shell_session(
         .event_tx
         .shell_started(session_id, &app_name, &shell_name);
 
-    let exit_code: i32;
-
-    if !leftover_stdin.is_empty() && exec_handle.stdin.write_all(&leftover_stdin).await.is_err() {
-        state.shells.remove(&session_id);
-        // i[impl shell.exit]
-        state.event_tx.shell_exited(session_id, -1);
-        streams.end(-1, None).await;
-        return;
-    }
-
-    // i[shell.close]
-    // i[shell.exit]
-    if let Some(status) = relay_session(
+    let exit_code = run_to_exit(
+        &state,
+        session_id,
+        LiveShell {
+            exec: exec_handle,
+            container_name,
+            net_name,
+        },
         &mut recv,
-        &mut exec_handle,
-        &mut streams.stdout,
+        &leftover_stdin,
         &mut stop_rx,
+        streams,
     )
-    .await
-    {
-        exit_code = status.ok().and_then(|s| s.code()).unwrap_or(-1);
-        state.shells.remove(&session_id);
-        // i[impl shell.exit]
-        state.event_tx.shell_exited(session_id, exit_code);
-        let _ = state.container_runtime.remove_network(&net_name).await;
-        streams.end(exit_code, None).await;
-        tracing::info!(
-            app = %app_name, shell = %shell_name, %exit_code,
-            "shell session ended"
-        );
-        return;
-    }
+    .await;
 
-    // i[shell.cleanup]
-    if let Some(pid) = exec_handle.child.id() {
-        unsafe { libc::kill(pid as libc::pid_t, libc::SIGTERM) };
-    }
+    tracing::info!(app = %app_name, shell = %shell_name, %exit_code, "shell session ended");
+}
 
-    let graceful = tokio::time::timeout(Duration::from_secs(5), exec_handle.child.wait()).await;
+/// A started shell: its running job and the names of what must be removed once
+/// the session ends.
+pub(super) struct LiveShell {
+    pub(super) exec: ExecHandle,
+    pub(super) container_name: String,
+    pub(super) net_name: String,
+}
 
-    exit_code = match graceful {
-        Ok(status) => status.ok().and_then(|s| s.code()).unwrap_or(-1),
-        Err(_timeout) => {
-            let _ = state
-                .container_runtime
-                .remove_container(&container_name, true)
-                .await;
-            let _ = exec_handle.child.kill().await;
-            exec_handle
-                .child
-                .wait()
-                .await
-                .ok()
-                .and_then(|s| s.code())
-                .unwrap_or(-1)
+/// Runs a registered session to its end and tears everything it holds down:
+/// the job, the session's registry entry, its pod network and its streams.
+/// Returns the exit code reported to the client.
+///
+/// Every way a session can end comes through here, so none can leave the job or
+/// its network behind.
+pub(super) async fn run_to_exit(
+    state: &OiState,
+    session_id: SessionId,
+    mut live: LiveShell,
+    recv: &mut quinn::RecvStream,
+    leftover_stdin: &[u8],
+    stop_rx: &mut tokio::sync::oneshot::Receiver<()>,
+    mut streams: SessionStreams,
+) -> i32 {
+    // The job has exited on its own, with this status, or it has to be stopped
+    // and the exit code is the one its termination gives (or the one forced).
+    let job_exit: Result<i32, Option<i32>> = 'run: {
+        if !leftover_stdin.is_empty() && live.exec.stdin.write_all(leftover_stdin).await.is_err() {
+            break 'run Err(Some(-1));
+        }
+
+        // i[shell.close]
+        match relay_session(recv, &mut live.exec, &mut streams.stdout, stop_rx).await {
+            Some(status) => Ok(status.ok().and_then(|s| s.code()).unwrap_or(-1)),
+            None => Err(None),
+        }
+    };
+
+    let exit_code = match job_exit {
+        Ok(code) => code,
+        Err(forced) => {
+            // i[impl shell.cleanup]
+            if let Some(pid) = live.exec.child.id() {
+                unsafe { libc::kill(pid as libc::pid_t, libc::SIGTERM) };
+            }
+
+            let graceful =
+                tokio::time::timeout(Duration::from_secs(5), live.exec.child.wait()).await;
+            let terminated = match graceful {
+                Ok(status) => status.ok().and_then(|s| s.code()).unwrap_or(-1),
+                Err(_timeout) => {
+                    let _ = state
+                        .container_runtime
+                        .remove_container(&live.container_name, true)
+                        .await;
+                    let _ = live.exec.child.kill().await;
+                    live.exec
+                        .child
+                        .wait()
+                        .await
+                        .ok()
+                        .and_then(|s| s.code())
+                        .unwrap_or(-1)
+                }
+            };
+            forced.unwrap_or(terminated)
         }
     };
 
     state.shells.remove(&session_id);
     // i[impl shell.exit]
     state.event_tx.shell_exited(session_id, exit_code);
-    let _ = state.container_runtime.remove_network(&net_name).await;
-
+    let _ = state.container_runtime.remove_network(&live.net_name).await;
     streams.end(exit_code, None).await;
-
-    tracing::info!(app = %app_name, shell = %shell_name, %exit_code, "shell session ended");
+    exit_code
 }
 
 // i[impl stream.shell]

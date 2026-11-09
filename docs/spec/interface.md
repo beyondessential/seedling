@@ -702,6 +702,7 @@ Absent specification bugs, anything that is not defined here is either defined i
 
 > i[shell.cleanup]
 > Dynamic resources created within a shell session are cleaned up by the runtime when the session ends, as specified in the runtime spec.
+> The session's job is terminated and its pod network removed however the session ends, including when the job could not be given the stdin the client sent with its request.
 
 > i[shell.concurrent]
 > Shell sessions may run concurrently with lifecycle operations and with other shell sessions.
