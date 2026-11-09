@@ -187,6 +187,15 @@ maximum age (currently 5 minutes); the reconciler is kicked when a
 host's resolved set actually changes so route / nftables state catches
 up promptly.
 
+The A and AAAA queries are independent: when one fails and the other
+returns records, the host resolves from those records, the failed family
+keeps its last answer, and the host is looked up again after a few
+seconds. Only a host with no records from either family, and at least
+one failed query, counts towards the unresolvable threshold. The
+resolver-status entry names the failing family in `degraded_family`, so
+a host resolving on one family alone is visible as such rather than
+looking healthy; a lookup where both families fail clears it.
+
 Endpoints that can't be turned into a routable address surface as
 faults on the affected site service:
 
@@ -329,10 +338,17 @@ upstream IPv4 DNS servers when the operator supplies any via
 `--dns-upstreams`.
 
 Like Caddy, the resolver runs in blue/green container slots
-(`seedling-resolver-blue` / `seedling-resolver-green`) for zero-downtime
-image upgrades. The active slot is recorded in the database; upgrades
-start the inactive slot at the same well-known address, health-check
-the `/health` endpoint on port 8080, then swap.
+(`seedling-resolver-blue` / `seedling-resolver-green`). The active slot is recorded in the database. The
+resolver address can be held by one container at a time, so a
+replacement stops the running resolver, records the other slot as
+active, and starts there at the same well-known address; resolution is
+briefly unavailable. An interrupted replacement is finished by the next
+tick, which starts the recorded slot afresh.
+
+Each resolver container carries a label holding a hash of the Corefile
+and address it was started with. CoreDNS is not told to reload its
+Corefile, so a container whose hash differs from the one now generated
+(or that has none) is replaced the same way as on an image change.
 
 The Corefile is generated from two inputs:
 

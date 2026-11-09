@@ -410,6 +410,7 @@ pub(crate) fn site_service_resolver_status(state: &OiState) -> HandlerResult {
                 "aaaa": e.aaaa.iter().map(|a| a.to_string()).collect::<Vec<_>>(),
                 "a":    e.a.iter().map(|a| a.to_string()).collect::<Vec<_>>(),
                 "last_attempt_failed": e.last_attempt_failed,
+                "degraded_family": e.degraded_family.map(|f| f.record_type()),
                 "age_seconds": e.age.as_secs(),
                 "ttl_remaining_seconds": e.ttl_remaining.as_secs(),
             })

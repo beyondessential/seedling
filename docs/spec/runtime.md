@@ -1180,6 +1180,9 @@ Some operations must hand a writable or read-only path to an action closure with
 >
 > The runtime must report endpoints as unroutable when an IPv4 path is required but NAT64 is unavailable on the host (e.g. when the operator has explicitly disabled it and no external NAT64 is present), and as unresolvable when DNS resolution for an endpoint hostname has failed past a small consecutive-failure threshold. These conditions must surface as faults on the affected site service and must auto-clear when the underlying condition resolves. An unresolvable or unroutable endpoint must not block routing for other endpoints, services, or apps; only the affected site service's own backend pool is reduced.
 
+> r[service.site.address.partial-answer]
+> A DNS name is resolved from the address families that answered. When the lookup for one family fails and the other returns records, the endpoint is resolved from those records, the failed family keeps whatever it last answered, and the name is looked up again promptly rather than after the answer's full lifetime. A failed lookup must not be recorded as the family having no records. The name counts towards the unresolvable threshold only when no lookup returned records and at least one failed. The resolver's status report must name the family whose lookup is failing, for as long as it keeps failing, so that a name resolving on one family alone is distinguishable from one resolving on both.
+
 > r[service.site.lifecycle]
 > Site services are created, retargeted, and deleted exclusively through operator commands. Creating a site service registers its name and an optional human-readable description; endpoints are added and removed independently so operators may adjust the backing set without recreating the service.
 >
@@ -1607,7 +1610,9 @@ Two levers set how a workload competes for host resources under pressure. Each D
 
 > r[infra.resolver.address]
 > The resolver must listen on a stable node-wide IPv6 address derived from the node prefix,
-> so that all workload containers can reach it at a predictable address.
+> so that all workload containers can reach it at a predictable address. The address is
+> `<prefix>:fd00::53` within the resolver network, where `53` is the hexadecimal last
+> group, so that operators can write firewall and monitoring rules against it.
 
 > r[infra.resolver.startup]
 > The runtime must ensure the resolver container is running and healthy before beginning the
@@ -1615,8 +1620,19 @@ Two levers set how a workload competes for host resources under pressure. Each D
 > the resolver if necessary.
 
 > r[infra.resolver.upgrade]
-> When the resolver container image changes, the runtime must upgrade it using the same
-> blue/green strategy used for the [proxy](#r--infra.proxy.upgrade).
+> When the resolver container image changes, the runtime must replace the running resolver
+> with one started from the new image, in the resolver slot that is not active, at the
+> [resolver address](#r--infra.resolver.address). The resolver address can be held by one
+> container at a time, so the replacement stops the running resolver first and resolution
+> is briefly unavailable. The active slot is persisted in the database, and a replacement
+> interrupted at any point must be completed on a later reconciliation tick without
+> operator action.
+
+> r[infra.resolver.config.apply]
+> The resolver must serve the configuration the runtime currently generates. The runtime
+> records on each resolver container the configuration and address it was started with, and
+> when that differs from what is currently generated, or is absent, it must replace the
+> container as for an [image change](#r--infra.resolver.upgrade).
 
 ## Container DNS
 

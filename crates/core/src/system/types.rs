@@ -13,6 +13,12 @@ use serde::{Deserialize, Serialize};
 // Container observation
 // ---------------------------------------------------------------------------
 
+/// Label carrying the hash of the configuration a container was started with,
+/// so a later observation can tell whether it is still what is wanted. Written
+/// by the translation that builds a container's spec and read back off the
+/// running container, so both sides name it from here.
+pub const SPEC_HASH_LABEL: &str = "seedling.spec-hash";
+
 #[derive(Debug, Clone)]
 pub struct ContainerState {
     pub status: ContainerStatus,
@@ -27,7 +33,7 @@ pub struct ContainerState {
     pub pod_addr_v4: Option<Ipv4Addr>,
     /// The image ID (config digest) the container was started from, if known.
     pub image_id: Option<String>,
-    /// The `seedling.spec-hash` label value from the running container, if present.
+    /// The [`SPEC_HASH_LABEL`] value from the running container, if present.
     /// Used to detect config drift without re-running the spec computation.
     pub spec_hash: Option<String>,
 }

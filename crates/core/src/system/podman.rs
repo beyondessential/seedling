@@ -31,7 +31,7 @@ use crate::system::{
     translate::container::podman_args,
     types::{
         ContainerFilter, ContainerHealth, ContainerSpec, ContainerState, ContainerStatus,
-        ContainerSummary, ExecHandle, ImageSummary, NetworkSummary,
+        ContainerSummary, ExecHandle, ImageSummary, NetworkSummary, SPEC_HASH_LABEL,
     },
 };
 
@@ -178,7 +178,7 @@ impl PodmanRuntime {
                 .config
                 .as_ref()
                 .and_then(|c| c.labels.as_ref())
-                .and_then(|l| l.get("seedling.spec-hash"))
+                .and_then(|l| l.get(SPEC_HASH_LABEL))
                 .cloned(),
         }))
     }

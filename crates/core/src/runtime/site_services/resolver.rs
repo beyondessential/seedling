@@ -52,6 +52,31 @@ const FAULT_AFTER_FAILURES: u32 = 5;
 /// How often the background loop wakes up to look for entries due for refresh.
 const TICK_INTERVAL: Duration = Duration::from_secs(5);
 
+/// A DNS address family, named by the record type that carries it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Family {
+    /// IPv6 addresses, from AAAA records.
+    Aaaa,
+    /// IPv4 addresses, from A records.
+    A,
+}
+
+impl Family {
+    /// The record type's name, as it appears in logs and on the status route.
+    pub fn record_type(self) -> &'static str {
+        match self {
+            Self::Aaaa => "AAAA",
+            Self::A => "A",
+        }
+    }
+}
+
+impl std::fmt::Display for Family {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.record_type())
+    }
+}
+
 /// Single-host cache record. Two never-yet-resolved hostnames look the same
 /// to consumers as `lookup() -> None`; only entries that have completed at
 /// least one query (success or failure) appear in the map.
@@ -65,6 +90,10 @@ struct CacheEntry {
     /// `failed` entry with no records into an `Unresolved::LookupFailed`
     /// outcome.
     last_attempt_failed: bool,
+    /// The address family whose last lookup failed while the other family
+    /// answered, so that family's records are its previous answer rather
+    /// than a fresh one.
+    degraded_family: Option<Family>,
 }
 
 impl CacheEntry {
@@ -81,6 +110,10 @@ pub struct ResolverStatusEntry {
     pub aaaa: Vec<Ipv6Addr>,
     pub a: Vec<Ipv4Addr>,
     pub last_attempt_failed: bool,
+    /// The family whose lookup is failing while the other answers. The
+    /// records of that family are the last it returned, so a name with a
+    /// degraded family is resolving on less than it appears to.
+    pub degraded_family: Option<Family>,
     pub age: Duration,
     pub ttl_remaining: Duration,
 }
@@ -102,6 +135,36 @@ impl ResolverInner {
         a: Vec<Ipv4Addr>,
         ttl: Duration,
     ) -> bool {
+        self.store(host, aaaa, a, ttl, None)
+    }
+
+    /// Records a lookup in which one family's query failed. The family that
+    /// failed keeps its previously cached answer, since a failed query says
+    /// nothing about what the family holds. Returns whether the resolved set
+    /// changed and whether the host has newly become degraded.
+    fn record_partial(&self, host: &str, partial: &PartialLookup) -> (bool, bool) {
+        let failed_family = partial.failed_family();
+        let prev = self.cache.read().get(host).cloned();
+        let newly_degraded = prev
+            .as_ref()
+            .is_none_or(|p| p.degraded_family != Some(failed_family));
+        let (prev_aaaa, prev_a) = prev.map(|p| (p.aaaa, p.a)).unwrap_or_default();
+        let (aaaa, a) = match partial {
+            PartialLookup::AaaaFailed { a, .. } => (prev_aaaa, a.clone()),
+            PartialLookup::AFailed { aaaa, .. } => (aaaa.clone(), prev_a),
+        };
+        let changed = self.store(host, aaaa, a, FAILURE_BACKOFF, Some(failed_family));
+        (changed, newly_degraded)
+    }
+
+    fn store(
+        &self,
+        host: &str,
+        aaaa: Vec<Ipv6Addr>,
+        a: Vec<Ipv4Addr>,
+        ttl: Duration,
+        degraded_family: Option<Family>,
+    ) -> bool {
         let ttl = ttl.clamp(MIN_REFRESH_INTERVAL, MAX_REFRESH_INTERVAL);
         let now = Instant::now();
 
@@ -116,6 +179,7 @@ impl ResolverInner {
                     fetched_at: now,
                     expires_at: now + ttl,
                     last_attempt_failed: false,
+                    degraded_family,
                 },
             );
             match prev {
@@ -144,10 +208,14 @@ impl ResolverInner {
             fetched_at: now,
             expires_at: now + FAILURE_BACKOFF,
             last_attempt_failed: false,
+            degraded_family: None,
         });
         entry.fetched_at = now;
         entry.expires_at = now + FAILURE_BACKOFF;
         entry.last_attempt_failed = true;
+        // The whole lookup failed, so nothing is known about either family
+        // and a previous "this one family is failing" no longer holds.
+        entry.degraded_family = None;
         let became_unresolved_change = count == FAULT_AFTER_FAILURES && entry.is_empty();
         if became_unresolved_change {
             self.fault_hosts.write().insert(host.to_owned());
@@ -240,6 +308,8 @@ impl SiteServiceResolver {
                     aaaa: entry.aaaa.clone(),
                     a: entry.a.clone(),
                     last_attempt_failed: entry.last_attempt_failed,
+                    // r[impl service.site.address.partial-answer]
+                    degraded_family: entry.degraded_family,
                     age,
                     ttl_remaining,
                 }
@@ -365,9 +435,27 @@ async fn refresh_due_hosts(inner: &Arc<ResolverInner>, resolver: Option<&TokioRe
     let mut any_change = false;
     for host in due {
         match lookup_records(resolver, &host).await {
-            Ok((aaaa, a, ttl)) => {
+            Ok(Lookup::Complete { aaaa, a, ttl }) => {
                 if inner.record_success(&host, aaaa, a, ttl) {
                     any_change = true;
+                }
+            }
+            Ok(Lookup::Partial(partial)) => {
+                let (changed, newly_degraded) = inner.record_partial(&host, &partial);
+                if changed {
+                    any_change = true;
+                }
+                let family = partial.failed_family();
+                let error = partial.error();
+                if newly_degraded {
+                    warn!(
+                        host = %host,
+                        %family,
+                        "site-service resolver: {family} lookup failed; \
+                         resolving from the other family: {error}"
+                    );
+                } else {
+                    debug!(host = %host, %family, "site-service {family} lookup still failing: {error}");
                 }
             }
             Err(e) => {
@@ -393,60 +481,140 @@ async fn refresh_due_hosts(inner: &Arc<ResolverInner>, resolver: Option<&TokioRe
     }
 }
 
-async fn lookup_records(
-    resolver: &TokioResolver,
-    host: &str,
-) -> Result<(Vec<Ipv6Addr>, Vec<Ipv4Addr>, Duration), NetError> {
-    let now = Instant::now();
-    let aaaa = match resolver.ipv6_lookup(host).await {
-        Ok(lookup) => {
-            let valid = lookup.valid_until();
-            let v6: Vec<Ipv6Addr> = lookup
-                .answers()
-                .iter()
-                .filter_map(|r| match &r.data {
-                    RData::AAAA(a) => Some(a.0),
-                    _ => None,
-                })
-                .collect();
-            (v6, Some(valid))
+/// The outcome of looking up both address families of a name.
+enum Lookup {
+    /// Both queries completed, whether or not they returned records.
+    Complete {
+        aaaa: Vec<Ipv6Addr>,
+        a: Vec<Ipv4Addr>,
+        ttl: Duration,
+    },
+    /// One query failed while the other returned records.
+    Partial(PartialLookup),
+}
+
+/// A lookup where one family's query errored while the other returned
+/// records. The variant names the family that failed and carries what the
+/// family that answered returned, so the two cannot disagree.
+enum PartialLookup {
+    /// The AAAA query failed; the A query returned these records.
+    AaaaFailed { a: Vec<Ipv4Addr>, error: String },
+    /// The A query failed; the AAAA query returned these records.
+    AFailed { aaaa: Vec<Ipv6Addr>, error: String },
+}
+
+impl PartialLookup {
+    fn failed_family(&self) -> Family {
+        match self {
+            Self::AaaaFailed { .. } => Family::Aaaa,
+            Self::AFailed { .. } => Family::A,
         }
-        Err(NetError::Dns(DnsError::NoRecordsFound(_))) => (Vec::new(), None),
-        Err(other) => return Err(other),
-    };
-
-    let a = match resolver.ipv4_lookup(host).await {
-        Ok(lookup) => {
-            let valid = lookup.valid_until();
-            let v4: Vec<Ipv4Addr> = lookup
-                .answers()
-                .iter()
-                .filter_map(|r| match &r.data {
-                    RData::A(addr) => Some(addr.0),
-                    _ => None,
-                })
-                .collect();
-            (v4, Some(valid))
-        }
-        Err(NetError::Dns(DnsError::NoRecordsFound(_))) => (Vec::new(), None),
-        Err(other) => return Err(other),
-    };
-
-    let valid = [aaaa.1, a.1]
-        .into_iter()
-        .flatten()
-        .min()
-        .map(|deadline| deadline.saturating_duration_since(now))
-        .unwrap_or(MAX_REFRESH_INTERVAL);
-
-    if aaaa.0.is_empty() && a.0.is_empty() {
-        // Both queries succeeded with empty answer sections: treat as
-        // "resolved to no records", not a transport failure. Cache it for
-        // a short period so we don't hammer DNS.
-        return Ok((Vec::new(), Vec::new(), MIN_REFRESH_INTERVAL));
     }
 
-    Ok((aaaa.0, a.0, valid))
+    fn error(&self) -> &str {
+        match self {
+            Self::AaaaFailed { error, .. } | Self::AFailed { error, .. } => error,
+        }
+    }
+}
+
+/// One family's query result: its records and the instant they stop being
+/// valid, or the error that stopped the query.
+type FamilyResult<T, E> = Result<(Vec<T>, Option<Instant>), E>;
+
+async fn lookup_records(resolver: &TokioResolver, host: &str) -> Result<Lookup, NetError> {
+    let now = Instant::now();
+    // Neither query feeds the other, and a family that is failing usually
+    // costs a full DNS timeout. Running them together keeps one family's
+    // timeout from being added to the other's, which matters because the
+    // hosts due in a tick are refreshed one after another.
+    let (aaaa, a) = tokio::join!(
+        async {
+            match resolver.ipv6_lookup(host).await {
+                Ok(lookup) => {
+                    let v6: Vec<Ipv6Addr> = lookup
+                        .answers()
+                        .iter()
+                        .filter_map(|r| match &r.data {
+                            RData::AAAA(a) => Some(a.0),
+                            _ => None,
+                        })
+                        .collect();
+                    Ok((v6, Some(lookup.valid_until())))
+                }
+                Err(NetError::Dns(DnsError::NoRecordsFound(_))) => Ok((Vec::new(), None)),
+                Err(other) => Err(other),
+            }
+        },
+        async {
+            match resolver.ipv4_lookup(host).await {
+                Ok(lookup) => {
+                    let v4: Vec<Ipv4Addr> = lookup
+                        .answers()
+                        .iter()
+                        .filter_map(|r| match &r.data {
+                            RData::A(addr) => Some(addr.0),
+                            _ => None,
+                        })
+                        .collect();
+                    Ok((v4, Some(lookup.valid_until())))
+                }
+                Err(NetError::Dns(DnsError::NoRecordsFound(_))) => Ok((Vec::new(), None)),
+                Err(other) => Err(other),
+            }
+        },
+    );
+
+    combine_families(aaaa, a, now)
+}
+
+// r[impl service.site.address.partial-answer]
+fn combine_families<E: std::fmt::Display>(
+    aaaa: FamilyResult<Ipv6Addr, E>,
+    a: FamilyResult<Ipv4Addr, E>,
+    now: Instant,
+) -> Result<Lookup, E> {
+    match (aaaa, a) {
+        (Ok(aaaa), Ok(a)) => {
+            let valid = [aaaa.1, a.1]
+                .into_iter()
+                .flatten()
+                .min()
+                .map(|deadline| deadline.saturating_duration_since(now))
+                .unwrap_or(MAX_REFRESH_INTERVAL);
+
+            if aaaa.0.is_empty() && a.0.is_empty() {
+                // Both queries succeeded with empty answer sections: treat as
+                // "resolved to no records", not a transport failure. Cache it for
+                // a short period so we don't hammer DNS.
+                return Ok(Lookup::Complete {
+                    aaaa: Vec::new(),
+                    a: Vec::new(),
+                    ttl: MIN_REFRESH_INTERVAL,
+                });
+            }
+
+            Ok(Lookup::Complete {
+                aaaa: aaaa.0,
+                a: a.0,
+                ttl: valid,
+            })
+        }
+        (Err(e), Ok((a, _))) if !a.is_empty() => Ok(Lookup::Partial(PartialLookup::AaaaFailed {
+            a,
+            error: e.to_string(),
+        })),
+        (Ok((aaaa, _)), Err(e)) if !aaaa.is_empty() => {
+            Ok(Lookup::Partial(PartialLookup::AFailed {
+                aaaa,
+                error: e.to_string(),
+            }))
+        }
+        // A failure with nothing from the other family to stand in for it
+        // leaves the name's addresses unknown, which is a failed lookup and
+        // not an answer of "no records".
+        (Err(e), _) | (_, Err(e)) => Err(e),
+    }
 }
 
 #[cfg(test)]
@@ -528,6 +696,179 @@ mod tests {
         assert!(!r.unresolved_hosts().contains("flapping.example"));
 
         let res = r.lookup("flapping.example").unwrap();
+        assert!(!res.failed);
+    }
+
+    type Fam<T> = FamilyResult<T, String>;
+
+    fn v6(addrs: &[&str]) -> Fam<Ipv6Addr> {
+        Ok((addrs.iter().map(|s| s.parse().unwrap()).collect(), None))
+    }
+
+    fn v4(addrs: &[&str]) -> Fam<Ipv4Addr> {
+        Ok((addrs.iter().map(|s| s.parse().unwrap()).collect(), None))
+    }
+
+    // r[verify service.site.address.partial-answer]
+    #[test]
+    fn failed_aaaa_with_a_records_is_a_partial_lookup() {
+        let out = combine_families(
+            Err("servfail".to_owned()),
+            v4(&["10.0.0.1"]),
+            Instant::now(),
+        );
+        match out {
+            Ok(Lookup::Partial(PartialLookup::AaaaFailed { a, .. })) => {
+                assert_eq!(a, vec!["10.0.0.1".parse::<Ipv4Addr>().unwrap()]);
+            }
+            _ => panic!("expected the AAAA family to have failed"),
+        }
+    }
+
+    // r[verify service.site.address.partial-answer]
+    #[test]
+    fn failed_a_with_aaaa_records_is_a_partial_lookup() {
+        let out = combine_families(
+            v6(&["2001:db8::1"]),
+            Err("refused".to_owned()),
+            Instant::now(),
+        );
+        match out {
+            Ok(Lookup::Partial(PartialLookup::AFailed { aaaa, .. })) => {
+                assert_eq!(aaaa, vec!["2001:db8::1".parse::<Ipv6Addr>().unwrap()]);
+            }
+            _ => panic!("expected the A family to have failed"),
+        }
+    }
+
+    // r[verify service.site.address.partial-answer]
+    #[test]
+    fn failed_family_with_nothing_from_the_other_is_a_failure() {
+        let out = combine_families(Err("servfail".to_owned()), v4(&[]), Instant::now());
+        assert!(out.is_err());
+        let out = combine_families(v6(&[]), Err("servfail".to_owned()), Instant::now());
+        assert!(out.is_err());
+        let out =
+            combine_families::<String>(Err("a".to_owned()), Err("b".to_owned()), Instant::now());
+        assert!(out.is_err());
+    }
+
+    #[test]
+    fn both_families_empty_is_resolved_to_no_records() {
+        match combine_families(v6(&[]), v4(&[]), Instant::now()) {
+            Ok(Lookup::Complete { aaaa, a, ttl }) => {
+                assert!(aaaa.is_empty() && a.is_empty());
+                assert_eq!(ttl, MIN_REFRESH_INTERVAL);
+            }
+            _ => panic!("expected a complete empty lookup"),
+        }
+    }
+
+    // r[verify service.site.address.partial-answer]
+    #[test]
+    fn partial_lookup_keeps_failed_family_answer_and_clears_failure_state() {
+        let r = mkresolver();
+        r.seed_success(
+            "dual.example",
+            &["2001:db8::1"],
+            &["10.0.0.1"],
+            Duration::from_secs(60),
+        );
+        for _ in 0..FAULT_AFTER_FAILURES {
+            r.seed_failure("dual.example");
+        }
+
+        let (changed, newly_degraded) = r.inner.record_partial(
+            "dual.example",
+            &PartialLookup::AaaaFailed {
+                a: vec!["10.0.0.2".parse().unwrap()],
+                error: "servfail".to_owned(),
+            },
+        );
+        assert!(changed);
+        assert!(newly_degraded);
+        assert!(!r.unresolved_hosts().contains("dual.example"));
+
+        let res = r.lookup("dual.example").unwrap();
+        assert_eq!(res.aaaa, vec!["2001:db8::1".parse::<Ipv6Addr>().unwrap()]);
+        assert_eq!(res.a, vec!["10.0.0.2".parse::<Ipv4Addr>().unwrap()]);
+
+        let (_, newly_degraded) = r.inner.record_partial(
+            "dual.example",
+            &PartialLookup::AaaaFailed {
+                a: vec!["10.0.0.2".parse().unwrap()],
+                error: "servfail".to_owned(),
+            },
+        );
+        assert!(!newly_degraded);
+    }
+
+    // r[verify service.site.address.partial-answer]
+    #[test]
+    fn status_names_the_degraded_family_until_the_lookup_recovers() {
+        let r = mkresolver();
+        r.inner.record_partial(
+            "dual.example",
+            &PartialLookup::AaaaFailed {
+                a: vec!["10.0.0.1".parse().unwrap()],
+                error: "servfail".to_owned(),
+            },
+        );
+        let entry = |r: &SiteServiceResolver| {
+            r.status()
+                .into_iter()
+                .find(|e| e.host == "dual.example")
+                .expect("host in status")
+        };
+        assert_eq!(entry(&r).degraded_family, Some(Family::Aaaa));
+
+        // A lookup that answers on both families is no longer degraded.
+        r.seed_success(
+            "dual.example",
+            &["2001:db8::1"],
+            &["10.0.0.1"],
+            Duration::from_secs(60),
+        );
+        assert_eq!(entry(&r).degraded_family, None);
+    }
+
+    // r[verify service.site.address.partial-answer]
+    #[test]
+    fn a_wholly_failed_lookup_clears_the_degraded_family() {
+        // Both families failing says nothing about either, so the claim that
+        // one of them alone is at fault must not outlive it.
+        let r = mkresolver();
+        r.inner.record_partial(
+            "dual.example",
+            &PartialLookup::AaaaFailed {
+                a: vec!["10.0.0.1".parse().unwrap()],
+                error: "servfail".to_owned(),
+            },
+        );
+        r.seed_failure("dual.example");
+        let entry = r
+            .status()
+            .into_iter()
+            .find(|e| e.host == "dual.example")
+            .expect("host in status");
+        assert_eq!(entry.degraded_family, None);
+        assert!(entry.last_attempt_failed);
+    }
+
+    // r[verify service.site.address.partial-answer]
+    #[test]
+    fn partial_lookup_for_new_host_leaves_failed_family_empty() {
+        let r = mkresolver();
+        r.inner.record_partial(
+            "v4only.example",
+            &PartialLookup::AaaaFailed {
+                a: vec!["10.0.0.1".parse().unwrap()],
+                error: "servfail".to_owned(),
+            },
+        );
+        let res = r.lookup("v4only.example").unwrap();
+        assert!(res.aaaa.is_empty());
+        assert_eq!(res.a.len(), 1);
         assert!(!res.failed);
     }
 
