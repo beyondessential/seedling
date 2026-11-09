@@ -187,6 +187,12 @@ maximum age (currently 5 minutes); the reconciler is kicked when a
 host's resolved set actually changes so route / nftables state catches
 up promptly.
 
+The A and AAAA queries are independent: when one fails and the other
+returns records, the host resolves from those records, the failed family
+keeps its last answer, and the host is looked up again after a few
+seconds. Only a host with no records from either family, and at least
+one failed query, counts towards the unresolvable threshold.
+
 Endpoints that can't be turned into a routable address surface as
 faults on the affected site service:
 
