@@ -1145,7 +1145,8 @@ fn decision_next_issuance(st: &state::HostnameState<'_>) -> (Option<i64>, Option
 
 /// Build the `last_issuance` object: prefer the active cert's metadata
 /// for manual uploads (which never go through the attempt log), fall
-/// back to the latest successful attempt for ACME-DNS, then to the
+/// back to the latest successful attempt whose certificate is still
+/// stored, then to the
 /// active cert's bare creation timestamp, then — for default-strategy
 /// hostnames — to whatever Caddy's on-disk store has.
 fn build_last_issuance(
@@ -1171,14 +1172,17 @@ fn build_last_issuance(
             "cert_id": cert.id,
         });
     }
-    if let Some(att) = st.last_success {
-        let provider = st.policy.and_then(|p| match &p.policy {
-            TlsPolicy::AcmeDns { dns_provider } => Some(dns_provider.clone()),
-            // r[impl ingress.site.tailscale]
-            TlsPolicy::Tailscale | TlsPolicy::Canopy => None,
-        });
+    // ACME-DNS, Tailscale and Canopy all log attempts, so the kind is taken
+    // from the certificate the attempt produced rather than assumed.
+    if let (Some(att), Some(cert)) = (st.last_success, st.last_success_cert) {
+        let provider = match (cert.origin, st.policy.map(|p| &p.policy)) {
+            (TlsCertOrigin::AcmeDns, Some(TlsPolicy::AcmeDns { dns_provider })) => {
+                Some(dns_provider.clone())
+            }
+            _ => None,
+        };
         return json!({
-            "kind": "acme_dns",
+            "kind": cert.origin.as_str(),
             "at": att.started_at,
             "cert_id": att.cert_id,
             "provider": provider,

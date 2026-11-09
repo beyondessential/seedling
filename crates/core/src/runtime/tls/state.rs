@@ -330,6 +330,10 @@ pub struct HostnameState<'a> {
     pub active_cert: Option<&'a TlsCertificate>,
     pub last_attempt: Option<&'a TlsCertAttempt>,
     pub last_success: Option<&'a TlsCertAttempt>,
+    /// The certificate `last_success` produced, of any state. `None` when the
+    /// attempt names none or the row is gone, which says nothing about how it
+    /// was obtained.
+    pub last_success_cert: Option<&'a TlsCertificate>,
     pub retry_block: Option<&'a TlsCertRetryBlock>,
     pub force_retry_at: Option<i64>,
     pub decision: Decision,
@@ -568,6 +572,10 @@ pub fn compute_state<'a>(snap: &'a Snapshot, hostname: &str) -> HostnameState<'a
         }
     }
 
+    let last_success_cert = last_success
+        .and_then(|att| att.cert_id)
+        .and_then(|id| snap.certificates.iter().find(|c| c.id == id));
+
     let retry_block = snap.retry_blocks.iter().find(|b| b.hostname == hostname);
     let force_retry_at = snap
         .force_retries
@@ -602,6 +610,7 @@ pub fn compute_state<'a>(snap: &'a Snapshot, hostname: &str) -> HostnameState<'a
         active_cert,
         last_attempt,
         last_success,
+        last_success_cert,
         retry_block,
         force_retry_at,
         decision,

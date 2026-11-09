@@ -1119,6 +1119,76 @@ fn a_canopy_certificate_is_in_the_hostname_view_like_any_other() {
     assert_eq!(certs["certificates"][0]["origin"], "canopy");
 }
 
+/// Tailscale issuance logs attempts just as ACME-DNS does, so the kind of the
+/// last issuance is what the attempt produced, not ACME-DNS by assumption.
+// i[verify tls.hostname.list]
+#[test]
+fn the_last_issuance_is_kinded_by_the_certificate_it_produced() {
+    use crate::runtime::tls::{AttemptOutcome, AttemptTrigger, state, store};
+
+    let oi = TestOi::new();
+    let now = jiff::Timestamp::now().as_second();
+    let (pem, _) = self_signed("node.tail1234.ts.net");
+    let cert_id = oi
+        .state
+        .db
+        .call(move |db| -> rusqlite::Result<i64> {
+            let id = store::insert_certificate(
+                db,
+                store::NewCertificate {
+                    hostname: "node.tail1234.ts.net",
+                    requested_hostname: None,
+                    state: crate::runtime::tls::TlsCertState::Active,
+                    origin: crate::runtime::tls::TlsCertOrigin::Tailscale,
+                    cert_pem: Some(&pem),
+                    csr_pem: None,
+                    key_ciphertext: &[0u8; 8],
+                    key_type: crate::runtime::tls::KeyType::EcdsaP256,
+                    metadata: store::CertMetadata {
+                        not_before: Some(now - 60),
+                        not_after: Some(now + 89 * 86_400),
+                        ..Default::default()
+                    },
+                    note: None,
+                    acme_account_id: None,
+                },
+            )?;
+            let attempt =
+                store::insert_attempt(db, "node.tail1234.ts.net", AttemptTrigger::OnDemand)?;
+            store::finalize_attempt(db, attempt, AttemptOutcome::Success, Some(id), None)?;
+            Ok(id)
+        })
+        .unwrap();
+
+    let view = |oi: &TestOi| {
+        let snapshot = oi
+            .state
+            .db
+            .call(|db| state::Snapshot::load(db, state::ChainEnv::none()))
+            .unwrap();
+        let st = state::compute_state(&snapshot, "node.tail1234.ts.net");
+        super::project_hostname_state(
+            "node.tail1234.ts.net",
+            &std::collections::BTreeSet::new(),
+            &st,
+            None,
+        )
+    };
+
+    let host = view(&oi);
+    assert_eq!(host["last_issuance"]["kind"], "tailscale");
+    assert_eq!(host["last_issuance"]["cert_id"], cert_id);
+    assert!(host["last_issuance"]["provider"].is_null());
+
+    // With the certificate gone the attempt says nothing about how anything
+    // serving was obtained, so it is not reported under a guessed kind.
+    oi.state
+        .db
+        .call(move |db| store::delete_certificate(db, cert_id))
+        .unwrap();
+    assert!(view(&oi)["last_issuance"].is_null());
+}
+
 // r[verify tls.cert.eager-issuance]
 #[test]
 fn a_hostname_on_a_chain_is_not_driven_through_an_acme_dns_flow() {
