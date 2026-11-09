@@ -7,12 +7,13 @@ use std::{
 
 use ipnet::Ipv6Net;
 use rusqlite::OptionalExtension;
+use sha2::{Digest, Sha256};
 use snafu::{ResultExt, Snafu};
 
 use crate::system::priority;
 use crate::system::{
     ContainerRuntime, ProcessManager,
-    types::{ContainerStatus, TransientRestart, TransientUnitSpec},
+    types::{ContainerState, ContainerStatus, TransientRestart, TransientUnitSpec},
 };
 
 use super::{resolver_addr, resolver_ipv4_subnet, resolver_network_prefix};
@@ -122,6 +123,43 @@ fn slot_unit(container: &str) -> String {
     format!("{container}.service")
 }
 
+/// Label the resolver container carries so a later tick can tell what it was
+/// started with. Shares the name the other containers use for their
+/// configuration hash.
+const CONFIG_HASH_LABEL: &str = "seedling.spec-hash";
+
+/// Fingerprint of what a resolver container is started with: its Corefile and
+/// the address it listens at. The image is compared separately, by id.
+fn config_hash(corefile: &str, resolver_ip: &Ipv6Addr) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(corefile.as_bytes());
+    hasher.update([0]);
+    hasher.update(resolver_ip.octets());
+    hasher
+        .finalize()
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect()
+}
+
+/// How a running resolver container compares with what is wanted.
+#[derive(Debug, PartialEq, Eq)]
+enum Running {
+    UpToDate,
+    StaleImage,
+    StaleConfig,
+}
+
+fn assess_running(state: &ContainerState, desired_image_id: &str, desired_config: &str) -> Running {
+    if state.image_id.as_deref() != Some(desired_image_id) {
+        Running::StaleImage
+    } else if state.spec_hash.as_deref() != Some(desired_config) {
+        Running::StaleConfig
+    } else {
+        Running::UpToDate
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Container lifecycle
 // ---------------------------------------------------------------------------
@@ -132,6 +170,7 @@ async fn start_slot(
     process: &dyn ProcessManager,
     data_dir: &Path,
     resolver_ip: &Ipv6Addr,
+    config_hash: &str,
 ) -> Result<(), ResolverStartupError> {
     let unit_name = slot_unit(container_name);
 
@@ -186,6 +225,8 @@ async fn start_slot(
                 RESOLVER_NETWORK.to_owned(),
                 "--ip6".to_owned(),
                 resolver_ip.to_string(),
+                "--label".to_owned(),
+                format!("{CONFIG_HASH_LABEL}={config_hash}"),
                 "--volume".to_owned(),
                 format!("{corefile_str}:/Corefile:ro"),
                 RESOLVER_IMAGE.to_owned(),
@@ -323,10 +364,11 @@ pub async fn ensure_resolver_running(
     let corefile_path = data_dir.join("Corefile");
     let corefile_content =
         super::config::generate_corefile(upstreams, nat64_active, force_dns64_translation);
-    std::fs::write(&corefile_path, corefile_content).context(IoSnafu)?;
+    std::fs::write(&corefile_path, &corefile_content).context(IoSnafu)?;
+    let desired_config = config_hash(&corefile_content, &resolver_ip);
 
     // 3. Read active container from DB (default blue).
-    let active = {
+    let mut active = {
         let conn = resolver_db_open(data_dir).context(DbSnafu)?;
         read_active_container(&conn)
             .context(DbSnafu)?
@@ -369,7 +411,8 @@ pub async fn ensure_resolver_running(
 
     match active_state {
         Some(state) if matches!(state.status, ContainerStatus::Running) => {
-            if state.image_id.as_deref() == Some(&desired_id) {
+            let assessment = assess_running(&state, &desired_id, &desired_config);
+            if assessment == Running::UpToDate {
                 let health_url = format!("http://[{}]:8080/health", resolver_ip);
                 let client = reqwest::Client::builder()
                     .timeout(Duration::from_secs(2))
@@ -410,19 +453,25 @@ pub async fn ensure_resolver_running(
                 stop_slot(&active, process, container).await;
             } else {
                 // r[impl infra.resolver.upgrade]
+                // r[impl infra.resolver.config.apply]
                 tracing::info!(
                     container = %active,
+                    ?assessment,
                     running_image = ?state.image_id,
                     desired_image = %desired_id,
-                    "resolver image mismatch; performing blue/green upgrade"
+                    "resolver is not what is wanted; replacing it"
                 );
-                start_slot(other, process, data_dir, &resolver_ip).await?;
-                let deadline = tokio::time::Instant::now() + Duration::from_secs(60);
-                let new_addrs =
-                    poll_until_healthy(other, container, deadline, &resolver_ip).await?;
+                // The resolver address is held by the running container, and a
+                // second container cannot take it while that one has it, so the
+                // replacement starts only once the running one is gone. The
+                // slot to start in is recorded before anything is started, so
+                // that an interruption from here on leaves a database that
+                // names a slot the next tick will start fresh.
+                stop_slot(&active, process, container).await;
                 let conn = resolver_db_open(data_dir).context(DbSnafu)?;
                 write_active_container(&conn, other).context(DbSnafu)?;
-                return Ok(new_addrs);
+                inline_health_fail_count.store(0, Ordering::Relaxed);
+                active = other.to_owned();
             }
         }
         Some(state) => {
@@ -439,10 +488,77 @@ pub async fn ensure_resolver_running(
     }
 
     // 8. Fresh start.
-    start_slot(&active, process, data_dir, &resolver_ip).await?;
+    start_slot(&active, process, data_dir, &resolver_ip, &desired_config).await?;
     let deadline = tokio::time::Instant::now() + Duration::from_secs(60);
     let addrs = poll_until_healthy(&active, container, deadline, &resolver_ip).await?;
     let conn = resolver_db_open(data_dir).context(DbSnafu)?;
     write_active_container(&conn, &active).context(DbSnafu)?;
     Ok(addrs)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::system::types::ContainerHealth;
+
+    fn running(image_id: Option<&str>, spec_hash: Option<&str>) -> ContainerState {
+        ContainerState {
+            status: ContainerStatus::Running,
+            health: ContainerHealth::None,
+            pid: None,
+            exit_code: None,
+            started_at: None,
+            finished_at: None,
+            pod_addr: None,
+            pod_addr_v4: None,
+            image_id: image_id.map(str::to_owned),
+            spec_hash: spec_hash.map(str::to_owned),
+        }
+    }
+
+    // r[verify infra.resolver.config.apply]
+    #[test]
+    fn config_hash_follows_corefile_and_address() {
+        let a: Ipv6Addr = "fd5e:a5:bac1:fd00::53".parse().unwrap();
+        let b: Ipv6Addr = "fd5e:a5:bac1:fd00::35".parse().unwrap();
+        let base = config_hash("forward . 1.1.1.1\n", &a);
+        assert_eq!(base, config_hash("forward . 1.1.1.1\n", &a));
+        assert_ne!(base, config_hash("forward . 8.8.8.8\n", &a));
+        assert_ne!(base, config_hash("forward . 1.1.1.1\n", &b));
+    }
+
+    // r[verify infra.resolver.config.apply]
+    #[test]
+    fn running_resolver_with_changed_config_is_stale() {
+        let state = running(Some("img"), Some("old"));
+        assert_eq!(assess_running(&state, "img", "new"), Running::StaleConfig);
+    }
+
+    // r[verify infra.resolver.config.apply]
+    #[test]
+    fn running_resolver_without_a_config_label_is_stale() {
+        let state = running(Some("img"), None);
+        assert_eq!(assess_running(&state, "img", "new"), Running::StaleConfig);
+    }
+
+    // r[verify infra.resolver.upgrade]
+    #[test]
+    fn running_resolver_on_another_image_is_stale() {
+        let state = running(Some("old-img"), Some("cfg"));
+        assert_eq!(assess_running(&state, "img", "cfg"), Running::StaleImage);
+        let state = running(None, Some("cfg"));
+        assert_eq!(assess_running(&state, "img", "cfg"), Running::StaleImage);
+    }
+
+    #[test]
+    fn running_resolver_matching_image_and_config_is_up_to_date() {
+        let state = running(Some("img"), Some("cfg"));
+        assert_eq!(assess_running(&state, "img", "cfg"), Running::UpToDate);
+    }
+
+    #[test]
+    fn other_slot_alternates() {
+        assert_eq!(other_slot(RESOLVER_BLUE), RESOLVER_GREEN);
+        assert_eq!(other_slot(RESOLVER_GREEN), RESOLVER_BLUE);
+    }
 }

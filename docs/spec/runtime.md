@@ -1620,8 +1620,19 @@ Two levers set how a workload competes for host resources under pressure. Each D
 > the resolver if necessary.
 
 > r[infra.resolver.upgrade]
-> When the resolver container image changes, the runtime must upgrade it using the same
-> blue/green strategy used for the [proxy](#r--infra.proxy.upgrade).
+> When the resolver container image changes, the runtime must replace the running resolver
+> with one started from the new image, in the resolver slot that is not active, at the
+> [resolver address](#r--infra.resolver.address). The resolver address can be held by one
+> container at a time, so the replacement stops the running resolver first and resolution
+> is briefly unavailable. The active slot is persisted in the database, and a replacement
+> interrupted at any point must be completed on a later reconciliation tick without
+> operator action.
+
+> r[infra.resolver.config.apply]
+> The resolver must serve the configuration the runtime currently generates. The runtime
+> records on each resolver container the configuration and address it was started with, and
+> when that differs from what is currently generated, or is absent, it must replace the
+> container as for an [image change](#r--infra.resolver.upgrade).
 
 ## Container DNS
 
