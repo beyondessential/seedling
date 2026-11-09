@@ -126,25 +126,9 @@ pub(crate) fn restore_held(
     crate::reserved::check_site_volume_name(&target_name)
         .map_err(|e| OiError::new(ErrorCode::RequirementsInvalid, e.to_string()))?;
 
-    let target_for_lookup = target_name.clone();
-    let existing = state
-        .db
-        .call(move |db| site_volumes::get(db, &target_for_lookup))
-        .map_err(|e| {
-            OiError::new(
-                ErrorCode::Internal,
-                format!("failed to look up site volume: {e}"),
-            )
-        })?;
-    if existing.is_some() {
-        return Err(OiError::new(
-            ErrorCode::RequirementsInvalid,
-            format!(
-                "site volume {:?} already exists; pick a different target_name",
-                target_name.as_str()
-            ),
-        ));
-    }
+    // r[impl volume.site.name-taken]
+    // r[impl actuate.volume.hold.restore]
+    let _claim = check_site_name_free(state, &target_name)?;
 
     tokio::task::block_in_place(|| {
         tokio::runtime::Handle::current().block_on(async {
@@ -284,6 +268,8 @@ pub(crate) fn create_site_volume(
     // r[impl namespace.reserved]
     crate::reserved::check_site_volume_name(&params.name)
         .map_err(|e| OiError::new(ErrorCode::RequirementsInvalid, e.to_string()))?;
+    // r[impl volume.site.name-taken]
+    let _claim = check_site_name_free(state, &params.name)?;
 
     let kind = match params.kind.as_str() {
         "managed" => SiteVolumeKind::Managed,
@@ -436,24 +422,26 @@ pub(crate) fn delete_site_volume(
     // a held copy. Bind kinds only reference an operator-provided host path,
     // so dropping the row is sufficient.
     let held_meta = match def.kind {
-        SiteVolumeKind::Managed => {
-            let meta = tokio::task::block_in_place(|| {
-                tokio::runtime::Handle::current().block_on(async {
-                    state
-                        .driver
-                        .volume_store
-                        .hold_site(params.name.as_str(), "site volume deleted by operator")
-                        .await
-                        .map_err(|e| {
-                            OiError::new(
-                                ErrorCode::Internal,
-                                format!("failed to hold site volume for review: {e}"),
-                            )
-                        })
-                })
-            })?;
-            Some(meta)
-        }
+        // Storage that is not there is held by doing nothing, so the record
+        // goes and the operator is not left with a site volume they cannot
+        // remove. A hold that could not be carried out still stops the
+        // delete: there the data is real, and dropping the record would
+        // orphan it.
+        SiteVolumeKind::Managed => tokio::task::block_in_place(|| {
+            tokio::runtime::Handle::current().block_on(async {
+                state
+                    .driver
+                    .volume_store
+                    .hold_site(params.name.as_str(), "site volume deleted by operator")
+                    .await
+                    .map_err(|e| {
+                        OiError::new(
+                            ErrorCode::Internal,
+                            format!("failed to hold site volume for review: {e}"),
+                        )
+                    })
+            })
+        })?,
         SiteVolumeKind::Snapshot { .. } => {
             tokio::task::block_in_place(|| {
                 tokio::runtime::Handle::current().block_on(async {
@@ -509,6 +497,63 @@ pub(crate) fn delete_site_volume(
     Ok(json!({ "deleted": true }))
 }
 
+/// Refuse a name another site volume already holds, before any storage
+/// operation runs against it.
+///
+/// Both halves matter. A recorded name would only collide when the record is
+/// written, which for a snapshot is after btrfs has already placed the
+/// subvolume. Storage with no record is refused rather than reused because
+/// the runtime cannot tell a leftover from an operator's volume whose record
+/// has yet to be written.
+///
+/// The returned guard is the claim on the name. Hold it until the name has
+/// been taken — until both the storage and the record are in place — so that
+/// no other request can find the name free in the meantime.
+// r[impl volume.site.name-taken]
+fn check_site_name_free<'a>(
+    state: &'a OiState,
+    name: &SiteVolumeName,
+) -> Result<parking_lot::MutexGuard<'a, ()>, OiError> {
+    // r[impl volume.site.name-taken]
+    // The claim is returned rather than dropped here, and the caller holds
+    // it until the name has actually been taken. Finding the name free is
+    // only worth anything if nothing else can take it in between: two
+    // requests naming the same target would otherwise both pass this and
+    // both go on to make storage.
+    let claim = state.driver.volume_store.claim_site_name();
+
+    let name_owned = name.clone();
+    let recorded = state
+        .db
+        .call(move |db| crate::runtime::site_volumes::get(db, &name_owned))
+        .map_err(|e| {
+            OiError::new(
+                ErrorCode::Internal,
+                format!("failed to look up site volume: {e}"),
+            )
+        })?;
+
+    if recorded.is_some() {
+        return Err(OiError::new(
+            ErrorCode::RequirementsInvalid,
+            format!("a site volume named {:?} already exists", name.as_str()),
+        ));
+    }
+
+    if state.driver.volume_store.site_exists(name.as_str()) {
+        return Err(OiError::new(
+            ErrorCode::RequirementsInvalid,
+            format!(
+                "storage for a site volume named {:?} is already on disk with no site volume \
+                 recorded for it; resolve it by hand before reusing the name",
+                name.as_str()
+            ),
+        ));
+    }
+
+    Ok(claim)
+}
+
 #[derive(Deserialize)]
 pub(crate) struct SnapshotSiteVolumeParams {
     /// Name for the new snapshot site volume
@@ -528,6 +573,8 @@ pub(crate) fn snapshot_site_volume(
     // r[impl namespace.reserved]
     crate::reserved::check_site_volume_name(&params.name)
         .map_err(|e| OiError::new(ErrorCode::RequirementsInvalid, e.to_string()))?;
+    // r[impl volume.site.name-taken]
+    let _claim = check_site_name_free(state, &params.name)?;
 
     let (source, source_path) = parse_source_vol_id(&params.source, state)
         .map_err(|e| OiError::new(ErrorCode::RequirementsInvalid, e))?;
@@ -591,6 +638,8 @@ pub(crate) fn promote_site_volume(
     // r[impl namespace.reserved]
     crate::reserved::check_site_volume_name(&params.name)
         .map_err(|e| OiError::new(ErrorCode::RequirementsInvalid, e.to_string()))?;
+    // r[impl volume.site.name-taken]
+    let _claim = check_site_name_free(state, &params.name)?;
 
     let source_name = params.source.clone();
     let source_def = state

@@ -38,8 +38,8 @@ use crate::{
 mod pod;
 mod pull;
 
-pub use pod::TMPFS_VOLUMES_DIR;
 use pod::{ContainerVolume, collect_container_volumes, map_on_exit};
+pub use pod::{TMPFS_VOLUMES_DIR, tmpfs_volume_path};
 use pull::PullState;
 
 // ---------------------------------------------------------------------------
@@ -121,6 +121,58 @@ pub(crate) async fn safe_volume_write(
                 VolumeWriteSnafu { path }.into_error(source)
             }
         })
+}
+
+/// Bring a named non-tmpfs volume's storage into existence and seed it with
+/// its declared writes, as one step. Returns whether this call created it.
+///
+/// Both the volumes phase and the pods phase reach a named volume, and they
+/// run concurrently, so either may be the one that finds it absent. Creation
+/// and seeding therefore cannot live in separate places: a volume only ever
+/// receives its declared writes at creation, so whichever phase got there
+/// first would decide whether they were applied at all.
+///
+/// A write that fails takes the storage back out, so the next tick creates
+/// and seeds afresh instead of finding a directory that counts as created and
+/// will never be written to. Only storage this call created is taken back
+/// out: the loser of a race must not tear out what the winner is seeding.
+///
+/// Creation is the decision, not a look before it. Both phases can find the
+/// volume absent at the same moment, so asking first and creating second
+/// would only narrow the window; `create` reports which call made the
+/// storage, and that answer is what settles who owes the writes.
+// r[impl actuate.volume.start]
+pub(crate) async fn ensure_named_volume(
+    vol_store: &crate::system::volume_store::VolumeStore,
+    name: &VolumeName,
+    writes: &[(String, bytes::Bytes)],
+) -> Result<bool, ActuateError> {
+    let mountpoint = vol_store.path(name);
+    let created = vol_store.create(name).await.map_err(|e| {
+        VolumeWriteSnafu {
+            path: mountpoint.clone(),
+        }
+        .into_error(e)
+    })?;
+    if !created {
+        return Ok(false);
+    }
+
+    for (path, contents) in writes {
+        if let Err(e) = safe_volume_write(&mountpoint, path, contents).await {
+            if let Err(cleanup) = vol_store.remove(name).await {
+                tracing::error!(
+                    volume = %name,
+                    path = %mountpoint.display(),
+                    "seeding failed and the storage it created could not be removed, \
+                     so the volume will stay unseeded: {cleanup}"
+                );
+            }
+            return Err(e);
+        }
+    }
+
+    Ok(true)
 }
 
 // ---------------------------------------------------------------------------
@@ -362,33 +414,29 @@ impl Actuator {
                     (def.tmpfs, def.writes.clone())
                 };
                 if tmpfs {
-                    // Tmpfs volumes are managed by podman with the tmpfs driver.
                     // r[impl actuate.volume.tmpfs]
-                    let podman_name = &instance.display_name;
-                    if !self
-                        .driver
-                        .container
-                        .volume_exists(podman_name)
+                    // The directory containers bind-mount *is* the volume, so
+                    // it is what gets created and seeded here. Routing this
+                    // through the container runtime's tmpfs driver instead
+                    // would seed a mountpoint nothing ever mounts.
+                    let host_path = tmpfs_volume_path(&instance.display_name);
+                    // r[impl storage.confinement] — classify the path before
+                    // making anything at it. `create_dir_all` succeeds
+                    // straight through a symlink standing at the name, and
+                    // the declared writes would then land wherever it points.
+                    crate::system::confined::owned_dir_async(&host_path)
                         .await
-                        .context(ContainerSnafu)?
-                    {
-                        self.driver
-                            .container
-                            .create_volume(podman_name, true)
-                            .await
-                            .context(ContainerSnafu)?;
-                    }
+                        .context(VolumeWriteSnafu {
+                            path: host_path.clone(),
+                        })?;
+                    tokio::fs::create_dir_all(&host_path)
+                        .await
+                        .context(VolumeWriteSnafu {
+                            path: host_path.clone(),
+                        })?;
                     // Tmpfs contents don't survive a reboot; always re-apply writes.
-                    if !writes.is_empty() {
-                        let mountpoint = self
-                            .driver
-                            .container
-                            .volume_mountpoint(podman_name)
-                            .await
-                            .context(ContainerSnafu)?;
-                        for (path, contents) in &writes {
-                            safe_volume_write(&mountpoint, path, contents).await?;
-                        }
+                    for (path, contents) in &writes {
+                        safe_volume_write(&host_path, path, contents).await?;
                     }
                 } else {
                     // r[impl actuate.volume.storage]
@@ -406,23 +454,7 @@ impl Actuator {
                                 .into_error(e)
                             })?;
                     }
-                    let just_created = if !vol_store.exists(&name) {
-                        vol_store.create(&name).await.map_err(|e| {
-                            VolumeWriteSnafu {
-                                path: vol_store.path(&name),
-                            }
-                            .into_error(e)
-                        })?;
-                        true
-                    } else {
-                        false
-                    };
-                    if just_created && !writes.is_empty() {
-                        let mountpoint = vol_store.path(&name);
-                        for (path, contents) in &writes {
-                            safe_volume_write(&mountpoint, path, contents).await?;
-                        }
-                    }
+                    ensure_named_volume(vol_store, &name, &writes).await?;
                 }
                 Ok(None)
             }
@@ -499,6 +531,27 @@ impl Actuator {
             Resource::Volume(vol) => {
                 let tmpfs = vol.def.lock().tmpfs;
                 if tmpfs {
+                    // r[impl actuate.volume.tmpfs]
+                    // Remove the directory holding the data, not a stand-in
+                    // for it: the tmpfs backing under /run is reclaimed once
+                    // the directory is gone.
+                    let host_path = tmpfs_volume_path(&instance.display_name);
+                    // r[impl storage.confinement] — a symlink wearing the
+                    // name is refused rather than unlinked, so a stop never
+                    // reports a cleanup that removed only a link.
+                    if crate::system::confined::owned_dir_async(&host_path)
+                        .await
+                        .context(VolumeWriteSnafu {
+                            path: host_path.clone(),
+                        })?
+                        && let Err(e) = tokio::fs::remove_dir_all(&host_path).await
+                        && e.kind() != std::io::ErrorKind::NotFound
+                    {
+                        return Err(VolumeWriteSnafu { path: host_path }.into_error(e));
+                    }
+                    // Earlier releases stood a podman tmpfs-driver volume up
+                    // beside the directory. Reap it on the way past, by the
+                    // exact name those releases gave it.
                     let podman_name = &instance.display_name;
                     if self
                         .driver
@@ -517,16 +570,16 @@ impl Actuator {
                     // r[impl actuate.volume.hold]
                     let vol_store = &self.driver.volume_store;
                     let name = VolumeName::of_instance(instance);
-                    if vol_store.exists(&name) {
-                        let meta = vol_store
-                            .hold(&name, instance.app.as_str(), "removed from app definition")
-                            .await
-                            .map_err(|e| {
-                                VolumeWriteSnafu {
-                                    path: vol_store.path(&name),
-                                }
-                                .into_error(e)
-                            })?;
+                    let held = vol_store
+                        .hold(&name, instance.app.as_str(), "removed from app definition")
+                        .await
+                        .map_err(|e| {
+                            VolumeWriteSnafu {
+                                path: vol_store.path(&name),
+                            }
+                            .into_error(e)
+                        })?;
+                    if let Some(meta) = held {
                         // r[impl actuate.volume.hold.events]
                         self.event_tx.held_volume_created(
                             meta.id,
@@ -562,16 +615,16 @@ impl Actuator {
             if !tmpfs {
                 let vol_store = &self.driver.volume_store;
                 let name = crate::runtime::identity::VolumeName::of_instance(instance);
-                if vol_store.exists(&name) {
-                    let meta = vol_store
-                        .hold(&name, instance.app.as_str(), reason)
-                        .await
-                        .map_err(|e| {
-                            VolumeWriteSnafu {
-                                path: vol_store.path(&name),
-                            }
-                            .into_error(e)
-                        })?;
+                let held = vol_store
+                    .hold(&name, instance.app.as_str(), reason)
+                    .await
+                    .map_err(|e| {
+                        VolumeWriteSnafu {
+                            path: vol_store.path(&name),
+                        }
+                        .into_error(e)
+                    })?;
+                if let Some(meta) = held {
                     // r[impl actuate.volume.hold.events]
                     self.event_tx.held_volume_created(
                         meta.id,
@@ -734,4 +787,114 @@ pub fn resolve_external_volumes(
         resolved.insert(mapping.external_name, mount);
     }
     resolved
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::system::volume_store::VolumeStore;
+
+    fn store() -> (tempfile::TempDir, VolumeStore) {
+        let data = tempfile::tempdir().unwrap();
+        let store = VolumeStore::new(data.path(), false).unwrap();
+        (data, store)
+    }
+
+    // r[verify actuate.volume.start]
+    #[tokio::test]
+    async fn creating_a_named_volume_seeds_it_in_the_same_step() {
+        let (_data, store) = store();
+        let name = VolumeName::for_app("app", "data");
+        let writes = vec![("conf/app.toml".to_owned(), bytes::Bytes::from("port = 80"))];
+
+        assert!(ensure_named_volume(&store, &name, &writes).await.unwrap());
+
+        let seeded = store.path(&name).join("conf/app.toml");
+        assert_eq!(std::fs::read_to_string(seeded).unwrap(), "port = 80");
+    }
+
+    /// Whichever phase reaches the volume second must leave its contents
+    /// alone: the declared writes seed the volume, they do not own it.
+    // r[verify actuate.volume.start]
+    #[tokio::test]
+    async fn a_volume_that_is_already_there_is_not_seeded_again() {
+        let (_data, store) = store();
+        let name = VolumeName::for_app("app", "data");
+        let writes = vec![("conf/app.toml".to_owned(), bytes::Bytes::from("port = 80"))];
+
+        ensure_named_volume(&store, &name, &writes).await.unwrap();
+        let seeded = store.path(&name).join("conf/app.toml");
+        std::fs::write(&seeded, "port = 8080").unwrap();
+
+        assert!(!ensure_named_volume(&store, &name, &writes).await.unwrap());
+
+        assert_eq!(
+            std::fs::read_to_string(&seeded).unwrap(),
+            "port = 8080",
+            "the app owns the volume's contents once it has them"
+        );
+    }
+
+    /// A volume only ever receives its writes at creation, so storage left
+    /// behind by a failed seed would stay unseeded for good.
+    // r[verify actuate.volume.start]
+    #[tokio::test]
+    async fn a_failed_write_takes_the_storage_it_created_back_out() {
+        let (_data, store) = store();
+        let name = VolumeName::for_app("app", "data");
+        let writes = vec![
+            ("conf/app.toml".to_owned(), bytes::Bytes::from("port = 80")),
+            ("../escape".to_owned(), bytes::Bytes::from("elsewhere")),
+        ];
+
+        let err = ensure_named_volume(&store, &name, &writes)
+            .await
+            .unwrap_err();
+
+        assert!(
+            matches!(err, ActuateError::VolumePathEscape { .. }),
+            "{err}"
+        );
+        assert!(
+            !store.exists(&name),
+            "the next attempt must create and seed afresh"
+        );
+    }
+
+    /// Both phases can find the volume absent at once. The one whose create
+    /// did not take effect owes the volume nothing — it must not report the
+    /// name as an error, and above all must not take the winner's storage
+    /// back out on a write it was never responsible for.
+    // r[verify actuate.volume.start]
+    #[tokio::test]
+    async fn losing_the_race_to_create_is_not_a_failure_and_undoes_nothing() {
+        let (_data, store) = store();
+        let name = VolumeName::for_app("app", "data");
+
+        assert!(store.create(&name).await.unwrap(), "the winner creates it");
+        let seeded = store.path(&name).join("conf/app.toml");
+        std::fs::create_dir_all(seeded.parent().unwrap()).unwrap();
+        std::fs::write(&seeded, "port = 80").unwrap();
+
+        let writes = vec![("../escape".to_owned(), bytes::Bytes::from("elsewhere"))];
+        assert!(
+            !ensure_named_volume(&store, &name, &writes).await.unwrap(),
+            "the loser reports that it did not create the volume"
+        );
+
+        assert!(store.exists(&name));
+        assert_eq!(std::fs::read_to_string(&seeded).unwrap(), "port = 80");
+    }
+
+    /// `create` is the decision about who owns seeding, so it has to answer
+    /// that question rather than fail on a name already in use.
+    // r[verify actuate.volume.start]
+    #[tokio::test]
+    async fn creating_a_volume_that_is_already_there_reports_no_creation() {
+        let (_data, store) = store();
+        let name = VolumeName::for_app("app", "data");
+
+        assert!(store.create(&name).await.unwrap());
+        assert!(!store.create(&name).await.unwrap());
+    }
 }

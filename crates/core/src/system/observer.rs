@@ -89,12 +89,10 @@ impl Observer {
                 let name = &instance.display_name;
                 let tmpfs = vol.def.lock().tmpfs;
                 if tmpfs {
-                    let exists = self
-                        .driver
-                        .container
-                        .volume_exists(name)
-                        .await
-                        .context(ContainerSnafu)?;
+                    // r[impl actuate.volume.tmpfs]
+                    // Presence is the directory containers mount, not a
+                    // container-runtime volume standing in for it.
+                    let exists = crate::system::actuator::tmpfs_volume_path(name).exists();
                     facts.push((
                         if exists {
                             ObservationFact::VolumePresent

@@ -13,6 +13,9 @@ use crate::{runtime::identity::VolumeName, system::confined::owned_dir_async};
 pub struct VolumeStore {
     volumes_dir: PathBuf,
     use_btrfs: bool,
+    /// Held while a site volume's name is found free and then taken.
+    // r[impl volume.site.name-taken]
+    site_name_claim: parking_lot::Mutex<()>,
 }
 
 impl VolumeStore {
@@ -22,7 +25,21 @@ impl VolumeStore {
         Ok(Self {
             volumes_dir,
             use_btrfs,
+            site_name_claim: parking_lot::Mutex::new(()),
         })
+    }
+
+    /// Claim the right to decide whether a site volume name is free.
+    ///
+    /// Taking a site volume name is check-then-act: the name is found free,
+    /// then storage is made and a record written. Operator commands are
+    /// served concurrently, so the guard must be held across the whole of
+    /// that, not around the look alone. One lock covers every name: these
+    /// are rare operator commands, and a per-name map would have to be
+    /// reaped to avoid growing with every name ever used.
+    // r[impl volume.site.name-taken]
+    pub fn claim_site_name(&self) -> parking_lot::MutexGuard<'_, ()> {
+        self.site_name_claim.lock()
     }
 
     pub fn volumes_dir(&self) -> &Path {
@@ -37,15 +54,42 @@ impl VolumeStore {
         self.path(name).exists()
     }
 
+    /// Create a named volume's storage, reporting whether this call is the
+    /// one that created it.
+    ///
+    /// `Ok(false)` means the storage was already there — either standing from
+    /// an earlier tick, or created by a concurrent caller between this one's
+    /// look and its own create. The two are the same answer to the caller:
+    /// somebody else owns seeding it.
     // r[impl actuate.volume.btrfs]
-    pub async fn create(&self, name: &VolumeName) -> std::io::Result<()> {
+    // r[impl actuate.volume.start]
+    pub async fn create(&self, name: &VolumeName) -> std::io::Result<bool> {
         let path = self.path(name);
         // r[impl storage.confinement]
-        owned_dir_async(&path).await?;
+        if owned_dir_async(&path).await? {
+            return Ok(false);
+        }
         if self.use_btrfs {
-            btrfs_create_subvolume(&path).await
+            // `btrfs subvolume create` refuses a name already in use, and
+            // gives no machine-readable way to say so. Ask the filesystem
+            // afterwards instead: storage standing at the name means the
+            // race was lost, not that the create was wrong.
+            match btrfs_create_subvolume(&path).await {
+                Ok(()) => Ok(true),
+                Err(e) => match owned_dir_async(&path).await {
+                    Ok(true) => Ok(false),
+                    _ => Err(e),
+                },
+            }
         } else {
-            tokio::fs::create_dir_all(&path).await
+            if let Some(parent) = path.parent() {
+                tokio::fs::create_dir_all(parent).await?;
+            }
+            match tokio::fs::create_dir(&path).await {
+                Ok(()) => Ok(true),
+                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => Ok(false),
+                Err(e) => Err(e),
+            }
         }
     }
 
@@ -57,9 +101,12 @@ impl VolumeStore {
     /// requires rehoming data that containers wrote to the legacy path.
     ///
     /// Returns `Ok(true)` if a rename happened, `Ok(false)` if there was
-    /// nothing to migrate. If the canonical path already exists, it is
-    /// removed (when empty) or held (when not) before the legacy path is
-    /// renamed in place so nothing is silently dropped.
+    /// nothing to migrate. If a directory already stands at the canonical
+    /// path it is removed (when empty) or held (when not) before the legacy
+    /// path is renamed in place, so nothing is silently dropped. Anything
+    /// else at that path is storage the runtime does not own, and the
+    /// migration is refused with an error naming it rather than acting on
+    /// it; both paths are left as they are for an operator to resolve.
     pub async fn migrate_legacy(
         &self,
         legacy: &str,
@@ -77,12 +124,14 @@ impl VolumeStore {
             return Ok(false);
         }
 
-        if canonical_path.exists() {
-            let is_empty = match tokio::fs::read_dir(&canonical_path).await {
-                Ok(mut rd) => rd.next_entry().await?.is_none(),
-                Err(e) => return Err(e),
-            };
-            if is_empty {
+        // r[impl storage.confinement] — classify the canonical path before
+        // deciding what to do with it. A regular file or a symlink wearing
+        // the name is refused with an error naming it, rather than reaching
+        // a directory read that fails with a bare NotADirectory and aborts
+        // the migration with nothing said about what an operator should do.
+        if owned_dir_async(&canonical_path).await? {
+            let mut rd = tokio::fs::read_dir(&canonical_path).await?;
+            if rd.next_entry().await?.is_none() {
                 self.remove(canonical).await?;
             } else {
                 self.hold_inner(
@@ -131,13 +180,20 @@ impl VolumeStore {
             .join("held-volumes")
     }
 
+    /// Hold a named app volume for operator review.
+    ///
+    /// `Ok(None)` means there was no storage to hold, which is not a failure:
+    /// nothing is preserved because there is nothing to preserve. A hold that
+    /// could not be carried out is an error, and the two must stay distinct —
+    /// callers hold in order to remove something, and removing on the strength
+    /// of a hold that did not happen orphans the data.
     // r[impl actuate.volume.hold]
     pub async fn hold(
         &self,
         name: &VolumeName,
         app: &str,
         reason: &str,
-    ) -> std::io::Result<HeldVolumeMeta> {
+    ) -> std::io::Result<Option<HeldVolumeMeta>> {
         let s = name.as_str();
         self.hold_inner(&self.path(name), s, s, app, reason).await
     }
@@ -147,8 +203,14 @@ impl VolumeStore {
     /// The on-disk path `site-{name}` is moved into the held volumes
     /// directory; the resulting record carries the literal app name `_site`
     /// so UIs can distinguish site-origin holds from app-origin ones.
+    ///
+    /// `Ok(None)` means there was no storage to hold; see [`Self::hold`].
     // r[impl actuate.volume.hold]
-    pub async fn hold_site(&self, name: &str, reason: &str) -> std::io::Result<HeldVolumeMeta> {
+    pub async fn hold_site(
+        &self,
+        name: &str,
+        reason: &str,
+    ) -> std::io::Result<Option<HeldVolumeMeta>> {
         let src = self.site_path(name);
         let display = format!("site-{name}");
         self.hold_inner(&src, &display, name, "_site", reason).await
@@ -161,15 +223,19 @@ impl VolumeStore {
         volume_name: &str,
         app: &str,
         reason: &str,
-    ) -> std::io::Result<HeldVolumeMeta> {
+    ) -> std::io::Result<Option<HeldVolumeMeta>> {
         // r[impl storage.confinement] — holding moves the storage aside,
         // and moving a symlink would record a held volume with none of the
-        // data behind it.
+        // data behind it. That is an error and stops the caller; storage
+        // that is simply not there is not, and lets the caller carry on.
+        // r[impl actuate.volume.hold]
         if !owned_dir_async(src).await? {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::NotFound,
-                format!("volume {display_name} does not exist"),
-            ));
+            tracing::info!(
+                app = app,
+                volume = volume_name,
+                "nothing to hold: the volume has no storage behind it"
+            );
+            return Ok(None);
         }
 
         let held_dir = self.held_dir();
@@ -201,7 +267,7 @@ impl VolumeStore {
             "volume held for operator review"
         );
 
-        Ok(meta)
+        Ok(Some(meta))
     }
 
     /// Host path for a held volume's data directory.
@@ -334,8 +400,13 @@ impl VolumeStore {
         self.volumes_dir.join(format!("site-{name}"))
     }
 
+    /// Whether anything at all stands at this site volume's path: a
+    /// directory, a file, or a symlink whose target is gone. The question
+    /// callers ask is whether the name is free, so a name occupied by
+    /// something the runtime would refuse to act on is not free either.
+    // r[impl volume.site.name-taken]
     pub fn site_exists(&self, name: &str) -> bool {
-        self.site_path(name).exists()
+        std::fs::symlink_metadata(self.site_path(name)).is_ok()
     }
 
     /// Return the names (without the `site-` prefix) of every site volume
@@ -601,6 +672,81 @@ mod tests {
             store.list_held().unwrap().is_empty(),
             "a hold that moved only a link would record a volume with no data behind it"
         );
+    }
+
+    /// The migration moves storage, so a canonical path that is not a
+    /// directory is refused rather than renamed over or read as empty.
+    // r[verify storage.confinement]
+    #[tokio::test]
+    async fn migrating_onto_a_canonical_path_that_is_a_file_is_refused_by_name() {
+        let (_data, store) = store();
+        let name = VolumeName::for_app("app", "data");
+        let legacy = store.volumes_dir().join("app-data");
+        std::fs::create_dir_all(&legacy).unwrap();
+        std::fs::write(legacy.join("data.db"), b"the volume's contents").unwrap();
+        std::fs::write(store.path(&name), b"not a directory").unwrap();
+
+        let err = store
+            .migrate_legacy("app-data", &name, "app")
+            .await
+            .unwrap_err();
+
+        assert!(err.to_string().contains("not a directory"), "{err}");
+        assert!(
+            err.to_string().contains("app-volume-data"),
+            "the error must name the path: {err}"
+        );
+        assert!(
+            legacy.join("data.db").exists(),
+            "both paths must be left as they are"
+        );
+        assert!(store.list_held().unwrap().is_empty());
+    }
+
+    // r[verify storage.confinement]
+    #[tokio::test]
+    async fn migrating_onto_an_empty_canonical_path_replaces_it() {
+        let (_data, store) = store();
+        let name = VolumeName::for_app("app", "data");
+        let legacy = store.volumes_dir().join("app-data");
+        std::fs::create_dir_all(&legacy).unwrap();
+        std::fs::write(legacy.join("data.db"), b"the volume's contents").unwrap();
+        std::fs::create_dir_all(store.path(&name)).unwrap();
+
+        assert!(
+            store
+                .migrate_legacy("app-data", &name, "app")
+                .await
+                .unwrap()
+        );
+
+        assert!(store.path(&name).join("data.db").exists());
+        assert!(!legacy.exists());
+        assert!(store.list_held().unwrap().is_empty());
+    }
+
+    // r[verify actuate.volume.hold]
+    #[tokio::test]
+    async fn migrating_onto_a_canonical_path_holding_data_holds_it_first() {
+        let (_data, store) = store();
+        let name = VolumeName::for_app("app", "data");
+        let legacy = store.volumes_dir().join("app-data");
+        std::fs::create_dir_all(&legacy).unwrap();
+        std::fs::write(legacy.join("data.db"), b"the volume's contents").unwrap();
+        std::fs::create_dir_all(store.path(&name)).unwrap();
+        std::fs::write(store.path(&name).join("other.db"), b"somebody else's").unwrap();
+
+        assert!(
+            store
+                .migrate_legacy("app-data", &name, "app")
+                .await
+                .unwrap()
+        );
+
+        let held = store.list_held().unwrap();
+        assert_eq!(held.len(), 1);
+        assert!(held[0].path.join("other.db").exists());
+        assert!(store.path(&name).join("data.db").exists());
     }
 
     // r[verify storage.confinement]

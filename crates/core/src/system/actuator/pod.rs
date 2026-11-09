@@ -1,5 +1,5 @@
 use ipnet::Ipv6Net;
-use snafu::{IntoError, ResultExt};
+use snafu::ResultExt;
 
 use super::safe_volume_write;
 
@@ -66,6 +66,18 @@ pub(crate) struct ContainerVolume {
 // r[impl actuate.volume.tmpfs]
 pub const TMPFS_VOLUMES_DIR: &str = "/run/seedling/tmpfs-volumes";
 
+/// Host path backing one tmpfs volume, named or anonymous.
+///
+/// Every part of the runtime that touches a tmpfs volume — the actuator that
+/// creates and removes it, the observer that reports whether it is there, the
+/// translator that builds the container's bind mount, and the `rt.write` path
+/// — must address the same directory, so the join lives here rather than
+/// being repeated beside a comment asking callers to keep it in sync.
+// r[impl actuate.volume.tmpfs]
+pub fn tmpfs_volume_path(name: &str) -> std::path::PathBuf {
+    std::path::Path::new(TMPFS_VOLUMES_DIR).join(name)
+}
+
 /// Collect all volumes declared in the pod's container mounts.
 ///
 /// Anonymous volumes (`v.name.is_none()`) get a deterministic podman name
@@ -98,7 +110,7 @@ pub(super) fn collect_container_volumes(
                         // volume driver creates a fresh tmpfs at every mount,
                         // wiping any data we'd written to its host _data path.
                         let host_path = if tmpfs {
-                            Some(std::path::PathBuf::from(TMPFS_VOLUMES_DIR).join(&vol_name))
+                            Some(tmpfs_volume_path(&vol_name))
                         } else {
                             None
                         };
@@ -108,9 +120,7 @@ pub(super) fn collect_container_volumes(
                         let vol_name = VolumeName::for_app(instance.app.as_str(), n.as_str());
                         let host_path = if tmpfs {
                             // r[impl actuate.volume.tmpfs]
-                            Some(
-                                std::path::PathBuf::from(TMPFS_VOLUMES_DIR).join(vol_name.as_str()),
-                            )
+                            Some(tmpfs_volume_path(vol_name.as_str()))
                         } else {
                             volumes_dir.map(|dir| dir.join(vol_name.as_str()))
                         };
@@ -135,10 +145,15 @@ pub(super) fn collect_container_volumes(
         .collect()
 }
 
-/// The exists-then-create pattern has an inherent TOCTOU gap, but the reconciler is the sole
-/// actor managing volumes on this node so no concurrent race is possible. If concurrent
-/// reconciliation is ever introduced, call create unconditionally and treat "already exists"
-/// as success.
+/// Materialise the volumes a pod's container mounts, before it starts.
+///
+/// The exists-then-create pattern here has an inherent TOCTOU gap. It is
+/// benign for the anonymous volumes the container runtime manages, since the
+/// reconciler is the only actor creating those. It is *not* benign for named
+/// volumes: this phase and the volumes phase run concurrently and both reach
+/// them, which is why creating one goes through `ensure_named_volume` rather
+/// than being open-coded here. Losing that race once meant losing the
+/// volume's declared writes for good.
 async fn ensure_volumes(driver: &System, volumes: &[ContainerVolume]) -> Result<(), ActuateError> {
     for vol in volumes {
         if let Some(host_path) = &vol.host_path {
@@ -160,22 +175,20 @@ async fn ensure_volumes(driver: &System, volumes: &[ContainerVolume]) -> Result<
                 for (path, contents) in &vol.def.writes {
                     safe_volume_write(host_path, path, contents).await?;
                 }
-            } else if !host_path.exists() {
+            } else {
                 // r[impl actuate.volume.storage]
-                // Named non-tmpfs volume managed by VolumeStore; ensure the
-                // host directory/subvolume exists.
+                // r[impl actuate.volume.start]
+                // Named non-tmpfs volume managed by VolumeStore. This phase
+                // runs alongside the volumes phase, so it may well be the one
+                // that finds the volume absent — in which case it owes the
+                // volume its declared writes, which only ever land at
+                // creation.
                 let bind_name = vol
                     .bind_name
                     .as_ref()
                     .expect("named bind volume must carry a VolumeName");
-                driver.volume_store.create(bind_name).await.map_err(|e| {
-                    super::VolumeWriteSnafu {
-                        path: host_path.clone(),
-                    }
-                    .into_error(e)
-                })?;
-                // Named volumes only get writes on first creation.
-                // (The reconciler handles their lifecycle.)
+                super::ensure_named_volume(&driver.volume_store, bind_name, &vol.def.writes)
+                    .await?;
             }
         } else {
             // Anonymous non-tmpfs volume: managed by the container runtime.

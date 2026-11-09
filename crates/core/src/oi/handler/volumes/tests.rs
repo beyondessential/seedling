@@ -438,3 +438,192 @@ fn reserved_prefix_is_rejected_at_creation() {
     )
     .expect("only the claimed prefix is reserved");
 }
+
+/// btrfs snapshots *into* a destination that already exists rather than
+/// refusing it, so the name must be refused before btrfs is reached. The
+/// error distinguishes the two: reaching btrfs on a non-btrfs test host
+/// would report an internal failure instead.
+// r[verify volume.site.name-taken]
+#[test]
+fn snapshotting_onto_a_name_already_taken_is_refused_before_any_btrfs_call() {
+    let oi = TestOi::new();
+    oi.call(
+        "/volumes/site/create",
+        json!({ "name": "data", "kind": "managed" }),
+    )
+    .unwrap();
+
+    let (code, msg) = oi
+        .call(
+            "/volumes/site/snapshot",
+            json!({ "name": "data", "source": "_site/data" }),
+        )
+        .unwrap_err();
+
+    assert_eq!(code, "requirements_invalid");
+    assert!(msg.contains("already exists"), "{msg}");
+    assert_eq!(site_volume_names(&oi), vec!["data"]);
+}
+
+// r[verify volume.site.name-taken]
+#[test]
+fn promoting_onto_a_name_already_taken_is_refused() {
+    let oi = TestOi::new();
+    oi.call(
+        "/volumes/site/create",
+        json!({ "name": "data", "kind": "managed" }),
+    )
+    .unwrap();
+
+    let (code, msg) = oi
+        .call(
+            "/volumes/site/promote",
+            json!({ "source": "some-snapshot", "name": "data" }),
+        )
+        .unwrap_err();
+
+    assert_eq!(code, "requirements_invalid");
+    assert!(msg.contains("already exists"), "{msg}");
+}
+
+// r[verify volume.site.name-taken]
+#[test]
+fn creating_a_site_volume_under_a_name_already_taken_is_refused() {
+    let oi = TestOi::new();
+    oi.call(
+        "/volumes/site/create",
+        json!({ "name": "data", "kind": "managed" }),
+    )
+    .unwrap();
+
+    let (code, msg) = oi
+        .call(
+            "/volumes/site/create",
+            json!({ "name": "data", "kind": "managed" }),
+        )
+        .unwrap_err();
+
+    assert_eq!(code, "requirements_invalid");
+    assert!(msg.contains("already exists"), "{msg}");
+}
+
+/// Storage with no record could be a leftover or an operator's volume whose
+/// record was never written, and the runtime cannot tell which.
+// r[verify volume.site.name-taken]
+#[test]
+fn storage_standing_at_the_name_with_no_record_is_refused_rather_than_reused() {
+    let oi = TestOi::new();
+    let path = oi.state.driver.volume_store.site_path("unrecorded");
+    std::fs::create_dir_all(&path).unwrap();
+    std::fs::write(path.join("data.db"), b"somebody's data").unwrap();
+
+    let (code, msg) = oi
+        .call(
+            "/volumes/site/create",
+            json!({ "name": "unrecorded", "kind": "managed" }),
+        )
+        .unwrap_err();
+
+    assert_eq!(code, "requirements_invalid");
+    assert!(msg.contains("no site volume recorded"), "{msg}");
+    assert!(
+        path.join("data.db").exists(),
+        "the data must be left where it is"
+    );
+}
+
+/// Storage removed by hand, by a disk recovery, or by the startup sweep of
+/// leftover snapshots leaves a row with nothing behind it. There is nothing
+/// to hold, so there is nothing stopping the deletion.
+// r[verify actuate.volume.hold]
+#[test]
+fn deleting_a_managed_site_volume_whose_storage_is_gone_removes_the_record() {
+    let oi = TestOi::new();
+    oi.call(
+        "/volumes/site/create",
+        json!({ "name": "mydata", "kind": "managed" }),
+    )
+    .unwrap();
+    std::fs::remove_dir_all(oi.state.driver.volume_store.site_path("mydata")).unwrap();
+
+    let deleted = oi
+        .call("/volumes/site/delete", json!({ "name": "mydata" }))
+        .unwrap();
+
+    assert_eq!(deleted["deleted"], true);
+    assert!(site_volume_names(&oi).is_empty());
+    assert!(
+        held_volumes(&oi).is_empty(),
+        "nothing was preserved because there was nothing to preserve"
+    );
+}
+
+/// The data is real and would be orphaned, so a hold that could not be
+/// carried out must still stop the delete.
+// r[verify actuate.volume.hold]
+#[test]
+fn deleting_a_managed_site_volume_that_cannot_be_held_leaves_the_record_alone() {
+    let oi = TestOi::new();
+    oi.call(
+        "/volumes/site/create",
+        json!({ "name": "relocated", "kind": "managed" }),
+    )
+    .unwrap();
+
+    // Storage an operator moved aside and linked back into place: the
+    // runtime does not own it, so it refuses to move it.
+    let path = oi.state.driver.volume_store.site_path("relocated");
+    let elsewhere = path.with_file_name("elsewhere");
+    std::fs::rename(&path, &elsewhere).unwrap();
+    std::os::unix::fs::symlink(&elsewhere, &path).unwrap();
+
+    let (code, msg) = oi
+        .call("/volumes/site/delete", json!({ "name": "relocated" }))
+        .unwrap_err();
+
+    assert_eq!(code, "internal");
+    assert!(msg.contains("failed to hold site volume"), "{msg}");
+    assert_eq!(site_volume_names(&oi), vec!["relocated"]);
+    assert!(elsewhere.exists(), "the data must be left where it is");
+}
+
+/// Operator commands are served concurrently, so finding the name free and
+/// taking it has to be one step. Standing in as the other request, this
+/// holds the claim and shows that a create cannot get past the check while
+/// it is held — the point at which, unguarded, it would have gone on to
+/// make storage under a name someone else was already taking.
+// r[verify volume.site.name-taken]
+#[test]
+fn taking_a_site_volume_name_excludes_another_request_taking_the_same_one() {
+    let oi = TestOi::new();
+    let (reached_tx, reached_rx) = std::sync::mpsc::channel();
+
+    let claim = oi.state.driver.volume_store.claim_site_name();
+
+    std::thread::scope(|scope| {
+        scope.spawn(|| {
+            let created = oi
+                .call(
+                    "/volumes/site/create",
+                    json!({ "name": "contended", "kind": "managed" }),
+                )
+                .unwrap();
+            reached_tx.send(created).unwrap();
+        });
+
+        assert!(
+            reached_rx
+                .recv_timeout(std::time::Duration::from_millis(250))
+                .is_err(),
+            "the create must wait for the claim rather than check the name beside its holder"
+        );
+
+        drop(claim);
+        let created = reached_rx
+            .recv_timeout(std::time::Duration::from_secs(10))
+            .expect("the create proceeds once the claim is released");
+        assert_eq!(created["created"], true);
+    });
+
+    assert_eq!(site_volume_names(&oi), vec!["contended".to_owned()]);
+}

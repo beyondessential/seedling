@@ -165,6 +165,11 @@ Absent specification bugs, anything that is not defined here is either defined i
 >
 > Forensic reconstruction of a prior app's history (across a deregister/re-register cycle) is the responsibility of the [audit log](#r--audit.log), not the per-app generation history.
 
+> r[deregister.purge]
+> Deregistering an app must discard every piece of state the runtime holds under that app's name, including the operator-configured [external service](#r--service.external.mapping.events) and [external volume](#r--volume.external.mapping.events) mappings made for it. An app name is the runtime's identity for an app, so state surviving the app it names is inherited by the next app registered under that name rather than belonging to nobody.
+>
+> External volume mappings make that inheritance a question of access rather than tidiness: a mapping carries a target volume and a read-only flag, so an app coming up under a reused name would mount another app's data on the strength of a decision an operator made about a different app, having declared only that it wants an external volume by that name.
+
 # Definition Sources
 
 > r[definition.recheck]
@@ -1080,10 +1085,17 @@ Some operations must hand a writable or read-only path to an action closure with
 
 > r[actuate.volume.start]
 > Starting a Volume instance must create the named volume if it does not already exist, then apply any declared file writes to the volume.
+>
+> Creating a named non-tmpfs volume and seeding it with its declared writes is one step. Whichever part of the runtime brings the volume's storage into existence must apply the declared writes to it, and a part that finds the storage already there must not apply them again — an app owns its volume's contents once it has them, so re-seeding would overwrite what the app wrote. A volume that was created without being seeded is never seeded afterwards, so the two must not be separable: a workload that happened to materialise the volume ahead of the component nominally responsible for it would otherwise start against empty storage, permanently and with nothing reported.
+>
+> Because those parts run concurrently, both may find the storage absent at the same moment, and exactly one of them creates it. Creation must report which one that was. The part whose creation did not take effect is a part that found the storage already there: it owes the volume no writes, and the name already being in use is not an error for it to report. Treating creation as something that can only succeed makes an ordinary overlap fail the start on storage backends whose create refuses an existing name.
+>
+> When a declared write fails part-way through seeding, storage the same operation had just created must be removed again, so the next attempt seeds from scratch rather than leaving behind a volume that counts as created and will never receive its writes.
 
 > r[actuate.volume.tmpfs]
 > Tmpfs-backed Volumes (named or anonymous) must be materialised as a host-managed directory under a tmpfs-backed location and bind-mounted into containers. The runtime must not delegate tmpfs storage to the container runtime's own tmpfs volume driver, because such drivers create a fresh tmpfs at every container mount and so silently drop any declared file writes that were applied to the volume's host backing.
 > Because tmpfs contents do not survive a host reboot, any declared file writes must be re-applied unconditionally each time the volume is materialised — not only when the volume is first created.
+> That directory is the volume for every step of its lifecycle: it is what starting creates and seeds, what observation reports as present or missing, and what stopping removes. The runtime must not create a container-runtime volume to stand for a tmpfs Volume, because a lifecycle step that acts on the stand-in leaves the directory holding the data untouched — a stop that reports a cleanup it did not perform, and a later volume of the same name that silently inherits the previous one's files.
 
 > r[actuate.volume.storage]
 > Named non-tmpfs volumes are stored as host-managed directories under the data directory and bind-mounted into containers. Anonymous non-tmpfs volumes remain managed by the container runtime.
@@ -1092,7 +1104,7 @@ Some operations must hand a writable or read-only path to an action closure with
 > When the data directory resides on a BTRFS filesystem, named non-tmpfs volumes must be created as BTRFS subvolumes.
 
 > r[storage.confinement]
-> Every host filesystem path the runtime creates, writes, moves, or deletes on behalf of a definition or an operator command is confined to the root that owns it: a volume's root for content written into that volume, and the volume storage directory under the data directory for a volume's own storage.
+> Every host filesystem path the runtime creates, writes, moves, or deletes on behalf of a definition or an operator command is confined to the root that owns it: a volume's root for content written into that volume, and for a volume's own storage the directory that holds volumes of its kind — under the data directory for a non-tmpfs volume, under the tmpfs-backed location for a tmpfs one. Where a volume's storage lives does not change whether the runtime owns it.
 >
 > Confinement covers every component of a path, not only its last. A parent directory created on the way to a write must be resolved under the same confinement as the write itself, so that a symlink placed inside the root cannot lead the runtime to create or write anything outside it. A path that escapes its root must be refused, and nothing along the way to it may be created.
 >
@@ -1100,6 +1112,8 @@ Some operations must hand a writable or read-only path to an action closure with
 
 > r[actuate.volume.hold]
 > When a named non-tmpfs volume or a managed site volume would be removed — either because the volume name has been removed from the app definition, because the volume's storage backend cannot be updated in-place, or because an operator has requested deletion of a managed site volume — the runtime must preserve the volume's data in a held state instead of deleting it. The held volume remains linked to the originating context: app volumes to their app, and site volumes to the site (reported as app name `_site`). If the app still requires a volume under the same name, a fresh volume is created and the old one is held alongside it. Snapshot site volumes are excluded from the hold mechanism (see [volume.site.snapshot.delete](#r--volume.site.snapshot.delete)).
+>
+> A volume with no storage behind it is held by doing nothing: there is no data to preserve, so the removal it was standing in the way of goes ahead and no held volume is recorded. This must be distinguishable from a hold that could not be carried out — storage the runtime does not own, or a move that failed — which still stops the removal, because there the data is real and would be orphaned. A runtime that cannot tell the two apart leaves a managed site volume whose storage an operator removed by hand permanently undeletable, its record stranded in every listing.
 
 > r[actuate.volume.hold.confirm]
 > An operator must explicitly confirm deletion of a held volume before its data is removed.
@@ -1120,6 +1134,13 @@ Some operations must hand a writable or read-only path to an action closure with
 
 > r[volume.site.lifecycle]
 > Site volumes are created and deleted exclusively through operator commands. The runtime must create the backing storage for managed site volumes at creation time. When a managed site volume is deleted, its backing storage must be routed through the [held volume](#r--actuate.volume.hold) mechanism so that an operator must explicitly confirm final removal. Deleting a snapshot site volume removes its backing storage directly without routing through the hold mechanism (see [volume.site.snapshot.delete](#r--volume.site.snapshot.delete)). Deleting a bind site volume must only drop the runtime's reference and must not affect the operator-provided host path.
+
+> r[volume.site.name-taken]
+> Every operation that brings a new site volume into being — creating one, snapshotting to one, promoting a snapshot into one, or [restoring a held volume](#r--actuate.volume.hold.restore) as one — must be rejected as an invalid request when the chosen name is already taken, before any storage is touched. A name is taken when a site volume is recorded under it, and also when storage already stands at the name with no record of it.
+>
+> The check comes first because the storage operations do not refuse a name that is in use on their own terms: a snapshot taken onto an existing directory is placed *inside* it and reported as success, leaving a subvolume nested in an unrelated live volume with no record pointing at it, which only then fails on the record's unique name. Storage with no record is refused rather than taken over, because the runtime cannot tell leftovers from an operator's volume whose record has not been written.
+>
+> The refusal holds between operators as well as within one request. Operator commands are served concurrently, so finding the name free and then taking it must be one indivisible step; otherwise two requests naming the same target both find it free and both go on to make storage, which is the nesting above with nothing to have stopped it. Only one of the two may proceed, and the other must be refused as though it had arrived second.
 
 > r[volume.site.lifecycle.events]
 > Site volume creation and deletion must emit events on the event feed and be recorded in the [audit log](#r--audit.log). Deletion events must identify the site volume's kind and, when the deletion routed through the held-volume mechanism, the resulting held volume identifier.
