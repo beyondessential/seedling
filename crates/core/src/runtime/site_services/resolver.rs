@@ -524,37 +524,46 @@ type FamilyResult<T, E> = Result<(Vec<T>, Option<Instant>), E>;
 
 async fn lookup_records(resolver: &TokioResolver, host: &str) -> Result<Lookup, NetError> {
     let now = Instant::now();
-    let aaaa = match resolver.ipv6_lookup(host).await {
-        Ok(lookup) => {
-            let v6: Vec<Ipv6Addr> = lookup
-                .answers()
-                .iter()
-                .filter_map(|r| match &r.data {
-                    RData::AAAA(a) => Some(a.0),
-                    _ => None,
-                })
-                .collect();
-            Ok((v6, Some(lookup.valid_until())))
-        }
-        Err(NetError::Dns(DnsError::NoRecordsFound(_))) => Ok((Vec::new(), None)),
-        Err(other) => Err(other),
-    };
-
-    let a = match resolver.ipv4_lookup(host).await {
-        Ok(lookup) => {
-            let v4: Vec<Ipv4Addr> = lookup
-                .answers()
-                .iter()
-                .filter_map(|r| match &r.data {
-                    RData::A(addr) => Some(addr.0),
-                    _ => None,
-                })
-                .collect();
-            Ok((v4, Some(lookup.valid_until())))
-        }
-        Err(NetError::Dns(DnsError::NoRecordsFound(_))) => Ok((Vec::new(), None)),
-        Err(other) => Err(other),
-    };
+    // Neither query feeds the other, and a family that is failing usually
+    // costs a full DNS timeout. Running them together keeps one family's
+    // timeout from being added to the other's, which matters because the
+    // hosts due in a tick are refreshed one after another.
+    let (aaaa, a) = tokio::join!(
+        async {
+            match resolver.ipv6_lookup(host).await {
+                Ok(lookup) => {
+                    let v6: Vec<Ipv6Addr> = lookup
+                        .answers()
+                        .iter()
+                        .filter_map(|r| match &r.data {
+                            RData::AAAA(a) => Some(a.0),
+                            _ => None,
+                        })
+                        .collect();
+                    Ok((v6, Some(lookup.valid_until())))
+                }
+                Err(NetError::Dns(DnsError::NoRecordsFound(_))) => Ok((Vec::new(), None)),
+                Err(other) => Err(other),
+            }
+        },
+        async {
+            match resolver.ipv4_lookup(host).await {
+                Ok(lookup) => {
+                    let v4: Vec<Ipv4Addr> = lookup
+                        .answers()
+                        .iter()
+                        .filter_map(|r| match &r.data {
+                            RData::A(addr) => Some(addr.0),
+                            _ => None,
+                        })
+                        .collect();
+                    Ok((v4, Some(lookup.valid_until())))
+                }
+                Err(NetError::Dns(DnsError::NoRecordsFound(_))) => Ok((Vec::new(), None)),
+                Err(other) => Err(other),
+            }
+        },
+    );
 
     combine_families(aaaa, a, now)
 }
