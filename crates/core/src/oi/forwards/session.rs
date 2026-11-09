@@ -1,7 +1,10 @@
 use std::sync::Arc;
 
-use seedling_protocol::names::{AppName, ForwardId};
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use seedling_protocol::{
+    names::{AppName, ForwardId},
+    relay::{abort_forward_stream, relay_forward_stream},
+};
+use tokio::io::AsyncWriteExt;
 
 use super::{
     registry::{ForwardEntry, ForwardProto},
@@ -311,6 +314,7 @@ pub(crate) async fn handle_forward_stream(
         Ok(t) => t,
         Err(e) => {
             tracing::warn!(fwd = %forward_id, "TCP connect to {target} failed: {e}");
+            abort_forward_stream(&mut send, &mut recv);
             return;
         }
     };
@@ -318,41 +322,25 @@ pub(crate) async fn handle_forward_stream(
 
     let (mut tcp_recv, mut tcp_send) = tcp.split();
 
-    if !leftover.is_empty() && tcp_send.write_all(&leftover).await.is_err() {
-        let _ = send.finish();
+    if !leftover.is_empty()
+        && let Err(e) = tcp_send.write_all(&leftover).await
+    {
+        tracing::debug!(fwd = %forward_id, "TCP relay failed: {e}");
+        abort_forward_stream(&mut send, &mut recv);
         return;
     }
 
-    let mut qbuf = vec![0u8; 8192];
-    let mut tbuf = vec![0u8; 8192];
-
-    loop {
-        tokio::select! {
-            n = recv.read(&mut qbuf) => {
-                match n {
-                    Ok(Some(n)) if n > 0 => {
-                        if tcp_send.write_all(&qbuf[..n]).await.is_err() {
-                            break;
-                        }
-                    }
-                    _ => break,
-                }
-            }
-            n = tcp_recv.read(&mut tbuf) => {
-                match n {
-                    Ok(0) | Err(_) => break,
-                    Ok(n) => {
-                        if send.write_all(&tbuf[..n]).await.is_err() {
-                            break;
-                        }
-                    }
-                }
-            }
-        }
+    match relay_forward_stream(
+        (&mut send, &mut recv),
+        (&mut tcp_recv, &mut tcp_send),
+        |_| {},
+        |_| {},
+    )
+    .await
+    {
+        Ok(()) => tracing::debug!(fwd = %forward_id, "TCP relay: closed"),
+        Err(e) => tracing::debug!(fwd = %forward_id, "TCP relay failed: {e}"),
     }
-
-    let _ = send.finish();
-    tracing::debug!(fwd = %forward_id, "TCP relay: closed");
 }
 
 // i[forward.tunnel.udp]

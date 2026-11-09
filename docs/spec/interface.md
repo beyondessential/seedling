@@ -85,7 +85,7 @@ Absent specification bugs, anything that is not defined here is either defined i
 > i[stream.forward]
 > Each tunneled TCP connection within a port forward uses one client-initiated bidirectional QUIC stream.
 > Both directions carry raw TCP bytes after an initial newline-terminated JSON header line: `{ "forward": "<forward_id>" }`.
-> The stream closes when the tunneled TCP connection closes.
+> Each direction of the stream is finished when the matching direction of the tunneled TCP connection is, and the stream is reset when the tunneled connection fails, as [forward.tunnel.tcp](#i--forward.tunnel.tcp) describes.
 
 > i[datagram.forward]
 > Each tunneled UDP datagram within a port forward is carried as a QUIC datagram (RFC 9221).
@@ -756,7 +756,12 @@ Absent specification bugs, anything that is not defined here is either defined i
 
 > i[forward.tunnel.tcp]
 > Each individual TCP connection forwarded through a TCP port forward uses a dedicated bidi stream as defined in [stream.forward](#i--stream.forward).
-> The server accepts the stream, opens a TCP connection to the target service address and port, and relays bytes bidirectionally until either end closes.
+> The server accepts the stream, opens a TCP connection to the target service address and port, and relays bytes between the two.
+> The client relays each local connection it accepts to its own stream in the same way, so both ends of the tunnel behave alike.
+> Each direction is relayed independently: data waiting to be delivered in one direction never holds up the other.
+> When one side finishes sending, the relay finishes that direction toward the other side and keeps relaying the opposite direction, so a connection that half-closes after sending its request still receives the whole response.
+> The tunnel ends once both directions have finished.
+> If either side fails, including the server failing to connect to the target, both directions are torn down and the stream is reset rather than finished, so the other end cannot mistake a truncated transfer for a complete one.
 
 > i[forward.tunnel.udp]
 > Each UDP datagram forwarded through a UDP port forward is carried as a QUIC datagram as defined in [datagram.forward](#i--datagram.forward).
