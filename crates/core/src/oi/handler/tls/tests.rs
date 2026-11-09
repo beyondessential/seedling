@@ -626,6 +626,42 @@ fn csr_begin_get_cancel_roundtrip() {
     assert_eq!(code, "not_found");
 }
 
+/// A wildcard is a name a CA will sign, so a CSR may request one — alongside
+/// exact names in the same request.
+// i[verify tls.cert.csr.begin]
+#[test]
+fn a_csr_may_request_a_wildcard() {
+    let oi = TestOi::new();
+
+    let (id, csr_pem) = begin_csr_for(&oi, &["*.example.com", "example.com"]);
+    let csr = CertificateSigningRequestParams::from_pem(&csr_pem).expect("parse csr");
+    let sans: Vec<String> = csr
+        .params
+        .subject_alt_names
+        .iter()
+        .map(|san| match san {
+            rcgen::SanType::DnsName(name) => name.as_str().to_owned(),
+            other => panic!("unexpected SAN {other:?}"),
+        })
+        .collect();
+    assert_eq!(sans, ["*.example.com", "example.com"]);
+    assert_eq!(
+        cert_row(&oi, id)["requested_hostnames"],
+        json!(["*.example.com", "example.com"])
+    );
+
+    // A bare `*` names no suffix to issue under, so it is refused.
+    for hostnames in [json!(["*"]), json!(["*."]), json!(["*.*.example.com"])] {
+        let (code, _) = oi
+            .call(
+                "/tls/certificates/csr/begin",
+                json!({ "hostnames": hostnames }),
+            )
+            .unwrap_err();
+        assert_eq!(code, "requirements_invalid", "{hostnames}");
+    }
+}
+
 // i[verify tls.cert.csr.begin]
 // i[verify tls.cert.csr.get]
 // i[verify tls.cert.csr.upload-cert]

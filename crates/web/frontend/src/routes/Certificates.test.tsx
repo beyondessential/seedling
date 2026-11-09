@@ -633,6 +633,29 @@ describe("Certificates", () => {
     expect(revokeObjectURL).toHaveBeenCalledWith("blob:test");
   });
 
+  // w[verify routes.certificates]
+  it("sends a wildcard CSR request through to the runtime", async () => {
+    const { request } = renderWithSession(<Certificates />, {
+      fixtures: baseFixtures({
+        "/tls/certificates/csr/begin": { id: 10, csr_pem: CSR_PEM },
+      }),
+      safetyMode: "write",
+    });
+
+    fireEvent.click(await screen.findByRole("button", { name: "Generate CSR" }));
+    fireEvent.change(await screen.findByLabelText("Hostnames"), {
+      target: { value: "*.example.com example.com" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Generate" }));
+
+    await waitFor(() => {
+      expect(request).toHaveBeenCalledWith("/tls/certificates/csr/begin", {
+        hostnames: ["*.example.com", "example.com"],
+        key_type: "ecdsa_p256",
+      });
+    });
+  });
+
   it("re-shows the CSR PEM for a pending certificate", async () => {
     const { request } = renderWithSession(<Certificates />, {
       fixtures: baseFixtures({

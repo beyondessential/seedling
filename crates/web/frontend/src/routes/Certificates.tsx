@@ -1435,7 +1435,10 @@ function CsrBeginDialog({ open, onClose, onSubmitted }: CsrBeginDialogProps) {
     }
   };
 
-  const valid = names.length > 0 && !names.some((n) => n.includes("*"));
+  // A name the runtime will not take is refused by the runtime, which says
+  // precisely what is wrong with it. The dialog only waits for something to
+  // send.
+  const valid = names.length > 0;
 
   return (
     <Dialog open={open} onClose={close} fullWidth maxWidth="sm">
@@ -1451,14 +1454,14 @@ function CsrBeginDialog({ open, onClose, onSubmitted }: CsrBeginDialogProps) {
           <TextField
             autoFocus
             label="Hostnames"
-            placeholder="e.g. app.example.com, www.example.com"
+            placeholder="e.g. app.example.com, *.example.com"
             value={hostnames}
             onChange={(e) => setHostnames(e.target.value)}
             fullWidth
             multiline
             minRows={2}
             slotProps={{ htmlInput: { style: { fontFamily: "monospace" } } }}
-            helperText="One or more concrete hostnames (no wildcards), separated by commas or spaces. The runtime generates an ECDSA P-256 keypair on the server; only the CSR is returned. Get the CSR signed by your CA, then come back to upload the signed cert."
+            helperText="One or more hostnames, or *.suffix wildcards, separated by commas or spaces. The runtime generates an ECDSA P-256 keypair on the server; only the CSR is returned. Get the CSR signed by your CA, then come back to upload the signed cert."
           />
         </Stack>
       </DialogContent>
