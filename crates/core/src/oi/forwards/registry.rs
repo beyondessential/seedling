@@ -197,8 +197,14 @@ impl ForwardRegistry {
         };
         match udp_tx.try_send(payload) {
             Ok(()) => {
-                if entry.udp_dropped > 0 {
-                    let _ = entry.status_tx.try_send(ForwardStatus::warn(format!(
+                // Reserved rather than sent: the count is cleared only once
+                // the report is on its way, so a status channel that was full
+                // leaves the episode to be reported by a later datagram
+                // instead of ending it silently.
+                if entry.udp_dropped > 0
+                    && let Ok(permit) = entry.status_tx.try_reserve()
+                {
+                    permit.send(ForwardStatus::warn(format!(
                         "UDP relay caught up after dropping {} to the service",
                         plural(entry.udp_dropped, "datagram")
                     )));
@@ -386,6 +392,48 @@ mod tests {
         assert_eq!(plural(1, "datagram"), "1 datagram");
         assert_eq!(plural(0, "datagram"), "0 datagrams");
         assert_eq!(plural(2, "datagram"), "2 datagrams");
+    }
+
+    // i[verify forward.status]
+    #[test]
+    fn a_caught_up_report_the_status_channel_had_no_room_for_is_not_lost() {
+        let registry = ForwardRegistry::new();
+        let mut reg = registry.lock();
+        let conn = 9;
+        let (udp_tx, mut udp_rx) = mpsc::channel(1);
+        let (status_tx, mut status_rx) = mpsc::channel(1);
+        let key = reg
+            .register(conn, |k| {
+                entry_with(conn, k, ForwardProto::Udp, Some(udp_tx), status_tx)
+            })
+            .unwrap();
+
+        // One datagram fills the relay, the next is dropped and takes the
+        // status channel's only slot with the report that dropping started.
+        reg.deliver_datagram(conn, key, vec![1]);
+        reg.deliver_datagram(conn, key, vec![2]);
+
+        // The relay catches up while the status channel is still full, so
+        // the episode is not yet over as far as the client knows.
+        udp_rx.try_recv().unwrap();
+        reg.deliver_datagram(conn, key, vec![3]);
+
+        let started = status_rx.try_recv().unwrap();
+        assert!(started.message.contains("dropping"), "{}", started.message);
+        assert!(
+            status_rx.try_recv().is_err(),
+            "the catch-up report had nowhere to go"
+        );
+
+        // With room again, the next delivery reports the episode it could not.
+        udp_rx.try_recv().unwrap();
+        reg.deliver_datagram(conn, key, vec![4]);
+        let caught_up = status_rx.try_recv().unwrap();
+        assert!(
+            caught_up.message.contains("dropping 1 datagram"),
+            "{}",
+            caught_up.message
+        );
     }
 
     // i[verify forward.status]
