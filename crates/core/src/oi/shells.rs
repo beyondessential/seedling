@@ -1,6 +1,8 @@
 mod handler;
 mod registry;
 mod session;
+#[cfg(test)]
+mod tests;
 mod volume_session;
 
 pub(crate) use handler::{list_shells, resize_shell, stop_shell};

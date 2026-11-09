@@ -1,11 +1,16 @@
-use std::{path::PathBuf, sync::Arc, time::Duration};
+use std::{path::PathBuf, sync::Arc};
 
 use seedling_protocol::names::{
     AppName, AppVolumeName, HeldVolumeId, SessionId, ShellName, SiteVolumeName,
 };
-use tokio::io::AsyncWriteExt;
 
-use super::{registry::ShellSession, session::relay_session};
+use super::{
+    registry::{ShellSession, StopSignal},
+    session::{
+        LiveShell, SessionStreams, StartupFailure, abort_startup, begin_session, reject,
+        run_to_exit,
+    },
+};
 use crate::{
     defs::resource::ResourceKind,
     oi::state::OiState,
@@ -79,21 +84,7 @@ pub(crate) async fn open_volume_shell_session(
 
     macro_rules! err {
         ($code:expr, $msg:expr) => {{
-            let resp = serde_json::to_vec(&serde_json::json!({
-                "error": { "code": $code, "message": $msg }
-            }))
-            .unwrap_or_default();
-            let _ = send.write_all(&resp).await;
-            let _ = send.finish();
-            return;
-        }};
-    }
-    macro_rules! fail {
-        ($code:expr) => {{
-            let resp = serde_json::to_vec(&serde_json::json!({ "exit_code": $code }))
-                .unwrap_or_default();
-            let _ = send.write_all(&resp).await;
-            let _ = send.finish();
+            reject(&mut send, $code, $msg).await;
             return;
         }};
     }
@@ -237,7 +228,7 @@ pub(crate) async fn open_volume_shell_session(
                 .unwrap_or_else(|| std::path::PathBuf::from("."));
             if let Err(e) = build_volume_shell_image(&data_dir).await {
                 tracing::warn!(%image, "image build failed: {e}");
-                fail!(-1);
+                err!("shell_error", format!("image build failed: {e}"));
             }
         }
         Err(e) => tracing::warn!(%image, "image_exists check failed: {e}"),
@@ -251,11 +242,11 @@ pub(crate) async fn open_volume_shell_session(
         .await
     {
         tracing::warn!(%net_name, "volume shell: create network failed: {e}");
-        fail!(-1);
+        err!("shell_error", format!("create network failed: {e}"));
     }
 
     // Open daemon stdout/stderr uni streams.
-    let (mut stdout_send, stdout_stream_id) = match conn.open_uni().await {
+    let (stdout_send, stdout_stream_id) = match conn.open_uni().await {
         Ok(s) => {
             let id = s.id().index();
             (s, id)
@@ -267,7 +258,7 @@ pub(crate) async fn open_volume_shell_session(
             return;
         }
     };
-    let (mut stderr_send, stderr_stream_id) = match conn.open_uni().await {
+    let (stderr_send, stderr_stream_id) = match conn.open_uni().await {
         Ok(s) => {
             let id = s.id().index();
             (s, id)
@@ -282,24 +273,36 @@ pub(crate) async fn open_volume_shell_session(
 
     let session_id = SessionId::generate();
 
-    // Write handshake.
+    let stop = StopSignal::new();
+    let volumes_app = AppName::new_unchecked("_volumes");
+    // i[impl volumes.shell]
+    let session = ShellSession::starting(
+        session_id,
+        volumes_app,
+        session_name.clone(),
+        req_actor,
+        (params.rows, params.cols),
+        stop.clone(),
+    );
+    let event_name = ShellName::new_unchecked("volume-shell");
+    if !begin_session(
+        &state,
+        &mut send,
+        session,
+        &event_name,
+        stdout_stream_id,
+        stderr_stream_id,
+    )
+    .await
     {
-        let mut resp = serde_json::to_vec(&serde_json::json!({
-            "result": {
-                "session_id": session_id.to_string(),
-                "stdout_stream_id": stdout_stream_id,
-                "stderr_stream_id": stderr_stream_id,
-            }
-        }))
-        .unwrap_or_default();
-        resp.push(b'\n');
-        if let Err(e) = send.write_all(&resp).await {
-            tracing::warn!("volume shell: write handshake: {e}");
-            let _ = send.finish();
-            let _ = state.container_runtime.remove_network(&net_name).await;
-            return;
-        }
+        let _ = state.container_runtime.remove_network(&net_name).await;
+        return;
     }
+    let streams = SessionStreams {
+        send,
+        stdout: stdout_send,
+        stderr: stderr_send,
+    };
 
     // Drop the operator at the most useful directory: the single mount
     // point when they're inspecting one volume, or /mnt when several are
@@ -362,107 +365,42 @@ pub(crate) async fn open_volume_shell_session(
         stop_timeout_secs: None,
     };
 
-    let mut exec_handle = match state.container_runtime.exec(spec).await {
-        Ok(h) => h,
-        Err(e) => {
-            tracing::warn!("volume shell: exec failed: {e}");
-            let _ = state.container_runtime.remove_network(&net_name).await;
-            fail!(-1);
-        }
-    };
-
-    {
-        let ws = libc::winsize {
-            ws_row: params.rows,
-            ws_col: params.cols,
-            ws_xpixel: 0,
-            ws_ypixel: 0,
-        };
-        // SAFETY: pty_master_fd is valid until exec_handle is dropped.
-        unsafe { libc::ioctl(exec_handle.pty_master_fd, libc::TIOCSWINSZ as _, &ws) };
-    }
-
-    let (stop_tx, mut stop_rx) = tokio::sync::oneshot::channel::<()>();
-    let pty_master_fd = exec_handle.pty_master_fd;
-    let volumes_app = AppName::new_unchecked("_volumes");
-    state.shells.insert(ShellSession {
-        session_id,
-        app: volumes_app.clone(),
-        name: session_name.clone(),
-        opened_at: jiff::Timestamp::now(),
-        actor: req_actor,
-        container_name: container_name.clone(),
-        pty_master_fd,
-        stop_tx,
-    });
-    // i[impl volumes.shell]
-    let shell_event_name = ShellName::new_unchecked("volume-shell");
-    state
-        .event_tx
-        .shell_started(session_id, &volumes_app, &shell_event_name);
-
-    let _ = stderr_send.finish();
-
-    let exit_code: i32;
-
-    if !leftover_stdin.is_empty() && exec_handle.stdin.write_all(&leftover_stdin).await.is_err() {
-        state.shells.remove(&session_id);
-        state.event_tx.shell_exited(session_id, -1);
-        let _ = state.container_runtime.remove_network(&net_name).await;
-        fail!(-1);
-    }
-
-    if let Some(status) =
-        relay_session(&mut recv, &mut exec_handle, &mut stdout_send, &mut stop_rx).await
-    {
-        exit_code = status.ok().and_then(|s| s.code()).unwrap_or(-1);
-        state.shells.remove(&session_id);
-        state.event_tx.shell_exited(session_id, exit_code);
-        let _ = state.container_runtime.remove_network(&net_name).await;
-        let mut exit_frame =
-            serde_json::to_vec(&serde_json::json!({ "exit_code": exit_code })).unwrap_or_default();
-        exit_frame.push(b'\n');
-        let _ = send.write_all(&exit_frame).await;
-        let _ = send.finish();
-        let _ = stdout_send.finish();
-        tracing::info!(%session_name, %exit_code, "volume shell session ended");
+    // i[impl shell.startup]
+    if stop.is_requested() {
+        abort_startup(
+            &state,
+            session_id,
+            StartupFailure::stopped(Some(net_name)),
+            streams,
+        )
+        .await;
         return;
     }
 
-    if let Some(pid) = exec_handle.child.id() {
-        unsafe { libc::kill(pid as libc::pid_t, libc::SIGTERM) };
-    }
-
-    let graceful = tokio::time::timeout(Duration::from_secs(5), exec_handle.child.wait()).await;
-
-    exit_code = match graceful {
-        Ok(status) => status.ok().and_then(|s| s.code()).unwrap_or(-1),
-        Err(_timeout) => {
-            let _ = state
-                .container_runtime
-                .remove_container(&container_name, true)
-                .await;
-            let _ = exec_handle.child.kill().await;
-            exec_handle
-                .child
-                .wait()
-                .await
-                .ok()
-                .and_then(|s| s.code())
-                .unwrap_or(-1)
+    let exec_handle = match state.container_runtime.exec(spec).await {
+        Ok(h) => h,
+        Err(e) => {
+            tracing::warn!("volume shell: exec failed: {e}");
+            let failure = StartupFailure::failed(format!("exec failed: {e}"), Some(net_name));
+            abort_startup(&state, session_id, failure, streams).await;
+            return;
         }
     };
 
-    state.shells.remove(&session_id);
-    state.event_tx.shell_exited(session_id, exit_code);
-    let _ = state.container_runtime.remove_network(&net_name).await;
-
-    let mut exit_frame =
-        serde_json::to_vec(&serde_json::json!({ "exit_code": exit_code })).unwrap_or_default();
-    exit_frame.push(b'\n');
-    let _ = send.write_all(&exit_frame).await;
-    let _ = send.finish();
-    let _ = stdout_send.finish();
+    let exit_code = run_to_exit(
+        &state,
+        session_id,
+        &stop,
+        LiveShell {
+            exec: exec_handle,
+            container_name,
+            net_name,
+        },
+        &mut recv,
+        &leftover_stdin,
+        streams,
+    )
+    .await;
 
     tracing::info!(%session_name, %exit_code, "volume shell session ended");
 }

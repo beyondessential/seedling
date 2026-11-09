@@ -4,9 +4,9 @@ use parking_lot::Mutex;
 use seedling_protocol::names::{ActionName, AppName, SessionId, ShellName};
 use tokio::io::AsyncWriteExt;
 
-use super::registry::ShellSession;
+use super::registry::{ShellSession, StopSignal};
 use crate::{
-    defs::resource::ResourceKind,
+    defs::{app::App, resource::ResourceKind},
     oi::state::OiState,
     runtime::{
         AppPhase,
@@ -27,6 +27,63 @@ use crate::{
         types::ExecHandle,
     },
 };
+
+/// The three streams of a shell session: the session stream the handshake and
+/// exit frame travel on, and the stdout and stderr streams.
+pub(super) struct SessionStreams {
+    pub(super) send: quinn::SendStream,
+    pub(super) stdout: quinn::SendStream,
+    pub(super) stderr: quinn::SendStream,
+}
+
+impl SessionStreams {
+    // i[impl shell.close]
+    // i[impl shell.exit]
+    /// Ends the session: writes the exit frame and closes all three streams.
+    /// `reason` is why a session that failed to start ended, and is written to
+    /// stderr for the client to show.
+    pub(super) async fn end(mut self, exit_code: i32, reason: Option<&str>) {
+        if let Some(reason) = reason {
+            let _ = self
+                .stderr
+                .write_all(format!("{reason}\n").as_bytes())
+                .await;
+        }
+        let _ = self.stderr.finish();
+        let _ = self.stdout.finish();
+        let _ = write_frame(&mut self.send, &exit_frame(exit_code)).await;
+        let _ = self.send.finish();
+    }
+}
+
+// i[impl stream.shell.framing]
+/// A frame as it goes on the wire: one JSON line, newline included.
+fn frame_bytes(frame: &serde_json::Value) -> Vec<u8> {
+    let mut line = frame.to_string().into_bytes();
+    line.push(b'\n');
+    line
+}
+
+fn exit_frame(exit_code: i32) -> serde_json::Value {
+    serde_json::json!({ "exit_code": exit_code })
+}
+
+fn error_frame(code: &str, message: &str) -> serde_json::Value {
+    serde_json::json!({ "error": { "code": code, "message": message } })
+}
+
+pub(super) async fn write_frame(
+    send: &mut quinn::SendStream,
+    frame: &serde_json::Value,
+) -> Result<(), quinn::WriteError> {
+    send.write_all(&frame_bytes(frame)).await
+}
+
+/// Answers a `/shells/start` that failed before the session opened.
+pub(super) async fn reject(send: &mut quinn::SendStream, code: &str, message: impl AsRef<str>) {
+    let _ = write_frame(send, &error_frame(code, message.as_ref())).await;
+    let _ = send.finish();
+}
 
 pub(crate) async fn open_shell_session(
     conn: quinn::Connection,
@@ -57,12 +114,7 @@ pub(crate) async fn open_shell_session(
     let req: Request = match serde_json::from_slice(&initial_line) {
         Ok(r) => r,
         Err(e) => {
-            let resp = serde_json::to_vec(&serde_json::json!({
-                "error": { "code": "not_found", "message": format!("invalid request: {e}") }
-            }))
-            .unwrap_or_default();
-            let _ = send.write_all(&resp).await;
-            let _ = send.finish();
+            reject(&mut send, "not_found", format!("invalid request: {e}")).await;
             return;
         }
     };
@@ -70,12 +122,12 @@ pub(crate) async fn open_shell_session(
     let params: Params = match serde_json::from_value(req.params) {
         Ok(p) => p,
         Err(e) => {
-            let resp = serde_json::to_vec(&serde_json::json!({
-                "error": { "code": "requirements_invalid", "message": format!("invalid params: {e}") }
-            }))
-            .unwrap_or_default();
-            let _ = send.write_all(&resp).await;
-            let _ = send.finish();
+            reject(
+                &mut send,
+                "requirements_invalid",
+                format!("invalid params: {e}"),
+            )
+            .await;
             return;
         }
     };
@@ -91,17 +143,14 @@ pub(crate) async fn open_shell_session(
         .keys()
         .find(|k| k.ends_with("_volume") || k.ends_with("_filename"))
     {
-        let resp = serde_json::to_vec(&serde_json::json!({
-            "error": {
-                "code": "requirements_invalid",
-                "message": format!(
-                    "param key {reserved:?} is reserved (keys ending in _volume or _filename are reserved)"
-                ),
-            }
-        }))
-        .unwrap_or_default();
-        let _ = send.write_all(&resp).await;
-        let _ = send.finish();
+        reject(
+            &mut send,
+            "requirements_invalid",
+            format!(
+                "param key {reserved:?} is reserved (keys ending in _volume or _filename are reserved)"
+            ),
+        )
+        .await;
         return;
     }
 
@@ -127,12 +176,7 @@ pub(crate) async fn open_shell_session(
     let (app, shell_params_schema) = match lookup {
         Ok(v) => v,
         Err((code, msg)) => {
-            let resp = serde_json::to_vec(&serde_json::json!({
-                "error": { "code": code, "message": msg }
-            }))
-            .unwrap_or_default();
-            let _ = send.write_all(&resp).await;
-            let _ = send.finish();
+            reject(&mut send, code, msg).await;
             return;
         }
     };
@@ -150,19 +194,14 @@ pub(crate) async fn open_shell_session(
                     .map(|(k, v)| (k, serde_json::Value::String(v)))
                     .collect(),
                 Err(e) => {
-                    let resp = serde_json::to_vec(&serde_json::json!({
-                        "error": { "code": "requirements_invalid", "message": e.message }
-                    }))
-                    .unwrap_or_default();
-                    let _ = send.write_all(&resp).await;
-                    let _ = send.finish();
+                    reject(&mut send, "requirements_invalid", e.message).await;
                     return;
                 }
             }
         };
 
     // i[impl stream.shell]
-    let (mut stdout_send, stdout_stream_id) = match conn.open_uni().await {
+    let (stdout_send, stdout_stream_id) = match conn.open_uni().await {
         Ok(s) => {
             let id = s.id().index();
             (s, id)
@@ -173,7 +212,7 @@ pub(crate) async fn open_shell_session(
             return;
         }
     };
-    let (mut stderr_send, stderr_stream_id) = match conn.open_uni().await {
+    let (stderr_send, stderr_stream_id) = match conn.open_uni().await {
         Ok(s) => {
             let id = s.id().index();
             (s, id)
@@ -186,27 +225,179 @@ pub(crate) async fn open_shell_session(
     };
 
     let session_id = SessionId::generate();
-
+    let stop = StopSignal::new();
+    let session = ShellSession::starting(
+        session_id,
+        app_name.clone(),
+        shell_name.as_str().to_owned(),
+        req_actor,
+        (initial_rows, initial_cols),
+        stop.clone(),
+    );
+    if !begin_session(
+        &state,
+        &mut send,
+        session,
+        &shell_name,
+        stdout_stream_id,
+        stderr_stream_id,
+    )
+    .await
     {
-        // i[impl shell.open]
-        // i[impl shell.streams]
-        // i[impl stream.shell.framing]
-        let mut resp = serde_json::to_vec(&serde_json::json!({
+        return;
+    }
+    let streams = SessionStreams {
+        send,
+        stdout: stdout_send,
+        stderr: stderr_send,
+    };
+
+    let live =
+        match start_app_shell(&state, app, &app_name, &shell_name, validated_params, &stop).await {
+            Ok(live) => live,
+            Err(failure) => {
+                abort_startup(&state, session_id, failure, streams).await;
+                return;
+            }
+        };
+
+    let exit_code = run_to_exit(
+        &state,
+        session_id,
+        &stop,
+        live,
+        &mut recv,
+        &leftover_stdin,
+        streams,
+    )
+    .await;
+
+    tracing::info!(app = %app_name, shell = %shell_name, %exit_code, "shell session ended");
+}
+
+/// Why a session ended before its job was running.
+pub(super) struct StartupFailure {
+    /// What went wrong, for the client; `None` when the session was stopped.
+    reason: Option<String>,
+    /// The pod network to remove, if one had been created.
+    network: Option<String>,
+}
+
+impl StartupFailure {
+    pub(super) fn stopped(network: Option<String>) -> Self {
+        Self {
+            reason: None,
+            network,
+        }
+    }
+
+    pub(super) fn failed(reason: impl Into<String>, network: Option<String>) -> Self {
+        Self {
+            reason: Some(reason.into()),
+            network,
+        }
+    }
+}
+
+// i[impl shell.startup]
+/// Registers the session under its id, then tells the client the id. The id is
+/// never given out for a session that cannot be listed, resized or stopped.
+/// Returns `false`, with the session gone again, if the client could not be
+/// told.
+pub(super) async fn begin_session(
+    state: &OiState,
+    send: &mut quinn::SendStream,
+    session: ShellSession,
+    event_name: &ShellName,
+    stdout_stream_id: u64,
+    stderr_stream_id: u64,
+) -> bool {
+    let session_id = session.session_id;
+    let app = session.app.clone();
+    state.shells.insert(session);
+
+    // i[impl shell.open]
+    // i[impl shell.streams]
+    let handshake = write_frame(
+        send,
+        &serde_json::json!({
             "result": {
                 "session_id": session_id.to_string(),
                 "stdout_stream_id": stdout_stream_id,
                 "stderr_stream_id": stderr_stream_id,
             }
-        }))
-        .unwrap_or_default();
-        resp.push(b'\n');
-        if let Err(e) = send.write_all(&resp).await {
-            tracing::warn!("write handshake: {e}");
-            let _ = send.finish();
-            return;
-        }
+        }),
+    )
+    .await;
+    if let Err(e) = handshake {
+        tracing::warn!("write handshake: {e}");
+        state.shells.remove(&session_id);
+        let _ = send.finish();
+        return false;
     }
 
+    // i[impl shell.start]
+    state.event_tx.shell_started(session_id, &app, event_name);
+    true
+}
+
+/// Ends a session whose job never ran: it was stopped, or something it needed
+/// failed.
+pub(super) async fn abort_startup(
+    state: &OiState,
+    session_id: SessionId,
+    failure: StartupFailure,
+    streams: SessionStreams,
+) {
+    if let Some(network) = &failure.network {
+        let _ = state.container_runtime.remove_network(network).await;
+    }
+    state.shells.remove(&session_id);
+    // i[impl shell.exit]
+    state.event_tx.shell_exited(session_id, -1);
+    streams.end(-1, failure.reason.as_deref()).await;
+}
+
+/// Pulls the shell's image if it is not already present.
+async fn ensure_image(
+    state: &OiState,
+    app_name: &AppName,
+    shell_name: &ShellName,
+    image: &str,
+) -> Result<(), String> {
+    match state.container_runtime.image_exists(image).await {
+        Ok(false) => {
+            tracing::info!(app = %app_name, shell = %shell_name, %image, "pulling shell image");
+            state
+                .container_runtime
+                .pull_image(image)
+                .await
+                .map_err(|e| {
+                    tracing::warn!(app = %app_name, shell = %shell_name, %image, "image pull failed: {e}");
+                    format!("image pull failed: {e}")
+                })
+        }
+        Err(e) => {
+            tracing::warn!(app = %app_name, %image, "image_exists check failed: {e}");
+            Ok(())
+        }
+        Ok(true) => Ok(()),
+    }
+}
+
+/// Runs the shell's script and starts the job it attaches to, ending early if
+/// a stop is requested.
+///
+/// A stop is acted on wherever the startup waits, and between the steps that
+/// are not interrupted part-way: creating the network and starting the job.
+async fn start_app_shell(
+    state: &OiState,
+    app: App,
+    app_name: &AppName,
+    shell_name: &ShellName,
+    validated_params: serde_json::Map<String, serde_json::Value>,
+    stop: &StopSignal,
+) -> Result<LiveShell, StartupFailure> {
     let result_slot: Arc<Mutex<Option<ShellOutcome>>> = Arc::new(Mutex::new(None));
     let result_slot_for_task = Arc::clone(&result_slot);
     let db_for_task = state.db.clone();
@@ -215,9 +406,9 @@ pub(crate) async fn open_shell_session(
     let op_id_for_log = operation_id.clone();
     let app_name_for_task = app_name.clone();
     let shell_name_for_task = shell_name.clone();
-    let validated_params_for_task = validated_params;
+    let cancel = stop.cancel_token();
 
-    let run_result = tokio::task::spawn_blocking(move || {
+    let mut script = tokio::task::spawn_blocking(move || {
         let (engine, mut scope, _) = crate::setup_language(&script_limits, Arc::clone(&app.bundle));
         let compiled = app
             .bundle
@@ -270,7 +461,7 @@ pub(crate) async fn open_shell_session(
                     registry: Arc::clone(&registry),
                     active_progress: None,
                     tick_notify: None,
-                    params: validated_params_for_task.clone(),
+                    params: validated_params.clone(),
                     // r[impl operation.shell]
                     is_shell: true,
                     // r[impl operation.shell.resources]
@@ -285,8 +476,9 @@ pub(crate) async fn open_shell_session(
                     cipher: None,
                     operation_volume_bindings: std::collections::HashMap::new(),
                     // Shell sessions don't participate in operator-initiated
-                    // cancellation; an inert token never fires.
-                    cancel_token: Arc::new(crate::runtime::barrier::CancelToken::new()),
+                    // cancellation; the token fires only when the session is
+                    // stopped, which ends the script early.
+                    cancel_token: Arc::clone(&cancel),
                     container_signaler: None,
                     volume_writer: None,
                     executor: None,
@@ -303,27 +495,32 @@ pub(crate) async fn open_shell_session(
                     break false;
                 }
                 // r[impl operation.cancel]
-                // Shell sessions don't participate in operator cancellation;
-                // the inert token never fires this branch. Present for
-                // exhaustiveness.
+                // The session was stopped while the script waited.
                 OperationResult::Cancelled => break false,
-                OperationResult::Suspended(_) => {
-                    std::thread::sleep(Duration::from_secs(2));
-                }
+                OperationResult::Suspended(_) => cancel.wait_for(Duration::from_secs(2)),
             }
         };
 
         clear_shell_attach_ctx();
         success
-    })
-    .await
-    .unwrap_or(false);
+    });
 
-    if !run_result {
-        let resp = serde_json::to_vec(&serde_json::json!({ "exit_code": -1 })).unwrap_or_default();
-        let _ = send.write_all(&resp).await;
-        let _ = send.finish();
-        return;
+    // i[impl shell.startup]
+    let script_ok = tokio::select! {
+        _ = stop.requested() => {
+            // The script's thread cannot be abandoned: it sees the stop at its
+            // next wait and exits, and until then it may still be creating
+            // things the teardown would miss.
+            let _ = (&mut script).await;
+            return Err(StartupFailure::stopped(None));
+        }
+        done = &mut script => done.unwrap_or(false),
+    };
+    if stop.is_requested() {
+        return Err(StartupFailure::stopped(None));
+    }
+    if !script_ok {
+        return Err(StartupFailure::failed("the shell's script failed", None));
     }
 
     let shell_outcome = result_slot.lock().take();
@@ -331,26 +528,14 @@ pub(crate) async fn open_shell_session(
         Some(ShellOutcome::Attach(target)) => target,
         Some(ShellOutcome::Error(msg)) => {
             tracing::warn!(app = %app_name, shell = %shell_name, "shell error: {msg}");
-            let resp = serde_json::to_vec(&serde_json::json!({
-                "error": { "code": "shell_error", "message": msg }
-            }))
-            .unwrap_or_default();
-            let _ = send.write_all(&resp).await;
-            let _ = send.finish();
-            return;
+            return Err(StartupFailure::failed(msg, None));
         }
         None => {
             tracing::warn!(
                 app = %app_name, shell = %shell_name,
                 "shell closure completed but attach was not called"
             );
-            let resp = serde_json::to_vec(&serde_json::json!({
-                "error": { "code": "shell_error", "message": "shell did not attach" }
-            }))
-            .unwrap_or_default();
-            let _ = send.write_all(&resp).await;
-            let _ = send.finish();
-            return;
+            return Err(StartupFailure::failed("the shell did not attach", None));
         }
     };
 
@@ -379,21 +564,17 @@ pub(crate) async fn open_shell_session(
         .clone()
         .unwrap_or_default();
     if !image.is_empty() {
-        match state.container_runtime.image_exists(&image).await {
-            Ok(false) => {
-                tracing::info!(app = %app_name, shell = %shell_name, %image, "pulling shell image");
-                if let Err(e) = state.container_runtime.pull_image(&image).await {
-                    tracing::warn!(app = %app_name, shell = %shell_name, %image, "image pull failed: {e}");
-                    let resp = serde_json::to_vec(&serde_json::json!({ "exit_code": -1 }))
-                        .unwrap_or_default();
-                    let _ = send.write_all(&resp).await;
-                    let _ = send.finish();
-                    return;
-                }
+        // i[impl shell.startup]
+        tokio::select! {
+            _ = stop.requested() => return Err(StartupFailure::stopped(None)),
+            ensured = ensure_image(state, app_name, shell_name, &image) => {
+                ensured.map_err(|reason| StartupFailure::failed(reason, None))?;
             }
-            Err(e) => tracing::warn!(app = %app_name, %image, "image_exists check failed: {e}"),
-            Ok(true) => {}
         }
+    }
+
+    if stop.is_requested() {
+        return Err(StartupFailure::stopped(None));
     }
 
     let net_name = format!("seedling-{}", instance.display_name);
@@ -404,10 +585,10 @@ pub(crate) async fn open_shell_session(
         .await
     {
         tracing::warn!(app = %app_name, shell = %shell_name, %net_name, "create network failed: {e}");
-        let resp = serde_json::to_vec(&serde_json::json!({ "exit_code": -1 })).unwrap_or_default();
-        let _ = send.write_all(&resp).await;
-        let _ = send.finish();
-        return;
+        return Err(StartupFailure::failed(
+            format!("create network failed: {e}"),
+            None,
+        ));
     }
 
     let resolved_mounts: Vec<(u16, Ipv6Addr, u16)> = {
@@ -432,11 +613,10 @@ pub(crate) async fn open_shell_session(
                 Ok(v) => v,
                 Err(e) => {
                     tracing::warn!(app = %app_name, shell = %shell_name, "service mount registry lookup failed: {e}");
-                    let resp = serde_json::to_vec(&serde_json::json!({ "exit_code": -1 }))
-                        .unwrap_or_default();
-                    let _ = send.write_all(&resp).await;
-                    let _ = send.finish();
-                    return;
+                    return Err(StartupFailure::failed(
+                        format!("service mount lookup failed: {e}"),
+                        Some(net_name),
+                    ));
                 }
             }
         }
@@ -453,7 +633,7 @@ pub(crate) async fn open_shell_session(
     let external_volumes = crate::system::actuator::resolve_external_volumes(
         &state.db,
         &state.driver.volume_store,
-        &app_name,
+        app_name,
     );
     let mut container_spec = job_spec(
         &exec_target.job_def,
@@ -471,124 +651,113 @@ pub(crate) async fn open_shell_session(
         .labels
         .insert("seedling.session".to_string(), "shell".to_string());
 
-    let mut exec_handle = match state.container_runtime.exec(container_spec).await {
-        Ok(h) => h,
+    // i[impl shell.startup]
+    if stop.is_requested() {
+        return Err(StartupFailure::stopped(Some(net_name)));
+    }
+
+    match state.container_runtime.exec(container_spec).await {
+        Ok(exec) => Ok(LiveShell {
+            exec,
+            container_name,
+            net_name,
+        }),
         Err(e) => {
             tracing::warn!(app = %app_name, shell = %shell_name, "exec failed: {e}");
-            let _ = state.container_runtime.remove_network(&net_name).await;
-            let resp =
-                serde_json::to_vec(&serde_json::json!({ "exit_code": -1 })).unwrap_or_default();
-            let _ = send.write_all(&resp).await;
-            let _ = send.finish();
-            return;
+            Err(StartupFailure::failed(
+                format!("exec failed: {e}"),
+                Some(net_name),
+            ))
+        }
+    }
+}
+
+/// A started shell: its running job and the names of what must be removed once
+/// the session ends.
+pub(super) struct LiveShell {
+    pub(super) exec: ExecHandle,
+    pub(super) container_name: String,
+    pub(super) net_name: String,
+}
+
+/// Runs a registered session to its end and tears everything it holds down:
+/// the job, the session's registry entry, its pod network and its streams.
+/// Returns the exit code reported to the client.
+///
+/// Every way a session can end comes through here, so none can leave the job or
+/// its network behind.
+pub(super) async fn run_to_exit(
+    state: &OiState,
+    session_id: SessionId,
+    stop: &StopSignal,
+    mut live: LiveShell,
+    recv: &mut quinn::RecvStream,
+    leftover_stdin: &[u8],
+    mut streams: SessionStreams,
+) -> i32 {
+    // The job has exited on its own, with this status, or it has to be stopped
+    // and the exit code is the one its termination gives (or the one forced).
+    let job_exit: Result<i32, Option<i32>> = 'run: {
+        // i[impl shell.startup]
+        // A stop that arrived while the job was starting has already removed
+        // the session; the job is stopped as soon as it is known.
+        let attached = state.shells.attach(
+            &session_id,
+            live.container_name.clone(),
+            live.exec.pty_master_fd,
+        );
+        if !attached {
+            break 'run Err(None);
+        }
+
+        if !leftover_stdin.is_empty() && live.exec.stdin.write_all(leftover_stdin).await.is_err() {
+            break 'run Err(Some(-1));
+        }
+
+        // i[shell.close]
+        match relay_session(recv, &mut live.exec, &mut streams.stdout, stop).await {
+            Some(status) => Ok(status.ok().and_then(|s| s.code()).unwrap_or(-1)),
+            None => Err(None),
         }
     };
 
-    {
-        let ws = libc::winsize {
-            ws_row: initial_rows,
-            ws_col: initial_cols,
-            ws_xpixel: 0,
-            ws_ypixel: 0,
-        };
-        // SAFETY: pty_master_fd is valid until exec_handle is dropped.
-        unsafe { libc::ioctl(exec_handle.pty_master_fd, libc::TIOCSWINSZ as _, &ws) };
-    }
+    let exit_code = match job_exit {
+        Ok(code) => code,
+        Err(forced) => {
+            // i[impl shell.cleanup]
+            if let Some(pid) = live.exec.child.id() {
+                unsafe { libc::kill(pid as libc::pid_t, libc::SIGTERM) };
+            }
 
-    let (stop_tx, mut stop_rx) = tokio::sync::oneshot::channel::<()>();
-    let pty_master_fd = exec_handle.pty_master_fd;
-    state.shells.insert(ShellSession {
-        session_id,
-        app: app_name.clone(),
-        name: shell_name.as_str().to_owned(),
-        opened_at: jiff::Timestamp::now(),
-        actor: req_actor,
-        container_name: container_name.clone(),
-        pty_master_fd,
-        stop_tx,
-    });
-    // i[impl shell.start]
-    state
-        .event_tx
-        .shell_started(session_id, &app_name, &shell_name);
-
-    let _ = stderr_send.finish();
-
-    let exit_code: i32;
-
-    if !leftover_stdin.is_empty() && exec_handle.stdin.write_all(&leftover_stdin).await.is_err() {
-        state.shells.remove(&session_id);
-        // i[impl shell.exit]
-        state.event_tx.shell_exited(session_id, -1);
-        let resp = serde_json::to_vec(&serde_json::json!({ "exit_code": -1 })).unwrap_or_default();
-        let _ = send.write_all(&resp).await;
-        let _ = send.finish();
-        return;
-    }
-
-    // i[shell.close]
-    // i[shell.exit]
-    if let Some(status) =
-        relay_session(&mut recv, &mut exec_handle, &mut stdout_send, &mut stop_rx).await
-    {
-        exit_code = status.ok().and_then(|s| s.code()).unwrap_or(-1);
-        state.shells.remove(&session_id);
-        // i[impl shell.exit]
-        state.event_tx.shell_exited(session_id, exit_code);
-        let _ = state.container_runtime.remove_network(&net_name).await;
-        // i[impl stream.shell.framing]
-        let mut exit_frame =
-            serde_json::to_vec(&serde_json::json!({ "exit_code": exit_code })).unwrap_or_default();
-        exit_frame.push(b'\n');
-        let _ = send.write_all(&exit_frame).await;
-        let _ = send.finish();
-        let _ = stdout_send.finish();
-        tracing::info!(
-            app = %app_name, shell = %shell_name, %exit_code,
-            "shell session ended"
-        );
-        return;
-    }
-
-    // i[shell.cleanup]
-    if let Some(pid) = exec_handle.child.id() {
-        unsafe { libc::kill(pid as libc::pid_t, libc::SIGTERM) };
-    }
-
-    let graceful = tokio::time::timeout(Duration::from_secs(5), exec_handle.child.wait()).await;
-
-    exit_code = match graceful {
-        Ok(status) => status.ok().and_then(|s| s.code()).unwrap_or(-1),
-        Err(_timeout) => {
-            let _ = state
-                .container_runtime
-                .remove_container(&container_name, true)
-                .await;
-            let _ = exec_handle.child.kill().await;
-            exec_handle
-                .child
-                .wait()
-                .await
-                .ok()
-                .and_then(|s| s.code())
-                .unwrap_or(-1)
+            let graceful =
+                tokio::time::timeout(Duration::from_secs(5), live.exec.child.wait()).await;
+            let terminated = match graceful {
+                Ok(status) => status.ok().and_then(|s| s.code()).unwrap_or(-1),
+                Err(_timeout) => {
+                    let _ = state
+                        .container_runtime
+                        .remove_container(&live.container_name, true)
+                        .await;
+                    let _ = live.exec.child.kill().await;
+                    live.exec
+                        .child
+                        .wait()
+                        .await
+                        .ok()
+                        .and_then(|s| s.code())
+                        .unwrap_or(-1)
+                }
+            };
+            forced.unwrap_or(terminated)
         }
     };
 
     state.shells.remove(&session_id);
     // i[impl shell.exit]
     state.event_tx.shell_exited(session_id, exit_code);
-    let _ = state.container_runtime.remove_network(&net_name).await;
-
-    // i[impl stream.shell.framing]
-    let mut exit_frame =
-        serde_json::to_vec(&serde_json::json!({ "exit_code": exit_code })).unwrap_or_default();
-    exit_frame.push(b'\n');
-    let _ = send.write_all(&exit_frame).await;
-    let _ = send.finish();
-    let _ = stdout_send.finish();
-
-    tracing::info!(app = %app_name, shell = %shell_name, %exit_code, "shell session ended");
+    let _ = state.container_runtime.remove_network(&live.net_name).await;
+    streams.end(exit_code, None).await;
+    exit_code
 }
 
 // i[impl stream.shell]
@@ -603,7 +772,7 @@ pub(super) async fn relay_session(
     recv: &mut quinn::RecvStream,
     exec: &mut ExecHandle,
     stdout_send: &mut quinn::SendStream,
-    stop_rx: &mut tokio::sync::oneshot::Receiver<()>,
+    stop: &StopSignal,
 ) -> Option<std::io::Result<std::process::ExitStatus>> {
     let ExecHandle {
         stdin,
@@ -615,6 +784,41 @@ pub(super) async fn relay_session(
         status = child.wait() => Some(status),
         _ = tokio::io::copy(recv, stdin) => None,
         _ = tokio::io::copy(stdout, stdout_send) => None,
-        _ = stop_rx => None,
+        _ = stop.requested() => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // i[verify stream.shell.framing]
+    #[test]
+    fn every_frame_is_one_newline_terminated_line() {
+        for frame in [
+            exit_frame(0),
+            exit_frame(-1),
+            error_frame("not_found", "no such shell"),
+            serde_json::json!({ "result": { "session_id": "x" } }),
+        ] {
+            let bytes = frame_bytes(&frame);
+            assert_eq!(bytes.last(), Some(&b'\n'), "{frame}");
+            assert_eq!(bytes.iter().filter(|b| **b == b'\n').count(), 1, "{frame}");
+            let parsed: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+            assert_eq!(parsed, frame);
+        }
+    }
+
+    // i[verify stream.shell.framing]
+    #[test]
+    fn error_text_with_newlines_stays_on_one_line() {
+        let bytes = frame_bytes(&error_frame("shell_error", "line one\nline two"));
+        assert_eq!(bytes.iter().filter(|b| **b == b'\n').count(), 1);
+    }
+
+    // i[verify shell.exit]
+    #[test]
+    fn exit_frame_carries_only_the_exit_code() {
+        assert_eq!(exit_frame(-1), serde_json::json!({ "exit_code": -1 }));
     }
 }

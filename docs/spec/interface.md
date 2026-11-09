@@ -82,6 +82,9 @@ Absent specification bugs, anything that is not defined here is either defined i
 
 > i[stream.shell.framing]
 > The server-to-client direction of the session stream carries newline-delimited JSON: the `/shells/start` response first, then the exit frame when the session ends.
+> Every frame ends with a newline, so a client reading line by line sees each frame as soon as it is written rather than when the stream closes.
+> A request that fails before the session opens is answered with an error response in place of the handshake response, and nothing follows it.
+> After a handshake response the exit frame is the only frame.
 > The client-to-server direction carries a single newline-terminated JSON request followed by raw stdin bytes for the remainder of the stream's lifetime.
 
 > i[stream.forward]
@@ -656,6 +659,12 @@ Absent specification bugs, anything that is not defined here is either defined i
 > Returns `{ session_id, stdout_stream_id, stderr_stream_id }` as the handshake response on the session stream.
 > After the handshake response is written, the server treats subsequent bytes on the session stream's client-to-server direction as raw stdin for the shell's job.
 
+> i[shell.startup]
+> A session is registered under its `session_id` before the handshake response carrying that id is written, and stays registered while its shell starts, which can include running the shell's script, pulling its image and creating its network.
+> From the moment the client holds the id, the session appears in `/shells/list`, `/shells/resize` records the dimensions to apply as soon as the terminal exists, and `/shells/stop` ends the session without waiting for the shell to start.
+> A session stopped before its job is running ends without the job having started, and anything it had already created, such as its pod network, is removed.
+A session stopped while the shell's script is running ends only once the script has stopped, so the script creates nothing after the session is over.
+
 > i[shell.streams]
 > Each session uses the three streams defined in [stream.shell](#i--stream.shell).
 > `stdout_stream_id` and `stderr_stream_id` in the handshake response identify the server-initiated unidirectional streams the client must read for the session's output.
@@ -688,15 +697,19 @@ Absent specification bugs, anything that is not defined here is either defined i
 > On session end, the server closes its write-ends of the stdout and stderr streams.
 
 > i[shell.start]
-> When a session is registered, a `ShellStarted` event is emitted on the event feed.
+> When the handshake response has been written, a `ShellStarted` event is emitted on the event feed.
+> Every session that emits it ends with a `ShellExited` event, including one that ends before its job has started.
 
 > i[shell.exit]
 > When a session ends, the server writes a final JSON frame `{ "exit_code": <int> }` to the server-to-client direction of the session stream, then closes its write-end.
 > Signal-terminated processes report a negative exit code.
+> A session that fails after its handshake response, such as when the shell's script fails, its image cannot be pulled, or its job cannot be started, ends the same way with an `exit_code` of `-1`.
+> The reason for such a failure is written to the stderr stream before it closes.
 > A `ShellExited` event is also emitted on the event feed.
 
 > i[shell.cleanup]
 > Dynamic resources created within a shell session are cleaned up by the runtime when the session ends, as specified in the runtime spec.
+> The session's job is terminated and its pod network removed however the session ends, including when the job could not be given the stdin the client sent with its request.
 
 > i[shell.concurrent]
 > Shell sessions may run concurrently with lifecycle operations and with other shell sessions.
