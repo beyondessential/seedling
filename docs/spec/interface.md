@@ -342,6 +342,9 @@ Absent specification bugs, anything that is not defined here is either defined i
 > - `Running`: steady state; no active faults; all resources are at their desired lifecycle states.
 > - `Degraded`: steady state, but one or more resources are not at their desired lifecycle state or have an active fault. Resources that are actively being torn down (`Terminating` or `Terminated` lifecycle state) are not counted as degraded — they are transitioning to `Unscheduled` and do not represent a fault condition.
 > - `Faulted`: one or more active faults exist and at least one resource has been excluded from active reconciliation.
+>
+> Outside an operation, a resource's desired lifecycle state is `Ready`, except that a [stopped](#i--resource.stop) resource and a Deployment at a scale of zero are desired at `Unscheduled`.
+> An external service is provided from outside the runtime, has no lifecycle state, and is always at its desired state.
 
 > i[app.status.priority]
 > When multiple conditions apply simultaneously, the state with the highest priority is reported.

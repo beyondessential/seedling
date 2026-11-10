@@ -1125,3 +1125,47 @@ fn the_server_summary_counts_apps_by_their_reported_status() {
     let summary = oi.call("/server/status", json!({})).unwrap();
     assert_eq!(summary["apps_by_status"][&status], 1, "{summary}");
 }
+
+// i[verify app.status] i[verify resource.stop]
+// The rollup wanted a Ready instance of every resource, so stopping one, as
+// asked, left the app degraded until it was unstopped.
+#[test]
+fn a_stopped_resource_does_not_degrade_the_app() {
+    let oi = TestOi::with_app("demo");
+    oi.install("demo");
+    let status =
+        |oi: &TestOi| oi.call("/apps/show", json!({ "app": "demo" })).unwrap()["status"].clone();
+    assert_eq!(status(&oi), "degraded", "nothing runs the deployment here");
+
+    oi.call(
+        "/apps/resource/stop",
+        json!({ "app": "demo", "kind": "deployment", "name": "web" }),
+    )
+    .unwrap();
+    assert_eq!(status(&oi), "running");
+}
+
+// i[verify app.status]
+// A deployment scaled to zero wants nothing Ready, and an external service is
+// never observed, so neither can hold the app back from running.
+#[test]
+fn resources_meant_to_have_nothing_ready_do_not_degrade_the_app() {
+    let oi = TestOi::new();
+    oi.call(
+        "/apps/create",
+        json!({
+            "app": "demo",
+            "script": r#"
+                app.deployment("web")
+                    .image("docker.io/library/nginx:1.29")
+                    .scale(0..4);
+                app.external_service("api");
+            "#,
+        }),
+    )
+    .unwrap();
+    oi.install("demo");
+
+    let desc = oi.call("/apps/show", json!({ "app": "demo" })).unwrap();
+    assert_eq!(desc["status"], "running", "{desc}");
+}

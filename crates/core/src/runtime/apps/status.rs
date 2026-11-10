@@ -5,14 +5,17 @@ use seedling_protocol::names::AppName;
 
 use super::{AppEntry, AppPhase, AppRegistry, AppStatus};
 use crate::{
-    defs::resource::ResourceKind,
+    defs::resource::{Resource, ResourceKind},
     runtime::{
-        barrier::oracle::derive_lifecycle_state,
-        db::DbHandle,
+        barrier::oracle::{derive_lifecycle_state, has_lifecycle},
+        db::{Db, DbHandle},
         faults,
         history::{find_instances_for_group, query_observations},
+        identity::ResourceInstance,
         lifecycle::LifecycleState,
+        scaling,
         scheduler::{ActiveOperation, Scheduler},
+        stopped,
     },
 };
 
@@ -67,50 +70,82 @@ pub fn of(entry: &AppEntry, active: Option<&ActiveOperation>, db: &DbHandle) -> 
 fn steady(entry: &AppEntry, db: &DbHandle) -> AppStatus {
     let app_name = entry.name.clone();
 
-    // Collect resource IDs with a brief def lock, then release before touching db.
-    let resource_ids: Vec<(ResourceKind, Arc<String>)> = {
+    // Collected with a brief def lock, released before touching the database.
+    let resources: Vec<(ResourceKind, Arc<String>, Option<(u16, u16)>)> = {
         let def = entry.app.def.load();
         def.resources
-            .keys()
-            .map(|id| (id.kind, Arc::clone(&id.name)))
+            .iter()
+            .map(|(id, resource)| {
+                let bounds = match resource {
+                    Resource::Deployment(d) => {
+                        let scale = &d.def.lock().scale;
+                        Some((scale.start, scale.end))
+                    }
+                    _ => None,
+                };
+                (id.kind, Arc::clone(&id.name), bounds)
+            })
             .collect()
     };
 
-    db.call(move |db| {
-        let has_faults = faults::has_active_faults(db, &app_name).unwrap_or(false);
-
-        let all_ready = resource_ids.iter().all(|(kind, name)| {
-            let instances = find_instances_for_group(db, &app_name, *kind, Some(name.as_str()))
-                .unwrap_or_default();
-            if instances.is_empty() {
-                return false;
+    let result = db.call({
+        let app_name = app_name.clone();
+        move |db| -> rusqlite::Result<AppStatus> {
+            if faults::has_active_faults(db, &app_name)? {
+                return Ok(AppStatus::Faulted);
             }
-            let mut has_ready = false;
-            for inst in &instances {
-                let obs = query_observations(db, inst).unwrap_or_default();
-                let state = derive_lifecycle_state(inst, &obs);
-                if state == LifecycleState::Ready {
-                    has_ready = true;
-                } else if matches!(
-                    state,
-                    LifecycleState::Unscheduled
-                        | LifecycleState::Terminating
-                        | LifecycleState::Terminated
-                ) {
-                    // Instances being torn down must not drag the app to Degraded.
+            let stopped = stopped::load_stopped(db, &app_name)?;
+            for (kind, name, bounds) in &resources {
+                if !has_lifecycle(*kind) {
+                    continue;
+                }
+                // i[impl resource.stop]
+                // As the steady desired state has it: a stopped resource, or
+                // a deployment scaled to zero, is meant to have nothing Ready.
+                let wants_ready = if stopped.contains(&(*kind, name.as_str().to_owned())) {
+                    false
+                } else if let Some((low, high)) = bounds {
+                    scaling::effective_scale(db, &app_name, name, *low, *high)? > 0
                 } else {
-                    return false;
+                    true
+                };
+                let instances = find_instances_for_group(db, &app_name, *kind, Some(name))?;
+                if !at_desired_state(db, &instances, wants_ready)? {
+                    return Ok(AppStatus::Degraded);
                 }
             }
-            has_ready
-        });
-
-        if has_faults {
-            AppStatus::Faulted
-        } else if all_ready {
-            AppStatus::Running
-        } else {
-            AppStatus::Degraded
+            Ok(AppStatus::Running)
         }
+    });
+
+    result.unwrap_or_else(|e| {
+        // Running is a claim that everything was checked. With a read
+        // failed nothing was, and Degraded is the status that has an
+        // operator look.
+        tracing::warn!(app = %app_name, "could not read the app's state to derive its status: {e}");
+        AppStatus::Degraded
     })
+}
+
+/// Whether a resource's instances are where its desired state puts them.
+fn at_desired_state(
+    db: &Db,
+    instances: &[ResourceInstance],
+    wants_ready: bool,
+) -> rusqlite::Result<bool> {
+    let mut has_ready = false;
+    for inst in instances {
+        let obs = query_observations(db, inst)?;
+        match derive_lifecycle_state(inst, &obs) {
+            LifecycleState::Ready if wants_ready => has_ready = true,
+            // Instances being torn down are on their way to Unscheduled, which
+            // is where a stopped resource belongs and where a replaced
+            // instance is going, so they do not drag the app to Degraded.
+            LifecycleState::Unscheduled
+            | LifecycleState::Terminating
+            | LifecycleState::Terminated => {}
+            _ => return Ok(false),
+        }
+    }
+    Ok(has_ready || !wants_ready)
 }

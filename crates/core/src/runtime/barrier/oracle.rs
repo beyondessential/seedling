@@ -331,6 +331,22 @@ fn drive_observations(
 // Lifecycle derivation — public API
 // ---------------------------------------------------------------------------
 
+/// Whether instances of `kind` have a lifecycle state derived from what is
+/// observed of them. Every other kind reads as `Pending` forever.
+pub fn has_lifecycle(kind: ResourceKind) -> bool {
+    match kind {
+        ResourceKind::Deployment
+        | ResourceKind::Job
+        | ResourceKind::Service
+        | ResourceKind::Ingress
+        | ResourceKind::Volume
+        | ResourceKind::ExternalVolume => true,
+        // An external service is provided from outside the runtime, which
+        // never observes it.
+        ResourceKind::ExternalService | ResourceKind::Parameter | ResourceKind::Action => false,
+    }
+}
+
 // r[impl lifecycle.derivation]
 /// Derive the current lifecycle state for a resource from its observation history.
 ///
