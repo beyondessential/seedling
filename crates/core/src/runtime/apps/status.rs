@@ -10,7 +10,7 @@ use crate::{
         barrier::oracle::{container_run_succeeded, derive_lifecycle_state, has_lifecycle},
         db::{Db, DbHandle},
         faults,
-        history::{find_instances_for_group, query_observations},
+        history::{find_instances_for_group, query_observations_for},
         identity::ResourceInstance,
         lifecycle::LifecycleState,
         scaling,
@@ -265,13 +265,18 @@ fn at_desired_state(
     desired: Desired,
 ) -> rusqlite::Result<bool> {
     let mut reached = false;
+    let histories = query_observations_for(db, instances)?;
     for inst in instances {
-        let obs = query_observations(db, inst)?;
-        match (desired, derive_lifecycle_state(inst, &obs)) {
+        // Every instance asked for has an entry, empty when it has no history.
+        let obs = histories
+            .get(&inst.id)
+            .map(Vec::as_slice)
+            .unwrap_or_default();
+        match (desired, derive_lifecycle_state(inst, obs)) {
             (Desired::Ready | Desired::Run, LifecycleState::Ready) => reached = true,
             // A Job that has run rests here, removed or not.
             (Desired::Run, LifecycleState::Terminated | LifecycleState::Unscheduled) => {
-                match container_run_succeeded(&obs) {
+                match container_run_succeeded(obs) {
                     Some(true) => reached = true,
                     Some(false) => return Ok(false),
                     None => {}
