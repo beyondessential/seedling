@@ -296,7 +296,9 @@ Absent specification bugs, anything not defined here is either defined in anothe
 > - **Settings**: view and edit the ACME contact email and certificate profile used for issuance.
 > - **Stored certificates**: list grouped by the certificate's label, surfacing state, origin, issuer, expiry, and serial; certificates within fourteen days of expiry and self-signed certificates must be visually flagged.
 >   A certificate obtained through the CSR flow surfaces the hostnames the request was made for wherever they differ from the certificate's own primary SAN, and carries the same visual flagging as the two cases above, naming the missed hostnames, when the issued certificate does not cover all of them.
-  Beginning a CSR takes one or more hostnames, each a hostname or a `*.<suffix>` wildcard, as [tls.cert.csr.begin](interface.md#i--tls.cert.csr.begin) accepts.
+>   Beginning a CSR takes one or more hostnames, each a hostname or a `*.<suffix>` wildcard, as [tls.cert.csr.begin](interface.md#i--tls.cert.csr.begin) accepts.
+>   An active manual or CSR-derived certificate within fourteen days of expiry, or past it, offers to [renew](runtime.md#r--tls.csr.renew) it: this begins a CSR pre-filled with the certificate's SAN DNS names, editable, alongside the hostnames it currently serves.
+>   Where the certificate already has a pending renewal, it leads to that renewal instead, and a pending renewal names the certificate it renews.
 > - **DNS providers**: list (without credentials), add (Route 53), and delete (refused while a policy references the provider).
 >
 > Private key material, ACME account keys, and DNS-provider credentials must never be returned to the client.
