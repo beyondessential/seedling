@@ -68,8 +68,8 @@ pub(super) fn collect(
 
         // The ingress's resource name is "<hostname>:<port>" (multiple
         // ingresses can hang off one service). The instance must be keyed
-        // by the same name the AppDef uses, otherwise the lifecycle
-        // lookup in `effective_app_status` finds nothing and the app
+        // by the same name the AppDef uses, otherwise the status rollup
+        // (`runtime::apps::status`) finds no instance for it and the app
         // sits at Degraded with the ingress wedged at Pending.
         let ingress_instance = registry.get_or_create_singleton(
             app_name,
