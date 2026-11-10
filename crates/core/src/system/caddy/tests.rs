@@ -1538,7 +1538,7 @@ fn old_cached_config_without_headers_still_deserialises() {
         }}}]}],
       "l4_routes":[],"warm_cert_hostnames":[],"cert_endpoint_url":null
     }"#;
-    let cfg: crate::system::types::ProxyConfig = serde_json::from_str(old)
+    let cfg = super::startup::parse_cached_proxy_config(old)
         .expect("a cached config from before header rules must still load");
     let crate::system::types::ProxyRouteHandler::ReverseProxy { proxy, .. } =
         &cfg.virtual_hosts[0].routes[0].handler

@@ -351,6 +351,7 @@ mod tests {
         );
     }
 
+    // r[impl infra.proxy.image.config]
     /// Run `caddy validate` in the image over `config`, returning its verdict
     /// and everything it said.
     ///
