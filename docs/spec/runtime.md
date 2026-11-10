@@ -428,6 +428,10 @@ Absent specification bugs, anything that is not defined here is either defined i
 > - "Observed 1 running instance, scale requires 2."
 > - "Ingress controller unreachable (observation at T), rebuilding configuration."
 
+> r[history.operations.interrupted]
+> An entry whose operation was still in progress when the runtime stopped is completed when the runtime next starts, before the reconciler performs any operation, with an outcome recording that it was interrupted.
+> An interrupted operation's real outcome is unknown, so the entry records it as neither a success nor a failure.
+
 > r[history.operations.rate-limiting]
 > The runtime must use the autonomous operations log to detect repeated operations on the same resource and apply backoff.
 > The backoff strategy must prevent tight loops (e.g. a container that exits immediately after starting must not be restarted indefinitely at full speed).
@@ -513,6 +517,7 @@ Absent specification bugs, anything that is not defined here is either defined i
 
 > r[gc.autonomous-operations]
 > Completed autonomous operation records must be deleted after a configurable retention period (default: 7 days).
+> Autonomous operation records whose instance identity no longer appears in the resource instance registry must be deleted.
 
 > r[gc.restarts]
 > [Restart records](#r--autonomous.restart.record) must be bounded per instance: only a configurable number of the most recent records for an instance are retained (default: 50), and older records for that instance are deleted.
@@ -534,8 +539,8 @@ Absent specification bugs, anything that is not defined here is either defined i
 > It holds for actions and not for the reconciler, whose steady-state desired state keeps a scaled instance whatever its containers have done, because re-identifying it would discard the [restart record](#r--autonomous.restart.record) and observation history held against its identity.
 
 > r[gc.instances.atomic]
-> The deletion of an instance's records must be atomic across the world observation rows, fault rows, and the resource instance row.
-> A partial deletion that leaves any of these three out of sync with the others is a defect: it allows orphan faults and registry rows to linger indefinitely, since subsequent garbage-collection passes select instances by observation history that no longer exists.
+> The deletion of an instance's records must be atomic across the world observation rows, fault rows, autonomous operation rows, and the resource instance row.
+> A partial deletion that leaves any of these out of sync with the others is a defect: it allows orphan faults and registry rows to linger indefinitely, since subsequent garbage-collection passes select instances by observation history that no longer exists.
 
 > r[gc.instances.never-actuated]
 > A scaled instance that the desired state has demoted to Unscheduled, or a singleton left behind by a deployment that has since become scaled, must be retired immediately by the reconciler in any of the following cases:

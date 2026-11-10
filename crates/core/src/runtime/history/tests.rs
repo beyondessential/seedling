@@ -680,6 +680,11 @@ fn delete_instance_clears_observations_and_faults_atomically() {
         "boom",
     )
     .unwrap();
+    let prov = Provenance {
+        observation_ids: vec![],
+        rule: "test".into(),
+    };
+    insert_autonomous_operation(&db, inst.id, "restart", &prov).unwrap();
 
     delete_instance(&db, inst.id).unwrap();
 
@@ -708,9 +713,41 @@ fn delete_instance_clears_observations_and_faults_atomically() {
         )
         .unwrap();
 
+    let op_count: i64 = db
+        .conn
+        .query_row(
+            "SELECT COUNT(*) FROM autonomous_operations WHERE instance_id = ?1",
+            [&inst_hex],
+            |r| r.get(0),
+        )
+        .unwrap();
+
     assert_eq!(registry_count, 0, "registry row deleted");
     assert_eq!(obs_count, 0, "observations deleted");
     assert_eq!(fault_count, 0, "faults deleted");
+    assert_eq!(op_count, 0, "autonomous operations deleted");
+}
+
+// r[verify history.operations.interrupted]
+#[test]
+fn incomplete_autonomous_operations_are_interrupted_and_completed_ones_kept() {
+    let db = Db::open_in_memory().unwrap();
+    let inst = dep("app", "web");
+    let prov = Provenance {
+        observation_ids: vec![],
+        rule: "test".into(),
+    };
+    let done = insert_autonomous_operation(&db, inst.id, "restart", &prov).unwrap();
+    complete_autonomous_operation(&db, done, "ok").unwrap();
+    insert_autonomous_operation(&db, inst.id, "start", &prov).unwrap();
+
+    assert_eq!(interrupt_incomplete_autonomous_operations(&db).unwrap(), 1);
+
+    let ops = query_autonomous_operations(&db, inst.id).unwrap();
+    let outcomes: Vec<_> = ops.iter().map(|o| o.outcome.as_deref()).collect();
+    assert_eq!(outcomes, [Some("ok"), Some(INTERRUPTED_OUTCOME)]);
+    assert!(ops.iter().all(|o| o.completed_at.is_some()));
+    assert_eq!(interrupt_incomplete_autonomous_operations(&db).unwrap(), 0);
 }
 
 // r[verify app.uninstall.scope]
