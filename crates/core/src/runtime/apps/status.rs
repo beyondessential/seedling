@@ -34,13 +34,53 @@ pub fn all(
     scheduler: &Mutex<Scheduler>,
     db: &DbHandle,
 ) -> Vec<(AppName, AppStatus)> {
-    let (active, snapshots) = snapshot_all(registry, scheduler);
+    let (active, snapshots) = snapshot_all(registry, scheduler, |_| ());
     db.call(move |db| {
         snapshots
             .into_iter()
-            .map(|snapshot| {
+            .map(|(snapshot, ())| {
                 let status = status_in(db, &snapshot, active.as_ref());
                 (snapshot.name, status)
+            })
+            .collect()
+    })
+}
+
+/// An app's status alongside what a listing reports of its standing.
+pub struct Standing {
+    pub status: AppStatus,
+    pub has_stopped: bool,
+    pub fault_count: i64,
+}
+
+/// The standing of every registered app, sorted by name, each with what
+/// `extra` takes from its registry entry while the snapshot is taken.
+///
+/// Read in one pass, like [`all`], but a failed read fails the whole call: a
+/// listing that defaulted it would report no faults and nothing stopped.
+pub fn standings<T: Send + 'static>(
+    registry: &RwLock<AppRegistry>,
+    scheduler: &Mutex<Scheduler>,
+    db: &DbHandle,
+    extra: impl Fn(&AppEntry) -> T,
+) -> rusqlite::Result<Vec<(AppName, Standing, T)>> {
+    let (active, snapshots) = snapshot_all(registry, scheduler, extra);
+    db.call(move |db| {
+        snapshots
+            .into_iter()
+            .map(|(snapshot, extra)| {
+                let fault_count = faults::count_active_faults_for_app(db, &snapshot.name)?;
+                let stopped = stopped::load_stopped(db, &snapshot.name)?;
+                let status = match settled(&snapshot, active.as_ref()) {
+                    Some(status) => status,
+                    None => steady(db, &snapshot, fault_count > 0, &stopped)?,
+                };
+                let standing = Standing {
+                    status,
+                    has_stopped: !stopped.is_empty(),
+                    fault_count,
+                };
+                Ok((snapshot.name, standing, extra))
             })
             .collect()
     })
@@ -85,11 +125,12 @@ impl Snapshot {
 }
 
 /// The scheduler's active operation and a snapshot of every registered app,
-/// sorted by name.
-fn snapshot_all(
+/// sorted by name, each with what `extra` takes from its entry.
+fn snapshot_all<T>(
     registry: &RwLock<AppRegistry>,
     scheduler: &Mutex<Scheduler>,
-) -> (Option<ActiveOperation>, Vec<Snapshot>) {
+    extra: impl Fn(&AppEntry) -> T,
+) -> (Option<ActiveOperation>, Vec<(Snapshot, T)>) {
     // Taken before the registry: the scheduler lock is never held while
     // waiting on the registry.
     let active = active_operation(scheduler);
@@ -97,7 +138,8 @@ fn snapshot_all(
     let snapshots = reg
         .names()
         .into_iter()
-        .filter_map(|name| reg.get(name.as_str()).map(Snapshot::of))
+        .filter_map(|name| reg.get(name.as_str()))
+        .map(|entry| (Snapshot::of(entry), extra(entry)))
         .collect();
     (active, snapshots)
 }

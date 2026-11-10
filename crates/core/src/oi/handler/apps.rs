@@ -474,11 +474,9 @@ pub(crate) fn serialize_param_schema(
 // i[app.list]
 // i[impl resource.stop.status]
 pub(crate) fn list_apps(state: &OiState) -> HandlerResult {
-    let active = app_status::active_operation(&state.scheduler);
-    let reg = state.registry.read();
     // i[impl app.priority.describe]
-    // One read for every app's standing, rather than a round trip per app on
-    // top of the per-app fault count this endpoint already pays. A failed read
+    // One read for every app's priority, rather than a round trip per app. A
+    // failed read
     // is surfaced rather than defaulted: reporting every app as `normal` is
     // indistinguishable from nobody having set one, and would tell an operator
     // asking why their `high` app is being shed exactly the wrong thing.
@@ -491,37 +489,28 @@ pub(crate) fn list_apps(state: &OiState) -> HandlerResult {
                 format!("could not read app priorities: {e}"),
             )
         })?;
-    let result: Vec<Value> = reg
-        .names()
+    // l[impl app.description]
+    let standings = app_status::standings(&state.registry, &state.scheduler, &state.db, |entry| {
+        entry.app.def.load().description.clone()
+    })
+    .map_err(|e| {
+        OiError::new(
+            ErrorCode::Internal,
+            format!("could not read the apps' standing: {e}"),
+        )
+    })?;
+    let result: Vec<Value> = standings
         .into_iter()
-        .filter_map(|name| reg.get(name.as_str()).map(|entry| (name, entry)))
-        .map(|(name, entry)| {
-            let status = app_status::of(entry, active.as_ref(), &state.db);
-            let has_stopped = {
-                let name_clone = name.clone();
-                state.db.call(move |db| {
-                    stopped::load_stopped(db, &name_clone)
-                        .map(|s| !s.is_empty())
-                        .unwrap_or(false)
-                })
-            };
-            let fault_count = {
-                let name_clone = name.clone();
-                state.db.call(move |db| {
-                    faults::count_active_faults_for_app(db, &name_clone).unwrap_or(0)
-                })
-            };
-            // l[impl app.description]
-            let description = entry.app.def.load().description.clone();
+        .map(|(name, standing, description)| {
             let mut obj = json!({
                 "name": name,
-                "status": status.name(),
-                "has_stopped_resources": has_stopped,
-                "fault_count": fault_count,
+                "status": standing.status.name(),
+                "has_stopped_resources": standing.has_stopped,
+                "fault_count": standing.fault_count,
                 "priority": priorities.get(&name).copied().unwrap_or_default().as_str(),
                 "description": description,
             });
-            if let AppStatus::Operating { action_name } = &status {
+            if let AppStatus::Operating { action_name } = &standing.status {
                 obj["action_name"] = json!(action_name);
             }
             obj
