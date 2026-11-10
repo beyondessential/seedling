@@ -85,6 +85,7 @@ Absent specification bugs, anything not defined here is either defined in anothe
 > During rotation the web interface maintains an overlap window of at least 24 hours during which both the expiring certificate and the new certificate are accepted.
 > The hashes of both certificates are included in `POST /connect` responses during the overlap window.
 > Clients that reconnect after a rotation automatically receive the new hash by calling `POST /connect` again.
+> Rotation changes the certificate the listener presents to new sessions without releasing the listener's address, and established sessions continue across it.
 
 > w[wt.token]
 > The `wt_url` returned by `POST /connect` embeds a short-lived single-use token.

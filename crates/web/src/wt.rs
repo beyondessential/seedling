@@ -6,52 +6,56 @@ use serde_json::json;
 use tokio::io::AsyncWriteExt as _;
 use tokio::sync::watch;
 use uuid::Uuid;
+use wtransport::endpoint::endpoint_side::Server;
 use wtransport::tls::server::build_default_tls_config;
-use wtransport::{Endpoint, ServerConfig, VarInt};
+use wtransport::{Endpoint, ServerConfig};
 
 use crate::EventBroker;
 use crate::state::AppState;
 use crate::web_sessions::{HeartbeatOutcome, SafetyMode, WebSessionEntry};
 use crate::{proxy, state};
 
-/// Run a WebTransport server on `addr`, restarting when `rotation_rx` fires (cert rotated).
+fn server_config(addr: SocketAddr, state: &AppState) -> ServerConfig {
+    let identity = state.cert_store.read().current_identity();
+    let mut tls = build_default_tls_config(identity);
+    tls.key_log = Arc::new(rustls::KeyLogFile::new());
+    ServerConfig::builder()
+        .with_bind_address(addr)
+        .with_custom_tls(tls)
+        .build()
+}
+
+/// Bind the WebTransport endpoint for `addr` with the current certificate.
+// w[impl bind]
+pub fn bind_wt_endpoint(addr: SocketAddr, state: &AppState) -> std::io::Result<Endpoint<Server>> {
+    Endpoint::server(server_config(addr, state))
+}
+
+/// Serve WebTransport sessions on a bound endpoint, presenting the new
+/// certificate to new sessions whenever `rotation_rx` fires.
 // w[transport.webtransport]
 pub async fn run_wt_server(
+    endpoint: Endpoint<Server>,
     addr: SocketAddr,
     state: AppState,
     mut rotation_rx: watch::Receiver<()>,
 ) {
+    tracing::info!(%addr, "WT server listening");
     loop {
-        let identity = state.cert_store.read().current_identity();
-        let mut tls = build_default_tls_config(identity);
-        tls.key_log = Arc::new(rustls::KeyLogFile::new());
-        let config = ServerConfig::builder()
-            .with_bind_address(addr)
-            .with_custom_tls(tls)
-            .build();
-
-        let endpoint = match Endpoint::server(config) {
-            Ok(ep) => ep,
-            Err(e) => {
-                tracing::error!(%addr, "WT endpoint creation failed: {e}");
-                return;
+        tokio::select! {
+            incoming = endpoint.accept() => {
+                let state2 = state.clone();
+                tokio::spawn(async move {
+                    handle_incoming(incoming, state2).await;
+                });
             }
-        };
-
-        tracing::info!(%addr, "WT server listening");
-
-        loop {
-            tokio::select! {
-                incoming = endpoint.accept() => {
-                    let state2 = state.clone();
-                    tokio::spawn(async move {
-                        handle_incoming(incoming, state2).await;
-                    });
-                }
-                _ = rotation_rx.changed() => {
-                    tracing::info!(%addr, "WT cert rotated — restarting endpoint");
-                    endpoint.close(VarInt::from_u32(0), b"cert rotation");
-                    break;
+            Ok(()) = rotation_rx.changed() => {
+                // w[impl wt.cert.rotation]
+                // Without a rebind the socket is kept, so this swaps the TLS
+                // configuration in place and established sessions carry on.
+                match endpoint.reload_config(server_config(addr, &state), false) {
+                    Ok(()) => tracing::info!(%addr, "WT certificate rotated"),
+                    Err(e) => tracing::error!(%addr, "WT certificate reload failed: {e}"),
                 }
             }
         }
