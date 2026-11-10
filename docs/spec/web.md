@@ -174,6 +174,8 @@ Absent specification bugs, anything not defined here is either defined in anothe
 > Each uni stream begins with an 8-byte big-endian QUIC stream ID that matches the corresponding `stdout_stream_id` or `stderr_stream_id` in the handshake response; subsequent bytes are raw PTY output.
 > The browser reads the 8-byte prefix to route each uni stream to the correct shell session.
 > Since the gateway uses a shared QUIC connection to the daemon, stream IDs are unique across all concurrent shells on a given browser session; no rewriting or additional multiplexing is required.
+> The gateway takes a shell's stdout and stderr streams from the daemon connection that carried that shell's handshake.
+> When the gateway replaces its daemon connection, shells waiting on the old connection end, and the old connection's closing has no effect on shells started on the new one.
 
 > w[shells.resize]
 > Terminal resize is sent as a standard `/shells/resize` OI request over the browser's shared WebTransport session.

@@ -70,7 +70,7 @@ impl UniRouter {
 }
 
 /// Background task that accepts all incoming daemon uni streams and routes
-/// them to registered handlers via the `UniRouter`.
+/// them to registered handlers via the connection's own `UniRouter`.
 async fn run_uni_dispatcher(conn: quinn::Connection, router: Arc<UniRouter>) {
     loop {
         match conn.accept_uni().await {
@@ -87,13 +87,49 @@ async fn run_uni_dispatcher(conn: quinn::Connection, router: Arc<UniRouter>) {
     }
 }
 
+/// One daemon connection and the router for the uni streams it carries.
+///
+/// QUIC stream IDs are only unique within a connection, so the router lives
+/// and dies with its connection.
+struct Upstream {
+    client: OiClient,
+    uni_router: Arc<UniRouter>,
+}
+
+impl Upstream {
+    fn new(client: OiClient) -> Self {
+        let uni_router = Arc::new(UniRouter::new());
+        tokio::spawn(run_uni_dispatcher(
+            client.connection().clone(),
+            Arc::clone(&uni_router),
+        ));
+        Self { client, uni_router }
+    }
+
+    async fn open_bi(&self) -> Result<DaemonBi, ClientError> {
+        let (send, recv) = self.client.open_bi().await?;
+        Ok(DaemonBi {
+            send,
+            recv,
+            uni_router: Arc::clone(&self.uni_router),
+        })
+    }
+}
+
+/// A bidirectional stream on the shared daemon connection, with the router for
+/// uni streams the daemon opens on that same connection.
+pub struct DaemonBi {
+    pub send: quinn::SendStream,
+    pub recv: quinn::RecvStream,
+    pub uni_router: Arc<UniRouter>,
+}
+
 pub struct DaemonConn {
-    inner: tokio::sync::Mutex<OiClient>,
+    inner: tokio::sync::Mutex<Upstream>,
     pub fingerprint: String,
     addr: SocketAddr,
     auth: ClientAuth,
     key_path: PathBuf,
-    pub uni_router: Arc<UniRouter>,
 }
 
 impl DaemonConn {
@@ -122,17 +158,12 @@ impl DaemonConn {
         let actor = Self::make_actor(&fingerprint);
         let client = OiClient::connect(addr, auth.clone(), &identity, actor).await?;
 
-        let uni_router = Arc::new(UniRouter::new());
-        let quic_conn = client.connection().clone();
-        tokio::spawn(run_uni_dispatcher(quic_conn, Arc::clone(&uni_router)));
-
         Ok(Self {
-            inner: tokio::sync::Mutex::new(client),
+            inner: tokio::sync::Mutex::new(Upstream::new(client)),
             fingerprint,
             addr,
             auth,
             key_path: key_file.to_path_buf(),
-            uni_router,
         })
     }
 
@@ -157,7 +188,7 @@ impl DaemonConn {
         method: &str,
         params: serde_json::Value,
     ) -> Result<serde_json::Value, ClientError> {
-        self.inner.lock().await.request(method, params).await
+        self.inner.lock().await.client.request(method, params).await
     }
 
     pub async fn probe(&self) -> Result<(), ClientError> {
@@ -165,6 +196,7 @@ impl DaemonConn {
             .inner
             .lock()
             .await
+            .client
             .request("/server/ping", json!({}))
             .await
         {
@@ -173,15 +205,19 @@ impl DaemonConn {
         }
     }
 
-    pub async fn open_bi(&self) -> Result<(quinn::SendStream, quinn::RecvStream), ClientError> {
+    /// Open a bidirectional stream on the shared daemon connection.
+    ///
+    /// The returned router belongs to the connection the stream was opened on:
+    /// register any uni stream IDs the daemon announces on this stream there.
+    pub async fn open_bi(&self) -> Result<DaemonBi, ClientError> {
         // Drop the guard before the match so that try_reconnect can re-acquire
         // the lock. Holding it through the scrutinee would deadlock.
         let result = {
-            let client = self.inner.lock().await;
-            client.open_bi().await
+            let upstream = self.inner.lock().await;
+            upstream.open_bi().await
         };
         match result {
-            Ok(streams) => Ok(streams),
+            Ok(bi) => Ok(bi),
             Err(ClientError::Transport(_)) => {
                 tracing::warn!("daemon transport error — attempting reconnect");
                 self.try_reconnect().await?;
@@ -189,14 +225,6 @@ impl DaemonConn {
             }
             Err(e) => Err(e),
         }
-    }
-
-    /// Register interest in an incoming daemon uni stream by its QUIC stream ID.
-    ///
-    /// Call this after parsing the shell handshake response to receive the
-    /// daemon's server-initiated stdout/stderr streams.
-    pub async fn register_uni(&self, stream_id: u64) -> oneshot::Receiver<quinn::RecvStream> {
-        self.uni_router.register(stream_id).await
     }
 
     async fn try_reconnect(&self) -> Result<(), ClientError> {
@@ -210,14 +238,16 @@ impl DaemonConn {
             Err(e) => return Err(e),
         }
 
-        // Cancel outstanding registrations tied to the old connection.
-        self.uni_router.cancel_all().await;
+        let old = std::mem::replace(&mut *self.inner.lock().await, Upstream::new(new_client));
 
-        // Spawn a new dispatcher for the new connection.
-        let quic_conn = new_client.connection().clone();
-        tokio::spawn(run_uni_dispatcher(quic_conn, Arc::clone(&self.uni_router)));
-
-        *self.inner.lock().await = new_client;
+        // w[impl shells.wire]
+        // The old dispatcher holds a handle to its connection, which would keep
+        // it open; close it so the dispatcher ends, and release anything still
+        // waiting on a stream it can no longer carry.
+        old.client
+            .connection()
+            .close(0u32.into(), b"replaced by reconnect");
+        old.uni_router.cancel_all().await;
         tracing::info!("daemon reconnected");
         Ok(())
     }

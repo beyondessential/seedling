@@ -274,9 +274,11 @@ async fn handle_incoming(incoming: wtransport::endpoint::IncomingSession, state:
             }
 
             match state3.daemon.open_bi().await {
-                Ok((daemon_send, daemon_recv)) => {
-                    let mut daemon_send = daemon_send;
-                    let mut daemon_recv = daemon_recv;
+                Ok(crate::daemon::DaemonBi {
+                    send: mut daemon_send,
+                    recv: mut daemon_recv,
+                    ..
+                }) => {
                     if let Err(e) = proxy::proxy_from_peeked(
                         &mut wt_send,
                         peeked,
