@@ -378,12 +378,12 @@ fn redirect_code_must_be_a_redirection_status() {
 fn ingress_on_anonymous_service_throws() {
     let msg = run_action_err(
         r#"
-        app.on_action("go", |rt, _param| {
+        app.on_action("run-it", |rt, _param| {
             let s = app.service();
             s.ingress("example.com", 443);
         });
     "#,
-        "go",
+        "run-it",
     );
     assert!(msg.contains("anonymous service"), "got: {msg}");
 }
@@ -393,11 +393,11 @@ fn ingress_on_anonymous_service_throws() {
 fn ingress_on_anonymous_http_service_throws() {
     let msg = run_action_err(
         r#"
-        app.on_action("go", |rt, _param| {
+        app.on_action("run-it", |rt, _param| {
             app.service().http(8080).ingress("example.com", 443);
         });
     "#,
-        "go",
+        "run-it",
     );
     assert!(msg.contains("anonymous service"), "got: {msg}");
 }

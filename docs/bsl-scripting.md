@@ -49,7 +49,7 @@ In the dynamic context, `app.resource_method(name)` returns a _reference_ to an 
 |---|---|---|
 | `app.param(name)` | `Param` | Reads a value set by the control plane |
 | `app.service(name)` | Service builder | Network endpoint |
-| `app.external_service(name)` | `ExternalService` | Endpoint slot; the control plane maps it to a concrete address |
+| `app.external_service(name)` | `ExternalService` | Endpoint slot; the control plane maps it to a concrete address. In an action closure it refers to the static one and throws if there is none |
 | `app.deployment(name)` | Deployment builder | Long-running container workload |
 | `app.job(name?)` | Job builder | One-off container workload; `name` optional in dynamic context |
 | `app.volume(name?)` | Volume builder | Persistent directory; `name` optional |
@@ -157,7 +157,7 @@ let version = app.param("version")
     .kind("text")           // text | multiline | email | password | weak-password | random
     .required(false)        // (action params can also use kind "volume" — see below)
     .default_value("latest")
-    .secret(false)          // password/weak-password imply secret=true; random does NOT
+    .secret(false)          // password/weak-password imply secret=true unless this says false; random does NOT
     .description("Docker image tag to deploy");
 
 version.value()             // "latest" when no operator value is stored
@@ -210,7 +210,7 @@ executed.ensure_success()       // throws with the exit code if non-zero
 ### Collections
 
 ```rhai
-col(val)                         // coerce anything to Collection
+col(val)                         // coerce anything to Collection (an Action, like any other non-resource, is empty)
 col.one()                        // any single resource (or null)
 col.only(other)                  // intersection
 col.except(other)                // difference

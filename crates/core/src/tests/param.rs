@@ -596,12 +596,12 @@ fn param_schema_text_kind_with_secret_true_is_secret() {
 fn param_schema_explicit_secret_false_overrides_password_kind() {
     for kind in ["password", "weak-password"] {
         for source in [
-            format!(r#"app.param("p").kind("{kind}").secret(false);"#),
-            format!(r#"app.param("p").secret(false).kind("{kind}");"#),
+            format!(r#"app.param("pass").kind("{kind}").secret(false);"#),
+            format!(r#"app.param("pass").secret(false).kind("{kind}");"#),
         ] {
             let app = run_test_script_app(&source);
             let def = app.def.load();
-            let schema = def.params.get("p").expect("param declared");
+            let schema = def.params.get("pass").expect("param declared");
             assert_eq!(schema.secret, Some(false), "{source}");
             assert!(!schema.is_secret(), "{source}");
         }
@@ -611,9 +611,9 @@ fn param_schema_explicit_secret_false_overrides_password_kind() {
 // l[verify param.schema.secret-from-kind]
 #[test]
 fn param_schema_explicit_secret_true_still_secret_on_password_kind() {
-    let app = run_test_script_app(r#"app.param("p").kind("password").secret(true);"#);
+    let app = run_test_script_app(r#"app.param("pass").kind("password").secret(true);"#);
     let def = app.def.load();
-    assert!(def.params.get("p").expect("param declared").is_secret());
+    assert!(def.params.get("pass").expect("param declared").is_secret());
 }
 
 // l[verify action.install.requirements.kind-random]

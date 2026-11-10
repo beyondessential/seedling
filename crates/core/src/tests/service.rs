@@ -1173,11 +1173,11 @@ fn external_service_unknown_in_action_throws() {
     let msg = run_action_err(
         r#"
         app.external_service("postgres");
-        app.on_action("go", |rt, _param| {
+        app.on_action("run-it", |rt, _param| {
             app.external_service("postgers");
         });
     "#,
-        "go",
+        "run-it",
     );
     assert!(msg.contains("no static external service"), "got: {msg}");
 }
@@ -1188,12 +1188,12 @@ fn external_service_static_resolves_in_action() {
     let result = run_action(
         r#"
         app.external_service("postgres");
-        app.on_action("go", |rt, _param| {
+        app.on_action("run-it", |rt, _param| {
             let db = app.external_service("postgres");
             db.port(5432);
         });
     "#,
-        "go",
+        "run-it",
     );
     assert!(
         matches!(
@@ -1218,10 +1218,10 @@ fn external_service_static_is_immutable_in_action() {
         let source = format!(
             r#"
             let db = app.external_service("postgres");
-            app.on_action("go", |rt, _param| {{ {body} }});
+            app.on_action("run-it", |rt, _param| {{ {body} }});
         "#
         );
-        let msg = run_action_err(&source, "go");
+        let msg = run_action_err(&source, "run-it");
         assert!(
             msg.contains("cannot modify") || msg.contains("static"),
             "`{body}` should be refused as immutable, got: {msg}"
