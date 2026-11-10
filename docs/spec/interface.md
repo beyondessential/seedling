@@ -952,6 +952,7 @@ A session stopped while the shell's script is running ends only once the script 
 > | `ForwardStopped` | `forward_id` |
 > | `ScaleChanged` | `app`, `deployment`, `scale`, `previous_scale`, `bounds_low`, `bounds_high` |
 > | `ServerBusy` | `reason` |
+> | `EventsDropped` | `skipped` |
 > | `CanopyOffered` | `offer_id`, `agent`, `endpoint` |
 > | `CanopyWithdrawn` | `offer_id`, `reason` |
 >
@@ -965,6 +966,11 @@ A session stopped while the shell's script is running ends only once the script 
 > i[event.ordering]
 > Events on a single connection's event stream are emitted in the order they occur.
 > No ordering guarantee is made across separate connections.
+
+> i[event.gap]
+> When a subscriber falls far enough behind that the server skips events rather than delivering them, the server writes an `EventsDropped` event to that subscriber's stream at the point of the gap, with `skipped` giving the number of events skipped.
+> `EventsDropped` is written only to the subscriber that fell behind.
+> A subscriber that receives it treats any state it keeps current from the feed as stale and reads that state afresh.
 
 # Key Management
 

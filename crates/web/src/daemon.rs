@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::time::Instant;
 
 use seedling_protocol::actor::Actor;
 use seedling_protocol::client::{ClientAuth, ClientError, OiClient};
@@ -25,6 +26,8 @@ struct UniRouterInner {
     waiting: HashMap<u64, oneshot::Sender<quinn::RecvStream>>,
     /// Streams that arrived before their handler registered.
     parked: HashMap<u64, quinn::RecvStream>,
+    /// The connection has closed, so no further streams will arrive.
+    closed: bool,
 }
 
 impl UniRouter {
@@ -33,6 +36,7 @@ impl UniRouter {
             inner: Mutex::new(UniRouterInner {
                 waiting: HashMap::new(),
                 parked: HashMap::new(),
+                closed: false,
             }),
         }
     }
@@ -40,11 +44,15 @@ impl UniRouter {
     /// Register interest in a uni stream with the given daemon-side QUIC stream ID.
     ///
     /// If the stream already arrived (parked), the returned receiver resolves
-    /// immediately. Otherwise it resolves when the dispatcher delivers it.
+    /// immediately. Otherwise it resolves when the dispatcher delivers it, or
+    /// fails once the connection has closed, including when it already has.
     pub async fn register(&self, stream_id: u64) -> oneshot::Receiver<quinn::RecvStream> {
         let (tx, rx) = oneshot::channel();
         let mut inner = self.inner.lock().await;
-        if let Some(stream) = inner.parked.remove(&stream_id) {
+        if inner.closed {
+            // w[impl shells.wire]
+            drop(tx);
+        } else if let Some(stream) = inner.parked.remove(&stream_id) {
             let _ = tx.send(stream);
         } else {
             inner.waiting.insert(stream_id, tx);
@@ -61,16 +69,17 @@ impl UniRouter {
         }
     }
 
-    /// Cancel all outstanding registrations (connection closed/replaced).
-    async fn cancel_all(&self) {
+    /// Fail all outstanding and future registrations (connection closed).
+    async fn close(&self) {
         let mut inner = self.inner.lock().await;
+        inner.closed = true;
         inner.waiting.clear();
         inner.parked.clear();
     }
 }
 
 /// Background task that accepts all incoming daemon uni streams and routes
-/// them to registered handlers via the `UniRouter`.
+/// them to registered handlers via the connection's own `UniRouter`.
 async fn run_uni_dispatcher(conn: quinn::Connection, router: Arc<UniRouter>) {
     loop {
         match conn.accept_uni().await {
@@ -80,20 +89,67 @@ async fn run_uni_dispatcher(conn: quinn::Connection, router: Arc<UniRouter>) {
             }
             Err(e) => {
                 tracing::debug!("uni dispatcher: connection closed: {e}");
-                router.cancel_all().await;
+                router.close().await;
                 break;
             }
         }
     }
 }
 
+/// One daemon connection and the router for the uni streams it carries.
+///
+/// QUIC stream IDs are only unique within a connection, so the router lives
+/// and dies with its connection.
+struct Upstream {
+    client: OiClient,
+    uni_router: Arc<UniRouter>,
+}
+
+impl Upstream {
+    fn new(client: OiClient) -> Self {
+        let uni_router = Arc::new(UniRouter::new());
+        tokio::spawn(run_uni_dispatcher(
+            client.connection().clone(),
+            Arc::clone(&uni_router),
+        ));
+        Self { client, uni_router }
+    }
+
+    async fn open_bi(&self) -> Result<DaemonBi, ClientError> {
+        let (send, recv) = self.client.open_bi().await?;
+        Ok(DaemonBi {
+            send,
+            recv,
+            uni_router: Arc::clone(&self.uni_router),
+        })
+    }
+}
+
+/// A bidirectional stream on the shared daemon connection, with the router for
+/// uni streams the daemon opens on that same connection.
+pub struct DaemonBi {
+    pub send: quinn::SendStream,
+    pub recv: quinn::RecvStream,
+    pub uni_router: Arc<UniRouter>,
+}
+
+/// The most recent reconnect attempt that failed.
+struct FailedReconnect {
+    /// The connection it was replacing.
+    failed: usize,
+    finished: Instant,
+    error: String,
+}
+
 pub struct DaemonConn {
-    inner: tokio::sync::Mutex<OiClient>,
+    inner: tokio::sync::Mutex<Upstream>,
+    /// Held for the whole of a reconnect, so callers that saw the same
+    /// failure share one replacement connection, or one failed attempt.
+    reconnecting: Mutex<Option<FailedReconnect>>,
     pub fingerprint: String,
     addr: SocketAddr,
     auth: ClientAuth,
     key_path: PathBuf,
-    pub uni_router: Arc<UniRouter>,
 }
 
 impl DaemonConn {
@@ -122,17 +178,13 @@ impl DaemonConn {
         let actor = Self::make_actor(&fingerprint);
         let client = OiClient::connect(addr, auth.clone(), &identity, actor).await?;
 
-        let uni_router = Arc::new(UniRouter::new());
-        let quic_conn = client.connection().clone();
-        tokio::spawn(run_uni_dispatcher(quic_conn, Arc::clone(&uni_router)));
-
         Ok(Self {
-            inner: tokio::sync::Mutex::new(client),
+            inner: tokio::sync::Mutex::new(Upstream::new(client)),
+            reconnecting: Mutex::new(None),
             fingerprint,
             addr,
             auth,
             key_path: key_file.to_path_buf(),
-            uni_router,
         })
     }
 
@@ -157,7 +209,7 @@ impl DaemonConn {
         method: &str,
         params: serde_json::Value,
     ) -> Result<serde_json::Value, ClientError> {
-        self.inner.lock().await.request(method, params).await
+        self.inner.lock().await.client.request(method, params).await
     }
 
     pub async fn probe(&self) -> Result<(), ClientError> {
@@ -165,6 +217,7 @@ impl DaemonConn {
             .inner
             .lock()
             .await
+            .client
             .request("/server/ping", json!({}))
             .await
         {
@@ -173,33 +226,62 @@ impl DaemonConn {
         }
     }
 
-    pub async fn open_bi(&self) -> Result<(quinn::SendStream, quinn::RecvStream), ClientError> {
+    /// Open a bidirectional stream on the shared daemon connection.
+    ///
+    /// The returned router belongs to the connection the stream was opened on:
+    /// register any uni stream IDs the daemon announces on this stream there.
+    pub async fn open_bi(&self) -> Result<DaemonBi, ClientError> {
         // Drop the guard before the match so that try_reconnect can re-acquire
         // the lock. Holding it through the scrutinee would deadlock.
-        let result = {
-            let client = self.inner.lock().await;
-            client.open_bi().await
+        let (result, used) = {
+            let upstream = self.inner.lock().await;
+            (
+                upstream.open_bi().await,
+                upstream.client.connection().stable_id(),
+            )
         };
         match result {
-            Ok(streams) => Ok(streams),
+            Ok(bi) => Ok(bi),
             Err(ClientError::Transport(_)) => {
                 tracing::warn!("daemon transport error — attempting reconnect");
-                self.try_reconnect().await?;
+                self.try_reconnect(used).await?;
                 self.inner.lock().await.open_bi().await
             }
             Err(e) => Err(e),
         }
     }
 
-    /// Register interest in an incoming daemon uni stream by its QUIC stream ID.
-    ///
-    /// Call this after parsing the shell handshake response to receive the
-    /// daemon's server-initiated stdout/stderr streams.
-    pub async fn register_uni(&self, stream_id: u64) -> oneshot::Receiver<quinn::RecvStream> {
-        self.uni_router.register(stream_id).await
+    /// Replace the daemon connection identified by `failed`, unless another
+    /// caller has already replaced it, or tried and failed while this one
+    /// waited, in which case that attempt's error is returned.
+    async fn try_reconnect(&self, failed: usize) -> Result<(), ClientError> {
+        let waiting_since = Instant::now();
+        let mut last_failure = self.reconnecting.lock().await;
+        // w[impl shells.wire]
+        // Closing a connection that is not the failed one would end the
+        // shells already started on it.
+        if self.inner.lock().await.client.connection().stable_id() != failed {
+            return Ok(());
+        }
+        if let Some(last) = &*last_failure
+            && last.failed == failed
+            && last.finished >= waiting_since
+        {
+            return Err(ClientError::Connect(last.error.clone().into()));
+        }
+
+        let result = self.replace_upstream().await;
+        if let Err(e) = &result {
+            *last_failure = Some(FailedReconnect {
+                failed,
+                finished: Instant::now(),
+                error: e.to_string(),
+            });
+        }
+        result
     }
 
-    async fn try_reconnect(&self) -> Result<(), ClientError> {
+    async fn replace_upstream(&self) -> Result<(), ClientError> {
         let identity = ClientIdentity::load_or_generate(&self.key_path)
             .map_err(|e| ClientError::Connect(Box::new(e)))?
             .0;
@@ -210,14 +292,16 @@ impl DaemonConn {
             Err(e) => return Err(e),
         }
 
-        // Cancel outstanding registrations tied to the old connection.
-        self.uni_router.cancel_all().await;
+        let old = std::mem::replace(&mut *self.inner.lock().await, Upstream::new(new_client));
 
-        // Spawn a new dispatcher for the new connection.
-        let quic_conn = new_client.connection().clone();
-        tokio::spawn(run_uni_dispatcher(quic_conn, Arc::clone(&self.uni_router)));
-
-        *self.inner.lock().await = new_client;
+        // w[impl shells.wire]
+        // The old dispatcher holds a handle to its connection, which would keep
+        // it open; close it so the dispatcher ends, and release anything still
+        // waiting on a stream it can no longer carry.
+        old.client
+            .connection()
+            .close(0u32.into(), b"replaced by reconnect");
+        old.uni_router.close().await;
         tracing::info!("daemon reconnected");
         Ok(())
     }
@@ -261,5 +345,21 @@ impl DaemonConn {
             .unwrap_or_else(|| PathBuf::from("."))
             .join("seedling")
             .join("web.key")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // w[verify shells.wire]
+    #[tokio::test]
+    async fn registration_after_close_fails_at_once() {
+        let router = UniRouter::new();
+        let before = router.register(1).await;
+        router.close().await;
+        let after = router.register(2).await;
+        assert!(before.await.is_err());
+        assert!(after.await.is_err());
     }
 }

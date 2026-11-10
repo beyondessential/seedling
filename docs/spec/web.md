@@ -85,6 +85,7 @@ Absent specification bugs, anything not defined here is either defined in anothe
 > During rotation the web interface maintains an overlap window of at least 24 hours during which both the expiring certificate and the new certificate are accepted.
 > The hashes of both certificates are included in `POST /connect` responses during the overlap window.
 > Clients that reconnect after a rotation automatically receive the new hash by calling `POST /connect` again.
+> Rotation changes the certificate the listener presents to new sessions without releasing the listener's address, and established sessions continue across it.
 
 > w[wt.token]
 > The `wt_url` returned by `POST /connect` embeds a short-lived single-use token.
@@ -162,6 +163,16 @@ Absent specification bugs, anything not defined here is either defined in anothe
 > w[routes.events]
 > The web interface exposes the OI event feed, delivering a live stream of runtime events to the operator.
 
+> w[routes.events.replay]
+> A client subscribing to the event feed first receives the web interface's most recent events, then live events from that point on.
+> Each event reaches a subscriber once, in the order the web interface received it, with no overlap between the replay and the live events.
+
+> w[routes.events.gap]
+> The web interface relays the OI feed's `EventsDropped` events unchanged.
+> When a client falls behind the web interface's own feed, the web interface writes an `EventsDropped` event to that client, with the meaning [event.gap](interface.md#i--event.gap) gives it.
+> When the web interface's own subscription to the OI feed is lost and later re-established, it writes an `EventsDropped` event to every client, without a `skipped` count, since the number of events in between is unknown.
+> On receiving `EventsDropped`, the client reads afresh every view the event feed keeps current.
+
 > w[routes.shells]
 > The web interface exposes interactive shell sessions, allowing operators to open a terminal session within an app's context directly from the browser.
 > See [shells.wire](#w--shells.wire), [shells.ui](#w--shells.ui), and [shells.resize](#w--shells.resize) for the wire protocol and UI details.
@@ -173,6 +184,8 @@ Absent specification bugs, anything not defined here is either defined in anothe
 > Each uni stream begins with an 8-byte big-endian QUIC stream ID that matches the corresponding `stdout_stream_id` or `stderr_stream_id` in the handshake response; subsequent bytes are raw PTY output.
 > The browser reads the 8-byte prefix to route each uni stream to the correct shell session.
 > Since the gateway uses a shared QUIC connection to the daemon, stream IDs are unique across all concurrent shells on a given browser session; no rewriting or additional multiplexing is required.
+> The gateway takes a shell's stdout and stderr streams from the daemon connection that carried that shell's handshake.
+> When the gateway replaces its daemon connection, shells waiting on the old connection end, and the old connection's closing has no effect on shells started on the new one.
 
 > w[shells.resize]
 > Terminal resize is sent as a standard `/shells/resize` OI request over the browser's shared WebTransport session.

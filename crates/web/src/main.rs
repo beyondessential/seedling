@@ -254,6 +254,10 @@ async fn main() {
         .install_default()
         .expect("ring crypto provider already installed");
 
+    if std::env::var_os("SSLKEYLOGFILE").is_some() {
+        tracing::warn!("SSLKEYLOGFILE is set — TLS session keys are being logged to disk");
+    }
+
     let cfg = args
         .config
         .as_deref()
@@ -396,10 +400,15 @@ async fn main() {
 
     // Spawn WT servers.
     for addr in wt_addrs {
+        // w[impl bind]
+        let endpoint = wt::bind_wt_endpoint(addr, &state).unwrap_or_else(|e| {
+            eprintln!("error: WebTransport bind {addr}: {e}");
+            std::process::exit(1);
+        });
         let state2 = state.clone();
         let rx = rotation_rx.clone();
         tokio::spawn(async move {
-            wt::run_wt_server(addr, state2, rx).await;
+            wt::run_wt_server(endpoint, addr, state2, rx).await;
         });
     }
 

@@ -376,6 +376,8 @@ export interface SeedlingEvent {
   safety_mode?: SafetyMode;
   // ServerBusy
   reason?: string;
+  // EventsDropped
+  skipped?: number;
   // HeldVolumeCreated / HeldVolumeDeleted / HeldVolumeRestored
   held_id?: string;
   volume_name?: string;

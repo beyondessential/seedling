@@ -5,7 +5,8 @@ import type { SeedlingEvent } from "../lib/types";
 const DEBOUNCE_MS = 500;
 
 /**
- * Calls `refetch` when a relevant event arrives, debounced.
+ * Calls `refetch` when a relevant event arrives, or when the feed reports a
+ * gap in which a relevant event may have been lost, debounced.
  * If the tab is hidden when the event fires, queues the refresh and
  * runs it when the tab becomes visible again.
  */
@@ -78,7 +79,8 @@ export function useEventRefresh(
     const cutoff = oldFirst ? events.indexOf(oldFirst) : events.length;
     const newCount = cutoff === -1 ? events.length : cutoff;
     for (let i = 0; i < newCount; i++) {
-      if (matches(events[i])) {
+      // w[impl routes.events.gap]
+      if (events[i].type === "EventsDropped" || matches(events[i])) {
         scheduleRefetch();
         break;
       }

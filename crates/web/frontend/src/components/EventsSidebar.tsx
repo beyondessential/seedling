@@ -26,7 +26,7 @@ function eventColor(type: string): "default" | "success" | "error" | "warning" |
   if (type === "FaultCleared") return "success";
   if (type === "ResourceUnstopped") return "success";
   if (type.includes("Fault")) return "error";
-  if (type === "ResourceStopped") return "warning";
+  if (type === "ResourceStopped" || type === "EventsDropped") return "warning";
   if (type.includes("Failed") || type.includes("Exited")) return "warning";
   if (type.includes("Completed") || type.includes("Registered")) return "success";
   if (type === "DeploymentRestarted") return "info";
@@ -56,6 +56,7 @@ function eventSummary(ev: SeedlingEvent): string {
     case "ForwardStopped": return `forward stopped`;
     case "ShellExited": return `shell exited (${ev.exit_code ?? "?"})`;
     case "ServerBusy": return ev.reason ?? "server busy";
+    case "EventsDropped": return ev.skipped === undefined ? "events missed" : `${ev.skipped} events missed`;
     default: return "";
   }
 }

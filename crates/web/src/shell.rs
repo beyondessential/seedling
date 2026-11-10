@@ -98,8 +98,12 @@ pub async fn handle_shell_start(
     peeked: PeekedRequest,
 ) {
     // 1. Open a bidi on the shared daemon connection.
-    let (mut daemon_send, mut daemon_recv) = match state.daemon.open_bi().await {
-        Ok(streams) => streams,
+    let crate::daemon::DaemonBi {
+        send: mut daemon_send,
+        recv: mut daemon_recv,
+        uni_router,
+    } = match state.daemon.open_bi().await {
+        Ok(bi) => bi,
         Err(e) => {
             tracing::error!("shells/start: daemon stream open failed: {e}");
             let msg = json!({"error": {"code": "daemon_unavailable", "message": e.to_string()}});
@@ -154,9 +158,10 @@ pub async fn handle_shell_start(
     let stderr_stream_id = result["stderr_stream_id"].as_u64().unwrap_or(0);
 
     // 6. Register for the two daemon uni streams BEFORE the streams can arrive
-    //    (registrations must precede delivery to avoid parking races).
-    let stdout_rx = state.daemon.register_uni(stdout_stream_id).await;
-    let stderr_rx = state.daemon.register_uni(stderr_stream_id).await;
+    //    (registrations must precede delivery to avoid parking races), on the
+    //    router of the connection that carried the handshake.
+    let stdout_rx = uni_router.register(stdout_stream_id).await;
+    let stderr_rx = uni_router.register(stderr_stream_id).await;
 
     // 7. Concurrently: open WT uni streams to the browser and await daemon uni streams.
     let wt_conn2 = wt_conn.clone();
