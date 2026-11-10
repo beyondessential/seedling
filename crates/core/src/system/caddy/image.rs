@@ -357,7 +357,11 @@ mod tests {
 
     // r[impl infra.proxy.image.config]
     /// Run `caddy validate` in the image over `config`, returning its verdict
-    /// and everything it said.
+    /// and everything it said, prefixed with the image and runtime it ran in.
+    ///
+    /// Without `SEEDLING_CADDY_IMAGE` this is the pinned published image, which
+    /// lags a Containerfile change until the bumped tag is published; naming
+    /// it is what tells a stale image apart from an emitter the image rejects.
     ///
     /// `validate` provisions every module, which is what decodes each one's own
     /// fields strictly; it parses the whole document rather than only its outer
@@ -382,7 +386,7 @@ mod tests {
             .output()
             .unwrap_or_else(|e| panic!("could not run `{runtime}`: {e}"));
         let said = format!(
-            "{}{}",
+            "validated in {image} with {runtime}:\n{}{}",
             String::from_utf8_lossy(&output.stdout),
             String::from_utf8_lossy(&output.stderr)
         );
@@ -420,14 +424,16 @@ mod tests {
         assert!(
             !accepted && said.contains("unknown field"),
             "the image accepted a configuration carrying an undeclared field, so \
-             validating against it cannot catch one: {said}"
+             validating against it cannot catch one. {said}"
         );
 
         let (accepted, said) = validate_in_image(&emitted);
         assert!(
             accepted,
             "the proxy image rejects the configuration the runtime emits, which \
-             would drop ingress for every vhost on the host:\n{said}"
+             would drop ingress for every vhost on the host. If this is the \
+             pinned image and the Containerfile changed, set SEEDLING_CADDY_IMAGE \
+             to an image built from it. {said}"
         );
     }
 
