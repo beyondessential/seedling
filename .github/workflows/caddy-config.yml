@@ -7,6 +7,9 @@ on:
       - crates/core/src/system/caddy/**
       - crates/core/src/system/translate/proxy.rs
       - crates/core/src/system/types.rs
+      - crates/core/src/defs/service.rs
+      - crates/core/src/defs/service/**
+      - crates/core/src/runtime/tls/state.rs
       - .github/workflows/caddy-config.yml
   push:
     branches:
@@ -16,6 +19,9 @@ on:
       - crates/core/src/system/caddy/**
       - crates/core/src/system/translate/proxy.rs
       - crates/core/src/system/types.rs
+      - crates/core/src/defs/service.rs
+      - crates/core/src/defs/service/**
+      - crates/core/src/runtime/tls/state.rs
       - .github/workflows/caddy-config.yml
   workflow_dispatch:
 
