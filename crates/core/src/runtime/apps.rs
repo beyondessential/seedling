@@ -12,10 +12,11 @@ use tokio::sync::Notify;
 use crate::{
     defs::app::App,
     runtime::{
-        db::Db,
+        db::{Db, DbHandle},
         definition::{Bundle, Source},
         desired::OperationProgress,
         generations,
+        secrets::Cipher,
     },
     setup_language,
 };
@@ -225,8 +226,11 @@ impl AppRegistry {
     /// holds a definition derived from these params. Anything that diffs the
     /// registry against previous state — volume holds, scaling bounds,
     /// forwards, schedules — is only meaningful on [`ReloadOutcome::Applied`].
+    ///
+    /// Reached only through [`reload`], which follows an applied definition
+    /// with the secret migration it calls for.
     #[must_use = "a KeptPrevious reload must not be followed by state derived from the new values"]
-    pub fn reload(
+    fn reevaluate(
         &mut self,
         name: &AppName,
         params: &BTreeMap<String, String>,
@@ -309,7 +313,7 @@ impl AppRegistry {
     // i[app.persist]
     pub fn load_from_db(
         db: &Db,
-        cipher: &crate::runtime::secrets::Cipher,
+        cipher: &Cipher,
         tick_notify: Arc<Notify>,
         limits: &crate::ScriptLimits,
     ) -> rusqlite::Result<Self> {
@@ -502,7 +506,7 @@ pub fn transition_phase(
 /// Used before script evaluation, when schema isn't known yet.
 pub fn load_all_params_for_app(
     db: &Db,
-    cipher: &crate::runtime::secrets::Cipher,
+    cipher: &Cipher,
     app_name: &AppName,
 ) -> BTreeMap<String, String> {
     let mut merged = params::load_params_for_app(db, app_name).unwrap_or_default();
@@ -522,7 +526,7 @@ pub fn load_all_params_for_app(
 // r[impl secret.storage]
 pub fn store_param_value(
     db: &Db,
-    cipher: &crate::runtime::secrets::Cipher,
+    cipher: &Cipher,
     app: &AppName,
     name: &ParamName,
     value: Option<&str>,
@@ -545,13 +549,35 @@ pub fn store_param_value(
     }
 }
 
+/// Re-evaluate `name`'s current definition with `params`, and move the stored
+/// value of any param the definition now declares secret into secret storage.
+///
+/// Migration follows only a definition that was applied: a reload that keeps
+/// the previous one changes no param's `secret` flag.
 // r[impl secret.migration]
-pub(crate) fn migrate_newly_secret_params(
-    db: &Db,
-    cipher: &crate::runtime::secrets::Cipher,
-    app_name: &AppName,
-    app: &App,
-) {
+#[must_use = "a KeptPrevious reload must not be followed by state derived from the new values"]
+pub fn reload(
+    registry: &RwLock<AppRegistry>,
+    db: &DbHandle,
+    cipher: &Arc<Cipher>,
+    name: &AppName,
+    params: &BTreeMap<String, String>,
+    limits: &crate::ScriptLimits,
+) -> ReloadOutcome {
+    let outcome = registry.write().reevaluate(name, params, limits);
+    if outcome.is_applied() {
+        let running = registry.read().get(name.as_str()).map(|e| e.app.clone());
+        if let Some(running) = running {
+            let name = name.clone();
+            let cipher = Arc::clone(cipher);
+            db.call(move |db| migrate_newly_secret_params(db, &cipher, &name, &running));
+        }
+    }
+    outcome
+}
+
+// r[impl secret.migration]
+pub(crate) fn migrate_newly_secret_params(db: &Db, cipher: &Cipher, app_name: &AppName, app: &App) {
     let def = app.def.load();
     for (param_name, param_def) in &def.params {
         if param_def.is_secret()

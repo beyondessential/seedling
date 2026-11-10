@@ -1,4 +1,4 @@
-use std::{collections::BTreeMap, sync::Arc};
+use std::sync::Arc;
 
 use seedling_protocol::error::{ErrorCode, OiError};
 use seedling_protocol::names::{ActionName, AppName, ParamName};
@@ -13,7 +13,7 @@ use crate::{
     oi::{handler::RequestCtx, state::OiState},
     runtime::{
         AppPhase,
-        apps::{AppRegistry, AppStatus, ReloadOutcome, status as app_status},
+        apps::{AppRegistry, AppStatus, status as app_status},
         barrier::oracle::derive_state_with_transition_time,
         definition::{Bundle, Source, version},
         desired::list_dynamic_resources_for_app,
@@ -143,38 +143,6 @@ pub(crate) fn app_blocked(app: &str, doing: &str, blocker: &AppBlocker) -> OiErr
         ErrorCode::OperationInProgress,
         format!("cannot {doing} {app} while {blocker}; {advice}"),
     )
-}
-
-/// Re-evaluate `app`'s current definition with `params`, and move the stored
-/// value of any param the definition now declares secret into secret storage.
-///
-/// Migration follows only a definition that was applied: a reload that keeps
-/// the previous one changes no param's `secret` flag.
-// r[impl secret.migration]
-pub(crate) fn reload_app(
-    state: &OiState,
-    app: &AppName,
-    params: &BTreeMap<String, String>,
-) -> ReloadOutcome {
-    let outcome = state
-        .registry
-        .write()
-        .reload(app, params, &state.script_limits);
-    if outcome.is_applied() {
-        let running = state
-            .registry
-            .read()
-            .get(app.as_str())
-            .map(|e| e.app.clone());
-        if let Some(running) = running {
-            let app = app.clone();
-            let cipher = Arc::clone(&state.cipher);
-            state.db.call(move |db| {
-                crate::runtime::apps::migrate_newly_secret_params(db, &cipher, &app, &running);
-            });
-        }
-    }
-    outcome
 }
 
 /// Extract the fields needed to persist an app entry without holding `&AppEntry`.
