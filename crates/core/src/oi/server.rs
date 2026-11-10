@@ -591,33 +591,79 @@ async fn read_json_line(
 // i[event.ordering]
 async fn event_stream_task(
     mut send: quinn::SendStream,
+    rx: tokio::sync::broadcast::Receiver<seedling_protocol::events::OiEvent>,
+) {
+    pump_events(&mut send, rx).await;
+    let _ = send.finish();
+}
+
+/// Write events from `rx` to `send` as newline-delimited JSON until the bus
+/// closes or the write fails.
+async fn pump_events(
+    send: &mut (impl tokio::io::AsyncWrite + Unpin),
     mut rx: tokio::sync::broadcast::Receiver<seedling_protocol::events::OiEvent>,
 ) {
+    use tokio::io::AsyncWriteExt as _;
+
     loop {
-        match rx.recv().await {
-            Ok(event) => {
-                let mut bytes = match serde_json::to_vec(&event) {
-                    Ok(b) => b,
-                    Err(e) => {
-                        tracing::warn!("event serialisation error: {e}");
-                        continue;
-                    }
-                };
-                bytes.push(b'\n');
-                if let Err(e) = send.write_all(&bytes).await {
-                    tracing::debug!("event stream closed: {e}");
-                    break;
-                }
-            }
+        let event = match rx.recv().await {
+            Ok(event) => event,
             Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
                 tracing::warn!("event subscriber lagged, dropped {n} events");
+                // i[impl event.gap]
+                seedling_protocol::events::OiEvent::events_dropped(Some(n))
             }
-            Err(tokio::sync::broadcast::error::RecvError::Closed) => {
-                break;
+            Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+        };
+        let mut bytes = match serde_json::to_vec(&event) {
+            Ok(b) => b,
+            Err(e) => {
+                tracing::warn!("event serialisation error: {e}");
+                continue;
             }
+        };
+        bytes.push(b'\n');
+        if let Err(e) = send.write_all(&bytes).await {
+            tracing::debug!("event stream closed: {e}");
+            break;
         }
     }
-    let _ = send.finish();
+}
+
+#[cfg(test)]
+mod event_stream_tests {
+    use seedling_protocol::events::OiEvent;
+
+    use super::*;
+
+    // i[verify event.gap]
+    #[tokio::test]
+    async fn lagged_subscriber_receives_gap_marker() {
+        let (tx, rx) = tokio::sync::broadcast::channel(2);
+        for i in 0..5 {
+            tx.send(OiEvent::ServerBusy {
+                timestamp: jiff::Timestamp::now(),
+                reason: format!("busy-{i}"),
+                actor: None,
+            })
+            .unwrap();
+        }
+        drop(tx);
+
+        let mut out = Vec::new();
+        pump_events(&mut out, rx).await;
+        let lines: Vec<serde_json::Value> = String::from_utf8(out)
+            .unwrap()
+            .lines()
+            .map(|l| serde_json::from_str(l).unwrap())
+            .collect();
+
+        assert_eq!(lines.len(), 3);
+        assert_eq!(lines[0]["type"], "EventsDropped");
+        assert_eq!(lines[0]["skipped"], 3);
+        assert_eq!(lines[1]["reason"], "busy-3");
+        assert_eq!(lines[2]["reason"], "busy-4");
+    }
 }
 
 #[cfg(test)]

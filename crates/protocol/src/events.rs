@@ -272,6 +272,14 @@ pub enum OiEvent {
         #[serde(skip_serializing_if = "Option::is_none")]
         actor: Option<Arc<Actor>>,
     },
+    /// Written to one subscriber in place of events it fell too far behind to
+    /// receive. `skipped` is absent when the number is unknown.
+    // i[impl event.gap]
+    EventsDropped {
+        timestamp: Timestamp,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        skipped: Option<u64>,
+    },
     HeldVolumeCreated {
         timestamp: Timestamp,
         held_id: HeldVolumeId,
@@ -565,6 +573,15 @@ pub fn new_event_channel() -> EventSender {
 
 fn now() -> Timestamp {
     Timestamp::now()
+}
+
+impl OiEvent {
+    pub fn events_dropped(skipped: Option<u64>) -> Self {
+        Self::EventsDropped {
+            timestamp: now(),
+            skipped,
+        }
+    }
 }
 
 fn is_false(b: &bool) -> bool {

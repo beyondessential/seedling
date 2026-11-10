@@ -167,6 +167,12 @@ Absent specification bugs, anything not defined here is either defined in anothe
 > A client subscribing to the event feed first receives the web interface's most recent events, then live events from that point on.
 > Each event reaches a subscriber once, in the order the web interface received it, with no overlap between the replay and the live events.
 
+> w[routes.events.gap]
+> The web interface relays the OI feed's `EventsDropped` events unchanged.
+> When a client falls behind the web interface's own feed, the web interface writes an `EventsDropped` event to that client, with the meaning [event.gap](interface.md#i--event.gap) gives it.
+> When the web interface's own subscription to the OI feed is lost and later re-established, it writes an `EventsDropped` event to every client, without a `skipped` count, since the number of events in between is unknown.
+> On receiving `EventsDropped`, the client reads afresh every view the event feed keeps current.
+
 > w[routes.shells]
 > The web interface exposes interactive shell sessions, allowing operators to open a terminal session within an app's context directly from the browser.
 > See [shells.wire](#w--shells.wire), [shells.ui](#w--shells.ui), and [shells.resize](#w--shells.resize) for the wire protocol and UI details.

@@ -1,7 +1,8 @@
 use std::{collections::VecDeque, sync::Arc};
 
+use seedling_protocol::events::OiEvent;
 use tokio::{
-    io::{AsyncBufReadExt as _, BufReader},
+    io::{AsyncBufReadExt as _, AsyncWrite, AsyncWriteExt as _, BufReader},
     sync::{Mutex, broadcast},
 };
 
@@ -50,43 +51,50 @@ impl EventBroker {
     }
 
     /// Serve the cached + live event stream to a connected WT client.
-    pub async fn serve_client(self: &Arc<Self>, mut send: wtransport::SendStream) {
+    pub async fn serve_client(self: &Arc<Self>, mut send: impl AsyncWrite + Unpin) {
         let (cached, mut rx) = self.subscribe().await;
 
         for line in cached {
-            if send.write_all(line.as_bytes()).await.is_err() {
-                return;
-            }
-            if send.write_all(b"\n").await.is_err() {
+            if write_line(&mut send, &line).await.is_err() {
                 return;
             }
         }
 
         loop {
-            match rx.recv().await {
-                Ok(line) => {
-                    if send.write_all(line.as_bytes()).await.is_err() {
-                        return;
-                    }
-                    if send.write_all(b"\n").await.is_err() {
-                        return;
-                    }
-                }
+            let line = match rx.recv().await {
+                Ok(line) => line,
                 Err(broadcast::error::RecvError::Lagged(n)) => {
                     tracing::warn!(skipped = n, "event broker: client lagged, events skipped");
+                    // w[impl routes.events.gap]
+                    gap_marker(Some(n))
                 }
                 Err(broadcast::error::RecvError::Closed) => return,
+            };
+            if write_line(&mut send, &line).await.is_err() {
+                return;
             }
         }
     }
+}
+
+async fn write_line(send: &mut (impl AsyncWrite + Unpin), line: &str) -> std::io::Result<()> {
+    send.write_all(line.as_bytes()).await?;
+    send.write_all(b"\n").await
+}
+
+fn gap_marker(skipped: Option<u64>) -> Arc<str> {
+    serde_json::to_string(&OiEvent::events_dropped(skipped))
+        .expect("EventsDropped serialises")
+        .into()
 }
 
 /// Runs forever: subscribes to the daemon event stream and forwards to the broker.
 /// Reconnects automatically on transport errors.
 pub async fn run_event_broker(broker: Arc<EventBroker>, daemon: Arc<DaemonConn>) {
     let mut backoff = std::time::Duration::from_secs(1);
+    let mut resumed = false;
     loop {
-        match stream_events(&broker, &daemon).await {
+        match stream_events(&broker, &daemon, &mut resumed).await {
             Ok(()) => {
                 tracing::info!("event broker: daemon stream ended, reconnecting");
                 backoff = std::time::Duration::from_secs(1);
@@ -100,12 +108,21 @@ pub async fn run_event_broker(broker: Arc<EventBroker>, daemon: Arc<DaemonConn>)
     }
 }
 
+/// Relay one daemon event subscription into the broker. `resumed` records
+/// whether an earlier subscription was established, so that events lost
+/// between the two are marked as a gap.
 async fn stream_events(
     broker: &EventBroker,
     daemon: &DaemonConn,
+    resumed: &mut bool,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let client = daemon.new_events_client().await?;
     let uni = client.subscribe_events().await?;
+    if *resumed {
+        // w[impl routes.events.gap]
+        broker.publish(gap_marker(None)).await;
+    }
+    *resumed = true;
     let mut buf = BufReader::new(uni);
     let mut line = String::new();
     loop {
@@ -116,6 +133,8 @@ async fn stream_events(
         }
         let trimmed = line.trim_end_matches(['\n', '\r']);
         if !trimmed.is_empty() {
+            // w[impl routes.events.gap]
+            // The daemon's own EventsDropped is relayed like any other event.
             broker.publish(Arc::from(trimmed)).await;
         }
     }
@@ -188,6 +207,41 @@ mod tests {
                 .collect::<Vec<_>>();
             assert_eq!(seen, all);
         }
+    }
+
+    // w[verify routes.events.gap]
+    #[tokio::test]
+    async fn lagged_client_receives_gap_marker() {
+        let broker = broker();
+        let (client, mut server) = tokio::io::duplex(64);
+        let serving = tokio::spawn({
+            let broker = Arc::clone(&broker);
+            async move { broker.serve_client(client).await }
+        });
+        let mut lines = BufReader::new(&mut server).lines();
+
+        broker.publish(Arc::from("ready")).await;
+        assert_eq!(lines.next_line().await.unwrap().unwrap(), "ready");
+
+        // The client is not reading, so the broker's write blocks on the
+        // full pipe and its receiver falls behind the channel.
+        let total = BROADCAST_CAPACITY + 10;
+        for i in 0..total {
+            broker.publish(Arc::from(format!("event-{i}"))).await;
+        }
+
+        let mut gap = None;
+        let mut last = String::new();
+        while last != format!("event-{}", total - 1) {
+            last = lines.next_line().await.unwrap().unwrap();
+            if last.contains("EventsDropped") {
+                gap = Some(serde_json::from_str::<serde_json::Value>(&last).unwrap());
+            }
+        }
+        let gap = gap.expect("a gap marker before the latest events");
+        assert!(gap["skipped"].as_u64().unwrap() > 0);
+
+        serving.abort();
     }
 
     #[tokio::test]
