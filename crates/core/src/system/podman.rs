@@ -280,7 +280,7 @@ impl PodmanRuntime {
         prefix: Ipv6Net,
         ipv4: Option<ipnet::Ipv4Net>,
     ) -> Result<String, PodmanError> {
-        let gateway = first_host_v6(&prefix)
+        let gateway = crate::system::first_host_v6(&prefix)
             .ok_or_else(|| {
                 ProtocolSnafu {
                     message: format!(
@@ -302,7 +302,7 @@ impl PodmanRuntime {
         }];
 
         if let Some(v4) = ipv4 {
-            let gateway4 = first_host_v4(&v4)
+            let gateway4 = crate::system::first_host_v4(&v4)
                 .ok_or_else(|| {
                     ProtocolSnafu {
                         message: format!(
@@ -1178,57 +1178,9 @@ mod status_tests {
     }
 }
 
-/// The gateway of a pod network: the first host address of its prefix.
-///
-/// Follows from the prefix rather than from where the allocator happens to
-/// put the host part. `None` for a prefix too small to hold a gateway and a
-/// pod.
-// r[impl infra.pod.network]
-fn first_host_v6(prefix: &Ipv6Net) -> Option<Ipv6Addr> {
-    (prefix.prefix_len() <= 126).then(|| Ipv6Addr::from(u128::from(prefix.network()) + 1))
-}
-
-// r[impl infra.pod.network]
-fn first_host_v4(prefix: &ipnet::Ipv4Net) -> Option<std::net::Ipv4Addr> {
-    (prefix.prefix_len() <= 30).then(|| std::net::Ipv4Addr::from(u32::from(prefix.network()) + 1))
-}
-
 #[cfg(test)]
 mod tests {
-    use super::{
-        exec_argv, first_host_v4, first_host_v6, is_not_found, is_not_running, is_untagged_sentinel,
-    };
-
-    // r[verify infra.pod.network]
-    #[test]
-    fn the_gateway_is_the_first_host_address_of_the_prefix() {
-        let gw = |p: &str| first_host_v6(&p.parse().unwrap());
-        assert_eq!(
-            gw("fd5e:ed12:3456:4a07::/64"),
-            Some("fd5e:ed12:3456:4a07::1".parse().unwrap())
-        );
-        // Carved from one /64, two networks do not share a gateway.
-        assert_ne!(
-            gw("fd5e:ed12:3456:4a07::/80"),
-            gw("fd5e:ed12:3456:4a07:1::/80")
-        );
-        // The gateway lies inside the subnet, off its network address.
-        let p: ipnet::Ipv6Net = "fd5e:ed12:3456:4a07:1::/80".parse().unwrap();
-        let g = first_host_v6(&p).unwrap();
-        assert!(p.contains(&g) && g != p.network());
-        assert_eq!(
-            first_host_v4(&"10.89.4.0/24".parse().unwrap()),
-            Some("10.89.4.1".parse().unwrap())
-        );
-    }
-
-    // r[verify infra.pod.network]
-    #[test]
-    fn a_prefix_with_no_room_for_a_gateway_is_refused() {
-        assert_eq!(first_host_v6(&"fd5e::1/128".parse().unwrap()), None);
-        assert_eq!(first_host_v6(&"fd5e::/127".parse().unwrap()), None);
-        assert_eq!(first_host_v4(&"10.0.0.0/31".parse().unwrap()), None);
-    }
+    use super::{exec_argv, is_not_found, is_not_running, is_untagged_sentinel};
 
     fn api_err(code: u16, body: &str) -> podman_rest_client::Error {
         podman_rest_client::Error::Api {
