@@ -289,6 +289,10 @@ over IPv6:
       → nftables service DNAT: service_ip:80 → pod_ip:3000
       → pod receives on :3000
 
+Caddy runs one server per ingress port, so an ingress is reachable only on the
+port it was declared on: the same hostname on `:80` and `:8080` reaches two
+different services, one on each.
+
 Caddy handles TLS termination, ACME certificate management, path-based
 routing, and HTTP/HTTPS redirects. Where a certificate comes from Canopy or
 another source Seedling manages, Seedling hands it to Caddy at handshake time
