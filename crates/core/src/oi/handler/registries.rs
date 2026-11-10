@@ -95,10 +95,7 @@ fn re_evaluate_all_apps(state: &OiState) {
             .call(move |db| apps::load_all_params_for_app(db, &cipher, &name_clone));
         // Re-evaluating each app's existing script after an allowlist change:
         // nothing downstream diffs the definition, so either outcome is fine.
-        let _ = state
-            .registry
-            .write()
-            .reload(name, &loaded_params, &state.script_limits);
+        let _ = super::apps::reload_app(state, name, &loaded_params);
         {
             let reg = state.registry.read();
             if let Some(entry) = reg.get(name.as_str()) {

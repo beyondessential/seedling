@@ -106,10 +106,7 @@ fn reload_and_persist_apperror(
     // The outcome needs no gating here: this re-evaluates the app's existing
     // definition under new param values and derives nothing from the result
     // but the fault state synced below, which is filed on either outcome.
-    let _ = state
-        .registry
-        .write()
-        .reload(app, &loaded_params, &state.script_limits);
+    let _ = super::apps::reload_app(state, app, &loaded_params);
     {
         let reg = state.registry.read();
         if let Some(entry) = reg.get(app.as_str()) {

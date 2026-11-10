@@ -1767,6 +1767,9 @@ Two levers set how a workload competes for host resources under pressure. Each D
 
 > r[secret.migration]
 > When a parameter transitions from non-secret to secret (because the BSL script is updated or the `secret` flag is changed), the runtime must move the existing stored value from non-secret storage to secret storage at the next opportunity, without requiring operator intervention.
+>
+> The move follows every evaluation of the app's definition that the runtime applies, whatever caused it: startup, a definition update, a parameter change, or any other re-evaluation.
+> The value is written to secret storage before it is removed from non-secret storage, so a failure part way leaves it readable.
 
 # TLS Certificate Strategy
 

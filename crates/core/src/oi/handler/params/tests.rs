@@ -199,3 +199,52 @@ fn a_param_set_during_an_uninstall_stores_the_value_and_runs_no_handler() {
     assert_eq!(result["schedule"], "not_scheduled");
     assert!(oi.state.scheduler.lock().active().is_none());
 }
+
+// r[verify secret.migration]
+// Only startup and a definition update migrated, so a param made secret by
+// another param's change kept its plaintext row until the daemon restarted.
+#[test]
+fn a_param_made_secret_by_a_param_change_moves_to_secret_storage() {
+    let oi = TestOi::new();
+    oi.call(
+        "/apps/create",
+        json!({
+            "app": "demo",
+            "script": r#"
+                let mode = app.param("mode").default_value("plain");
+                let key = app.param("apikey");
+                if mode.value() == "secure" {
+                    key.secret(true);
+                }
+            "#,
+        }),
+    )
+    .unwrap();
+    oi.call(
+        "/apps/params/set",
+        json!({ "app": "demo", "name": "apikey", "value": "hunter2" }),
+    )
+    .unwrap();
+    oi.call(
+        "/apps/params/set",
+        json!({ "app": "demo", "name": "mode", "value": "secure" }),
+    )
+    .unwrap();
+
+    let (plaintext, secret) = oi.state.db.call(|db| {
+        let app = seedling_protocol::names::AppName::new_unchecked("demo");
+        let key = seedling_protocol::names::ParamName::new_unchecked("apikey");
+        let plaintext: i64 = db
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM params WHERE app_name = 'demo' AND param_name = 'apikey'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        let secret = crate::runtime::apps::secret_params::is_stored_secret(db, &app, &key).unwrap();
+        (plaintext, secret)
+    });
+    assert_eq!(plaintext, 0, "no plaintext copy remains");
+    assert!(secret, "the value is in secret storage");
+}
