@@ -1,4 +1,4 @@
-use std::collections::VecDeque;
+use std::collections::{HashSet, VecDeque};
 use std::fmt;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -94,6 +94,30 @@ pub enum RejectReason {
     /// The application is being torn down, so nothing further may run
     /// against it.
     AppUninstalling,
+    /// A change to the application is being committed, and its `on_change`
+    /// handler is admitted in the hold's place; see [`AppHold`].
+    ChangeBeingApplied,
+}
+
+/// What keeps an operation from being admitted for an app.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AppBlocker {
+    /// The named action is the scheduler's active operation.
+    Active(ActionName),
+    /// The named action is queued behind another app's operation.
+    Queued(ActionName),
+    /// A change to the app is being committed; see [`AppHold`].
+    Change,
+}
+
+impl std::fmt::Display for AppBlocker {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Active(action) => write!(f, "'{action}' is in progress"),
+            Self::Queued(action) => write!(f, "'{action}' is queued"),
+            Self::Change => f.write_str("a change to it is being applied"),
+        }
+    }
 }
 
 // r[impl operation.composition.cycles]
@@ -132,6 +156,9 @@ pub struct Scheduler {
     queue: VecDeque<QueuedOperation>,
     /// Inline action invocation chain for the active operation.
     call_stack: Vec<String>,
+    /// Apps held against admission while a change to them is committed; see
+    /// [`Self::hold`].
+    held: HashSet<AppName>,
 }
 
 impl Scheduler {
@@ -149,10 +176,35 @@ impl Scheduler {
         self.queue.iter()
     }
 
-    /// Returns true if there is an active or queued operation for the given app.
-    pub fn has_operation_for(&self, app: &AppName) -> bool {
-        self.active.as_ref().is_some_and(|a| a.app == *app)
-            || self.queue.iter().any(|q| q.app == *app)
+    /// What keeps an operation from being admitted for `app`: its active or
+    /// queued operation, or a change to it that holds it.
+    pub fn blocker_for(&self, app: &AppName) -> Option<AppBlocker> {
+        if let Some(active) = self.active.as_ref().filter(|a| a.app == *app) {
+            return Some(AppBlocker::Active(active.action.clone()));
+        }
+        if let Some(queued) = self.queue.iter().find(|q| q.app == *app) {
+            return Some(AppBlocker::Queued(queued.action.clone()));
+        }
+        self.held.contains(app).then_some(AppBlocker::Change)
+    }
+
+    // r[impl operation.lifecycle.param-change]
+    /// Hold `app` against every admission while a change to it is committed.
+    ///
+    /// A parameter or definition change checks that nothing runs for the app,
+    /// commits, and only then admits its `on_change` handler. An operation
+    /// admitted in between would have the handler refused after the change
+    /// was committed, so the hold stands in for an operation from the check
+    /// until the handler is admitted in its place. Refused with whatever
+    /// holds the app already.
+    fn hold(&mut self, app: &AppName) -> Result<(), AppBlocker> {
+        match self.blocker_for(app) {
+            Some(blocker) => Err(blocker),
+            None => {
+                self.held.insert(app.clone());
+                Ok(())
+            }
+        }
     }
 
     // r[impl app.uninstall.exclusive]
@@ -244,6 +296,9 @@ impl Scheduler {
         trigger: &str,
         operation_id: OperationId,
     ) -> ScheduleResult {
+        if self.held.contains(app) {
+            return ScheduleResult::Rejected(RejectReason::ChangeBeingApplied);
+        }
         match &self.active {
             None => {
                 // No active operation — start immediately.
@@ -344,6 +399,72 @@ impl Scheduler {
     /// The current composition call stack (most-recently-pushed is last).
     pub fn call_stack(&self) -> &[String] {
         &self.call_stack
+    }
+}
+
+/// A [`Scheduler::hold`] on one app, released when dropped.
+///
+/// Lives across the commit of a change, so it holds the scheduler handle
+/// rather than a lock on it.
+pub struct AppHold {
+    scheduler: Arc<Mutex<Scheduler>>,
+    app: AppName,
+    /// Set once [`Self::admit`] has given the hold up, so dropping it does
+    /// not release a hold some later change has taken on the same app.
+    released: bool,
+}
+
+impl AppHold {
+    /// Hold `app`, or name what holds it already.
+    pub fn take(scheduler: &Arc<Mutex<Scheduler>>, app: &AppName) -> Result<Self, AppBlocker> {
+        scheduler.lock().hold(app)?;
+        Ok(Self {
+            scheduler: Arc::clone(scheduler),
+            app: app.clone(),
+            released: false,
+        })
+    }
+
+    /// Admit an operation for the held app in the hold's place, under one
+    /// lock so nothing else is admitted between the two. Returns the
+    /// operation's id when it was accepted or queued.
+    pub fn admit(
+        mut self,
+        action: &ActionName,
+        source_generation: u64,
+        target_generation: u64,
+        trigger: &str,
+        phase: &Mutex<AppPhase>,
+    ) -> (ScheduleResult, Option<OperationId>) {
+        self.released = true;
+        let mut scheduler = self.scheduler.lock();
+        scheduler.held.remove(&self.app);
+        let result = scheduler.admit(
+            &self.app,
+            action,
+            serde_json::Map::new(),
+            source_generation,
+            target_generation,
+            trigger,
+            phase,
+        );
+        let operation_id = match result {
+            ScheduleResult::Accepted => scheduler.active().map(|a| a.operation_id.clone()),
+            ScheduleResult::Queued => scheduler
+                .queue_iter()
+                .find(|q| q.app == self.app)
+                .map(|q| q.operation_id.clone()),
+            ScheduleResult::Rejected(_) => None,
+        };
+        (result, operation_id)
+    }
+}
+
+impl Drop for AppHold {
+    fn drop(&mut self) {
+        if !self.released {
+            self.scheduler.lock().held.remove(&self.app);
+        }
     }
 }
 

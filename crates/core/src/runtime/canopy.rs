@@ -19,7 +19,10 @@ use serde_json::{Value, json};
 
 use crate::{
     oi::{canopy::OiCanopyTransport, state::OiState},
-    runtime::{apps::AppStatus, faults},
+    runtime::{
+        apps::{AppStatus, status},
+        faults,
+    },
     system::types::ContainerStatus,
 };
 
@@ -250,7 +253,9 @@ fn check(name: &str, result: Result_, extra: Value) -> Value {
 // r[impl canopy.report.extra]
 // r[impl canopy.app.key]
 async fn build_payload(state: &Arc<OiState>) -> Result<Value, String> {
-    let (apps_check, apps_total, apps_by_status) = apps_check(state);
+    // One sweep serves the health check, the totals and the applications.
+    let statuses = status::all(&state.registry, &state.scheduler, &state.db);
+    let (apps_check, apps_total, apps_by_status) = apps_check(&statuses);
     let faults_check = faults_check(state);
     let proxy = component_check(
         state,
@@ -272,7 +277,6 @@ async fn build_payload(state: &Arc<OiState>) -> Result<Value, String> {
         .db
         .call(|db| faults::count_active_faults(db).unwrap_or(0));
 
-    let statuses = state.registry.read().list();
     // A report that cannot say which apps there are fails rather than going
     // out without them: an absent application reads to Canopy as unreachable.
     let applications = state
@@ -304,16 +308,15 @@ async fn build_payload(state: &Arc<OiState>) -> Result<Value, String> {
 
 // r[impl canopy.report.checks]
 /// `health/apps`, plus the app totals the free-form payload also carries.
-fn apps_check(state: &Arc<OiState>) -> (Value, usize, HashMap<&'static str, usize>) {
-    let apps = state.registry.read().list();
+fn apps_check(apps: &[(AppName, AppStatus)]) -> (Value, usize, HashMap<&'static str, usize>) {
     let total = apps.len();
 
     let mut by_status: HashMap<&'static str, usize> = HashMap::new();
-    for (_, status) in &apps {
+    for (_, status) in apps {
         *by_status.entry(status.name()).or_insert(0) += 1;
     }
 
-    (grade_apps(&apps), total, by_status)
+    (grade_apps(apps), total, by_status)
 }
 
 // r[impl canopy.report.extra]
@@ -568,6 +571,20 @@ mod tests {
             detail.get("tamanuVersion").is_none(),
             "tamanuVersion sets the server's tracked version and is not ours to set"
         );
+    }
+
+    // r[verify canopy.report.checks]
+    // The report graded a status that stops short of the health rollup, so
+    // an installed app whose deployment is not running passed.
+    #[test]
+    fn an_installed_app_that_is_not_running_is_graded_degraded() {
+        let oi = TestOi::with_app("demo");
+        oi.install("demo");
+
+        let payload = oi.block_on(build_payload(&oi.state)).expect("a payload");
+        let apps = find(&payload, "health/apps");
+        assert_eq!(result_of(apps), "warning", "{apps}");
+        assert_eq!(apps["degraded"], serde_json::json!(["demo"]));
     }
 
     // r[verify canopy.report.checks]

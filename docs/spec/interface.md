@@ -177,7 +177,7 @@ Absent specification bugs, anything that is not defined here is either defined i
 > | `not_installed` | The app is `NotInstalled` and the requested operation requires it to be installed. |
 > | `already_installed` | `/apps/install/invoke` was called but the app is already `Installed` or `Uninstalling`. |
 > | `install_in_progress` | `/apps/install/invoke` was called but an install for this app is already running. |
-> | `operation_in_progress` | A lifecycle operation is running and the request conflicts with it. |
+> | `operation_in_progress` | A lifecycle operation is running or queued for the app, or a change to it is being applied, and the request conflicts with it; `message` names which. |
 > | `already_queued` | An operation is already queued for this app. |
 > | `requirements_invalid` | Install requirements failed validation; per-field errors are included in `message`. |
 > | `script_error` | The BSL script failed to parse or evaluate; detail is included in `message`. |
@@ -338,10 +338,14 @@ Absent specification bugs, anything that is not defined here is either defined i
 > - `NotInstalled`: the install action has never completed successfully for this app, and no install is currently in progress.
 > - `Installing`: an install operation is in progress for this app. The reconciler actuates resources the install closure has placed into the desired state per [desired-state.during-install](#r--desired-state.during-install).
 > - `Deregistering`: deregistration was requested and resource teardown is in progress.
-> - `Operating`: a lifecycle operation other than `install` is in progress. Includes the field `action_name`.
+> - `Operating`: a lifecycle operation other than `install` is in progress. Includes the field `action_name`, the name of the action that operation runs.
 > - `Running`: steady state; no active faults; all resources are at their desired lifecycle states.
 > - `Degraded`: steady state, but one or more resources are not at their desired lifecycle state or have an active fault. Resources that are actively being torn down (`Terminating` or `Terminated` lifecycle state) are not counted as degraded — they are transitioning to `Unscheduled` and do not represent a fault condition.
 > - `Faulted`: one or more active faults exist and at least one resource has been excluded from active reconciliation.
+>
+> Outside an operation, a resource's desired lifecycle state is `Ready`, except that a [stopped](#i--resource.stop) resource and a Deployment at a scale of zero are desired at `Unscheduled`.
+> A Job runs once rather than staying up, so it is at its desired state while `Ready` and once its run has ended in success, whether or not its container has since been removed; success is judged as for [rt.termination.ensure-success](language.md#l--rt.termination.ensure-success).
+> An external service is provided from outside the runtime, has no lifecycle state, and is always at its desired state.
 
 > i[app.status.priority]
 > When multiple conditions apply simultaneously, the state with the highest priority is reported.
@@ -405,7 +409,8 @@ Absent specification bugs, anything that is not defined here is either defined i
 >   `kind` is one of `action`, `shell`, `install`, or `lifecycle`. The `lifecycle` kind is used for the Start Action, which is driven autonomously and cannot be manually invoked.
 >   `params` is an object map of param key to `{ kind, required, description, default_value }`, as defined in the language spec. Empty for actions with no declared param schema.
 >   `schedules` is an array of objects with fields `cronexpr`, `last_fired_at`, and `next_fire_at`, listing every cron schedule attached to the action via [action.schedule](language.md#l--action.schedule). The array is empty for actions with no declared schedule. `last_fired_at` is the RFC 3339 timestamp at which the runtime last fired this schedule, or `null` if it has never fired (or the app is not yet installed). `next_fire_at` is the RFC 3339 timestamp at which the schedule is next expected to fire, computed from `last_fired_at` (or the current time if never fired); it is `null` only when the cron expression cannot be evaluated.
-> - `current_operation`: present only when status is `Operating`.
+> - `current_operation`: present when status is `Operating` or `Installing` and the operation is running, and describes that operation.
+>   An app being deregistered has no operation and does not report one.
 >   Has fields `action_name`, `barrier`, `source_generation`, and `target_generation`.
 >   `barrier` is either `null` (operation is running but not yet at a barrier, or the barrier has already been satisfied and the closure is about to resume) or an object with fields `resources`, `required_state`, `deadline_secs`, and `elapsed_secs`.
 >   `resources` is an array of resource display names the barrier is awaiting.
@@ -492,8 +497,8 @@ Absent specification bugs, anything that is not defined here is either defined i
 > On success, the response is `{}`.
 
 > i[resource.stop.no-active-op]
-> All three stop/unstop endpoints (`/apps/resource/stop`, `/apps/resource/unstop`, `/apps/unstop`) reject with `operation_in_progress` when a lifecycle operation is active or queued for the target app.
-> The operator is expected to cancel the active operation first via [action.cancel](#i--action.cancel); desired-state mutations must not race with a running action closure.
+> All three stop/unstop endpoints (`/apps/resource/stop`, `/apps/resource/unstop`, `/apps/unstop`) reject with `operation_in_progress` when a lifecycle operation is active or queued for the target app, or a change to it is being applied.
+> The operator cancels an active operation first via [action.cancel](#i--action.cancel), or waits for a queued one or a change to finish; desired-state mutations must not race with a running action closure.
 
 > i[resource.stop.status]
 > `/apps/show` includes a `stopped` boolean field on each resource that has been stopped via `/apps/resource/stop`.

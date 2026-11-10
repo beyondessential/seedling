@@ -611,7 +611,7 @@ async fn main() {
     {
         let known_apps: std::collections::HashSet<AppName> = {
             let reg = registry.read();
-            reg.list().into_iter().map(|(name, _)| name).collect()
+            reg.names().into_iter().collect()
         };
 
         let driver_ref = Arc::clone(&driver);
@@ -1014,9 +1014,9 @@ async fn main() {
                         seedling_core::runtime::schedules::ScheduledApp,
                     > = {
                         let reg = schedule_registry.read();
-                        reg.list()
+                        reg.names()
                             .into_iter()
-                            .filter_map(|(name, _)| {
+                            .filter_map(|name| {
                                 let entry = reg.get(name.as_str())?;
                                 let phase = entry.phase.lock().clone();
                                 if matches!(phase, seedling_core::runtime::AppPhase::Installed) {

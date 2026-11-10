@@ -473,7 +473,7 @@ fn list_returns_registered_apps_sorted() {
         )
         .unwrap();
     }
-    let names: Vec<_> = reg.list().into_iter().map(|(n, _)| n).collect();
+    let names = reg.names();
     assert_eq!(names, vec!["alpha-app", "mu-app", "zeta-app"]);
 }
 
@@ -704,7 +704,7 @@ fn failed_reload_keeps_the_previous_definition() {
     )
     .unwrap();
 
-    let outcome = reg.reload(
+    let outcome = reg.reevaluate(
         &app("myapp"),
         &BTreeMap::from([("mode".to_owned(), "broken".to_owned())]),
         &crate::ScriptLimits::default(),
@@ -733,7 +733,7 @@ fn reload_of_unknown_app_is_noop() {
     // No panic, no registration — and not reported as applied, since a caller
     // gating destructive work on `is_applied` must not be told the registry
     // holds a definition it never stored.
-    let outcome = reg.reload(
+    let outcome = reg.reevaluate(
         &app("ghost"),
         &BTreeMap::new(),
         &crate::ScriptLimits::default(),

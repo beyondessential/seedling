@@ -13,16 +13,16 @@ use crate::{
     oi::{handler::RequestCtx, state::OiState},
     runtime::{
         AppPhase,
-        apps::{AppEntry, AppRegistry, AppStatus},
-        barrier::oracle::{derive_lifecycle_state, derive_state_with_transition_time},
+        apps::{AppRegistry, AppStatus, status as app_status},
+        barrier::oracle::derive_state_with_transition_time,
         definition::{Bundle, Source, version},
         desired::list_dynamic_resources_for_app,
         faults,
         history::{find_instances_for_group, query_observations},
         identity::{InstanceId, InstanceVariant, ResourceInstance},
-        lifecycle::LifecycleState,
         priority::{self, AppPriority},
         restart_gens, restarts, scaling,
+        scheduler::AppBlocker,
         stopped::{self, kind_str, parse_kind},
         transition_phase,
     },
@@ -127,6 +127,22 @@ pub(crate) struct ResourceStopParams {
     pub app: AppName,
     pub kind: String,
     pub name: String,
+}
+
+/// The refusal of a request to `doing` an app that `blocker` holds, naming the
+/// holder and what the operator can do about it.
+// i[impl wire.error-codes]
+pub(crate) fn app_blocked(app: &str, doing: &str, blocker: &AppBlocker) -> OiError {
+    let advice = match blocker {
+        AppBlocker::Active(_) => "cancel it first via /apps/action/cancel",
+        // Only the active operation can be cancelled.
+        AppBlocker::Queued(_) => "wait for it to finish",
+        AppBlocker::Change => "try again once it is applied",
+    };
+    OiError::new(
+        ErrorCode::OperationInProgress,
+        format!("cannot {doing} {app} while {blocker}; {advice}"),
+    )
 }
 
 /// Extract the fields needed to persist an app entry without holding `&AppEntry`.
@@ -458,11 +474,9 @@ pub(crate) fn serialize_param_schema(
 // i[app.list]
 // i[impl resource.stop.status]
 pub(crate) fn list_apps(state: &OiState) -> HandlerResult {
-    let reg = state.registry.read();
-    let apps = reg.list();
     // i[impl app.priority.describe]
-    // One read for every app's standing, rather than a round trip per app on
-    // top of the per-app fault count this endpoint already pays. A failed read
+    // One read for every app's priority, rather than a round trip per app. A
+    // failed read
     // is surfaced rather than defaulted: reporting every app as `normal` is
     // indistinguishable from nobody having set one, and would tell an operator
     // asking why their `high` app is being shed exactly the wrong thing.
@@ -475,40 +489,28 @@ pub(crate) fn list_apps(state: &OiState) -> HandlerResult {
                 format!("could not read app priorities: {e}"),
             )
         })?;
-    let result: Vec<Value> = apps
+    // l[impl app.description]
+    let standings = app_status::standings(&state.registry, &state.scheduler, &state.db, |entry| {
+        entry.app.def.load().description.clone()
+    })
+    .map_err(|e| {
+        OiError::new(
+            ErrorCode::Internal,
+            format!("could not read the apps' standing: {e}"),
+        )
+    })?;
+    let result: Vec<Value> = standings
         .into_iter()
-        .map(|(name, base_status)| {
-            let status = match reg.get(name.as_str()) {
-                Some(entry) => effective_app_status(base_status, entry, &state.db),
-                None => base_status,
-            };
-            let has_stopped = {
-                let name_clone = name.clone();
-                state.db.call(move |db| {
-                    stopped::load_stopped(db, &name_clone)
-                        .map(|s| !s.is_empty())
-                        .unwrap_or(false)
-                })
-            };
-            let fault_count = {
-                let name_clone = name.clone();
-                state.db.call(move |db| {
-                    faults::count_active_faults_for_app(db, &name_clone).unwrap_or(0)
-                })
-            };
-            // l[impl app.description]
-            let description = reg
-                .get(name.as_str())
-                .and_then(|entry| entry.app.def.load().description.clone());
+        .map(|(name, standing, description)| {
             let mut obj = json!({
                 "name": name,
-                "status": status.name(),
-                "has_stopped_resources": has_stopped,
-                "fault_count": fault_count,
+                "status": standing.status.name(),
+                "has_stopped_resources": standing.has_stopped,
+                "fault_count": standing.fault_count,
                 "priority": priorities.get(&name).copied().unwrap_or_default().as_str(),
                 "description": description,
             });
-            if let AppStatus::Operating { action_name } = &status {
+            if let AppStatus::Operating { action_name } = &standing.status {
                 obj["action_name"] = json!(action_name);
             }
             obj
@@ -517,81 +519,18 @@ pub(crate) fn list_apps(state: &OiState) -> HandlerResult {
     Ok(json!(result))
 }
 
-/// Refines a base `AppStatus::Running` into `Running` or `Degraded` by
-/// checking whether all resource instances have reached `Ready`.  All other
-/// statuses are returned unchanged.
-// i[impl app.status.priority]
-pub(crate) fn effective_app_status(
-    base: AppStatus,
-    entry: &AppEntry,
-    db: &crate::runtime::db::DbHandle,
-) -> AppStatus {
-    if !matches!(base, AppStatus::Running) {
-        return base;
-    }
-
-    let app_name = entry.name.clone();
-
-    // Collect resource IDs with a brief def lock, then release before touching db.
-    let resource_ids: Vec<(ResourceKind, Arc<String>)> = {
-        let def = entry.app.def.load();
-        def.resources
-            .keys()
-            .map(|id| (id.kind, Arc::clone(&id.name)))
-            .collect()
-    };
-
-    db.call(move |db| {
-        let has_faults = faults::has_active_faults(db, &app_name).unwrap_or(false);
-
-        let all_ready = resource_ids.iter().all(|(kind, name)| {
-            let instances = find_instances_for_group(db, &app_name, *kind, Some(name.as_str()))
-                .unwrap_or_default();
-            if instances.is_empty() {
-                return false;
-            }
-            let mut has_ready = false;
-            for inst in &instances {
-                let obs = query_observations(db, inst).unwrap_or_default();
-                let state = derive_lifecycle_state(inst, &obs);
-                if state == LifecycleState::Ready {
-                    has_ready = true;
-                } else if matches!(
-                    state,
-                    LifecycleState::Unscheduled
-                        | LifecycleState::Terminating
-                        | LifecycleState::Terminated
-                ) {
-                    // Instances being torn down must not drag the app to Degraded.
-                } else {
-                    return false;
-                }
-            }
-            has_ready
-        });
-
-        if has_faults {
-            AppStatus::Faulted
-        } else if all_ready {
-            AppStatus::Running
-        } else {
-            AppStatus::Degraded
-        }
-    })
-}
-
 // i[app.describe]
 pub(crate) fn describe_app(state: &OiState, params: AppParams) -> HandlerResult {
     let name = params.app.as_str();
 
+    let active = app_status::active_operation(&state.scheduler);
     let reg = state.registry.read();
     let entry = reg
         .get(name)
         .ok_or_else(|| OiError::not_found(format!("app not found: {name}")))?;
     let generation = entry.current_generation;
 
-    let base_status = reg.status_of(name).unwrap();
-    let status = effective_app_status(base_status, entry, &state.db);
+    let status = app_status::of(entry, active.as_ref(), &state.db);
 
     // Load stored param values from DB (both plaintext and secret tables).
     // Names come from AppDef; values come from the params/secret_params tables.
@@ -942,34 +881,23 @@ pub(crate) fn describe_app(state: &OiState, params: AppParams) -> HandlerResult 
 
     // i[impl action.describe.barrier]
     // Surface the in-flight operation (action name, generation transition,
-    // currently-blocking barrier) for any status that has a scheduled action
-    // attached — install and uninstall are tracked as their own statuses but
-    // both run an action closure with the same observable surface.
-    if matches!(
-        &status,
-        AppStatus::Operating { .. } | AppStatus::Installing | AppStatus::Uninstalling
-    ) {
-        let (action_name, source_generation, target_generation, op_id) = state
-            .scheduler
-            .lock()
-            .active()
-            .filter(|a| a.app == name)
-            .map(|a| {
-                (
-                    a.action.clone(),
-                    a.source_generation,
-                    a.target_generation,
-                    Some(a.operation_id.clone()),
-                )
-            })
-            .unwrap_or_else(|| (ActionName::default(), 0, 0, None));
-
+    // currently-blocking barrier) when the app is Operating or Installing,
+    // from the same scheduler snapshot the status was derived from. An
+    // install runs an action closure and is reported like any other
+    // operation. An uninstall is driven by the reconciler and has no
+    // operation to report.
+    let reported_operation = active.as_ref().filter(|a| {
+        a.app == params.app
+            && matches!(&status, AppStatus::Operating { .. } | AppStatus::Installing)
+    });
+    if let Some(op) = reported_operation {
+        let op_id = &op.operation_id;
         // i[impl action.describe.barrier]
         // Surface the currently-blocking barrier (if any) so operators can
         // see elapsed time / deadline without tailing logs. Between replay
         // passes the unsatisfied barrier record sits in the action log
         // alongside its started_at_secs timestamp.
-        let barrier_json = if let Some(op_id) = op_id {
+        let barrier_json = {
             let op_id_for_load = op_id.clone();
             let entries = state.db.call(move |db| {
                 crate::runtime::history::load_action_log(db, &op_id_for_load).unwrap_or_default()
@@ -1003,15 +931,13 @@ pub(crate) fn describe_app(state: &OiState, params: AppParams) -> HandlerResult 
                     })
                 })
                 .unwrap_or(Value::Null)
-        } else {
-            Value::Null
         };
 
         desc["current_operation"] = json!({
-            "action_name": action_name,
+            "action_name": op.action,
             "barrier": barrier_json,
-            "source_generation": source_generation,
-            "target_generation": target_generation,
+            "source_generation": op.source_generation,
+            "target_generation": op.target_generation,
         });
     }
 
@@ -1480,11 +1406,8 @@ pub(crate) fn deregister_app(
     }
 
     // Reject if an operation is active or queued for this app.
-    if state.scheduler.lock().has_operation_for(&params.app) {
-        return Err(OiError::new(
-            ErrorCode::OperationInProgress,
-            format!("operation in progress for app: {name}"),
-        ));
+    if let Some(blocker) = state.scheduler.lock().blocker_for(&params.app) {
+        return Err(app_blocked(name, "remove", &blocker));
     }
 
     // Reject if the app is not in the NotInstalled phase. The message
@@ -1628,25 +1551,10 @@ pub(crate) fn uninstall_app(state: &OiState, params: AppParams) -> HandlerResult
     // lock, so the cleanup that follows, which admission never looks at, is
     // left outside it.
     let scheduled = state.scheduler.lock();
-    if scheduled.has_operation_for(&params.app) {
-        // Name whichever operation holds the app. An operator told only that
-        // "an action is queued" cannot tell what to cancel, which is the whole
-        // point of naming it.
-        let holder = scheduled
-            .active()
-            .filter(|a| a.app == params.app)
-            .map(|a| format!("'{}' is in progress", a.action))
-            .or_else(|| {
-                scheduled
-                    .queue_iter()
-                    .find(|q| q.app == params.app)
-                    .map(|q| format!("'{}' is queued", q.action))
-            })
-            .unwrap_or_else(|| "an action is queued".to_owned());
-        return Err(OiError::new(
-            ErrorCode::OperationInProgress,
-            format!("cannot uninstall {name} while {holder}; cancel it first, then uninstall"),
-        ));
+    if let Some(blocker) = scheduled.blocker_for(&params.app) {
+        // Named, because an operator told only that "an action is queued"
+        // cannot tell what to cancel.
+        return Err(app_blocked(name, "uninstall", &blocker));
     }
     // The phase was read and released before this lock, so a second uninstall
     // can have arrived in between. Both would otherwise transition, delete the
@@ -1739,13 +1647,9 @@ pub(crate) fn update_app(state: &OiState, params: UpdateParams, ctx: &RequestCtx
         }
     }
 
-    // Reject if an operation is active or queued for this app.
-    if state.scheduler.lock().has_operation_for(&params.app) {
-        return Err(OiError::new(
-            ErrorCode::OperationInProgress,
-            format!("operation in progress for app: {name}"),
-        ));
-    }
+    // Reject if an operation is active or queued for this app, and hold it
+    // until the handler for a changed param is admitted.
+    let hold = super::params::hold_for_change(state, &params.app)?;
 
     // i[impl app.update] — everything up to the commit below is a check:
     // fetching, bundle rules, evaluation and validation all happen before
@@ -1986,7 +1890,7 @@ pub(crate) fn update_app(state: &OiState, params: UpdateParams, ctx: &RequestCtx
     // schedules nothing.
     let schedule = match &change {
         Some((pname, _, _)) => {
-            super::params::schedule_on_change(state, &params.app, pname, generation)?
+            super::params::schedule_on_change(state, hold, &params.app, pname, generation)?
         }
         None => "not_scheduled",
     };
@@ -2270,13 +2174,8 @@ pub(crate) fn stop_resource(
     // action whose resource is about to vanish has no sensible continuation.
     // Operators cancel the active op first (via /apps/action/cancel), then
     // stop resources.
-    if state.scheduler.lock().has_operation_for(&params.app) {
-        return Err(OiError::new(
-            ErrorCode::OperationInProgress,
-            format!(
-                "operation in progress for app: {app}; cancel it first via /apps/action/cancel"
-            ),
-        ));
+    if let Some(blocker) = state.scheduler.lock().blocker_for(&params.app) {
+        return Err(app_blocked(app, "stop a resource of", &blocker));
     }
 
     let reg = state.registry.read();
@@ -2338,13 +2237,8 @@ pub(crate) fn unstop_resource(
     }
 
     // i[impl resource.stop.no-active-op]
-    if state.scheduler.lock().has_operation_for(&params.app) {
-        return Err(OiError::new(
-            ErrorCode::OperationInProgress,
-            format!(
-                "operation in progress for app: {app}; cancel it first via /apps/action/cancel"
-            ),
-        ));
+    if let Some(blocker) = state.scheduler.lock().blocker_for(&params.app) {
+        return Err(app_blocked(app, "start a resource of", &blocker));
     }
 
     let app_owned = params.app.clone();
@@ -2383,13 +2277,8 @@ pub(crate) fn unstop_all_resources(
     }
 
     // i[impl resource.stop.no-active-op]
-    if state.scheduler.lock().has_operation_for(&params.app) {
-        return Err(OiError::new(
-            ErrorCode::OperationInProgress,
-            format!(
-                "operation in progress for app: {app}; cancel it first via /apps/action/cancel"
-            ),
-        ));
+    if let Some(blocker) = state.scheduler.lock().blocker_for(&params.app) {
+        return Err(app_blocked(app, "start the resources of", &blocker));
     }
 
     let app_owned = params.app.clone();

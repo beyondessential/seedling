@@ -164,12 +164,14 @@ disagrees.
 
 ### 5. Check the status computation
 
-App status is computed in `src/oi/handler/apps.rs` (`effective_app_status`).
-It refines `Running` into `Running` or `Degraded` by checking whether all
-resource instances are `Ready`. Cross-reference what this function sees
-(all instances from `find_instances_for_group`) against what the reconciler
-considers active (the `keep` set from `ensure_scaled_group`). Mismatches
-here are a common source of false `Degraded`.
+App status is computed in `src/runtime/apps/status.rs`. For an installed app
+with no operation running, `steady` reports `Faulted`, `Degraded` or `Running`
+by checking each resource's instances against its desired state: `Ready`, or
+`Unscheduled` for a stopped resource or a deployment scaled to zero, while a
+Job is also at its desired state after a successful run. Cross-reference what
+it sees (all instances from `find_instances_for_group`) against what the
+reconciler considers active (the `keep` set from `ensure_scaled_group`).
+Mismatches here are a common source of false `Degraded`.
 
 ### 6. Check for stuck operations
 

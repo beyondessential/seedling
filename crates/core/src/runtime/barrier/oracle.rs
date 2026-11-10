@@ -212,50 +212,7 @@ impl WorldStateOracle for DbWorldOracle {
             ResourceKind::Deployment | ResourceKind::Job => self.db.call(move |db| {
                 let observations =
                     crate::runtime::history::query_observations(db, &resource_clone).ok()?;
-                // Find the terminal marker for the current run: the most
-                // recent container_exited or container_removed. Anything
-                // after the most recent container_running is what we care
-                // about — an earlier failed run followed by a successful
-                // retry must report success.
-                let last_run_start = observations
-                    .iter()
-                    .rposition(|obs| obs.obs_kind == "container_running")
-                    .unwrap_or(0);
-                let tail = &observations[last_run_start..];
-
-                // Primary signal: if we captured container_exited with a
-                // known exit code, trust it.
-                if let Some(exit) = tail.iter().rev().find(|o| o.obs_kind == "container_exited") {
-                    let code = exit
-                        .payload
-                        .get("exit_code")
-                        .and_then(|v| v.as_i64())
-                        .unwrap_or(-1);
-                    if code >= 0 {
-                        return Some(code == 0);
-                    }
-                    // exit_code = -1 means podman couldn't tell us. Fall
-                    // through to the unit-level signal.
-                }
-
-                // Secondary signal: if systemd observed the unit as failed,
-                // the container process crashed/OOMed/got signalled, even
-                // if --rm cleaned it up before we could inspect.
-                if tail.iter().any(|o| o.obs_kind == "unit_failed") {
-                    return Some(false);
-                }
-
-                // Fallback: the container was observed gone (container_removed)
-                // and we have no explicit failure signal. This is the
-                // common --rm-auto-removed case for jobs that exit 0 too
-                // quickly to inspect. Treat as success.
-                let terminal_seen = tail.iter().any(|o| {
-                    matches!(
-                        o.obs_kind.as_str(),
-                        "container_exited" | "container_removed"
-                    )
-                });
-                if terminal_seen { Some(true) } else { None }
+                container_run_succeeded(&observations)
             }),
             ResourceKind::Service
             | ResourceKind::Ingress
@@ -330,6 +287,72 @@ fn drive_observations(
 // ---------------------------------------------------------------------------
 // Lifecycle derivation — public API
 // ---------------------------------------------------------------------------
+
+/// How a container's latest run ended: `Some(true)` when it succeeded,
+/// `Some(false)` when it failed, and `None` while it has not ended.
+// l[impl rt.termination.ensure-success]
+pub fn container_run_succeeded(observations: &[WorldObservation]) -> Option<bool> {
+    // Find the terminal marker for the current run: the most
+    // recent container_exited or container_removed. Anything
+    // after the most recent container_running is what we care
+    // about — an earlier failed run followed by a successful
+    // retry must report success.
+    let last_run_start = observations
+        .iter()
+        .rposition(|obs| obs.obs_kind == "container_running")
+        .unwrap_or(0);
+    let tail = &observations[last_run_start..];
+
+    // Primary signal: if we captured container_exited with a
+    // known exit code, trust it.
+    if let Some(exit) = tail.iter().rev().find(|o| o.obs_kind == "container_exited") {
+        let code = exit
+            .payload
+            .get("exit_code")
+            .and_then(|v| v.as_i64())
+            .unwrap_or(-1);
+        if code >= 0 {
+            return Some(code == 0);
+        }
+        // exit_code = -1 means podman couldn't tell us. Fall
+        // through to the unit-level signal.
+    }
+
+    // Secondary signal: if systemd observed the unit as failed,
+    // the container process crashed/OOMed/got signalled, even
+    // if --rm cleaned it up before we could inspect.
+    if tail.iter().any(|o| o.obs_kind == "unit_failed") {
+        return Some(false);
+    }
+
+    // Fallback: the container was observed gone (container_removed)
+    // and we have no explicit failure signal. This is the
+    // common --rm-auto-removed case for jobs that exit 0 too
+    // quickly to inspect. Treat as success.
+    let terminal_seen = tail.iter().any(|o| {
+        matches!(
+            o.obs_kind.as_str(),
+            "container_exited" | "container_removed"
+        )
+    });
+    if terminal_seen { Some(true) } else { None }
+}
+
+/// Whether instances of `kind` have a lifecycle state derived from what is
+/// observed of them. Every other kind reads as `Pending` forever.
+pub fn has_lifecycle(kind: ResourceKind) -> bool {
+    match kind {
+        ResourceKind::Deployment
+        | ResourceKind::Job
+        | ResourceKind::Service
+        | ResourceKind::Ingress
+        | ResourceKind::Volume
+        | ResourceKind::ExternalVolume => true,
+        // An external service is provided from outside the runtime, which
+        // never observes it.
+        ResourceKind::ExternalService | ResourceKind::Parameter | ResourceKind::Action => false,
+    }
+}
 
 // r[impl lifecycle.derivation]
 /// Derive the current lifecycle state for a resource from its observation history.

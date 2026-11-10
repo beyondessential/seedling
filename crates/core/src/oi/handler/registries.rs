@@ -85,7 +85,7 @@ pub(crate) fn remove_registry(state: &OiState, params: RegistryParams) -> Handle
 fn re_evaluate_all_apps(state: &OiState) {
     let app_names: Vec<AppName> = {
         let reg = state.registry.read();
-        reg.list().into_iter().map(|(name, _)| name).collect()
+        reg.names()
     };
     for name in &app_names {
         let name_clone = name.clone();
@@ -95,10 +95,14 @@ fn re_evaluate_all_apps(state: &OiState) {
             .call(move |db| apps::load_all_params_for_app(db, &cipher, &name_clone));
         // Re-evaluating each app's existing script after an allowlist change:
         // nothing downstream diffs the definition, so either outcome is fine.
-        let _ = state
-            .registry
-            .write()
-            .reload(name, &loaded_params, &state.script_limits);
+        let _ = crate::runtime::apps::reload(
+            &state.registry,
+            &state.db,
+            &state.cipher,
+            name,
+            &loaded_params,
+            &state.script_limits,
+        );
         {
             let reg = state.registry.read();
             if let Some(entry) = reg.get(name.as_str()) {

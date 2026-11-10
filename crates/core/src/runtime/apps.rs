@@ -12,10 +12,11 @@ use tokio::sync::Notify;
 use crate::{
     defs::app::App,
     runtime::{
-        db::Db,
+        db::{Db, DbHandle},
         definition::{Bundle, Source},
         desired::OperationProgress,
         generations,
+        secrets::Cipher,
     },
     setup_language,
 };
@@ -23,6 +24,7 @@ use crate::{
 mod params;
 mod registry_faults;
 pub mod secret_params;
+pub mod status;
 
 pub use params::{delete_app_params, delete_one_param, sync_script_error_fault, upsert_param};
 pub use registry_faults::sync_registry_faults;
@@ -224,8 +226,11 @@ impl AppRegistry {
     /// holds a definition derived from these params. Anything that diffs the
     /// registry against previous state — volume holds, scaling bounds,
     /// forwards, schedules — is only meaningful on [`ReloadOutcome::Applied`].
+    ///
+    /// Reached only through [`reload`], which follows an applied definition
+    /// with the secret migration it calls for.
     #[must_use = "a KeptPrevious reload must not be followed by state derived from the new values"]
-    pub fn reload(
+    fn reevaluate(
         &mut self,
         name: &AppName,
         params: &BTreeMap<String, String>,
@@ -297,25 +302,18 @@ impl AppRegistry {
         self.entries.get_mut(name)
     }
 
+    /// Every registered app's name, sorted.
     // i[app.list]
-    pub fn list(&self) -> Vec<(AppName, AppStatus)> {
-        let mut result: Vec<_> = self
-            .entries
-            .values()
-            .map(|e| (e.name.clone(), derive_status(e)))
-            .collect();
-        result.sort_by(|a, b| a.0.cmp(&b.0));
-        result
-    }
-
-    pub fn status_of(&self, name: &str) -> Option<AppStatus> {
-        self.entries.get(name).map(derive_status)
+    pub fn names(&self) -> Vec<AppName> {
+        let mut names: Vec<_> = self.entries.values().map(|e| e.name.clone()).collect();
+        names.sort();
+        names
     }
 
     // i[app.persist]
     pub fn load_from_db(
         db: &Db,
-        cipher: &crate::runtime::secrets::Cipher,
+        cipher: &Cipher,
         tick_notify: Arc<Notify>,
         limits: &crate::ScriptLimits,
     ) -> rusqlite::Result<Self> {
@@ -442,31 +440,6 @@ pub fn definition_at_generation(
     Ok(Some((generations::load_bundle(db, &hash)?, source)))
 }
 
-// i[impl app.status.priority]
-// Resolves the four highest-priority states: Uninstalling (= Deregistering),
-// Installing, Operating, NotInstalled. A Running result here is refined into
-// Running/Faulted/Degraded by `effective_app_status` — matching the spec's
-// priority order (Deregistering > Installing > Operating > NotInstalled >
-// Faulted > Degraded > Running).
-fn derive_status(entry: &AppEntry) -> AppStatus {
-    let phase = entry.phase.lock();
-    match *phase {
-        AppPhase::NotInstalled => AppStatus::NotInstalled,
-        // i[impl app.status]
-        AppPhase::Installing => AppStatus::Installing,
-        AppPhase::Uninstalling => AppStatus::Uninstalling,
-        AppPhase::Installed => {
-            if entry.active_progress.read().is_some() {
-                AppStatus::Operating {
-                    action_name: ActionName::default(),
-                }
-            } else {
-                AppStatus::Running
-            }
-        }
-    }
-}
-
 /// Encode a phase as the `(installed, uninstalling, installing)` triple stored
 /// in `registered_apps`. Exactly one of the three is ever set, except that
 /// `Uninstalling` sets `installed` alongside `uninstalling` so that a halted
@@ -533,7 +506,7 @@ pub fn transition_phase(
 /// Used before script evaluation, when schema isn't known yet.
 pub fn load_all_params_for_app(
     db: &Db,
-    cipher: &crate::runtime::secrets::Cipher,
+    cipher: &Cipher,
     app_name: &AppName,
 ) -> BTreeMap<String, String> {
     let mut merged = params::load_params_for_app(db, app_name).unwrap_or_default();
@@ -553,7 +526,7 @@ pub fn load_all_params_for_app(
 // r[impl secret.storage]
 pub fn store_param_value(
     db: &Db,
-    cipher: &crate::runtime::secrets::Cipher,
+    cipher: &Cipher,
     app: &AppName,
     name: &ParamName,
     value: Option<&str>,
@@ -576,13 +549,35 @@ pub fn store_param_value(
     }
 }
 
+/// Re-evaluate `name`'s current definition with `params`, and move the stored
+/// value of any param the definition now declares secret into secret storage.
+///
+/// Migration follows only a definition that was applied: a reload that keeps
+/// the previous one changes no param's `secret` flag.
 // r[impl secret.migration]
-pub(crate) fn migrate_newly_secret_params(
-    db: &Db,
-    cipher: &crate::runtime::secrets::Cipher,
-    app_name: &AppName,
-    app: &App,
-) {
+#[must_use = "a KeptPrevious reload must not be followed by state derived from the new values"]
+pub fn reload(
+    registry: &RwLock<AppRegistry>,
+    db: &DbHandle,
+    cipher: &Arc<Cipher>,
+    name: &AppName,
+    params: &BTreeMap<String, String>,
+    limits: &crate::ScriptLimits,
+) -> ReloadOutcome {
+    let outcome = registry.write().reevaluate(name, params, limits);
+    if outcome.is_applied() {
+        let running = registry.read().get(name.as_str()).map(|e| e.app.clone());
+        if let Some(running) = running {
+            let name = name.clone();
+            let cipher = Arc::clone(cipher);
+            db.call(move |db| migrate_newly_secret_params(db, &cipher, &name, &running));
+        }
+    }
+    outcome
+}
+
+// r[impl secret.migration]
+pub(crate) fn migrate_newly_secret_params(db: &Db, cipher: &Cipher, app_name: &AppName, app: &App) {
     let def = app.def.load();
     for (param_name, param_def) in &def.params {
         if param_def.is_secret()

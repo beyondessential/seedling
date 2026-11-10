@@ -2,7 +2,11 @@ use std::{collections::HashMap, sync::Arc};
 
 use serde_json::json;
 
-use crate::{oi::state::OiState, runtime::faults, system::types::ContainerStatus};
+use crate::{
+    oi::state::OiState,
+    runtime::{apps::status as app_status, faults},
+    system::types::ContainerStatus,
+};
 
 use super::HandlerResult;
 
@@ -43,8 +47,7 @@ pub(crate) fn get_status(state: &OiState) -> HandlerResult {
     let hostname = whoami::devicename()
         .or_else(|_| whoami::hostname())
         .unwrap_or_else(|_| "unknown".into());
-    let reg = state.registry.read();
-    let apps = reg.list();
+    let apps = app_status::all(&state.registry, &state.scheduler, &state.db);
     let apps_total = apps.len();
     let mut apps_by_status: HashMap<&'static str, usize> = HashMap::new();
     for (_, status) in &apps {

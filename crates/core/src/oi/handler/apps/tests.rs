@@ -583,6 +583,30 @@ fn unstop_all_clears_every_stopped_resource() {
     assert_eq!(code, "not_found");
 }
 
+// i[verify resource.stop.no-active-op]
+// A change being committed holds the app with no operation behind it, and the
+// refusal told the operator to cancel an operation that did not exist.
+#[test]
+fn a_stop_during_a_change_names_the_change_rather_than_an_operation() {
+    let oi = TestOi::with_app("demo");
+    let demo = seedling_protocol::names::AppName::new("demo").expect("app name");
+    let _hold = crate::runtime::scheduler::AppHold::take(&oi.state.scheduler, &demo)
+        .expect("a free app can be held");
+
+    let (code, message) = oi
+        .call(
+            "/apps/resource/stop",
+            json!({ "app": "demo", "kind": "deployment", "name": "web" }),
+        )
+        .unwrap_err();
+    assert_eq!(code, "operation_in_progress");
+    assert!(
+        message.contains("a change to it is being applied"),
+        "{message}"
+    );
+    assert!(!message.contains("/apps/action/cancel"), "{message}");
+}
+
 /// An app whose definition carries every kind of state `/apps/update` derives
 /// by diffing the registry: a named volume, a scaled deployment, and a
 /// scheduled action.
@@ -1046,4 +1070,179 @@ fn deregistering_discards_the_external_mappings_made_for_the_app() {
         .call("/services/external/list", json!({ "app": "demo" }))
         .unwrap();
     assert!(services.as_array().unwrap().is_empty(), "{services}");
+}
+
+/// Admit `action` for the installed app `app`, as the scheduler would for an
+/// operator invocation.
+fn admit(oi: &TestOi, app: &str, action: &str) {
+    use seedling_protocol::names::{ActionName, AppName};
+
+    oi.state.scheduler.lock().admit(
+        &AppName::new(app).expect("app name"),
+        &ActionName::new(action).expect("action name"),
+        serde_json::Map::new(),
+        1,
+        1,
+        "test",
+        &parking_lot::Mutex::new(crate::runtime::apps::AppPhase::Installed),
+    );
+}
+
+// i[verify app.status] i[verify app.list] i[verify app.describe]
+// The list reported an operating app's action as "", a placeholder the
+// status was built with because only the scheduler knows the action.
+#[test]
+fn an_operating_app_is_reported_with_the_action_it_runs() {
+    let oi = TestOi::with_app("demo");
+    oi.install("demo");
+    admit(&oi, "demo", "backup");
+
+    let list = oi.call("/apps/list", json!({})).unwrap();
+    assert_eq!(list[0]["status"], "operating");
+    assert_eq!(list[0]["action_name"], "backup");
+
+    let desc = oi.call("/apps/show", json!({ "app": "demo" })).unwrap();
+    assert_eq!(desc["status"], "operating");
+    assert_eq!(desc["current_operation"]["action_name"], "backup");
+}
+
+// i[verify app.describe]
+// An uninstall is reconciler-driven and has no operation, and an operation
+// running for another app is not this one's.
+#[test]
+fn no_operation_is_reported_for_an_app_the_scheduler_is_not_running() {
+    let oi = TestOi::with_app("demo");
+    oi.call(
+        "/apps/create",
+        json!({ "app": "other", "script": MINIMAL_SCRIPT }),
+    )
+    .unwrap();
+    oi.install("demo");
+    oi.install("other");
+    admit(&oi, "other", "backup");
+
+    let desc = oi.call("/apps/show", json!({ "app": "demo" })).unwrap();
+    assert_ne!(desc["status"], "operating");
+    assert!(desc.get("current_operation").is_none(), "{desc}");
+
+    oi.state.scheduler.lock().complete_current();
+    oi.call("/apps/uninstall", json!({ "app": "demo" }))
+        .unwrap();
+    let desc = oi.call("/apps/show", json!({ "app": "demo" })).unwrap();
+    assert_eq!(desc["status"], "uninstalling");
+    assert!(desc.get("current_operation").is_none(), "{desc}");
+}
+
+// i[verify status.get]
+// The summary counted apps by a status that stops short of the health
+// rollup, so an installed app whose deployment is not running was counted
+// as running.
+#[test]
+fn the_server_summary_counts_apps_by_their_reported_status() {
+    let oi = TestOi::with_app("demo");
+    oi.install("demo");
+
+    let desc = oi.call("/apps/show", json!({ "app": "demo" })).unwrap();
+    let status = desc["status"].as_str().unwrap().to_owned();
+    assert_eq!(status, "degraded", "nothing runs the deployment here");
+
+    let summary = oi.call("/server/status", json!({})).unwrap();
+    assert_eq!(summary["apps_by_status"][&status], 1, "{summary}");
+}
+
+// i[verify app.status] i[verify resource.stop]
+// The rollup wanted a Ready instance of every resource, so stopping one, as
+// asked, left the app degraded until it was unstopped.
+#[test]
+fn a_stopped_resource_does_not_degrade_the_app() {
+    let oi = TestOi::with_app("demo");
+    oi.install("demo");
+    let status =
+        |oi: &TestOi| oi.call("/apps/show", json!({ "app": "demo" })).unwrap()["status"].clone();
+    assert_eq!(status(&oi), "degraded", "nothing runs the deployment here");
+
+    oi.call(
+        "/apps/resource/stop",
+        json!({ "app": "demo", "kind": "deployment", "name": "web" }),
+    )
+    .unwrap();
+    assert_eq!(status(&oi), "running");
+}
+
+// i[verify app.status]
+// A deployment scaled to zero wants nothing Ready, and an external service is
+// never observed, so neither can hold the app back from running.
+#[test]
+fn resources_meant_to_have_nothing_ready_do_not_degrade_the_app() {
+    let oi = TestOi::new();
+    oi.call(
+        "/apps/create",
+        json!({
+            "app": "demo",
+            "script": r#"
+                app.deployment("web")
+                    .image("docker.io/library/nginx:1.29")
+                    .scale(0..4);
+                app.external_service("api");
+            "#,
+        }),
+    )
+    .unwrap();
+    oi.install("demo");
+
+    let desc = oi.call("/apps/show", json!({ "app": "demo" })).unwrap();
+    assert_eq!(desc["status"], "running", "{desc}");
+}
+
+// i[verify app.status]
+// A Job runs once and is not restarted, so after a successful run it rests
+// terminated or removed. The rollup wanted it Ready, and an app with one read
+// as degraded whenever its job was not running.
+#[test]
+fn a_static_job_is_judged_by_how_its_run_ended() {
+    use crate::{
+        defs::resource::ResourceKind,
+        runtime::{history::insert_observation, identity::ResourceInstance},
+    };
+
+    let run = |exit_code: i32| {
+        let oi = TestOi::new();
+        oi.call(
+            "/apps/create",
+            json!({
+                "app": "demo",
+                "script": r#"
+                    app.job("migrate")
+                        .image("docker.io/library/busybox:1.37")
+                        .command("true");
+                "#,
+            }),
+        )
+        .unwrap();
+        oi.install("demo");
+        let status = |oi: &TestOi| {
+            oi.call("/apps/show", json!({ "app": "demo" })).unwrap()["status"].clone()
+        };
+        assert_eq!(status(&oi), "degraded", "the job has not run");
+
+        let job = ResourceInstance::new_singleton(
+            seedling_protocol::names::AppName::new_unchecked("demo"),
+            ResourceKind::Job,
+            "migrate",
+        );
+        oi.state.db.call(move |db| {
+            for (kind, payload) in [
+                ("container_created", json!({})),
+                ("container_running", json!({ "pid": 1 })),
+                ("container_exited", json!({ "exit_code": exit_code })),
+                ("container_removed", json!({})),
+            ] {
+                insert_observation(db, &job, kind, &payload).unwrap();
+            }
+        });
+        status(&oi)
+    };
+
+    assert_eq!(run(0), "running");
+    assert_eq!(run(1), "degraded");
 }
