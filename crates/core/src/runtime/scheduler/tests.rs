@@ -676,3 +676,104 @@ fn mixed_ops_only_matching_ones_contribute_to_backoff() {
     let result = should_back_off(web, "start_container", &ops, now_from_ms(now_ms));
     assert_eq!(result, Some(Duration::from_secs(4)));
 }
+
+// -----------------------------------------------------------------------
+// AppHold
+// -----------------------------------------------------------------------
+
+fn shared() -> Arc<Mutex<Scheduler>> {
+    Arc::new(Mutex::new(Scheduler::new()))
+}
+
+fn fire(s: &Arc<Mutex<Scheduler>>, name: &str) -> ScheduleResult {
+    s.lock().admit(
+        &app(name),
+        &act("nightly"),
+        serde_json::Map::new(),
+        1,
+        1,
+        "schedule",
+        &phase(AppPhase::Installed),
+    )
+}
+
+// r[verify operation.lifecycle.param-change]
+// A param change checked that the app was free, committed, and then admitted
+// its handler. A scheduled firing admitted in between had the handler
+// refused after the value was already stored.
+#[test]
+fn a_held_app_admits_nothing_until_its_handler_takes_the_hold_s_place() {
+    let s = shared();
+    let hold = AppHold::take(&s, &app("app1")).expect("a free app can be held");
+    assert!(s.lock().has_operation_for(&app("app1")));
+    assert_eq!(
+        fire(&s, "app1"),
+        ScheduleResult::Rejected(RejectReason::SameAppOperationInProgress)
+    );
+    assert_eq!(
+        fire(&s, "app2"),
+        ScheduleResult::Accepted,
+        "other apps are not held"
+    );
+    s.lock().complete_current();
+
+    let (result, op) = hold.admit(
+        &act("apikey"),
+        1,
+        2,
+        "param_change",
+        &phase(AppPhase::Installed),
+    );
+    assert_eq!(result, ScheduleResult::Accepted);
+    assert_eq!(op, s.lock().active().map(|a| a.operation_id.clone()));
+    assert_eq!(s.lock().active().unwrap().action, act("apikey"));
+}
+
+// r[verify operation.lifecycle.param-change]
+#[test]
+fn an_app_with_an_operation_or_a_hold_cannot_be_held() {
+    let s = shared();
+    assert_eq!(fire(&s, "app1"), ScheduleResult::Accepted);
+    assert!(AppHold::take(&s, &app("app1")).is_none());
+    s.lock().complete_current();
+
+    let _hold = AppHold::take(&s, &app("app1")).expect("free again");
+    assert!(
+        AppHold::take(&s, &app("app1")).is_none(),
+        "one change at a time"
+    );
+}
+
+// r[verify operation.lifecycle.param-change]
+#[test]
+fn a_dropped_hold_frees_the_app() {
+    let s = shared();
+    drop(AppHold::take(&s, &app("app1")).expect("a free app can be held"));
+    assert!(!s.lock().has_operation_for(&app("app1")));
+    assert_eq!(fire(&s, "app1"), ScheduleResult::Accepted);
+}
+
+// r[verify operation.lifecycle.param-change]
+#[test]
+fn a_refused_handler_frees_the_app() {
+    let s = shared();
+    let first = AppHold::take(&s, &app("app1")).unwrap();
+    let (result, _) = first.admit(
+        &act("apikey"),
+        1,
+        2,
+        "param_change",
+        &phase(AppPhase::Uninstalling),
+    );
+    assert_eq!(
+        result,
+        ScheduleResult::Rejected(RejectReason::AppUninstalling)
+    );
+
+    let _second = AppHold::take(&s, &app("app1")).expect("free after the refusal");
+    assert_eq!(
+        fire(&s, "app1"),
+        ScheduleResult::Rejected(RejectReason::SameAppOperationInProgress),
+        "the new hold stands"
+    );
+}

@@ -10,7 +10,7 @@ use crate::{
     oi::{handler::RequestCtx, state::OiState},
     runtime::{
         AppPhase, generations,
-        scheduler::{RejectReason, ScheduleResult},
+        scheduler::{AppHold, ScheduleResult},
     },
 };
 
@@ -57,20 +57,23 @@ fn param_is_secret(state: &OiState, app: &AppName, name: &ParamName) -> bool {
 
 // i[impl param.set] i[impl param.unset]
 // r[impl operation.lifecycle.param-change]
-// Params cannot be mutated while an operation is in flight for the app:
-// captured-closure state inside the operation would become inconsistent with
-// the new param value. The scheduler is the primary source of truth; the
-// phase check covers the narrow window between boot (phase = Installing
-// persisted by a prior process) and the replay path re-registering the
-// operation with the in-memory scheduler.
-fn reject_if_op_in_progress(state: &OiState, app: &AppName) -> Result<(), OiError> {
-    use crate::runtime::apps::AppPhase;
-    if state.scheduler.lock().has_operation_for(app) {
+/// Hold `app` for a parameter or definition change, or refuse the change.
+///
+/// Params cannot be mutated while an operation is in flight for the app:
+/// captured-closure state inside the operation would become inconsistent with
+/// the new param value. The scheduler is the primary source of truth, and the
+/// hold keeps it that way until the change's handler is admitted, so nothing
+/// is admitted between this check and that admission. The phase check covers
+/// the narrow window between boot (phase = Installing persisted by a prior
+/// process) and the replay path re-registering the operation with the
+/// in-memory scheduler.
+pub(crate) fn hold_for_change(state: &OiState, app: &AppName) -> Result<AppHold, OiError> {
+    let Some(hold) = AppHold::take(&state.scheduler, app) else {
         return Err(OiError::new(
             ErrorCode::OperationInProgress,
             format!("operation in progress for app: {app}"),
         ));
-    }
+    };
     let reg = state.registry.read();
     if let Some(entry) = reg.get(app.as_str())
         && matches!(*entry.phase.lock(), AppPhase::Installing)
@@ -80,7 +83,7 @@ fn reject_if_op_in_progress(state: &OiState, app: &AppName) -> Result<(), OiErro
             format!("install is in progress for app: {app}"),
         ));
     }
-    Ok(())
+    Ok(hold)
 }
 
 fn reload_and_persist_apperror(
@@ -201,8 +204,11 @@ fn validate_proposed(
     }
 }
 
+/// Admit the `on_change` handler for a committed change in place of the
+/// hold [`hold_for_change`] took before it, or report that none runs.
 pub(crate) fn schedule_on_change(
     state: &OiState,
+    hold: AppHold,
     app: &AppName,
     param_name: &ParamName,
     generation: generations::Generation,
@@ -211,10 +217,11 @@ pub(crate) fn schedule_on_change(
         let reg = state.registry.read();
         let entry = reg.get(app.as_str()).expect("confirmed registered");
         let has = entry.app.def.load().param_changes.contains(param_name);
-        let installed = matches!(
-            *entry.phase.lock(),
-            AppPhase::Installed | AppPhase::Uninstalling
-        );
+        // r[impl app.uninstall.exclusive]
+        // An app being torn down admits no handler. The hold keeps an
+        // uninstall from starting until the handler is admitted, so the
+        // phase read here is the one admission will see.
+        let installed = matches!(*entry.phase.lock(), AppPhase::Installed);
         let notify = Arc::clone(&entry.tick_notify);
         (has, installed, notify, Arc::clone(&entry.phase))
     };
@@ -226,15 +233,8 @@ pub(crate) fn schedule_on_change(
     // The on_change handler is dispatched by using the param name itself as an
     // action identifier. Param names follow the same bsl.name rules.
     let param_action = seedling_protocol::names::ActionName::new_unchecked(param_name.as_str());
-    let mut sched = state.scheduler.lock();
-    // r[impl app.uninstall.exclusive]
-    // The phase above was read before this lock and admits `Uninstalling`, so
-    // a handler could be dispatched into a teardown already under way. The
-    // scheduler reads the phase under its own lock and refuses it.
-    let result = sched.admit(
-        app,
+    let (result, op_id) = hold.admit(
         &param_action,
-        serde_json::Map::new(),
         source_generation,
         generation,
         "param_change",
@@ -243,18 +243,11 @@ pub(crate) fn schedule_on_change(
     match result {
         ScheduleResult::Accepted => {
             // Attach the operation to the generation history entry so the
-            // outcome can be recorded against it later. Active operation is
-            // the one we just requested.
-            let op_id = sched
-                .active()
-                .map(|a| a.operation_id.0.clone())
-                .unwrap_or_default();
-            drop(sched);
-            if !op_id.is_empty() {
+            // outcome can be recorded against it later.
+            if let Some(op_id) = op_id {
                 let app_owned = app.clone();
-                let op_id_owned = op_id.clone();
                 state.db.call(move |db| {
-                    if let Err(e) = generations::attach_operation(db, &app_owned, generation, &op_id_owned) {
+                    if let Err(e) = generations::attach_operation(db, &app_owned, generation, &op_id.0) {
                         tracing::warn!(app = %app_owned, generation, "failed to attach op to generation: {e}");
                     }
                 });
@@ -262,28 +255,24 @@ pub(crate) fn schedule_on_change(
             tick_notify.notify_one();
             Ok("accepted")
         }
+        // Queued behind another app's operation; it runs when that one ends.
         ScheduleResult::Queued => {
-            // Spec says script and param updates during in-flight ops are
-            // rejected, not queued. The scheduler shouldn't reach this case
-            // since we checked has_operation_for earlier; treat as accepted to
-            // be defensive.
-            drop(sched);
             tick_notify.notify_one();
             Ok("accepted")
         }
-        ScheduleResult::Rejected(RejectReason::SameAppOperationInProgress) => Err(OiError::new(
-            ErrorCode::OperationInProgress,
-            format!("operation in progress for app: {app}"),
-        )),
-        ScheduleResult::Rejected(RejectReason::SameAppAlreadyQueued) => Err(OiError::new(
-            ErrorCode::AlreadyQueued,
-            format!("already queued for app: {app}"),
-        )),
-        // r[impl app.uninstall.exclusive]
-        ScheduleResult::Rejected(RejectReason::AppUninstalling) => Err(OiError::new(
-            ErrorCode::NotInstalled,
-            format!("app is being uninstalled: {app}"),
-        )),
+        // The hold ruled out every refusal, so this is a broken invariant. The
+        // change is committed either way, and the error says so rather than
+        // reading as a change that did not happen.
+        ScheduleResult::Rejected(reason) => {
+            tracing::error!(app = %app, param = %param_name, generation, ?reason, "on_change handler refused after the change was committed");
+            Err(OiError::new(
+                ErrorCode::Internal,
+                format!(
+                    "the change to {app} was applied as generation {generation}, but its on_change \
+                     handler was refused: {reason:?}"
+                ),
+            ))
+        }
     }
 }
 
@@ -309,7 +298,7 @@ pub(crate) fn set_param(
         }
     }
 
-    reject_if_op_in_progress(state, app)?;
+    let hold = hold_for_change(state, app)?;
 
     let previous_value = current_param_value(state, app, param_name)?;
 
@@ -377,7 +366,7 @@ pub(crate) fn set_param(
     // r[impl image.pin.update-reconcile]
     super::images::reconcile_pins_post_update(state, app);
 
-    let schedule = schedule_on_change(state, app, param_name, generation)?;
+    let schedule = schedule_on_change(state, hold, app, param_name, generation)?;
 
     // i[impl param.store.secret]
     // r[impl secret.history] — the event carries one redaction flag for both
@@ -414,7 +403,7 @@ pub(crate) fn unset_param(
         }
     }
 
-    reject_if_op_in_progress(state, app)?;
+    let hold = hold_for_change(state, app)?;
 
     let previous_value = current_param_value(state, app, param_name)?;
     let Some(previous_value) = previous_value else {
@@ -479,7 +468,7 @@ pub(crate) fn unset_param(
     // r[impl image.pin.update-reconcile]
     super::images::reconcile_pins_post_update(state, app);
 
-    let schedule = schedule_on_change(state, app, param_name, generation)?;
+    let schedule = schedule_on_change(state, hold, app, param_name, generation)?;
 
     // i[impl param.store.secret]
     // r[impl secret.history]

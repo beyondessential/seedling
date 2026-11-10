@@ -1562,7 +1562,7 @@ pub(crate) fn uninstall_app(state: &OiState, params: AppParams) -> HandlerResult
                     .find(|q| q.app == params.app)
                     .map(|q| format!("'{}' is queued", q.action))
             })
-            .unwrap_or_else(|| "an action is queued".to_owned());
+            .unwrap_or_else(|| "a change to it is being applied".to_owned());
         return Err(OiError::new(
             ErrorCode::OperationInProgress,
             format!("cannot uninstall {name} while {holder}; cancel it first, then uninstall"),
@@ -1659,13 +1659,9 @@ pub(crate) fn update_app(state: &OiState, params: UpdateParams, ctx: &RequestCtx
         }
     }
 
-    // Reject if an operation is active or queued for this app.
-    if state.scheduler.lock().has_operation_for(&params.app) {
-        return Err(OiError::new(
-            ErrorCode::OperationInProgress,
-            format!("operation in progress for app: {name}"),
-        ));
-    }
+    // Reject if an operation is active or queued for this app, and hold it
+    // until the handler for a changed param is admitted.
+    let hold = super::params::hold_for_change(state, &params.app)?;
 
     // i[impl app.update] — everything up to the commit below is a check:
     // fetching, bundle rules, evaluation and validation all happen before
@@ -1906,7 +1902,7 @@ pub(crate) fn update_app(state: &OiState, params: UpdateParams, ctx: &RequestCtx
     // schedules nothing.
     let schedule = match &change {
         Some((pname, _, _)) => {
-            super::params::schedule_on_change(state, &params.app, pname, generation)?
+            super::params::schedule_on_change(state, hold, &params.app, pname, generation)?
         }
         None => "not_scheduled",
     };

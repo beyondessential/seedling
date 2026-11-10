@@ -167,3 +167,35 @@ fn param_calls_on_unknown_app_are_not_found() {
         .unwrap_err();
     assert_eq!(code, "not_found");
 }
+
+// i[verify param.set] r[verify app.uninstall.exclusive]
+// The handler was asked for during a teardown, which the scheduler refuses,
+// and the request failed after the value had been stored.
+#[test]
+fn a_param_set_during_an_uninstall_stores_the_value_and_runs_no_handler() {
+    let oi = TestOi::new();
+    oi.call(
+        "/apps/create",
+        json!({
+            "app": "demo",
+            "script": r#"
+                app.deployment("web").image("docker.io/library/nginx:1.29");
+                let p = app.param("greeting");
+                p.on_change(|rt| {});
+            "#,
+        }),
+    )
+    .unwrap();
+    oi.install("demo");
+    oi.call("/apps/uninstall", json!({ "app": "demo" }))
+        .unwrap();
+
+    let result = oi
+        .call(
+            "/apps/params/set",
+            json!({ "app": "demo", "name": "greeting", "value": "hello" }),
+        )
+        .unwrap();
+    assert_eq!(result["schedule"], "not_scheduled");
+    assert!(oi.state.scheduler.lock().active().is_none());
+}

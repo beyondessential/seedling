@@ -578,6 +578,8 @@ Absent specification bugs, anything that is not defined here is either defined i
 > A param change is a lifecycle operation.
 > It is subject to the same [concurrency restrictions](#r--operation.lifecycle.single) as all other lifecycle operations.
 > Only one parameter may be changed at a time, including one changed alongside a definition update.
+>
+> Checking that no other operation holds the app and admitting the change's `on_change` handler are one decision with respect to admitting any other operation for the app, so none is admitted after the change is committed and before its handler.
 
 > r[operation.lifecycle.generations]
 > Every lifecycle operation record must carry a *source generation* and a *target generation*.
