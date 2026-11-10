@@ -336,7 +336,10 @@ pub(crate) async fn open_volume_shell_session(
         network: net_name.clone(),
         labels: {
             let mut m = std::collections::BTreeMap::new();
-            m.insert("seedling.session".into(), "volume-shell".into());
+            m.insert(
+                crate::system::types::SESSION_LABEL.into(),
+                "volume-shell".into(),
+            );
             m
         },
         health: None,

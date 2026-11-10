@@ -177,7 +177,7 @@ pub fn build_proxy_config(
     redirects: &[(IngressDef, RedirectTarget)],
 ) -> ProxyConfig {
     let mut listener_set: BTreeSet<ProxyListener> = BTreeSet::new();
-    let mut vhosts: BTreeMap<(String, bool), VirtualHost> = BTreeMap::new();
+    let mut vhosts: BTreeMap<(String, u16, bool), VirtualHost> = BTreeMap::new();
 
     for (ingress, upstream) in forwards {
         register_listeners(&mut listener_set, ingress);
@@ -293,21 +293,26 @@ fn register_listeners(set: &mut BTreeSet<ProxyListener>, ingress: &IngressDef) {
     }
 }
 
+// r[impl actuate.ingress.port-scope]
 // r[impl actuate.ingress.plaintext]
-// Vhosts are keyed by `(hostname, tls)`, not by hostname alone: one hostname
+// Vhosts are keyed by `(hostname, port, tls)`, not by hostname alone. The port
+// keeps two ingresses for one hostname apart: merged by name, a public site
+// and an admin endpoint on another port would share one route list and the
+// first would answer on both. Termination stays in the key because one hostname
 // may carry a plaintext ingress on one port and a TLS-terminating one on
-// another, and each has to reach the listener matching its own termination.
-// Keying by hostname alone would merge them into a single vhost whose
-// `tls_acme` is the OR of both, serving the plaintext routes from the HTTPS
-// server and dropping them from the HTTP one.
+// another, and each has to reach the listener matching its own termination;
+// keying without it would merge them into a single vhost whose `tls_acme` is
+// the OR of both, serving the plaintext routes from the HTTPS server and
+// dropping them from the HTTP one.
 fn ensure_vhost<'a>(
-    vhosts: &'a mut BTreeMap<(String, bool), VirtualHost>,
+    vhosts: &'a mut BTreeMap<(String, u16, bool), VirtualHost>,
     ingress: &IngressDef,
 ) -> &'a mut VirtualHost {
     let vhost = vhosts
-        .entry((ingress.hostname.clone(), ingress.tls))
+        .entry((ingress.hostname.clone(), ingress.port.get(), ingress.tls))
         .or_insert_with(|| VirtualHost {
             hostname: ingress.hostname.clone(),
+            port: ingress.port.get(),
             tls_acme: ingress.tls,
             redirect: None,
             routes: vec![],
@@ -611,6 +616,28 @@ mod tests {
             &[],
         );
         assert!(!has(&cfg, 5432, ProxyListenerProto::Quic));
+    }
+
+    // r[verify actuate.ingress.port-scope]
+    #[test]
+    fn one_hostname_on_two_ports_yields_one_vhost_per_port() {
+        // A public site on :80 and an admin endpoint on :8080 under one
+        // hostname. Keyed by name and termination alone they merged, and the
+        // first answered on both ports.
+        let cfg = build_proxy_config(
+            &[
+                (ing("x.example.com", 80, false, true), upstream(3000)),
+                (ing("x.example.com", 8080, false, true), upstream(4000)),
+            ],
+            &[],
+        );
+
+        let mut ports: Vec<u16> = cfg.virtual_hosts.iter().map(|v| v.port).collect();
+        ports.sort_unstable();
+        assert_eq!(ports, vec![80, 8080], "got {:?}", cfg.virtual_hosts);
+        for vhost in &cfg.virtual_hosts {
+            assert_eq!(vhost.routes.len(), 1, "each keeps only its own route");
+        }
     }
 
     // r[verify actuate.ingress.plaintext]

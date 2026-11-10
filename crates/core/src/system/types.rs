@@ -19,6 +19,18 @@ use serde::{Deserialize, Serialize};
 /// running container, so both sides name it from here.
 pub const SPEC_HASH_LABEL: &str = "seedling.spec-hash";
 
+/// Label naming the app a workload container belongs to. Written by the
+/// translation that builds a container's spec and read by the startup sweep,
+/// which keeps a pod network only while a container of a registered app uses
+/// it, so both sides name it from here.
+pub const APP_LABEL: &str = "seedling.app";
+
+/// Label marking an operator session's container, and which kind of session.
+/// Written when a shell is opened and read by the sweeps that remove sessions
+/// a daemon restart left behind, and by the startup sweep, which keeps a pod
+/// network while a live session uses it.
+pub const SESSION_LABEL: &str = "seedling.session";
+
 #[derive(Debug, Clone)]
 pub struct ContainerState {
     pub status: ContainerStatus,
@@ -498,6 +510,11 @@ pub enum ProxyListenerProto {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct VirtualHost {
     pub hostname: String,
+    /// The listener port the ingress behind this vhost was declared on. Two
+    /// vhosts of one hostname on different ports are independent: a request is
+    /// routed by the port it arrived on as well as the name it asked for.
+    // r[impl actuate.ingress.port-scope]
+    pub port: u16,
     pub tls_acme: bool,
     /// If present, add an HTTP→HTTPS redirect server block.
     pub redirect: Option<HttpRedirect>,

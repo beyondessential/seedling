@@ -117,6 +117,49 @@ impl StubContainerRuntime {
         }
     }
 
+    /// Add a running container carrying `labels`, as one left behind by a
+    /// previous daemon would be found.
+    #[cfg(test)]
+    pub(crate) fn seed_container(&self, name: &str, labels: &[(&str, &str)]) {
+        let mut s = self.state.lock();
+        let image_id = Self::ensure_image_for(&mut s, "seeded:latest");
+        let pid = Self::next_pid(&mut s);
+        s.containers.insert(
+            name.to_owned(),
+            StubContainer {
+                spec: ContainerSpec {
+                    name: name.to_owned(),
+                    image: "seeded:latest".to_owned(),
+                    command: vec![],
+                    entrypoint: vec![],
+                    env: vec![],
+                    mounts: vec![],
+                    network: String::new(),
+                    labels: labels
+                        .iter()
+                        .map(|(k, v)| ((*k).to_owned(), (*v).to_owned()))
+                        .collect(),
+                    health: None,
+                    hosts: vec![],
+                    dns_servers: vec![],
+                    memory: None,
+                    cpus: None,
+                    extra_caps: vec![],
+                    writable_rootfs: false,
+                    pids_limit: 0,
+                    workdir: None,
+                    user: None,
+                    stop_signal: None,
+                    stop_timeout_secs: None,
+                },
+                started_at: SystemTime::now(),
+                pid,
+                state: ContainerStatus::Running,
+                image_id,
+            },
+        );
+    }
+
     fn next_pid(state: &mut ContainerState_) -> u32 {
         let pid = state.next_pid;
         state.next_pid = state.next_pid.wrapping_add(1);

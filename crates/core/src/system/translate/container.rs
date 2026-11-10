@@ -20,7 +20,7 @@ use crate::{
     system::{
         translate::proxy::node_mount_addr,
         types::{
-            ContainerSpec, HealthCheckSpec, Mount, MountSource, ResolvedExternalMount,
+            APP_LABEL, ContainerSpec, HealthCheckSpec, Mount, MountSource, ResolvedExternalMount,
             SPEC_HASH_LABEL,
         },
     },
@@ -364,7 +364,7 @@ fn spec_from_pod(
         .collect();
 
     let mut labels = BTreeMap::new();
-    labels.insert("seedling.app".to_string(), instance.app.as_str().to_owned());
+    labels.insert(APP_LABEL.to_string(), instance.app.as_str().to_owned());
     labels.insert("seedling.instance".to_string(), instance.id.to_hex());
     labels.insert("seedling.kind".to_string(), format!("{:?}", instance.kind));
     labels.insert(

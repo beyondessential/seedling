@@ -280,10 +280,16 @@ impl PodmanRuntime {
         prefix: Ipv6Net,
         ipv4: Option<ipnet::Ipv4Net>,
     ) -> Result<String, PodmanError> {
-        let net_addr = prefix.network();
-        let mut gw_bytes = net_addr.octets();
-        gw_bytes[15] = 1;
-        let gateway = Ipv6Addr::from(gw_bytes).to_string();
+        let gateway = crate::system::first_host_v6(&prefix)
+            .ok_or_else(|| {
+                ProtocolSnafu {
+                    message: format!(
+                        "pod network {name}: prefix {prefix} has no room for a gateway"
+                    ),
+                }
+                .build()
+            })?
+            .to_string();
         let subnet = prefix.to_string();
 
         // dual_stack must be checked before ipv4 is moved into the if-let below.
@@ -296,9 +302,16 @@ impl PodmanRuntime {
         }];
 
         if let Some(v4) = ipv4 {
-            let mut gw4 = v4.network().octets();
-            gw4[3] = 1;
-            let gateway4 = std::net::Ipv4Addr::from(gw4).to_string();
+            let gateway4 = crate::system::first_host_v4(&v4)
+                .ok_or_else(|| {
+                    ProtocolSnafu {
+                        message: format!(
+                            "pod network {name}: prefix {v4} has no room for a gateway"
+                        ),
+                    }
+                    .build()
+                })?
+                .to_string();
             subnets.push(Subnet {
                 gateway: Some(gateway4),
                 subnet: Some(v4.to_string()),

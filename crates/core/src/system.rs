@@ -27,6 +27,7 @@ pub(crate) mod journal;
 pub mod leftover_snapshots;
 pub(crate) mod podman;
 pub mod resolver;
+pub mod startup_cleanup;
 pub mod stub;
 pub(crate) mod systemd;
 pub(crate) mod unavailable;
@@ -54,10 +55,23 @@ pub fn is_infra_network(network_name: &str) -> bool {
 /// only Caddy + host processes should reach (e.g. the TLS cert endpoint) to
 /// this address so that workload pods on other /64s cannot route to them.
 pub fn proxy_bridge_gateway(node_prefix: &Ipv6Net) -> std::net::Ipv6Addr {
-    let proxy_net = caddy::proxy_network_prefix(node_prefix);
-    let mut bytes = proxy_net.network().octets();
-    bytes[15] = 1;
-    std::net::Ipv6Addr::from(bytes)
+    first_host_v6(&caddy::proxy_network_prefix(node_prefix)).expect("the proxy network is a /64")
+}
+
+/// The gateway of a bridge network the runtime creates: the first host
+/// address of its prefix. Network creation assigns it, and the host binds
+/// services on it, so both sides use this one derivation.
+///
+/// Follows from the prefix rather than from where an allocator happens to put
+/// the host part. `None` for a prefix too small to hold a gateway and a host.
+// r[impl infra.pod.network]
+pub(crate) fn first_host_v6(prefix: &Ipv6Net) -> Option<std::net::Ipv6Addr> {
+    (prefix.prefix_len() <= 126).then(|| std::net::Ipv6Addr::from(u128::from(prefix.network()) + 1))
+}
+
+// r[impl infra.pod.network]
+pub(crate) fn first_host_v4(prefix: &ipnet::Ipv4Net) -> Option<std::net::Ipv4Addr> {
+    (prefix.prefix_len() <= 30).then(|| std::net::Ipv4Addr::from(u32::from(prefix.network()) + 1))
 }
 pub use types::{
     ActiveState, ContainerHealth, ContainerStatus, DataPlaneRules as SystemDataPlaneRules,
@@ -473,6 +487,61 @@ impl System {
             degraded: Some("backends unavailable".to_owned()),
         });
         Ok((system, caddy_admin_client))
+    }
+}
+
+#[cfg(test)]
+mod gateway_tests {
+    use super::{first_host_v4, first_host_v6};
+
+    // r[verify infra.pod.network]
+    #[test]
+    fn the_gateway_is_the_first_host_address_of_the_prefix() {
+        let gw = |p: &str| first_host_v6(&p.parse().unwrap());
+        assert_eq!(
+            gw("fd5e:ed12:3456:4a07::/64"),
+            Some("fd5e:ed12:3456:4a07::1".parse().unwrap())
+        );
+        // Carved from one /64, two networks do not share a gateway.
+        assert_ne!(
+            gw("fd5e:ed12:3456:4a07::/80"),
+            gw("fd5e:ed12:3456:4a07:1::/80")
+        );
+        // The gateway lies inside the subnet, off its network address.
+        let p: ipnet::Ipv6Net = "fd5e:ed12:3456:4a07:1::/80".parse().unwrap();
+        let g = first_host_v6(&p).unwrap();
+        assert!(p.contains(&g) && g != p.network());
+        assert_eq!(
+            first_host_v4(&"10.89.4.0/24".parse().unwrap()),
+            Some("10.89.4.1".parse().unwrap())
+        );
+    }
+
+    // r[verify infra.pod.network]
+    #[test]
+    fn a_prefix_with_no_room_for_a_gateway_is_refused() {
+        assert_eq!(first_host_v6(&"fd5e::1/128".parse().unwrap()), None);
+        assert_eq!(first_host_v6(&"fd5e::/127".parse().unwrap()), None);
+        assert_eq!(first_host_v4(&"10.0.0.0/31".parse().unwrap()), None);
+    }
+
+    // The proxy and resolver bridges are created like any pod network, so the
+    // address the host binds on is the gateway that creation assigns.
+    #[test]
+    fn infra_bridge_gateways_are_their_networks_first_host() {
+        let node: ipnet::Ipv6Net = "fd5e:ed12:3456::/48".parse().unwrap();
+        assert_eq!(
+            super::proxy_bridge_gateway(&node),
+            "fd5e:ed12:3456:ff00::1"
+                .parse::<std::net::Ipv6Addr>()
+                .unwrap()
+        );
+        assert_eq!(
+            super::resolver::resolver_gateway_addr(&node),
+            "fd5e:ed12:3456:fd00::1"
+                .parse::<std::net::Ipv6Addr>()
+                .unwrap()
+        );
     }
 }
 

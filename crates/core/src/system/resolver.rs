@@ -44,12 +44,8 @@ pub fn resolver_addr(node_prefix: &Ipv6Net) -> Ipv6Addr {
 /// sending to their default gateway, and — on the host side — the
 /// address the in-process DNS forwarder binds to.
 pub fn resolver_gateway_addr(node_prefix: &Ipv6Net) -> Ipv6Addr {
-    let bytes = node_prefix.network().octets();
-    let mut addr = [0u8; 16];
-    addr[..6].copy_from_slice(&bytes[..6]);
-    addr[6] = 0xfd;
-    addr[15] = 1;
-    Ipv6Addr::from(addr)
+    super::first_host_v6(&resolver_network_prefix(node_prefix))
+        .expect("the resolver network is a /64")
 }
 
 /// Fixed IPv4 subnet for the resolver network.

@@ -45,6 +45,7 @@ Absent specification bugs, anything that is not defined here is either defined i
 > An installed app's contribution to absolute state may be withdrawn only by an explicit [lifecycle](#r--lifecycle.states) transition — never because computing that contribution failed.
 > When an iteration cannot compute the contribution of every installed app, the affected absolute state must not be applied for that iteration; the previously applied state stands until an iteration succeeds.
 > An iteration that withholds an apply must draw no conclusion from having done so: the fault for that state is neither filed nor cleared, and no resource is recorded as ready on the strength of an apply that did not run.
+> State that comes out empty from an iteration that computed every contribution is a result like any other, and is applied: removing the last ingress from the last app must leave the proxy serving nothing, not whatever it was last given.
 > Likewise, a full teardown of shared infrastructure occurs only when no app is installed or installing — never when apps are installed but their state could not be computed.
 > This does not constrain per-resource incremental actuation, which acts only on the resources it names.
 
@@ -991,6 +992,12 @@ Some operations must hand a writable or read-only path to an action closure with
 > A hostname may carry both plaintext and TLS-terminating ingresses on different ports.
 > Each must be served from the listener matching its own termination, and the presence of a TLS-terminating ingress must not cause a plaintext ingress on the same hostname to be dropped or served only over TLS.
 
+> r[actuate.ingress.port-scope]
+> An ingress is served on its own port and no other. A request is routed to the target of an ingress only when it arrives on the port that ingress was declared on, whatever hostname it names.
+>
+> Two ingresses for the same hostname on different ports are therefore independent: each port serves the routes of the ingress declared on it, and neither displaces the other, whether they terminate TLS or not.
+> A redirect an ingress declares answers on the port it names and on no other.
+
 > r[ingress.persistent-connections]
 > An HTTP/1.1 connection to an ingress must be persistent: the proxy must serve successive requests on the connection it was given rather than closing it after each exchange, and must hold an idle connection open long enough for a client to reuse it.
 >
@@ -1499,6 +1506,13 @@ Two levers set how a workload competes for host resources under pressure. Each D
 > Each pod instance must be connected to a dedicated IPv6-only bridge network. The network
 > prefix is a /64 derived from the node prefix and the instance identity. No IPv4 subnet
 > must be allocated on pod networks.
+> The network's gateway is the first host address of its prefix, so it follows from the
+> prefix and is distinct for every distinct prefix.
+
+> r[infra.pod.network.cleanup]
+> At startup, the runtime must remove each workload container that belongs to an app that is no longer registered, and the pod network it used. A pod network is kept only while a container that belongs to a registered app, or to a live operator session, is using it.
+> Whether a network is in use must be judged after those containers have been removed, so that removing a container is never what leaves its network behind with nothing to revisit it.
+> A container or network listing that cannot be read must not be taken for an empty one: networks are not removed on the strength of a failed listing.
 
 > r[infra.pod.mount]
 > Pods that mount a service must resolve the `localmount` hostname to a stable node-wide
@@ -1525,6 +1539,19 @@ Two levers set how a workload competes for host resources under pressure. Each D
 > serving its previous configuration indefinitely.
 > The runtime must declare the set of modules it requires, so that an image can be checked
 > against what the runtime actually emits rather than against a separately maintained list.
+
+> r[infra.proxy.image.config]
+> The proxy image must accept, in full, the configuration the runtime emits for every
+> feature it can emit. The proxy decodes each module's configuration strictly, so a field
+> the image's version of a module does not declare fails the whole document rather than the
+> route that carried it, and every ingress on the node loses service together.
+> [infra.proxy.image.modules](#r--infra.proxy.image.modules) does not cover this: a module
+> can be present and still not declare a field the runtime emits.
+>
+> The emitted configuration must therefore be checked against the image itself, using the
+> proxy's own validation, before the image is published and whenever the emitter changes.
+> The check must be one that can fail: it must be shown to reject a configuration carrying
+> a field the image does not declare.
 
 > r[infra.proxy.image.cert-cache]
 > The proxy image must store its certificate cache at the location the runtime observes it
@@ -1677,6 +1704,11 @@ Two levers set how a workload competes for host resources under pressure. Each D
 > process. If the translator cannot be initialised and NAT64 is required (`enabled` mode
 > or `auto` mode with no external NAT64 detected), the runtime must report an error and
 > file a fault.
+>
+> A teardown that cannot establish whether the translator is installed has failed; it must
+> not be taken for the translator being absent. The runtime must not report the translator
+> removed while it remains installed, and must attempt the teardown again while no
+> workloads are registered.
 
 > r[infra.nat64.forwarding]
 > When NAT64 is active, the runtime must ensure that IPv6 and IPv4 forwarding are enabled on
