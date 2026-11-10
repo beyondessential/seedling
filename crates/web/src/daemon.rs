@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::time::Instant;
 
 use seedling_protocol::actor::Actor;
 use seedling_protocol::client::{ClientAuth, ClientError, OiClient};
@@ -132,11 +133,19 @@ pub struct DaemonBi {
     pub uni_router: Arc<UniRouter>,
 }
 
+/// The most recent reconnect attempt that failed.
+struct FailedReconnect {
+    /// The connection it was replacing.
+    failed: usize,
+    finished: Instant,
+    error: String,
+}
+
 pub struct DaemonConn {
     inner: tokio::sync::Mutex<Upstream>,
     /// Held for the whole of a reconnect, so callers that saw the same
-    /// failure share one replacement connection.
-    reconnecting: Mutex<()>,
+    /// failure share one replacement connection, or one failed attempt.
+    reconnecting: Mutex<Option<FailedReconnect>>,
     pub fingerprint: String,
     addr: SocketAddr,
     auth: ClientAuth,
@@ -171,7 +180,7 @@ impl DaemonConn {
 
         Ok(Self {
             inner: tokio::sync::Mutex::new(Upstream::new(client)),
-            reconnecting: Mutex::new(()),
+            reconnecting: Mutex::new(None),
             fingerprint,
             addr,
             auth,
@@ -243,16 +252,36 @@ impl DaemonConn {
     }
 
     /// Replace the daemon connection identified by `failed`, unless another
-    /// caller has already replaced it.
+    /// caller has already replaced it, or tried and failed while this one
+    /// waited, in which case that attempt's error is returned.
     async fn try_reconnect(&self, failed: usize) -> Result<(), ClientError> {
-        let _reconnecting = self.reconnecting.lock().await;
+        let waiting_since = Instant::now();
+        let mut last_failure = self.reconnecting.lock().await;
         // w[impl shells.wire]
         // Closing a connection that is not the failed one would end the
         // shells already started on it.
         if self.inner.lock().await.client.connection().stable_id() != failed {
             return Ok(());
         }
+        if let Some(last) = &*last_failure
+            && last.failed == failed
+            && last.finished >= waiting_since
+        {
+            return Err(ClientError::Connect(last.error.clone().into()));
+        }
 
+        let result = self.replace_upstream().await;
+        if let Err(e) = &result {
+            *last_failure = Some(FailedReconnect {
+                failed,
+                finished: Instant::now(),
+                error: e.to_string(),
+            });
+        }
+        result
+    }
+
+    async fn replace_upstream(&self) -> Result<(), ClientError> {
         let identity = ClientIdentity::load_or_generate(&self.key_path)
             .map_err(|e| ClientError::Connect(Box::new(e)))?
             .0;
