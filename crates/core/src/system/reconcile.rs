@@ -1595,7 +1595,7 @@ impl Reconciler {
             .driver
             .container
             .list(ContainerFilter {
-                label: Some(("seedling.session", "shell")),
+                label: Some((crate::system::types::SESSION_LABEL, "shell")),
                 ..Default::default()
             })
             .await

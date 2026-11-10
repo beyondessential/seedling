@@ -15,10 +15,10 @@ use std::collections::HashSet;
 
 use seedling_protocol::names::AppName;
 
-use super::{ContainerFilter, ContainerRuntime, is_infra_network};
-
-const APP_LABEL: &str = "seedling.app";
-const SESSION_LABEL: &str = "seedling.session";
+use super::{
+    ContainerFilter, ContainerRuntime, is_infra_network,
+    types::{APP_LABEL, SESSION_LABEL},
+};
 
 /// Remove containers of unregistered apps, then the pod networks that nothing
 /// live is using.

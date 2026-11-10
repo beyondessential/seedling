@@ -647,9 +647,10 @@ async fn start_app_shell(
         0,
     );
     container_spec.health = None;
-    container_spec
-        .labels
-        .insert("seedling.session".to_string(), "shell".to_string());
+    container_spec.labels.insert(
+        crate::system::types::SESSION_LABEL.to_string(),
+        "shell".to_string(),
+    );
 
     // i[impl shell.startup]
     if stop.is_requested() {

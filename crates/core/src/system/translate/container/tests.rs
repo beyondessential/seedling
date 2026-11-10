@@ -421,10 +421,8 @@ fn spec_hash_ignores_self_label() {
 fn spec_hash_considers_other_labels() {
     let mut a = bare_spec();
     let mut b = bare_spec();
-    a.labels
-        .insert("seedling.app".to_string(), "alpha".to_string());
-    b.labels
-        .insert("seedling.app".to_string(), "beta".to_string());
+    a.labels.insert(APP_LABEL.to_string(), "alpha".to_string());
+    b.labels.insert(APP_LABEL.to_string(), "beta".to_string());
     assert_ne!(spec_hash(&a), spec_hash(&b));
 }
 

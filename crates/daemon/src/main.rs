@@ -574,7 +574,7 @@ async fn main() {
                     driver_ref
                         .container
                         .list(seedling_core::system::types::ContainerFilter {
-                            label_key: Some("seedling.session"),
+                            label_key: Some(seedling_core::system::types::SESSION_LABEL),
                             ..Default::default()
                         })
                         .await
@@ -590,7 +590,7 @@ async fn main() {
             for container in &orphan_shells {
                 tracing::info!(
                     container = %container.name,
-                    session = container.labels.get("seedling.session").map(|s| s.as_str()).unwrap_or("?"),
+                    session = container.labels.get(seedling_core::system::types::SESSION_LABEL).map(|s| s.as_str()).unwrap_or("?"),
                     "removing orphaned shell container"
                 );
                 tokio::task::block_in_place(|| {
