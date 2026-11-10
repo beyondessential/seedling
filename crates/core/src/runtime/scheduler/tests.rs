@@ -731,6 +731,30 @@ fn a_held_app_admits_nothing_until_its_handler_takes_the_hold_s_place() {
 
 // r[verify operation.lifecycle.param-change]
 #[test]
+fn a_handler_queued_in_the_hold_s_place_reports_its_id() {
+    let s = shared();
+    assert_eq!(fire(&s, "app2"), ScheduleResult::Accepted);
+    let hold = AppHold::take(&s, &app("app1")).expect("a free app can be held");
+    let (result, op) = hold.admit(
+        &act("apikey"),
+        1,
+        2,
+        "param_change",
+        &phase(AppPhase::Installed),
+    );
+    assert_eq!(result, ScheduleResult::Queued);
+    assert_eq!(
+        op,
+        s.lock()
+            .queue_iter()
+            .find(|q| q.app == app("app1"))
+            .map(|q| q.operation_id.clone())
+    );
+    assert!(op.is_some());
+}
+
+// r[verify operation.lifecycle.param-change]
+#[test]
 fn an_app_with_an_operation_or_a_hold_cannot_be_held() {
     let s = shared();
     assert_eq!(fire(&s, "app1"), ScheduleResult::Accepted);

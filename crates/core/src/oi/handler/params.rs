@@ -234,7 +234,9 @@ pub(crate) fn schedule_on_change(
         &phase_handle,
     );
     match result {
-        ScheduleResult::Accepted => {
+        // A queued handler runs when the other app's operation ends, and is
+        // the operation this change triggered all the same.
+        ScheduleResult::Accepted | ScheduleResult::Queued => {
             // Attach the operation to the generation history entry so the
             // outcome can be recorded against it later.
             if let Some(op_id) = op_id {
@@ -245,11 +247,6 @@ pub(crate) fn schedule_on_change(
                     }
                 });
             }
-            tick_notify.notify_one();
-            Ok("accepted")
-        }
-        // Queued behind another app's operation; it runs when that one ends.
-        ScheduleResult::Queued => {
             tick_notify.notify_one();
             Ok("accepted")
         }

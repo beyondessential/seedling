@@ -427,7 +427,7 @@ impl AppHold {
 
     /// Admit an operation for the held app in the hold's place, under one
     /// lock so nothing else is admitted between the two. Returns the
-    /// operation's id when it was accepted.
+    /// operation's id when it was accepted or queued.
     pub fn admit(
         mut self,
         action: &ActionName,
@@ -450,7 +450,11 @@ impl AppHold {
         );
         let operation_id = match result {
             ScheduleResult::Accepted => scheduler.active().map(|a| a.operation_id.clone()),
-            _ => None,
+            ScheduleResult::Queued => scheduler
+                .queue_iter()
+                .find(|q| q.app == self.app)
+                .map(|q| q.operation_id.clone()),
+            ScheduleResult::Rejected(_) => None,
         };
         (result, operation_id)
     }

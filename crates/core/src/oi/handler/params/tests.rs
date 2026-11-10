@@ -248,3 +248,66 @@ fn a_param_made_secret_by_a_param_change_moves_to_secret_storage() {
     assert_eq!(plaintext, 0, "no plaintext copy remains");
     assert!(secret, "the value is in secret storage");
 }
+
+// i[verify generation.history]
+// A handler queued behind another app's operation is still the operation the
+// change triggered, but only one that started at once was recorded against
+// the generation.
+#[test]
+fn a_queued_on_change_handler_is_recorded_against_its_generation() {
+    use seedling_protocol::names::{ActionName, AppName};
+
+    let oi = TestOi::new();
+    oi.call(
+        "/apps/create",
+        json!({
+            "app": "demo",
+            "script": r#"
+                app.deployment("web").image("docker.io/library/nginx:1.29");
+                let p = app.param("greeting");
+                p.on_change(|rt| {});
+            "#,
+        }),
+    )
+    .unwrap();
+    oi.install("demo");
+
+    // Another app holds the one operation slot.
+    oi.state.scheduler.lock().admit(
+        &AppName::new_unchecked("other"),
+        &ActionName::new_unchecked("backup"),
+        serde_json::Map::new(),
+        1,
+        1,
+        "test",
+        &parking_lot::Mutex::new(crate::runtime::apps::AppPhase::Installed),
+    );
+
+    let result = oi
+        .call(
+            "/apps/params/set",
+            json!({ "app": "demo", "name": "greeting", "value": "hello" }),
+        )
+        .unwrap();
+    assert_eq!(result["schedule"], "accepted");
+    let queued = oi
+        .state
+        .scheduler
+        .lock()
+        .queue_iter()
+        .find(|q| q.app.as_str() == "demo")
+        .map(|q| q.operation_id.0.clone())
+        .expect("the handler is queued");
+
+    let generations = oi
+        .call("/apps/generations", json!({ "app": "demo" }))
+        .unwrap();
+    let entry = generations
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|e| e["generation"] == result["generation"])
+        .expect("the change's generation");
+    assert_eq!(entry["operation_id"], queued.as_str());
+    assert_eq!(entry["outcome"], "pending");
+}
