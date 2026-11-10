@@ -15,7 +15,7 @@ use crate::{
         lifecycle::LifecycleState,
         scaling,
         scheduler::{ActiveOperation, Scheduler},
-        stopped,
+        stopped::{self, StoppedSet},
     },
 };
 
@@ -26,22 +26,24 @@ pub fn active_operation(scheduler: &Mutex<Scheduler>) -> Option<ActiveOperation>
 }
 
 /// The status of every registered app, sorted by name.
+///
+/// The registry is read only to take a snapshot, and released before every
+/// app is read from the database in one pass.
 pub fn all(
     registry: &RwLock<AppRegistry>,
     scheduler: &Mutex<Scheduler>,
     db: &DbHandle,
 ) -> Vec<(AppName, AppStatus)> {
-    // Taken before the registry: the scheduler lock is never held while
-    // waiting on the registry.
-    let active = active_operation(scheduler);
-    let reg = registry.read();
-    reg.names()
-        .into_iter()
-        .filter_map(|name| {
-            let entry = reg.get(name.as_str())?;
-            Some((name, of(entry, active.as_ref(), db)))
-        })
-        .collect()
+    let (active, snapshots) = snapshot_all(registry, scheduler);
+    db.call(move |db| {
+        snapshots
+            .into_iter()
+            .map(|snapshot| {
+                let status = status_in(db, &snapshot, active.as_ref());
+                (snapshot.name, status)
+            })
+            .collect()
+    })
 }
 
 // i[impl app.status] i[impl app.status.priority]
@@ -52,18 +54,85 @@ pub fn all(
 /// scheduler is running for the app is the only thing that makes it
 /// Operating, because the scheduler is what knows which action it is.
 pub fn of(entry: &AppEntry, active: Option<&ActiveOperation>, db: &DbHandle) -> AppStatus {
-    let phase = entry.phase.lock().clone();
-    match phase {
-        AppPhase::Uninstalling => AppStatus::Uninstalling,
-        AppPhase::Installing => AppStatus::Installing,
-        AppPhase::NotInstalled => AppStatus::NotInstalled,
-        AppPhase::Installed => match active.filter(|a| a.app == entry.name) {
-            Some(op) => AppStatus::Operating {
-                action_name: op.action.clone(),
-            },
-            None => steady(entry, db),
-        },
+    let snapshot = Snapshot::of(entry);
+    let active = active.cloned();
+    db.call(move |db| status_in(db, &snapshot, active.as_ref()))
+}
+
+/// What the rollup reads of one app from the registry, so that the database
+/// work runs with the registry released.
+struct Snapshot {
+    name: AppName,
+    phase: AppPhase,
+    resources: Vec<Declared>,
+}
+
+impl Snapshot {
+    fn of(entry: &AppEntry) -> Self {
+        let phase = entry.phase.lock().clone();
+        // Only an installed app's resources are judged.
+        let resources = if matches!(phase, AppPhase::Installed) {
+            declared(entry)
+        } else {
+            Vec::new()
+        };
+        Self {
+            name: entry.name.clone(),
+            phase,
+            resources,
+        }
     }
+}
+
+/// The scheduler's active operation and a snapshot of every registered app,
+/// sorted by name.
+fn snapshot_all(
+    registry: &RwLock<AppRegistry>,
+    scheduler: &Mutex<Scheduler>,
+) -> (Option<ActiveOperation>, Vec<Snapshot>) {
+    // Taken before the registry: the scheduler lock is never held while
+    // waiting on the registry.
+    let active = active_operation(scheduler);
+    let reg = registry.read();
+    let snapshots = reg
+        .names()
+        .into_iter()
+        .filter_map(|name| reg.get(name.as_str()).map(Snapshot::of))
+        .collect();
+    (active, snapshots)
+}
+
+/// The status the phase or the scheduler settles without the database, or
+/// `None` for an installed app with no operation, whose status is its health.
+fn settled(snapshot: &Snapshot, active: Option<&ActiveOperation>) -> Option<AppStatus> {
+    match snapshot.phase {
+        AppPhase::Uninstalling => Some(AppStatus::Uninstalling),
+        AppPhase::Installing => Some(AppStatus::Installing),
+        AppPhase::NotInstalled => Some(AppStatus::NotInstalled),
+        AppPhase::Installed => {
+            active
+                .filter(|a| a.app == snapshot.name)
+                .map(|op| AppStatus::Operating {
+                    action_name: op.action.clone(),
+                })
+        }
+    }
+}
+
+fn status_in(db: &Db, snapshot: &Snapshot, active: Option<&ActiveOperation>) -> AppStatus {
+    settled(snapshot, active).unwrap_or_else(|| {
+        let read = faults::has_active_faults(db, &snapshot.name).and_then(|faulted| {
+            let stopped = stopped::load_stopped(db, &snapshot.name)?;
+            steady(db, snapshot, faulted, &stopped)
+        });
+        read.unwrap_or_else(|e| {
+            // Running is a claim that everything was checked. With a read
+            // failed nothing was, and Degraded is the status that has an
+            // operator look.
+            tracing::warn!(app = %snapshot.name, "could not read the app's state to derive its status: {e}");
+            AppStatus::Degraded
+        })
+    })
 }
 
 /// What the status rollup reads of one declared resource.
@@ -74,80 +143,67 @@ struct Declared {
     scale_bounds: Option<(u16, u16)>,
 }
 
-/// Faulted, Degraded or Running, for an installed app with no operation.
-fn steady(entry: &AppEntry, db: &DbHandle) -> AppStatus {
-    let app_name = entry.name.clone();
-
-    // Collected with a brief def lock, released before touching the database.
-    let resources: Vec<Declared> = {
-        let def = entry.app.def.load();
-        def.resources
-            .iter()
-            .map(|(id, resource)| {
-                let scale_bounds = match resource {
-                    Resource::Deployment(d) => {
-                        let scale = &d.def.lock().scale;
-                        Some((scale.start, scale.end))
-                    }
-                    _ => None,
-                };
-                Declared {
-                    kind: id.kind,
-                    name: Arc::clone(&id.name),
-                    scale_bounds,
+fn declared(entry: &AppEntry) -> Vec<Declared> {
+    let def = entry.app.def.load();
+    def.resources
+        .iter()
+        .filter(|(id, _)| has_lifecycle(id.kind))
+        .map(|(id, resource)| {
+            let scale_bounds = match resource {
+                Resource::Deployment(d) => {
+                    let scale = &d.def.lock().scale;
+                    Some((scale.start, scale.end))
                 }
-            })
-            .collect()
-    };
-
-    let result = db.call({
-        let app_name = app_name.clone();
-        move |db| -> rusqlite::Result<AppStatus> {
-            if faults::has_active_faults(db, &app_name)? {
-                return Ok(AppStatus::Faulted);
-            }
-            let stopped = stopped::load_stopped(db, &app_name)?;
-            for Declared {
-                kind,
-                name,
+                _ => None,
+            };
+            Declared {
+                kind: id.kind,
+                name: Arc::clone(&id.name),
                 scale_bounds,
-            } in &resources
-            {
-                if !has_lifecycle(*kind) {
-                    continue;
-                }
-                // i[impl resource.stop]
-                // As the steady desired state has it: a stopped resource, or
-                // a deployment scaled to zero, is meant to have nothing Ready.
-                let desired = if stopped.contains(&(*kind, name.as_str().to_owned())) {
-                    Desired::Unscheduled
-                } else if let Some((low, high)) = scale_bounds {
-                    if scaling::effective_scale(db, &app_name, name, *low, *high)? > 0 {
-                        Desired::Ready
-                    } else {
-                        Desired::Unscheduled
-                    }
-                } else if *kind == ResourceKind::Job {
-                    Desired::Run
-                } else {
-                    Desired::Ready
-                };
-                let instances = find_instances_for_group(db, &app_name, *kind, Some(name))?;
-                if !at_desired_state(db, &instances, desired)? {
-                    return Ok(AppStatus::Degraded);
-                }
             }
-            Ok(AppStatus::Running)
-        }
-    });
+        })
+        .collect()
+}
 
-    result.unwrap_or_else(|e| {
-        // Running is a claim that everything was checked. With a read
-        // failed nothing was, and Degraded is the status that has an
-        // operator look.
-        tracing::warn!(app = %app_name, "could not read the app's state to derive its status: {e}");
-        AppStatus::Degraded
-    })
+/// Faulted, Degraded or Running, for an installed app with no operation.
+fn steady(
+    db: &Db,
+    snapshot: &Snapshot,
+    faulted: bool,
+    stopped: &StoppedSet,
+) -> rusqlite::Result<AppStatus> {
+    if faulted {
+        return Ok(AppStatus::Faulted);
+    }
+    let app_name = &snapshot.name;
+    for Declared {
+        kind,
+        name,
+        scale_bounds,
+    } in &snapshot.resources
+    {
+        // i[impl resource.stop]
+        // As the steady desired state has it: a stopped resource, or a
+        // deployment scaled to zero, is meant to have nothing Ready.
+        let desired = if stopped.contains(&(*kind, name.as_str().to_owned())) {
+            Desired::Unscheduled
+        } else if let Some((low, high)) = scale_bounds {
+            if scaling::effective_scale(db, app_name, name, *low, *high)? > 0 {
+                Desired::Ready
+            } else {
+                Desired::Unscheduled
+            }
+        } else if *kind == ResourceKind::Job {
+            Desired::Run
+        } else {
+            Desired::Ready
+        };
+        let instances = find_instances_for_group(db, app_name, *kind, Some(name))?;
+        if !at_desired_state(db, &instances, desired)? {
+            return Ok(AppStatus::Degraded);
+        }
+    }
+    Ok(AppStatus::Running)
 }
 
 /// Where a resource's desired state puts its instances.
