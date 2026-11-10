@@ -94,6 +94,30 @@ pub enum RejectReason {
     /// The application is being torn down, so nothing further may run
     /// against it.
     AppUninstalling,
+    /// A change to the application is being committed, and its `on_change`
+    /// handler is admitted in the hold's place; see [`AppHold`].
+    ChangeBeingApplied,
+}
+
+/// What keeps an operation from being admitted for an app.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AppBlocker {
+    /// The named action is the scheduler's active operation.
+    Active(ActionName),
+    /// The named action is queued behind another app's operation.
+    Queued(ActionName),
+    /// A change to the app is being committed; see [`AppHold`].
+    Change,
+}
+
+impl std::fmt::Display for AppBlocker {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Active(action) => write!(f, "'{action}' is in progress"),
+            Self::Queued(action) => write!(f, "'{action}' is queued"),
+            Self::Change => f.write_str("a change to it is being applied"),
+        }
+    }
 }
 
 // r[impl operation.composition.cycles]
@@ -152,12 +176,16 @@ impl Scheduler {
         self.queue.iter()
     }
 
-    /// Returns true if there is an active or queued operation for the given
-    /// app, or a change to it holds it.
-    pub fn has_operation_for(&self, app: &AppName) -> bool {
-        self.active.as_ref().is_some_and(|a| a.app == *app)
-            || self.queue.iter().any(|q| q.app == *app)
-            || self.held.contains(app)
+    /// What keeps an operation from being admitted for `app`: its active or
+    /// queued operation, or a change to it that holds it.
+    pub fn blocker_for(&self, app: &AppName) -> Option<AppBlocker> {
+        if let Some(active) = self.active.as_ref().filter(|a| a.app == *app) {
+            return Some(AppBlocker::Active(active.action.clone()));
+        }
+        if let Some(queued) = self.queue.iter().find(|q| q.app == *app) {
+            return Some(AppBlocker::Queued(queued.action.clone()));
+        }
+        self.held.contains(app).then_some(AppBlocker::Change)
     }
 
     // r[impl operation.lifecycle.param-change]
@@ -167,10 +195,16 @@ impl Scheduler {
     /// commits, and only then admits its `on_change` handler. An operation
     /// admitted in between would have the handler refused after the change
     /// was committed, so the hold stands in for an operation from the check
-    /// until the handler is admitted in its place. Refused when the app has
-    /// an operation or a hold already.
-    fn hold(&mut self, app: &AppName) -> bool {
-        !self.has_operation_for(app) && self.held.insert(app.clone())
+    /// until the handler is admitted in its place. Refused with whatever
+    /// holds the app already.
+    fn hold(&mut self, app: &AppName) -> Result<(), AppBlocker> {
+        match self.blocker_for(app) {
+            Some(blocker) => Err(blocker),
+            None => {
+                self.held.insert(app.clone());
+                Ok(())
+            }
+        }
     }
 
     // r[impl app.uninstall.exclusive]
@@ -263,7 +297,7 @@ impl Scheduler {
         operation_id: OperationId,
     ) -> ScheduleResult {
         if self.held.contains(app) {
-            return ScheduleResult::Rejected(RejectReason::SameAppOperationInProgress);
+            return ScheduleResult::Rejected(RejectReason::ChangeBeingApplied);
         }
         match &self.active {
             None => {
@@ -381,9 +415,10 @@ pub struct AppHold {
 }
 
 impl AppHold {
-    /// Hold `app`, or `None` when it has an operation or a hold already.
-    pub fn take(scheduler: &Arc<Mutex<Scheduler>>, app: &AppName) -> Option<Self> {
-        scheduler.lock().hold(app).then(|| Self {
+    /// Hold `app`, or name what holds it already.
+    pub fn take(scheduler: &Arc<Mutex<Scheduler>>, app: &AppName) -> Result<Self, AppBlocker> {
+        scheduler.lock().hold(app)?;
+        Ok(Self {
             scheduler: Arc::clone(scheduler),
             app: app.clone(),
             released: false,

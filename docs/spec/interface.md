@@ -177,7 +177,7 @@ Absent specification bugs, anything that is not defined here is either defined i
 > | `not_installed` | The app is `NotInstalled` and the requested operation requires it to be installed. |
 > | `already_installed` | `/apps/install/invoke` was called but the app is already `Installed` or `Uninstalling`. |
 > | `install_in_progress` | `/apps/install/invoke` was called but an install for this app is already running. |
-> | `operation_in_progress` | A lifecycle operation is running and the request conflicts with it. |
+> | `operation_in_progress` | A lifecycle operation is running or queued for the app, or a change to it is being applied, and the request conflicts with it; `message` names which. |
 > | `already_queued` | An operation is already queued for this app. |
 > | `requirements_invalid` | Install requirements failed validation; per-field errors are included in `message`. |
 > | `script_error` | The BSL script failed to parse or evaluate; detail is included in `message`. |
@@ -496,8 +496,8 @@ Absent specification bugs, anything that is not defined here is either defined i
 > On success, the response is `{}`.
 
 > i[resource.stop.no-active-op]
-> All three stop/unstop endpoints (`/apps/resource/stop`, `/apps/resource/unstop`, `/apps/unstop`) reject with `operation_in_progress` when a lifecycle operation is active or queued for the target app.
-> The operator is expected to cancel the active operation first via [action.cancel](#i--action.cancel); desired-state mutations must not race with a running action closure.
+> All three stop/unstop endpoints (`/apps/resource/stop`, `/apps/resource/unstop`, `/apps/unstop`) reject with `operation_in_progress` when a lifecycle operation is active or queued for the target app, or a change to it is being applied.
+> The operator cancels an active operation first via [action.cancel](#i--action.cancel), or waits for a queued one or a change to finish; desired-state mutations must not race with a running action closure.
 
 > i[resource.stop.status]
 > `/apps/show` includes a `stopped` boolean field on each resource that has been stopped via `/apps/resource/stop`.

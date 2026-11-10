@@ -705,10 +705,10 @@ fn fire(s: &Arc<Mutex<Scheduler>>, name: &str) -> ScheduleResult {
 fn a_held_app_admits_nothing_until_its_handler_takes_the_hold_s_place() {
     let s = shared();
     let hold = AppHold::take(&s, &app("app1")).expect("a free app can be held");
-    assert!(s.lock().has_operation_for(&app("app1")));
+    assert_eq!(s.lock().blocker_for(&app("app1")), Some(AppBlocker::Change));
     assert_eq!(
         fire(&s, "app1"),
-        ScheduleResult::Rejected(RejectReason::SameAppOperationInProgress)
+        ScheduleResult::Rejected(RejectReason::ChangeBeingApplied)
     );
     assert_eq!(
         fire(&s, "app2"),
@@ -734,12 +734,16 @@ fn a_held_app_admits_nothing_until_its_handler_takes_the_hold_s_place() {
 fn an_app_with_an_operation_or_a_hold_cannot_be_held() {
     let s = shared();
     assert_eq!(fire(&s, "app1"), ScheduleResult::Accepted);
-    assert!(AppHold::take(&s, &app("app1")).is_none());
+    assert_eq!(
+        AppHold::take(&s, &app("app1")).err(),
+        Some(AppBlocker::Active(act("nightly")))
+    );
     s.lock().complete_current();
 
     let _hold = AppHold::take(&s, &app("app1")).expect("free again");
-    assert!(
-        AppHold::take(&s, &app("app1")).is_none(),
+    assert_eq!(
+        AppHold::take(&s, &app("app1")).err(),
+        Some(AppBlocker::Change),
         "one change at a time"
     );
 }
@@ -749,7 +753,7 @@ fn an_app_with_an_operation_or_a_hold_cannot_be_held() {
 fn a_dropped_hold_frees_the_app() {
     let s = shared();
     drop(AppHold::take(&s, &app("app1")).expect("a free app can be held"));
-    assert!(!s.lock().has_operation_for(&app("app1")));
+    assert_eq!(s.lock().blocker_for(&app("app1")), None);
     assert_eq!(fire(&s, "app1"), ScheduleResult::Accepted);
 }
 
@@ -773,7 +777,7 @@ fn a_refused_handler_frees_the_app() {
     let _second = AppHold::take(&s, &app("app1")).expect("free after the refusal");
     assert_eq!(
         fire(&s, "app1"),
-        ScheduleResult::Rejected(RejectReason::SameAppOperationInProgress),
+        ScheduleResult::Rejected(RejectReason::ChangeBeingApplied),
         "the new hold stands"
     );
 }

@@ -68,12 +68,8 @@ fn param_is_secret(state: &OiState, app: &AppName, name: &ParamName) -> bool {
 /// process) and the replay path re-registering the operation with the
 /// in-memory scheduler.
 pub(crate) fn hold_for_change(state: &OiState, app: &AppName) -> Result<AppHold, OiError> {
-    let Some(hold) = AppHold::take(&state.scheduler, app) else {
-        return Err(OiError::new(
-            ErrorCode::OperationInProgress,
-            format!("operation in progress for app: {app}"),
-        ));
-    };
+    let hold = AppHold::take(&state.scheduler, app)
+        .map_err(|blocker| super::apps::app_blocked(app.as_str(), "change", &blocker))?;
     let reg = state.registry.read();
     if let Some(entry) = reg.get(app.as_str())
         && matches!(*entry.phase.lock(), AppPhase::Installing)

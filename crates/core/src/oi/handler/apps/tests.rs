@@ -583,6 +583,30 @@ fn unstop_all_clears_every_stopped_resource() {
     assert_eq!(code, "not_found");
 }
 
+// i[verify resource.stop.no-active-op]
+// A change being committed holds the app with no operation behind it, and the
+// refusal told the operator to cancel an operation that did not exist.
+#[test]
+fn a_stop_during_a_change_names_the_change_rather_than_an_operation() {
+    let oi = TestOi::with_app("demo");
+    let demo = seedling_protocol::names::AppName::new("demo").expect("app name");
+    let _hold = crate::runtime::scheduler::AppHold::take(&oi.state.scheduler, &demo)
+        .expect("a free app can be held");
+
+    let (code, message) = oi
+        .call(
+            "/apps/resource/stop",
+            json!({ "app": "demo", "kind": "deployment", "name": "web" }),
+        )
+        .unwrap_err();
+    assert_eq!(code, "operation_in_progress");
+    assert!(
+        message.contains("a change to it is being applied"),
+        "{message}"
+    );
+    assert!(!message.contains("/apps/action/cancel"), "{message}");
+}
+
 /// An app whose definition carries every kind of state `/apps/update` derives
 /// by diffing the registry: a named volume, a scaled deployment, and a
 /// scheduled action.

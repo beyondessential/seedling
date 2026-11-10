@@ -22,6 +22,7 @@ use crate::{
         identity::{InstanceId, InstanceVariant, ResourceInstance},
         priority::{self, AppPriority},
         restart_gens, restarts, scaling,
+        scheduler::AppBlocker,
         stopped::{self, kind_str, parse_kind},
         transition_phase,
     },
@@ -126,6 +127,22 @@ pub(crate) struct ResourceStopParams {
     pub app: AppName,
     pub kind: String,
     pub name: String,
+}
+
+/// The refusal of a request to `doing` an app that `blocker` holds, naming the
+/// holder and what the operator can do about it.
+// i[impl wire.error-codes]
+pub(crate) fn app_blocked(app: &str, doing: &str, blocker: &AppBlocker) -> OiError {
+    let advice = match blocker {
+        AppBlocker::Active(_) => "cancel it first via /apps/action/cancel",
+        // Only the active operation can be cancelled.
+        AppBlocker::Queued(_) => "wait for it to finish",
+        AppBlocker::Change => "try again once it is applied",
+    };
+    OiError::new(
+        ErrorCode::OperationInProgress,
+        format!("cannot {doing} {app} while {blocker}; {advice}"),
+    )
 }
 
 /// Re-evaluate `app`'s current definition with `params`, and move the stored
@@ -1432,11 +1449,8 @@ pub(crate) fn deregister_app(
     }
 
     // Reject if an operation is active or queued for this app.
-    if state.scheduler.lock().has_operation_for(&params.app) {
-        return Err(OiError::new(
-            ErrorCode::OperationInProgress,
-            format!("operation in progress for app: {name}"),
-        ));
+    if let Some(blocker) = state.scheduler.lock().blocker_for(&params.app) {
+        return Err(app_blocked(name, "remove", &blocker));
     }
 
     // Reject if the app is not in the NotInstalled phase. The message
@@ -1580,25 +1594,10 @@ pub(crate) fn uninstall_app(state: &OiState, params: AppParams) -> HandlerResult
     // lock, so the cleanup that follows, which admission never looks at, is
     // left outside it.
     let scheduled = state.scheduler.lock();
-    if scheduled.has_operation_for(&params.app) {
-        // Name whichever operation holds the app. An operator told only that
-        // "an action is queued" cannot tell what to cancel, which is the whole
-        // point of naming it.
-        let holder = scheduled
-            .active()
-            .filter(|a| a.app == params.app)
-            .map(|a| format!("'{}' is in progress", a.action))
-            .or_else(|| {
-                scheduled
-                    .queue_iter()
-                    .find(|q| q.app == params.app)
-                    .map(|q| format!("'{}' is queued", q.action))
-            })
-            .unwrap_or_else(|| "a change to it is being applied".to_owned());
-        return Err(OiError::new(
-            ErrorCode::OperationInProgress,
-            format!("cannot uninstall {name} while {holder}; cancel it first, then uninstall"),
-        ));
+    if let Some(blocker) = scheduled.blocker_for(&params.app) {
+        // Named, because an operator told only that "an action is queued"
+        // cannot tell what to cancel.
+        return Err(app_blocked(name, "uninstall", &blocker));
     }
     // The phase was read and released before this lock, so a second uninstall
     // can have arrived in between. Both would otherwise transition, delete the
@@ -2218,13 +2217,8 @@ pub(crate) fn stop_resource(
     // action whose resource is about to vanish has no sensible continuation.
     // Operators cancel the active op first (via /apps/action/cancel), then
     // stop resources.
-    if state.scheduler.lock().has_operation_for(&params.app) {
-        return Err(OiError::new(
-            ErrorCode::OperationInProgress,
-            format!(
-                "operation in progress for app: {app}; cancel it first via /apps/action/cancel"
-            ),
-        ));
+    if let Some(blocker) = state.scheduler.lock().blocker_for(&params.app) {
+        return Err(app_blocked(app, "stop a resource of", &blocker));
     }
 
     let reg = state.registry.read();
@@ -2286,13 +2280,8 @@ pub(crate) fn unstop_resource(
     }
 
     // i[impl resource.stop.no-active-op]
-    if state.scheduler.lock().has_operation_for(&params.app) {
-        return Err(OiError::new(
-            ErrorCode::OperationInProgress,
-            format!(
-                "operation in progress for app: {app}; cancel it first via /apps/action/cancel"
-            ),
-        ));
+    if let Some(blocker) = state.scheduler.lock().blocker_for(&params.app) {
+        return Err(app_blocked(app, "start a resource of", &blocker));
     }
 
     let app_owned = params.app.clone();
@@ -2331,13 +2320,8 @@ pub(crate) fn unstop_all_resources(
     }
 
     // i[impl resource.stop.no-active-op]
-    if state.scheduler.lock().has_operation_for(&params.app) {
-        return Err(OiError::new(
-            ErrorCode::OperationInProgress,
-            format!(
-                "operation in progress for app: {app}; cancel it first via /apps/action/cancel"
-            ),
-        ));
+    if let Some(blocker) = state.scheduler.lock().blocker_for(&params.app) {
+        return Err(app_blocked(app, "start the resources of", &blocker));
     }
 
     let app_owned = params.app.clone();

@@ -213,6 +213,10 @@ pub(crate) fn invoke_install(
             ErrorCode::AlreadyQueued,
             format!("already queued for app: {app_name}"),
         )),
+        ScheduleResult::Rejected(RejectReason::ChangeBeingApplied) => Err(OiError::new(
+            ErrorCode::OperationInProgress,
+            format!("a change to {app_name} is being applied; try again once it is applied"),
+        )),
         // r[impl app.uninstall.exclusive]
         ScheduleResult::Rejected(RejectReason::AppUninstalling) => Err(OiError::new(
             ErrorCode::NotInstalled,
