@@ -13,7 +13,25 @@ A lookup computes two keys: the hostname, and `*.` followed by everything after 
 - Narrow and rank candidates using the index, then confirm the winner by parsing its own PEM and re-ranking it before using it.
 - When confirmation contradicts the index (the winner's PEM does not cover the hostname, or ranks differently), rewrite that certificate's SAN rows from its PEM, warn, and move to the next candidate.
 - The snapshot is an in-memory view with no database handle, so on a contradiction it warns and skips. The serving lookup ranks the same index the same way, so the next handshake for that hostname reaches the same certificate and rewrites its rows.
-- A missing SAN row can't be detected without scanning everything, which is the cost this card removes. Writing SAN rows in the same transaction as the certificate is what guards against it. Say so in the doc comment.
+- A lookup can't detect a missing SAN row without scanning everything, which is the cost this card removes. Writing SAN rows in the same transaction as the certificate is the first guard. The background guards below repair drift eventually. Say so in the doc comment.
+
+## Drift guards
+
+Both guards rebuild rows with the same derivation the write paths use. They catch rows that have drifted from their PEM, never a bug in the derivation itself.
+
+**Marker, trigger and sweep (prompt repair).**
+- `tls_certificates` gains a `sans_indexed` marker, with a partial index on rows that have a PEM but no marker. The indexing function sets it, including when the PEM will not parse (that certificate is recorded as indexed with no rows, so it isn't retried forever).
+- A trigger `AFTER UPDATE OF cert_pem` deletes that certificate's SAN rows and clears its marker. That turns a stale index into a missing one, which the sweep can see. The activate paths update the PEM and then index inside one transaction, so the trigger's delete comes before their insert.
+- A background sweep selects `cert_pem IS NOT NULL AND sans_indexed IS NULL`. It parses nothing when the index is right.
+- If the SAN derivation ever changes, a migration clears every marker and this sweep reindexes everything.
+
+**Full re-parse (backstop).**
+- Occasionally re-derive every stored certificate's SAN rows and rewrite any that differ. This catches what the marker can't, such as SAN rows deleted by hand.
+
+**Shared by both.**
+- Read PEMs in one database call, parse them off the database thread, then write in a second call. The write is conditional on the PEM being the one that was parsed, so a concurrent certificate write wins.
+- Finding anything to repair means a write path has a bug. Log it at error. No fault: an operator can do nothing about it, and the sweep has already repaired it.
+- Name the loop's back-off, how errors are classified, and how it reports its exit (repo loop rule). A failed pass is logged and retried at the next interval, never abandoned.
 
 ## Write paths
 
@@ -43,5 +61,7 @@ The open comment on the card: `Coordinator::run` loads a snapshot per hostname p
 - [ ] Write SAN rows from the three write paths, in their transactions
 - [ ] Serving lookup: candidates from the index, winner confirmed, reindex on contradiction
 - [ ] Snapshot: candidates from the index, confirmation memoised, self-issuance from the index
-- [ ] Tests: unknown hostname parses nothing; wildcard-only hostname; history rows ranked out; deleted certificate gone from the index; a contradicting index row is corrected and the next candidate served; backfill skips an unparseable row
+- [ ] Marker column, partial index and `cert_pem` trigger (same migration)
+- [ ] Background task: unmarked-row sweep plus the occasional full re-parse, both with a conditional write-back
+- [ ] Tests: unknown hostname parses nothing; wildcard-only hostname; history rows ranked out; deleted certificate gone from the index; a contradicting index row is corrected and the next candidate served; backfill skips an unparseable row; a raw `cert_pem` update clears the marker and the sweep reindexes it; hand-deleted SAN rows restored by the full re-parse; a write landing mid-sweep isn't overwritten
 - [ ] Update the doc comments on `store::find_active_for_hostname` and `Snapshot::sans` to describe the index
