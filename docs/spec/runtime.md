@@ -1506,6 +1506,8 @@ Two levers set how a workload competes for host resources under pressure. Each D
 > Each pod instance must be connected to a dedicated IPv6-only bridge network. The network
 > prefix is a /64 derived from the node prefix and the instance identity. No IPv4 subnet
 > must be allocated on pod networks.
+> The network's gateway is the first host address of its prefix, so it follows from the
+> prefix and is distinct for every distinct prefix.
 
 > r[infra.pod.network.cleanup]
 > At startup, the runtime must remove each workload container that belongs to an app that is no longer registered, and the pod network it used. A pod network is kept only while a container that belongs to a registered app, or to a live operator session, is using it.
