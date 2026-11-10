@@ -65,6 +65,61 @@ pub fn run_test_script_err(source: &str) -> Box<rhai::EvalAltResult> {
     run_script(&engine, &mut scope, source).expect_err("script should fail")
 }
 
+/// Run the action `action_name` defined by `source` to its end and report how
+/// it ended, so a test can assert on the error an action closure raised.
+pub fn run_action(
+    source: &str,
+    action_name: &str,
+) -> crate::runtime::barrier::replay::OperationResult {
+    use std::sync::Arc;
+
+    use crate::runtime::{
+        EphemeralInstanceRegistry, TestWorldOracle,
+        barrier::OperationId,
+        barrier::replay::{InMemoryActionLog, OperationContext, run_operation},
+    };
+
+    let (engine, mut scope, app, ast) = run_test_script(source);
+    let registry: Arc<dyn crate::runtime::InstanceRegistry> =
+        Arc::new(EphemeralInstanceRegistry::new());
+
+    run_operation(
+        OperationContext {
+            engine: &engine,
+            script_ast: &ast,
+            operation_id: OperationId::new(),
+            app: &app,
+            action_name,
+            log: &InMemoryActionLog::new(),
+            world: Arc::new(TestWorldOracle::new()),
+            registry,
+            active_progress: None,
+            tick_notify: None,
+            params: serde_json::Map::new(),
+            is_shell: false,
+            db: None,
+            source_generation: 0,
+            target_generation: 0,
+            script_limits: None,
+            cipher: None,
+            operation_volume_bindings: std::collections::HashMap::new(),
+            cancel_token: Arc::new(crate::runtime::barrier::CancelToken::new()),
+            container_signaler: None,
+            volume_writer: None,
+            executor: None,
+        },
+        &mut scope,
+    )
+}
+
+/// The error message of the action `action_name`, which must fail.
+pub fn run_action_err(source: &str, action_name: &str) -> String {
+    match run_action(source, action_name) {
+        crate::runtime::barrier::replay::OperationResult::Failed(e) => e.to_string(),
+        other => panic!("expected the action to fail, got {other:?}"),
+    }
+}
+
 pub fn exercise(source: &str) {
     let (engine, mut scope, app, ast) = run_test_script(source);
     exercise_actions(&engine, &mut scope, &app, &ast);

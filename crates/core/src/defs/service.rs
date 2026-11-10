@@ -184,33 +184,45 @@ pub(crate) fn declare_ingress(
     port: i64,
 ) -> Result<Ingress, Box<EvalAltResult>> {
     service.ensure_unfrozen()?;
+    // An anonymous service belongs to no app, so an ingress on it could be
+    // neither conflict-checked nor registered: it would be a handle nothing
+    // routes to.
+    // l[impl ingress.type]
+    if service.name.is_empty() {
+        return Err("ingress() is not available on an anonymous service".into());
+    }
     let port = Port::new(port)?;
     validate_hostname(hostname)?;
     let ingress = Ingress::new(service.clone(), hostname.into(), port);
-    if let Some(arc) = service.app_def.as_ref().and_then(Weak::upgrade) {
-        let id = ResourceId {
-            kind: ResourceKind::Ingress,
-            name: ingress.name.clone(),
-        };
-        // Conflict check: a prior ingress with the same (hostname, port)
-        // keyed by the same resource name in this app must not be
-        // overwritten. Throwing lets the script catch + handle it;
-        // silently overriding would erase a previous declaration.
-        if arc.load().resources.contains_key(&id) {
-            return Err(format!(
-                "ingress conflict: ({hostname}, {}) is already declared in this app",
-                port.get()
-            )
-            .into());
-        }
-        let ingress_clone = ingress.clone();
-        arc.rcu(|d| {
-            let mut d = (**d).clone();
-            d.resources
-                .insert(id.clone(), Resource::Ingress(ingress_clone.clone()));
-            d
-        });
+    let arc = service
+        .app_def
+        .as_ref()
+        .and_then(Weak::upgrade)
+        .ok_or_else(|| -> Box<EvalAltResult> {
+            format!("internal: service '{}' has no owning app", service.name).into()
+        })?;
+    let id = ResourceId {
+        kind: ResourceKind::Ingress,
+        name: ingress.name.clone(),
+    };
+    // Conflict check: a prior ingress with the same (hostname, port)
+    // keyed by the same resource name in this app must not be
+    // overwritten. Throwing lets the script catch + handle it;
+    // silently overriding would erase a previous declaration.
+    if arc.load().resources.contains_key(&id) {
+        return Err(format!(
+            "ingress conflict: ({hostname}, {}) is already declared in this app",
+            port.get()
+        )
+        .into());
     }
+    let ingress_clone = ingress.clone();
+    arc.rcu(|d| {
+        let mut d = (**d).clone();
+        d.resources
+            .insert(id.clone(), Resource::Ingress(ingress_clone.clone()));
+        d
+    });
     Ok(ingress)
 }
 

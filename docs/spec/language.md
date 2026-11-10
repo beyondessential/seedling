@@ -669,6 +669,8 @@ This is currently the only value.
 > Traffic from an Ingress is matched by the hostname and port, and sent to the associated Service at the same port.
 >
 > There can be multiple ingresses for a Service.
+>
+> Only a named Service can have an ingress: calling `ingress` on an anonymous Service must throw, and no Ingress is created.
 
 > l[ingress.hostname]
 > The `hostname` argument must be a valid fully-qualified domain name: one or more labels separated by `.`, where each label is 1–63 ASCII alphanumeric or hyphen characters, must not start or end with a hyphen, and the overall length (including dots) must not exceed 253 characters.
