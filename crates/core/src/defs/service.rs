@@ -264,6 +264,7 @@ impl BoundService {
                 Ok(f(&mut def.balance))
             }
             Self::External(e) => {
+                e.ensure_unfrozen()?;
                 let mut def = e.def.lock();
                 Ok(f(&mut def.balance))
             }
@@ -345,6 +346,7 @@ impl BoundService {
                 Ok(f(def.http.get_or_insert_default()))
             }
             Self::External(e) => {
+                e.ensure_unfrozen()?;
                 let mut def = e.def.lock();
                 Ok(f(def.http.get_or_insert_default()))
             }
@@ -862,6 +864,16 @@ impl ExternalServiceDef {
 pub struct ExternalService {
     pub name: ResourceName,
     pub def: Holder<ExternalServiceDef>,
+    pub frozen: bool,
+}
+
+impl super::Freezable for ExternalService {
+    // l[impl app.resources.context.immutable]
+    fn is_frozen(&self) -> bool {
+        // An external service has no anonymous form, so every one is static
+        // and immutable inside an action closure.
+        self.frozen || is_in_action_closure()
+    }
 }
 
 impl CustomType for ExternalService {
@@ -886,6 +898,7 @@ impl CustomType for ExternalService {
             .with_fn(
                 "http",
                 |this: &mut Self| -> Result<HttpService, Box<EvalAltResult>> {
+                    this.ensure_unfrozen()?;
                     this.def.lock().http.get_or_insert_default();
                     Ok(HttpService {
                         service: this.clone().into(),
@@ -896,6 +909,7 @@ impl CustomType for ExternalService {
             .with_fn(
                 "http",
                 |this: &mut Self, port: i64| -> Result<HttpService, Box<EvalAltResult>> {
+                    this.ensure_unfrozen()?;
                     let port = Port::new(port)?;
                     this.def.lock().http.get_or_insert_default();
                     Ok(HttpService {
@@ -908,15 +922,20 @@ impl CustomType for ExternalService {
             .with_fn(
                 "balance",
                 |this: &mut Self, config: Map| -> Result<Self, Box<EvalAltResult>> {
+                    this.ensure_unfrozen()?;
                     this.def.lock().balance = proxy::parse_balance(config)?;
                     Ok(this.clone())
                 },
             )
             // l[impl bsl.resource.description]
-            .with_fn("description", |this: &mut Self, desc: &str| -> Self {
-                this.def.lock().description = Some(desc.to_owned());
-                this.clone()
-            });
+            .with_fn(
+                "description",
+                |this: &mut Self, desc: &str| -> Result<Self, Box<EvalAltResult>> {
+                    this.ensure_unfrozen()?;
+                    this.def.lock().description = Some(desc.to_owned());
+                    Ok(this.clone())
+                },
+            );
     }
 }
 

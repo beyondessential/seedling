@@ -1163,3 +1163,68 @@ fn a_service_level_location_operation_does_not_reach_a_redirect_route() {
     let root = routes.iter().find(|r| r.prefix == "/").expect("root route");
     assert!(root.headers.response.replace.contains_key("Location"));
 }
+
+// l[verify service.external.action-context]
+// l[verify app.resources.context.named]
+// A typo in an action closure used to register a fresh, unmapped slot instead
+// of failing at the line that caused it.
+#[test]
+fn external_service_unknown_in_action_throws() {
+    let msg = run_action_err(
+        r#"
+        app.external_service("postgres");
+        app.on_action("go", |rt, _param| {
+            app.external_service("postgers");
+        });
+    "#,
+        "go",
+    );
+    assert!(msg.contains("no static external service"), "got: {msg}");
+}
+
+// l[verify service.external.action-context]
+#[test]
+fn external_service_static_resolves_in_action() {
+    let result = run_action(
+        r#"
+        app.external_service("postgres");
+        app.on_action("go", |rt, _param| {
+            let db = app.external_service("postgres");
+            db.port(5432);
+        });
+    "#,
+        "go",
+    );
+    assert!(
+        matches!(
+            result,
+            crate::runtime::barrier::replay::OperationResult::Completed
+        ),
+        "expected Completed, got {result:?}"
+    );
+}
+
+// l[verify service.external.action-context]
+// l[verify app.resources.context.immutable]
+#[test]
+fn external_service_static_is_immutable_in_action() {
+    for body in [
+        r#"app.external_service("postgres").description("x");"#,
+        r#"app.external_service("postgres").balance(#{ policy: "least_conn" });"#,
+        r#"app.external_service("postgres").http();"#,
+        r#"app.external_service("postgres").http(8080);"#,
+        r#"db.description("x");"#,
+    ] {
+        let source = format!(
+            r#"
+            let db = app.external_service("postgres");
+            app.on_action("go", |rt, _param| {{ {body} }});
+        "#
+        );
+        let msg = run_action_err(&source, "go");
+        assert!(
+            msg.contains("cannot modify") || msg.contains("static"),
+            "`{body}` should be refused as immutable, got: {msg}"
+        );
+    }
+}

@@ -69,6 +69,8 @@ pub(super) fn on_app(builder: &mut TypeBuilder<App>) {
     );
 
     // l[impl service.external]
+    // l[impl service.external.action-context]
+    // l[impl app.resources.context.named]
     builder.with_fn(
         "external_service",
         |this: &mut App, name: &str| -> Result<ExternalService, Box<EvalAltResult>> {
@@ -79,12 +81,27 @@ pub(super) fn on_app(builder: &mut TypeBuilder<App>) {
                 kind: ResourceKind::ExternalService,
                 name: rname.clone(),
             };
+            if is_in_action_closure() {
+                let adef = action_def().ok_or_else(|| -> Box<EvalAltResult> {
+                    "internal: action context but no action AppDef set".into()
+                })?;
+                let def = adef.load();
+                return match def.resources.get(&id) {
+                    Some(Resource::ExternalService(e)) => {
+                        let mut frozen = e.clone();
+                        frozen.frozen = true;
+                        Ok(frozen)
+                    }
+                    _ => Err(format!("no static external service named '{}'", name).into()),
+                };
+            }
             this.def.rcu(|d| {
                 let mut d = (**d).clone();
                 d.resources.entry(id.clone()).or_insert_with(|| {
                     Resource::ExternalService(ExternalService {
                         name: rname.clone(),
                         def: Default::default(),
+                        frozen: false,
                     })
                 });
                 d

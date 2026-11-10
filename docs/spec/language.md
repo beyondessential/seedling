@@ -290,6 +290,7 @@ This is currently the only value.
 > In the **static context** (top-level script), `app.resource(name)` creates and registers a named resource.
 > In the **action context** (inside an action closure), `app.resource(name)` returns a **reference** to an existing static resource.
 > If no static resource with that name exists, it is a script error.
+> `app.external_volume(name)` is the one exception; see [volume.external.dynamic](#l--volume.external.dynamic).
 
 > l[app.resources.context.immutable]
 > Static resources are immutable in the action context.
@@ -658,6 +659,11 @@ This is currently the only value.
 > External Services are defined using the `app.external_service(name: string)` method, which returns an `ExternalService`.
 >
 > External Services can't be modified or configured further, only [mounted](#l--container.mount-service) or [bound](#l--pod.bind) like any other Service. The concrete endpoint the slot resolves to is supplied by the operator via a mapping; see the runtime spec [service.external.mapping.events](runtime.md#r--service.external.mapping.events) for the mapping lifecycle.
+
+> l[service.external.action-context]
+> In the action context, `app.external_service(name)` returns a reference to the static External Service of that name, and throws if there is none, as [app.resources.context.named](#l--app.resources.context.named) requires of every named resource.
+> The reference is immutable like any other static resource: `description`, `balance` and `http` throw on it, however the handle was obtained.
+> No External Service is created in the action context, so the set of slots an operator maps is the set the static script declares.
 
 # Ingress
 
