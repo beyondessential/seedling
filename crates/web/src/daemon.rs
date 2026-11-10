@@ -25,6 +25,8 @@ struct UniRouterInner {
     waiting: HashMap<u64, oneshot::Sender<quinn::RecvStream>>,
     /// Streams that arrived before their handler registered.
     parked: HashMap<u64, quinn::RecvStream>,
+    /// The connection has closed, so no further streams will arrive.
+    closed: bool,
 }
 
 impl UniRouter {
@@ -33,6 +35,7 @@ impl UniRouter {
             inner: Mutex::new(UniRouterInner {
                 waiting: HashMap::new(),
                 parked: HashMap::new(),
+                closed: false,
             }),
         }
     }
@@ -40,11 +43,15 @@ impl UniRouter {
     /// Register interest in a uni stream with the given daemon-side QUIC stream ID.
     ///
     /// If the stream already arrived (parked), the returned receiver resolves
-    /// immediately. Otherwise it resolves when the dispatcher delivers it.
+    /// immediately. Otherwise it resolves when the dispatcher delivers it, or
+    /// fails once the connection has closed, including when it already has.
     pub async fn register(&self, stream_id: u64) -> oneshot::Receiver<quinn::RecvStream> {
         let (tx, rx) = oneshot::channel();
         let mut inner = self.inner.lock().await;
-        if let Some(stream) = inner.parked.remove(&stream_id) {
+        if inner.closed {
+            // w[impl shells.wire]
+            drop(tx);
+        } else if let Some(stream) = inner.parked.remove(&stream_id) {
             let _ = tx.send(stream);
         } else {
             inner.waiting.insert(stream_id, tx);
@@ -61,9 +68,10 @@ impl UniRouter {
         }
     }
 
-    /// Cancel all outstanding registrations (connection closed/replaced).
-    async fn cancel_all(&self) {
+    /// Fail all outstanding and future registrations (connection closed).
+    async fn close(&self) {
         let mut inner = self.inner.lock().await;
+        inner.closed = true;
         inner.waiting.clear();
         inner.parked.clear();
     }
@@ -80,7 +88,7 @@ async fn run_uni_dispatcher(conn: quinn::Connection, router: Arc<UniRouter>) {
             }
             Err(e) => {
                 tracing::debug!("uni dispatcher: connection closed: {e}");
-                router.cancel_all().await;
+                router.close().await;
                 break;
             }
         }
@@ -247,7 +255,7 @@ impl DaemonConn {
         old.client
             .connection()
             .close(0u32.into(), b"replaced by reconnect");
-        old.uni_router.cancel_all().await;
+        old.uni_router.close().await;
         tracing::info!("daemon reconnected");
         Ok(())
     }
@@ -291,5 +299,21 @@ impl DaemonConn {
             .unwrap_or_else(|| PathBuf::from("."))
             .join("seedling")
             .join("web.key")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // w[verify shells.wire]
+    #[tokio::test]
+    async fn registration_after_close_fails_at_once() {
+        let router = UniRouter::new();
+        let before = router.register(1).await;
+        router.close().await;
+        let after = router.register(2).await;
+        assert!(before.await.is_err());
+        assert!(after.await.is_err());
     }
 }
