@@ -163,6 +163,10 @@ Absent specification bugs, anything not defined here is either defined in anothe
 > w[routes.events]
 > The web interface exposes the OI event feed, delivering a live stream of runtime events to the operator.
 
+> w[routes.events.replay]
+> A client subscribing to the event feed first receives the web interface's most recent events, then live events from that point on.
+> Each event reaches a subscriber once, in the order the web interface received it, with no overlap between the replay and the live events.
+
 > w[routes.shells]
 > The web interface exposes interactive shell sessions, allowing operators to open a terminal session within an app's context directly from the browser.
 > See [shells.wire](#w--shells.wire), [shells.ui](#w--shells.ui), and [shells.resize](#w--shells.resize) for the wire protocol and UI details.
