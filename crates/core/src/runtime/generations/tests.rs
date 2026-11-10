@@ -84,6 +84,66 @@ fn register_bumps_to_one() {
     assert_eq!(current(&db, &app()).unwrap(), Some(1));
 }
 
+/// Make the last statement of every bump, moving `current_generation`, fail.
+fn fail_current_generation_updates(db: &Db) {
+    db.conn
+        .execute_batch(
+            "CREATE TRIGGER fail_bump BEFORE UPDATE OF current_generation ON registered_apps
+             BEGIN SELECT RAISE(ABORT, 'injected'); END;",
+        )
+        .expect("create trigger");
+}
+
+fn generation_rows(db: &Db) -> i64 {
+    db.conn
+        .query_row("SELECT COUNT(*) FROM generations", [], |r| r.get(0))
+        .unwrap()
+}
+
+// r[verify generation.bumps]
+#[test]
+fn failed_script_update_leaves_no_generation_behind() {
+    let db = test_db();
+    register_script(&db, &app(), SCRIPT_A).unwrap();
+    fail_current_generation_updates(&db);
+
+    update_script(&db, &app(), SCRIPT_B).expect_err("injected failure");
+
+    assert_eq!(generation_rows(&db), 1);
+    assert_eq!(current(&db, &app()).unwrap(), Some(1));
+    assert!(db.conn.is_autocommit(), "savepoint left open");
+}
+
+// r[verify generation.bumps]
+#[test]
+fn failed_param_bump_leaves_no_generation_behind() {
+    let db = test_db();
+    let cipher = test_cipher();
+    register_script(&db, &app(), SCRIPT_A).unwrap();
+    fail_current_generation_updates(&db);
+
+    bump_param_set(&db, &app(), &param("p"), None, "v", &cipher, false)
+        .expect_err("injected failure");
+
+    assert_eq!(generation_rows(&db), 1);
+    assert_eq!(current(&db, &app()).unwrap(), Some(1));
+    assert!(db.conn.is_autocommit(), "savepoint left open");
+}
+
+// r[verify generation.bumps]
+#[test]
+fn bump_inside_a_transaction_commits_with_it() {
+    let db = test_db();
+    register_script(&db, &app(), SCRIPT_A).unwrap();
+
+    let tx = db.conn.unchecked_transaction().unwrap();
+    update_script(&db, &app(), SCRIPT_B).unwrap();
+    tx.rollback().unwrap();
+
+    assert_eq!(generation_rows(&db), 1);
+    assert_eq!(current(&db, &app()).unwrap(), Some(1));
+}
+
 // r[verify generation.bumps]
 // r[verify generation.monotonic]
 // r[verify generation.script-storage]

@@ -332,29 +332,32 @@ pub(crate) fn set_param(
     let (generation, previous_is_secret) = state
         .db
         .call(move |db| -> rusqlite::Result<_> {
-            // r[impl secret.history] — read before the write replaces it.
-            let previous_is_secret = crate::runtime::apps::secret_params::is_stored_secret(
-                db,
-                &app_owned,
-                &param_name_owned,
-            )?;
-            crate::runtime::apps::store_param_value(
-                db,
-                &cipher,
-                &app_owned,
-                &param_name_owned,
-                Some(&value_owned),
-                is_secret,
-            )?;
-            let change = generations::ParamChange {
-                name: &param_name_owned,
-                previous: prev_owned.as_deref(),
-                new_value: Some(&value_owned),
-                is_secret,
-                previous_is_secret,
-            };
-            let generation = generations::bump_param_change(db, &app_owned, &change, &cipher)?;
-            Ok((generation, previous_is_secret))
+            // r[impl generation.bumps] — the stored value commits with its bump.
+            db.atomically(|db| {
+                // r[impl secret.history] — read before the write replaces it.
+                let previous_is_secret = crate::runtime::apps::secret_params::is_stored_secret(
+                    db,
+                    &app_owned,
+                    &param_name_owned,
+                )?;
+                crate::runtime::apps::store_param_value(
+                    db,
+                    &cipher,
+                    &app_owned,
+                    &param_name_owned,
+                    Some(&value_owned),
+                    is_secret,
+                )?;
+                let change = generations::ParamChange {
+                    name: &param_name_owned,
+                    previous: prev_owned.as_deref(),
+                    new_value: Some(&value_owned),
+                    is_secret,
+                    previous_is_secret,
+                };
+                let generation = generations::bump_param_change(db, &app_owned, &change, &cipher)?;
+                Ok((generation, previous_is_secret))
+            })
         })
         .map_err(|e| OiError::new(ErrorCode::NotFound, format!("db error: {e}")))?;
 
@@ -434,29 +437,32 @@ pub(crate) fn unset_param(
     let (generation, previous_is_secret) = state
         .db
         .call(move |db| -> rusqlite::Result<_> {
-            // r[impl secret.history] — read before the delete removes it.
-            let previous_is_secret = crate::runtime::apps::secret_params::is_stored_secret(
-                db,
-                &app_owned,
-                &param_name_owned,
-            )?;
-            crate::runtime::apps::store_param_value(
-                db,
-                &cipher,
-                &app_owned,
-                &param_name_owned,
-                None,
-                is_secret,
-            )?;
-            let change = generations::ParamChange {
-                name: &param_name_owned,
-                previous: Some(&prev_owned),
-                new_value: None,
-                is_secret,
-                previous_is_secret,
-            };
-            let generation = generations::bump_param_change(db, &app_owned, &change, &cipher)?;
-            Ok((generation, previous_is_secret))
+            // r[impl generation.bumps] — the stored value commits with its bump.
+            db.atomically(|db| {
+                // r[impl secret.history] — read before the delete removes it.
+                let previous_is_secret = crate::runtime::apps::secret_params::is_stored_secret(
+                    db,
+                    &app_owned,
+                    &param_name_owned,
+                )?;
+                crate::runtime::apps::store_param_value(
+                    db,
+                    &cipher,
+                    &app_owned,
+                    &param_name_owned,
+                    None,
+                    is_secret,
+                )?;
+                let change = generations::ParamChange {
+                    name: &param_name_owned,
+                    previous: Some(&prev_owned),
+                    new_value: None,
+                    is_secret,
+                    previous_is_secret,
+                };
+                let generation = generations::bump_param_change(db, &app_owned, &change, &cipher)?;
+                Ok((generation, previous_is_secret))
+            })
         })
         .map_err(|e| OiError::new(ErrorCode::NotFound, format!("db error: {e}")))?;
 

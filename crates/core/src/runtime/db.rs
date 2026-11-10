@@ -531,6 +531,27 @@ impl Db {
         Ok(db)
     }
 
+    /// Run `f` inside a savepoint, so its writes land together or not at all.
+    ///
+    /// Unlike a transaction a savepoint nests, so this holds whether or not
+    /// the caller already has one open: inside a transaction the writes
+    /// commit with it, outside one they commit on return.
+    pub fn atomically<T>(&self, f: impl FnOnce(&Self) -> SqlResult<T>) -> SqlResult<T> {
+        self.conn.execute_batch("SAVEPOINT atomically")?;
+        let result = f(self).and_then(|v| {
+            self.conn.execute_batch("RELEASE atomically")?;
+            Ok(v)
+        });
+        if result.is_err()
+            && let Err(e) = self
+                .conn
+                .execute_batch("ROLLBACK TO atomically; RELEASE atomically")
+        {
+            tracing::error!(error = %e, "failed to roll back savepoint");
+        }
+        result
+    }
+
     // NEVER edit or delete an existing migration block, and NEVER modify an
     // existing SQL file under db/migrations/. Once a migration has shipped the
     // schema_version row for it exists in production databases, and the stored
