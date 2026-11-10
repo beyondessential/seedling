@@ -357,6 +357,26 @@ fn on_schedule_registers_cron_on_action() {
 
 // l[verify action.schedule]
 #[test]
+fn schedule_hash_is_pinned() {
+    use crate::defs::action::schedule_hash;
+    use seedling_protocol::names::{ActionName, AppName};
+
+    // These values are a contract with every deployed daemon: changing them
+    // moves every `H` schedule. They must not follow the toolchain.
+    let hash = |app: &str, action: &str| {
+        schedule_hash(
+            &AppName::new_unchecked(app),
+            &ActionName::new_unchecked(action),
+        )
+    };
+    assert_eq!(hash("tamanu", "backup"), 10722289103843889808);
+    assert_eq!(hash("a", "b"), 17343052842552570643);
+    assert_eq!(hash("", ""), 2147057924765956750);
+    assert_ne!(hash("ab", "c"), hash("a", "bc"));
+}
+
+// l[verify action.schedule]
+#[test]
 fn on_schedule_chains_multiple_exprs() {
     let (engine, mut scope, app) =
         crate::setup_language(&crate::ScriptLimits::default(), Default::default());

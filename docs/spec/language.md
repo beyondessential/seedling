@@ -1152,7 +1152,7 @@ This is currently the only value.
 >
 > `on_schedule` returns the Action for chaining. It may be called multiple times to attach multiple schedules to the same action.
 >
-> The `expr` is a 5-field cron expression (minute, hour, day-of-month, month, day-of-week) with 1-minute minimum resolution. The Jenkins `H` extension is supported: `H` is replaced with a stable hash-derived value within the field's range, computed from `(app_name, action_name)`. For example, `H 2 * * *` fires once daily at a stable minute during the 02:xx hour.
+> The `expr` is a 5-field cron expression (minute, hour, day-of-month, month, day-of-week) with 1-minute minimum resolution. The Jenkins `H` extension is supported: `H` is replaced with a stable hash-derived value within the field's range, computed from `(app_name, action_name)`. The value depends on those two names alone, so the same pair resolves `H` identically on every daemon, build and release: upgrading the daemon or its toolchain never moves a schedule. For example, `H 2 * * *` fires once daily at a stable minute during the 02:xx hour.
 >
 > An optional sixth field specifies the IANA timezone (e.g. `0 2 * * * Pacific/Auckland`). When omitted, the expression is interpreted in the system local timezone of the daemon.
 >
