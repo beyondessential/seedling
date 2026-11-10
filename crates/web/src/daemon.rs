@@ -134,6 +134,9 @@ pub struct DaemonBi {
 
 pub struct DaemonConn {
     inner: tokio::sync::Mutex<Upstream>,
+    /// Held for the whole of a reconnect, so callers that saw the same
+    /// failure share one replacement connection.
+    reconnecting: Mutex<()>,
     pub fingerprint: String,
     addr: SocketAddr,
     auth: ClientAuth,
@@ -168,6 +171,7 @@ impl DaemonConn {
 
         Ok(Self {
             inner: tokio::sync::Mutex::new(Upstream::new(client)),
+            reconnecting: Mutex::new(()),
             fingerprint,
             addr,
             auth,
@@ -220,22 +224,35 @@ impl DaemonConn {
     pub async fn open_bi(&self) -> Result<DaemonBi, ClientError> {
         // Drop the guard before the match so that try_reconnect can re-acquire
         // the lock. Holding it through the scrutinee would deadlock.
-        let result = {
+        let (result, used) = {
             let upstream = self.inner.lock().await;
-            upstream.open_bi().await
+            (
+                upstream.open_bi().await,
+                upstream.client.connection().stable_id(),
+            )
         };
         match result {
             Ok(bi) => Ok(bi),
             Err(ClientError::Transport(_)) => {
                 tracing::warn!("daemon transport error — attempting reconnect");
-                self.try_reconnect().await?;
+                self.try_reconnect(used).await?;
                 self.inner.lock().await.open_bi().await
             }
             Err(e) => Err(e),
         }
     }
 
-    async fn try_reconnect(&self) -> Result<(), ClientError> {
+    /// Replace the daemon connection identified by `failed`, unless another
+    /// caller has already replaced it.
+    async fn try_reconnect(&self, failed: usize) -> Result<(), ClientError> {
+        let _reconnecting = self.reconnecting.lock().await;
+        // w[impl shells.wire]
+        // Closing a connection that is not the failed one would end the
+        // shells already started on it.
+        if self.inner.lock().await.client.connection().stable_id() != failed {
+            return Ok(());
+        }
+
         let identity = ClientIdentity::load_or_generate(&self.key_path)
             .map_err(|e| ClientError::Connect(Box::new(e)))?
             .0;
