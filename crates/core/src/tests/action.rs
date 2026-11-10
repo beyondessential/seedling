@@ -155,6 +155,37 @@ fn on_install_with_requirements() {
     assert!(pw_req.default_value.is_none());
 }
 
+// l[verify action.install.requirements]
+// A `secret` the schema states wins over the kind's implication, in either
+// direction, and one it leaves out defers to the kind.
+#[test]
+fn on_install_requirement_secret_overrides_kind() {
+    let app = run_test_script_app(
+        r#"
+        app.on_install(|rt, reqs| {}, #{
+            params: #{
+                "plain": #{ kind: "password" },
+                "opted-out": #{ kind: "password", secret: false },
+                "opted-out-weak": #{ kind: "weak-password", secret: false },
+                "opted-in": #{ kind: "text", secret: true },
+                "text": #{ kind: "text" },
+            },
+        });
+    "#,
+    );
+    let def = app.def.load();
+    let reqs = &def
+        .install
+        .as_ref()
+        .expect("install should exist")
+        .requirements;
+    assert!(reqs["plain"].is_secret());
+    assert!(!reqs["opted-out"].is_secret());
+    assert!(!reqs["opted-out-weak"].is_secret());
+    assert!(reqs["opted-in"].is_secret());
+    assert!(!reqs["text"].is_secret());
+}
+
 // l[verify action.install]
 #[test]
 fn on_install_without_requirements() {
