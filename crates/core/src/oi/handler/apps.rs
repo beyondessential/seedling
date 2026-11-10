@@ -13,14 +13,13 @@ use crate::{
     oi::{handler::RequestCtx, state::OiState},
     runtime::{
         AppPhase,
-        apps::{AppEntry, AppRegistry, AppStatus},
-        barrier::oracle::{derive_lifecycle_state, derive_state_with_transition_time},
+        apps::{AppRegistry, AppStatus, status as app_status},
+        barrier::oracle::derive_state_with_transition_time,
         definition::{Bundle, Source, version},
         desired::list_dynamic_resources_for_app,
         faults,
         history::{find_instances_for_group, query_observations},
         identity::{InstanceId, InstanceVariant, ResourceInstance},
-        lifecycle::LifecycleState,
         priority::{self, AppPriority},
         restart_gens, restarts, scaling,
         stopped::{self, kind_str, parse_kind},
@@ -458,8 +457,8 @@ pub(crate) fn serialize_param_schema(
 // i[app.list]
 // i[impl resource.stop.status]
 pub(crate) fn list_apps(state: &OiState) -> HandlerResult {
+    let active = app_status::active_operation(&state.scheduler);
     let reg = state.registry.read();
-    let apps = reg.list();
     // i[impl app.priority.describe]
     // One read for every app's standing, rather than a round trip per app on
     // top of the per-app fault count this endpoint already pays. A failed read
@@ -475,13 +474,12 @@ pub(crate) fn list_apps(state: &OiState) -> HandlerResult {
                 format!("could not read app priorities: {e}"),
             )
         })?;
-    let result: Vec<Value> = apps
+    let result: Vec<Value> = reg
+        .names()
         .into_iter()
-        .map(|(name, base_status)| {
-            let status = match reg.get(name.as_str()) {
-                Some(entry) => effective_app_status(base_status, entry, &state.db),
-                None => base_status,
-            };
+        .filter_map(|name| reg.get(name.as_str()).map(|entry| (name, entry)))
+        .map(|(name, entry)| {
+            let status = app_status::of(entry, active.as_ref(), &state.db);
             let has_stopped = {
                 let name_clone = name.clone();
                 state.db.call(move |db| {
@@ -497,9 +495,7 @@ pub(crate) fn list_apps(state: &OiState) -> HandlerResult {
                 })
             };
             // l[impl app.description]
-            let description = reg
-                .get(name.as_str())
-                .and_then(|entry| entry.app.def.load().description.clone());
+            let description = entry.app.def.load().description.clone();
             let mut obj = json!({
                 "name": name,
                 "status": status.name(),
@@ -517,81 +513,18 @@ pub(crate) fn list_apps(state: &OiState) -> HandlerResult {
     Ok(json!(result))
 }
 
-/// Refines a base `AppStatus::Running` into `Running` or `Degraded` by
-/// checking whether all resource instances have reached `Ready`.  All other
-/// statuses are returned unchanged.
-// i[impl app.status.priority]
-pub(crate) fn effective_app_status(
-    base: AppStatus,
-    entry: &AppEntry,
-    db: &crate::runtime::db::DbHandle,
-) -> AppStatus {
-    if !matches!(base, AppStatus::Running) {
-        return base;
-    }
-
-    let app_name = entry.name.clone();
-
-    // Collect resource IDs with a brief def lock, then release before touching db.
-    let resource_ids: Vec<(ResourceKind, Arc<String>)> = {
-        let def = entry.app.def.load();
-        def.resources
-            .keys()
-            .map(|id| (id.kind, Arc::clone(&id.name)))
-            .collect()
-    };
-
-    db.call(move |db| {
-        let has_faults = faults::has_active_faults(db, &app_name).unwrap_or(false);
-
-        let all_ready = resource_ids.iter().all(|(kind, name)| {
-            let instances = find_instances_for_group(db, &app_name, *kind, Some(name.as_str()))
-                .unwrap_or_default();
-            if instances.is_empty() {
-                return false;
-            }
-            let mut has_ready = false;
-            for inst in &instances {
-                let obs = query_observations(db, inst).unwrap_or_default();
-                let state = derive_lifecycle_state(inst, &obs);
-                if state == LifecycleState::Ready {
-                    has_ready = true;
-                } else if matches!(
-                    state,
-                    LifecycleState::Unscheduled
-                        | LifecycleState::Terminating
-                        | LifecycleState::Terminated
-                ) {
-                    // Instances being torn down must not drag the app to Degraded.
-                } else {
-                    return false;
-                }
-            }
-            has_ready
-        });
-
-        if has_faults {
-            AppStatus::Faulted
-        } else if all_ready {
-            AppStatus::Running
-        } else {
-            AppStatus::Degraded
-        }
-    })
-}
-
 // i[app.describe]
 pub(crate) fn describe_app(state: &OiState, params: AppParams) -> HandlerResult {
     let name = params.app.as_str();
 
+    let active = app_status::active_operation(&state.scheduler);
     let reg = state.registry.read();
     let entry = reg
         .get(name)
         .ok_or_else(|| OiError::not_found(format!("app not found: {name}")))?;
     let generation = entry.current_generation;
 
-    let base_status = reg.status_of(name).unwrap();
-    let status = effective_app_status(base_status, entry, &state.db);
+    let status = app_status::of(entry, active.as_ref(), &state.db);
 
     // Load stored param values from DB (both plaintext and secret tables).
     // Names come from AppDef; values come from the params/secret_params tables.
@@ -942,34 +875,23 @@ pub(crate) fn describe_app(state: &OiState, params: AppParams) -> HandlerResult 
 
     // i[impl action.describe.barrier]
     // Surface the in-flight operation (action name, generation transition,
-    // currently-blocking barrier) for any status that has a scheduled action
-    // attached — install and uninstall are tracked as their own statuses but
-    // both run an action closure with the same observable surface.
-    if matches!(
-        &status,
-        AppStatus::Operating { .. } | AppStatus::Installing | AppStatus::Uninstalling
-    ) {
-        let (action_name, source_generation, target_generation, op_id) = state
-            .scheduler
-            .lock()
-            .active()
-            .filter(|a| a.app == name)
-            .map(|a| {
-                (
-                    a.action.clone(),
-                    a.source_generation,
-                    a.target_generation,
-                    Some(a.operation_id.clone()),
-                )
-            })
-            .unwrap_or_else(|| (ActionName::default(), 0, 0, None));
-
+    // currently-blocking barrier) when the app is Operating or Installing,
+    // from the same scheduler snapshot the status was derived from. An
+    // install runs an action closure and is reported like any other
+    // operation. An uninstall is driven by the reconciler and has no
+    // operation to report.
+    let reported_operation = active.as_ref().filter(|a| {
+        a.app == params.app
+            && matches!(&status, AppStatus::Operating { .. } | AppStatus::Installing)
+    });
+    if let Some(op) = reported_operation {
+        let op_id = &op.operation_id;
         // i[impl action.describe.barrier]
         // Surface the currently-blocking barrier (if any) so operators can
         // see elapsed time / deadline without tailing logs. Between replay
         // passes the unsatisfied barrier record sits in the action log
         // alongside its started_at_secs timestamp.
-        let barrier_json = if let Some(op_id) = op_id {
+        let barrier_json = {
             let op_id_for_load = op_id.clone();
             let entries = state.db.call(move |db| {
                 crate::runtime::history::load_action_log(db, &op_id_for_load).unwrap_or_default()
@@ -1003,15 +925,13 @@ pub(crate) fn describe_app(state: &OiState, params: AppParams) -> HandlerResult 
                     })
                 })
                 .unwrap_or(Value::Null)
-        } else {
-            Value::Null
         };
 
         desc["current_operation"] = json!({
-            "action_name": action_name,
+            "action_name": op.action,
             "barrier": barrier_json,
-            "source_generation": source_generation,
-            "target_generation": target_generation,
+            "source_generation": op.source_generation,
+            "target_generation": op.target_generation,
         });
     }
 

@@ -1047,3 +1047,81 @@ fn deregistering_discards_the_external_mappings_made_for_the_app() {
         .unwrap();
     assert!(services.as_array().unwrap().is_empty(), "{services}");
 }
+
+/// Admit `action` for the installed app `app`, as the scheduler would for an
+/// operator invocation.
+fn admit(oi: &TestOi, app: &str, action: &str) {
+    use seedling_protocol::names::{ActionName, AppName};
+
+    oi.state.scheduler.lock().admit(
+        &AppName::new(app).expect("app name"),
+        &ActionName::new(action).expect("action name"),
+        serde_json::Map::new(),
+        1,
+        1,
+        "test",
+        &parking_lot::Mutex::new(crate::runtime::apps::AppPhase::Installed),
+    );
+}
+
+// i[verify app.status] i[verify app.list] i[verify app.describe]
+// The list reported an operating app's action as "", a placeholder the
+// status was built with because only the scheduler knows the action.
+#[test]
+fn an_operating_app_is_reported_with_the_action_it_runs() {
+    let oi = TestOi::with_app("demo");
+    oi.install("demo");
+    admit(&oi, "demo", "backup");
+
+    let list = oi.call("/apps/list", json!({})).unwrap();
+    assert_eq!(list[0]["status"], "operating");
+    assert_eq!(list[0]["action_name"], "backup");
+
+    let desc = oi.call("/apps/show", json!({ "app": "demo" })).unwrap();
+    assert_eq!(desc["status"], "operating");
+    assert_eq!(desc["current_operation"]["action_name"], "backup");
+}
+
+// i[verify app.describe]
+// An uninstall is reconciler-driven and has no operation, and an operation
+// running for another app is not this one's.
+#[test]
+fn no_operation_is_reported_for_an_app_the_scheduler_is_not_running() {
+    let oi = TestOi::with_app("demo");
+    oi.call(
+        "/apps/create",
+        json!({ "app": "other", "script": MINIMAL_SCRIPT }),
+    )
+    .unwrap();
+    oi.install("demo");
+    oi.install("other");
+    admit(&oi, "other", "backup");
+
+    let desc = oi.call("/apps/show", json!({ "app": "demo" })).unwrap();
+    assert_ne!(desc["status"], "operating");
+    assert!(desc.get("current_operation").is_none(), "{desc}");
+
+    oi.state.scheduler.lock().complete_current();
+    oi.call("/apps/uninstall", json!({ "app": "demo" }))
+        .unwrap();
+    let desc = oi.call("/apps/show", json!({ "app": "demo" })).unwrap();
+    assert_eq!(desc["status"], "uninstalling");
+    assert!(desc.get("current_operation").is_none(), "{desc}");
+}
+
+// i[verify status.get]
+// The summary counted apps by a status that stops short of the health
+// rollup, so an installed app whose deployment is not running was counted
+// as running.
+#[test]
+fn the_server_summary_counts_apps_by_their_reported_status() {
+    let oi = TestOi::with_app("demo");
+    oi.install("demo");
+
+    let desc = oi.call("/apps/show", json!({ "app": "demo" })).unwrap();
+    let status = desc["status"].as_str().unwrap().to_owned();
+    assert_eq!(status, "degraded", "nothing runs the deployment here");
+
+    let summary = oi.call("/server/status", json!({})).unwrap();
+    assert_eq!(summary["apps_by_status"][&status], 1, "{summary}");
+}

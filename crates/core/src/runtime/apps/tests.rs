@@ -473,7 +473,7 @@ fn list_returns_registered_apps_sorted() {
         )
         .unwrap();
     }
-    let names: Vec<_> = reg.list().into_iter().map(|(n, _)| n).collect();
+    let names = reg.names();
     assert_eq!(names, vec!["alpha-app", "mu-app", "zeta-app"]);
 }
 

@@ -212,10 +212,9 @@ bsl_name_newtype! {
     ///
     /// The implicit `"start"` lifecycle action is valid by these rules.
     ///
-    /// [`ActionName::default`] yields an empty placeholder used only for the
-    /// transient `AppStatus::Operating { action_name }` state before a
-    /// concrete action is known; it is invalid by the name rules and must be
-    /// overwritten before anything inspects it.
+    /// [`ActionName::default`] yields an empty name, invalid by the name
+    /// rules, that nothing reports: an action's name is only ever taken from
+    /// the action itself.
     ActionName
 }
 

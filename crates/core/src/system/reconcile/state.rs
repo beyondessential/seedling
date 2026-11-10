@@ -429,7 +429,7 @@ fn known_desired_state(apps: &[AppSnapshot], registry: &AppRegistry) -> KnownDes
             );
         }
     }
-    for (name, _) in registry.list() {
+    for name in registry.names() {
         if registry.get(name.as_str()).is_some_and(|entry| {
             *entry.phase.lock() == AppPhase::NotInstalled && entry.active_progress.read().is_none()
         }) {

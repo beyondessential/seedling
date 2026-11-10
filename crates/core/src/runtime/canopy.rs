@@ -19,7 +19,10 @@ use serde_json::{Value, json};
 
 use crate::{
     oi::{canopy::OiCanopyTransport, state::OiState},
-    runtime::{apps::AppStatus, faults},
+    runtime::{
+        apps::{AppStatus, status},
+        faults,
+    },
     system::types::ContainerStatus,
 };
 
@@ -272,7 +275,7 @@ async fn build_payload(state: &Arc<OiState>) -> Result<Value, String> {
         .db
         .call(|db| faults::count_active_faults(db).unwrap_or(0));
 
-    let statuses = state.registry.read().list();
+    let statuses = status::all(&state.registry, &state.scheduler, &state.db);
     // A report that cannot say which apps there are fails rather than going
     // out without them: an absent application reads to Canopy as unreachable.
     let applications = state
@@ -305,7 +308,7 @@ async fn build_payload(state: &Arc<OiState>) -> Result<Value, String> {
 // r[impl canopy.report.checks]
 /// `health/apps`, plus the app totals the free-form payload also carries.
 fn apps_check(state: &Arc<OiState>) -> (Value, usize, HashMap<&'static str, usize>) {
-    let apps = state.registry.read().list();
+    let apps = status::all(&state.registry, &state.scheduler, &state.db);
     let total = apps.len();
 
     let mut by_status: HashMap<&'static str, usize> = HashMap::new();
@@ -568,6 +571,20 @@ mod tests {
             detail.get("tamanuVersion").is_none(),
             "tamanuVersion sets the server's tracked version and is not ours to set"
         );
+    }
+
+    // r[verify canopy.report.checks]
+    // The report graded a status that stops short of the health rollup, so
+    // an installed app whose deployment is not running passed.
+    #[test]
+    fn an_installed_app_that_is_not_running_is_graded_degraded() {
+        let oi = TestOi::with_app("demo");
+        oi.install("demo");
+
+        let payload = oi.block_on(build_payload(&oi.state)).expect("a payload");
+        let apps = find(&payload, "health/apps");
+        assert_eq!(result_of(apps), "warning", "{apps}");
+        assert_eq!(apps["degraded"], serde_json::json!(["demo"]));
     }
 
     // r[verify canopy.report.checks]

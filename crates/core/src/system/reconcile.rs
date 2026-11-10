@@ -657,7 +657,7 @@ impl Reconciler {
                          persists. Error: {e}"
                     ),
                 );
-                return (Vec::new(), reg.list().len().max(1));
+                return (Vec::new(), reg.names().len().max(1));
             }
         };
         // r[impl scaling.decision]
@@ -691,11 +691,11 @@ impl Reconciler {
                          advances while this persists. Error: {e}"
                     ),
                 );
-                return (Vec::new(), reg.list().len().max(1));
+                return (Vec::new(), reg.names().len().max(1));
             }
         };
 
-        for (name, status) in reg.list() {
+        for name in reg.names() {
             let entry = match reg.get(name.as_str()) {
                 Some(e) => e,
                 None => continue,
@@ -712,7 +712,6 @@ impl Reconciler {
                 AppPhase::Installed | AppPhase::Installing | AppPhase::Uninstalling => {}
                 AppPhase::NotInstalled => continue,
             }
-            let _ = status;
             let progress = entry.active_progress.read();
             let app_def_arc = entry.app.def.load_full();
             let app_def = (*app_def_arc).clone();

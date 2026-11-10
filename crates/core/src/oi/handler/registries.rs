@@ -85,7 +85,7 @@ pub(crate) fn remove_registry(state: &OiState, params: RegistryParams) -> Handle
 fn re_evaluate_all_apps(state: &OiState) {
     let app_names: Vec<AppName> = {
         let reg = state.registry.read();
-        reg.list().into_iter().map(|(name, _)| name).collect()
+        reg.names()
     };
     for name in &app_names {
         let name_clone = name.clone();

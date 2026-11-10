@@ -175,7 +175,7 @@ pub(crate) fn list_exported(state: &OiState) -> HandlerResult {
     let registry = state.registry.read();
     let mut exported = Vec::new();
 
-    for (app_name, _status) in registry.list() {
+    for app_name in registry.names() {
         let Some(entry) = registry.get(app_name.as_str()) else {
             continue;
         };
@@ -217,7 +217,7 @@ pub(crate) fn list_app_volumes(state: &OiState) -> HandlerResult {
     let registry = state.registry.read();
     let mut volumes = Vec::new();
 
-    for (app_name, _status) in registry.list() {
+    for app_name in registry.names() {
         let Some(entry) = registry.get(app_name.as_str()) else {
             continue;
         };

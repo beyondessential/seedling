@@ -338,7 +338,7 @@ Absent specification bugs, anything that is not defined here is either defined i
 > - `NotInstalled`: the install action has never completed successfully for this app, and no install is currently in progress.
 > - `Installing`: an install operation is in progress for this app. The reconciler actuates resources the install closure has placed into the desired state per [desired-state.during-install](#r--desired-state.during-install).
 > - `Deregistering`: deregistration was requested and resource teardown is in progress.
-> - `Operating`: a lifecycle operation other than `install` is in progress. Includes the field `action_name`.
+> - `Operating`: a lifecycle operation other than `install` is in progress. Includes the field `action_name`, the name of the action that operation runs.
 > - `Running`: steady state; no active faults; all resources are at their desired lifecycle states.
 > - `Degraded`: steady state, but one or more resources are not at their desired lifecycle state or have an active fault. Resources that are actively being torn down (`Terminating` or `Terminated` lifecycle state) are not counted as degraded — they are transitioning to `Unscheduled` and do not represent a fault condition.
 > - `Faulted`: one or more active faults exist and at least one resource has been excluded from active reconciliation.
@@ -405,7 +405,8 @@ Absent specification bugs, anything that is not defined here is either defined i
 >   `kind` is one of `action`, `shell`, `install`, or `lifecycle`. The `lifecycle` kind is used for the Start Action, which is driven autonomously and cannot be manually invoked.
 >   `params` is an object map of param key to `{ kind, required, description, default_value }`, as defined in the language spec. Empty for actions with no declared param schema.
 >   `schedules` is an array of objects with fields `cronexpr`, `last_fired_at`, and `next_fire_at`, listing every cron schedule attached to the action via [action.schedule](language.md#l--action.schedule). The array is empty for actions with no declared schedule. `last_fired_at` is the RFC 3339 timestamp at which the runtime last fired this schedule, or `null` if it has never fired (or the app is not yet installed). `next_fire_at` is the RFC 3339 timestamp at which the schedule is next expected to fire, computed from `last_fired_at` (or the current time if never fired); it is `null` only when the cron expression cannot be evaluated.
-> - `current_operation`: present only when status is `Operating`.
+> - `current_operation`: present when status is `Operating` or `Installing` and the operation is running, and describes that operation.
+>   An app being deregistered has no operation and does not report one.
 >   Has fields `action_name`, `barrier`, `source_generation`, and `target_generation`.
 >   `barrier` is either `null` (operation is running but not yet at a barrier, or the barrier has already been satisfied and the closure is about to resume) or an object with fields `resources`, `required_state`, `deadline_secs`, and `elapsed_secs`.
 >   `resources` is an array of resource display names the barrier is awaiting.

@@ -23,6 +23,7 @@ use crate::{
 mod params;
 mod registry_faults;
 pub mod secret_params;
+pub mod status;
 
 pub use params::{delete_app_params, delete_one_param, sync_script_error_fault, upsert_param};
 pub use registry_faults::sync_registry_faults;
@@ -297,19 +298,12 @@ impl AppRegistry {
         self.entries.get_mut(name)
     }
 
+    /// Every registered app's name, sorted.
     // i[app.list]
-    pub fn list(&self) -> Vec<(AppName, AppStatus)> {
-        let mut result: Vec<_> = self
-            .entries
-            .values()
-            .map(|e| (e.name.clone(), derive_status(e)))
-            .collect();
-        result.sort_by(|a, b| a.0.cmp(&b.0));
-        result
-    }
-
-    pub fn status_of(&self, name: &str) -> Option<AppStatus> {
-        self.entries.get(name).map(derive_status)
+    pub fn names(&self) -> Vec<AppName> {
+        let mut names: Vec<_> = self.entries.values().map(|e| e.name.clone()).collect();
+        names.sort();
+        names
     }
 
     // i[app.persist]
@@ -440,31 +434,6 @@ pub fn definition_at_generation(
         Err(e) => return Err(e),
     };
     Ok(Some((generations::load_bundle(db, &hash)?, source)))
-}
-
-// i[impl app.status.priority]
-// Resolves the four highest-priority states: Uninstalling (= Deregistering),
-// Installing, Operating, NotInstalled. A Running result here is refined into
-// Running/Faulted/Degraded by `effective_app_status` — matching the spec's
-// priority order (Deregistering > Installing > Operating > NotInstalled >
-// Faulted > Degraded > Running).
-fn derive_status(entry: &AppEntry) -> AppStatus {
-    let phase = entry.phase.lock();
-    match *phase {
-        AppPhase::NotInstalled => AppStatus::NotInstalled,
-        // i[impl app.status]
-        AppPhase::Installing => AppStatus::Installing,
-        AppPhase::Uninstalling => AppStatus::Uninstalling,
-        AppPhase::Installed => {
-            if entry.active_progress.read().is_some() {
-                AppStatus::Operating {
-                    action_name: ActionName::default(),
-                }
-            } else {
-                AppStatus::Running
-            }
-        }
-    }
 }
 
 /// Encode a phase as the `(installed, uninstalling, installing)` triple stored
