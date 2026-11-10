@@ -253,7 +253,9 @@ fn check(name: &str, result: Result_, extra: Value) -> Value {
 // r[impl canopy.report.extra]
 // r[impl canopy.app.key]
 async fn build_payload(state: &Arc<OiState>) -> Result<Value, String> {
-    let (apps_check, apps_total, apps_by_status) = apps_check(state);
+    // One sweep serves the health check, the totals and the applications.
+    let statuses = status::all(&state.registry, &state.scheduler, &state.db);
+    let (apps_check, apps_total, apps_by_status) = apps_check(&statuses);
     let faults_check = faults_check(state);
     let proxy = component_check(
         state,
@@ -275,7 +277,6 @@ async fn build_payload(state: &Arc<OiState>) -> Result<Value, String> {
         .db
         .call(|db| faults::count_active_faults(db).unwrap_or(0));
 
-    let statuses = status::all(&state.registry, &state.scheduler, &state.db);
     // A report that cannot say which apps there are fails rather than going
     // out without them: an absent application reads to Canopy as unreachable.
     let applications = state
@@ -307,16 +308,15 @@ async fn build_payload(state: &Arc<OiState>) -> Result<Value, String> {
 
 // r[impl canopy.report.checks]
 /// `health/apps`, plus the app totals the free-form payload also carries.
-fn apps_check(state: &Arc<OiState>) -> (Value, usize, HashMap<&'static str, usize>) {
-    let apps = status::all(&state.registry, &state.scheduler, &state.db);
+fn apps_check(apps: &[(AppName, AppStatus)]) -> (Value, usize, HashMap<&'static str, usize>) {
     let total = apps.len();
 
     let mut by_status: HashMap<&'static str, usize> = HashMap::new();
-    for (_, status) in &apps {
+    for (_, status) in apps {
         *by_status.entry(status.name()).or_insert(0) += 1;
     }
 
-    (grade_apps(&apps), total, by_status)
+    (grade_apps(apps), total, by_status)
 }
 
 // r[impl canopy.report.extra]
