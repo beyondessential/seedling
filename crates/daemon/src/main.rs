@@ -605,104 +605,9 @@ async fn main() {
         }
     }
 
-    // Podman-level scan for orphaned seedling pod networks.
-    //
-    // A network can outlive its container (e.g. podman --rm removed the
-    // container before the reconciler cleaned up the network, or the daemon
-    // was killed mid-operation). The daemon doesn't assign a stable
-    // app-label to pod networks, but we can recover orphans by correlating
-    // the network name against still-running seedling containers: any
-    // seedling-<display_name> network whose matching container is gone is
-    // safe to remove.
-    //
-    // Excluded: the infra networks `seedling-proxy` (Caddy) and
-    // `seedling-resolver` (CoreDNS), plus seedling-mount-* — managed by
-    // the corresponding subsystem's `ensure_*_running` path. Earlier
-    // versions of this filter used `seedling-caddy-*` / `seedling-resolver-*`
-    // prefixes, but those are *container* names; the *network* names are
-    // bare, so the filter let the infra networks through and we then
-    // tore them down on every restart, kicking the resolver into a
-    // start/heath-check/restart loop until coredns happened to come up
-    // fast enough to clear the inline health check.
-    // Also excluded: any network whose name matches a currently-known
-    // dynamic resource display_name (would be cleaned up by the earlier
-    // dynamic-resource loop).
-    {
-        let driver_ref = Arc::clone(&driver);
-        let nets = tokio::task::block_in_place(|| {
-            tokio::runtime::Handle::current().block_on(async {
-                driver_ref
-                    .container
-                    .list_networks("seedling-")
-                    .await
-                    .unwrap_or_default()
-            })
-        });
-
-        // Collect live containers keyed by EITHER of our two seedling labels:
-        // seedling.app (reconciler-spawned Jobs and Deployments) and
-        // seedling.session (operator-opened shell sessions, including volume
-        // shells that don't carry a seedling.app label). Union the two sets
-        // so a network whose backing container is a running volume-shell
-        // isn't mistakenly considered an orphan.
-        let live_containers: std::collections::HashSet<String> = {
-            let driver_ref = Arc::clone(&driver);
-            tokio::task::block_in_place(|| {
-                tokio::runtime::Handle::current().block_on(async {
-                    let mut names: std::collections::HashSet<String> =
-                        std::collections::HashSet::new();
-                    for label in ["seedling.app", "seedling.session"] {
-                        let found = driver_ref
-                            .container
-                            .list(seedling_core::system::types::ContainerFilter {
-                                label_key: Some(label),
-                                ..Default::default()
-                            })
-                            .await
-                            .unwrap_or_default();
-                        for c in found {
-                            names.insert(c.name);
-                        }
-                    }
-                    names
-                })
-            })
-        };
-
-        let is_infra = seedling_core::system::is_infra_network;
-
-        let orphan_nets: Vec<String> = nets
-            .into_iter()
-            .map(|n| n.name)
-            .filter(|name| !is_infra(name))
-            .filter(|name| {
-                // Network name is "seedling-<display_name>"; container name
-                // is the display_name itself.
-                let display = name.strip_prefix("seedling-").unwrap_or(name);
-                !live_containers.contains(display)
-            })
-            .collect();
-
-        if !orphan_nets.is_empty() {
-            tracing::warn!(
-                count = orphan_nets.len(),
-                "found orphaned seedling pod networks; removing"
-            );
-            let driver_ref = Arc::clone(&driver);
-            for net_name in &orphan_nets {
-                tracing::info!(network = %net_name, "removing orphaned pod network");
-                tokio::task::block_in_place(|| {
-                    tokio::runtime::Handle::current().block_on(async {
-                        let _ = driver_ref.container.remove_network(net_name).await;
-                    });
-                });
-            }
-        }
-    }
-
-    // Podman-level scan for orphaned seedling containers.
-    // Any container with a "seedling.app" label that doesn't belong to a
-    // currently registered app is an orphan.
+    // Containers of apps that are no longer registered, and the pod networks
+    // nothing live is using. The containers go first: a network is judged live
+    // by the container behind it, and an orphan still exists until removed.
     {
         let known_apps: std::collections::HashSet<AppName> = {
             let reg = registry.read();
@@ -710,51 +615,14 @@ async fn main() {
         };
 
         let driver_ref = Arc::clone(&driver);
-        let all_seedling_containers: Vec<seedling_core::system::types::ContainerSummary> =
-            tokio::task::block_in_place(|| {
-                tokio::runtime::Handle::current().block_on(async {
-                    driver_ref
-                        .container
-                        .list(seedling_core::system::types::ContainerFilter {
-                            label_key: Some("seedling.app"),
-                            ..Default::default()
-                        })
-                        .await
-                        .unwrap_or_default()
-                })
-            });
-
-        let orphans: Vec<_> = all_seedling_containers
-            .iter()
-            .filter(|c| {
-                c.labels
-                    .get("seedling.app")
-                    .is_none_or(|app| !known_apps.contains(app.as_str()))
-            })
-            .collect();
-
-        if !orphans.is_empty() {
-            tracing::warn!(
-                count = orphans.len(),
-                "found orphaned seedling containers; removing"
-            );
-            let driver_ref = Arc::clone(&driver);
-            for container in &orphans {
-                tracing::info!(
-                    container = %container.name,
-                    app = container.labels.get("seedling.app").map(|s| s.as_str()).unwrap_or("?"),
-                    "removing orphaned container"
-                );
-                tokio::task::block_in_place(|| {
-                    tokio::runtime::Handle::current().block_on(async {
-                        let _ = driver_ref
-                            .container
-                            .remove_container(&container.name, true)
-                            .await;
-                    })
-                });
-            }
-        }
+        tokio::task::block_in_place(|| {
+            tokio::runtime::Handle::current().block_on(
+                seedling_core::system::startup_cleanup::sweep_orphaned_workloads(
+                    &*driver_ref.container,
+                    &known_apps,
+                ),
+            )
+        });
     }
 
     // ---------------------------------------------------------------------------

@@ -27,6 +27,7 @@ pub(crate) mod journal;
 pub mod leftover_snapshots;
 pub(crate) mod podman;
 pub mod resolver;
+pub mod startup_cleanup;
 pub mod stub;
 pub(crate) mod systemd;
 pub(crate) mod unavailable;

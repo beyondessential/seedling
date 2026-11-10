@@ -1507,6 +1507,11 @@ Two levers set how a workload competes for host resources under pressure. Each D
 > prefix is a /64 derived from the node prefix and the instance identity. No IPv4 subnet
 > must be allocated on pod networks.
 
+> r[infra.pod.network.cleanup]
+> At startup, the runtime must remove each workload container that belongs to an app that is no longer registered, and the pod network it used. A pod network is kept only while a container that belongs to a registered app, or to a live operator session, is using it.
+> Whether a network is in use must be judged after those containers have been removed, so that removing a container is never what leaves its network behind with nothing to revisit it.
+> A container or network listing that cannot be read must not be taken for an empty one: networks are not removed on the strength of a failed listing.
+
 > r[infra.pod.mount]
 > Pods that mount a service must resolve the `localmount` hostname to a stable node-wide
 > address at `fd5e:XXYY:ZZWW:fffe::1`. nftables DNAT rules scope traffic to this address
