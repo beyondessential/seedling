@@ -991,6 +991,12 @@ Some operations must hand a writable or read-only path to an action closure with
 > A hostname may carry both plaintext and TLS-terminating ingresses on different ports.
 > Each must be served from the listener matching its own termination, and the presence of a TLS-terminating ingress must not cause a plaintext ingress on the same hostname to be dropped or served only over TLS.
 
+> r[actuate.ingress.port-scope]
+> An ingress is served on its own port and no other. A request is routed to the target of an ingress only when it arrives on the port that ingress was declared on, whatever hostname it names.
+>
+> Two ingresses for the same hostname on different ports are therefore independent: each port serves the routes of the ingress declared on it, and neither displaces the other, whether they terminate TLS or not.
+> A redirect an ingress declares answers on the port it names and on no other.
+
 > r[ingress.persistent-connections]
 > An HTTP/1.1 connection to an ingress must be persistent: the proxy must serve successive requests on the connection it was given rather than closing it after each exchange, and must hold an idle connection open long enough for a client to reuse it.
 >

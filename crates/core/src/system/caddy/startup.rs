@@ -157,7 +157,66 @@ pub(crate) fn read_cached_proxy_config(
 pub(crate) fn parse_cached_proxy_config(json: &str) -> Option<ProxyConfig> {
     let mut doc: serde_json::Value = serde_json::from_str(json).ok()?;
     backfill_redirect_targets(&mut doc);
+    backfill_vhost_ports(&mut doc);
     serde_json::from_value(doc).ok()
+}
+
+/// A document cached before vhosts carried a port is expanded to one vhost per
+/// listener port of its class, because that is what the daemon that wrote it
+/// was serving: every vhost answered on every port of its protocol. Replaying
+/// it therefore reproduces what was running rather than narrowing it to a
+/// guess, and the next reconciliation tick, which rebuilds the document from
+/// the declarations, narrows it to what was declared.
+///
+/// A vhost whose class has no listener was served nowhere, and expands to
+/// nothing.
+// r[impl infra.proxy.upgrade.cache]
+fn backfill_vhost_ports(doc: &mut serde_json::Value) {
+    let ports_of = |doc: &serde_json::Value, protos: &[&str]| -> Vec<u64> {
+        let mut ports: Vec<u64> = doc["listeners"]
+            .as_array()
+            .map(|ls| {
+                ls.iter()
+                    .filter(|l| l["proto"].as_str().is_some_and(|p| protos.contains(&p)))
+                    .filter_map(|l| l["port"].as_u64())
+                    .collect()
+            })
+            .unwrap_or_default();
+        ports.sort_unstable();
+        ports.dedup();
+        ports
+    };
+    let tls_ports = ports_of(doc, &["Https", "Quic"]);
+    let plain_ports = ports_of(doc, &["Http"]);
+
+    let Some(vhosts) = doc
+        .get_mut("virtual_hosts")
+        .and_then(serde_json::Value::as_array_mut)
+    else {
+        return;
+    };
+    let expanded: Vec<serde_json::Value> = std::mem::take(vhosts)
+        .into_iter()
+        .flat_map(|vhost| {
+            if vhost.get("port").is_some() {
+                return vec![vhost];
+            }
+            let ports = if vhost["tls_acme"].as_bool().unwrap_or(false) {
+                &tls_ports
+            } else {
+                &plain_ports
+            };
+            ports
+                .iter()
+                .map(|port| {
+                    let mut copy = vhost.clone();
+                    copy["port"] = (*port).into();
+                    copy
+                })
+                .collect()
+        })
+        .collect();
+    *vhosts = expanded;
 }
 
 /// A document cached before HTTP redirects recorded their target port renders

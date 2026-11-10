@@ -498,6 +498,11 @@ pub enum ProxyListenerProto {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct VirtualHost {
     pub hostname: String,
+    /// The listener port the ingress behind this vhost was declared on. Two
+    /// vhosts of one hostname on different ports are independent: a request is
+    /// routed by the port it arrived on as well as the name it asked for.
+    // r[impl actuate.ingress.port-scope]
+    pub port: u16,
     pub tls_acme: bool,
     /// If present, add an HTTP→HTTPS redirect server block.
     pub redirect: Option<HttpRedirect>,

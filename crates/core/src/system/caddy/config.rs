@@ -1,3 +1,5 @@
+use std::collections::BTreeSet;
+
 use serde_json::{Value, json};
 
 use crate::runtime::tls::state::is_caddy_internal;
@@ -18,8 +20,6 @@ use crate::system::types::{
 /// serve an ingress on a protocol its author did not ask for.
 // r[impl actuate.ingress.plaintext]
 pub(crate) fn conflicting_listener_ports(config: &ProxyConfig) -> Vec<u16> {
-    use std::collections::BTreeSet;
-
     let mut plaintext: BTreeSet<u16> = BTreeSet::new();
     let mut tls: BTreeSet<u16> = BTreeSet::new();
     for l in &config.listeners {
@@ -67,36 +67,38 @@ pub(crate) fn build_caddy_config(config: &ProxyConfig) -> Value {
     // silently — a request would still be answered, one connection at a time.
     let mut servers = serde_json::Map::new();
 
-    // --- HTTPS server ---
-    let mut https_listens: Vec<String> = https_ports.iter().map(|p| format!(":{p}")).collect();
-
-    for p in &quic_ports {
-        https_listens.push(format!(":{p}"));
-    }
-
-    https_listens.sort();
-    https_listens.dedup();
-
-    if !https_listens.is_empty() {
-        let https_routes: Vec<Value> = config
+    // r[impl actuate.ingress.port-scope]
+    // One server per listener port. A server's routes match on host (and
+    // path), never on the port the request arrived on, so a server spanning
+    // several ports would answer every vhost on every one of them, and two
+    // ingresses for one hostname on different ports would share a route list.
+    // Binding each server to a single port makes the proxy's own listener
+    // the port match.
+    //
+    // --- HTTPS servers ---
+    // HTTP/3 shares the TCP port number, so a QUIC listener lands on the
+    // server of its port rather than on a server of its own.
+    let https_listen_ports: BTreeSet<u16> =
+        https_ports.iter().chain(&quic_ports).copied().collect();
+    for port in https_listen_ports {
+        let routes: Vec<Value> = config
             .virtual_hosts
             .iter()
-            .filter(|vh| vh.tls_acme)
+            .filter(|vh| vh.tls_acme && vh.port == port)
             .flat_map(proxy_routes_for_vhost)
             .collect();
 
-        if !https_routes.is_empty() {
+        if !routes.is_empty() {
             servers.insert(
-                "seedling_https".to_string(),
-                json!({ "listen": https_listens, "routes": https_routes }),
+                format!("seedling_https_{port}"),
+                json!({ "listen": [format!(":{port}")], "routes": routes }),
             );
         }
     }
 
-    // --- HTTP server ---
-    let http_listens: Vec<String> = http_ports.iter().map(|p| format!(":{p}")).collect();
-    if !http_listens.is_empty() {
-        let mut http_routes: Vec<Value> = Vec::new();
+    // --- HTTP servers ---
+    for &port in http_ports.iter().collect::<BTreeSet<_>>() {
+        let mut routes: Vec<Value> = Vec::new();
 
         // r[impl actuate.ingress.plaintext]
         // A vhost that terminates no TLS is served here, as plaintext, and is
@@ -104,16 +106,21 @@ pub(crate) fn build_caddy_config(config: &ProxyConfig) -> Value {
         // requested for its hostname.
         for vh in &config.virtual_hosts {
             if let Some(redirect) = &vh.redirect {
-                http_routes.push(redirect_route(&vh.hostname, redirect));
-            } else if !vh.tls_acme {
-                http_routes.extend(proxy_routes_for_vhost(vh));
+                // r[impl actuate.ingress.port-scope]
+                // Answers on the port the redirect names, which is not the
+                // port of the ingress that declared it.
+                if redirect.from_port == port {
+                    routes.push(redirect_route(&vh.hostname, redirect));
+                }
+            } else if !vh.tls_acme && vh.port == port {
+                routes.extend(proxy_routes_for_vhost(vh));
             }
         }
 
-        if !http_routes.is_empty() {
+        if !routes.is_empty() {
             servers.insert(
-                "seedling_http".to_string(),
-                json!({ "listen": http_listens, "routes": http_routes }),
+                format!("seedling_http_{port}"),
+                json!({ "listen": [format!(":{port}")], "routes": routes }),
             );
         }
     }

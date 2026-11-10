@@ -215,6 +215,7 @@ mod tests {
         let tls_vhost = |hostname: &str, routes: Vec<ProxyRoute>| VirtualHost {
             hostname: hostname.to_owned(),
             tls_acme: true,
+            port: 443,
             redirect: None,
             routes,
         };
@@ -249,8 +250,23 @@ mod tests {
             code: 308,
         });
 
+        // The same hostname on a second port, which is a server of its own.
+        let mut admin = tls_vhost(
+            "app.example.com",
+            vec![proxied("/", compressed_proxy("round_robin", None))],
+        );
+        admin.port = 8443;
+
         ProxyConfig {
             listeners: vec![
+                ProxyListener {
+                    port: 8443,
+                    proto: ProxyListenerProto::Https,
+                },
+                ProxyListener {
+                    port: 8443,
+                    proto: ProxyListenerProto::Quic,
+                },
                 ProxyListener {
                     port: 80,
                     proto: ProxyListenerProto::Http,
@@ -266,6 +282,7 @@ mod tests {
             ],
             virtual_hosts: vec![
                 app,
+                admin,
                 tls_vhost(
                     "old.example.com",
                     vec![ProxyRoute {
@@ -280,6 +297,7 @@ mod tests {
                 VirtualHost {
                     hostname: "plain.example.com".to_owned(),
                     tls_acme: false,
+                    port: 80,
                     redirect: None,
                     routes: vec![proxied("/", compressed_proxy("round_robin", None))],
                 },

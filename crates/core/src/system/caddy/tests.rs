@@ -13,6 +13,7 @@ fn http_vhost(hostname: &str, upstream: &str) -> VirtualHost {
     VirtualHost {
         hostname: hostname.to_string(),
         tls_acme: false,
+        port: 80,
         redirect: None,
         routes: vec![ProxyRoute {
             prefix: "/".to_string(),
@@ -28,6 +29,7 @@ fn https_vhost(hostname: &str, upstream: &str) -> VirtualHost {
     VirtualHost {
         hostname: hostname.to_string(),
         tls_acme: true,
+        port: 443,
         redirect: Some(HttpRedirect {
             from_port: 80,
             to_port: 443,
@@ -66,8 +68,8 @@ fn http_only_vhost_goes_in_http_server() {
     };
     let json = build_caddy_config(&config);
     let servers = &json["apps"]["http"]["servers"];
-    assert!(servers["seedling_http"].is_object());
-    assert!(servers["seedling_https"].is_null());
+    assert!(servers["seedling_http_80"].is_object());
+    assert!(servers["seedling_https_443"].is_null());
 }
 
 #[test]
@@ -92,17 +94,20 @@ fn https_vhost_goes_in_https_server_redirect_in_http() {
     let json = build_caddy_config(&config);
     let servers = &json["apps"]["http"]["servers"];
     assert!(
-        servers["seedling_https"].is_object(),
+        servers["seedling_https_443"].is_object(),
         "missing https server"
     );
-    assert!(servers["seedling_http"].is_object(), "missing http server");
+    assert!(
+        servers["seedling_http_80"].is_object(),
+        "missing http server"
+    );
 
     // https server should have proxy routes
-    let https_routes = &servers["seedling_https"]["routes"];
+    let https_routes = &servers["seedling_https_443"]["routes"];
     assert!(https_routes.as_array().is_some_and(|r| !r.is_empty()));
 
     // http server should have redirect route
-    let http_routes = &servers["seedling_http"]["routes"];
+    let http_routes = &servers["seedling_http_80"]["routes"];
     let redirect = &http_routes[0];
     assert_eq!(redirect["handle"][0]["handler"], "static_response");
     assert_eq!(redirect["handle"][0]["status_code"], 308);
@@ -120,6 +125,7 @@ fn tls_acme_subjects_appear_in_automation() {
         virtual_hosts: vec![VirtualHost {
             hostname: "secure.example.com".to_string(),
             tls_acme: true,
+            port: 443,
             redirect: None,
             routes: vec![ProxyRoute {
                 prefix: "/".to_string(),
@@ -173,6 +179,7 @@ fn warm_cert_skipped_when_already_routed() {
         virtual_hosts: vec![VirtualHost {
             hostname: "shared.example.com".to_string(),
             tls_acme: true,
+            port: 443,
             redirect: None,
             routes: vec![ProxyRoute {
                 prefix: "/".to_string(),
@@ -221,6 +228,7 @@ fn dial_strips_http_scheme() {
         virtual_hosts: vec![VirtualHost {
             hostname: "x.com".to_string(),
             tls_acme: true,
+            port: 443,
             redirect: None,
             routes: vec![ProxyRoute {
                 prefix: "/".to_string(),
@@ -236,7 +244,7 @@ fn dial_strips_http_scheme() {
         renewal_ratios: Default::default(),
     };
     let json = build_caddy_config(&config);
-    let dial = &json["apps"]["http"]["servers"]["seedling_https"]["routes"][0]["handle"][1]["upstreams"]
+    let dial = &json["apps"]["http"]["servers"]["seedling_https_443"]["routes"][0]["handle"][1]["upstreams"]
         [0]["dial"];
     assert_eq!(dial, "[fd5e:ed12:3456:0100::3]:3000");
 }
@@ -257,6 +265,7 @@ fn https_server_includes_quic_listener() {
         virtual_hosts: vec![VirtualHost {
             hostname: "h3.example.com".to_string(),
             tls_acme: true,
+            port: 443,
             redirect: None,
             routes: vec![ProxyRoute {
                 prefix: "/".to_string(),
@@ -272,7 +281,7 @@ fn https_server_includes_quic_listener() {
         renewal_ratios: Default::default(),
     };
     let json = build_caddy_config(&config);
-    let listen = &json["apps"]["http"]["servers"]["seedling_https"]["listen"];
+    let listen = &json["apps"]["http"]["servers"]["seedling_https_443"]["listen"];
     let listen_strs: Vec<&str> = listen
         .as_array()
         .unwrap()
@@ -407,6 +416,7 @@ fn vhost_with_multiple_prefixes_emits_per_prefix_routes_longest_first() {
         virtual_hosts: vec![VirtualHost {
             hostname: "example.com".to_string(),
             tls_acme: true,
+            port: 443,
             redirect: None,
             // Caddy is order-sensitive within a server's routes; the
             // builder must emit `/api` before `/` so the API path matches
@@ -435,7 +445,7 @@ fn vhost_with_multiple_prefixes_emits_per_prefix_routes_longest_first() {
         renewal_ratios: Default::default(),
     };
     let json = build_caddy_config(&config);
-    let routes = &json["apps"]["http"]["servers"]["seedling_https"]["routes"];
+    let routes = &json["apps"]["http"]["servers"]["seedling_https_443"]["routes"];
     let routes = routes.as_array().unwrap();
     assert_eq!(routes.len(), 2);
     // Each route's match should carry the right host + path.
@@ -526,6 +536,7 @@ fn redirect_handler_emits_static_response_with_and_without_path_preservation() {
         virtual_hosts: vec![VirtualHost {
             hostname: "old.example.com".to_string(),
             tls_acme: true,
+            port: 443,
             redirect: None,
             routes: vec![
                 ProxyRoute {
@@ -552,7 +563,7 @@ fn redirect_handler_emits_static_response_with_and_without_path_preservation() {
         renewal_ratios: Default::default(),
     };
     let json = build_caddy_config(&config);
-    let routes = json["apps"]["http"]["servers"]["seedling_https"]["routes"]
+    let routes = json["apps"]["http"]["servers"]["seedling_https_443"]["routes"]
         .as_array()
         .expect("routes");
 
@@ -577,6 +588,7 @@ fn redirect_handler_emits_static_response_with_and_without_path_preservation() {
 #[test]
 fn http_to_https_redirect_targets_nonstandard_https_port() {
     let mut vhost = https_vhost("example.com", "[fd5e::1]:3000");
+    vhost.port = 8443;
     vhost.redirect = Some(HttpRedirect {
         from_port: 8080,
         to_port: 8443,
@@ -600,7 +612,7 @@ fn http_to_https_redirect_targets_nonstandard_https_port() {
         renewal_ratios: Default::default(),
     };
     let json = build_caddy_config(&config);
-    let redirect = &json["apps"]["http"]["servers"]["seedling_http"]["routes"][0]["handle"][0];
+    let redirect = &json["apps"]["http"]["servers"]["seedling_http_8080"]["routes"][0]["handle"][0];
     assert_eq!(
         redirect["headers"]["Location"][0],
         "https://{http.request.host}:8443{http.request.uri}"
@@ -646,7 +658,7 @@ fn each_redirect_targets_its_own_ingress_port() {
         &[],
     );
     let json = build_caddy_config(&config);
-    let routes = json["apps"]["http"]["servers"]["seedling_http"]["routes"]
+    let routes = json["apps"]["http"]["servers"]["seedling_http_80"]["routes"]
         .as_array()
         .expect("the plaintext server has the redirects");
 
@@ -732,7 +744,7 @@ fn plaintext_vhost_gets_no_redirect_route() {
         renewal_ratios: Default::default(),
     };
     let json = build_caddy_config(&config);
-    let routes = json["apps"]["http"]["servers"]["seedling_http"]["routes"].to_string();
+    let routes = json["apps"]["http"]["servers"]["seedling_http_80"]["routes"].to_string();
 
     assert!(
         !routes.contains("static_response") && !routes.contains("Location"),
@@ -754,12 +766,12 @@ fn plaintext_ingress_is_served_end_to_end() {
     let servers = &json["apps"]["http"]["servers"];
 
     assert!(
-        servers["seedling_http"].is_object(),
+        servers["seedling_http_80"].is_object(),
         "plaintext host must be served over HTTP, got {}",
         serde_json::to_string(&json).unwrap()
     );
-    assert_eq!(servers["seedling_http"]["listen"][0], ":80");
-    let routes = servers["seedling_http"]["routes"].to_string();
+    assert_eq!(servers["seedling_http_80"]["listen"][0], ":80");
+    let routes = servers["seedling_http_80"]["routes"].to_string();
     assert!(
         routes.contains("clinic.local"),
         "host matcher missing: {routes}"
@@ -791,17 +803,17 @@ fn mixed_termination_on_one_hostname_serves_each_from_its_own_listener() {
     let servers = &json["apps"]["http"]["servers"];
 
     assert!(
-        servers["seedling_http"].is_object(),
+        servers["seedling_http_80"].is_object(),
         "the plaintext route must still be served over HTTP: {}",
         serde_json::to_string(&json).unwrap()
     );
     assert!(
-        servers["seedling_https"].is_object(),
+        servers["seedling_https_443"].is_object(),
         "the TLS route must be served over HTTPS"
     );
-    assert_eq!(servers["seedling_http"]["listen"][0], ":80");
+    assert_eq!(servers["seedling_http_80"]["listen"][0], ":80");
     assert_eq!(
-        servers["seedling_https"]["routes"]
+        servers["seedling_https_443"]["routes"]
             .as_array()
             .map(|r| r.len()),
         Some(1),
@@ -821,7 +833,7 @@ fn reverse_proxy_routes_compress_ahead_of_the_proxy() {
         ..Default::default()
     };
     let json = build_caddy_config(&config);
-    let handle = &json["apps"]["http"]["servers"]["seedling_http"]["routes"][0]["handle"];
+    let handle = &json["apps"]["http"]["servers"]["seedling_http_80"]["routes"][0]["handle"];
 
     // encode must wrap the proxy, so it comes first in the chain.
     assert_eq!(handle[0]["handler"], "encode");
@@ -847,7 +859,7 @@ fn reverse_proxy_routes_carry_balancing_defaults() {
         ..Default::default()
     };
     let json = build_caddy_config(&config);
-    let lb = &json["apps"]["http"]["servers"]["seedling_http"]["routes"][0]["handle"][1]["load_balancing"];
+    let lb = &json["apps"]["http"]["servers"]["seedling_http_80"]["routes"][0]["handle"][1]["load_balancing"];
 
     assert_eq!(lb["selection_policy"]["policy"], "round_robin");
     // Caddy durations as nanoseconds: 5s and 250ms.
@@ -867,6 +879,7 @@ fn redirect_routes_are_emitted_bare() {
         virtual_hosts: vec![VirtualHost {
             hostname: "old.example.com".to_string(),
             tls_acme: false,
+            port: 80,
             redirect: None,
             routes: vec![ProxyRoute {
                 prefix: "/".to_string(),
@@ -880,7 +893,7 @@ fn redirect_routes_are_emitted_bare() {
         ..Default::default()
     };
     let json = build_caddy_config(&config);
-    let handle = &json["apps"]["http"]["servers"]["seedling_http"]["routes"][0]["handle"];
+    let handle = &json["apps"]["http"]["servers"]["seedling_http_80"]["routes"][0]["handle"];
 
     // A redirect has nothing to compress and no pool to balance across.
     assert_eq!(handle[0]["handler"], "static_response");
@@ -910,6 +923,7 @@ fn compression_can_be_switched_off_for_a_route() {
         virtual_hosts: vec![VirtualHost {
             hostname: "app.example.com".to_string(),
             tls_acme: false,
+            port: 80,
             redirect: None,
             routes: vec![ProxyRoute {
                 prefix: "/".to_string(),
@@ -922,7 +936,7 @@ fn compression_can_be_switched_off_for_a_route() {
         ..Default::default()
     };
     let json = build_caddy_config(&config);
-    let handle = &json["apps"]["http"]["servers"]["seedling_http"]["routes"][0]["handle"];
+    let handle = &json["apps"]["http"]["servers"]["seedling_http_80"]["routes"][0]["handle"];
 
     assert_eq!(handle[0]["handler"], "reverse_proxy");
     assert_eq!(
@@ -966,6 +980,7 @@ fn vhost_with(hostname: &str, routes: Vec<ProxyRoute>) -> ProxyConfig {
         virtual_hosts: vec![VirtualHost {
             hostname: hostname.to_string(),
             tls_acme: false,
+            port: 80,
             redirect: None,
             routes,
         }],
@@ -988,7 +1003,7 @@ fn a_limited_route_carries_the_rate_limit_handler() {
         )],
     );
     let json = build_caddy_config(&config);
-    let handle = &json["apps"]["http"]["servers"]["seedling_http"]["routes"][0]["handle"];
+    let handle = &json["apps"]["http"]["servers"]["seedling_http_80"]["routes"][0]["handle"];
 
     // First in the chain, so the excess never reaches the proxy.
     assert_eq!(handle[0]["handler"], "rate_limit");
@@ -1006,7 +1021,7 @@ fn a_limited_route_carries_the_rate_limit_handler() {
 fn an_unlimited_route_carries_no_rate_limit_handler() {
     let config = vhost_with("app.example.com", vec![limited_route("/api", None)]);
     let json = build_caddy_config(&config);
-    let handle = &json["apps"]["http"]["servers"]["seedling_http"]["routes"][0]["handle"];
+    let handle = &json["apps"]["http"]["servers"]["seedling_http_80"]["routes"][0]["handle"];
 
     assert_eq!(handle[0]["handler"], "reverse_proxy");
     assert!(handle[1].is_null());
@@ -1030,7 +1045,7 @@ fn emitted_zone_uses_only_fields_the_pinned_module_declares() {
         )],
     );
     let json = build_caddy_config(&config);
-    let handler = &json["apps"]["http"]["servers"]["seedling_http"]["routes"][0]["handle"][0];
+    let handler = &json["apps"]["http"]["servers"]["seedling_http_80"]["routes"][0]["handle"][0];
     let zone = &handler["rate_limits"]["demo/web/api"];
 
     // Both levels: an unknown key fails the document wherever it sits.
@@ -1090,7 +1105,7 @@ fn a_longer_prefix_carries_its_own_zone_ahead_of_the_shorter_one() {
         ],
     );
     let json = build_caddy_config(&config);
-    let routes = &json["apps"]["http"]["servers"]["seedling_http"]["routes"];
+    let routes = &json["apps"]["http"]["servers"]["seedling_http_80"]["routes"];
 
     // Longest prefix first, and terminal, so a login request is counted
     // against the tighter zone alone.
@@ -1118,6 +1133,7 @@ fn redirect_routes_are_never_rate_limited() {
         virtual_hosts: vec![VirtualHost {
             hostname: "old.example.com".to_string(),
             tls_acme: false,
+            port: 80,
             redirect: None,
             routes: vec![ProxyRoute {
                 prefix: "/".to_string(),
@@ -1131,7 +1147,7 @@ fn redirect_routes_are_never_rate_limited() {
         ..Default::default()
     };
     let json = build_caddy_config(&config);
-    let handle = &json["apps"]["http"]["servers"]["seedling_http"]["routes"][0]["handle"];
+    let handle = &json["apps"]["http"]["servers"]["seedling_http_80"]["routes"][0]["handle"];
 
     assert_eq!(handle[0]["handler"], "static_response");
     assert!(handle[1].is_null());
@@ -1152,8 +1168,8 @@ fn old_cached_config_without_rate_limit_still_deserialises() {
         }}}]}],
       "l4_routes":[],"warm_cert_hostnames":[],"cert_endpoint_url":null
     }"#;
-    let parsed: Result<crate::system::types::ProxyConfig, _> = serde_json::from_str(old);
-    let cfg = parsed.expect("a cached config from before rate limiting must still load");
+    let cfg = super::startup::parse_cached_proxy_config(old)
+        .expect("a cached config from before rate limiting must still load");
     let crate::system::types::ProxyRouteHandler::ReverseProxy { proxy, .. } =
         &cfg.virtual_hosts[0].routes[0].handler
     else {
@@ -1238,12 +1254,14 @@ fn a_zone_reaches_the_emitted_document_unchanged() {
             VirtualHost {
                 hostname: "app.example.com".to_string(),
                 tls_acme: false,
+                port: 80,
                 redirect: None,
                 routes: vec![shared("/api"), shared("/v1")],
             },
             VirtualHost {
                 hostname: "app.example.com".to_string(),
                 tls_acme: true,
+                port: 443,
                 redirect: None,
                 routes: vec![shared("/api")],
             },
@@ -1251,8 +1269,8 @@ fn a_zone_reaches_the_emitted_document_unchanged() {
         ..Default::default()
     };
     let json = build_caddy_config(&config);
-    let plain = &json["apps"]["http"]["servers"]["seedling_http"]["routes"];
-    let tls = &json["apps"]["http"]["servers"]["seedling_https"]["routes"];
+    let plain = &json["apps"]["http"]["servers"]["seedling_http_80"]["routes"];
+    let tls = &json["apps"]["http"]["servers"]["seedling_https_443"]["routes"];
 
     for zones in [
         &plain[0]["handle"][0]["rate_limits"],
@@ -1279,7 +1297,7 @@ fn ipv6_clients_are_counted_per_64_and_ipv4_per_address() {
         )],
     );
     let json = build_caddy_config(&config);
-    let zone = &json["apps"]["http"]["servers"]["seedling_http"]["routes"][0]["handle"][0]["rate_limits"]
+    let zone = &json["apps"]["http"]["servers"]["seedling_http_80"]["routes"][0]["handle"][0]["rate_limits"]
         ["demo/web/api"];
 
     // A party holds its whole /64, so counting addresses within it separately
@@ -1394,7 +1412,7 @@ fn ops(
 
 fn handle_for(config: &ProxyConfig) -> Vec<serde_json::Value> {
     let json = build_caddy_config(config);
-    json["apps"]["http"]["servers"]["seedling_http"]["routes"][0]["handle"]
+    json["apps"]["http"]["servers"]["seedling_http_80"]["routes"][0]["handle"]
         .as_array()
         .expect("a handler chain")
         .clone()
@@ -1551,12 +1569,14 @@ fn no_server_takes_away_the_proxys_default_keep_alive() {
             VirtualHost {
                 hostname: "plain.example.com".to_string(),
                 tls_acme: false,
+                port: 80,
                 redirect: None,
                 routes: vec![limited_route("/", None)],
             },
             VirtualHost {
                 hostname: "tls.example.com".to_string(),
                 tls_acme: true,
+                port: 443,
                 redirect: None,
                 routes: vec![limited_route("/", None)],
             },
@@ -1637,7 +1657,7 @@ fn redirect_route_at(prefix: &str, target: Vec<RedirectSegment>, code: u16) -> P
 }
 
 fn handlers(json: &serde_json::Value, index: usize) -> Vec<String> {
-    json["apps"]["http"]["servers"]["seedling_http"]["routes"][index]["handle"]
+    json["apps"]["http"]["servers"]["seedling_http_80"]["routes"][index]["handle"]
         .as_array()
         .expect("route has a handler chain")
         .iter()
@@ -1646,7 +1666,7 @@ fn handlers(json: &serde_json::Value, index: usize) -> Vec<String> {
 }
 
 fn location(json: &serde_json::Value, index: usize, handler: usize) -> String {
-    json["apps"]["http"]["servers"]["seedling_http"]["routes"][index]["handle"][handler]["headers"]
+    json["apps"]["http"]["servers"]["seedling_http_80"]["routes"][index]["handle"][handler]["headers"]
         ["Location"][0]
         .as_str()
         .expect("a Location is set")
@@ -1671,7 +1691,7 @@ fn a_tail_carrying_redirect_cuts_the_rest_of_the_request_line_into_the_target() 
     );
     let json = build_caddy_config(&config);
     assert_eq!(handlers(&json, 0), vec!["map", "static_response"]);
-    let route = &json["apps"]["http"]["servers"]["seedling_http"]["routes"][0];
+    let route = &json["apps"]["http"]["servers"]["seedling_http_80"]["routes"][0];
     assert_eq!(route["handle"][1]["status_code"], 308);
     assert_eq!(
         location(&json, 0, 1),
@@ -1711,10 +1731,11 @@ fn the_request_parts_pattern_is_case_insensitive_and_refuses_braces() {
         )],
     );
     let json = build_caddy_config(&config);
-    let pattern = json["apps"]["http"]["servers"]["seedling_http"]["routes"][0]["handle"][0]
-        ["mappings"][0]["input_regexp"]
-        .as_str()
-        .expect("the mapping carries a pattern");
+    let pattern =
+        json["apps"]["http"]["servers"]["seedling_http_80"]["routes"][0]["handle"][0]["mappings"]
+            [0]["input_regexp"]
+            .as_str()
+            .expect("the mapping carries a pattern");
 
     // The path matcher that chose this route compares without regard to case,
     // so a pattern that did not would match the route and drop the tail.
@@ -1740,10 +1761,11 @@ fn a_prefix_carrying_pattern_metacharacters_is_matched_literally() {
         )],
     );
     let json = build_caddy_config(&config);
-    let pattern = json["apps"]["http"]["servers"]["seedling_http"]["routes"][0]["handle"][0]
-        ["mappings"][0]["input_regexp"]
-        .as_str()
-        .expect("the mapping carries a pattern");
+    let pattern =
+        json["apps"]["http"]["servers"]["seedling_http_80"]["routes"][0]["handle"][0]["mappings"]
+            [0]["input_regexp"]
+            .as_str()
+            .expect("the mapping carries a pattern");
     assert!(pattern.contains(r"\/v1\.0\/log\+in"), "{pattern}");
 }
 
@@ -1783,7 +1805,7 @@ fn a_query_carried_on_its_own_is_mapped_so_an_absent_one_adds_nothing() {
     );
     let json = build_caddy_config(&config);
     assert_eq!(handlers(&json, 0), vec!["map", "static_response"]);
-    let map = &json["apps"]["http"]["servers"]["seedling_http"]["routes"][0]["handle"][0];
+    let map = &json["apps"]["http"]["servers"]["seedling_http_80"]["routes"][0]["handle"][0];
     // The query is cut out carrying its `?`, so a request without one
     // contributes nothing rather than a bare `?`.
     assert_eq!(map["mappings"][0]["outputs"][1], "${2}");
@@ -1836,7 +1858,7 @@ fn a_redirect_route_carries_its_response_header_operations_first() {
         handlers(&json, 0),
         vec!["headers", "map", "static_response"]
     );
-    let handler = &json["apps"]["http"]["servers"]["seedling_http"]["routes"][0]["handle"][0];
+    let handler = &json["apps"]["http"]["servers"]["seedling_http_80"]["routes"][0]["handle"][0];
     assert_eq!(handler["response"]["deferred"], true);
     assert_eq!(handler["response"]["set"]["Cache-Control"][0], "no-store");
 }
@@ -1883,6 +1905,7 @@ fn an_ingress_redirect_answers_ahead_of_a_redirect_route_on_the_plaintext_vhost(
         virtual_hosts: vec![VirtualHost {
             hostname: "app.example.com".to_string(),
             tls_acme: true,
+            port: 443,
             redirect: Some(HttpRedirect {
                 from_port: 80,
                 to_port: 443,
@@ -1901,7 +1924,7 @@ fn an_ingress_redirect_answers_ahead_of_a_redirect_route_on_the_plaintext_vhost(
     };
     let json = build_caddy_config(&config);
 
-    let http = json["apps"]["http"]["servers"]["seedling_http"]["routes"]
+    let http = json["apps"]["http"]["servers"]["seedling_http_80"]["routes"]
         .as_array()
         .expect("the plaintext server has routes");
     assert_eq!(http.len(), 1, "the redirect route must not be emitted here");
@@ -1915,7 +1938,7 @@ fn an_ingress_redirect_answers_ahead_of_a_redirect_route_on_the_plaintext_vhost(
     );
 
     // It is served on the TLS side, where the client arrives after the hop.
-    let https = json["apps"]["http"]["servers"]["seedling_https"]["routes"]
+    let https = json["apps"]["http"]["servers"]["seedling_https_443"]["routes"]
         .as_array()
         .expect("the TLS server has routes");
     assert_eq!(https[0]["match"][0]["path"][0], "/v1/login");
@@ -2028,4 +2051,151 @@ fn a_ratio_for_a_hostname_the_proxy_does_not_serve_is_ignored() {
         .unwrap();
     assert_eq!(policies.len(), 1);
     assert!(policies[0]["renewal_window_ratio"].is_null());
+}
+
+// r[verify actuate.ingress.port-scope]
+// Two ingresses for one hostname on different ports used to merge into one
+// route list, so the public site answered on the admin port and the admin
+// service was unreachable.
+#[test]
+fn same_hostname_on_two_ports_keeps_each_ingress_apart() {
+    let config = build_proxy_config(
+        &[
+            (
+                plaintext_ingress("x.example.com", 80),
+                service_upstream(3000),
+            ),
+            (
+                plaintext_ingress("x.example.com", 8080),
+                service_upstream(4000),
+            ),
+        ],
+        &[],
+    );
+    let json = build_caddy_config(&config);
+    let servers = &json["apps"]["http"]["servers"];
+
+    let dial = |server: &str| -> String {
+        servers[server]["routes"][0]["handle"]
+            .as_array()
+            .and_then(|h| h.iter().find(|h| h["handler"] == "reverse_proxy"))
+            .map(|h| h["upstreams"][0]["dial"].to_string())
+            .unwrap_or_default()
+    };
+    assert_eq!(
+        servers["seedling_http_80"]["listen"],
+        serde_json::json!([":80"])
+    );
+    assert_eq!(
+        servers["seedling_http_8080"]["listen"],
+        serde_json::json!([":8080"])
+    );
+    assert!(dial("seedling_http_80").contains(":3000"), "{json}");
+    assert!(dial("seedling_http_8080").contains(":4000"), "{json}");
+}
+
+// r[verify actuate.ingress.port-scope]
+#[test]
+fn tls_ingresses_on_two_ports_get_their_own_servers() {
+    let mut a = https_vhost("x.example.com", "[fd5e::1]:3000");
+    a.redirect = None;
+    let mut b = https_vhost("x.example.com", "[fd5e::2]:4000");
+    b.port = 8443;
+    b.redirect = None;
+    let config = ProxyConfig {
+        listeners: [443, 8443]
+            .into_iter()
+            .flat_map(|port| {
+                [ProxyListenerProto::Https, ProxyListenerProto::Quic]
+                    .map(|proto| ProxyListener { port, proto })
+            })
+            .collect(),
+        virtual_hosts: vec![a, b],
+        ..Default::default()
+    };
+    let json = build_caddy_config(&config);
+    let servers = &json["apps"]["http"]["servers"];
+
+    assert_eq!(
+        servers["seedling_https_443"]["listen"],
+        serde_json::json!([":443"])
+    );
+    assert_eq!(
+        servers["seedling_https_8443"]["listen"],
+        serde_json::json!([":8443"])
+    );
+    for (server, upstream) in [
+        ("seedling_https_443", ":3000"),
+        ("seedling_https_8443", ":4000"),
+    ] {
+        let routes = servers[server]["routes"].as_array().expect("routes");
+        assert_eq!(routes.len(), 1, "{server} serves only its own ingress");
+        assert!(routes[0].to_string().contains(upstream), "{server}");
+    }
+}
+
+// r[verify actuate.ingress.port-scope]
+#[test]
+fn a_redirect_answers_only_on_the_port_it_names() {
+    let mut vhost = https_vhost("x.example.com", "[fd5e::1]:3000");
+    vhost.redirect = Some(HttpRedirect {
+        from_port: 80,
+        to_port: 443,
+        code: 308,
+    });
+    let config = ProxyConfig {
+        listeners: vec![
+            ProxyListener {
+                port: 80,
+                proto: ProxyListenerProto::Http,
+            },
+            ProxyListener {
+                port: 8080,
+                proto: ProxyListenerProto::Http,
+            },
+            ProxyListener {
+                port: 443,
+                proto: ProxyListenerProto::Https,
+            },
+        ],
+        virtual_hosts: vec![vhost],
+        ..Default::default()
+    };
+    let json = build_caddy_config(&config);
+    let servers = &json["apps"]["http"]["servers"];
+    assert!(servers["seedling_http_80"].is_object());
+    assert!(
+        servers["seedling_http_8080"].is_null(),
+        "another plaintext port must not answer for the redirect"
+    );
+}
+
+// r[verify infra.proxy.upgrade.cache]
+// A document cached before vhosts carried a port is replayed as the daemon
+// that wrote it served it: each vhost on every port of its protocol.
+#[test]
+fn old_cached_vhosts_without_a_port_replay_on_every_port_of_their_class() {
+    let old = r#"{
+      "listeners":[{"port":80,"proto":"Http"},{"port":8080,"proto":"Http"},
+                   {"port":443,"proto":"Https"},{"port":443,"proto":"Quic"}],
+      "virtual_hosts":[
+        {"hostname":"plain.example.com","tls_acme":false,"redirect":null,"routes":[]},
+        {"hostname":"app.example.com","tls_acme":true,"redirect":null,"routes":[]}],
+      "l4_routes":[],"warm_cert_hostnames":[],"cert_endpoint_url":null
+    }"#;
+    let cfg = super::startup::parse_cached_proxy_config(old)
+        .expect("a cached config from before vhosts carried a port must still load");
+    let served: Vec<(&str, u16)> = cfg
+        .virtual_hosts
+        .iter()
+        .map(|vh| (vh.hostname.as_str(), vh.port))
+        .collect();
+    assert_eq!(
+        served,
+        [
+            ("plain.example.com", 80),
+            ("plain.example.com", 8080),
+            ("app.example.com", 443)
+        ]
+    );
 }
