@@ -5,7 +5,7 @@ use crate::runtime::barrier::runtime::is_in_action_closure;
 use super::{
     Freezable, Holder,
     pod::PodDef,
-    resource::{ResourceId, ResourceKind, ResourceName},
+    resource::{Resource, ResourceId, ResourceKind, ResourceName},
 };
 
 // l[impl job.type]
@@ -29,6 +29,21 @@ impl super::Freezable for Job {
     fn is_frozen(&self) -> bool {
         // Anonymous jobs use an empty name as a sentinel (see app/job.rs).
         self.frozen || (!self.name.is_empty() && is_in_action_closure())
+    }
+}
+
+impl super::app::StaticResource for Job {
+    const KIND: ResourceKind = ResourceKind::Job;
+
+    fn from_resource(resource: &Resource) -> Option<&Self> {
+        match resource {
+            Resource::Job(r) => Some(r),
+            _ => None,
+        }
+    }
+
+    fn freeze(&mut self) {
+        self.frozen = true;
     }
 }
 

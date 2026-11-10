@@ -1228,3 +1228,43 @@ fn external_service_static_is_immutable_in_action() {
         );
     }
 }
+
+// l[verify app.resources.context.named]
+// `resources` is keyed by kind and name together, so a name held by another
+// kind misses the lookup exactly as an undeclared one does. The error says
+// which kind has it rather than sending the author after a typo.
+#[test]
+fn static_ref_names_the_kind_that_holds_the_name() {
+    let msg = run_action_err(
+        r#"
+        app.service("database");
+        app.on_action("run-it", |rt, _param| {
+            app.external_service("database");
+        });
+    "#,
+        "run-it",
+    );
+    assert!(
+        msg.contains("no static external service named 'database'")
+            && msg.contains("it is a service"),
+        "got: {msg}"
+    );
+}
+
+// l[verify app.resources.context.named]
+#[test]
+fn static_ref_reports_an_undeclared_name_as_missing() {
+    let msg = run_action_err(
+        r#"
+        app.on_action("run-it", |rt, _param| {
+            app.deployment("nowhere");
+        });
+    "#,
+        "run-it",
+    );
+    assert!(
+        msg.contains("no static deployment named 'nowhere'"),
+        "got: {msg}"
+    );
+    assert!(!msg.contains("it is a"), "got: {msg}");
+}

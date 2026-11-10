@@ -54,6 +54,21 @@ impl super::Freezable for Service {
     }
 }
 
+impl super::app::StaticResource for Service {
+    const KIND: ResourceKind = ResourceKind::Service;
+
+    fn from_resource(resource: &Resource) -> Option<&Self> {
+        match resource {
+            Resource::Service(s) => Some(s),
+            _ => None,
+        }
+    }
+
+    fn freeze(&mut self) {
+        self.frozen = true;
+    }
+}
+
 impl Service {
     pub fn new(name: ResourceName) -> Self {
         Self {
@@ -873,6 +888,21 @@ impl super::Freezable for ExternalService {
         // An external service has no anonymous form, so every one is static
         // and immutable inside an action closure.
         self.frozen || is_in_action_closure()
+    }
+}
+
+impl super::app::StaticResource for ExternalService {
+    const KIND: ResourceKind = ResourceKind::ExternalService;
+
+    fn from_resource(resource: &Resource) -> Option<&Self> {
+        match resource {
+            Resource::ExternalService(s) => Some(s),
+            _ => None,
+        }
+    }
+
+    fn freeze(&mut self) {
+        self.frozen = true;
     }
 }
 

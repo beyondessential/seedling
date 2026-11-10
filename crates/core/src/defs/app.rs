@@ -5,13 +5,14 @@ use std::sync::Arc;
 use rhai::{CustomType, Dynamic, FnPtr, Map, TypeBuilder};
 use seedling_protocol::names::{ActionName, AppName, ParamName, ShellName};
 
+use crate::runtime::barrier::runtime::action_def;
 use crate::runtime::definition::Bundle;
 
 use super::{
     Holder,
     action::{ActionDef, ShellDef},
     install::{InstallDef, ParamDef},
-    resource::{Resource, ResourceId},
+    resource::{Resource, ResourceId, ResourceKind},
 };
 
 mod action;
@@ -147,6 +148,101 @@ pub(crate) fn ensure_not_validating() -> Result<(), Box<rhai::EvalAltResult>> {
         return Err("a validator must not define resources".into());
     }
     Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Static resource references
+// ---------------------------------------------------------------------------
+
+/// A resource type that `app.<kind>(name)` hands back as a frozen reference in
+/// the action context.
+///
+/// One implementation per named resource type, so [`static_ref`] can do the
+/// lookup for all of them rather than each method repeating it.
+pub(crate) trait StaticResource: Clone {
+    /// The kind this type is filed under in [`AppDef::resources`].
+    const KIND: ResourceKind;
+
+    /// The resource as this type, when the entry holds this variant.
+    fn from_resource(resource: &Resource) -> Option<&Self>;
+
+    /// Mark the handle frozen, which every static reference in the action
+    /// context is.
+    // l[impl app.resources.context.immutable]
+    fn freeze(&mut self);
+}
+
+/// The static resource `name` of type `T`, as a frozen reference.
+///
+/// Every named-resource method resolves the same way in the action context, so
+/// the lookup lives here rather than in each of them: one diagnosis for a name
+/// that is not there, and nothing for the next resource type to copy.
+// l[impl app.resources.context.named]
+pub(crate) fn static_ref<T: StaticResource>(name: &str) -> Result<T, Box<rhai::EvalAltResult>> {
+    let adef = action_def().ok_or_else(|| -> Box<rhai::EvalAltResult> {
+        "internal: action context but no action AppDef set".into()
+    })?;
+    let def = adef.load();
+    let id = ResourceId {
+        kind: T::KIND,
+        name: Arc::new(name.to_owned()),
+    };
+    let Some(resource) = def.resources.get(&id) else {
+        return Err(no_static_resource(&def, T::KIND, name));
+    };
+    let mut handle = T::from_resource(resource)
+        .ok_or_else(|| -> Box<rhai::EvalAltResult> {
+            format!(
+                "internal: '{name}' is filed as {} but holds a {}",
+                noun(T::KIND),
+                noun(resource.kind())
+            )
+            .into()
+        })?
+        .clone();
+    handle.freeze();
+    Ok(handle)
+}
+
+/// The error for a name that is not a static resource of `kind`.
+///
+/// `resources` is keyed by kind and name together, so a name declared as
+/// another kind misses the lookup exactly as one never declared does. Saying
+/// which kind holds it is the difference between a one-line fix and a hunt for
+/// a typo that was never made.
+fn no_static_resource(def: &AppDef, kind: ResourceKind, name: &str) -> Box<rhai::EvalAltResult> {
+    let held_by = def
+        .resources
+        .keys()
+        .find(|id| id.name.as_str() == name)
+        .map(|id| id.kind);
+    match held_by {
+        Some(other) => format!(
+            "no static {} named '{name}': it is a {}",
+            noun(kind),
+            noun(other)
+        ),
+        None => format!("no static {} named '{name}'", noun(kind)),
+    }
+    .into()
+}
+
+/// How a resource kind is named to a script author.
+///
+/// Separate from the kind slugs the runtime persists and parses, which are
+/// written for machines and must not change under them.
+fn noun(kind: ResourceKind) -> &'static str {
+    match kind {
+        ResourceKind::Parameter => "parameter",
+        ResourceKind::Service => "service",
+        ResourceKind::Ingress => "ingress",
+        ResourceKind::Deployment => "deployment",
+        ResourceKind::Job => "job",
+        ResourceKind::Volume => "volume",
+        ResourceKind::ExternalVolume => "external volume",
+        ResourceKind::ExternalService => "external service",
+        ResourceKind::Action => "action",
+    }
 }
 
 // ---------------------------------------------------------------------------

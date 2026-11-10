@@ -1,6 +1,6 @@
 use rhai::{EvalAltResult, TypeBuilder};
 
-use crate::runtime::barrier::runtime::{action_def, is_in_action_closure};
+use crate::runtime::barrier::runtime::is_in_action_closure;
 
 use super::super::{
     job::Job,
@@ -18,23 +18,7 @@ pub(super) fn on_app(builder: &mut TypeBuilder<App>) {
             super::ensure_not_validating()?;
             let rname = ResourceName::new(name.into());
             if is_in_action_closure() {
-                let adef = action_def().ok_or_else(|| -> Box<EvalAltResult> {
-                    "internal: action context but no action AppDef set".into()
-                })?;
-                let def = adef.load();
-                let id = ResourceId {
-                    kind: ResourceKind::Job,
-                    name: rname,
-                };
-                match def.resources.get(&id) {
-                    Some(Resource::Job(j)) => {
-                        let mut frozen = j.clone();
-                        frozen.frozen = true;
-                        Ok(frozen)
-                    }
-                    Some(_) => Err(format!("'{}' is not a job", name).into()),
-                    None => Err(format!("no static job named '{}'", name).into()),
-                }
+                super::static_ref::<Job>(name)
             } else {
                 let id = ResourceId {
                     kind: ResourceKind::Job,
