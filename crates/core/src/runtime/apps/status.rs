@@ -66,24 +66,36 @@ pub fn of(entry: &AppEntry, active: Option<&ActiveOperation>, db: &DbHandle) -> 
     }
 }
 
+/// What the status rollup reads of one declared resource.
+struct Declared {
+    kind: ResourceKind,
+    name: Arc<String>,
+    /// A deployment's scale bounds; `None` for every other kind.
+    scale_bounds: Option<(u16, u16)>,
+}
+
 /// Faulted, Degraded or Running, for an installed app with no operation.
 fn steady(entry: &AppEntry, db: &DbHandle) -> AppStatus {
     let app_name = entry.name.clone();
 
     // Collected with a brief def lock, released before touching the database.
-    let resources: Vec<(ResourceKind, Arc<String>, Option<(u16, u16)>)> = {
+    let resources: Vec<Declared> = {
         let def = entry.app.def.load();
         def.resources
             .iter()
             .map(|(id, resource)| {
-                let bounds = match resource {
+                let scale_bounds = match resource {
                     Resource::Deployment(d) => {
                         let scale = &d.def.lock().scale;
                         Some((scale.start, scale.end))
                     }
                     _ => None,
                 };
-                (id.kind, Arc::clone(&id.name), bounds)
+                Declared {
+                    kind: id.kind,
+                    name: Arc::clone(&id.name),
+                    scale_bounds,
+                }
             })
             .collect()
     };
@@ -95,7 +107,12 @@ fn steady(entry: &AppEntry, db: &DbHandle) -> AppStatus {
                 return Ok(AppStatus::Faulted);
             }
             let stopped = stopped::load_stopped(db, &app_name)?;
-            for (kind, name, bounds) in &resources {
+            for Declared {
+                kind,
+                name,
+                scale_bounds,
+            } in &resources
+            {
                 if !has_lifecycle(*kind) {
                     continue;
                 }
@@ -104,7 +121,7 @@ fn steady(entry: &AppEntry, db: &DbHandle) -> AppStatus {
                 // a deployment scaled to zero, is meant to have nothing Ready.
                 let wants_ready = if stopped.contains(&(*kind, name.as_str().to_owned())) {
                     false
-                } else if let Some((low, high)) = bounds {
+                } else if let Some((low, high)) = scale_bounds {
                     scaling::effective_scale(db, &app_name, name, *low, *high)? > 0
                 } else {
                     true
