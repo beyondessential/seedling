@@ -1526,6 +1526,19 @@ Two levers set how a workload competes for host resources under pressure. Each D
 > The runtime must declare the set of modules it requires, so that an image can be checked
 > against what the runtime actually emits rather than against a separately maintained list.
 
+> r[infra.proxy.image.config]
+> The proxy image must accept, in full, the configuration the runtime emits for every
+> feature it can emit. The proxy decodes each module's configuration strictly, so a field
+> the image's version of a module does not declare fails the whole document rather than the
+> route that carried it, and every ingress on the node loses service together.
+> [infra.proxy.image.modules](#r--infra.proxy.image.modules) does not cover this: a module
+> can be present and still not declare a field the runtime emits.
+>
+> The emitted configuration must therefore be checked against the image itself, using the
+> proxy's own validation, before the image is published and whenever the emitter changes.
+> The check must be one that can fail: it must be shown to reject a configuration carrying
+> a field the image does not declare.
+
 > r[infra.proxy.image.cert-cache]
 > The proxy image must store its certificate cache at the location the runtime observes it
 > at. The certificate status in [observe.ingress.certs](#r--observe.ingress.certs) and the

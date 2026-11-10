@@ -1,0 +1,71 @@
+name: Caddy config
+
+on:
+  pull_request:
+    paths:
+      - docker/caddy/**
+      - crates/core/src/system/caddy/**
+      - crates/core/src/system/translate/proxy.rs
+      - crates/core/src/system/types.rs
+      - .github/workflows/caddy-config.yml
+  push:
+    branches:
+      - main
+    paths:
+      - docker/caddy/**
+      - crates/core/src/system/caddy/**
+      - crates/core/src/system/translate/proxy.rs
+      - crates/core/src/system/types.rs
+      - .github/workflows/caddy-config.yml
+  workflow_dispatch:
+
+concurrency:
+  group: caddy-config-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  SKIP_FRONTEND_BUILD: "1"
+
+jobs:
+  validate:
+    name: Emitted config is accepted by the proxy image
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7.0.0
+      - uses: docker/setup-buildx-action@v4
+
+      # Built from the Containerfile in this checkout rather than pulled by the
+      # pinned tag: a change to the image and a change to the emitter are both
+      # checked against each other, including before a bumped tag exists in the
+      # registry. Never published from here; caddy-image.yml owns that.
+      - name: Build the proxy image
+        uses: docker/build-push-action@v7.3.0
+        with:
+          context: docker/caddy
+          file: docker/caddy/Containerfile
+          platforms: linux/amd64
+          load: true
+          tags: seedling-caddy:check
+
+      - name: Configure toolchain
+        run: |
+          rustup toolchain install --profile minimal --no-self-update stable
+          rustup default stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: rust
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - name: Install system dependencies
+        run: sudo apt-get update && sudo apt-get install -y libsystemd-dev
+      - name: Create frontend/dist placeholder
+        run: mkdir -p crates/web/frontend/dist
+
+      # r[verify infra.proxy.image.config]
+      - name: Validate the emitted config in the image
+        env:
+          SEEDLING_CADDY_IMAGE: seedling-caddy:check
+          CONTAINER_RUNTIME: docker
+        run: >
+          cargo test -p seedling-core --locked --lib
+          emitted_config_is_accepted_by_the_proxy_image -- --ignored

@@ -140,24 +140,21 @@ pub(super) const RATE_LIMIT_ZONE_FIELDS: &[&str] =
 
 #[cfg(test)]
 mod tests {
-    use std::collections::BTreeSet;
+    use std::collections::{BTreeMap, BTreeSet};
 
     use super::*;
     use crate::system::caddy::config::build_caddy_config;
     use crate::system::types::{
         HttpRedirect, L4Proto, L4Route, ProxyConfig, ProxyListener, ProxyListenerProto, ProxyRoute,
-        ProxyRouteHandler, VirtualHost,
+        ProxyRouteHandler, RedirectSegment, RouteCompress, RouteHeaderOps, RouteHeaders,
+        RouteProxy, RouteZone, VirtualHost,
     };
 
     /// Default proxy settings, with a rate limit added: limiting is off by
     /// default, so the defaults alone would leave its handler out of the
-    /// fixture and its module unchecked.
-    fn rate_limited_proxy() -> Box<crate::system::types::RouteProxy> {
-        let mut headers = crate::defs::service::HeaderSettings::default();
-        headers.response.set(
-            crate::defs::service::HeaderName::parse("Cache-Control").expect("a valid header name"),
-            crate::defs::service::HeaderOp::Replace(vec!["no-store".to_string()]),
-        );
+    /// fixture and its module unchecked. Header operations are set in both
+    /// directions, in every verb the emitter has.
+    fn rate_limited_proxy() -> Box<RouteProxy> {
         let resolved = crate::defs::service::ResolvedRouteProxy {
             rate_limit: Some(crate::defs::service::ResolvedRateLimit {
                 settings: crate::defs::service::RateLimitSettings {
@@ -166,22 +163,92 @@ mod tests {
                 },
                 scope: crate::defs::service::RateLimitScope::Service,
             }),
-            headers,
             ..Default::default()
         };
-        Box::new(crate::system::types::RouteProxy::from_resolved(
-            resolved,
-            || crate::system::types::RouteZone("demo/web".to_string()),
-        ))
+        let mut proxy = RouteProxy::from_resolved(resolved, || RouteZone("demo/web".to_string()));
+        proxy.headers = RouteHeaders {
+            request: header_ops(),
+            response: header_ops(),
+        };
+        Box::new(proxy)
+    }
+
+    fn header_ops() -> RouteHeaderOps {
+        RouteHeaderOps {
+            replace: BTreeMap::from([("Cache-Control".to_owned(), vec!["no-store".to_owned()])]),
+            add: BTreeMap::from([("Vary".to_owned(), vec!["Accept".to_owned()])]),
+            remove: vec!["Server".to_owned()],
+        }
+    }
+
+    /// Default proxy settings with the balancing policy named and compression
+    /// on, so each selection policy and each encoder is emitted somewhere.
+    fn compressed_proxy(policy: &str, content_types: Option<Vec<String>>) -> Box<RouteProxy> {
+        let mut proxy = RouteProxy::unlimited(Default::default());
+        proxy.balance.policy = policy.to_owned();
+        proxy.compress = Some(RouteCompress {
+            encodings: vec!["zstd".to_owned(), "gzip".to_owned()],
+            minimum_length: 512,
+            content_types,
+        });
+        Box::new(proxy)
+    }
+
+    fn proxied(prefix: &str, proxy: Box<RouteProxy>) -> ProxyRoute {
+        ProxyRoute {
+            prefix: prefix.to_owned(),
+            handler: ProxyRouteHandler::ReverseProxy {
+                upstreams: vec!["http://[fd5e::1]:3000".to_owned()],
+                proxy,
+            },
+        }
     }
 
     /// A configuration exercising every feature `build_caddy_config` emits.
     ///
-    /// The check below is only as complete as this fixture: a feature it does
-    /// not exercise contributes no module id and so cannot be caught missing
+    /// Both the module-id check and the validation against the real image are
+    /// only as complete as this fixture: a feature it does not exercise
+    /// contributes no module id and no field, so it cannot be caught missing
     /// from the image. Add to it whenever the emitted configuration grows a
-    /// handler.
+    /// handler, a field, or a shape.
     fn everything_on() -> ProxyConfig {
+        let tls_vhost = |hostname: &str, routes: Vec<ProxyRoute>| VirtualHost {
+            hostname: hostname.to_owned(),
+            tls_acme: true,
+            redirect: None,
+            routes,
+        };
+
+        let mut app = tls_vhost(
+            "app.example.com",
+            vec![
+                proxied("/", rate_limited_proxy()),
+                proxied("/api", compressed_proxy("least_conn", None)),
+                proxied(
+                    "/assets",
+                    compressed_proxy("random", Some(vec!["text/css".to_owned()])),
+                ),
+                proxied("/first", compressed_proxy("first", None)),
+                ProxyRoute {
+                    prefix: "/old".to_owned(),
+                    handler: ProxyRouteHandler::RouteRedirect {
+                        target: vec![
+                            RedirectSegment::Literal("https://new.example.com/v2".to_owned()),
+                            RedirectSegment::Tail,
+                            RedirectSegment::Query,
+                        ],
+                        code: 308,
+                        headers: header_ops(),
+                    },
+                },
+            ],
+        );
+        app.redirect = Some(HttpRedirect {
+            from_port: 80,
+            to_port: 443,
+            code: 308,
+        });
+
         ProxyConfig {
             listeners: vec![
                 ProxyListener {
@@ -198,27 +265,10 @@ mod tests {
                 },
             ],
             virtual_hosts: vec![
-                VirtualHost {
-                    hostname: "app.example.com".to_owned(),
-                    tls_acme: true,
-                    redirect: Some(HttpRedirect {
-                        from_port: 80,
-                        to_port: 443,
-                        code: 308,
-                    }),
-                    routes: vec![ProxyRoute {
-                        prefix: "/".to_owned(),
-                        handler: ProxyRouteHandler::ReverseProxy {
-                            upstreams: vec!["http://[fd5e::1]:3000".to_owned()],
-                            proxy: rate_limited_proxy(),
-                        },
-                    }],
-                },
-                VirtualHost {
-                    hostname: "old.example.com".to_owned(),
-                    tls_acme: true,
-                    redirect: None,
-                    routes: vec![ProxyRoute {
+                app,
+                tls_vhost(
+                    "old.example.com",
+                    vec![ProxyRoute {
                         prefix: "/".to_owned(),
                         handler: ProxyRouteHandler::Redirect {
                             url: "https://app.example.com".to_owned(),
@@ -226,16 +276,39 @@ mod tests {
                             preserve_path: true,
                         },
                     }],
+                ),
+                VirtualHost {
+                    hostname: "plain.example.com".to_owned(),
+                    tls_acme: false,
+                    redirect: None,
+                    routes: vec![proxied("/", compressed_proxy("round_robin", None))],
+                },
+                tls_vhost(
+                    "slow.example.com",
+                    vec![proxied("/", compressed_proxy("round_robin", None))],
+                ),
+                // Names the proxy's own CA issues for, which take the
+                // internal-issuer automation policy rather than the default.
+                tls_vhost(
+                    "app.internal",
+                    vec![proxied("/", compressed_proxy("round_robin", None))],
+                ),
+            ],
+            l4_routes: vec![
+                L4Route {
+                    port: 5432,
+                    proto: L4Proto::Tcp,
+                    upstreams: vec!["[fd5e::2]:5432".to_owned()],
+                },
+                L4Route {
+                    port: 5353,
+                    proto: L4Proto::Udp,
+                    upstreams: vec!["[fd5e::2]:5353".to_owned()],
                 },
             ],
-            l4_routes: vec![L4Route {
-                port: 5432,
-                proto: L4Proto::Tcp,
-                upstreams: vec!["[fd5e::2]:5432".to_owned()],
-            }],
             warm_cert_hostnames: BTreeSet::from(["warm.example.com".to_owned()]),
             cert_endpoint_url: Some("http://[fd5e::3]:8080/get_certificate".to_owned()),
-            renewal_ratios: Default::default(),
+            renewal_ratios: BTreeMap::from([("slow.example.com".to_owned(), 0.5)]),
         }
     }
 
@@ -257,6 +330,81 @@ mod tests {
              docker/caddy/required-modules.txt: {undeclared:?}. The image is \
              checked against that file, so an undeclared module makes the \
              whole configuration unappliable once it is emitted."
+        );
+    }
+
+    /// Run `caddy validate` in the image over `config`, returning its verdict
+    /// and everything it said.
+    ///
+    /// `validate` provisions every module, which is what decodes each one's own
+    /// fields strictly; it parses the whole document rather than only its outer
+    /// shape, so no running container or admin API is needed.
+    fn validate_in_image(config: &serde_json::Value) -> (bool, String) {
+        let image = std::env::var("SEEDLING_CADDY_IMAGE")
+            .unwrap_or_else(|_| crate::system::caddy::startup::CADDY_IMAGE.to_owned());
+        let runtime = std::env::var("CONTAINER_RUNTIME").unwrap_or_else(|_| "podman".to_owned());
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        std::fs::write(
+            dir.path().join("caddy.json"),
+            serde_json::to_vec_pretty(config).expect("serialise config"),
+        )
+        .expect("write config");
+
+        let output = std::process::Command::new(&runtime)
+            .args(["run", "--rm", "-v"])
+            .arg(format!("{}:/cfg:ro,Z", dir.path().display()))
+            .arg(&image)
+            .args(["caddy", "validate", "--config", "/cfg/caddy.json"])
+            .output()
+            .unwrap_or_else(|e| panic!("could not run `{runtime}`: {e}"));
+        let said = format!(
+            "{}{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        (output.status.success(), said)
+    }
+
+    /// Insert `bogus_field` into every object that carries a `handler` key.
+    fn with_unknown_field(config: &mut serde_json::Value) {
+        match config {
+            serde_json::Value::Object(map) => {
+                if map.contains_key("handler") {
+                    map.insert("bogus_field".to_owned(), serde_json::json!(1));
+                }
+                for value in map.values_mut() {
+                    with_unknown_field(value);
+                }
+            }
+            serde_json::Value::Array(items) => items.iter_mut().for_each(with_unknown_field),
+            _ => {}
+        }
+    }
+
+    // r[verify infra.proxy.image.config]
+    #[test]
+    #[ignore = "needs a container runtime and the proxy image; run by the caddy-config workflow"]
+    fn emitted_config_is_accepted_by_the_proxy_image() {
+        let emitted = build_caddy_config(&everything_on());
+
+        // A check that cannot fail proves nothing: if `validate` accepted a
+        // handler carrying a field no module declares, a pass below would only
+        // mean the command ran.
+        let mut tampered = emitted.clone();
+        with_unknown_field(&mut tampered);
+        let (accepted, said) = validate_in_image(&tampered);
+        assert!(
+            !accepted && said.contains("unknown field"),
+            "the image accepted a configuration carrying an undeclared field, so \
+             validating against it cannot catch one: {said}"
+        );
+
+        let (accepted, said) = validate_in_image(&emitted);
+        assert!(
+            accepted,
+            "the proxy image rejects the configuration the runtime emits, which \
+             would drop ingress for every vhost on the host:\n{said}"
         );
     }
 
