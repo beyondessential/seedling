@@ -272,6 +272,10 @@ mod tests {
                     proto: ProxyListenerProto::Http,
                 },
                 ProxyListener {
+                    port: 8080,
+                    proto: ProxyListenerProto::Http,
+                },
+                ProxyListener {
                     port: 443,
                     proto: ProxyListenerProto::Https,
                 },
@@ -297,7 +301,7 @@ mod tests {
                 VirtualHost {
                     hostname: "plain.example.com".to_owned(),
                     tls_acme: false,
-                    port: 80,
+                    port: 8080,
                     redirect: None,
                     routes: vec![proxied("/", compressed_proxy("round_robin", None))],
                 },

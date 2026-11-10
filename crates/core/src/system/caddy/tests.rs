@@ -2199,3 +2199,48 @@ fn old_cached_vhosts_without_a_port_replay_on_every_port_of_their_class() {
         ]
     );
 }
+
+// r[verify actuate.ingress.plaintext]
+// The proxy makes any server off its HTTP port TLS unless told not to, so a
+// plaintext ingress on :8080 answered plain HTTP clients with an error.
+#[test]
+fn plaintext_servers_on_any_port_opt_out_of_automatic_https() {
+    let config = build_proxy_config(
+        &[
+            (
+                plaintext_ingress("x.example.com", 80),
+                service_upstream(3000),
+            ),
+            (
+                plaintext_ingress("x.example.com", 8080),
+                service_upstream(4000),
+            ),
+        ],
+        &[],
+    );
+    let json = build_caddy_config(&config);
+    for server in ["seedling_http_80", "seedling_http_8080"] {
+        assert_eq!(
+            json["apps"]["http"]["servers"][server]["automatic_https"]["disable"], true,
+            "{server}"
+        );
+    }
+}
+
+// r[verify actuate.ingress.plaintext]
+#[test]
+fn tls_servers_keep_automatic_https() {
+    let mut vhost = https_vhost("x.example.com", "[fd5e::1]:3000");
+    vhost.port = 8443;
+    vhost.redirect = None;
+    let config = ProxyConfig {
+        listeners: vec![ProxyListener {
+            port: 8443,
+            proto: ProxyListenerProto::Https,
+        }],
+        virtual_hosts: vec![vhost],
+        ..Default::default()
+    };
+    let json = build_caddy_config(&config);
+    assert!(json["apps"]["http"]["servers"]["seedling_https_8443"]["automatic_https"].is_null());
+}

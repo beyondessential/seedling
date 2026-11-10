@@ -58,8 +58,9 @@ pub(crate) fn build_caddy_config(config: &ProxyConfig) -> Value {
         .collect();
 
     // r[impl ingress.persistent-connections]
-    // Each server below carries its listeners and its routes and nothing
-    // else. That absence is the implementation: the proxy keeps HTTP/1.1
+    // Each server below carries its listeners, its routes and, for plaintext,
+    // the switch that keeps it plaintext, and nothing else. That absence is
+    // the implementation: the proxy keeps HTTP/1.1
     // connections alive by default, with an idle timeout it defaults to five
     // minutes, so a client reusing a connection is what happens when we say
     // nothing. Adding `idle_timeout`, `keepalive_interval`, `keepalive_idle`,
@@ -118,9 +119,19 @@ pub(crate) fn build_caddy_config(config: &ProxyConfig) -> Value {
         }
 
         if !routes.is_empty() {
+            // r[impl actuate.ingress.plaintext]
+            // The proxy turns TLS on for any server listening off its HTTP
+            // port that matches hostnames, so left to itself it would answer
+            // a plaintext ingress on `:8080`, or a redirect declared there,
+            // with TLS. On the HTTP port this changes nothing: the proxy
+            // already leaves a server there in plaintext.
             servers.insert(
                 format!("seedling_http_{port}"),
-                json!({ "listen": [format!(":{port}")], "routes": routes }),
+                json!({
+                    "listen": [format!(":{port}")],
+                    "routes": routes,
+                    "automatic_https": { "disable": true },
+                }),
             );
         }
     }
