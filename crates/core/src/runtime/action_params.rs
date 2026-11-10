@@ -281,7 +281,7 @@ mod tests {
             required: false,
             default_value: Some(default.to_owned()),
             description: None,
-            secret: false,
+            secret: None,
         }
     }
 

@@ -74,7 +74,7 @@ fn req(kind: ParamKind, required: bool, default: Option<&str>) -> ParamDef {
         required,
         default_value: default.map(|s| s.to_owned()),
         description: None,
-        secret: false,
+        secret: None,
     }
 }
 

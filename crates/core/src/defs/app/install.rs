@@ -99,8 +99,7 @@ pub(super) fn parse_param_defs(
             .get("secret")
             .cloned()
             .map(|v| take_bool(&format!("param `{key}` secret"), v))
-            .transpose()?
-            .unwrap_or(false);
+            .transpose()?;
 
         let param_name = ParamName::new(key.as_str())
             .map_err(|e| -> Box<EvalAltResult> { e.to_string().into() })?;

@@ -137,7 +137,7 @@ Absent specification bugs, anything that is not defined here is either defined i
 > - An anonymous Volume (without a name) — yields an empty Collection.
 > - Any other value — yields an empty Collection.
 >
-> Action handles are not coercible to a Collection: actions are invoked via [`Action.invoke()`](#l--action.call), not scheduled as resources.
+> Action handles are not coercible to a Collection: `col(action)` yields an empty Collection, because actions are invoked via [`Action.invoke()`](#l--action.call), not scheduled as resources.
 
 # Constants
 
@@ -290,6 +290,7 @@ This is currently the only value.
 > In the **static context** (top-level script), `app.resource(name)` creates and registers a named resource.
 > In the **action context** (inside an action closure), `app.resource(name)` returns a **reference** to an existing static resource.
 > If no static resource with that name exists, it is a script error.
+> `app.external_volume(name)` is the one exception; see [volume.external.dynamic](#l--volume.external.dynamic).
 
 > l[app.resources.context.immutable]
 > Static resources are immutable in the action context.
@@ -659,6 +660,11 @@ This is currently the only value.
 >
 > External Services can't be modified or configured further, only [mounted](#l--container.mount-service) or [bound](#l--pod.bind) like any other Service. The concrete endpoint the slot resolves to is supplied by the operator via a mapping; see the runtime spec [service.external.mapping.events](runtime.md#r--service.external.mapping.events) for the mapping lifecycle.
 
+> l[service.external.action-context]
+> In the action context, `app.external_service(name)` returns a reference to the static External Service of that name, and throws if there is none, as [app.resources.context.named](#l--app.resources.context.named) requires of every named resource.
+> The reference is immutable like any other static resource: `description`, `balance` and `http` throw on it, however the handle was obtained.
+> No External Service is created in the action context, so the set of slots an operator maps is the set the static script declares.
+
 # Ingress
 
 > l[ingress.type]
@@ -669,6 +675,8 @@ This is currently the only value.
 > Traffic from an Ingress is matched by the hostname and port, and sent to the associated Service at the same port.
 >
 > There can be multiple ingresses for a Service.
+>
+> Only a named Service can have an ingress: calling `ingress` on an anonymous Service must throw, and no Ingress is created.
 
 > l[ingress.hostname]
 > The `hostname` argument must be a valid fully-qualified domain name: one or more labels separated by `.`, where each label is 1–63 ASCII alphanumeric or hyphen characters, must not start or end with a hyphen, and the overall length (including dots) must not exceed 253 characters.
@@ -1152,7 +1160,7 @@ This is currently the only value.
 >
 > `on_schedule` returns the Action for chaining. It may be called multiple times to attach multiple schedules to the same action.
 >
-> The `expr` is a 5-field cron expression (minute, hour, day-of-month, month, day-of-week) with 1-minute minimum resolution. The Jenkins `H` extension is supported: `H` is replaced with a stable hash-derived value within the field's range, computed from `(app_name, action_name)`. For example, `H 2 * * *` fires once daily at a stable minute during the 02:xx hour.
+> The `expr` is a 5-field cron expression (minute, hour, day-of-month, month, day-of-week) with 1-minute minimum resolution. The Jenkins `H` extension is supported: `H` is replaced with a stable hash-derived value within the field's range, computed from `(app_name, action_name)`. The value depends on those two names alone, so the same pair resolves `H` identically on every daemon, build and release: upgrading the daemon or its toolchain never moves a schedule. For example, `H 2 * * *` fires once daily at a stable minute during the 02:xx hour.
 >
 > An optional sixth field specifies the IANA timezone (e.g. `0 2 * * * Pacific/Auckland`). When omitted, the expression is interpreted in the system local timezone of the daemon.
 >

@@ -155,6 +155,37 @@ fn on_install_with_requirements() {
     assert!(pw_req.default_value.is_none());
 }
 
+// l[verify action.install.requirements]
+// A `secret` the schema states wins over the kind's implication, in either
+// direction, and one it leaves out defers to the kind.
+#[test]
+fn on_install_requirement_secret_overrides_kind() {
+    let app = run_test_script_app(
+        r#"
+        app.on_install(|rt, reqs| {}, #{
+            params: #{
+                "plain": #{ kind: "password" },
+                "opted-out": #{ kind: "password", secret: false },
+                "opted-out-weak": #{ kind: "weak-password", secret: false },
+                "opted-in": #{ kind: "text", secret: true },
+                "text": #{ kind: "text" },
+            },
+        });
+    "#,
+    );
+    let def = app.def.load();
+    let reqs = &def
+        .install
+        .as_ref()
+        .expect("install should exist")
+        .requirements;
+    assert!(reqs["plain"].is_secret());
+    assert!(!reqs["opted-out"].is_secret());
+    assert!(!reqs["opted-out-weak"].is_secret());
+    assert!(reqs["opted-in"].is_secret());
+    assert!(!reqs["text"].is_secret());
+}
+
 // l[verify action.install]
 #[test]
 fn on_install_without_requirements() {
@@ -353,6 +384,26 @@ fn on_schedule_registers_cron_on_action() {
     let def = app.def.load();
     let action = def.actions.get("cleanup").expect("action exists");
     assert_eq!(action.schedules, vec!["H 2 * * *".to_owned()]);
+}
+
+// l[verify action.schedule]
+#[test]
+fn schedule_hash_is_pinned() {
+    use crate::defs::action::schedule_hash;
+    use seedling_protocol::names::{ActionName, AppName};
+
+    // These values are a contract with every deployed daemon: changing them
+    // moves every `H` schedule. They must not follow the toolchain.
+    let hash = |app: &str, action: &str| {
+        schedule_hash(
+            &AppName::new_unchecked(app),
+            &ActionName::new_unchecked(action),
+        )
+    };
+    assert_eq!(hash("tamanu", "backup"), 10722289103843889808);
+    assert_eq!(hash("a", "b"), 17343052842552570643);
+    assert_eq!(hash("", ""), 2147057924765956750);
+    assert_ne!(hash("ab", "c"), hash("a", "bc"));
 }
 
 // l[verify action.schedule]

@@ -23,7 +23,7 @@ pub(super) fn on_app(builder: &mut TypeBuilder<App>) {
                         required: false,
                         default_value: None,
                         description: None,
-                        secret: false,
+                        secret: None,
                     });
                 d
             });

@@ -188,7 +188,7 @@ impl CustomType for Param {
                 let mut d = (**d).clone();
                 d.params
                     .entry(name_clone.clone())
-                    .and_modify(|def| def.secret = secret);
+                    .and_modify(|def| def.secret = Some(secret));
                 d
             });
             this.clone()

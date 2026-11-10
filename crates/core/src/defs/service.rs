@@ -54,6 +54,21 @@ impl super::Freezable for Service {
     }
 }
 
+impl super::app::StaticResource for Service {
+    const KIND: ResourceKind = ResourceKind::Service;
+
+    fn from_resource(resource: &Resource) -> Option<&Self> {
+        match resource {
+            Resource::Service(s) => Some(s),
+            _ => None,
+        }
+    }
+
+    fn freeze(&mut self) {
+        self.frozen = true;
+    }
+}
+
 impl Service {
     pub fn new(name: ResourceName) -> Self {
         Self {
@@ -184,33 +199,45 @@ pub(crate) fn declare_ingress(
     port: i64,
 ) -> Result<Ingress, Box<EvalAltResult>> {
     service.ensure_unfrozen()?;
+    // An anonymous service belongs to no app, so an ingress on it could be
+    // neither conflict-checked nor registered: it would be a handle nothing
+    // routes to.
+    // l[impl ingress.type]
+    if service.name.is_empty() {
+        return Err("ingress() is not available on an anonymous service".into());
+    }
     let port = Port::new(port)?;
     validate_hostname(hostname)?;
     let ingress = Ingress::new(service.clone(), hostname.into(), port);
-    if let Some(arc) = service.app_def.as_ref().and_then(Weak::upgrade) {
-        let id = ResourceId {
-            kind: ResourceKind::Ingress,
-            name: ingress.name.clone(),
-        };
-        // Conflict check: a prior ingress with the same (hostname, port)
-        // keyed by the same resource name in this app must not be
-        // overwritten. Throwing lets the script catch + handle it;
-        // silently overriding would erase a previous declaration.
-        if arc.load().resources.contains_key(&id) {
-            return Err(format!(
-                "ingress conflict: ({hostname}, {}) is already declared in this app",
-                port.get()
-            )
-            .into());
-        }
-        let ingress_clone = ingress.clone();
-        arc.rcu(|d| {
-            let mut d = (**d).clone();
-            d.resources
-                .insert(id.clone(), Resource::Ingress(ingress_clone.clone()));
-            d
-        });
+    let arc = service
+        .app_def
+        .as_ref()
+        .and_then(Weak::upgrade)
+        .ok_or_else(|| -> Box<EvalAltResult> {
+            format!("internal: service '{}' has no owning app", service.name).into()
+        })?;
+    let id = ResourceId {
+        kind: ResourceKind::Ingress,
+        name: ingress.name.clone(),
+    };
+    // Conflict check: a prior ingress with the same (hostname, port)
+    // keyed by the same resource name in this app must not be
+    // overwritten. Throwing lets the script catch + handle it;
+    // silently overriding would erase a previous declaration.
+    if arc.load().resources.contains_key(&id) {
+        return Err(format!(
+            "ingress conflict: ({hostname}, {}) is already declared in this app",
+            port.get()
+        )
+        .into());
     }
+    let ingress_clone = ingress.clone();
+    arc.rcu(|d| {
+        let mut d = (**d).clone();
+        d.resources
+            .insert(id.clone(), Resource::Ingress(ingress_clone.clone()));
+        d
+    });
     Ok(ingress)
 }
 
@@ -252,6 +279,7 @@ impl BoundService {
                 Ok(f(&mut def.balance))
             }
             Self::External(e) => {
+                e.ensure_unfrozen()?;
                 let mut def = e.def.lock();
                 Ok(f(&mut def.balance))
             }
@@ -333,6 +361,7 @@ impl BoundService {
                 Ok(f(def.http.get_or_insert_default()))
             }
             Self::External(e) => {
+                e.ensure_unfrozen()?;
                 let mut def = e.def.lock();
                 Ok(f(def.http.get_or_insert_default()))
             }
@@ -850,6 +879,31 @@ impl ExternalServiceDef {
 pub struct ExternalService {
     pub name: ResourceName,
     pub def: Holder<ExternalServiceDef>,
+    pub frozen: bool,
+}
+
+impl super::Freezable for ExternalService {
+    // l[impl app.resources.context.immutable]
+    fn is_frozen(&self) -> bool {
+        // An external service has no anonymous form, so every one is static
+        // and immutable inside an action closure.
+        self.frozen || is_in_action_closure()
+    }
+}
+
+impl super::app::StaticResource for ExternalService {
+    const KIND: ResourceKind = ResourceKind::ExternalService;
+
+    fn from_resource(resource: &Resource) -> Option<&Self> {
+        match resource {
+            Resource::ExternalService(s) => Some(s),
+            _ => None,
+        }
+    }
+
+    fn freeze(&mut self) {
+        self.frozen = true;
+    }
 }
 
 impl CustomType for ExternalService {
@@ -874,6 +928,7 @@ impl CustomType for ExternalService {
             .with_fn(
                 "http",
                 |this: &mut Self| -> Result<HttpService, Box<EvalAltResult>> {
+                    this.ensure_unfrozen()?;
                     this.def.lock().http.get_or_insert_default();
                     Ok(HttpService {
                         service: this.clone().into(),
@@ -884,6 +939,7 @@ impl CustomType for ExternalService {
             .with_fn(
                 "http",
                 |this: &mut Self, port: i64| -> Result<HttpService, Box<EvalAltResult>> {
+                    this.ensure_unfrozen()?;
                     let port = Port::new(port)?;
                     this.def.lock().http.get_or_insert_default();
                     Ok(HttpService {
@@ -896,15 +952,20 @@ impl CustomType for ExternalService {
             .with_fn(
                 "balance",
                 |this: &mut Self, config: Map| -> Result<Self, Box<EvalAltResult>> {
+                    this.ensure_unfrozen()?;
                     this.def.lock().balance = proxy::parse_balance(config)?;
                     Ok(this.clone())
                 },
             )
             // l[impl bsl.resource.description]
-            .with_fn("description", |this: &mut Self, desc: &str| -> Self {
-                this.def.lock().description = Some(desc.to_owned());
-                this.clone()
-            });
+            .with_fn(
+                "description",
+                |this: &mut Self, desc: &str| -> Result<Self, Box<EvalAltResult>> {
+                    this.ensure_unfrozen()?;
+                    this.def.lock().description = Some(desc.to_owned());
+                    Ok(this.clone())
+                },
+            );
     }
 }
 

@@ -1,10 +1,17 @@
+use std::sync::Arc;
+
 use rhai::Dynamic;
 use rhai::{AST, Engine, Scope};
 
 use crate::defs;
 use crate::defs::install::InstallDef;
+use crate::runtime::OperationProgress;
 use crate::runtime::barrier::runtime::{ActionClosureGuard, RuntimeInstance};
 use crate::runtime::barrier::shell::ShellControl;
+use crate::runtime::barrier::{
+    OperationId,
+    replay::{InMemoryActionLog, OperationContext, OperationResult, run_operation},
+};
 
 /// An engine, scope and app evaluating no particular definition.
 pub fn setup(limits: &crate::ScriptLimits) -> (Engine, Scope<'static>, defs::app::App) {
@@ -63,6 +70,123 @@ pub fn run_test_script_app(source: &str) -> defs::app::App {
 pub fn run_test_script_err(source: &str) -> Box<rhai::EvalAltResult> {
     let (engine, mut scope, _app) = setup(&crate::ScriptLimits::default());
     run_script(&engine, &mut scope, source).expect_err("script should fail")
+}
+
+/// The hooks and operation-scoped state one action run differs by.
+///
+/// Everything a test does not name is the language-only default: no executor,
+/// no volume writer, no signaller, no volume bindings, no progress sink.
+#[derive(Default)]
+pub struct ActionHooks {
+    pub active_progress: Option<Arc<parking_lot::RwLock<Option<OperationProgress>>>>,
+    pub operation_volume_bindings:
+        std::collections::HashMap<String, crate::defs::volume::OperationVolumeBinding>,
+    pub container_signaler: Option<Arc<dyn crate::runtime::barrier::ContainerSignaler>>,
+    pub volume_writer: Option<Arc<dyn crate::runtime::barrier::VolumeWriter>>,
+    pub executor: Option<Arc<dyn crate::runtime::barrier::Executor>>,
+}
+
+/// An [`OperationContext`] for `action_name`, carrying `hooks` over the
+/// defaults every language test wants.
+///
+/// The single home for this field plumbing: a field added to
+/// `OperationContext` is given its test default here once, rather than in each
+/// test that builds one.
+pub fn action_context<'a, W: crate::runtime::WorldStateOracle + 'static>(
+    engine: &'a Engine,
+    script_ast: &'a AST,
+    app: &'a defs::app::App,
+    action_name: &'a str,
+    log: &'a dyn crate::runtime::barrier::replay::ActionLog,
+    world: Arc<W>,
+    hooks: ActionHooks,
+) -> OperationContext<'a, W> {
+    OperationContext {
+        engine,
+        script_ast,
+        app,
+        action_name,
+        log,
+        world,
+        operation_id: OperationId::new(),
+        registry: Arc::new(crate::runtime::EphemeralInstanceRegistry::new()),
+        active_progress: hooks.active_progress,
+        tick_notify: None,
+        params: serde_json::Map::new(),
+        is_shell: false,
+        db: None,
+        source_generation: 0,
+        target_generation: 0,
+        script_limits: None,
+        cipher: None,
+        operation_volume_bindings: hooks.operation_volume_bindings,
+        cancel_token: Arc::new(crate::runtime::barrier::CancelToken::new()),
+        container_signaler: hooks.container_signaler,
+        volume_writer: hooks.volume_writer,
+        executor: hooks.executor,
+    }
+}
+
+/// Run the action `action_name` defined by `source` to its end and report how
+/// it ended, so a test can assert on the error an action closure raised.
+pub fn run_action(source: &str, action_name: &str) -> OperationResult {
+    run_action_with(source, &[], action_name, None, ActionHooks::default())
+}
+
+/// The error message of the action `action_name`, which must fail.
+pub fn run_action_err(source: &str, action_name: &str) -> String {
+    match run_action(source, action_name) {
+        OperationResult::Failed(e) => e.to_string(),
+        other => panic!("expected the action to fail, got {other:?}"),
+    }
+}
+
+/// Run `action_name` from a script bundled with `files`, under `hooks`.
+///
+/// Pass a `log` to assert on what the run recorded; without one the run gets a
+/// log of its own that nothing reads.
+pub fn run_action_with(
+    source: &str,
+    files: &[(&str, &[u8])],
+    action_name: &str,
+    log: Option<&InMemoryActionLog>,
+    hooks: ActionHooks,
+) -> OperationResult {
+    run_action_on(source, files, action_name, log, hooks).0
+}
+
+/// As [`run_action_with`], also handing back the `App` the action ran against,
+/// for the tests that assert on what the run left in it.
+pub fn run_action_on(
+    source: &str,
+    files: &[(&str, &[u8])],
+    action_name: &str,
+    log: Option<&InMemoryActionLog>,
+    hooks: ActionHooks,
+) -> (OperationResult, defs::app::App) {
+    let (engine, mut scope, app, ast) =
+        run_test_script_in(source, files).expect("script should run without error");
+    let own_log;
+    let log = match log {
+        Some(log) => log,
+        None => {
+            own_log = InMemoryActionLog::new();
+            &own_log
+        }
+    };
+    let result = run_operation(
+        action_context(
+            &engine,
+            &ast,
+            &app,
+            action_name,
+            log,
+            Arc::new(crate::runtime::TestWorldOracle::new()),
+            hooks,
+        ),
+        &mut scope,
+    );
+    (result, app)
 }
 
 pub fn exercise(source: &str) {

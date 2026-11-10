@@ -369,3 +369,35 @@ fn redirect_code_must_be_a_redirection_status() {
     assert!(message.contains("`redirect code`"), "{message}");
     assert!(message.contains("300"), "{message}");
 }
+
+// l[verify ingress.type]
+// l[verify app.resources.context.anonymous]
+// An anonymous service belongs to no app, so an ingress declared on it used to
+// succeed without registering anything and hand back a handle nothing routes to.
+#[test]
+fn ingress_on_anonymous_service_throws() {
+    let msg = run_action_err(
+        r#"
+        app.on_action("run-it", |rt, _param| {
+            let s = app.service();
+            s.ingress("example.com", 443);
+        });
+    "#,
+        "run-it",
+    );
+    assert!(msg.contains("anonymous service"), "got: {msg}");
+}
+
+// l[verify ingress.type]
+#[test]
+fn ingress_on_anonymous_http_service_throws() {
+    let msg = run_action_err(
+        r#"
+        app.on_action("run-it", |rt, _param| {
+            app.service().http(8080).ingress("example.com", 443);
+        });
+    "#,
+        "run-it",
+    );
+    assert!(msg.contains("anonymous service"), "got: {msg}");
+}

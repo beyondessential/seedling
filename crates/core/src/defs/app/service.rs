@@ -1,6 +1,6 @@
 use rhai::{EvalAltResult, TypeBuilder};
 
-use crate::runtime::barrier::runtime::{action_def, is_in_action_closure};
+use crate::runtime::barrier::runtime::is_in_action_closure;
 
 use super::super::{
     resource::{Resource, ResourceId, ResourceKind, ResourceName},
@@ -18,23 +18,7 @@ pub(super) fn on_app(builder: &mut TypeBuilder<App>) {
             super::ensure_not_validating()?;
             let rname = ResourceName::new(name.into());
             if is_in_action_closure() {
-                let adef = action_def().ok_or_else(|| -> Box<EvalAltResult> {
-                    "internal: action context but no action AppDef set".into()
-                })?;
-                let def = adef.load();
-                let id = ResourceId {
-                    kind: ResourceKind::Service,
-                    name: rname,
-                };
-                match def.resources.get(&id) {
-                    Some(Resource::Service(s)) => {
-                        let mut frozen = s.clone();
-                        frozen.frozen = true;
-                        Ok(frozen)
-                    }
-                    Some(_) => Err(format!("'{}' is not a service", name).into()),
-                    None => Err(format!("no static service named '{}'", name).into()),
-                }
+                super::static_ref::<Service>(name)
             } else {
                 let weak = std::sync::Arc::downgrade(&this.def);
                 let id = ResourceId {
@@ -69,6 +53,8 @@ pub(super) fn on_app(builder: &mut TypeBuilder<App>) {
     );
 
     // l[impl service.external]
+    // l[impl service.external.action-context]
+    // l[impl app.resources.context.named]
     builder.with_fn(
         "external_service",
         |this: &mut App, name: &str| -> Result<ExternalService, Box<EvalAltResult>> {
@@ -79,12 +65,16 @@ pub(super) fn on_app(builder: &mut TypeBuilder<App>) {
                 kind: ResourceKind::ExternalService,
                 name: rname.clone(),
             };
+            if is_in_action_closure() {
+                return super::static_ref::<ExternalService>(name);
+            }
             this.def.rcu(|d| {
                 let mut d = (**d).clone();
                 d.resources.entry(id.clone()).or_insert_with(|| {
                     Resource::ExternalService(ExternalService {
                         name: rname.clone(),
                         def: Default::default(),
+                        frozen: false,
                     })
                 });
                 d

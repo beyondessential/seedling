@@ -432,7 +432,7 @@ mod tests {
                         required: true,
                         default_value: None,
                         description: None,
-                        secret: false,
+                        secret: None,
                     },
                 );
             }
@@ -484,7 +484,7 @@ mod tests {
                         required: true,
                         default_value: None,
                         description: None,
-                        secret: false,
+                        secret: None,
                     },
                 );
             }

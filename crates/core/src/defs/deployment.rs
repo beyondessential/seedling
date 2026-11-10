@@ -9,7 +9,7 @@ use super::{
     container::parse_healthcheck,
     enums::{OnTerminate, OnUpdate, Priority},
     pod::PodDef,
-    resource::{ResourceId, ResourceKind, ResourceName},
+    resource::{Resource, ResourceId, ResourceKind, ResourceName},
     take::take_int_in_range,
 };
 
@@ -51,6 +51,21 @@ impl Freezable for Deployment {
     fn is_frozen(&self) -> bool {
         // Anonymous deployments use an empty name as a sentinel (see app/deployment.rs).
         self.frozen || (!self.name.is_empty() && is_in_action_closure())
+    }
+}
+
+impl super::app::StaticResource for Deployment {
+    const KIND: ResourceKind = ResourceKind::Deployment;
+
+    fn from_resource(resource: &Resource) -> Option<&Self> {
+        match resource {
+            Resource::Deployment(r) => Some(r),
+            _ => None,
+        }
+    }
+
+    fn freeze(&mut self) {
+        self.frozen = true;
     }
 }
 

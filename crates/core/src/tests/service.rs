@@ -1163,3 +1163,108 @@ fn a_service_level_location_operation_does_not_reach_a_redirect_route() {
     let root = routes.iter().find(|r| r.prefix == "/").expect("root route");
     assert!(root.headers.response.replace.contains_key("Location"));
 }
+
+// l[verify service.external.action-context]
+// l[verify app.resources.context.named]
+// A typo in an action closure used to register a fresh, unmapped slot instead
+// of failing at the line that caused it.
+#[test]
+fn external_service_unknown_in_action_throws() {
+    let msg = run_action_err(
+        r#"
+        app.external_service("postgres");
+        app.on_action("run-it", |rt, _param| {
+            app.external_service("postgers");
+        });
+    "#,
+        "run-it",
+    );
+    assert!(msg.contains("no static external service"), "got: {msg}");
+}
+
+// l[verify service.external.action-context]
+#[test]
+fn external_service_static_resolves_in_action() {
+    let result = run_action(
+        r#"
+        app.external_service("postgres");
+        app.on_action("run-it", |rt, _param| {
+            let db = app.external_service("postgres");
+            db.port(5432);
+        });
+    "#,
+        "run-it",
+    );
+    assert!(
+        matches!(
+            result,
+            crate::runtime::barrier::replay::OperationResult::Completed
+        ),
+        "expected Completed, got {result:?}"
+    );
+}
+
+// l[verify service.external.action-context]
+// l[verify app.resources.context.immutable]
+#[test]
+fn external_service_static_is_immutable_in_action() {
+    for body in [
+        r#"app.external_service("postgres").description("x");"#,
+        r#"app.external_service("postgres").balance(#{ policy: "least_conn" });"#,
+        r#"app.external_service("postgres").http();"#,
+        r#"app.external_service("postgres").http(8080);"#,
+        r#"db.description("x");"#,
+    ] {
+        let source = format!(
+            r#"
+            let db = app.external_service("postgres");
+            app.on_action("run-it", |rt, _param| {{ {body} }});
+        "#
+        );
+        let msg = run_action_err(&source, "run-it");
+        assert!(
+            msg.contains("cannot modify") || msg.contains("static"),
+            "`{body}` should be refused as immutable, got: {msg}"
+        );
+    }
+}
+
+// l[verify app.resources.context.named]
+// `resources` is keyed by kind and name together, so a name held by another
+// kind misses the lookup exactly as an undeclared one does. The error says
+// which kind has it rather than sending the author after a typo.
+#[test]
+fn static_ref_names_the_kind_that_holds_the_name() {
+    let msg = run_action_err(
+        r#"
+        app.service("database");
+        app.on_action("run-it", |rt, _param| {
+            app.external_service("database");
+        });
+    "#,
+        "run-it",
+    );
+    assert!(
+        msg.contains("no static external service named 'database'")
+            && msg.contains("it is a service"),
+        "got: {msg}"
+    );
+}
+
+// l[verify app.resources.context.named]
+#[test]
+fn static_ref_reports_an_undeclared_name_as_missing() {
+    let msg = run_action_err(
+        r#"
+        app.on_action("run-it", |rt, _param| {
+            app.deployment("nowhere");
+        });
+    "#,
+        "run-it",
+    );
+    assert!(
+        msg.contains("no static deployment named 'nowhere'"),
+        "got: {msg}"
+    );
+    assert!(!msg.contains("it is a"), "got: {msg}");
+}

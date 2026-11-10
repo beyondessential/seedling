@@ -1,8 +1,9 @@
-use std::collections::{BTreeMap, hash_map::DefaultHasher};
-use std::hash::{Hash, Hasher};
+use std::collections::BTreeMap;
+use std::hash::Hasher;
 
 use rhai::{CustomType, EvalAltResult, Map, NativeCallContext, TypeBuilder};
 use seedling_protocol::names::{ActionName, AppName, ParamName, ShellName};
+use siphasher::sip::SipHasher13;
 
 use super::install::ParamDef;
 
@@ -18,10 +19,18 @@ pub struct ActionDef {
 
 /// Compute a stable hash from `(app_name, action_name)` for use with cronexpr's
 /// `H` extension.
+///
+/// Unseeded SipHash-1-3 over each name's bytes followed by a `0xff` terminator.
+/// Both the algorithm and the byte stream are fixed here rather than left to
+/// `std::hash`, whose `DefaultHasher` makes no promise across releases: a
+/// toolchain change must never move an `H` schedule.
+// l[impl action.schedule]
 pub fn schedule_hash(app_name: &AppName, action_name: &ActionName) -> u64 {
-    let mut hasher = DefaultHasher::new();
-    app_name.as_str().hash(&mut hasher);
-    action_name.as_str().hash(&mut hasher);
+    let mut hasher = SipHasher13::new();
+    for name in [app_name.as_str(), action_name.as_str()] {
+        hasher.write(name.as_bytes());
+        hasher.write_u8(0xff);
+    }
     hasher.finish()
 }
 

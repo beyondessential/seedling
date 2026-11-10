@@ -9,7 +9,7 @@ use super::{
     Freezable, Holder,
     export::ExportOptions,
     file::{Directory, File},
-    resource::ResourceName,
+    resource::{Resource, ResourceKind, ResourceName},
 };
 
 // l[impl volume.write.validation]
@@ -90,6 +90,21 @@ pub struct Volume {
     pub anon_id: Option<String>,
     pub def: Holder<VolumeDef>,
     pub frozen: bool,
+}
+
+impl super::app::StaticResource for Volume {
+    const KIND: ResourceKind = ResourceKind::Volume;
+
+    fn from_resource(resource: &Resource) -> Option<&Self> {
+        match resource {
+            Resource::Volume(r) => Some(r),
+            _ => None,
+        }
+    }
+
+    fn freeze(&mut self) {
+        self.frozen = true;
+    }
 }
 
 impl Volume {

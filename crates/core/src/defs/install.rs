@@ -15,14 +15,20 @@ pub struct ParamDef {
     pub required: bool,
     pub default_value: Option<String>,
     pub description: Option<String>,
+    /// What the script declared for `secret`, or `None` when it said nothing,
+    /// in which case the kind decides. An explicit `false` is a declaration, so
+    /// it is not the same as unset: it is how a password kind opts out.
     // l[impl param.schema.secret]
-    pub secret: bool,
+    pub secret: Option<bool>,
 }
 
 impl ParamDef {
     // l[impl param.schema.secret-from-kind]
     pub fn is_secret(&self) -> bool {
-        self.secret || matches!(self.kind, ParamKind::Password | ParamKind::WeakPassword)
+        self.secret.unwrap_or(matches!(
+            self.kind,
+            ParamKind::Password | ParamKind::WeakPassword
+        ))
     }
 }
 

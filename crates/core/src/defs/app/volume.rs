@@ -1,7 +1,7 @@
 use rhai::{Dynamic, EvalAltResult, TypeBuilder};
 
 use crate::runtime::barrier::runtime::{
-    action_def, get_operation_volume_binding, is_in_action_closure, is_in_probe, next_anon_vol_id,
+    get_operation_volume_binding, is_in_action_closure, is_in_probe, next_anon_vol_id,
 };
 
 use super::super::{
@@ -20,23 +20,7 @@ pub(super) fn on_app(builder: &mut TypeBuilder<App>) {
             super::ensure_not_validating()?;
             let rname = ResourceName::new(name.into());
             if is_in_action_closure() {
-                let adef = action_def().ok_or_else(|| -> Box<EvalAltResult> {
-                    "internal: action context but no action AppDef set".into()
-                })?;
-                let def = adef.load();
-                let id = ResourceId {
-                    kind: ResourceKind::Volume,
-                    name: rname,
-                };
-                match def.resources.get(&id) {
-                    Some(Resource::Volume(v)) => {
-                        let mut frozen = v.clone();
-                        frozen.frozen = true;
-                        Ok(frozen)
-                    }
-                    Some(_) => Err(format!("'{}' is not a volume", name).into()),
-                    None => Err(format!("no static volume named '{}'", name).into()),
-                }
+                super::static_ref::<Volume>(name)
             } else {
                 // l[impl app.resources.static]
                 let id = ResourceId {

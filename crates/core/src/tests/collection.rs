@@ -169,6 +169,24 @@ fn col_from_unknown_yields_empty() {
     );
 }
 
+// l[verify collection.col]
+// An Action is invoked, never scheduled: `col` must not wrap it into a
+// Collection that could reach `rt.start` and friends.
+#[test]
+fn col_from_action_yields_empty() {
+    run_test_script_app(
+        r#"
+        let act = app.on_action("migrate", |rt, _param| {});
+        if type_of(col(act).one()) != "()" {
+            throw "col(action) must be empty";
+        }
+        if type_of(col([act]).one()) != "()" {
+            throw "col([action]) must be empty";
+        }
+    "#,
+    );
+}
+
 // l[verify bsl.args.strict]
 // l[verify collection.select.types]
 // A `types` value that is not an array used to drop the criterion, and a
