@@ -53,6 +53,8 @@ pub async fn run_wt_server(
                 // w[impl wt.cert.rotation]
                 // Without a rebind the socket is kept, so this swaps the TLS
                 // configuration in place and established sessions carry on.
+                // Only rebinding can fail, so the error arm guards against a
+                // wtransport upgrade changing that rather than a known path.
                 match endpoint.reload_config(server_config(addr, &state), false) {
                     Ok(()) => tracing::info!(%addr, "WT certificate rotated"),
                     Err(e) => tracing::error!(%addr, "WT certificate reload failed: {e}"),
