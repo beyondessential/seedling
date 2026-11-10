@@ -4,9 +4,7 @@ use parking_lot::Mutex;
 
 use super::*;
 use crate::runtime::barrier::CallKind;
-use crate::runtime::barrier::replay::{
-    ActionLog, InMemoryActionLog, OperationContext, OperationResult, run_operation,
-};
+use crate::runtime::barrier::replay::{ActionLog, InMemoryActionLog, OperationResult};
 
 #[derive(Debug, Clone)]
 struct RecordedExec {
@@ -58,38 +56,15 @@ fn run_action_with_executor(
     executor: Arc<RecordingExecutor>,
     log: &InMemoryActionLog,
 ) -> OperationResult {
-    use crate::runtime::{EphemeralInstanceRegistry, TestWorldOracle, barrier::OperationId};
-
-    let (engine, mut scope, app, ast) = run_test_script(script);
-    let oracle = Arc::new(TestWorldOracle::new());
-    let registry: Arc<dyn crate::runtime::InstanceRegistry> =
-        Arc::new(EphemeralInstanceRegistry::new());
-    run_operation(
-        OperationContext {
-            engine: &engine,
-            script_ast: &ast,
-            operation_id: OperationId::new(),
-            app: &app,
-            action_name,
-            log,
-            world: oracle,
-            registry,
-            active_progress: None,
-            tick_notify: None,
-            params: serde_json::Map::new(),
-            is_shell: false,
-            db: None,
-            source_generation: 0,
-            target_generation: 0,
-            script_limits: None,
-            cipher: None,
-            operation_volume_bindings: std::collections::HashMap::new(),
-            cancel_token: Arc::new(crate::runtime::barrier::CancelToken::new()),
-            container_signaler: None,
-            volume_writer: None,
+    run_action_with(
+        script,
+        &[],
+        action_name,
+        Some(log),
+        ActionHooks {
             executor: Some(executor as Arc<dyn crate::runtime::barrier::Executor>),
+            ..Default::default()
         },
-        &mut scope,
     )
 }
 

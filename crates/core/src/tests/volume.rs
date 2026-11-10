@@ -293,47 +293,18 @@ fn run_action_with_volumes(
     script: &str,
     action_name: &str,
 ) -> crate::runtime::desired::OperationProgress {
-    use crate::runtime::{
-        EphemeralInstanceRegistry, TestWorldOracle,
-        barrier::OperationId,
-        barrier::replay::{InMemoryActionLog, OperationContext, OperationResult, run_operation},
-    };
+    use crate::runtime::barrier::replay::OperationResult;
 
-    let (engine, mut scope, app, ast) = run_test_script(script);
-
-    let oracle = Arc::new(TestWorldOracle::new());
-    let log = InMemoryActionLog::new();
-    let op = OperationId::new();
-    let registry: Arc<dyn crate::runtime::InstanceRegistry> =
-        Arc::new(EphemeralInstanceRegistry::new());
     let progress = Arc::new(parking_lot::RwLock::new(None));
-
-    let result = run_operation(
-        OperationContext {
-            engine: &engine,
-            script_ast: &ast,
-            operation_id: op,
-            app: &app,
-            action_name,
-            log: &log,
-            world: oracle,
-            registry,
+    let result = run_action_with(
+        script,
+        &[],
+        action_name,
+        None,
+        ActionHooks {
             active_progress: Some(Arc::clone(&progress)),
-            tick_notify: None,
-            params: serde_json::Map::new(),
-            is_shell: false,
-            db: None,
-            source_generation: 0,
-            target_generation: 0,
-            script_limits: None,
-            cipher: None,
-            operation_volume_bindings: std::collections::HashMap::new(),
-            cancel_token: Arc::new(crate::runtime::barrier::CancelToken::new()),
-            container_signaler: None,
-            volume_writer: None,
-            executor: None,
+            ..Default::default()
         },
-        &mut scope,
     );
 
     // The action should complete (no barriers in these tests).
@@ -537,11 +508,7 @@ fn external_volume_in_action_picks_up_operation_binding() {
     "#,
     );
 
-    let oracle = Arc::new(crate::runtime::TestWorldOracle::new());
     let log = crate::runtime::barrier::replay::InMemoryActionLog::new();
-    let op = crate::runtime::barrier::OperationId::new();
-    let registry: Arc<dyn crate::runtime::InstanceRegistry> =
-        Arc::new(crate::runtime::EphemeralInstanceRegistry::new());
     let progress = Arc::new(parking_lot::RwLock::new(None));
 
     // Populate the operation-scoped binding before running the action.
@@ -564,30 +531,19 @@ fn external_volume_in_action_picks_up_operation_binding() {
     );
 
     let result = crate::runtime::barrier::replay::run_operation(
-        crate::runtime::barrier::replay::OperationContext {
-            engine: &engine,
-            script_ast: &ast,
-            operation_id: op,
-            app: &app,
-            action_name: "backup",
-            log: &log,
-            world: oracle,
-            registry,
-            active_progress: Some(Arc::clone(&progress)),
-            tick_notify: None,
-            params: serde_json::Map::new(),
-            is_shell: false,
-            db: None,
-            source_generation: 0,
-            target_generation: 0,
-            script_limits: None,
-            cipher: None,
-            operation_volume_bindings: bindings,
-            cancel_token: Arc::new(crate::runtime::barrier::CancelToken::new()),
-            container_signaler: None,
-            volume_writer: None,
-            executor: None,
-        },
+        super::action_context(
+            &engine,
+            &ast,
+            &app,
+            "backup",
+            &log,
+            Arc::new(crate::runtime::TestWorldOracle::new()),
+            ActionHooks {
+                active_progress: Some(Arc::clone(&progress)),
+                operation_volume_bindings: bindings,
+                ..Default::default()
+            },
+        ),
         &mut scope,
     );
 
@@ -710,77 +666,27 @@ fn operation_bindings_cleared_after_guard_drops() {
 // l[verify app.resources.context.immutable]
 #[test]
 fn frozen_static_volume_cannot_be_modified_in_action() {
-    use crate::runtime::{
-        EphemeralInstanceRegistry, TestWorldOracle,
-        barrier::OperationId,
-        barrier::replay::{InMemoryActionLog, OperationContext, OperationResult, run_operation},
-    };
-
-    let (engine, mut scope, app, ast) = run_test_script(
+    let msg = run_action_err(
         r#"
         let v = app.volume("data");
         app.on_action("goo", |rt, _param| {
             app.volume("data").write("/x", "y");
         });
     "#,
+        "goo",
     );
-
-    let oracle = Arc::new(TestWorldOracle::new());
-    let log = InMemoryActionLog::new();
-    let op = OperationId::new();
-    let registry: Arc<dyn crate::runtime::InstanceRegistry> =
-        Arc::new(EphemeralInstanceRegistry::new());
-
-    let result = run_operation(
-        OperationContext {
-            engine: &engine,
-            script_ast: &ast,
-            operation_id: op,
-            app: &app,
-            action_name: "goo",
-            log: &log,
-            world: oracle,
-            registry,
-            active_progress: None,
-            tick_notify: None,
-            params: serde_json::Map::new(),
-            is_shell: false,
-            db: None,
-            source_generation: 0,
-            target_generation: 0,
-            script_limits: None,
-            cipher: None,
-            operation_volume_bindings: std::collections::HashMap::new(),
-            cancel_token: Arc::new(crate::runtime::barrier::CancelToken::new()),
-            container_signaler: None,
-            volume_writer: None,
-            executor: None,
-        },
-        &mut scope,
+    assert!(
+        msg.contains("cannot modify") || msg.contains("static"),
+        "error should mention immutability, got: {msg}"
     );
-
-    match result {
-        OperationResult::Failed(e) => {
-            let msg = e.to_string();
-            assert!(
-                msg.contains("cannot modify") || msg.contains("static"),
-                "error should mention immutability, got: {msg}"
-            );
-        }
-        other => panic!("expected Failed, got {other:?}"),
-    }
 }
 
 // l[verify app.resources.context.immutable]
 #[test]
 fn captured_static_volume_cannot_be_modified_in_action() {
-    use crate::runtime::{
-        EphemeralInstanceRegistry, TestWorldOracle,
-        barrier::OperationId,
-        barrier::replay::{InMemoryActionLog, OperationContext, OperationResult, run_operation},
-    };
+    use crate::runtime::barrier::replay::OperationResult;
 
-    let (engine, mut scope, app, ast) = run_test_script(
+    let (result, app) = run_action_on(
         r#"
         let vol = app.volume("foo");
         vol.write("/outside", "content");
@@ -788,39 +694,10 @@ fn captured_static_volume_cannot_be_modified_in_action() {
             vol.write("/inside", "content");
         });
     "#,
-    );
-
-    let oracle = Arc::new(TestWorldOracle::new());
-    let log = InMemoryActionLog::new();
-    let registry: Arc<dyn crate::runtime::InstanceRegistry> =
-        Arc::new(EphemeralInstanceRegistry::new());
-
-    let result = run_operation(
-        OperationContext {
-            engine: &engine,
-            script_ast: &ast,
-            operation_id: OperationId::new(),
-            app: &app,
-            action_name: "act",
-            log: &log,
-            world: oracle,
-            registry,
-            active_progress: None,
-            tick_notify: None,
-            params: serde_json::Map::new(),
-            is_shell: false,
-            db: None,
-            source_generation: 0,
-            target_generation: 0,
-            script_limits: None,
-            cipher: None,
-            operation_volume_bindings: std::collections::HashMap::new(),
-            cancel_token: Arc::new(crate::runtime::barrier::CancelToken::new()),
-            container_signaler: None,
-            volume_writer: None,
-            executor: None,
-        },
-        &mut scope,
+        &[],
+        "act",
+        None,
+        ActionHooks::default(),
     );
 
     match result {
@@ -904,43 +781,15 @@ pub(super) fn run_action_with_writer_in(
     writer: Arc<RecordingVolumeWriter>,
     log: &crate::runtime::barrier::replay::InMemoryActionLog,
 ) -> crate::runtime::barrier::replay::OperationResult {
-    use crate::runtime::{
-        EphemeralInstanceRegistry, TestWorldOracle,
-        barrier::OperationId,
-        barrier::replay::{OperationContext, run_operation},
-    };
-
-    let (engine, mut scope, app, ast) =
-        super::run_test_script_in(script, files).expect("script should run without error");
-    let oracle = Arc::new(TestWorldOracle::new());
-    let registry: Arc<dyn crate::runtime::InstanceRegistry> =
-        Arc::new(EphemeralInstanceRegistry::new());
-    run_operation(
-        OperationContext {
-            engine: &engine,
-            script_ast: &ast,
-            operation_id: OperationId::new(),
-            app: &app,
-            action_name,
-            log,
-            world: oracle,
-            registry,
-            active_progress: None,
-            tick_notify: None,
-            params: serde_json::Map::new(),
-            is_shell: false,
-            db: None,
-            source_generation: 0,
-            target_generation: 0,
-            script_limits: None,
-            cipher: None,
-            operation_volume_bindings: std::collections::HashMap::new(),
-            cancel_token: Arc::new(crate::runtime::barrier::CancelToken::new()),
-            container_signaler: None,
+    run_action_with(
+        script,
+        files,
+        action_name,
+        Some(log),
+        ActionHooks {
             volume_writer: Some(writer as Arc<dyn crate::runtime::barrier::VolumeWriter>),
-            executor: None,
+            ..Default::default()
         },
-        &mut scope,
     )
 }
 

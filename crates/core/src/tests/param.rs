@@ -3,12 +3,9 @@ use std::sync::Arc;
 use crate::{
     runtime::{
         LifecycleState, TestWorldOracle,
-        barrier::{
-            OperationId,
-            replay::{InMemoryActionLog, OperationContext, OperationResult, run_operation},
-        },
+        barrier::replay::{InMemoryActionLog, OperationResult, run_operation},
     },
-    tests::{run_test_script, run_test_script_app, run_test_script_err},
+    tests::{ActionHooks, run_test_script, run_test_script_app, run_test_script_err},
 };
 
 // -----------------------------------------------------------------------
@@ -291,30 +288,15 @@ fn param_used_in_closure_captures_injected_value() {
     let oracle = Arc::new(crate::runtime::TestWorldOracle::new());
     let log = InMemoryActionLog::new();
     let result = run_operation(
-        OperationContext {
-            engine: &engine,
-            script_ast: &ast,
-            operation_id: OperationId::new(),
-            app: &app,
-            action_name: "start",
-            log: &log,
-            world: oracle,
-            registry: std::sync::Arc::new(crate::runtime::EphemeralInstanceRegistry::new()),
-            active_progress: None,
-            tick_notify: None,
-            params: serde_json::Map::new(),
-            is_shell: false,
-            db: None,
-            source_generation: 0,
-            target_generation: 0,
-            script_limits: None,
-            cipher: None,
-            operation_volume_bindings: std::collections::HashMap::new(),
-            cancel_token: std::sync::Arc::new(crate::runtime::barrier::CancelToken::new()),
-            container_signaler: None,
-            volume_writer: None,
-            executor: None,
-        },
+        super::action_context(
+            &engine,
+            &ast,
+            &app,
+            "start",
+            &log,
+            oracle,
+            ActionHooks::default(),
+        ),
         &mut scope,
     );
     assert!(
@@ -346,30 +328,15 @@ fn on_change_inside_action_closure_throws() {
     );
     let log = InMemoryActionLog::new();
     let result = run_operation(
-        OperationContext {
-            engine: &engine,
-            script_ast: &ast,
-            operation_id: OperationId::new(),
-            app: &app,
-            action_name: "start",
-            log: &log,
-            world: oracle,
-            registry: std::sync::Arc::new(crate::runtime::EphemeralInstanceRegistry::new()),
-            active_progress: None,
-            tick_notify: None,
-            params: serde_json::Map::new(),
-            is_shell: false,
-            db: None,
-            source_generation: 0,
-            target_generation: 0,
-            script_limits: None,
-            cipher: None,
-            operation_volume_bindings: std::collections::HashMap::new(),
-            cancel_token: std::sync::Arc::new(crate::runtime::barrier::CancelToken::new()),
-            container_signaler: None,
-            volume_writer: None,
-            executor: None,
-        },
+        super::action_context(
+            &engine,
+            &ast,
+            &app,
+            "start",
+            &log,
+            oracle,
+            ActionHooks::default(),
+        ),
         &mut scope,
     );
     assert!(
