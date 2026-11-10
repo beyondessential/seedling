@@ -1193,3 +1193,56 @@ fn resources_meant_to_have_nothing_ready_do_not_degrade_the_app() {
     let desc = oi.call("/apps/show", json!({ "app": "demo" })).unwrap();
     assert_eq!(desc["status"], "running", "{desc}");
 }
+
+// i[verify app.status]
+// A Job runs once and is not restarted, so after a successful run it rests
+// terminated or removed. The rollup wanted it Ready, and an app with one read
+// as degraded whenever its job was not running.
+#[test]
+fn a_static_job_is_judged_by_how_its_run_ended() {
+    use crate::{
+        defs::resource::ResourceKind,
+        runtime::{history::insert_observation, identity::ResourceInstance},
+    };
+
+    let run = |exit_code: i32| {
+        let oi = TestOi::new();
+        oi.call(
+            "/apps/create",
+            json!({
+                "app": "demo",
+                "script": r#"
+                    app.job("migrate")
+                        .image("docker.io/library/busybox:1.37")
+                        .command("true");
+                "#,
+            }),
+        )
+        .unwrap();
+        oi.install("demo");
+        let status = |oi: &TestOi| {
+            oi.call("/apps/show", json!({ "app": "demo" })).unwrap()["status"].clone()
+        };
+        assert_eq!(status(&oi), "degraded", "the job has not run");
+
+        let job = ResourceInstance::new_singleton(
+            seedling_protocol::names::AppName::new_unchecked("demo"),
+            ResourceKind::Job,
+            "migrate",
+        );
+        oi.state.db.call(move |db| {
+            for (kind, payload) in [
+                ("container_created", json!({})),
+                ("container_running", json!({ "pid": 1 })),
+                ("container_exited", json!({ "exit_code": exit_code })),
+                ("container_removed", json!({})),
+            ] {
+                insert_observation(db, &job, kind, &payload).unwrap();
+            }
+        });
+        status(&oi)
+    };
+
+    assert_eq!(run(0), "running");
+    assert_eq!(run(1), "degraded");
+}

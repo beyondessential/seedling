@@ -344,6 +344,7 @@ Absent specification bugs, anything that is not defined here is either defined i
 > - `Faulted`: one or more active faults exist and at least one resource has been excluded from active reconciliation.
 >
 > Outside an operation, a resource's desired lifecycle state is `Ready`, except that a [stopped](#i--resource.stop) resource and a Deployment at a scale of zero are desired at `Unscheduled`.
+> A Job runs once rather than staying up, so it is at its desired state while `Ready` and once its run has ended in success, whether or not its container has since been removed; success is judged as for [rt.termination.ensure-success](language.md#l--rt.termination.ensure-success).
 > An external service is provided from outside the runtime, has no lifecycle state, and is always at its desired state.
 
 > i[app.status.priority]

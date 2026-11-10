@@ -7,7 +7,7 @@ use super::{AppEntry, AppPhase, AppRegistry, AppStatus};
 use crate::{
     defs::resource::{Resource, ResourceKind},
     runtime::{
-        barrier::oracle::{derive_lifecycle_state, has_lifecycle},
+        barrier::oracle::{container_run_succeeded, derive_lifecycle_state, has_lifecycle},
         db::{Db, DbHandle},
         faults,
         history::{find_instances_for_group, query_observations},
@@ -119,15 +119,21 @@ fn steady(entry: &AppEntry, db: &DbHandle) -> AppStatus {
                 // i[impl resource.stop]
                 // As the steady desired state has it: a stopped resource, or
                 // a deployment scaled to zero, is meant to have nothing Ready.
-                let wants_ready = if stopped.contains(&(*kind, name.as_str().to_owned())) {
-                    false
+                let desired = if stopped.contains(&(*kind, name.as_str().to_owned())) {
+                    Desired::Unscheduled
                 } else if let Some((low, high)) = scale_bounds {
-                    scaling::effective_scale(db, &app_name, name, *low, *high)? > 0
+                    if scaling::effective_scale(db, &app_name, name, *low, *high)? > 0 {
+                        Desired::Ready
+                    } else {
+                        Desired::Unscheduled
+                    }
+                } else if *kind == ResourceKind::Job {
+                    Desired::Run
                 } else {
-                    true
+                    Desired::Ready
                 };
                 let instances = find_instances_for_group(db, &app_name, *kind, Some(name))?;
-                if !at_desired_state(db, &instances, wants_ready)? {
+                if !at_desired_state(db, &instances, desired)? {
                     return Ok(AppStatus::Degraded);
                 }
             }
@@ -144,25 +150,46 @@ fn steady(entry: &AppEntry, db: &DbHandle) -> AppStatus {
     })
 }
 
+/// Where a resource's desired state puts its instances.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Desired {
+    Ready,
+    Unscheduled,
+    /// A Job, which runs once: Ready while it runs, then done once its run
+    /// has succeeded.
+    Run,
+}
+
 /// Whether a resource's instances are where its desired state puts them.
 fn at_desired_state(
     db: &Db,
     instances: &[ResourceInstance],
-    wants_ready: bool,
+    desired: Desired,
 ) -> rusqlite::Result<bool> {
-    let mut has_ready = false;
+    let mut reached = false;
     for inst in instances {
         let obs = query_observations(db, inst)?;
-        match derive_lifecycle_state(inst, &obs) {
-            LifecycleState::Ready if wants_ready => has_ready = true,
+        match (desired, derive_lifecycle_state(inst, &obs)) {
+            (Desired::Ready | Desired::Run, LifecycleState::Ready) => reached = true,
+            // A Job that has run rests here, removed or not.
+            (Desired::Run, LifecycleState::Terminated | LifecycleState::Unscheduled) => {
+                match container_run_succeeded(&obs) {
+                    Some(true) => reached = true,
+                    Some(false) => return Ok(false),
+                    None => {}
+                }
+            }
             // Instances being torn down are on their way to Unscheduled, which
             // is where a stopped resource belongs and where a replaced
             // instance is going, so they do not drag the app to Degraded.
-            LifecycleState::Unscheduled
-            | LifecycleState::Terminating
-            | LifecycleState::Terminated => {}
+            (
+                _,
+                LifecycleState::Unscheduled
+                | LifecycleState::Terminating
+                | LifecycleState::Terminated,
+            ) => {}
             _ => return Ok(false),
         }
     }
-    Ok(has_ready || !wants_ready)
+    Ok(reached || desired == Desired::Unscheduled)
 }
