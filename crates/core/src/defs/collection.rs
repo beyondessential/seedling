@@ -1,9 +1,7 @@
 use std::rc::Rc;
-use std::sync::Arc;
 
 use rhai::{CustomType, Dynamic, Map, TypeBuilder};
 
-use super::action::Action;
 use super::app::App;
 use super::deployment::Deployment;
 use super::ingress::Ingress;
@@ -161,17 +159,6 @@ pub fn col(val: Dynamic) -> Collection {
         return Collection::from_bag(Rc::new(ItemBag {
             id,
             value: Dynamic::from(job),
-        }));
-    }
-
-    if let Some(action) = val.clone().try_cast::<Action>() {
-        let id = ResourceId {
-            kind: ResourceKind::Action,
-            name: Arc::new(action.name.as_str().to_owned()),
-        };
-        return Collection::from_bag(Rc::new(ItemBag {
-            id,
-            value: Dynamic::from(action),
         }));
     }
 

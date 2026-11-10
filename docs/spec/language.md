@@ -137,7 +137,7 @@ Absent specification bugs, anything that is not defined here is either defined i
 > - An anonymous Volume (without a name) — yields an empty Collection.
 > - Any other value — yields an empty Collection.
 >
-> Action handles are not coercible to a Collection: actions are invoked via [`Action.invoke()`](#l--action.call), not scheduled as resources.
+> Action handles are not coercible to a Collection: `col(action)` yields an empty Collection, because actions are invoked via [`Action.invoke()`](#l--action.call), not scheduled as resources.
 
 # Constants
 
