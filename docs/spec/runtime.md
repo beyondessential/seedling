@@ -45,6 +45,7 @@ Absent specification bugs, anything that is not defined here is either defined i
 > An installed app's contribution to absolute state may be withdrawn only by an explicit [lifecycle](#r--lifecycle.states) transition — never because computing that contribution failed.
 > When an iteration cannot compute the contribution of every installed app, the affected absolute state must not be applied for that iteration; the previously applied state stands until an iteration succeeds.
 > An iteration that withholds an apply must draw no conclusion from having done so: the fault for that state is neither filed nor cleared, and no resource is recorded as ready on the strength of an apply that did not run.
+> State that comes out empty from an iteration that computed every contribution is a result like any other, and is applied: removing the last ingress from the last app must leave the proxy serving nothing, not whatever it was last given.
 > Likewise, a full teardown of shared infrastructure occurs only when no app is installed or installing — never when apps are installed but their state could not be computed.
 > This does not constrain per-resource incremental actuation, which acts only on the resources it names.
 

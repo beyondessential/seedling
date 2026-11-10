@@ -1381,9 +1381,6 @@ impl Reconciler {
                 self.reconcile_ingress_conflicts(&ingress_conflicts);
                 // r[impl ingress.site.attachment]
                 self.reconcile_unresolved_site_attachments(&unresolved_site_attachments);
-                let has_proxy_config =
-                    !proxy_config.virtual_hosts.is_empty() || !proxy_config.l4_routes.is_empty();
-
                 // The TLS-managed-ingress enumeration is shared with
                 // the OI rollup and the expiry sweep so all three call
                 // sites act on exactly the same set of hostnames; the
@@ -1475,18 +1472,7 @@ impl Reconciler {
                             false => None,
                         }
                     },
-                    async {
-                        match proxy_coverage.is_complete() {
-                            true if has_proxy_config => {
-                                Some(self.driver.proxy.apply_config(&proxy_config).await)
-                            }
-                            // An empty config is not applied, as before; that
-                            // is a decision about the config, not a withheld
-                            // apply, so it keeps reporting success.
-                            true => Some(Ok(())),
-                            false => None,
-                        }
-                    },
+                    apply_proxy_plane(&*self.driver.proxy, &proxy_config, proxy_coverage),
                 );
 
                 match routes_res {
@@ -1546,7 +1532,7 @@ impl Reconciler {
                             &format!("apply_config failed: {e}"),
                         );
                     }
-                    Some(Ok(())) if has_proxy_config => {
+                    Some(Ok(())) => {
                         self.clear_system_fault("proxy_failed");
                         // r[impl fault.proxy-apply-failed]
                         self.clear_proxy_apply_failed_faults();
@@ -1562,7 +1548,7 @@ impl Reconciler {
                             );
                         }
                     }
-                    Some(Ok(())) | None => {}
+                    None => {}
                 }
 
                 // r[impl observe.ingress.certs]
@@ -2207,10 +2193,75 @@ fn deployment_standing(
     }
 }
 
+/// Apply this tick's proxy config, or `None` when the build did not cover
+/// every app and the apply is withheld.
+///
+/// A config with no virtual hosts and no layer-4 routes is applied like any
+/// other. It is the computed answer — no ingress is declared — and the
+/// coverage check is what tells it apart from a build that could not compute
+/// one. Skipping it left whatever the proxy had last been given in force, so a
+/// deleted ingress stayed reachable.
+// r[impl reconciliation.absolute-state]
+async fn apply_proxy_plane(
+    proxy: &dyn super::NetworkProxy,
+    config: &crate::system::types::ProxyConfig,
+    coverage: Coverage,
+) -> Option<Result<(), super::BoxError>> {
+    match coverage.is_complete() {
+        true => Some(proxy.apply_config(config).await),
+        false => None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{DeploymentStanding, deployment_standing};
+    use super::{Coverage, DeploymentStanding, apply_proxy_plane, deployment_standing};
     use crate::defs::container::HealthcheckOnFailure;
+    use crate::system::{BoxError, BoxFuture, NetworkProxy, types::ProxyConfig};
+
+    #[derive(Default)]
+    struct RecordingProxy(parking_lot::Mutex<Vec<bool>>);
+
+    impl NetworkProxy for RecordingProxy {
+        fn is_healthy<'a>(&'a self) -> BoxFuture<'a, Result<bool, BoxError>> {
+            Box::pin(async { Ok(true) })
+        }
+
+        fn apply_config<'a>(
+            &'a self,
+            config: &'a ProxyConfig,
+        ) -> BoxFuture<'a, Result<(), BoxError>> {
+            self.0.lock().push(config.virtual_hosts.is_empty());
+            Box::pin(async { Ok(()) })
+        }
+    }
+
+    // r[verify reconciliation.absolute-state]
+    // Removing the last ingress produces an empty config. It used to be skipped
+    // and reported as a success, so the proxy kept serving the ingress that was
+    // deleted.
+    #[tokio::test]
+    async fn an_empty_proxy_config_is_applied() {
+        let proxy = RecordingProxy::default();
+
+        let outcome = apply_proxy_plane(&proxy, &ProxyConfig::default(), Coverage::Complete).await;
+
+        assert!(matches!(outcome, Some(Ok(()))));
+        assert_eq!(*proxy.0.lock(), vec![true], "applied once, and empty");
+    }
+
+    // r[verify reconciliation.absolute-state]
+    // An empty config from a build that could not cover every app is not the
+    // answer "nothing to serve", and must leave the previous state standing.
+    #[tokio::test]
+    async fn a_partial_build_is_withheld_whatever_it_holds() {
+        let proxy = RecordingProxy::default();
+
+        let outcome = apply_proxy_plane(&proxy, &ProxyConfig::default(), Coverage::Partial).await;
+
+        assert!(outcome.is_none(), "withheld, so no conclusion is drawn");
+        assert!(proxy.0.lock().is_empty(), "nothing was pushed");
+    }
 
     fn standing(
         on_failure: HealthcheckOnFailure,
