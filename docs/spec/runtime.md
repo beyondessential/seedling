@@ -1697,6 +1697,11 @@ Two levers set how a workload competes for host resources under pressure. Each D
 > process. If the translator cannot be initialised and NAT64 is required (`enabled` mode
 > or `auto` mode with no external NAT64 detected), the runtime must report an error and
 > file a fault.
+>
+> A teardown that cannot establish whether the translator is installed has failed; it must
+> not be taken for the translator being absent. The runtime must not report the translator
+> removed while it remains installed, and must attempt the teardown again while no
+> workloads are registered.
 
 > r[infra.nat64.forwarding]
 > When NAT64 is active, the runtime must ensure that IPv6 and IPv4 forwarding are enabled on

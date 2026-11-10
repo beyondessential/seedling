@@ -1646,10 +1646,10 @@ impl Reconciler {
             match crate::system::jool::teardown_nat64().await {
                 Ok(()) => self.nat64_installed = false,
                 Err(e) => {
-                    // Leave `nat64_installed = true` so the next non-idle
-                    // tick won't redundantly try to re-setup. Instance
-                    // removal failure is not fatal — the stale instance
-                    // is harmless and the next startup will handle it.
+                    // Left installed as far as the runtime knows, so the
+                    // next idle tick tries the teardown again rather than
+                    // concluding the translator is gone, and a non-idle tick
+                    // does not redundantly re-setup.
                     error!(error = %e, "idle: NAT64 teardown failed");
                 }
             }
