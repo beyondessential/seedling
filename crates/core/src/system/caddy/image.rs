@@ -427,14 +427,18 @@ mod tests {
              validating against it cannot catch one. {said}"
         );
 
-        let (accepted, said) = validate_in_image(&emitted);
-        assert!(
-            accepted,
-            "the proxy image rejects the configuration the runtime emits, which \
+        // The exhaustive fixture, and the document the proxy is given once the
+        // last ingress on the node is gone: nothing to serve is applied too.
+        for emitted in [emitted, build_caddy_config(&ProxyConfig::default())] {
+            let (accepted, said) = validate_in_image(&emitted);
+            assert!(
+                accepted,
+                "the proxy image rejects the configuration the runtime emits, which \
              would drop ingress for every vhost on the host. If this is the \
              pinned image and the Containerfile changed, set SEEDLING_CADDY_IMAGE \
              to an image built from it. {said}"
-        );
+            );
+        }
     }
 
     // r[verify infra.proxy.image.modules]
