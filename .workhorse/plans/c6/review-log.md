@@ -37,3 +37,10 @@ For the user: cancel at barrier or rt call; NotInstalled with recorded instances
 Restored: STS no expensive computation; APPS status order (operating above not_installed); PRM plan lists handlers that would be scheduled; TLSM manual upload accepts any PEM order, stored leaf first; TLSM CSR SAN set without order or subject constraint.
 
 For the user: TLSM stale manual-policy claims; auto_issue_kicked; APPS removal only when not installed; uninstall specified twice (APPS and ACI); Faulted vs Degraded meaning; restarts shape; history redaction shape; route served and `/` route; install result and no-install-action; empty string as no value; unknown parameter keys (originals conflict); PRM internal path; DEFN limits and digests; STS SemVer.
+
+### Round 1 triage
+
+Fixed by me: WIRE shell stderr description; APPS uninstall reduced to a link to ACN; TLSM never returns ACME account keys; WEB relay refusals answered requirements_invalid; CSP localhost without Host; one ACME order SHOULD; Canopy-only untyped and rejected-CSR faults; PRIO kill order MUST where the platform allows; NAT64 egress definition back to the original, Linux specifics in LINUX#egress; restart record retention configurable; volume shell event name; zero balance interval fails evaluation.
+Accepted code-derived details: recorded in gaps.md "Decided in the review loop".
+Code checks filed on D6.
+Asked the user: Faulted vs Degraded; shell attach timing; rt.write on mapped external volumes.
