@@ -37,6 +37,7 @@ When a Deployment's [update strategy](../language/deployment.md#update-and-termi
 6. Return the effective instance count to the Deployment's scale.
 
 An instance without a [healthcheck](../language/deployment.md#health-checks) is healthy once it is running.
+A replacement that does not become healthy is subject to the [replacement guard](autonomous.md#replacement-guard).
 
 The added instance MUST be part of the [desired state](../overview.md#desired-state), so that scaling does not treat it as excess.
 

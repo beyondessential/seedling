@@ -14,7 +14,8 @@ Applies to the volumes, services and ingresses that [operators](../overview.md#o
 | AAAA record | a DNS resource record carrying an IPv6 address, as defined by [RFC 3596](https://www.rfc-editor.org/rfc/rfc3596) |
 | NAT64 | translation from IPv6 clients to IPv4 servers, as defined by [RFC 6146](https://www.rfc-editor.org/rfc/rfc6146) |
 | Well-Known Prefix | the IPv6 prefix `64:ff9b::/96` for IPv4-embedded addresses, as defined by [RFC 6052](https://www.rfc-editor.org/rfc/rfc6052) |
-| redirect | an HTTP response with a 3xx status code, as defined by [RFC 9110](https://www.rfc-editor.org/rfc/rfc9110) section 15.4 |
+| redirect | an HTTP response with a 3xx status code, as defined by [RFC 9110 §15.4](https://www.rfc-editor.org/rfc/rfc9110#section-15.4) |
+| ACME | the Automatic Certificate Management Environment protocol, as defined by [RFC 8555](https://www.rfc-editor.org/rfc/rfc8555) |
 
 ## Terminology
 
@@ -58,7 +59,7 @@ When an operator deletes a managed site volume, the runtime MUST [hold](actuatio
 When an operator deletes a snapshot site volume, the runtime MUST delete its storage.
 When an operator deletes a bind site volume, the runtime MUST forget the volume and MUST leave the host path untouched.
 
-The runtime MUST emit an [event](../interface/events.md) and record an [audit log](audit-log.md#storage) entry when a site volume is created or deleted.
+The runtime MUST emit an [event](../interface/events.md) and record an [audit log](audit-log.md#entries) entry when a site volume is created or deleted.
 A deletion event MUST identify the site volume's kind, and the held volume created when the deletion held the volume's data.
 
 ### Site volume names
@@ -142,7 +143,9 @@ An unroutable or unresolvable endpoint MUST NOT affect the routing of other endp
 ### Partial DNS answers
 
 The runtime MUST resolve a name from the address families whose lookups succeeded.
-When the lookup for one family fails and the other returns records, the runtime MUST resolve the endpoint from those records, MUST keep the failed family's last answer, and MUST look the name up again promptly rather than after the answer's lifetime has passed.
+When the lookup for one family fails and the other returns records, the runtime MUST resolve the endpoint from those records.
+The runtime MUST keep the failed family's last answer.
+The runtime MUST look the name up again promptly, without waiting for the answer's lifetime to pass.
 A failed lookup MUST NOT be recorded as the family having no records.
 
 A failure MUST count towards the unresolvable threshold only when no lookup returned records and at least one lookup failed.

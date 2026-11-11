@@ -37,7 +37,7 @@ The outcome of a superseded pull MUST NOT change the pacing of the pull that sup
 
 ## Image warming
 
-When an action closure calls [`rt.warm_images`](../language/rt.md#image-warming) with a selection containing container resources, the runtime MUST collect the distinct image references of those resources' containers and begin a pull for each one not present on the host.
+When an action closure calls [`rt.warm_images`](../language/rt.md#image-warming) with a selection containing Deployments or Jobs, the runtime MUST collect the distinct image references of those resources' containers and begin a pull for each one not present on the host.
 For each reference collected, the runtime MUST record a [pin](#pin) for the calling app, creating it if absent.
 
 The runtime MUST record each `rt.warm_images` call in the [action execution log](history.md#action-execution-log).
@@ -73,7 +73,7 @@ The runtime MUST then treat each of the app's pins as follows:
 | --- | --- | --- |
 | in the safe set | any | the pin's expiry is cleared |
 | not in the safe set | every handler probed without error and none skipped | the pin is deleted |
-| not in the safe set | any handler errored or was skipped | the pin's expiry is set to 30 days from now, unless an earlier expiry is already set |
+| not in the safe set | any handler errored or was skipped | the pin's expiry is set to 30 days after the reconciliation, unless an earlier expiry is already set |
 
 If the probe cannot run, for instance because the definition does not compile, the runtime MUST leave the app's pins unchanged.
 
@@ -97,7 +97,7 @@ If the runtime cannot determine whether an image is pinned or in use, it MUST NO
 A failure to remove one image MUST be logged, and MUST NOT prevent the removal of other images in the same pass.
 
 Without explicit operator configuration, the runtime MUST NOT autonomously remove an image last used fewer than 30 days ago, nor remove images by any more aggressive policy.
-Operators remove images sooner through the Operator Interface.
+Operators remove images sooner through [image management](../interface/images.md#removing-an-image).
 
 ## Image discovery
 
@@ -114,8 +114,8 @@ During a probe, the runtime MUST handle `rt.*` calls as follows:
 | `rt.stop`, `rt.query`, `rt.restart`, `rt.warm_certs`, `rt.signal`, `rt.write` | does nothing |
 
 During a probe, every barrier MUST resolve as satisfied at once.
-This includes `.scheduled()`, `.running()`, `.ready()`, `.ready_eventually()`, `.terminated()`, `.terminated_eventually()`, and the implicit barrier of `rt.stop`.
-`Termination::ensure_success()` MUST succeed.
+The barriers include `.scheduled()`, `.running()`, `.ready()`, `.ready_eventually()`, `.terminated()`, `.terminated_eventually()`, and the implicit barrier of `rt.stop`.
+`termination.ensure_success()` MUST succeed.
 
 If a handler's closure throws, the probe MUST report the thrown message as that handler's error, together with the image references recorded before the throw.
 

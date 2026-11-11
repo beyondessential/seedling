@@ -6,6 +6,13 @@ id: IDN
 
 Applies to how the [runtime](../overview.md#runtime) identifies resource instances, and to the names it reserves for itself in namespaces [operators](../overview.md#operator) also use.
 
+## Borrowed terms
+
+| term | meaning |
+| --- | --- |
+| UUID | A 128-bit universally unique identifier, [RFC 9562](https://www.rfc-editor.org/rfc/rfc9562). |
+| nil UUID | The UUID with all 128 bits set to zero, [RFC 9562 §5.9](https://www.rfc-editor.org/rfc/rfc9562#section-5.9). |
+
 ## Terminology
 
 ### Instance ID
@@ -71,5 +78,5 @@ The runtime grants itself these names in namespaces operators also use:
 The runtime MUST reject the creation of a site volume, site ingress, external volume mapping or app under a reserved name.
 The runtime MUST NOT reject an update, rename or deletion of an object because its name is reserved.
 
-A component that deletes, disables or replaces objects it considers its own MUST identify them by what the runtime recorded, whatever they are named.
+A component that deletes, disables or replaces objects it considers its own MUST identify them by the ownership the runtime recorded, whatever they are named.
 The leftover snapshot sweep MUST NOT delete a recorded site volume, and a discovery provider MUST NOT disable or replace a manual site ingress.

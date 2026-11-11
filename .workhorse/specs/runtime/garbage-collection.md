@@ -15,9 +15,9 @@ A failure to delete one kind of record MUST NOT prevent the pass from deleting t
 | setting | default | daemon option |
 | --- | --- | --- |
 | collection interval | 3600 seconds (one hour) | `--gc-interval-secs` |
-| action log retention | 86 400 seconds (24 hours) | `--gc-retain-action-log-secs` |
-| cleared fault retention | 604 800 seconds (7 days) | `--gc-retain-cleared-faults-secs` |
-| completed autonomous operation retention | 604 800 seconds (7 days) | `--gc-retain-completed-operations-secs` |
+| action log retention | 86400 seconds (24 hours) | `--gc-retain-action-log-secs` |
+| cleared fault retention | 604800 seconds (7 days) | `--gc-retain-cleared-faults-secs` |
+| completed autonomous operation retention | 604800 seconds (7 days) | `--gc-retain-completed-operations-secs` |
 | unscheduled instance retention | 600 seconds (10 minutes) | `--gc-retain-unscheduled-instances-secs` |
 | restart records kept per instance | 50 | `--gc-retain-restart-records` |
 
@@ -26,7 +26,6 @@ An operator MAY override each setting with its daemon option when the daemon sta
 ## Retention
 
 The runtime MUST delete each [action execution log](history.md#action-execution-log) entry recorded longer ago than the action log retention, unless it belongs to the [lifecycle operation](../overview.md#lifecycle-operation) in progress.
-The runtime MUST NOT delete an entry of the lifecycle operation in progress.
 
 The runtime MUST delete each [fault](../overview.md#fault) record cleared longer ago than the cleared fault retention.
 
@@ -38,7 +37,6 @@ The runtime MUST delete every observation, autonomous operations log entry and [
 
 The runtime MUST keep the configured number of most recent restart records of each resource instance, and MUST delete that instance's older ones.
 The runtime MUST record every restart, however quickly an instance is restarting.
-The bound applies only to the records kept.
 
 > [!NOTE]
 > A crash loop produces restart records fastest exactly when each attempt's exit status is the diagnostic, so the bound is per instance and applies to storage, not to recording.

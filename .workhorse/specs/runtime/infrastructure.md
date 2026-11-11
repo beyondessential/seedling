@@ -108,7 +108,7 @@ Where a mounted service has several backends, the runtime MUST distribute new co
 ## Service translation
 
 The runtime MUST translate traffic addressed to a service's address and declared service port to the address and pod-side port of one of the service's backends.
-This MUST apply to traffic forwarded through the host and to traffic originating on the host.
+The translation MUST apply to traffic forwarded through the host and to traffic originating on the host.
 Where a service has several backends, the runtime MUST distribute new connections across them.
 
 The runtime MUST apply the service translation, mount translation, ingress redirection and forwarding policy rules together, as one atomic replacement of the rules it last applied.

@@ -37,7 +37,7 @@ The runtime MUST decide whether NAT64 is active once, when it starts.
 
 ## Detection
 
-In `auto` mode, the runtime MUST detect existing NAT64 by resolving `ipv4only.arpa` through the host's resolver when it starts.
+In `auto` mode, the runtime MUST detect existing NAT64 by resolving `ipv4only.arpa` through the host's system resolver when it starts.
 If the response contains an IPv6 address other than the IPv4-mapped form of `192.0.0.170` or `192.0.0.171`, the network provides NAT64 and DNS64, and NAT64 MUST NOT be active.
 If the resolver answers without such an address, NAT64 MUST be active.
 

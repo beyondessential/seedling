@@ -56,7 +56,9 @@ Whether an ingress terminates TLS is independent of whether it terminates HTTP.
 An ingress that terminates HTTP without terminating TLS is a plaintext ingress.
 
 The runtime MUST serve a plaintext ingress as HTTP without TLS on its port, routing matching requests to the ingress's target.
-For a plaintext ingress, the runtime MUST NOT request or provision a certificate for the hostname, MUST NOT accept QUIC connections, and MUST NOT answer requests with a redirect the ingress does not itself declare.
+For a plaintext ingress, the runtime MUST NOT request or provision a certificate for the hostname.
+It MUST NOT accept QUIC connections for a plaintext ingress.
+It MUST NOT answer a plaintext ingress's requests with a redirect the ingress does not itself declare.
 
 The runtime MUST forward to an ingress only the transport protocols the ingress serves.
 A plaintext HTTP ingress therefore MUST NOT cause UDP traffic on its port to be forwarded.
@@ -149,7 +151,7 @@ A response carrying an error status MUST be returned to the client as it stands.
 
 > [!NOTE]
 > A request that never connected cannot have been acted on, so retrying it is safe for any method.
-> This is what lets a request arriving while an instance shuts down during a [rolling update](update-strategies.md#rolling-updates) reach a surviving instance.
+> Retrying on another upstream lets a request arriving while an instance shuts down during a [rolling update](update-strategies.md#rolling-updates) reach a surviving instance.
 > On a fallback route, with its single upstream, the policy has no effect but the try duration and interval still do.
 
 The proxy MUST NOT remove an upstream from a route's pool on the strength of its own health checks.
@@ -221,7 +223,8 @@ The proxy MUST NOT add connection-specific fields to responses to keep a connect
 ## Proxy lifecycle
 
 The runtime MUST attempt to bring the proxy up when it starts.
-A failure to bring the proxy up MUST NOT prevent the runtime from starting: the [Operator Interface](../overview.md#operator-interface), database, scheduler and reconciliation loop MUST come up regardless.
+A failure to bring the proxy up MUST NOT prevent the runtime from starting.
+The [Operator Interface](../overview.md#operator-interface), database, scheduler and reconciliation loop MUST come up whether or not the proxy does.
 
 While any app is installed, the runtime MUST check the proxy's health on each [reconciliation](reconciliation.md#reconciliation-loop) iteration and restart it if it is not running or not healthy.
 The runtime MUST stop the proxy when no app is installed or installing.
@@ -259,7 +262,7 @@ On startup, the runtime MUST treat the persisted active instance as authoritativ
 
 The runtime MUST persist the last configuration it successfully applied to the proxy.
 The persisted configuration MUST be in the runtime's own form, rendered into the proxy's configuration format each time it is applied.
-A configuration persisted by an earlier version of the runtime MUST remain applicable, reproducing what that version served.
+A configuration persisted by an earlier version of the runtime MUST remain applicable, reproducing the serving behaviour that version configured.
 The runtime SHOULD also apply the persisted configuration to a proxy it starts afresh.
 
 > [!NOTE]

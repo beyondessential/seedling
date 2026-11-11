@@ -134,7 +134,7 @@ The runtime MUST hold a named non-tmpfs volume's data, instead of deleting it, w
 If the app still declares a volume under the same name, the runtime MUST create a fresh volume and keep the held one beside it.
 
 The runtime MUST hold a managed [site volume](site-resources.md#site-volumes)'s data when an operator deletes it.
-Snapshot site volumes are not held, as [SITE](site-resources.md#site-volume-snapshots) specifies.
+Deleting a snapshot site volume deletes its storage, as [SITE](site-resources.md#site-volumes) specifies.
 
 A held volume MUST record the context it came from: an app volume its app, and a site volume the app name `_site`.
 

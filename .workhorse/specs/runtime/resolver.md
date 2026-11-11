@@ -47,7 +47,7 @@ The runtime MUST accept a `--dns-upstreams` option naming the upstream DNS serve
 When the option is given, the resolver MUST forward to those servers.
 
 When the option is not given, the resolver MUST forward to the host's system resolver at `127.0.0.54:53`.
-This MUST work although that address is on the host's loopback interface, out of the resolver's reach.
+Forwarding to that address MUST work although it is on the host's loopback interface, out of the resolver's reach.
 The runtime MUST relay the resolver's queries to it through the host side of the resolver network, at port 53.
 
 > [!NOTE]
@@ -58,7 +58,8 @@ The runtime MUST relay the resolver's queries to it through the host side of the
 
 The resolver MUST forward every query to its upstreams.
 The resolver MUST cache responses.
-It MUST NOT serve a cached response beyond its TTL, and SHOULD NOT serve one for more than 30 seconds.
+It MUST NOT serve a cached response beyond its TTL.
+It SHOULD NOT serve a cached response for more than 30 seconds.
 
 The resolver MUST synthesise AAAA records as [DNS64](nat64.md#dns64) specifies.
 

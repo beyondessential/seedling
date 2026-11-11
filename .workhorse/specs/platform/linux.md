@@ -6,14 +6,12 @@ id: LINUX
 
 Applies to a [host](../overview.md#host) running Linux, settling for that platform each requirement the other specs leave to the platform.
 
-The other specs hold on every platform.
-Where they name a platform facility in general terms, or leave a choice to the platform, this spec says what it is on Linux.
-
 ## Borrowed terms
 
 | term | meaning |
 | --- | --- |
 | systemd | The Linux service manager, [systemd](https://systemd.io/). |
+| D-Bus | The message bus through which systemd exposes its API, [D-Bus](https://www.freedesktop.org/wiki/Software/dbus/). |
 | unit | An object systemd manages, such as a service or a slice, [systemd.unit(5)](https://www.freedesktop.org/software/systemd/man/latest/systemd.unit.html). |
 | transient unit | A unit created at runtime through systemd's API rather than from a unit file, [systemd.unit(5)](https://www.freedesktop.org/software/systemd/man/latest/systemd.unit.html). |
 | slice | A unit that groups processes into a node of the control-group tree, [systemd.slice(5)](https://www.freedesktop.org/software/systemd/man/latest/systemd.slice.html). |
@@ -21,6 +19,7 @@ Where they name a platform facility in general terms, or leave a choice to the p
 | journal | systemd's structured log store, [systemd-journald.service(8)](https://www.freedesktop.org/software/systemd/man/latest/systemd-journald.service.html). |
 | OOM score adjustment | A per-process bias, from -1000 to 1000, on the kernel's choice of victim when memory runs out, [proc(5)](https://man7.org/linux/man-pages/man5/proc.5.html). |
 | systemd-resolved | systemd's local resolver, [systemd-resolved.service(8)](https://www.freedesktop.org/software/systemd/man/latest/systemd-resolved.service.html). |
+| Podman | A container engine, [Podman](https://podman.io/). |
 | XDG base directories | The per-user directory layout of the [XDG Base Directory Specification](https://specifications.freedesktop.org/basedir-spec/latest/). |
 
 ## Host facilities
@@ -29,17 +28,17 @@ Where they name a platform facility in general terms, or leave a choice to the p
 | --- | --- |
 | process supervisor | systemd, reached over its D-Bus API |
 | container runtime | Podman, reached over its API socket at `/run/podman/podman.sock` |
-| system journal, host log store | the journal |
+| system journal | the journal |
 | resource-control group | a slice, over cgroup v2 |
 | system resolver | systemd-resolved |
 
 The host MUST run systemd as its service manager, with the unified cgroup v2 hierarchy.
-Unless the resolver is given its upstreams, the host MUST run systemd-resolved with its extra stub listener on `127.0.0.54`, which is the resolver's [default upstream](../runtime/resolver.md).
+Unless the resolver is given its upstreams, the host MUST run systemd-resolved with its extra stub listener on `127.0.0.54`, which is the resolver's [default upstream](../runtime/resolver.md#upstreams).
 
 ## Supervised units
 
 The runtime MUST run each container instance, workload or infrastructure, as a transient service unit.
-A workload container instance's unit MUST be named `seedling-<display name>.service`, where the display name is the instance's [display name](../runtime/identity.md).
+A workload container instance's unit MUST be named `seedling-<display name>.service`, where `<display name>` is the instance's [display name](../runtime/identity.md#display-name).
 Every unit the runtime creates MUST have a name beginning `seedling-`.
 
 The runtime MUST create each transient unit so that systemd discards it once it is inactive or failed with no restart pending.
