@@ -48,8 +48,8 @@ Each member in the table below has the same type and meaning in every event type
 | `deployment` | string | a deployment's name |
 | `description` | string | text for an operator to read |
 
-A volume target is a [volume reference](shells.md#volume-reference) with `kind` `"site"` or `"app"`.
-A service target is a JSON object with `kind` `"site"` and `name`, naming a site service, or with `kind` `"app"`, `app` and `service`, naming a service an app declares.
+A volume target is a [volume reference](volumes.md#volume-reference) with `kind` `"site"` or `"app"`.
+A service target is the object that [service targets](services.md#service-targets) defines.
 
 ## Event types
 

@@ -76,3 +76,15 @@
 - defs/container.rs:317-318: interval and timeout at least 1.
 - defs/container.rs mount (~557, ~572): key volume_mounts by canonical path.
 - system/reconcile/proxy.rs: a DTLS ingress is passed through as raw TCP/UDP without terminating DTLS, contrary to ING's termination table.
+
+## New interface specs (round 3 input)
+
+### INGM (site ingresses)
+- oi/handler/ingresses.rs create_site_ingress: duplicate name → requirements_invalid (not internal).
+- delete_site_ingress: allow deleting a discovered ingress its provider no longer reports; event source is the real source (not hardcoded "manual"); emit SiteIngressAttachmentRemoved for each attachment removed with it.
+- update_site_ingress: no event when nothing changed.
+- attach_forward/attach_redirect: re-attach on an existing (port, protocol) replaces the target (site_ingress_attachments::update), keeps created_at, emits SiteIngressAttachmentUpdated; identical target is a no-op.
+- Parameter `preserve_path` → `redirect_preserve_path` (also crates/ctl/src/ingresses.rs:229, web frontend routes/Ingresses.tsx:241).
+- SiteIngressAttachmentRemoved carries the target (protocol/src/events.rs, detach).
+- discovery_status: healthy null before the first poll.
+- CLI: no command for /ingresses/site/discovery/refresh (web UI neither).

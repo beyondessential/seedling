@@ -22,16 +22,6 @@ An interactive terminal an operator holds open on a job the server runs for it, 
 
 The client-initiated bidirectional stream that carries a shell session's opening request, its stdin, its handshake response and its exit frame.
 
-### Volume reference
-
-A JSON object naming one volume on the host by its `kind`.
-
-| `kind` | other members | names |
-| --- | --- | --- |
-| `"site"` | `name` (string) | the site volume of that name |
-| `"app"` | `app` (string), `volume` (string) | the volume `volume` declared by the app `app` |
-| `"held"` | `id` (string) | the [held volume](../runtime/actuation.md#held-volume) with that identifier |
-
 ## Opening an app shell
 
 A client opens a [shell session](#shell-session) on one of an app's [shells](../language/action.md#shells) by sending `/shells/start` on a new [session stream](#session-stream), framed as [shell stream framing](wire.md#shell-sessions) specifies.
@@ -171,7 +161,7 @@ The server MUST allow shell sessions to run concurrently with lifecycle operatio
 
 | member | type | required | meaning |
 | --- | --- | --- | --- |
-| `volumes` | array of [volume references](#volume-reference) | yes | the volumes to mount |
+| `volumes` | array of [volume references](volumes.md#volume-reference) | yes | the volumes to mount; a reference of any kind |
 | `rows` | integer, 0 to 65535 | yes | the terminal's initial height in rows |
 | `cols` | integer, 0 to 65535 | yes | the terminal's initial width in columns |
 | `read_only` | boolean | no, default `false` | when `true`, every volume is mounted read-only |

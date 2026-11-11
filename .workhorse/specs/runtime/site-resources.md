@@ -144,7 +144,7 @@ The runtime MUST look the name up again promptly, without waiting for the answer
 A failed lookup MUST NOT be recorded as the family having no records.
 
 A failure MUST count towards the unresolvable threshold only when no lookup returned records and at least one lookup failed.
-The `/services/site/resolver-status` method of the [Operator Interface](../overview.md#operator-interface) MUST name each family whose lookup is failing, for as long as it fails.
+The [`/services/site/resolver-status`](../interface/services.md#resolver-status) method MUST name each family whose lookup is failing, for as long as it fails.
 
 ### Site service lifecycle
 

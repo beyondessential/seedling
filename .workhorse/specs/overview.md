@@ -54,7 +54,7 @@ The key words MUST, MUST NOT, REQUIRED, SHALL, SHALL NOT, SHOULD, SHOULD NOT, RE
 | [RFC 1952](https://www.rfc-editor.org/rfc/rfc1952) | gzip, under [DEFN](interface/definitions.md) |
 | [RFC 8259](https://www.rfc-editor.org/rfc/rfc8259) | JSON, under [WIRE](interface/wire.md), [AUD](runtime/audit-log.md), [WEB](web/serving.md) |
 | [JSON Lines](https://jsonlines.org/) | the audit log format, under [AUD](runtime/audit-log.md) |
-| [RFC 3339](https://www.rfc-editor.org/rfc/rfc3339) | timestamps, under [APPS](interface/apps.md), [EVT](interface/events.md), [FLTS](interface/faults.md), [FWD](interface/port-forwards.md), [IMGM](interface/images.md), [LOG](interface/logs.md), [RLY](interface/canopy-relay.md), [SHL](interface/shells.md), [TPL](interface/templates.md), [WEB](web/serving.md) |
+| [RFC 3339](https://www.rfc-editor.org/rfc/rfc3339) | timestamps, under [APPS](interface/apps.md), [EVT](interface/events.md), [FLTS](interface/faults.md), [FWD](interface/port-forwards.md), [IMGM](interface/images.md), [LOG](interface/logs.md), [RLY](interface/canopy-relay.md), [SHL](interface/shells.md), [SVCM](interface/services.md), [TPL](interface/templates.md), [WEB](web/serving.md) |
 | [RFC 9562](https://www.rfc-editor.org/rfc/rfc9562) | UUIDs, under [IDN](runtime/identity.md) |
 | [RFC 9110](https://www.rfc-editor.org/rfc/rfc9110) | HTTP semantics, under [HTTP](language/http-service.md), [ING](language/ingress.md), [PRX](runtime/proxy.md), [SITE](runtime/site-resources.md), [RLY](interface/canopy-relay.md), [WEB](web/serving.md) |
 | [RFC 9111](https://www.rfc-editor.org/rfc/rfc9111) | HTTP caching, under [WEB](web/serving.md) |
@@ -76,7 +76,7 @@ The key words MUST, MUST NOT, REQUIRED, SHALL, SHALL NOT, SHOULD, SHOULD NOT, RE
 | [RFC 1035](https://www.rfc-editor.org/rfc/rfc1035) | DNS names and resource records, under [ING](language/ingress.md), [DNS](runtime/resolver.md), [SITE](runtime/site-resources.md) |
 | [RFC 1123](https://www.rfc-editor.org/rfc/rfc1123) | host name labels, under [ING](language/ingress.md) |
 | [RFC 3596](https://www.rfc-editor.org/rfc/rfc3596) | AAAA records, under [SITE](runtime/site-resources.md) |
-| [RFC 4291](https://www.rfc-editor.org/rfc/rfc4291) | IPv6 addressing, under [NAT64](runtime/nat64.md) |
+| [RFC 4291](https://www.rfc-editor.org/rfc/rfc4291) | IPv6 addressing, under [NAT64](runtime/nat64.md), [SVCM](interface/services.md) |
 | [RFC 4193](https://www.rfc-editor.org/rfc/rfc4193) | unique local IPv6 addresses, under [INFRA](runtime/infrastructure.md) |
 | [RFC 6146](https://www.rfc-editor.org/rfc/rfc6146) | stateful NAT64, under [NAT64](runtime/nat64.md), [CONST](language/constants.md), [SITE](runtime/site-resources.md) |
 | [RFC 6147](https://www.rfc-editor.org/rfc/rfc6147) | DNS64, under [NAT64](runtime/nat64.md), [CONST](language/constants.md) |
