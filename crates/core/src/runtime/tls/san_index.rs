@@ -324,10 +324,12 @@ pub enum Sweep {
 /// Bring the index entries of the certificates `sweep` covers into line with
 /// their PEMs, returning how many were rewritten.
 ///
-/// The PEMs are read in one database call, parsed off the database thread,
-/// and written back in a second call, so the database thread is never held for
-/// a parse. A certificate whose PEM changed in between is left alone: whatever
-/// changed it indexed it, or the trigger left it for the next sweep.
+/// The PEMs and what is indexed for them are read in one database call, parsed
+/// off the database thread, and only the entries that differ go back in a
+/// second call, so the database thread is never held for a parse and a pass
+/// over a correct index makes no query per certificate. A certificate whose PEM
+/// or entry changed in between is left alone: whatever changed it indexed it,
+/// or the trigger left it for the next sweep.
 ///
 /// Anything rewritten means a write path let the index drift, which is a
 /// defect, so each one is logged as an error. It is not filed as a fault: an
@@ -339,50 +341,99 @@ pub async fn sweep(db: &DbHandle, sweep: Sweep) -> Result<usize, SweepError> {
     if read.is_empty() {
         return Ok(0);
     }
-    let derived = tokio::task::spawn_blocking(move || {
+    let drifted = tokio::task::spawn_blocking(move || {
         read.into_iter()
-            .map(|(id, pem)| {
+            .filter_map(|(id, pem, indexed)| {
                 let entry = Entry::of(parse_reporting(id, &pem).as_ref());
-                (id, pem, entry)
+                (indexed.as_ref() != Some(&entry)).then_some(Drifted {
+                    id,
+                    pem,
+                    indexed,
+                    entry,
+                })
             })
             .collect::<Vec<_>>()
     })
     .await
     .context(ParseSnafu)?;
-    db.call(move |db| super::store::atomically(db, || write_back(db, derived)))
+    if drifted.is_empty() {
+        return Ok(0);
+    }
+    db.call(move |db| super::store::atomically(db, || write_back(db, drifted)))
         .context(StorageSnafu)
 }
 
-fn read_for_sweep(db: &Db, sweep: Sweep) -> rusqlite::Result<Vec<(i64, String)>> {
-    let sql = match sweep {
-        Sweep::Unindexed => {
+/// A certificate whose index entry, as the sweep read it, differs from what its
+/// PEM says.
+struct Drifted {
+    id: i64,
+    /// The PEM the entry was derived from.
+    pem: String,
+    /// What was indexed when the PEM was read.
+    indexed: Option<Entry>,
+    /// What the PEM says.
+    entry: Entry,
+}
+
+/// Each certificate `sweep` covers, with its PEM and what is indexed for it.
+fn read_for_sweep(db: &Db, sweep: Sweep) -> rusqlite::Result<Vec<(i64, String, Option<Entry>)>> {
+    let (certs_sql, entries_sql) = match sweep {
+        Sweep::Unindexed => (
             "SELECT c.id, c.cert_pem FROM tls_certificates c
              WHERE c.cert_pem IS NOT NULL
-               AND NOT EXISTS (SELECT 1 FROM tls_cert_index i WHERE i.cert_id = c.id)"
-        }
-        Sweep::All => "SELECT id, cert_pem FROM tls_certificates WHERE cert_pem IS NOT NULL",
+               AND NOT EXISTS (SELECT 1 FROM tls_cert_index i WHERE i.cert_id = c.id)",
+            None,
+        ),
+        Sweep::All => (
+            "SELECT id, cert_pem FROM tls_certificates WHERE cert_pem IS NOT NULL",
+            Some(
+                "SELECT i.cert_id, i.self_issued, s.san
+                 FROM tls_cert_index i
+                 LEFT JOIN tls_cert_sans s ON s.cert_id = i.cert_id",
+            ),
+        ),
     };
-    let mut stmt = db.conn.prepare_cached(sql)?;
+
+    let mut entries: BTreeMap<i64, Entry> = BTreeMap::new();
+    if let Some(sql) = entries_sql {
+        let mut stmt = db.conn.prepare_cached(sql)?;
+        let mut rows = stmt.query([])?;
+        while let Some(row) = rows.next()? {
+            let id: i64 = row.get(0)?;
+            let self_issued: Option<bool> = row.get(1)?;
+            let san: Option<String> = row.get(2)?;
+            entries
+                .entry(id)
+                .or_insert_with(|| Entry {
+                    self_issued,
+                    sans: BTreeSet::new(),
+                })
+                .sans
+                .extend(san);
+        }
+    }
+
+    let mut stmt = db.conn.prepare_cached(certs_sql)?;
     stmt.query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?
+        .map(|row| row.map(|(id, pem)| (id, pem, entries.remove(&id))))
         .collect()
 }
 
-fn write_back(db: &Db, derived: Vec<(i64, String, Entry)>) -> rusqlite::Result<usize> {
+fn write_back(db: &Db, drifted: Vec<Drifted>) -> rusqlite::Result<usize> {
     let mut rewritten = 0;
-    for (id, pem, entry) in derived {
+    for Drifted {
+        id,
+        pem,
+        indexed,
+        entry,
+    } in drifted
+    {
         let current: Option<Option<String>> = db
             .conn
-            .query_row(
-                "SELECT cert_pem FROM tls_certificates WHERE id = ?1",
-                [id],
-                |row| row.get(0),
-            )
+            .prepare_cached("SELECT cert_pem FROM tls_certificates WHERE id = ?1")?
+            .query_row([id], |row| row.get(0))
             .optional()?;
-        if current.flatten().as_deref() != Some(pem.as_str()) {
-            continue;
-        }
-        let indexed = read_entry(db, id)?;
-        if indexed.as_ref() == Some(&entry) {
+        if current.flatten().as_deref() != Some(pem.as_str()) || read_entry(db, id)? != indexed {
             continue;
         }
         tracing::error!(
@@ -400,11 +451,8 @@ fn write_back(db: &Db, derived: Vec<(i64, String, Entry)>) -> rusqlite::Result<u
 fn read_entry(db: &Db, id: i64) -> rusqlite::Result<Option<Entry>> {
     let Some(self_issued) = db
         .conn
-        .query_row(
-            "SELECT self_issued FROM tls_cert_index WHERE cert_id = ?1",
-            [id],
-            |row| row.get::<_, Option<bool>>(0),
-        )
+        .prepare_cached("SELECT self_issued FROM tls_cert_index WHERE cert_id = ?1")?
+        .query_row([id], |row| row.get::<_, Option<bool>>(0))
         .optional()?
     else {
         return Ok(None);
@@ -653,8 +701,21 @@ mod tests {
         let stale_pem = self_signed_pem(&["old.example.com"]);
         let id = insert_pem(&db, &self_signed_pem(&["new.example.com"])).unwrap();
         let stale = Entry::of(parse::leaf_facts(&stale_pem).ok().as_ref());
+        let indexed = read_entry(&db, id).unwrap();
 
-        assert_eq!(write_back(&db, vec![(id, stale_pem, stale)]).unwrap(), 0);
+        assert_eq!(
+            write_back(
+                &db,
+                vec![Drifted {
+                    id,
+                    pem: stale_pem,
+                    indexed,
+                    entry: stale,
+                }]
+            )
+            .unwrap(),
+            0
+        );
         assert_eq!(
             indexed_sans(&db, id).unwrap(),
             BTreeSet::from(["new.example.com".to_owned()]),
