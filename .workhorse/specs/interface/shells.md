@@ -4,95 +4,198 @@ id: SHL
 
 # Shell sessions
 
-## Shell Sessions
+Applies to interactive terminal sessions that operators open through the [Operator Interface](../overview.md#operator-interface), on an [app](../overview.md#app)'s shells and on volumes.
 
-<!-- from interface: Shell Sessions -->
+## Borrowed terms
 
-> i[shell.open]
-> `/shells/start { app, name, rows, cols, params? }` opens an interactive shell session.
-> `params` is an optional JSON object. Keys ending in `_volume` or `_filename` are reserved for internal use (see [operation.volume-param](rule:r/operation.volume-param)) and must be rejected.
-> Returns `{ session_id, stdout_stream_id, stderr_stream_id }` as the handshake response on the session stream.
-> After the handshake response is written, the server treats subsequent bytes on the session stream's client-to-server direction as raw stdin for the shell's job.
+| term | meaning |
+| --- | --- |
+| bidirectional stream, unidirectional stream, stream ID | as defined by QUIC, [RFC 9000](https://www.rfc-editor.org/rfc/rfc9000) section 2 |
 
-> i[shell.startup]
-> A session is registered under its `session_id` before the handshake response carrying that id is written, and stays registered while its shell starts, which can include running the shell's script, pulling its image and creating its network.
-> From the moment the client holds the id, the session appears in `/shells/list`, `/shells/resize` records the dimensions to apply as soon as the terminal exists, and `/shells/stop` ends the session without waiting for the shell to start.
-> A session stopped before its job is running ends without the job having started, and anything it had already created, such as its pod network, is removed.
-A session stopped while the shell's script is running ends only once the script has stopped, so the script creates nothing after the session is over.
+## Terminology
 
-> i[shell.streams]
-> Each session uses the three streams defined in [stream.shell](rule:i/stream.shell).
-> `stdout_stream_id` and `stderr_stream_id` in the handshake response identify the server-initiated unidirectional streams the client must read for the session's output.
+### Shell session
 
-> i[shell.resize]
-> `/shells/resize { session_id, rows, cols }` updates the terminal dimensions for the running session.
-> Returns `{}` on success, or `not_found` if the session does not exist.
+An interactive terminal an operator holds open on a job the server runs for it, from the request that opens it until it ends.
 
-> i[shell.record]
-> A shell record contains the following fields: `session_id`, `app`, `name`, and `opened_at` (RFC 3339).
+### Session stream
 
-> i[shell.list]
-> `/shells/list { app? }` returns an array of shell records for all currently active shell sessions.
-> If `app` is provided, only sessions for that app are returned; otherwise all active sessions across all apps are returned.
+The client-initiated bidirectional stream that carries a shell session's opening request, its stdin, its handshake response and its exit frame.
 
-> i[shell.stop]
-> `/shells/stop { session_id }` forcibly terminates an active shell session.
-> Any operator may stop any session regardless of which connection opened it.
-> The session ends as per [shell.close](rule:i/shell.close), with the job terminated and dynamic resources cleaned up.
-> Returns `{}` on success, or `not_found` if the session does not exist.
+### Volume reference
 
-> i[shell.close]
-> A session ends when any of the following occur:
->
-> - The shell's Job terminates.
-> - The client closes its write-end of the session stream (EOF on stdin).
-> - The connection is lost.
-> - An operator calls `/shells/stop`.
->
-> On session end, the server closes its write-ends of the stdout and stderr streams.
+A JSON object naming one volume on the host by its `kind`.
 
-> i[shell.start]
-> When the handshake response has been written, a `ShellStarted` event is emitted on the event feed.
-> Every session that emits it ends with a `ShellExited` event, including one that ends before its job has started.
+| `kind` | other members | names |
+| --- | --- | --- |
+| `"site"` | `name` (string) | the site volume of that name |
+| `"app"` | `app` (string), `volume` (string) | the volume `volume` declared by the app `app` |
+| `"held"` | `id` (string) | the [held volume](../runtime/actuation.md#held-volume) with that identifier |
 
-> i[shell.exit]
-> When a session ends, the server writes a final JSON frame `{ "exit_code": <int> }` to the server-to-client direction of the session stream, then closes its write-end.
-> Signal-terminated processes report a negative exit code.
-> A session that fails after its handshake response, such as when the shell's script fails, its image cannot be pulled, or its job cannot be started, ends the same way with an `exit_code` of `-1`.
-> The reason for such a failure is written to the stderr stream before it closes.
-> A `ShellExited` event is also emitted on the event feed.
+## Opening an app shell
 
-> i[shell.cleanup]
-> Dynamic resources created within a shell session are cleaned up by the runtime when the session ends, as specified in the runtime spec.
-> The session's job is terminated and its pod network removed however the session ends, including when the job could not be given the stdin the client sent with its request.
+A client opens a [shell session](#shell-session) on one of an app's [shells](rule:l/action.shell) by sending `/shells/start` on a new [session stream](#session-stream), framed as [shell stream framing](rule:i/stream.shell.framing) specifies.
 
-> i[shell.concurrent]
-> Shell sessions may run concurrently with lifecycle operations and with other shell sessions.
+| member | type | required | meaning |
+| --- | --- | --- | --- |
+| `app` | string | yes | the app's name |
+| `name` | string | yes | the shell's name |
+| `rows` | integer, 0 to 65535 | yes | the terminal's initial height in rows |
+| `cols` | integer, 0 to 65535 | yes | the terminal's initial width in columns |
+| `params` | object of strings | no | parameter values for the shell, keyed by parameter name |
 
-## Volume Shells
+The server MUST reject a request naming an app that is not registered with `not_found`.
+The server MUST reject the request with `not_installed` unless the app is `Installed`.
+The server MUST reject a request naming a shell the app does not declare with `not_found`.
+A `params` key ending in `_volume` or `_filename` is [reserved](rule:r/operation.volume-param.reserved), and the server MUST reject a request carrying one with `requirements_invalid`.
+Where the shell declares parameters, the server MUST validate `params` and fill in defaults as for [install parameters](actions.md#install-parameters).
 
-<!-- from interface: Volume Shells -->
+On success the handshake response's result is:
 
-> i[volumes.shell]
-> `/volumes/shell { volumes, rows, cols, read_only? }` opens an interactive shell session inside an ephemeral container with one or more volumes bind-mounted at `/mnt/{display-name}`.
->
-> `volumes` is an array of volume references. Each reference is one of:
-> - `{ "kind": "site", "name": "<name>" }` — a site volume.
-> - `{ "kind": "app", "app": "<app>", "volume": "<volume>" }` — a volume owned by an app.
->
-> The `display-name` for a site volume is its `name`; for an app volume it is `<app>.<volume>`.
-> Display names are sanitised to be valid path components before use as mount-point suffixes.
-> Each volume is mounted read-only if the volume is inherently read-only (snapshot site volumes); otherwise it is mounted read-write — unless the request sets `read_only: true`, in which case every mount is forced read-only regardless of the underlying volume kind. `read_only` defaults to `false`.
->
-> Volume shells use the same three-stream wire protocol as regular shell sessions (see [stream.shell](rule:i/stream.shell)).
-> They are registered in the shell session registry with `app = "_volumes"` and `name` set to the comma-separated list of display names; they appear in `/shells/list`, support `/shells/resize` and `/shells/stop`, and emit `ShellStarted`/`ShellExited` events identically to regular shell sessions.
-> Returns `not_found` if any referenced volume does not exist.
+| member | type | meaning |
+| --- | --- | --- |
+| `session_id` | string | the session's identifier, a UUID in its hyphenated text form |
+| `stdout_stream_id` | integer | the stdout stream's QUIC stream ID shifted right by two bits |
+| `stderr_stream_id` | integer | the stderr stream's QUIC stream ID shifted right by two bits |
 
-> i[volumes.shell.caps]
-> The shell container holds enough Linux capabilities for root inside the container to behave as root over the bind-mounted volumes — at minimum `CAP_DAC_OVERRIDE`, `CAP_DAC_READ_SEARCH`, `CAP_CHOWN`, and `CAP_FOWNER`.
-> Without them, the seedling-default `--cap-drop=ALL` would leave shell-root unable to traverse or edit files owned by service-specific UIDs (e.g. PostgreSQL's `0700 999:999` data directory), which defeats the point of opening the shell.
+> [!NOTE]
+> A stream ID shifted right by two bits is the stream's sequence number among the server-initiated unidirectional streams of its connection.
 
-> i[volumes.shell.image]
-> The volume-shell container image must include, at minimum, an interactive shell, terminal-based text editors, file-transfer / archive utilities, and a pager. Operators reach for these tools when poking at volume contents, and the image is the only context Seedling provides for that work.
->
-> The image is a runtime concern, not a contract: implementations may build it locally on first use rather than pull it from a registry.
+The server MUST open the stdout and stderr streams as server-initiated unidirectional streams before it writes the handshake response.
+The server MUST write the session terminal's output to the stdout stream.
+The server MAY write its own diagnostics about the session to the stderr stream.
+
+The server MUST treat every byte the client sends on the session stream after the request line as stdin for the session's job, including bytes that arrived in the same read as the request line.
+
+The server MUST NOT write any other frame on the session stream between the handshake response and the [exit frame](#session-end).
+
+## Session startup
+
+The server MUST register a session under its `session_id` before it writes the handshake response carrying that identifier.
+The session MUST stay registered while its shell starts, which can include running the shell's script, pulling its image and creating its network.
+
+From the time the client holds the identifier, the session MUST appear in [`/shells/list`](#listing-sessions), and [`/shells/stop`](#stopping-a-session) MUST end it without waiting for the shell to start.
+A [`/shells/resize`](#resizing-a-terminal) received before the terminal exists MUST take effect as soon as the terminal exists.
+
+A session stopped before its job runs MUST end without the job having started, and the server MUST remove every container and network the session had created.
+A session stopped while the shell's script runs MUST end only once the script has stopped, so that the script creates nothing after the session has ended.
+
+A session that fails after its handshake response, for example because the shell's script fails, the script calls `shell.error`, the image cannot be pulled or the job cannot be started, MUST end with an `exit_code` of `-1`.
+The server MUST write the reason for such a failure to the stderr stream before closing it.
+
+## Session end
+
+A session ends when any of the following occurs:
+
+- the session's job exits;
+- the client finishes its sending side of the session stream;
+- the stdout stream cannot be written;
+- the connection is lost;
+- an operator stops the session with `/shells/stop`.
+
+When a session ends, the server MUST write the exit frame `{ "exit_code": <integer> }` to the session stream and then finish its sending side of the session stream.
+The server MUST finish the stdout and stderr streams when the session ends.
+
+Where the job exited with a status, `exit_code` MUST be that status.
+Where the job was terminated by a signal, `exit_code` MUST be negative.
+
+However the session ends, the server MUST terminate the session's job and remove the network created for it, including when the stdin sent with the request could not be delivered to the job.
+The runtime MUST clean up resources created within the session as [shell resources](rule:r/operation.shell.resources) specifies.
+
+## Session events
+
+When the server has written a session's handshake response, it MUST emit a `ShellStarted` event on the [event feed](events.md).
+Every session that emitted `ShellStarted` MUST emit a `ShellExited` event when it ends, including a session that ends before its job has started.
+
+## Resizing a terminal
+
+`/shells/resize` changes a running session's terminal dimensions.
+
+| member | type | required | meaning |
+| --- | --- | --- | --- |
+| `session_id` | string | yes | the session's identifier |
+| `rows` | integer, 0 to 65535 | yes | the terminal's height in rows |
+| `cols` | integer, 0 to 65535 | yes | the terminal's width in columns |
+
+On success the result is `{}`.
+The server MUST reject a `session_id` that is not a UUID with `requirements_invalid`.
+The server MUST reject a `session_id` that names no registered session with `not_found`.
+
+## Listing sessions
+
+`/shells/list` lists the registered shell sessions.
+
+| member | type | required | meaning |
+| --- | --- | --- | --- |
+| `app` | string | no | restricts the list to that app's sessions |
+
+The result is `{ "shells": [ ... ] }`, an array of shell records.
+Without `app` the server MUST list every registered session on the host.
+
+| member | type | meaning |
+| --- | --- | --- |
+| `session_id` | string | the session's identifier |
+| `app` | string | the app the session belongs to, or `"_volumes"` for a [volume shell](#volume-shells) |
+| `name` | string | the shell's name, or for a volume shell its mounts' display names |
+| `opened_at` | string | when the session was opened, as an [RFC 3339](https://www.rfc-editor.org/rfc/rfc3339) timestamp |
+| `actor` | object or null | the [actor](rule:i/wire.actor) the opening request carried |
+
+## Stopping a session
+
+`/shells/stop` ends a registered session.
+
+| member | type | required | meaning |
+| --- | --- | --- | --- |
+| `session_id` | string | yes | the session's identifier |
+
+On success the result is `{}`.
+The server MUST let any operator stop any session, whichever connection opened it.
+The server MUST reject a `session_id` that is not a UUID with `requirements_invalid`.
+The server MUST reject a `session_id` that names no registered session with `not_found`.
+A stopped session MUST end as [session end](#session-end) specifies.
+
+## Concurrency
+
+The server MUST allow shell sessions to run concurrently with lifecycle operations and with other shell sessions.
+
+## Volume shells
+
+`/volumes/shell` opens a shell session in a container with one or more volumes mounted, on a new session stream framed as for `/shells/start`.
+
+| member | type | required | meaning |
+| --- | --- | --- | --- |
+| `volumes` | array of [volume references](#volume-reference) | yes | the volumes to mount |
+| `rows` | integer, 0 to 65535 | yes | the terminal's initial height in rows |
+| `cols` | integer, 0 to 65535 | yes | the terminal's initial width in columns |
+| `read_only` | boolean | no, default `false` | when `true`, every volume is mounted read-only |
+
+The server MUST reject an empty `volumes` with `requirements_invalid`.
+The server MUST reject a request referencing a volume that does not exist, or whose storage does not exist, with `not_found`.
+If the server cannot prepare the volume shell's image or network, it MUST answer with an error response in place of the handshake response.
+
+The server MUST mount each volume at `/mnt/<display name>`.
+A site volume's display name is its `name`.
+An app volume's display name is `<app>.<volume>`.
+A held volume's display name is `held-<app>-<volume>`, naming the app and volume it was held from, or `held-<id>` where those are unknown.
+Before use, the server MUST replace each character of a display name that is not an ASCII letter, ASCII digit, `-` or `.` with `_`, and then remove leading and trailing `-` and `.` characters.
+
+The server MUST mount a snapshot site volume read-only.
+The server MUST mount every other volume read-write unless `read_only` is `true`.
+The session's working directory SHOULD be the mount point when one volume is mounted, and `/mnt` when several are.
+
+A volume shell is a shell session in every other respect: its handshake response, streams, startup, end, `ShellStarted` and `ShellExited` events, listing, resizing and stopping are as for an app shell.
+The server MUST register a volume shell under the app name `"_volumes"`, which no app can hold, with the display names of its mounts joined by `", "` as its name.
+A volume shell's `ShellStarted` event MUST carry `app` `"_volumes"` and `name` `"volume-shell"`.
+
+### Volume shell privileges
+
+The root user in a volume shell MUST be able to read, traverse, modify, and change the ownership and mode of every file on a writable mounted volume, whichever user owns it.
+
+> [!NOTE]
+> Workload containers drop every Linux capability by default, which leaves root inside them subject to file permission checks.
+> A volume shell restores `CAP_DAC_OVERRIDE`, `CAP_DAC_READ_SEARCH`, `CAP_CHOWN` and `CAP_FOWNER`; without them root cannot enter a directory such as a database's `0700` data directory owned by another user.
+
+### Volume shell image
+
+The volume shell's image MUST provide an interactive shell, terminal text editors, file-transfer and archive utilities, and a pager.
+The server MAY build the image on the host when it is first needed rather than pull it from a registry.

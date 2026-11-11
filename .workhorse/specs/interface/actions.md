@@ -4,49 +4,97 @@ id: ACI
 
 # Action invocation
 
-## Action Invocation
+Applies to the [Operator Interface](../overview.md#operator-interface) methods that invoke an [app](../overview.md#app)'s install and actions, and that cancel a [lifecycle operation](../overview.md#lifecycle-operation).
 
-<!-- from interface: Action Invocation -->
+## Action invocation
 
-> i[action.not-installed-gate]
-> While an app is `NotInstalled` or `Installing`, all action and shell invocations except `/apps/install/invoke` are rejected with `not_installed`.
+`/apps/action/invoke` schedules one of an app's actions as a lifecycle operation.
 
-> i[action.invoke]
-> `/apps/action/invoke { app, name, params? }` schedules the named action as a lifecycle operation.
-> `params` is an optional JSON object. Keys ending in `_volume` or `_filename` are reserved for internal use (see [operation.volume-param](rule:r/operation.volume-param)) and must be rejected.
-> If the app has an active `script_error` fault, the request is rejected with `script_error`.
-> If the action has a declared param schema, schema-defined params are validated and defaults applied before the operation is enqueued; validation failure returns `requirements_invalid`.
-> Shell actions must not be invoked via this method; `not_found` is returned if a shell name is provided.
-> The Start Action (`name` = `"start"`) must not be invoked via this method; `not_found` is returned.
-> Returns `{ "schedule": "accepted", "operation_id": "<string>" }` or `{ "schedule": "queued", "operation_id": "<string>" }` on success, or an error. The `operation_id` is always present and uniquely identifies this operation.
+| member | type | required | meaning |
+| --- | --- | --- | --- |
+| `app` | string | yes | the app's name |
+| `name` | string | yes | the action's name |
+| `params` | object | no | parameter values for the action, keyed by parameter name |
 
-> i[action.cancel]
-> `/apps/action/cancel { app }` requests cancellation of the currently-active lifecycle operation for the named app.
-> The semantics of cancellation are defined by [operation.cancel](rule:r/operation.cancel): the runtime wakes any suspended barrier and drives the operation to a terminal cancelled state.
-> If no operation is active for the app, the request is rejected with `not_found`.
-> If a cancel is already pending for the active operation, the request is still accepted and is a no-op.
-> On success, the response is `{ "cancelled": true }`.
+The server MUST reject a request naming an app that is not registered with `not_found`.
+The server MUST reject the request with `not_installed` unless the app is `Installed`.
+If the app has an active `script_error` [fault](../overview.md#fault), the server MUST reject the request with `script_error`.
 
-> i[action.invoke.install]
-> `/apps/install/invoke { app, params? }` schedules the install action.
-> It is only valid when the app is `NotInstalled`.
-> If the app is already `Installing`, the request is rejected with `install_in_progress`.
-> If the app is `Installed` or `Uninstalling`, the request is rejected with `already_installed`.
-> If the app has an active `script_error` fault, the request is rejected with `script_error`.
-> `params` is an optional JSON object of param key to string value. The values are delivered to the install closure as `param`.
-> If the app has no explicit install action, `params` must be absent or empty.
-> Params are validated before the operation is enqueued; validation failure returns `requirements_invalid`.
-> Returns `{ "schedule": "accepted" }` or `{ "schedule": "queued" }` on success, or an error.
-> On `accepted`, the app atomically transitions to `Installing`.
+The server MUST reject with `not_found` a `name` that names one of the app's shells, a `name` of `"start"`, and a `name` that names no action the app declares.
 
-> i[action.invoke.install.validation]
-> Params are validated according to the kinds defined in the language spec before the operation is enqueued.
-> A required field with no provided value and no `default_value` is a validation error.
-> The params object is passed to the install action closure and is persisted alongside the operation record (see [operation.params](rule:r/operation.params)) so that a runtime restart during the install can replay the operation.
-> Values of params whose effective `secret` flag is `true` must be protected in persisted form as defined in [secret.storage](rule:r/secret.storage).
-> The persisted params are cleared when the install operation completes, regardless of outcome.
+A `params` key ending in `_volume` or `_filename` is [reserved](rule:r/operation.volume-param.reserved), and the server MUST reject a request carrying one with `requirements_invalid`.
+Where the action declares parameters, the server MUST validate the submitted values and fill in defaults as for [install parameters](#install-parameters) before the operation is scheduled.
+The value of a declared parameter MUST be a JSON string, and the server MUST reject a value of any other type with `requirements_invalid` rather than treat the parameter as absent.
+If a declared parameter of kind `volume` names a site volume that does not exist, the server MUST reject the request with `not_found`.
+The server MUST deliver `params`, with defaults filled in, to the action closure as `param`.
 
-> i[action.invoke.install.completion]
-> When an install operation completes successfully, the app transitions `Installing → Installed`.
-> When an install operation fails, the app transitions `Installing → NotInstalled` and an `operation_failed` fault is filed carrying the failure detail.
-> On subsequent runtime restarts, the runtime will initiate the `start` action for `Installed` apps automatically, as specified in the runtime spec.
+The server MUST schedule the operation with the trigger `"operator"`, subject to the [one-operation-at-a-time rules](rule:r/operation.lifecycle.single).
+The server MUST reject the request with `operation_in_progress` while an operation for the app is running or a change to the app is being applied.
+The server MUST reject the request with `already_queued` while an operation for the app is queued.
+The server MUST reject the request with `not_installed` once the app has begun uninstalling.
+
+On success the result is:
+
+| member | type | meaning |
+| --- | --- | --- |
+| `schedule` | string | `"accepted"` when the operation has started, `"queued"` when it waits behind another app's operation |
+| `operation_id` | string | the operation's identifier |
+
+The server MUST give every operation an `operation_id` that no other operation on the host holds.
+
+## Install
+
+`/apps/install/invoke` schedules an app's install.
+
+| member | type | required | meaning |
+| --- | --- | --- | --- |
+| `app` | string | yes | the app's name |
+| `params` | object of strings | no | install parameter values, keyed by parameter name |
+
+The server MUST reject a request naming an app that is not registered with `not_found`.
+The server MUST reject the request with `install_in_progress` while the app is `Installing`.
+The server MUST reject the request with `already_installed` while the app is `Installed` or `Uninstalling`.
+If the app has an active `script_error` fault, the server MUST reject the request with `script_error`.
+
+If the app declares no install action, `params` MUST be absent or empty, and the server MUST reject the request with `requirements_invalid` otherwise.
+The server MUST then move the app to `Installed` at once and answer `{ "schedule": "accepted" }`, with no `operation_id`.
+
+If the app declares an install action, the server MUST validate `params` as [install parameters](#install-parameters) specifies and schedule the install as a lifecycle operation named `install` with the trigger `"operator"`.
+Scheduling, its rejections and its result are as for [action invocation](#action-invocation).
+
+The app MUST be `Installing` from the time its install operation starts, whether the operation was accepted at once or started later from the queue.
+A queued install MUST leave the app `NotInstalled` until the install starts.
+
+## Install parameters
+
+Each install parameter value MUST be a JSON string.
+The server MUST validate each value against the parameter's declared [kind](rule:l/action.install.requirements) before the operation is scheduled.
+The server MUST treat an empty string as no value.
+The server MUST fill in a parameter with no value from its `default_value`, where it declares one.
+A required parameter with neither a value nor a `default_value` MUST fail validation.
+On any validation failure the server MUST reject the request with `requirements_invalid`, and its `message` MUST name each failing parameter and the reason.
+
+The server MUST deliver the validated values to the install closure as `param`.
+The server MUST persist the values with the operation record, as [operation parameters](rule:r/operation.params) specifies, so that a runtime restart during the install can replay it.
+The persisted values MUST be protected as [secret storage](rule:r/secret.storage) requires.
+The server MUST discard the persisted values when the install operation ends, whatever its outcome.
+
+## Install completion
+
+When an install operation completes successfully, the runtime MUST move the app from `Installing` to `Installed`.
+When an install operation fails or is cancelled, the runtime MUST move the app from `Installing` to `NotInstalled`.
+When an install operation fails, the runtime MUST file an `operation_failed` fault carrying the failure.
+
+## Cancellation
+
+`/apps/action/cancel` requests [cancellation](rule:r/operation.cancel) of the app's running lifecycle operation.
+
+| member | type | required | meaning |
+| --- | --- | --- | --- |
+| `app` | string | yes | the app's name |
+
+On success the result is `{ "cancelled": true }`.
+A request for an operation whose cancellation is already pending MUST succeed and have no further effect.
+
+If no operation is running for the app and the app is `Installing`, the server MUST move the app to `Uninstalling`, as [stuck-install recovery](rule:r/operation.cancel.stuck-recovery) requires, and answer `{ "cancelled": true, "recovered_stuck_phase": "installing" }`.
+If no operation is running for the app and the app is in any other phase, the server MUST reject the request with `not_found`.

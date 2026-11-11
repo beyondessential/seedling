@@ -4,112 +4,216 @@ id: SITE
 
 # Site resources
 
-## Actuation
+Applies to the volumes, services and ingresses that [operators](../overview.md#operator) manage on a [host](../overview.md#host) independently of any [app](../overview.md#app), and to the mappings that bind an app's external volumes and services to them.
 
-<!-- from runtime: Actuation -->
+## Borrowed terms
 
-> r[volume.site]
-> A site volume is a named volume managed by operators, independent of any app. Site volumes come in two kinds:
->
-> - **Managed**: a host directory (or BTRFS subvolume) created and maintained by the runtime under the data directory.
-> - **Bind**: an arbitrary host path provided by the operator, mounted as-is.
->
-> Site volumes may be read-write or read-only. Tmpfs site volumes are not supported.
+| term | meaning |
+| --- | --- |
+| A record | a DNS resource record carrying an IPv4 address, as defined by [RFC 1035](https://www.rfc-editor.org/rfc/rfc1035) |
+| AAAA record | a DNS resource record carrying an IPv6 address, as defined by [RFC 3596](https://www.rfc-editor.org/rfc/rfc3596) |
+| NAT64 | translation from IPv6 clients to IPv4 servers, as defined by [RFC 6146](https://www.rfc-editor.org/rfc/rfc6146) |
+| Well-Known Prefix | the IPv6 prefix `64:ff9b::/96` for IPv4-embedded addresses, as defined by [RFC 6052](https://www.rfc-editor.org/rfc/rfc6052) |
+| redirect | an HTTP response with a 3xx status code, as defined by [RFC 9110](https://www.rfc-editor.org/rfc/rfc9110) section 15.4 |
 
-> r[volume.site.lifecycle]
-> Site volumes are created and deleted exclusively through operator commands. The runtime must create the backing storage for managed site volumes at creation time. When a managed site volume is deleted, its backing storage must be routed through the [held volume](rule:r/actuate.volume.hold) mechanism so that an operator must explicitly confirm final removal. Deleting a snapshot site volume removes its backing storage directly without routing through the hold mechanism (see [volume.site.snapshot.delete](rule:r/volume.site.snapshot.delete)). Deleting a bind site volume must only drop the runtime's reference and must not affect the operator-provided host path.
+## Terminology
 
-> r[volume.site.name-taken]
-> Every operation that brings a new site volume into being — creating one, snapshotting to one, promoting a snapshot into one, or [restoring a held volume](rule:r/actuate.volume.hold.restore) as one — must be rejected as an invalid request when the chosen name is already taken, before any storage is touched. A name is taken when a site volume is recorded under it, and also when storage already stands at the name with no record of it.
->
-> The check comes first because the storage operations do not refuse a name that is in use on their own terms: a snapshot taken onto an existing directory is placed *inside* it and reported as success, leaving a subvolume nested in an unrelated live volume with no record pointing at it, which only then fails on the record's unique name. Storage with no record is refused rather than taken over, because the runtime cannot tell leftovers from an operator's volume whose record has not been written.
->
-> The refusal holds between operators as well as within one request. Operator commands are served concurrently, so finding the name free and then taking it must be one indivisible step; otherwise two requests naming the same target both find it free and both go on to make storage, which is the nesting above with nothing to have stopped it. Only one of the two may proceed, and the other must be refused as though it had arrived second.
+### Site volume
 
-> r[volume.site.lifecycle.events]
-> Site volume creation and deletion must emit events on the event feed and be recorded in the [audit log](rule:r/audit.log). Deletion events must identify the site volume's kind and, when the deletion routed through the held-volume mechanism, the resulting held volume identifier.
+A named volume an operator manages on a host, which apps can use through their external volumes.
 
-> r[volume.site.snapshot]
-> A snapshot site volume is a read-only point-in-time snapshot of a named volume (app volume or managed site volume) that supports snapshotting. Only BTRFS-backed volumes support snapshotting. Snapshot site volumes carry metadata identifying their source. They are inherently read-only: even when mapped without the read-only flag, mounts of snapshot site volumes are always read-only.
+### Site service
 
-> r[volume.site.snapshot.events]
-> Creating a snapshot site volume must emit an event identifying the new snapshot and the source volume (app-scoped or site-scoped).
+A named service an operator manages on a host, which forwards to addresses outside the host's apps.
 
-> r[volume.site.snapshot.delete]
-> Deletion of a snapshot site volume removes the backing storage directly and does not route through the [held volume](rule:r/actuate.volume.hold) mechanism. Snapshots are read-only by construction (which prevents the rename used by the hold path) and the source volume is unaffected by snapshot deletion, so there is no data the operator could meaningfully recover from a held copy of a snapshot. The corresponding [site volume deletion event](rule:r/volume.site.lifecycle.events) must therefore record no held volume identifier for the snapshot kind.
+### Site ingress
 
-> r[volume.site.promote]
-> An operator may promote a snapshot site volume to a fresh managed site volume with an operator-chosen name. The runtime must materialise the new volume as a writable copy seeded from the snapshot's contents and record it as a managed site volume. The source snapshot is not modified and remains available; operators may independently delete it afterwards if they wish. Promotion is only supported on BTRFS-backed installations because it relies on the same snapshotting primitive as `volume.site.snapshot`.
+A named hostname an operator or a discovery provider manages on a host, through which traffic can reach an app's services.
 
-> r[volume.site.promote.events]
-> Promoting a snapshot site volume must emit an event identifying the new managed site volume and the source snapshot. The promoted volume is treated as a new managed site volume for audit purposes, distinct from the source snapshot which remains intact.
+### Attachment
 
-> r[volume.site.leftover-snapshots]
-> Earlier releases ran backups from a read-only snapshot of the source volume, stored as site-volume storage under a name beginning `backup-snap-` and removed when the run finished. A run interrupted between those two steps left the snapshot on disk with no site volume recorded for it. On startup, the runtime must delete any site-volume storage whose name begins `backup-snap-` and for which no site volume is recorded. Storage recorded as a site volume is the operator's and must be left alone, as must storage whose ownership could not be determined.
+The binding of one port and protocol on a site ingress to a target.
 
-> r[volume.external.mapping.events]
-> Creating, removing, or retargeting an operator-configured external volume mapping must emit an event identifying the app and external volume name, the new mapping target (or absence of one for removal), and — for retargeting — the previous target. These events feed both the event feed and the [audit log](rule:r/audit.log).
+### Discovery provider
 
-> r[service.site]
-> A site service is a named service managed by operators, independent of any app. A site service carries a set of one or more endpoints, each a 4-tuple `(service_port, protocol, remote_host, remote_port)`.
->
-> `service_port` is the port on which the site service exposes this backend; `remote_host` and `remote_port` are the address traffic is forwarded to. The two ports may differ (e.g. a site service exposes 80/tcp in front of backends listening on 8080). The protocol is one of `tcp`, `udp`, or `http`.
->
-> `remote_host` may be an IPv6 literal, an IPv4 literal, or a DNS name. Names are resolved at runtime by the daemon; address-form values are used directly. See [service.site.address](rule:r/service.site.address) for resolution and routing semantics.
->
-> The `(service_port, protocol)` pairs across a site service's endpoints define the ports the service exposes. Traffic destined for `(service, service_port, protocol)` is distributed across the `(remote_host, remote_port)` pairs of all endpoints whose `(service_port, protocol)` matches, as for any other multi-backend service (see [service.routing](rule:l/service.routing)). Two endpoints sharing a `(service_port, protocol)` are peers for that port's traffic; endpoints differing in `(service_port, protocol)` back different exposed ports on the same site service.
+A part of the runtime that creates and maintains site ingresses from the host's own configuration.
 
-> r[service.site.address]
-> Site service endpoints whose `remote_host` is an IPv6 literal are routed natively using that address. Endpoints whose `remote_host` is an IPv4 literal, or a DNS name resolving only to A records, must be routed through NAT64 using the IANA well-known prefix `64:ff9b::/96` (RFC 6052). Endpoints whose `remote_host` is a DNS name resolving to AAAA records are routed natively when the host has IPv6 egress; on hosts without IPv6 egress, AAAA results are ignored in favour of A results routed through NAT64. When a name resolves to both A and AAAA records and the host has IPv6 egress, the AAAA records are used.
->
-> The runtime must report endpoints as unroutable when an IPv4 path is required but NAT64 is unavailable on the host (e.g. when the operator has explicitly disabled it and no external NAT64 is present), and as unresolvable when DNS resolution for an endpoint hostname has failed past a small consecutive-failure threshold. These conditions must surface as faults on the affected site service and must auto-clear when the underlying condition resolves. An unresolvable or unroutable endpoint must not block routing for other endpoints, services, or apps; only the affected site service's own backend pool is reduced.
+## Site volumes
 
-> r[service.site.address.partial-answer]
-> A DNS name is resolved from the address families that answered. When the lookup for one family fails and the other returns records, the endpoint is resolved from those records, the failed family keeps whatever it last answered, and the name is looked up again promptly rather than after the answer's full lifetime. A failed lookup must not be recorded as the family having no records. The name counts towards the unresolvable threshold only when no lookup returned records and at least one failed. The resolver's status report must name the family whose lookup is failing, for as long as it keeps failing, so that a name resolving on one family alone is distinguishable from one resolving on both.
+A site volume is one of three kinds:
 
-> r[service.site.lifecycle]
-> Site services are created, retargeted, and deleted exclusively through operator commands. Creating a site service registers its name and an optional human-readable description; endpoints are added and removed independently so operators may adjust the backing set without recreating the service.
->
-> Deleting a site service must be rejected while any [external service mapping](rule:r/service.external.mapping.events) still targets it; operators must unmap or remap those slots first. Deletion removes the service record and its endpoints; no held-resource mechanism applies because site services carry no persistent state.
+| kind | storage |
+| --- | --- |
+| managed | a directory the runtime creates and maintains in the [data directory](actuation.md#data-directory), as a BTRFS subvolume where the data directory is on BTRFS |
+| bind | a host path the operator supplies, mounted as it is |
+| snapshot | a read-only BTRFS snapshot of another volume, created by the runtime |
 
-> r[service.site.lifecycle.events]
-> Site service creation and deletion, and endpoint add/remove operations, must emit events on the event feed and be recorded in the [audit log](rule:r/audit.log). Endpoint events identify the site service name and the `(service_port, protocol, remote_host, remote_port)` tuple.
+A site volume is mapped read-write or read-only.
+The runtime MUST mount a snapshot site volume read-only, whatever its mapping says.
 
-> r[service.external.mapping.events]
-> Creating, removing, or retargeting an operator-configured external service mapping must emit an event identifying the app and external service name, the new mapping target (or absence of one for removal), and — for retargeting — the previous target. These events feed both the event feed and the [audit log](rule:r/audit.log).
+Site volumes MUST be created and deleted only through operator commands.
+The runtime MUST create a managed site volume's storage when the volume is created.
 
-> r[ingress.site]
-> A site ingress is a named entry point managed by operators, independent of any app. A site ingress carries a hostname, an optional human-readable description, a TLS provisioning mode, and a source.
->
-> A site ingress has one of two sources:
->
-> - **Manual**: created and deleted by the operator.
-> - **Discovered**: created and deleted automatically by the daemon based on host configuration. Each discovered site ingress is owned by a *provider* (initially Tailscale; see [ingress.site.tailscale](rule:r/ingress.site.tailscale)) and carries an opaque, stable provider key that survives hostname changes.
->
-> The TLS provisioning mode determines how certificates for the hostname are obtained when an attachment requires TLS termination. Valid modes are public-PKI ACME issuance, internal CA, the discovering provider's own certificate facility (only available on discovered ingresses), and "no TLS" (only plaintext attachments are permitted).
+When an operator deletes a managed site volume, the runtime MUST [hold](actuation.md#held-volumes) its data.
+When an operator deletes a snapshot site volume, the runtime MUST delete its storage.
+When an operator deletes a bind site volume, the runtime MUST forget the volume and MUST leave the host path untouched.
 
-> r[ingress.site.lifecycle]
-> Manual site ingresses are created, updated, and deleted exclusively through operator commands. Discovered site ingresses are created, updated, and deleted by the daemon's discovery loop; an operator command to delete a discovered site ingress while its source remains active must be rejected. Deletion of a site ingress, regardless of source, cascades to remove all of its attachments.
->
-> When a discovery source temporarily disappears (e.g. the underlying provider becomes unreachable) the corresponding site ingress must be marked stale rather than deleted, so that the operator's attachments persist across transient outages and resume serving when the source returns.
+The runtime MUST emit an [event](../interface/events.md) and record an [audit log](rule:r/audit.log) entry when a site volume is created or deleted.
+A deletion event MUST identify the site volume's kind, and the held volume created when the deletion held the volume's data.
 
-> r[ingress.site.lifecycle.events]
-> Site ingress creation, update, and deletion (whether by the operator or by a discovery provider) and attachment add, update, and remove operations must emit events on the event feed and be recorded in the [audit log](rule:r/audit.log). Events identify the site ingress name and, for attachment events, the `(port, protocol)` tuple and the attachment target.
+### Site volume names
 
-> r[ingress.site.attachment]
-> A site ingress carries zero or more *attachments*. Each attachment is keyed by `(port, protocol)` within the parent site ingress and binds that key to a target. The target is one of:
->
-> - **Forward**: traffic for the attachment's `(port, protocol)` is routed to a specified app service.
-> - **Redirect**: requests for the attachment's `(port, protocol)` are answered with an HTTP redirect response to a configured target URL, using a configured response code, optionally preserving the request path.
->
-> The set of supported protocols matches that of app-declared ingresses. The hostname and TLS provisioning mode are inherited from the parent site ingress; the attachment chooses only the listening `(port, protocol)` and the target. Multiple attachments differing in `(port, protocol)` may coexist on the same site ingress.
->
-> A parent site ingress whose TLS provisioning mode is `none` yields plaintext attachments, served per [actuate.ingress.plaintext](rule:r/actuate.ingress.plaintext).
+The runtime MUST reject, as an invalid request, every operation that would bring a new site volume into being under a name that is taken.
+These operations are creating a site volume, snapshotting to one, promoting a snapshot into one, and [restoring a held volume](actuation.md#held-volumes) as one.
+The runtime MUST reject the operation before it touches any storage.
 
-> r[ingress.site.tailscale]
-> The Tailscale discovery provider creates a single discovered site ingress representing the host's Tailscale identity. The site ingress's hostname is the host's tailnet DNS name; its provider key is the host's stable Tailscale node identity. When the operator renames the node, the site ingress's hostname must be updated in place and its existing attachments preserved. When the underlying node identity changes (e.g. the node is re-created on the tailnet), the existing discovered site ingress is removed and a fresh one created.
->
-> The Tailscale-provided site ingress's TLS mode resolves to certificates obtained from the local Tailscale facility. The runtime must not attempt to obtain certificates for tailnet hostnames through public ACME.
+A name is taken when a site volume is recorded under it, and when storage exists at the name without a record.
+Checking that a name is free and taking it MUST be one indivisible step, so that of two concurrent operations naming the same site volume, exactly one proceeds and the other is rejected.
 
-> r[ingress.site.conflict]
-> When an app ingress and a site-ingress attachment both claim the same `(hostname, port)`, the runtime must drop both entries from the proxy configuration on each tick on which the conflict persists, and must file a fault against each side identifying the conflicting party and the `(hostname, port)` tuple. Faults filed for a `(hostname, port)` conflict must be cleared automatically on the first subsequent tick on which that `(hostname, port)` is no longer in conflict. Independent `(hostname, port)` tuples on the same hostname are not affected by a conflict on a different port.
+> [!NOTE]
+> Storage operations do not refuse a name in use on their own terms: a snapshot taken onto an existing directory is placed inside it, leaving a subvolume nested in an unrelated volume with no record pointing at it.
+> Unrecorded storage is refused rather than taken over because leftovers cannot be told from an operator's volume whose record is not yet written.
+
+### Site volume snapshots
+
+An operator MAY snapshot an app volume or a managed site volume into a new snapshot site volume, when the data directory is on BTRFS.
+A snapshot site volume MUST record the volume it was taken from.
+On a host whose data directory is not on BTRFS, the runtime MUST reject a snapshot request.
+
+The runtime MUST emit an event when it creates a snapshot site volume, identifying the new snapshot and its source volume, app or site.
+
+### Snapshot promotion
+
+An operator MAY promote a snapshot site volume into a new managed site volume under a name the operator chooses, when the data directory is on BTRFS.
+The runtime MUST create the new volume as a writable copy of the snapshot's contents, and record it as a managed site volume.
+Promotion MUST leave the snapshot unchanged.
+On a host whose data directory is not on BTRFS, the runtime MUST reject a promotion request.
+
+The runtime MUST emit an event when it promotes a snapshot, identifying the new managed site volume and the source snapshot.
+
+### Leftover backup snapshots
+
+Site-volume storage whose name begins `backup-snap-` and for which no site volume is recorded is a leftover backup snapshot.
+When it starts, the runtime MUST delete every leftover backup snapshot.
+The runtime MUST leave in place storage recorded as a site volume, and storage whose ownership it cannot determine.
+
+## External mappings
+
+An operator maps an app's external volume to a site volume or an app's exported volume, and an app's external service to a site service or another app's service.
+
+The runtime MUST emit an event and record an audit log entry when an external volume mapping or an external service mapping is created, removed, or retargeted.
+The event MUST identify the app, the external name, and the new target, or that the mapping was removed.
+A retargeting event MUST also identify the previous target.
+
+## Site services
+
+A site service has a name, an optional description, and one or more endpoints.
+Each endpoint has these members:
+
+| member | meaning |
+| --- | --- |
+| `service_port` | the port on which the site service exposes this endpoint |
+| `protocol` | `tcp`, `udp` or `http` |
+| `remote_host` | the address traffic is forwarded to: an IPv6 literal, an IPv4 literal, or a DNS name |
+| `remote_port` | the port traffic is forwarded to |
+
+The `(service_port, protocol)` pairs across a site service's endpoints are the ports the site service exposes.
+The runtime MUST distribute traffic for a site service's `(service_port, protocol)` across the `(remote_host, remote_port)` of every endpoint with that pair, as for any [service with several backends](rule:l/service.routing).
+
+### Endpoint addressing
+
+The runtime MUST route each endpoint as follows:
+
+| `remote_host` | routed |
+| --- | --- |
+| an IPv6 literal | natively, to that address |
+| an IPv4 literal | through NAT64 |
+| a name with AAAA records, on a host with IPv6 egress | natively, to the AAAA addresses |
+| a name with A records and no usable AAAA records | through NAT64, to the A addresses |
+
+On a host without IPv6 egress, AAAA records are unusable.
+The runtime MUST route through NAT64 by embedding the IPv4 address in the Well-Known Prefix.
+
+The runtime MUST report an endpoint as unroutable when it needs NAT64 and NAT64 is not available on the host, or when its name has only AAAA records and the host has no IPv6 egress.
+The runtime MUST report an endpoint as unresolvable when resolving its name has failed 5 consecutive times.
+An unroutable or unresolvable endpoint MUST raise the [site service faults](faults.md#ingress-and-service-faults) for its site service.
+An unroutable or unresolvable endpoint MUST NOT affect the routing of other endpoints, site services or apps.
+
+### Partial DNS answers
+
+The runtime MUST resolve a name from the address families whose lookups succeeded.
+When the lookup for one family fails and the other returns records, the runtime MUST resolve the endpoint from those records, MUST keep the failed family's last answer, and SHOULD look the name up again without waiting for the answer's lifetime to pass.
+A failed lookup MUST NOT be recorded as the family having no records.
+
+A failure MUST count towards the unresolvable threshold only when no lookup returned records and at least one lookup failed.
+The resolver's status report MUST name each family whose lookup is failing, for as long as it fails.
+
+### Site service lifecycle
+
+Site services MUST be created and deleted, and have endpoints added and removed, only through operator commands.
+
+The runtime MUST reject the deletion of a site service while an external service mapping targets it.
+Deleting a site service MUST remove it and its endpoints.
+
+The runtime MUST emit an event and record an audit log entry when a site service is created or deleted, and when an endpoint is added or removed.
+An endpoint event MUST identify the site service and the endpoint's `(service_port, protocol, remote_host, remote_port)`.
+
+## Site ingresses
+
+A site ingress has a name, a hostname, an optional description, a TLS provisioning mode, a source, and zero or more attachments.
+
+### Sources
+
+A site ingress is either manual or discovered.
+A manual site ingress MUST be created, updated and deleted only through operator commands.
+A discovered site ingress MUST be created, updated and deleted only by its discovery provider, and carries the provider's name and a provider key that stays the same when the hostname changes.
+
+The runtime MUST reject an operator command to delete a discovered site ingress while its discovery provider still reports it.
+When a discovery provider stops reporting a site ingress it created without reporting a different identity, the runtime MUST mark the site ingress stale and MUST NOT delete it.
+The runtime MUST NOT serve a stale site ingress, and MUST serve it again once its provider reports it.
+
+Deleting a site ingress MUST delete its attachments.
+
+### TLS provisioning modes
+
+| mode | certificate for the hostname |
+| --- | --- |
+| `acme` | issued by a public certificate authority over ACME |
+| `internal` | issued by the runtime's internal certificate authority |
+| `tailscale` | obtained from the discovery provider's own certificate facility; valid only on a site ingress discovered by `tailscale` |
+| `none` | none; every attachment is plaintext |
+
+An attachment on a site ingress whose mode is `none` is a [plaintext ingress](actuation.md#plaintext-ingresses).
+
+### Attachments
+
+An attachment is keyed by `(port, protocol)` within its site ingress, and its target is one of:
+
+| target | effect |
+| --- | --- |
+| forward | traffic for the attachment's port and protocol is routed to a named service of a named app |
+| redirect | requests for the attachment's port and protocol are answered with a redirect to a configured URL, with a configured status code, optionally keeping the request path |
+
+An attachment's protocols are those an app's [ingress](rule:l/ingress.protocol) may declare.
+An attachment takes its hostname and TLS provisioning mode from its site ingress.
+A site ingress MAY carry several attachments that differ in `(port, protocol)`.
+
+The runtime MUST emit an event and record an audit log entry when a site ingress is created, updated or deleted, by an operator or by a discovery provider, and when an attachment is added, updated or removed.
+The event MUST identify the site ingress, and for an attachment the `(port, protocol)` and the target.
+
+### Tailscale discovery
+
+The Tailscale discovery provider maintains one discovered site ingress, named `tailscale`, for the host's identity on its tailnet.
+Its hostname MUST be the host's tailnet DNS name, and its provider key the host's stable Tailscale node identity.
+
+When the node is renamed, the runtime MUST update the site ingress's hostname in place and keep its attachments.
+When the node identity changes, the runtime MUST delete the discovered site ingress and create a new one.
+When the provider reports that the node is logged out or has no identity, the site ingress becomes stale.
+
+The runtime MUST NOT request certificates for a tailnet hostname from a public certificate authority.
+
+### Ingress conflicts
+
+When an app's ingress and a site ingress attachment both claim the same `(hostname, port)`, the runtime MUST leave both out of the proxy configuration for as long as the conflict lasts.
+The runtime MUST raise the [`ingress_conflict`](faults.md#ingress-and-service-faults) fault for each side.
+A conflict on one port MUST NOT affect the serving of other ports on the same hostname.

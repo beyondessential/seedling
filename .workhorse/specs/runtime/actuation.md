@@ -4,129 +4,211 @@ id: ACTU
 
 # Actuation
 
-## Actuation
+Applies to how the [runtime](../overview.md#runtime) realises resource instances on the [host](../overview.md#host): workload containers, their logs, ingress serving, volume storage and held volumes.
 
-<!-- from runtime: Actuation -->
+## Borrowed terms
 
-> r[actuate.deployment.start]
-> Starting a Deployment or Job instance must ensure the pod network exists for the instance, ensure the container image is present (pulling if absent), and start the container under process supervision.
+| term | meaning |
+| --- | --- |
+| QUIC | the UDP-based transport defined by [RFC 9000](https://www.rfc-editor.org/rfc/rfc9000), which carries HTTP/3 |
+| redirect | an HTTP response with a 3xx status code, as defined by [RFC 9110](https://www.rfc-editor.org/rfc/rfc9110) section 15.4 |
 
-> r[actuate.deployment.stop]
-> Stopping a Deployment or Job instance must stop the supervised container process and, once stopped, remove the pod network and any anonymous volumes that were created for that instance.
+## Terminology
 
-> r[actuate.deployment.anon-volume.start]
-> When starting a Deployment or Job instance, for each anonymous volume mounted by the container, the runtime must ensure the volume exists and apply any declared file writes to it before the container starts.
+### Data directory
 
-> r[actuate.container.hardening]
-> Workload containers must be started with all Linux capabilities dropped, privilege escalation disabled, and a read-only root filesystem with a writable tmpfs at `/tmp`. A default PID limit of 256 and a file-descriptor limit of 65536 are applied. BSL configuration may adjust these defaults.
+The host directory, named when the daemon starts, in which the runtime keeps its persistent state and the storage of named non-tmpfs volumes.
 
-> r[actuate.container.user]
-> A container whose definition names a user must be started as that user. Privilege escalation is disabled for every workload container, so a container that needs to run as a non-root user must be started as one rather than starting as root and dropping privileges from inside; tools that drop privileges themselves cannot be relied on to work under that restriction.
+### Workload container
 
-> r[actuate.container.journal-metadata]
-> Workload containers must have their stdout and stderr directed to the system journal.
-> Each supervised container process must be tagged with structured journal fields that
-> identify the owning app, resource kind, resource name, and instance. These fields
-> must be present on every journal entry produced by the container so that log queries
-> can filter at any granularity (app, resource, or individual instance) without
-> relying on unit name conventions.
+A container the runtime runs for a Deployment or Job instance.
 
-> r[actuate.infra.journal-metadata]
-> Infrastructure containers (proxy, resolver) must have their stdout and stderr directed
-> to the system journal. Each infrastructure container must be tagged with a structured
-> journal field that identifies the infrastructure component so that log queries can
-> target infrastructure logs independently of workload logs.
+### Infrastructure container
 
-> r[actuate.breadcrumb]
-> The runtime must record its own action breadcrumbs into the same log sink that
-> carries container output, tagged with the same app, resource kind, resource, and
-> instance fields. A breadcrumb names the `rt.*` primitive it records — or a synthetic
-> kind for runtime events such as unit creation and replay boundaries — and, where the
-> script surfaced one, the call site.
->
-> Sharing the sink and the tagging scheme is the requirement, not an implementation
-> convenience: a log query at any granularity must return breadcrumbs and container
-> output interleaved in time order, so that an operator reading an app's logs sees the
-> closure's call sequence against the output it produced.
+A container the runtime runs for itself rather than for an [app](../overview.md#app): the proxy or the resolver.
 
-> r[actuate.breadcrumb.replay]
-> A breadcrumb is emitted on a call's first fresh execution and not on replays of that
-> call, so a barrier-suspended operation does not flood the log with each pass. Each
-> replay pass instead surfaces a single boundary breadcrumb.
+### Breadcrumb
 
-> r[actuate.ingress.plaintext]
-> Whether an ingress terminates TLS is a property of its own termination, independent of whether it terminates HTTP.
-> An ingress may terminate HTTP as plaintext, as a site-ingress attachment does when its parent's TLS provisioning mode is `none`.
->
-> An ingress that does not terminate TLS must be served as plaintext on its port: the proxy must listen for HTTP on that port and route matching requests to the ingress's target.
-> The runtime must not request or provision a certificate for such an ingress's hostname, must not create a QUIC listener for it, and must not answer its requests with a redirect unless the ingress itself declares one.
-> Forwarding rules for an ingress must cover only the transport protocols it serves, so a plaintext HTTP ingress must not cause UDP traffic on its port to be forwarded.
->
-> A hostname may carry both plaintext and TLS-terminating ingresses on different ports.
-> Each must be served from the listener matching its own termination, and the presence of a TLS-terminating ingress must not cause a plaintext ingress on the same hostname to be dropped or served only over TLS.
+A log entry the runtime writes to record one of its own actions on an app.
 
-> r[actuate.ingress.port-scope]
-> An ingress is served on its own port and no other. A request is routed to the target of an ingress only when it arrives on the port that ingress was declared on, whatever hostname it names.
->
-> Two ingresses for the same hostname on different ports are therefore independent: each port serves the routes of the ingress declared on it, and neither displaces the other, whether they terminate TLS or not.
-> A redirect an ingress declares answers on the port it names and on no other.
+### Held volume
 
-> r[actuate.ingress.warm-certs]
-> When an action closure invokes [`rt.warm_certs`](rule:l/rt.warm-certs) with a selection that contains TLS-terminating ingresses, the runtime must initiate certificate acquisition for those ingresses' hostnames without exposing the ingresses to live traffic.
-> A typical implementation pushes a partial proxy configuration that requests certificate acquisition while not routing requests to any backend; once the certificate is `valid`, it is served from the proxy's cache when the same ingress is later started for real.
->
-> The warm_certs call must be recorded in the [action execution log](rule:r/history.action-log) and must be idempotent on replay: a subsequent invocation with the same selection observes the existing cert state and returns immediately when `valid`, without re-initiating acquisition.
+The preserved data of a volume the runtime would otherwise have deleted, kept until an operator confirms its deletion or restores it.
 
-> r[volume.export.host-path]
-> A listing of exported volumes must report, for each one, the path where that volume's contents live on the host. An exported volume exists so that something other than its owning app can use it, and a co-located consumer needs a path to address rather than having to reconstruct the runtime's storage layout for itself.
+## Deployment and Job instances
 
-> r[actuate.volume.start]
-> Starting a Volume instance must create the named volume if it does not already exist, then apply any declared file writes to the volume.
->
-> Creating a named non-tmpfs volume and seeding it with its declared writes is one step. Whichever part of the runtime brings the volume's storage into existence must apply the declared writes to it, and a part that finds the storage already there must not apply them again — an app owns its volume's contents once it has them, so re-seeding would overwrite what the app wrote. A volume that was created without being seeded is never seeded afterwards, so the two must not be separable: a workload that happened to materialise the volume ahead of the component nominally responsible for it would otherwise start against empty storage, permanently and with nothing reported.
->
-> Because those parts run concurrently, both may find the storage absent at the same moment, and exactly one of them creates it. Creation must report which one that was. The part whose creation did not take effect is a part that found the storage already there: it owes the volume no writes, and the name already being in use is not an error for it to report. Treating creation as something that can only succeed makes an ordinary overlap fail the start on storage backends whose create refuses an existing name.
->
-> When a declared write fails part-way through seeding, storage the same operation had just created must be removed again, so the next attempt seeds from scratch rather than leaving behind a volume that counts as created and will never receive its writes.
+Starting a Deployment or Job instance MUST ensure that the instance's pod network exists, ensure that the container image is present on the host, and start the container under process supervision.
+The runtime MUST pull the image if it is not present, as [IMG](images.md#image-pulls) specifies.
 
-> r[actuate.volume.tmpfs]
-> Tmpfs-backed Volumes (named or anonymous) must be materialised as a host-managed directory under a tmpfs-backed location and bind-mounted into containers. The runtime must not delegate tmpfs storage to the container runtime's own tmpfs volume driver, because such drivers create a fresh tmpfs at every container mount and so silently drop any declared file writes that were applied to the volume's host backing.
-> Because tmpfs contents do not survive a host reboot, any declared file writes must be re-applied unconditionally each time the volume is materialised — not only when the volume is first created.
-> That directory is the volume for every step of its lifecycle: it is what starting creates and seeds, what observation reports as present or missing, and what stopping removes. The runtime must not create a container-runtime volume to stand for a tmpfs Volume, because a lifecycle step that acts on the stand-in leaves the directory holding the data untouched — a stop that reports a cleanup it did not perform, and a later volume of the same name that silently inherits the previous one's files.
+Before the container starts, the runtime MUST ensure that each anonymous volume the container mounts exists, and MUST apply that volume's declared file writes to it.
 
-> r[actuate.volume.storage]
-> Named non-tmpfs volumes are stored as host-managed directories under the data directory and bind-mounted into containers. Anonymous non-tmpfs volumes remain managed by the container runtime.
+Stopping a Deployment or Job instance MUST stop the supervised container process.
+Once the process has stopped, the runtime MUST remove the instance's pod network and every anonymous volume created for the instance.
 
-> r[actuate.volume.btrfs]
-> When the data directory resides on a BTRFS filesystem, named non-tmpfs volumes must be created as BTRFS subvolumes.
+## Container hardening
 
-> r[storage.confinement]
-> Every host filesystem path the runtime creates, writes, moves, or deletes on behalf of a definition or an operator command is confined to the root that owns it: a volume's root for content written into that volume, and for a volume's own storage the directory that holds volumes of its kind — under the data directory for a non-tmpfs volume, under the tmpfs-backed location for a tmpfs one. Where a volume's storage lives does not change whether the runtime owns it.
->
-> Confinement covers every component of a path, not only its last. A parent directory created on the way to a write must be resolved under the same confinement as the write itself, so that a symlink placed inside the root cannot lead the runtime to create or write anything outside it. A path that escapes its root must be refused, and nothing along the way to it may be created.
->
-> Storage whose own path is a symlink is not storage the runtime owns. Creating, holding, or deleting such a path must be refused with an error naming it, rather than acting on what it points at or reporting a deletion that removed only the link.
+The runtime MUST start every workload container with the settings below.
+A script MAY change a setting only through the definition method the table names.
 
-> r[actuate.volume.hold]
-> When a named non-tmpfs volume or a managed site volume would be removed — either because the volume name has been removed from the app definition, because the volume's storage backend cannot be updated in-place, or because an operator has requested deletion of a managed site volume — the runtime must preserve the volume's data in a held state instead of deleting it. The held volume remains linked to the originating context: app volumes to their app, and site volumes to the site (reported as app name `_site`). If the app still requires a volume under the same name, a fresh volume is created and the old one is held alongside it. Snapshot site volumes are excluded from the hold mechanism (see [volume.site.snapshot.delete](rule:r/volume.site.snapshot.delete)).
->
-> A volume with no storage behind it is held by doing nothing: there is no data to preserve, so the removal it was standing in the way of goes ahead and no held volume is recorded. This must be distinguishable from a hold that could not be carried out — storage the runtime does not own, or a move that failed — which still stops the removal, because there the data is real and would be orphaned. A runtime that cannot tell the two apart leaves a managed site volume whose storage an operator removed by hand permanently undeletable, its record stranded in every listing.
+| setting | default | script adjustment |
+| --- | --- | --- |
+| Linux capabilities | all dropped | [`cap_add`](rule:l/container.cap-add) adds a named capability back |
+| privilege escalation | disabled | none |
+| root filesystem | read-only, with a writable tmpfs mounted at `/tmp` | [`writable_rootfs`](rule:l/container.writable-rootfs) makes it writable, and no tmpfs is mounted at `/tmp` |
+| process limit | 256 processes | [`pids_limit`](rule:l/container.pids-limit) sets another limit |
+| open file limit | 65536, soft and hard | none |
 
-> r[actuate.volume.hold.confirm]
-> An operator must explicitly confirm deletion of a held volume before its data is removed.
+A container whose definition [names a user](rule:l/container.user) MUST be started as that user.
 
-> r[actuate.volume.hold.restore]
-> An operator may restore a held volume's data into a fresh managed [site volume](rule:r/volume.site) instead of confirming its deletion. Restoration moves the held data into place under an operator-chosen site volume name, defaulting to the held volume's recorded name; the resulting volume is recorded as a managed site volume regardless of whether the hold originated from an app volume or a site volume. Restoration must be rejected when a site volume with the target name already exists, so operators surface and resolve the collision instead of silently overwriting either record. The held volume's tracking record is removed once its data has been moved.
+> [!NOTE]
+> With privilege escalation disabled, a process that starts as root and drops to another user from inside the container cannot be relied on to work.
+> A container that needs to run as a non-root user names that user in its definition.
 
-> r[actuate.volume.hold.events]
-> Creation, confirmed deletion, and restoration of held volumes must be observable on the event feed so that UIs can refresh held-volume counts without polling. A restore event must identify the held volume that was consumed and the name of the new site volume it became.
+## Container logs
 
-> r[actuate.volume.stop]
-> Stopping a Volume instance must remove the named volume.
+The runtime MUST direct the standard output and standard error of every workload container and every infrastructure container to the host's system journal.
 
-## Startup
+The runtime MUST tag every journal entry a container produces with the fields below, so that a log query can select an app, a resource, an instance, or an infrastructure component by field without relying on unit names.
 
-<!-- from runtime: Startup -->
+| field | carried by | value |
+| --- | --- | --- |
+| `SEEDLING_APP` | workload containers and breadcrumbs | the app's name |
+| `SEEDLING_RESOURCE_KIND` | workload containers and breadcrumbs | the resource's kind, in lower case |
+| `SEEDLING_RESOURCE` | workload containers and breadcrumbs | the resource's name |
+| `SEEDLING_INSTANCE` | workload containers and breadcrumbs | the instance's display name |
+| `SEEDLING_INFRA` | infrastructure containers | `proxy` or `resolver` |
+| `SEEDLING_RT_CALL` | breadcrumbs | the `rt.*` method recorded, or `unit_create` or `replay` |
+| `SEEDLING_SCRIPT_POS` | breadcrumbs | the script position of the call, as `<file>:<line>:<column>` |
 
-> r[startup.btrfs]
-> At startup, the runtime must verify that the data directory resides on a BTRFS filesystem. If BTRFS is not available and the `--without-btrfs` flag has not been passed, the runtime must exit with an error that mentions the `--without-btrfs` flag.
+A breadcrumb carries `SEEDLING_RESOURCE_KIND`, `SEEDLING_RESOURCE` and `SEEDLING_INSTANCE` only where its action names a single resource or instance.
+It carries `SEEDLING_SCRIPT_POS` only where the script exposed the call's position.
+
+## Breadcrumbs
+
+The runtime MUST write a breadcrumb to the system journal, tagged as above, for each `rt.*` call an action closure makes, each process supervision unit it creates, and each replay pass of a [lifecycle operation](../overview.md#lifecycle-operation).
+A log query at any granularity MUST return breadcrumbs and container output together, in time order.
+
+The runtime MUST write a call's breadcrumb when the call first executes, and MUST NOT write it again when the call is replayed.
+The runtime MUST write one `replay` breadcrumb at the start of each replay pass.
+
+## Ingress serving
+
+### Port scope
+
+The runtime MUST serve an ingress on the port it was declared on and on no other.
+The runtime MUST route a request to an ingress's target only when the request arrives on that ingress's port, whatever hostname the request names.
+
+Two ingresses for the same hostname on different ports MUST be served independently, each port serving the routes of the ingress declared on it.
+A redirect an ingress declares MUST answer only on the port it names.
+
+### Plaintext ingresses
+
+Whether an ingress terminates TLS is independent of whether it terminates HTTP.
+An ingress that terminates HTTP without terminating TLS is a plaintext ingress.
+
+The runtime MUST serve a plaintext ingress as HTTP without TLS on its port, routing matching requests to the ingress's target.
+For a plaintext ingress, the runtime MUST NOT request or provision a certificate for the hostname, MUST NOT accept QUIC connections, and MUST NOT answer requests with a redirect the ingress does not itself declare.
+
+The runtime MUST forward to an ingress only the transport protocols the ingress serves.
+A plaintext HTTP ingress therefore MUST NOT cause UDP traffic on its port to be forwarded.
+
+A hostname MAY carry plaintext and TLS-terminating ingresses on different ports.
+The runtime MUST serve each from a listener matching its own termination.
+A TLS-terminating ingress on a hostname MUST NOT cause a plaintext ingress on the same hostname to be dropped or served only over TLS.
+
+### Certificate warming
+
+When an action closure calls [`rt.warm_certs`](rule:l/rt.warm-certs) with a selection containing TLS-terminating ingresses, the runtime MUST begin acquiring certificates for those ingresses' hostnames.
+The runtime MUST NOT route live traffic to those ingresses as a result of the call.
+A certificate acquired this way MUST be the one served when the same ingress is later started.
+
+The runtime MUST record each `rt.warm_certs` call in the [action execution log](rule:r/history.action-log).
+A repeated call with the same selection MUST observe the existing certificate state and return at once when every certificate is valid, without beginning acquisition again.
+
+## Volume storage
+
+The runtime MUST store each named non-tmpfs volume as a directory in the data directory and bind-mount it into the containers that use it.
+When the data directory is on a BTRFS filesystem, the runtime MUST create each named non-tmpfs volume as a BTRFS subvolume.
+The container runtime MAY manage anonymous non-tmpfs volumes.
+
+The runtime MUST store each tmpfs volume, named or anonymous, as a directory on a tmpfs filesystem on the host, and bind-mount it into the containers that use it.
+That directory MUST be the volume for every lifecycle step: starting creates and seeds it, observation reports it present or missing, and stopping removes it.
+The runtime MUST NOT stand a container-runtime volume in for a tmpfs volume.
+
+> [!NOTE]
+> A container runtime's own tmpfs driver creates a fresh tmpfs at every mount, so writes applied to the volume's host directory never reach the container.
+> A lifecycle step acting on a stand-in leaves the directory holding the data untouched, and a later volume of the same name inherits its files.
+
+## Volume creation and seeding
+
+Starting a Volume instance MUST create the volume's storage if it does not exist, then apply the volume's declared file writes to it.
+
+Creating a named non-tmpfs volume's storage and applying its declared writes MUST be one step.
+The part of the runtime that creates the storage MUST apply the declared writes.
+A part of the runtime that finds the storage already present MUST NOT apply them.
+
+> [!NOTE]
+> An app owns its volume's contents once it has them, so seeding again would overwrite data the app wrote.
+> A volume created without being seeded is never seeded afterwards, so a workload that happened to create the volume before the component responsible for it would start against empty storage.
+
+Several parts of the runtime MAY find the storage absent at the same moment.
+Exactly one of them MUST create it, and creation MUST report whether this caller created it.
+A caller whose creation did not take effect MUST treat the storage as already present, and MUST NOT report the name being in use as an error.
+
+If a declared write fails, the runtime MUST remove storage the same step created, so that the next attempt creates and seeds it from scratch.
+
+The runtime MUST apply a tmpfs volume's declared writes each time it creates the volume's directory, including after the host restarts.
+
+## Exported volumes
+
+A listing of [exported volumes](rule:l/volume.exported) MUST report, for each volume, the host path at which its contents are stored.
+
+## Volume removal
+
+Stopping a Volume instance MUST remove the volume.
+For a tmpfs volume, the runtime MUST delete its directory.
+For a named non-tmpfs volume, the runtime MUST hold its data as a [held volume](#held-volume).
+
+## Held volumes
+
+The runtime MUST hold a named non-tmpfs volume's data, instead of deleting it, when the volume's name is removed from the app's definition or when the volume's storage cannot be changed in place to the backend the definition requires.
+If the app still declares a volume under the same name, the runtime MUST create a fresh volume and keep the held one beside it.
+
+The runtime MUST hold a managed [site volume](site-resources.md#site-volumes)'s data when an operator deletes it.
+Snapshot site volumes are not held, as [SITE](site-resources.md#site-volume-snapshots) specifies.
+
+A held volume MUST record the context it came from: an app volume its app, and a site volume the app name `_site`.
+
+If the volume has no storage, holding it MUST succeed without recording a held volume, and the removal that required the hold MUST proceed.
+If the volume has storage the runtime cannot hold, because the runtime does not own it or because moving it failed, the hold MUST fail and the removal MUST NOT proceed.
+
+The runtime MUST NOT delete a held volume's data until an operator confirms its deletion.
+
+An operator MAY restore a held volume into a new managed site volume instead of confirming its deletion.
+The operator MAY name the new site volume, and the name MUST default to the held volume's recorded name.
+The runtime MUST reject a restore whose target name is [taken](site-resources.md#site-volume-names).
+The restored volume MUST be recorded as a managed site volume, whichever context the held volume came from.
+The runtime MUST remove the held volume's record once its data has been moved.
+
+The runtime MUST emit an [event](../interface/events.md) when it creates a held volume, when an operator confirms a held volume's deletion, and when an operator restores one.
+A restore event MUST identify the held volume consumed and the name of the site volume it became.
+
+## Storage confinement
+
+Every host path the runtime creates, writes, moves or deletes on behalf of a definition or an operator command MUST be confined to the root that owns it.
+Content written into a volume is confined to that volume's root.
+A volume's own storage is confined to the directory holding volumes of its kind: in the data directory for a non-tmpfs volume, and in the tmpfs location for a tmpfs volume.
+
+Confinement MUST cover every component of a path.
+The runtime MUST resolve a parent directory it creates on the way to a write under the same confinement as the write.
+The runtime MUST refuse a path that escapes its root, and MUST create nothing along the way to it.
+
+Storage whose own path is a symbolic link is not owned by the runtime.
+The runtime MUST refuse to create, hold or delete such a path, with an error naming it.
+The runtime MUST NOT act on the target of such a link, and MUST NOT report a deletion that removed only the link.
+
+## BTRFS check
+
+When it starts, the runtime MUST determine whether the data directory is on a BTRFS filesystem.
+If it is not and the daemon was started without the `--without-btrfs` flag, the runtime MUST exit with an error that names the `--without-btrfs` flag.
+If the filesystem type cannot be determined, the runtime MUST exit with an error.

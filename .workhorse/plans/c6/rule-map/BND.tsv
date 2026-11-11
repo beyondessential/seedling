@@ -1,0 +1,9 @@
+l/bsl.bundle	BND#script-formation
+l/bsl.bundle.metadata	BND#metadata-file
+l/bsl.bundle.seedling-versions	BND#seedling-version-requirement
+l/bsl.bundle.script-errors	BND#script-formation
+l/app.file	BND#bundle-files
+l/app.dir	BND#bundle-files
+l/app.bundle.context	BND#bundle-files
+l/file.type	BND#bundle-files
+l/file.text	BND#bundle-files

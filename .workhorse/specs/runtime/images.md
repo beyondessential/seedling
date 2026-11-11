@@ -4,80 +4,136 @@ id: IMG
 
 # Images
 
-## Actuation
+Applies to how the [runtime](../overview.md#runtime) pulls, protects, tracks and removes container images on the [host](../overview.md#host), and how it discovers the images an [app](../overview.md#app) may need.
 
-<!-- from runtime: Actuation -->
+## Terminology
 
-> r[actuate.image.retry]
-> A failed image pull must be retried, and successive failures for the same reference must be spaced by an increasing delay up to a bounded maximum, so that an unreachable registry is not polled at the reconciliation interval.
-> A transient pull failure must not permanently disable actuation of the workload: however long a reference has been failing, waiting the maximum delay must be sufficient for another attempt.
-> Past a threshold of consecutive failures the condition becomes operator-visible, but that is an escalation and not a terminal state — attempts continue at the maximum interval, which is what allows the fault to clear on a later success.
-> A successful pull resets the count.
+### Image reference
 
-> r[actuate.image.warm]
-> When an action closure invokes [`rt.warm_images`](rule:l/rt.warm-images) with a selection that contains container resources, the runtime must collect the distinct image references from those resources' container definitions and initiate pulls for each image that is not already present locally.
-> For each extracted image reference the runtime must durably record a [pin](rule:r/image.pin) tying the calling app to the reference, upserted idempotently.
->
-> The warm_images call must be recorded in the [action execution log](rule:r/history.action-log) and must be idempotent on replay: a subsequent invocation with the same selection observes the existing local image state and returns immediately when all selected images are present.
+The string a definition names an image by, such as a tag or a digest reference.
+Two references are equal only when the strings are equal.
 
-> r[image.pin]
-> A _pin_ is a durable `(app, image_reference)` record indicating that an app has requested the referenced image be warmed.
-> While a pin exists it must protect its image reference from autonomous removal (see [image.gc](rule:r/image.gc)).
-> The runtime must remove a pin whenever it observes a running container whose image reference matches that pin, so that a warmed image transitions from _pinned_ to _in use_ automatically on first observed use.
-> A pin must not be automatically re-created when a workload stops using an image; a subsequent `rt.warm_images` call is required to re-pin.
-> Operators may clear any pin explicitly via the operator interface.
+### Pin
 
-> r[image.pin.expiry]
-> A pin may carry an optional expiration timestamp. When an expiration is set and passes, the reconciler must delete the pin on a subsequent tick exactly as if an operator had cleared it explicitly.
-> Setting, clearing, and reading an expiration does not change any other aspect of the pin's lifecycle — in particular, an expired-but-not-yet-swept pin still protects its image from [autonomous removal](rule:r/image.gc) until the reconciler sweeps it.
-> Expirations are only set by the post-update reconciliation rule (see [`image.pin.update-reconcile`](rule:r/image.pin.update-reconcile)); they are cleared whenever a pin's reference is observed to be valid again for the owning app.
+A durable record that an app has asked for an image reference to be kept on the host.
 
-> r[image.pin.update-reconcile]
-> Whenever an app's `AppDef` changes because of an operator-driven edit (a script update or a parameter change that triggers re-evaluation), the runtime must re-probe the new script and use the result to reconcile that app's pins:
->
-> 1. Build the _safe set_: every image reference declared by a `Deployment` or `Job` in the new `AppDef`, plus every image reference in the probe's [`all_images`](rule:r/image.discover) output.
-> 2. For any pin whose reference is in the safe set, clear its expiration (if any) so the pin is kept indefinitely.
-> 3. For any pin whose reference is _not_ in the safe set:
->    - If the probe ran without errors _and_ without skipped handlers, the safe set is authoritative: delete the pin.
->    - Otherwise the safe set is incomplete: set the pin's expiration to 30 days from now, unless an earlier expiration is already set.
->
-> A pin's reference is "in the safe set" based on exact string equality; a tag-pinned reference and a digest-pinned reference to the same image id are treated as distinct.
-> The rule fires only on operator-driven AppDef changes; autonomous reconciliation ticks do not run probes.
+### Probe
 
-> r[image.track]
-> The runtime must maintain, for each locally-present container image, a _last-used_ timestamp initialised to the time the image was first observed locally.
-> On every reconciliation pass, the last-used timestamp of every image whose `image_id` appears on at least one running container must be updated to the current time.
+An evaluation of an app's handler closures that enumerates the image references they could pull, without acting on the host.
 
-> r[image.gc]
-> At a regular interval matching the background garbage collector cadence, the runtime must remove locally-present container images that satisfy all of the following:
->
-> - No [pin](rule:r/image.pin) exists for any reference pointing at the image.
-> - No running container is currently observed using the image.
-> - The image's [last-used timestamp](rule:r/image.track) is at least 30 days in the past.
->
-> Removal failures must be logged and must not prevent removal of other images in the same pass.
-> Autonomous image GC must not be extended with shorter retention periods or more aggressive policies without explicit operator configuration; operators remove images they no longer need through the operator interface.
+## Image pulls
 
-> r[image.discover]
-> The runtime must provide a _probe_ execution mode that runs an app's handler closures without any world-modifying side effects, in order to enumerate every container image reference the handler might pull. The probe must:
->
-> - Drive every `rt.*` call whose normal semantics would mutate state or wait on the world. `rt.start(...)` and `rt.warm_images(...)` extract image references from the supplied container resources and record them to the probe output without scheduling anything or writing pins. `rt.stop(...)`, `rt.warm_certs(...)`, `rt.restart(...)`, and `rt.query(...)` are no-ops.
-> - Satisfy every barrier immediately: `.scheduled()`, `.running()`, `.ready()`, `.ready_eventually()`, `.terminated()`, `.terminated_eventually()`, and `rt.stop(...)`'s implicit barrier all return as if their condition is met. `Termination::ensure_success()` succeeds unconditionally.
-> - Not record anything to the action log, the autonomous operations log, the world observation history, or the `image_pins` table.
->
-> The probe is invoked per handler and operates on a handler's captured closure, the current `AppDef`, and a resolved param map supplied by the caller. Error-path image references (those only reached via a closure branch predicated on `termination.ensure_success()` failing, or a similar live-state signal) are necessarily missed by the probe, since the probe always returns the success path.
+The runtime MUST retry a failed pull.
+Successive failures for one image reference MUST be spaced by an increasing delay up to a fixed maximum.
+The delay SHOULD start at 5 seconds and double with each consecutive failure, up to a maximum of 300 seconds.
+A failure that follows the previous failure by more than the maximum delay SHOULD start a new count.
+A successful pull MUST reset the count.
 
-> r[image.discover.params]
-> The probe accepts a param map per handler. Parameter resolution proceeds in priority order:
->
-> 1. Values supplied by the probe caller override everything.
-> 2. Otherwise, the app's persisted param store supplies the value.
-> 3. Otherwise, the param schema's `default_value` is used.
-> 4. Otherwise, the param is unset.
->
-> Probing may operate in either of two modes:
->
-> - **Strict**: when a handler declares a required parameter that remains unresolved after step 3, the probe for that handler must return an error identifying the missing parameters without invoking the closure.
-> - **Lenient**: the same condition causes the handler to be reported as _skipped_ with the same error payload, without invoking the closure or producing any images.
->
-> Closures that throw during probing must be reported with the thrown message as their error; images accumulated before the throw must be returned alongside.
+However long a reference has been failing, the runtime MUST attempt it again once the maximum delay has passed.
+When a reference reaches 5 consecutive failures, the runtime MUST file an [`image_pull_failed`](faults.md#workload-faults) fault and MUST keep attempting at the maximum delay.
+
+The runtime SHOULD consider a pull that has not finished within 300 seconds stuck, and MAY start another.
+The outcome of a superseded pull MUST NOT change the pacing of the pull that superseded it.
+
+## Image warming
+
+When an action closure calls [`rt.warm_images`](rule:l/rt.warm-images) with a selection containing container resources, the runtime MUST collect the distinct image references of those resources' containers and begin a pull for each one not present on the host.
+For each reference collected, the runtime MUST record a [pin](#pin) for the calling app, creating it if absent.
+
+The runtime MUST record each `rt.warm_images` call in the [action execution log](rule:r/history.action-log).
+A repeated call with the same selection MUST observe the images on the host and return at once when every selected image is present.
+
+## Pins
+
+A pin is keyed by app and image reference, and MAY carry an expiry time.
+While a pin exists, the runtime MUST NOT autonomously remove an image that the pin's reference resolves to.
+
+When the runtime observes a running container whose image reference matches a pin's, it MUST delete that pin, whichever app the container belongs to.
+The runtime MUST NOT create a pin again when a workload stops using an image; only another `rt.warm_images` call pins it.
+An operator MAY delete any pin through the [Operator Interface](../overview.md#operator-interface).
+
+Recording a pin that already exists MUST clear its expiry.
+
+## Pin expiry
+
+When a pin's expiry time has passed, the runtime MUST delete the pin on a later iteration of the reconciliation loop.
+A pin whose expiry has passed but which the runtime has not yet deleted MUST still protect its image.
+
+Only [pin reconciliation](#pin-reconciliation) sets an expiry.
+
+## Pin reconciliation
+
+When an operator changes an app's definition or parameter values, and the app's [resource graph](../overview.md#resource-graph) is evaluated again as a result, the runtime MUST reconcile the app's pins against the new definition.
+The runtime MUST NOT reconcile pins on an iteration of the reconciliation loop that no operator change caused.
+
+The runtime MUST run a lenient [probe](#image-discovery) of the new definition, then build the app's safe set: every image reference a Deployment or Job in the new resource graph declares, together with every image reference the probe reports.
+The runtime MUST then treat each of the app's pins as follows:
+
+| pin's reference | probe outcome | effect |
+| --- | --- | --- |
+| in the safe set | any | the pin's expiry is cleared |
+| not in the safe set | every handler probed without error and none skipped | the pin is deleted |
+| not in the safe set | any handler errored or was skipped | the pin's expiry is set to 30 days from now, unless an earlier expiry is already set |
+
+If the probe cannot run, for instance because the definition does not compile, the runtime MUST leave the app's pins unchanged.
+
+## Image usage tracking
+
+The runtime MUST keep, for each image present on the host, a last-used time, set when the image is first observed on the host.
+On each iteration of the reconciliation loop, the runtime MUST set the last-used time of every image that a running container uses to the current time.
+
+## Image garbage collection
+
+The runtime MUST periodically remove images from the host that meet every condition below:
+
+- no pin's reference resolves to the image;
+- no running container uses the image;
+- the image's last-used time is at least 30 days in the past.
+
+The runtime SHOULD do this once an hour.
+Every running container on the host, whether a workload container, an infrastructure container, a shell, or a container the runtime did not start, MUST count as using its image.
+
+If the runtime cannot determine whether an image is pinned or in use, it MUST NOT remove the image in that pass.
+A failure to remove one image MUST be logged, and MUST NOT prevent the removal of other images in the same pass.
+
+The runtime MUST NOT autonomously remove an image last used fewer than 30 days ago.
+Operators remove images sooner through the Operator Interface.
+
+## Image discovery
+
+The runtime MUST provide a probe that evaluates an app's install handler, start handler, action handlers, shell handlers and parameter-change handlers, each with the app's current resource graph and a resolved parameter map.
+A probe MUST NOT change the host, the app's persisted state, the [action execution log](rule:r/history.action-log), the [autonomous operations log](rule:r/history.operations), the [world observation history](rule:r/history.world), or any pin.
+
+During a probe, the runtime MUST handle `rt.*` calls as follows:
+
+| call | effect during a probe |
+| --- | --- |
+| `rt.start` | records the image references of the resources' containers, and schedules nothing |
+| `rt.warm_images` | records the image references of the resources' containers, and writes no pin |
+| `rt.exec` | does nothing, and reports exit code 0 |
+| `rt.stop`, `rt.query`, `rt.restart`, `rt.warm_certs`, `rt.signal`, `rt.write` | does nothing |
+
+During a probe, every barrier MUST resolve as satisfied at once.
+This includes `.scheduled()`, `.running()`, `.ready()`, `.ready_eventually()`, `.terminated()`, `.terminated_eventually()`, and the implicit barrier of `rt.stop`.
+`Termination::ensure_success()` MUST succeed.
+
+If a handler's closure throws, the probe MUST report the thrown message as that handler's error, together with the image references recorded before the throw.
+
+> [!NOTE]
+> A probe follows the success path of every closure, so an image reference reached only after a failure, such as in a branch taken when `ensure_success()` fails, is not reported.
+
+### Probe parameters
+
+A probe caller MAY supply parameter values for each handler.
+The runtime MUST resolve each of a handler's parameters from the first of these sources that has a value:
+
+1. the value the probe caller supplied;
+2. the app's persisted parameter value;
+3. the parameter's declared default.
+
+A parameter with no value from any source is unresolved.
+
+A probe runs in strict or lenient mode.
+If a handler declares a required parameter that is unresolved, the runtime MUST NOT evaluate the handler's closure.
+In strict mode, the probe MUST report an error for that handler naming the unresolved parameters.
+In lenient mode, the probe MUST report the handler as skipped, with the same detail, and report no images for it.

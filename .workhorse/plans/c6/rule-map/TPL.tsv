@@ -1,0 +1,10 @@
+r/template.persist	TPL#persistence
+i/template.definition	TPL#template-definitions
+i/template.name	TPL#template-names
+i/template.create	TPL#creation
+i/template.list	TPL#listing
+i/template.show	TPL#inspection
+i/template.update	TPL#update
+i/template.remove	TPL#removal
+i/template.preview	TPL#preview
+i/template.instantiate	TPL#instantiation

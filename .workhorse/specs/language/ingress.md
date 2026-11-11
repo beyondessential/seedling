@@ -4,85 +4,120 @@ id: ING
 
 # Ingresses
 
-## Ingress
+Applies to the BSL `Ingress` type, through which an app exposes one of its services outside the [host](../overview.md#host).
 
-<!-- from language: Ingress -->
+## Borrowed terms
 
-> l[ingress.type]
-> An Ingress is an externally-accessible endpoint to the application.
->
-> Ingresses are created from [Services](rule:l/service.type) using the `service.ingress(hostname: string, port: number)` instance method, which returns a [builder](rule:l/bsl.builder).
->
-> Traffic from an Ingress is matched by the hostname and port, and sent to the associated Service at the same port.
->
-> There can be multiple ingresses for a Service.
->
-> Only a named Service can have an ingress: calling `ingress` on an anonymous Service must throw, and no Ingress is created.
+| term | meaning |
+| --- | --- |
+| TLS | Transport Layer Security, as defined by [RFC 8446](https://www.rfc-editor.org/rfc/rfc8446) |
+| DTLS | Datagram Transport Layer Security, as defined by [RFC 9147](https://www.rfc-editor.org/rfc/rfc9147) |
+| HTTPS | HTTP over TLS, as defined by [RFC 9110](https://www.rfc-editor.org/rfc/rfc9110) §4.2.2 |
+| HTTP/1.1 | as defined by [RFC 9112](https://www.rfc-editor.org/rfc/rfc9112) |
+| HTTP/2 | as defined by [RFC 9113](https://www.rfc-editor.org/rfc/rfc9113); in cleartext, started with prior knowledge as in §3.3 |
+| HTTP/3 | as defined by [RFC 9114](https://www.rfc-editor.org/rfc/rfc9114) |
+| label | one dot-separated component of a domain name, as defined by [RFC 1035](https://www.rfc-editor.org/rfc/rfc1035) §2.3.1 and [RFC 1123](https://www.rfc-editor.org/rfc/rfc1123) §2.1 |
+| redirection status code | a 3xx status code, as defined by RFC 9110 §15.4 |
 
-> l[ingress.hostname]
-> The `hostname` argument must be a valid fully-qualified domain name: one or more labels separated by `.`, where each label is 1–63 ASCII alphanumeric or hyphen characters, must not start or end with a hyphen, and the overall length (including dots) must not exceed 253 characters.
->
-> Wildcard labels (e.g. `*.example.com`) are not permitted. If wildcard matching is needed in the future it will be designed as a separate feature.
->
-> If the hostname is not valid, the method must throw.
->
-> A DNS name is case-insensitive, so the hostname is held in lower case whatever case it is written in, and everything derived from it — the ingress's identity, the proxy's configuration, the name a certificate is obtained for — uses that one form.
+## Terminology
 
-> l[ingress.conflicts]
-> If more than one ingress matches the same (hostname, port) tuple...
-> - ...within the same application: the latter definition in execution order will throw, and not be registered against the ingress. This can be caught (with `try..catch`) and handled.
-> - ...between two or more applications: this is a control plane concern.
+### Ingress
 
-> l[ingress.certificates]
-> This rule applies to all ingress spec rules that deal with certificates.
->
-> Certificates will be automatically obtained whenever possible for the ingress's hostnames. The application will not have access to the key material.
+An externally reachable endpoint of an app, identified by a hostname and a port, that delivers traffic to one of the app's services.
 
-> l[ingress.service]
-> The `ingress.service()` instance method returns the Service that the ingress was created from.
+## Declaration
 
-> l[ingress.termination]
-> The `ingress.tls(terminate: Terminate, output: Output)` builder method declares both what is terminated at the edge and what protocol the ingress hands to the bound Service.
->
-> Exactly four `(terminate, output)` pairings are accepted; any other pairing must throw:
->
-> | `terminate`        | `output`        | Behaviour |
-> | ------------------ | --------------- | --------- |
-> | `Terminate.Tls`    | `Output.Tcp`    | Terminate TLS for incoming TCP, re-emit as plaintext TCP. The ingress does not interpret the application protocol; non-TLS TCP traffic is rejected. |
-> | `Terminate.Dtls`   | `Output.Udp`    | Terminate DTLS for incoming UDP, re-emit as plaintext UDP. Non-DTLS UDP traffic is rejected. |
-> | `Terminate.Https`  | `Output.Http1`  | Terminate HTTPS (HTTP/1.1 and HTTP/2 over TCP, HTTP/3 over UDP), re-emit as plaintext HTTP/1.1. Non-HTTP traffic is rejected. |
-> | `Terminate.Https`  | `Output.Http2`  | Terminate HTTPS, re-emit as plaintext HTTP/2 (`h2c`). Non-HTTP traffic is rejected. |
->
-> Calling `tls()` without arguments, or with any other pairing, must throw with a clear message naming the supplied pair and the valid set.
->
-> An ingress with no termination call is left as plain TCP passthrough.
+A script declares an ingress with `service.ingress(hostname: string, port: number)`, which returns an `Ingress` [builder](rule:l/bsl.builder).
+`httpService.ingress(hostname, port)` is equivalent, as [HTTP services](http-service.md#declaration) specifies.
+A `port` MUST be validated as a [port number](rule:l/bsl.port).
 
-> l[const.terminate.tls]
-> The `Terminate.Tls` constant tags an ingress termination mode that strips TLS from incoming TCP traffic and exposes the inner bytes as plaintext TCP, without interpreting any application protocol.
+`ingress` called on an anonymous Service MUST throw, and MUST declare no ingress.
+A Service MAY have any number of ingresses.
 
-> l[const.terminate.dtls]
-> The `Terminate.Dtls` constant tags an ingress termination mode that strips DTLS from incoming UDP traffic and exposes the inner datagrams as plaintext UDP.
+The runtime MUST deliver traffic arriving at an ingress's hostname and port to the ingress's Service, at the same port number.
 
-> l[const.terminate.https]
-> The `Terminate.Https` constant tags an ingress termination mode that terminates HTTPS (HTTP/1.1 and HTTP/2 for TCP, HTTP/3 for UDP) and re-emits HTTP traffic to the bound Service.
+`ingress.service()` returns the Service the ingress was declared on.
 
-> l[const.output.tcp]
-> The `Output.Tcp` constant tags an ingress output protocol of plaintext TCP.
+### Identity within an app
 
-> l[const.output.udp]
-> The `Output.Udp` constant tags an ingress output protocol of plaintext UDP datagrams.
+An ingress is identified within its app by its hostname and port.
+Declaring an ingress whose hostname and port match an ingress already declared in the same app MUST throw, and MUST leave the earlier ingress as it was.
 
-> l[const.output.http1]
-> The `Output.Http1` constant tags an ingress output protocol of plaintext HTTP/1.1.
+> [!NOTE]
+> A script may catch the error with `try..catch`, as [errors](rule:l/bsl.errors) allows.
 
-> l[const.output.http2]
-> The `Output.Http2` constant tags an ingress output protocol of plaintext HTTP/2 (`h2c`).
+## Hostnames
 
-> l[ingress.redirect]
-> The `ingress.redirect(port?: number, code?: number)` builder method emits an HTTP redirect on the `port` given if and when the ingress has obtained a TLS certificate.
-> The redirect sends the client to the same host and request path over HTTPS on the ingress's own port, whatever other HTTPS ports the node listens on.
->
-> The `port` defaults to 80.
-> The `code` defaults to 307 ([Temporary Redirect](https://developer.mozilla.org/en-US/docs/Web/HTTP/Reference/Status/307)) and must be a redirection status code in the range 300–399; any other value throws.
->
-> Calling this on an ingress whose termination is not `Terminate.Https` throws.
+A `hostname` MUST meet all of the following, and any other hostname MUST throw:
+
+- it is 1 to 253 characters long;
+- it is one or more [labels](#borrowed-terms) separated by `.`;
+- each label is 1 to 63 characters long, of ASCII letters, digits and `-`;
+- no label begins or ends with `-`.
+
+A hostname containing `*` MUST throw.
+
+The runtime MUST hold a hostname in lower case, whatever case the script wrote it in.
+The ingress's identity, the proxy's configuration and the name a certificate is obtained for MUST all use that lower-case form.
+
+## Termination
+
+`ingress.tls(terminate: Terminate, output: Output)` declares what the ingress terminates and the protocol it hands to its Service.
+Exactly four pairings are valid:
+
+| `terminate` | `output` | the ingress accepts | the Service receives |
+| --- | --- | --- | --- |
+| `Terminate.Tls` | `Output.Tcp` | TLS over TCP | the plaintext TCP stream inside the TLS session |
+| `Terminate.Dtls` | `Output.Udp` | DTLS over UDP | the plaintext datagrams inside the DTLS session |
+| `Terminate.Https` | `Output.Http1` | HTTP/1.1 and HTTP/2 over TLS on TCP, and HTTP/3 on UDP | plaintext HTTP/1.1 |
+| `Terminate.Https` | `Output.Http2` | HTTP/1.1 and HTTP/2 over TLS on TCP, and HTTP/3 on UDP | cleartext HTTP/2 |
+
+Any other pairing MUST throw.
+The error SHOULD name the pairing supplied and the four valid pairings.
+A second `tls()` call MUST replace the first.
+
+An ingress terminating TLS or DTLS MUST NOT interpret the application protocol inside it.
+An ingress with a termination MUST reject traffic that is not of the protocol it accepts.
+
+An ingress on which `tls()` is never called MUST forward TCP connections to its Service unmodified.
+
+### Terminate
+
+`Terminate` is an [enum](rule:l/bsl.enums) of what an ingress terminates.
+
+| variant | terminates |
+| --- | --- |
+| `Tls` | TLS on TCP |
+| `Dtls` | DTLS on UDP |
+| `Https` | HTTPS, as HTTP/1.1 and HTTP/2 on TCP and HTTP/3 on UDP |
+
+### Output
+
+`Output` is an [enum](rule:l/bsl.enums) of the protocol an ingress hands to its Service.
+
+| variant | protocol |
+| --- | --- |
+| `Tcp` | plaintext TCP |
+| `Udp` | plaintext UDP datagrams |
+| `Http1` | plaintext HTTP/1.1 |
+| `Http2` | cleartext HTTP/2 |
+
+## Redirect to HTTPS
+
+`ingress.redirect()`, `ingress.redirect(port: number)` and `ingress.redirect(port: number, code: number)` declare that plaintext HTTP on `port` is redirected to the ingress.
+The `port` defaults to 80, and MUST be validated as a [port number](rule:l/bsl.port).
+The `code` defaults to 307, and MUST be a [redirection status code](#borrowed-terms) from 300 to 399.
+A `code` outside that range MUST throw.
+
+`redirect` called on an ingress whose termination is not `Terminate.Https` MUST throw.
+
+While the ingress holds a certificate for its hostname, the runtime MUST answer every plaintext HTTP request for that hostname on `port` with a redirect of `code`.
+The redirect's `Location` MUST be `https://`, the request's host, the ingress's own port preceded by `:` unless that port is 443, and the request's path and query string.
+
+> [!NOTE]
+> The redirect always targets the ingress's own port, whatever other HTTPS ports the host listens on.
+
+## Certificates
+
+The runtime SHOULD obtain a certificate for the hostname of every ingress that terminates TLS, DTLS or HTTPS, as [certificates](../runtime/tls/certificates.md) specifies.
+The runtime MUST NOT make a certificate's private key available to the app.

@@ -4,90 +4,127 @@ id: INFRA
 
 # Host infrastructure
 
-## Fault Handling
+Applies to the host-level state the [runtime](../overview.md#runtime) keeps beneath apps on a [host](../overview.md#host): its key and database files, its address space, pod networks, and the packet rules that carry traffic between them.
 
-<!-- from runtime: Fault Handling -->
+## Borrowed terms
 
-> r[infra.pod.subnet]
-> No two concurrently running pod instances may share a network prefix.
-> A prefix must therefore not be derived from a part of an instance's identity that distinct instances can share: in particular, instances carrying no unique identifier of their own must still be distinguished by the rest of their identity.
-> Deriving a prefix, however widely, does not on its own satisfy this requirement — only allocating prefixes and recording the allocation makes it a guarantee rather than a probability.
+| term | meaning |
+| --- | --- |
+| unique local address | An IPv6 address within `fc00::/7`, routable only within a site, [RFC 4193](https://www.rfc-editor.org/rfc/rfc4193). |
 
-## Infrastructure
+## Terminology
 
-<!-- from runtime: Infrastructure -->
+### Host prefix
 
-> r[infra.key.file-permissions]
-> Private key files must be created with owner-read/write-only permissions. The runtime
-> must refuse to use a key file whose group or world permission bits are set, and must
-> report an error.
+The IPv6 /48 unique local prefix the runtime derives for its host, within which every address it assigns falls.
 
-> r[infra.db.file-permissions]
-> The database file must be created with owner-read/write-only permissions. The runtime
-> must refuse to open a database file whose group or world permission bits are set, and
-> must report an error.
+### Pod network
 
-> r[infra.db.busy-timeout]
-> When a database write is blocked by a concurrent writer, the runtime must wait and retry
-> rather than failing immediately.
+The IPv6 bridge network, with its own /64 prefix within the host prefix, to which one pod instance is connected.
 
-> r[infra.node.prefix]
-> The runtime must derive a stable per-node /48 IPv6 prefix from the host machine identity.
-> The prefix follows the ULA format `fd5e:edXX:XXXX::/48`, where the 24-bit host portion is
-> derived from `/etc/machine-id`.
+### Mount endpoint
 
-> r[infra.node.degraded]
-> If the container runtime or the process manager cannot be reached at startup, the runtime
-> must not crash or crash-loop. It must still bring up the operator interface, database, and
-> reconciliation loop so the failure is observable, and it must file a system-wide fault whose
-> description identifies which backend is unavailable and states that no workloads will be
-> actuated until the runtime is restarted with working backends. While degraded, the runtime
-> must not attempt to actuate workloads or infrastructure that depend on the unavailable
-> backends. Recovery requires a restart; the runtime is not required to reconnect on its own.
+The address at which a pod reaches the services it [mounts](rule:l/pod.mount-serviceport).
 
-> r[infra.pod.network]
-> Each pod instance must be connected to a dedicated IPv6-only bridge network. The network
-> prefix is a /64 derived from the node prefix and the instance identity. No IPv4 subnet
-> must be allocated on pod networks.
-> The network's gateway is the first host address of its prefix, so it follows from the
-> prefix and is distinct for every distinct prefix.
+## Unavailable backends
 
-> r[infra.pod.network.cleanup]
-> At startup, the runtime must remove each workload container that belongs to an app that is no longer registered, and the pod network it used. A pod network is kept only while a container that belongs to a registered app, or to a live operator session, is using it.
-> Whether a network is in use must be judged after those containers have been removed, so that removing a container is never what leaves its network behind with nothing to revisit it.
-> A container or network listing that cannot be read must not be taken for an empty one: networks are not removed on the strength of a failed listing.
+If the container runtime or the process supervisor cannot be reached when the runtime starts, the runtime MUST NOT exit or restart repeatedly.
+It MUST still bring up the [Operator Interface](../overview.md#operator-interface), the database and the reconciliation loop.
 
-> r[infra.pod.mount]
-> Pods that mount a service must resolve the `localmount` hostname to a stable node-wide
-> address at `fd5e:XXYY:ZZWW:fffe::1`. nftables DNAT rules scope traffic to this address
-> by source pod prefix, so multiple pods may mount the same service simultaneously without
-> collision. The mount endpoint address does not need to be assigned to any network
-> interface.
+While either backend is unavailable, the runtime MUST NOT actuate workloads, or infrastructure that depends on the unavailable backend.
+On each reconciliation iteration while either is unavailable, the runtime MUST file a system [fault](../overview.md#fault) of kind `container_runtime_unavailable`.
+The fault's description MUST name the unavailable backend and state that no workloads will be actuated until the runtime is restarted with working backends.
+The runtime MUST clear that fault once it has started with both backends reachable.
 
-> r[infra.dataplane.output-nat]
-> The runtime must install DNAT rules in an nftables `output` chain (in addition to the
-> `prerouting` chain) so that host-originated traffic directed at ingress ports on any
-> local address is redirected to the proxy. The output rules must be restricted to
-> locally-destined packets (`fib daddr type local`) and to the IPv6 address family, and
-> must mirror the port and protocol set of the prerouting ingress rules.
+The runtime MAY remain without the backends until it is restarted.
 
-> r[infra.dataplane.service-dnat]
-> The runtime must install DNAT6 rules in the nftables `prerouting` chain that translate
-> traffic destined for a service's stable IPv6 address and declared service port to a
-> backing pod's address and pod-side port. When multiple backends are available, the
-> runtime must distribute new connections across them. These rules are applied atomically
-> alongside ingress and mount rules.
+## File permissions
 
-> r[infra.dataplane.mount-dnat]
-> Mount DNAT rules must translate directly from the pod's mount endpoint address and mount
-> port to a backing pod's address and pod-side port, without an intermediate hop through
-> the service address. When multiple backends are available, the runtime must distribute
-> new connections across them.
+The runtime MUST create every private key file and the database file with permissions granting read and write to the owner and nothing to group or others (mode `0600`).
+The runtime MUST refuse to use a key file or database file whose group or other permission bits are set, and MUST report an error naming the file and its mode.
 
-> r[infra.dataplane.forward-policy]
-> The nftables forward chain must drop unsolicited new inbound forwarded connections directed
-> at any address within the node's /48 prefix. The forward chain must explicitly permit:
-> conntrack-established and related connections; new connections that have been redirected by
-> a prerouting NAT rule (ingress traffic); and traffic whose source and destination both fall
-> within the node's /48 prefix. The chain's default policy must remain accept so that
-> forwarded traffic unrelated to the node's /48 prefix is not affected.
+## Database
+
+The runtime MUST keep its database in the file `seedling.db` in its [data directory](actuation.md#data-directory).
+
+The runtime MUST wait for a database write that is blocked by a concurrent writer, rather than failing it immediately.
+It SHOULD wait at least five seconds before failing such a write.
+
+## Host prefix
+
+The runtime MUST derive the host prefix from the host's machine identifier, read from `/etc/machine-id` with surrounding whitespace removed.
+The prefix MUST be `fd5e:` followed by the first four bytes of the SHA-256 ([FIPS 180-4](https://csrc.nist.gov/pubs/fips/180-4/upd1/final)) digest of that identifier, as a /48:
+
+| bytes | value |
+| --- | --- |
+| 0 to 1 | `fd 5e` |
+| 2 to 5 | bytes 0 to 3 of the digest |
+
+If the machine identifier cannot be read or is empty, the runtime MUST NOT start.
+
+> [!NOTE]
+> For a digest beginning `12 34 56 78`, the host prefix is `fd5e:1234:5678::/48`.
+> The prefix is stable for as long as the machine identifier is, so addresses derived from it survive restarts.
+
+## Pod networks
+
+The runtime MUST connect each pod instance to a pod network of its own.
+A pod network MUST be IPv6 only, and the runtime MUST NOT allocate an IPv4 subnet on it.
+Its prefix MUST be a /64 within the host prefix, disjoint from every address the runtime reserves for its own infrastructure.
+Its gateway MUST be the first host address of its prefix (`<prefix>::1`).
+
+The runtime MUST NOT give two concurrently running pod instances the same pod network prefix.
+It MUST allocate each instance's prefix and record the allocation.
+
+> [!NOTE]
+> A prefix derived from an instance's identity guarantees uniqueness only to a probability, however wide the derivation, and a derivation from a part of the identity that distinct instances share guarantees nothing.
+> Instances that carry no unique identifier of their own are the case that has collided.
+
+## Pod network cleanup
+
+When it starts, the runtime MUST remove each workload container belonging to an app that is not registered, and the pod network that container used.
+It MUST then keep a pod network only while a container belonging to a registered app, or to a live operator session, is using it, and remove the rest.
+The runtime MUST judge whether a pod network is in use only after removing those containers.
+
+The runtime MUST NOT take a container or network listing it could not read for an empty one.
+If a listing cannot be read, the runtime MUST NOT remove any pod network on the strength of it.
+
+The runtime MUST NOT remove the networks of its own infrastructure containers during this cleanup.
+
+## Mount endpoint
+
+The mount endpoint MUST be the address `<host prefix>:fffe::1`, the same for every pod on the host.
+The runtime MUST resolve the hostname `localmount` to the mount endpoint in every pod that mounts a service.
+The mount endpoint need not be assigned to any network interface.
+
+The runtime MUST translate traffic from a pod's network prefix to the mount endpoint, at a port the pod mounts, directly to the address and pod-side port of a backend of the mounted service.
+The translation MUST NOT pass through the service's own address.
+The runtime MUST scope each translation to the mounting pod's network prefix.
+Several pods MAY mount services at the same port, each reaching its own mounted service.
+Where a mounted service has several backends, the runtime MUST distribute new connections across them.
+
+## Service translation
+
+The runtime MUST translate traffic addressed to a service's address and declared service port to the address and pod-side port of one of the service's backends.
+This MUST apply to traffic forwarded through the host and to traffic originating on the host.
+Where a service has several backends, the runtime MUST distribute new connections across them.
+
+The runtime MUST apply the service translation, mount translation, ingress redirection and forwarding policy rules together, as one atomic replacement of the rules it last applied.
+These rules are [absolute state](reconciliation.md#absolute-state).
+
+## Host-originated traffic
+
+The runtime MUST redirect traffic originating on the host and addressed to an ingress port on any of the host's own addresses to the proxy, as it redirects traffic arriving from the network.
+The redirection MUST cover the same ports, protocols and address families as the redirection of traffic from the network, and apply only to traffic addressed to a local address.
+
+A connection from a host process over the loopback interface that the runtime redirects MUST receive the proxy's replies.
+
+## Forwarding policy
+
+The runtime MUST drop forwarded packets addressed to the host prefix, except:
+
+- packets of a connection already accepted, or related to one;
+- packets of a connection whose destination the runtime's ingress redirection rewrote;
+- packets whose source address is also within the host prefix.
+
+The runtime MUST NOT drop or otherwise filter forwarded traffic addressed outside the host prefix.

@@ -4,96 +4,107 @@ id: DEP
 
 # Deployments
 
-## Deployment
+Applies to the BSL `Deployment` resource, a long-lived container workload.
 
-<!-- from language: Deployment -->
+## Terminology
 
-> l[deployment.type]
-> A Deployment is a long-lived instance of a container workload. It describes how to run a single container image and associated configuration, and will manage updates to the underlying resource (the running container) from its declarative configuration.
->
-> Deployments are defined using the `app.deployment(name: string)` method, which returns a [builder](rule:l/bsl.builder).
+### Deployment
 
-> l[deployment.pod]
-> Deployment implements the [Pod](rule:l/pod.interface) interface.
+A [resource](../overview.md#resource) that keeps a number of instances of one container workload running, and replaces them when its definition changes.
 
-> l[deployment.scale]
-> The `deployment.scale(fixed: number)` or `deployment.scale(scalable: range)` builder method defines the scale ("replicas" in Kubernetes terms) of a Deployment.
->
-> A fixed-scale Deployment will try to always keep that amount of container copies alive as long as the Deployment is running, not more or less. It is equivalent to `scale(fixed..fixed)`.
-> The `fixed` number must be a positive non-zero integer.
->
-> A scalable Deployment is defined from a lower and upper bound (represented as a range of positive integers). The Deployment will try to keep at least the lower bound and at most the upper bound of containers running, and operators or the Seedling control plane may modify the scale of the Deployment within the defined range. The lower bound may be zero. The upper bound must be non-zero.
->
-> If a Deployment has a lower bound scale of zero it will be scheduled with zero containers initially.
+### Grace window
 
-> l[deployment.scale.max-lower-bound]
-> The lower bound of a scale definition must not exceed 10. If a fixed scale or the lower bound of a range exceeds 10, the method must throw.
+The time after an instance of a Deployment with a health check starts, `start_period + retries × interval` seconds, before the runtime acts on the instance being unhealthy.
 
-> l[deployment.on-update]
-> The `deployment.on_update(strategy: OnUpdate)` builder method defines the strategy used when an update is applied to a Deployment.
-> The default is [`OnUpdate.Rolling`](rule:l/const.on-update.rolling).
+## Declaration
 
-> l[deployment.on-terminate]
-> The `deployment.on_terminate(strategy: OnTerminate)` builder method defines the strategy used when the controlled container terminates within a Deployment.
-> The default is [`OnTerminate.Recreate`](rule:l/const.on-terminate.recreate).
+A script declares a Deployment with `app.deployment(name: string)`, which returns a `Deployment` [builder](rule:l/bsl.builder).
+A `Deployment` implements the [Pod](pod.md) interface, and so the [Container](container.md) interface.
 
-> l[deployment.healthcheck]
-> The `deployment.healthcheck(config: map)` builder method declares a periodic health check for the Deployment's container.
-> The `config` map must contain a `kind` key identifying the check variety, plus zero or more common timing fields and zero or more kind-specific fields.
->
-> Healthchecks are only valid on Deployments. The method is not registered on [Jobs](rule:l/job.type), so calling it on a Job is a BSL evaluation error.
->
-> Common fields (all optional):
->
-> - `interval`: seconds between successive checks. Default 30.
-> - `timeout`: seconds a single check may run before being considered a failure. Default 30.
-> - `retries`: consecutive failures required to transition from healthy to unhealthy. Default 3.
-> - `start_period`: seconds of grace after the container starts during which failures do not count against `retries`. Default 0.
-> - `on_failure`: response to sustained unhealth, one of `"replace"` or `"monitor"`. Default `"replace"`.
->
-> All timing fields must be non-negative. `retries` must be a positive integer.
->
-> If `healthcheck` is not called, the Deployment has no declared health check. A running container with no declared check is treated as healthy.
+## Scale
 
-> l[deployment.healthcheck.kind]
-> The `kind` field is required.
->
-> In the current spec, the only accepted value is `"command"`. The values `"http"`, `"tcp"`, and `"grpc"` are reserved for future use and must be rejected by the current implementation with an error identifying the kind as unsupported.
->
-> Any other value must cause the method to throw.
+A script sets a Deployment's scale with `deployment.scale(fixed: number)` or `deployment.scale(bounds: range)`.
+A Deployment on which `scale` is never called has a fixed scale of 1.
 
-> l[deployment.healthcheck.command]
-> When `kind` is `"command"`, the `config.cmd` field is required and defines the probe command run inside the container. The command is considered passing when it exits with code zero, and failing otherwise.
->
-> `cmd` may be:
->
-> - A string: run through a shell (equivalent to `["CMD-SHELL", cmd]`).
-> - A string array: run directly, the first element being the executable.
->
-> An empty `cmd` must cause the method to throw.
+`scale(fixed)` is equivalent to `scale(fixed..fixed)`.
+A `fixed` below 1 or above 10 MUST throw.
 
-> l[deployment.healthcheck.timings]
-> The timing fields control how often the probe runs and how quickly a failing probe transitions the container from healthy to unhealthy:
->
-> - `interval`: seconds between successive checks. Default 30.
-> - `timeout`: seconds a single check may run before being considered a failure. Default 30.
-> - `retries`: consecutive failures required to transition from healthy to unhealthy. Default 3.
-> - `start_period`: seconds of grace after the container starts during which failures do not count against `retries`. Default 0.
->
-> All timing values must be non-negative; `retries` must be a positive integer. The grace window before a starting container is treated as unhealthy is `start_period + retries × interval`.
+`scale(bounds)` takes a range written `lower..upper`, and reads both `lower` and `upper` as inclusive bounds.
+A `lower` below 0 or above 10 MUST throw.
+An `upper` below 1 or above 65535 MUST throw.
+A `lower` greater than `upper` MUST throw.
 
-> l[deployment.healthcheck.on-failure]
-> The `on_failure` response determines how the runtime reacts to a Deployment instance that has been unhealthy long enough to exceed the grace window:
->
-> - `"replace"` (default): the runtime spawns a replacement instance alongside the unhealthy one and lets the unhealthy instance keep serving traffic until the replacement is healthy. When the replacement is healthy, traffic shifts to it and the unhealthy instance is retired. If the replacement also fails to become healthy, the runtime stops the cycle, leaves the original running (degraded), and files a hard fault per [fault.healthcheck-replace-failed](rule:r/fault.healthcheck-replace-failed). See [autonomous.healthcheck-replace](rule:r/autonomous.healthcheck-replace).
-> - `"monitor"`: no automatic replacement. The container is observed and routing decisions account for its health (see [lifecycle.service](rule:r/lifecycle.service)), but the runtime does not spawn replacements. Recovery is operator-driven.
->
-> `on_failure` does not affect whether the container is considered Ready — an unhealthy container is not Ready regardless of the policy.
+> [!NOTE]
+> `scale(1..4)` allows one to four instances, although a Rhai range written `1..4` excludes 4.
 
-> l[deployment.priority]
-> The `deployment.priority(level: Priority)` builder method declares the Deployment's [priority](rule:l/const.priority.enum): its claim on host resources relative to other workloads when the host is under memory, CPU, or I/O pressure.
-> The default is [`Priority.Normal`](rule:l/const.priority.enum).
->
-> Priority is declared on Deployments only. The method is not registered on [Jobs](rule:l/job.type), so calling it on a Job is a BSL evaluation error, and every workload that is not a Deployment runs at `Normal`.
->
-> The level expresses intent; how it is realised is a runtime concern. The order in which workloads are shed under memory pressure is defined by [priority.kill-order](rule:r/priority.kill-order), and how contended CPU and I/O are divided by [priority.scheduling](rule:r/priority.scheduling). A Deployment's priority composes with the operator-set [app priority](rule:r/priority.app) of the app it belongs to: comparisons are app-major, so a Deployment in a higher-priority app outranks one in a lower-priority app whatever either Deployment's own level.
+While a Deployment runs, the runtime MUST keep at least `lower` and at most `upper` of its instances running.
+An operator or the runtime MAY choose an instance count within the bounds.
+Until one does, the instance count MUST be `lower`.
+
+## Update and termination strategies
+
+`deployment.on_update(strategy: OnUpdate)` sets the strategy the runtime follows when a change to the Deployment's definition is applied.
+The default is [`OnUpdate.Rolling`](rule:l/const.on-update.rolling).
+
+`deployment.on_terminate(strategy: OnTerminate)` sets the strategy the runtime follows when a Deployment's container terminates.
+The default is [`OnTerminate.Recreate`](rule:l/const.on-terminate.recreate).
+
+## Health checks
+
+`deployment.healthcheck(config: map)` declares a periodic health check of each of the Deployment's instances.
+The method is defined on `Deployment` alone.
+
+| field | type | required | default | meaning |
+| --- | --- | --- | --- | --- |
+| `kind` | string | yes | | the variety of check; `"command"` |
+| `cmd` | string or array of strings | with `kind: "command"` | | the probe command |
+| `interval` | integer seconds | no | 30 | the time between successive checks |
+| `timeout` | integer seconds | no | 30 | the time a single check may run before it counts as failed |
+| `retries` | integer | no | 3 | the consecutive failures that make a healthy instance unhealthy |
+| `start_period` | integer seconds | no | 0 | the time after the container starts during which failures do not count against `retries` |
+| `on_failure` | string | no | `"replace"` | the response to an instance that stays unhealthy; `"replace"` or `"monitor"` |
+
+A `config` with any key not in the table MUST throw.
+`interval`, `timeout` and `start_period` MUST be non-negative, and a negative value MUST throw.
+A `retries` below 1 MUST throw.
+An `on_failure` other than `"replace"` or `"monitor"` MUST throw.
+
+A `kind` of `"http"`, `"tcp"` or `"grpc"` MUST throw with an error naming the kind as unsupported.
+Any other `kind` except `"command"` MUST throw.
+
+A Deployment on which `healthcheck` is never called has no health check.
+The runtime MUST treat a running instance with no health check as healthy.
+
+### Command checks
+
+With `kind: "command"`, the runtime MUST run `cmd` inside the container as the probe.
+A string `cmd` MUST be run by the container's shell.
+An array `cmd` MUST be run directly, its first element naming the executable.
+A probe passes when it exits with status zero, and fails otherwise.
+
+An empty string, an empty array, and an array whose every element is empty MUST each throw.
+
+### Check timing
+
+The runtime MUST run a check every `interval` seconds, and MUST count a check still running after `timeout` seconds as failed.
+After `retries` consecutive failures, the runtime MUST treat the instance as unhealthy.
+Failures within `start_period` seconds of the container starting MUST NOT count towards `retries`.
+
+### Failure response
+
+`on_failure` sets the runtime's response to an instance that is still unhealthy once its [grace window](#grace-window) has elapsed.
+
+With `"replace"`, the runtime MUST replace the instance, as [health check replacement](rule:r/autonomous.healthcheck-replace) specifies.
+
+With `"monitor"`, the runtime MUST NOT replace the instance.
+The instance's health still governs its place in the [routing pool](rule:r/lifecycle.service.routing-pool), and its recovery is left to an operator.
+
+`on_failure` does not affect whether an instance is [Ready](rule:r/lifecycle.container.unhealthy-transition).
+
+## Priority
+
+`deployment.priority(level: Priority)` declares the Deployment's [priority](rule:l/const.priority.enum), its claim on host resources relative to other workloads when the host is under pressure.
+The default is `Priority.Normal`.
+The method is defined on `Deployment` alone, and every workload that is not a Deployment MUST run at `Priority.Normal`.
+
+How the runtime realises priority is specified by [PRIO](../runtime/priority.md).

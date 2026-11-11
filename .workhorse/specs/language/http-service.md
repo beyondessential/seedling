@@ -4,182 +4,335 @@ id: HTTP
 
 # HTTP services
 
-## HTTP Service
+Applies to the HTTP view of a service in BSL: its routes, route redirects, and the proxy settings a script declares on them.
 
-<!-- from language: Service / HTTP Service -->
+## Borrowed terms
 
-> l[service.http]
-> A Service can be _specialised_ into an HTTP Service, using the `service.http(port?: number)` instance method, which returns an `HttpService`.
->
-> The `port` argument is optional and defaults to `80`.
->
-> An `HttpService` is a per-call view of the underlying Service rather than a distinct resource. As an ergonomic affordance, `httpService.ingress(hostname, port)` is accepted and is equivalent to calling `ingress()` on the wrapped Service: the resulting Ingress is bound to the Service. Calling `ingress()` on an `HttpService` whose Service is external must throw.
+| term | meaning |
+| --- | --- |
+| field name | the name of an HTTP header field, a `token` as defined by [RFC 9110](https://www.rfc-editor.org/rfc/rfc9110) §5.1 and §5.6.2 |
+| field value | the value of an HTTP header field, as defined by RFC 9110 §5.5 |
+| content coding | a transformation applied to a representation, as defined by RFC 9110 §8.4.1 |
+| redirect | a 3xx response carrying a `Location` header, as defined by RFC 9110 §15.4 and §10.2.2 |
+| zstd | the Zstandard content coding, as defined by [RFC 8878](https://www.rfc-editor.org/rfc/rfc8878) |
+| gzip | the gzip content coding, as defined by RFC 9110 §8.4.1.3 |
 
-> l[service.http.route]
-> An HTTP Service Route serves a URL prefix.
->
-> HTTP Service Routes are defined using the `http.route(prefix: string)` instance method, which returns an `HttpServiceRoute`. The `prefix` argument must be a non-empty string starting with `/`.
->
-> The URL prefix is _not_ stripped for the pod: `GET /api/books` routed through a `route("/api")` will appear as `GET /api/books` to the container.
->
-> Prefix-matching is done by length: for any given URL, the longest matching prefix is selected. If more complicated logic is required, an application should embed an HTTP "reverse proxy" container of its choice.
->
-> A trailing `/` carries no meaning in a prefix, so `route("/v1/login/")` and `route("/v1/login")` are one route and not two.
-> Every spelling of the root is the root, `//` among them.
+## Terminology
 
-> l[service.http.route.redirect]
-> The `route.redirect(to: string)`, `route.redirect(to: string, code: number)`, and `route.redirect(config: map)` builder methods declare that an [HTTP Service Route](rule:l/service.http.route) answers with an HTTP redirect instead of being served by a pod.
-> They are available on the routes of an app-declared Service and of an [External Service](rule:l/service.external) alike, and a redirect route needs no pod bound to it.
->
-> The `to` target is either a path beginning with `/`, which redirects within the hostname the request arrived on, or an absolute URL beginning with `http://` or `https://`, which redirects to another host.
-> Any other target throws.
-> The `code` defaults to 307 and must be one of 301, 302, 307, or 308; any other value throws.
-> A permanent move of an endpoint that accepts a request body wants 308, since 301 and 302 permit a client to reissue the request as a `GET` and so lose the body.
->
-> The map form carries `to` and an optional `code` and no other field; an unrecognised field throws.
->
-> A target may name the parts of the incoming request that carry over to it:
->
-> - `<tail>`: the part of the request path following the matched prefix, carrying its leading `/`. Empty when the request path is exactly the prefix.
-> - `<query>`: the request's query string, carrying its leading `?`. Empty when the request carries none.
->
-> A target naming no token is literal: every request under the prefix redirects to exactly that target, whatever followed the prefix.
-> An unrecognised token throws, rather than reaching the client as part of the target.
-> So does a stray `<`, a character a URL carries percent-encoded rather than as itself, so there is nothing for it to have meant.
->
-> The two positional forms are the map form with `<tail><query>` appended to the target, which is the common case of moving a prefix while keeping everything under it.
-> A positional target naming a token itself throws, rather than carrying that part of the request twice: naming one is writing the target out in full, which is the map form.
-> `route("/v1/login").redirect("/api/login")` therefore sends `/v1/login/reset?token=x` to `/api/login/reset?token=x`, where `redirect(#{ to: "/api/login" })` sends it to `/api/login`.
->
-> The tokens are those named here, and are translated by the runtime.
-> A target must not be written in the proxy's own placeholder syntax: the proxy substitutes a braced word naming its own state, its environment among it, and the target reaches the client as a `Location` header, where a [header value](rule:l/service.http.headers.fields) refuses a brace for that same reason.
->
-> A path target whose second character is `/` or `\\` throws: it names another host while opening with the `/` that says "within the hostname the request arrived on", and the absolute form says so plainly.
-> A target carrying a tab throws for the same reason, a client stripping one before reading the target.
->
-> Each token carries its own leading separator, so a target must not end a literal with that separator immediately before the token: `/` before `<tail>` and `?` before `<query>` throw.
-> Left to compose, a target of `/` followed by `<tail>` reaches the client as `//` and whatever the request carried, which is the other host above assembled at request time.
->
-> A redirect must not be declared on the root prefix, which would answer for the whole hostname; retiring a hostname is a [site ingress redirect attachment](rule:r/ingress.site.attachment), an operator's to make rather than an app's.
-> A prefix declared as a redirect and also bound by a pod through `deployment.http(pod_port, svc.route(prefix))` throws: a prefix is either redirected or proxied.
-> A second `redirect()` on the same route replaces the first.
->
-> [Compression](rule:l/service.http.compress), [balancing](rule:l/service.balance), and [rate limiting](rule:l/service.http.rate-limit) have nothing to act on in a redirect, which reaches no pod: declaring one on a redirect route throws, where the error still names the line that wrote it.
-> The same setting declared on the Service and inherited by the route is ignored instead, so a service-wide declaration need not be written around the service's redirect routes.
-> [Header](rule:l/service.http.headers) `response` operations do apply, a redirect being a response the route serves; a `request` operation on a redirect route throws, having no onward request to shape.
-> A `response` operation naming `Location` on a redirect route throws, since it would displace the target the redirect computed and the route would then not serve what `to` declares.
+### HTTP service
 
-> l[service.http.compress]
-> `compress(enabled: bool)` and `compress(config: map)` are builder methods declaring compression of responses served through the proxy.
-> Both are available on an [HTTP Service](rule:l/service.http) and on an [HTTP Service Route](rule:l/service.http.route).
->
-> `compress(false)` disables compression. `compress(true)` enables it with the default settings below, as does the map form, which additionally sets whichever fields it names.
->
-> Compression is a property of responses proxied to the service's pods. Redirect responses, whether from an [ingress redirect](rule:l/ingress.redirect) or a [route redirect](rule:l/service.http.route.redirect), are never compressed.
+A view of a [service](rule:l/service.type) through which HTTP traffic on one of its ports is routed by URL prefix.
 
-> l[service.http.compress.fields]
-> All fields of the `config` map are optional:
->
-> - `encodings`: the content encodings offered, in descending order of preference. Accepted values are `"zstd"` and `"gzip"`. Default `["zstd", "gzip"]`.
-> - `minimum_length`: responses shorter than this many bytes are served uncompressed, because compressing them costs more than it saves. Default 512.
-> - `content_types`: the content types eligible for compression. An entry ending in `*` matches any content type with that prefix. Default is a set covering text and text-like formats: markup, stylesheets, scripts, JSON and other structured text, SVG, and fonts.
->
-> `minimum_length` must be a non-negative integer. An unrecognised encoding, an empty `encodings` list, and an empty `content_types` list must each throw.
+### Route
 
-> l[service.http.proxy-settings.resolution]
-> [compression](rule:l/service.http.compress) is declared on an HTTP Service, [balancing](rule:l/service.balance) on the Service itself, and either may be overridden on an individual HTTP Service Route.
-> [Rate limiting](rule:l/service.http.rate-limit) and [header manipulation](rule:l/service.http.headers) are likewise declared on an HTTP Service or an individual HTTP Service Route.
->
-> Compression and balancing resolve field by field: the route's value if the route set that field, otherwise the service's value if the service set it, otherwise the field's default.
-> A route setting some fields therefore keeps the service's values for the fields it left unset, and setting any one of `compress`, `balance`, `rate_limit`, or `headers` never disturbs the others.
->
-> Rate limiting resolves as a whole rather than field by field: the route's declaration if the route made one, otherwise the service's, otherwise no limit.
-> It has no default, so a service and route that both leave it unmentioned are not rate limited, and a route declaring `rate_limit(false)` is not rate limited even where the service declared a limit.
->
-> Header manipulation resolves per header name, independently within each direction: a header the route names takes the route's operation, and a header only the service names takes the service's.
-> A route therefore adds to the headers the service declared and overrides only those it names, without restating the rest.
-> Because each header name resolves to exactly one operation, the order in which operations are applied is not observable.
->
-> A Service with no HTTP Service Routes is served through a single `/` route, which takes the service's values.
+A URL prefix of an HTTP service, served either by the pods bound to it or by a redirect.
 
-> l[service.balance]
-> `balance(config: map)` is a builder method controlling how the proxy chooses among the backends serving a Service, and how long it may keep trying to reach one.
-> It is available on a [Service](rule:l/service.type), on an [External Service](rule:l/service.external), on an [HTTP Service](rule:l/service.http), and on an [HTTP Service Route](rule:l/service.http.route).
-> The first three set the same service-wide value; the route form overrides it for one route.
->
-> All fields of the `config` map are optional:
->
-> - `policy`: how a backend is chosen. One of `"round_robin"`, `"least_conn"`, `"random"`, `"first"`. Default `"round_robin"`.
-> - `try_duration`: seconds the proxy may spend finding a usable backend for a single request or connection before giving up. Default 5.
-> - `interval`: seconds to wait between successive attempts to find one. Default 0.25.
->
-> Both timing fields must be non-negative, and an unrecognised `policy` must throw.
-> A `try_duration` of zero disables retrying, so a request that cannot reach its first-chosen backend fails immediately and `interval` is not consulted.
-> An `interval` of zero combined with a non-zero `try_duration` must throw, because it would spin without pause whenever every backend is unreachable.
+### Proxy settings
 
-> l[service.http.rate-limit]
-> `rate_limit(config: map)` and `rate_limit(false)` are builder methods declaring per-client request rate limiting for a service's routes.
-> Both are available on an [HTTP Service](rule:l/service.http) and on an [HTTP Service Route](rule:l/service.http.route).
->
-> The map form declares a limit carrying the fields below; `rate_limit(false)` declares no limit at this level, which at a route also suppresses a limit the service declared.
-> A limit applies to requests proxied to the service's pods, and is opt-in: a service that never declares one is not rate limited.
-> Redirect responses, whether from an [ingress redirect](rule:l/ingress.redirect) or a [route redirect](rule:l/service.http.route.redirect), and non-HTTP forwarding are never rate limited.
+The compression, balancing, rate-limiting and header settings declared on a service or on one of its routes.
 
-> l[service.http.rate-limit.fields]
-> Both fields of the `config` map are required, since a limit has no meaning without either:
->
-> - `max_events`: the number of requests one client may make within each window. Must be a positive integer, at most one thousand.
-> - `window`: the length of the sliding window, in seconds. Must be a finite number between one millisecond and one hour.
->
-> An unrecognised field, and either field outside its range, must each throw.
-> The ranges are sanity bounds rather than tuning: a limit is charged to a proxy every app on the host shares, holding per-client state sized by `max_events` until the window has elapsed, so a declaration sets both how large that state is and how long it is held. How many clients are tracked is decided by whoever sends the traffic, so the size of each is held to something an app could plausibly mean, and a declaration outside that is refused where the error still names the script that made it.
+## Declaration
 
-> l[service.http.headers]
-> `headers(config: map)` is a builder method declaring manipulations of the headers carried by requests and responses passing through the proxy.
-> It is available on an [HTTP Service](rule:l/service.http) and on an [HTTP Service Route](rule:l/service.http.route).
->
-> The `config` map carries two optional fields, `request` and `response`, each a map of the operations applied in that direction.
-> `request` operations shape the request as the service's pods receive it, and `response` operations shape the response as the client receives it.
-> A `config` naming neither must throw, since it declares nothing.
->
-> A second `headers()` call on the same service or route layers over the first by header name, rather than discarding what it declared: the later call's operation wins for the headers it names, and the earlier one's stands for the rest.
->
-> Header manipulation is a property of traffic proxied to the service's pods.
-> [Ingress redirect](rule:l/ingress.redirect) responses and non-HTTP forwarding carry no header operations.
-> A [route redirect](rule:l/service.http.route.redirect) carries the `response` operations alone, those being the ones a response it serves can bear.
+A script obtains an HTTP service with `service.http()` or `service.http(port: number)`, on a Service or on an [External Service](rule:l/service.external).
+Either method returns an `HttpService`.
+The `port` is the [Service Port](rule:l/service.port) on which the HTTP service is reached, and defaults to 80.
+A `port` MUST be validated as a [port number](rule:l/bsl.port).
 
-> l[service.http.headers.fields]
-> The `request` and `response` maps each carry three optional fields, naming the operation applied to a header:
->
-> - `replace`: a map of header name to value, setting the header to that value and discarding whatever the message already carried.
-> - `add`: a map of header name to value, adding that value and keeping whatever the message already carried.
-> - `remove`: an array of header names, discarding those headers entirely.
->
-> A map naming none of the three, an empty `remove` array, and an empty `replace` or `add` map, must each throw.
->
-> A value in `replace` or `add` is either a string, or an array of strings where the header is to carry several values.
-> `Set-Cookie` is the case that requires the array form, since several cookies cannot be folded into one header.
-> A value that is neither form, and an empty array, must each throw.
->
-> Header names are compared case-insensitively, as HTTP defines them, and are matched exactly: there is no wildcard form, because a pattern could not be resolved against the named headers of an enclosing service.
-> A name must be a valid HTTP field name, and must additionally not contain `*`, which the grammar permits but which a proxy may read as a wildcard; a declaration meaning one header must not be able to reach every header.
-> A name appearing under more than one operation in the same direction at the same level must throw, whatever its case, since those operations contradict each other.
->
-> A value must be a valid HTTP field value: printable characters, spaces, and horizontal tabs.
-> A control character must throw, a carriage return or line feed above all, since those would end the value's own header and begin another of the declaration's choosing.
->
-> A value must also not contain `{`, which must throw.
-> A proxy may read a braced word as a placeholder naming its own state and substitute it, so a value carrying one would reach the other side as something other than what was declared — and the state it names may be the proxy's environment rather than anything belonging to the app.
-> Refusing the character is what keeps a value literal, and is refused where the error can still name the script that wrote it.
->
-> A direction may carry at most 64 operations, a name at most 256 characters, an operation at most 16 values, and a value at most 4096 characters.
-> These bound one declaration rather than the result of resolving it: a service and a route each naming different headers may exceed them between them, and that is not refused.
-> They are plausibility bounds like a [rate limit](rule:l/service.http.rate-limit.fields)'s rather than a guarantee about the size of the shared configuration — a declaration far outside anything an app could mean is refused where the error can still name the script that wrote it.
->
-> Naming a header that describes the connection rather than the message must throw: `Connection`, `Keep-Alive`, `Proxy-Authenticate`, `Proxy-Authorization`, `TE`, `Trailer`, `Transfer-Encoding`, and `Upgrade`.
-> `Content-Length`, which describes the message's framing, and `Content-Encoding`, which names the [compression](rule:l/service.http.compress) the proxy applied, must throw for the same reason: a response whose encoding is renamed or removed cannot be decoded by the client it reaches.
-> The proxy holds the connection to the client and the connection to the pod as two separate things, and owns the headers describing each; an app setting them corrupts the exchange rather than shaping it.
-> [Persistent connections](rule:r/ingress.persistent-connections), the reason an app would otherwise reach for `Connection`, are served without being asked for.
->
-> Removing a header the message does not carry, and replacing one it does not yet carry, are both well-formed.
-> An operation describes the message as the other side is to receive it, rather than a change to one in hand.
+An `HttpService` is a view of its Service and not a resource of its own.
+Settings declared through an `HttpService` MUST be recorded on the Service it views.
+
+`httpService.port(port: number)` returns the `ServicePort` of the viewed Service at `port`, as `service.port(port)` does.
+
+`httpService.ingress(hostname: string, port: number)` MUST declare an [ingress](ingress.md) on the viewed Service, exactly as `service.ingress(hostname, port)` does.
+Called on an `HttpService` that views an External Service, it MUST throw.
+
+## Routes
+
+`httpService.route(prefix: string)` returns the `HttpServiceRoute` for `prefix`.
+A `prefix` that is empty or does not begin with `/` MUST throw.
+
+A prefix MUST be normalised by removing every trailing `/`, and a prefix that is empty after that is `/`.
+Two spellings with the same normalised form MUST name the same route.
+
+> [!NOTE]
+> `route("/v1/login/")` and `route("/v1/login")` are one route, and `route("//")` is the route `/`.
+
+Requests are matched to routes as [routing](rule:r/service.http.route.routing) specifies.
+The runtime MUST pass a request to a pod with its path unchanged, including the matched prefix.
+
+> [!NOTE]
+> `GET /api/books` served through `route("/api")` reaches the pod as `GET /api/books`.
+
+The route at `/` through which the runtime serves a Service that no pod binds a route of MUST take the proxy settings declared on `route("/")`, as any other route takes its own.
+
+## Route redirects
+
+A route declared as a redirect answers every request it matches with a redirect, and reaches no pod.
+A script declares one with these methods of `HttpServiceRoute`:
+
+| method | target | code |
+| --- | --- | --- |
+| `redirect(to: string)` | `to` followed by `<tail><query>` | 307 |
+| `redirect(to: string, code: number)` | `to` followed by `<tail><query>` | `code` |
+| `redirect(config: map)` | `config.to` as written | `config.code`, or 307 |
+
+The `config` map carries `to`, which is REQUIRED, and `code`, which is OPTIONAL.
+A `config` with any other key MUST throw.
+
+The methods MUST be accepted on the routes of a Service and of an External Service alike.
+A redirect route MUST NOT require a pod bound to it.
+
+### Redirect targets
+
+A target MUST begin with `/`, `http://` or `https://`, and any other target MUST throw.
+A target beginning with `/` redirects within the hostname the request arrived on.
+A target beginning with `http://` or `https://` redirects to the host it names.
+
+A target may name these parts of the request, each a token the runtime replaces when it serves the redirect:
+
+| token | replaced with |
+| --- | --- |
+| `<tail>` | the part of the request path following the matched prefix, with its leading `/`, or nothing when the path is exactly the prefix |
+| `<query>` | the request's query string, with its leading `?`, or nothing when the request carries none |
+
+A target naming no token is literal, and every request under the prefix MUST be redirected to exactly that target.
+
+A target MUST throw if any of the following holds:
+
+- it contains a `<` that does not begin `<tail>` or `<query>`;
+- it contains `{`;
+- it begins with `/` and its second character is `/` or `\`;
+- it contains a tab or any other ASCII control character;
+- a literal ending in `/` is immediately followed by `<tail>`, or a literal ending in `?` is immediately followed by `<query>`;
+- it is longer than 4096 characters.
+
+A positional `to` that contains `<` MUST throw.
+
+> [!NOTE]
+> The positional forms keep everything under the prefix, the common case of moving a prefix.
+> `route("/v1/login").redirect("/api/login")` sends `/v1/login/reset?token=x` to `/api/login/reset?token=x`, where `redirect(#{ to: "/api/login" })` sends it to `/api/login`.
+> `redirect("/")` throws, since `/` followed by `<tail>` is a literal ending in `/` before `<tail>`.
+
+> [!NOTE]
+> A target reaches the client as a `Location` header.
+> A path whose second character is `/` or `\`, including one composed at request time from `/` and a tail, names another host while reading as a path within this one.
+> The proxy substitutes a braced word in a `Location` with its own state, its environment included, so a brace is refused for the reason a [header value](#header-operations) refuses one.
+
+### Redirect codes
+
+A `code` MUST be one of 301, 302, 307 or 308, and any other value MUST throw.
+
+> [!NOTE]
+> A client receiving 301 or 302 may reissue the request as a `GET` and lose its body, so a permanent move of an endpoint that accepts a request body wants 308.
+
+### Redirect route constraints
+
+`route("/").redirect(…)` MUST throw.
+
+> [!NOTE]
+> A redirect on `/` would answer for the whole hostname.
+> Retiring a hostname is a [site ingress redirect attachment](rule:r/ingress.site.attachment), made by an operator.
+
+A prefix MUST be either a redirect or bound by a pod.
+Declaring a redirect on a prefix a pod binds through [`pod.http`](pod.md#port-bindings) MUST throw, and so MUST binding a pod to a prefix declared as a redirect, in either order.
+A second `redirect()` on the same route MUST replace the first.
+
+Compression, balancing and rate limiting have nothing to act on in a redirect.
+Declaring `compress`, `balance` or `rate_limit` on a redirect route MUST throw, in either order.
+The same setting declared on the Service and inherited by a redirect route MUST be ignored for that route.
+
+A redirect route MUST apply its resolved `response` [header operations](#header-operations) to the redirect it serves.
+Declaring a `request` header operation on a redirect route MUST throw, in either order.
+Declaring a `response` operation naming `Location` on a redirect route MUST throw, in either order.
+`request` operations, and `response` operations naming `Location`, that a redirect route inherits from its Service MUST be ignored for that route.
+
+## Compression
+
+A script declares compression of proxied responses with `compress(enabled: bool)` or `compress(config: map)`, on an `HttpService` or an `HttpServiceRoute`.
+`compress(false)` switches compression off.
+`compress(true)` switches it on with the default settings.
+`compress(config)` switches it on with the fields `config` names, and the defaults for the rest.
+
+| field | type | default | meaning |
+| --- | --- | --- | --- |
+| `encodings` | array of `"zstd"` and `"gzip"` | `["zstd", "gzip"]` | the content codings offered, most preferred first |
+| `minimum_length` | integer | 512 | the length in bytes below which a response is served uncompressed |
+| `content_types` | array of strings | listed below | the media types eligible for compression |
+
+Every field is OPTIONAL.
+An `encodings` entry other than `"zstd"` or `"gzip"` MUST throw, and so MUST an empty `encodings` array.
+A negative `minimum_length` MUST throw.
+An empty `content_types` array MUST throw.
+A `config` with any other key MUST throw.
+
+A `content_types` entry ending in `*` matches every media type beginning with the text before the `*`.
+Any other entry matches that media type exactly.
+
+The default `content_types` is `application/atom+xml*`, `application/eot*`, `application/font*`, `application/geo+json*`, `application/graphql+json*`, `application/graphql-response+json*`, `application/javascript*`, `application/json*`, `application/ld+json*`, `application/manifest+json*`, `application/opentype*`, `application/otf*`, `application/rss+xml*`, `application/truetype*`, `application/ttf*`, `application/vnd.api+json*`, `application/vnd.ms-fontobject*`, `application/wasm*`, `application/x-httpd-cgi*`, `application/x-javascript*`, `application/x-opentype*`, `application/x-otf*`, `application/x-perl*`, `application/x-protobuf*`, `application/x-ttf*`, `application/xhtml+xml*`, `application/xml*`, `font/ttf*`, `font/otf*`, `image/svg+xml*`, `image/vnd.microsoft.icon*`, `image/x-icon*`, `multipart/bag*`, `multipart/mixed*` and `text/*`.
+
+How the runtime compresses is specified by [route compression](rule:r/service.http.route.compression).
+
+## Balancing
+
+A script declares how the proxy chooses among a service's backends with `balance(config: map)`, on a Service, an External Service, an `HttpService` or an `HttpServiceRoute`.
+On the first three, `balance` sets one service-wide value.
+On a route, it overrides that value for the route.
+
+| field | type | default | meaning |
+| --- | --- | --- | --- |
+| `policy` | string | `"round_robin"` | how a backend is chosen |
+| `try_duration` | number of seconds | 5 | how long the proxy may spend finding a usable backend for one request or connection |
+| `interval` | number of seconds | 0.25 | the pause between successive attempts to find one |
+
+| `policy` | backend chosen |
+| --- | --- |
+| `"round_robin"` | each backend in turn |
+| `"least_conn"` | the backend with the fewest requests in progress |
+| `"random"` | a backend chosen at random |
+| `"first"` | the first available backend in the order the runtime lists them |
+
+Every field is OPTIONAL.
+A `policy` not in the table above MUST throw.
+`try_duration` and `interval` MUST be finite and non-negative, and MAY be written as integers or as floating-point numbers.
+A `config` naming an `interval` of zero MUST throw unless the same `config` names a `try_duration` of zero.
+A `config` with any other key MUST throw.
+
+A `try_duration` of zero disables retrying: a request that cannot reach its first-chosen backend fails at once, and `interval` is not consulted.
+
+If resolution yields an `interval` of zero and a non-zero `try_duration`, the runtime MUST use an `interval` of 0.25 for that route.
+
+> [!NOTE]
+> A zero interval with a non-zero try duration retries without pause, spinning whenever every backend is unreachable.
+> A route can reach that pairing only by taking one value from its service and the other from itself, which no single declaration can see.
+
+How the runtime balances is specified by [route balancing](rule:r/service.http.route.balancing).
+
+## Rate limiting
+
+A script declares per-client request rate limiting with `rate_limit(config: map)` or `rate_limit(false)`, on an `HttpService` or an `HttpServiceRoute`.
+`rate_limit(config)` declares a limit.
+`rate_limit(false)` declares that this level is not limited.
+`rate_limit(true)` MUST throw.
+
+| field | type | range | meaning |
+| --- | --- | --- | --- |
+| `max_events` | integer | 1 to 1000 | the number of requests one client may make within each window |
+| `window` | number of seconds | 0.001 to 3600 | the length of the sliding window |
+
+Both fields are REQUIRED.
+A missing field, a field outside its range, a non-finite `window`, and any other key MUST each throw.
+`window` MAY be written as an integer or as a floating-point number.
+
+> [!NOTE]
+> The ranges bound plausibility, not tuning.
+> A limit is enforced by a proxy every app on the host shares, which holds `max_events` timestamps per client until the window has elapsed, for as many clients as send traffic.
+
+How the runtime enforces a limit is specified by [route rate limiting](rule:r/service.http.route.rate-limiting).
+
+## Header operations
+
+A script declares operations on the headers of proxied traffic with `headers(config: map)`, on an `HttpService` or an `HttpServiceRoute`.
+
+| key | applies to |
+| --- | --- |
+| `request` | the request as the service's pods receive it |
+| `response` | the response as the client receives it |
+
+Both keys are OPTIONAL, and a `config` naming neither MUST throw.
+A `config` with any other key MUST throw.
+
+The value of `request` or `response` is a map of operations:
+
+| operation | form | effect |
+| --- | --- | --- |
+| `replace` | map of field name to value | sets the header to the value, discarding whatever the message carried |
+| `add` | map of field name to value | adds the value, keeping whatever the message carried |
+| `remove` | array of field names | discards the header |
+
+Each operation is OPTIONAL, and a map naming none of the three MUST throw.
+A map with any other key MUST throw.
+An empty `replace` map, an empty `add` map, and an empty `remove` array MUST each throw.
+
+A value in `replace` or `add` is a string, or an array of strings for a header that carries several values.
+A value of any other type MUST throw, and so MUST an empty array.
+
+> [!NOTE]
+> `Set-Cookie` needs the array form, since several cookies cannot be folded into one header.
+
+Removing a header the message does not carry, and replacing one it does not yet carry, are both well-formed.
+
+### Header names
+
+A name MUST be a [field name](#borrowed-terms), and any other name MUST throw.
+A name containing `*` MUST throw.
+Names MUST be compared case-insensitively and matched exactly.
+
+A name that describes the connection or the message's framing MUST throw.
+These names, in any case, are `Connection`, `Keep-Alive`, `Proxy-Authenticate`, `Proxy-Authorization`, `TE`, `Trailer`, `Transfer-Encoding`, `Upgrade`, `Content-Length` and `Content-Encoding`.
+
+> [!NOTE]
+> A proxy may read `*` in a field name as a wildcard, which would let a declaration naming one header reach every header.
+> The proxy holds the connection to the client and the connection to the pod as two separate things, and owns the headers describing each.
+> `Content-Encoding` names the compression the proxy applied, and a response whose encoding is renamed or removed cannot be decoded by the client.
+> [Persistent connections](rule:r/ingress.persistent-connections) are served without being asked for.
+
+Within one direction of one `headers()` call, a name appearing under more than one operation MUST throw, whatever its case.
+
+### Header values
+
+A value MUST be a [field value](#borrowed-terms) containing no ASCII control character other than horizontal tab.
+A value containing a carriage return, a line feed or any other control character MUST throw.
+A value containing `{` MUST throw.
+
+> [!NOTE]
+> A carriage return or line feed would end the value's own header and begin another of the declaration's choosing.
+> The proxy reads a braced word as a placeholder naming its own state, its environment included, and would substitute it.
+
+### Header declaration bounds
+
+Within one `headers()` call, a direction MUST throw if it names more than 64 headers.
+A name longer than 256 characters MUST throw.
+A value array longer than 16 entries MUST throw.
+A value longer than 4096 characters MUST throw.
+
+These bounds apply to one declaration and not to the result of resolving it.
+A service and a route that each name different headers MAY exceed them between them.
+
+### Repeated declarations
+
+A second `headers()` call on the same service or route MUST layer over the first by header name, within each direction.
+The later call's operation MUST win for each header it names, and the earlier call's operation MUST stand for the rest.
+
+How the runtime applies header operations is specified by [route headers](rule:r/service.http.route.headers).
+
+## Resolution
+
+Each kind of proxy setting MUST resolve independently of the others, so that declaring one never disturbs another.
+
+### Compression resolution
+
+Whether a route is compressed MUST be decided by the nearest level that declared `compress`: the route, then its Service.
+If neither level declared `compress`, the route MUST be compressed.
+Each field of a compressed route MUST take the route's value if the route's `compress` named it, otherwise the Service's value if the Service's `compress` named it, otherwise the field's default.
+A level that declared `compress(false)` contributes no field values.
+
+### Balancing resolution
+
+Each balancing field of a route MUST take the route's value if the route set it, otherwise the Service's value if the Service set it, otherwise the field's default.
+
+### Rate-limit resolution
+
+A route's rate limit MUST be the route's declaration if it made one, otherwise the Service's declaration if it made one, otherwise no limit.
+A declaration of `rate_limit(false)` resolves to no limit, so a route declaring it is not limited even where its Service declared a limit.
+
+A limit declared on a Service MUST be one budget, shared by every route that inherits it.
+A limit declared on a route MUST be that route's own budget.
+
+### Header resolution
+
+Header operations MUST resolve per header name, independently within each direction.
+A header the route names MUST take the route's operation.
+A header only the Service names MUST take the Service's operation.
+
+> [!NOTE]
+> Each header name resolves to exactly one operation, so the order in which a route's operations are applied is not observable.
