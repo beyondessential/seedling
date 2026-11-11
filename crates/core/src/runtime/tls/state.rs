@@ -16,7 +16,7 @@
 //! function. The functions here are pure over a [`Snapshot`] of DB
 //! state; the snapshot is loaded once and reused per call.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::sync::Arc;
 
 use jiff::Timestamp;
@@ -232,6 +232,19 @@ pub struct Snapshot {
     /// a wildcard most of all, so each is parsed once per snapshot. Shared
     /// between clones, which see the same rows.
     confirmed: Arc<Mutex<BTreeMap<i64, Option<Arc<LeafFacts>>>>>,
+    /// Where each certificate sits in [`certificates`](Self::certificates), so
+    /// resolving a candidate from the index costs a lookup rather than a scan
+    /// of every loaded certificate.
+    positions: HashMap<i64, usize>,
+}
+
+/// Where each certificate in `certificates` sits, by id.
+fn positions(certificates: &[TlsCertificate]) -> HashMap<i64, usize> {
+    certificates
+        .iter()
+        .enumerate()
+        .map(|(position, cert)| (cert.id, position))
+        .collect()
 }
 
 impl Snapshot {
@@ -246,6 +259,7 @@ impl Snapshot {
         let attempts = store::list_attempts(db, None, SNAPSHOT_ATTEMPTS)?;
         let certificates = store::list_active_certificates_and_attempted(db, SNAPSHOT_ATTEMPTS)?;
         let index = SanIndex::load_active(db, &certificates)?;
+        let positions = positions(&certificates);
         Ok(Self {
             policies: store::list_policies(db)?,
             certificates,
@@ -258,6 +272,7 @@ impl Snapshot {
             now: Timestamp::now().as_second(),
             index,
             confirmed: Arc::default(),
+            positions,
         })
     }
 
@@ -296,8 +311,15 @@ impl Snapshot {
     }
 
     /// The certificate with id `id`, if the snapshot holds it.
+    ///
+    /// `certificates` is public, so the position is checked against the id
+    /// before it is trusted, and a stale one falls back to a scan.
     fn certificate(&self, id: i64) -> Option<&TlsCertificate> {
-        self.certificates.iter().find(|c| c.id == id)
+        self.positions
+            .get(&id)
+            .and_then(|position| self.certificates.get(*position))
+            .filter(|cert| cert.id == id)
+            .or_else(|| self.certificates.iter().find(|c| c.id == id))
     }
 }
 
@@ -560,7 +582,7 @@ pub fn compute_state<'a>(snap: &'a Snapshot, hostname: &str) -> HostnameState<'a
 
     let last_success_cert = last_success
         .and_then(|att| att.cert_id)
-        .and_then(|id| snap.certificates.iter().find(|c| c.id == id));
+        .and_then(|id| snap.certificate(id));
 
     let retry_block = snap.retry_blocks.iter().find(|b| b.hostname == hostname);
     let force_retry_at = snap
@@ -1202,6 +1224,7 @@ mod tests {
         now: i64,
     ) -> Snapshot {
         let index = SanIndex::parsed(&certs);
+        let positions = positions(&certs);
         Snapshot {
             policies,
             certificates: certs,
@@ -1221,6 +1244,7 @@ mod tests {
             now,
             index,
             confirmed: Default::default(),
+            positions,
         }
     }
 
