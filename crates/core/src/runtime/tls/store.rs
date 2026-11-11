@@ -354,7 +354,7 @@ pub struct NewCertificate<'a> {
 /// explains, and nothing is stored.
 // r[impl tls.cert.serve]
 pub fn insert_certificate(db: &Db, new: NewCertificate<'_>) -> rusqlite::Result<i64> {
-    atomically(db, || {
+    db.atomically(|db| {
         let id = insert_certificate_row(db, &new)?;
         if let Some(pem) = new.cert_pem {
             san_index::index_stored(&db.conn, id, pem)?;

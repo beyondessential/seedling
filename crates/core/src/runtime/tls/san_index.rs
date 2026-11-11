@@ -70,7 +70,7 @@ fn write(conn: &Connection, id: i64, entry: &Entry) -> rusqlite::Result<()> {
 /// The caller goes on to the next candidate whether or not this works, so a
 /// failure is reported here and not returned.
 pub(super) fn repair(db: &Db, id: i64, facts: Option<&parse::LeafFacts>) {
-    if let Err(e) = super::store::atomically(db, || write(&db.conn, id, &Entry::of(facts))) {
+    if let Err(e) = db.atomically(|db| write(&db.conn, id, &Entry::of(facts))) {
         tracing::error!(
             cert_id = id,
             error = %e,
@@ -359,7 +359,7 @@ pub async fn sweep(db: &DbHandle, sweep: Sweep) -> Result<usize, SweepError> {
     if drifted.is_empty() {
         return Ok(0);
     }
-    db.call(move |db| super::store::atomically(db, || write_back(db, drifted)))
+    db.call(move |db| db.atomically(|db| write_back(db, drifted)))
         .context(StorageSnafu)
 }
 
