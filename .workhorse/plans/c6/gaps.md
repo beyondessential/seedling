@@ -219,3 +219,25 @@ Spec leads code:
 Moves: /volumes/* methods have no interface spec (volume reference belongs there); client identity key (i/key.client.*) could move to CLI.
 Standards: RFC 9000, 3339 (SHL); RFC 9000, 9221, 6891 (FWD); RFC 3339 (LOG FLTS EVT); RFC 8032, 5958, 8410 (KEY); OCI Distribution, OCI Image (IMGM).
 Glossary: Install phase (ACI; also asked by TRD).
+
+### Runtime B (OPS SCHED SUSP AUTO OBS)
+Open:
+- OPS: start action at boot (trigger `boot`) never run: implement, or drop the row and the language promise. (Joins ACN item.)
+- OPS: queued operations in memory only; restart drops queued on_change handlers and operator actions: persist, report the drop, or accept.
+- OPS: install that cannot be replayed goes to NotInstalled (strands resources); spec says recovered as stuck install (Uninstalling): keep spec, or NotInstalled + later sweep.
+- OPS: unreadable persisted cancel flag: replay starts cancelled, or refuse with fault.
+- OPS: unreadable persisted operation at startup: fault, or keep retrying.
+- OPS: `seedling-op-` generated volume prefix not reserved (shadows operator mappings): reserve, or accept.
+- OPS/TRD/ACI: app phases have no defining rule: which spec owns them.
+- SUSP: action log committed only at end of pass, so crash after signal/write/exec repeats it: (a) record intent before effect, (b) commit after each effect, (c) weaken language wording.
+- AUTO: reconciler-issued restart of a failed unit recorded as deliberate (never counts toward crash loop): should count as recovery?
+- OBS: observe_failed clears only when next seen running and healthy (code) vs next successful observation (spec): confirm.
+- OBS: each (instance, kind) recorded once until restart, so later health changes are lost (contradicts LCY unhealthy->Ready): spec says don't record an unchanged fact again: confirm.
+Spec leads code:
+- OPS: operation record not persisted before running (only warns); failed reconstruction of `old` -> empty app; replay ignores target generation; failed persisted-operation read -> none (stuck sweep can tear down a live install); failed cancel-flag read -> not cancelled; generation outcome never recorded (record_outcome test-only), cancelled reported as OperationFailed; EVT trigger list has `boot`, lacks `replay`.
+- SCHED: queued fires never stamped, so they double-fire; unparseable last_fired_at -> never fired.
+- SUSP: rt.stop deadline start located by resource equality not position; spared-resource listing failure leaks them.
+- AUTO: unreadable scale stalls reconciliation (empty app list, waits for outside notify); unreadable restart settings fall back silently.
+- OBS: certificate reported valid if the file exists (no expiry check); observation marked recorded before its write.
+Moves: rt default deadlines to RT (already done there); OI certificate status vocabulary differs from observed statuses (TLS/TLSM to reconcile).
+Glossary: Action closure, Dynamic resource, App phase (OPS); Barrier (SUSP/RT); Effective scale (AUTO).
