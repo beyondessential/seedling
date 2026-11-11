@@ -32,12 +32,19 @@ Batches 1 and 2, folded into the specs; code changes filed on D6.
 - The `tailscale` policy kind is removed; `canopy_unavailable` is dropped from the error codes.
 - The relay selects its offer once a slot is held; `/canopy/offer` on a connection that cannot relay stays `not_found`.
 - CNR keeps `uninstalling` on the wire; an ingress is Ready once the proxy configuration including it is applied.
+- Operator clearing reaches `_system` and `seedling` faults through `/faults/clear`; `install_interrupted` also clears when a later install completes; `audit_lag` stays operator-cleared.
+- SEC keeps "authenticated encryption" without naming the construction.
+- A probe's `rt.query` does nothing, as IMG has it.
+- A function call nesting depth of 0 is refused at startup.
+- HIST's term is "operation provenance" and DEFN's "definition provenance".
+- An external volume's lifecycle state follows the desired state, with no observations recorded.
+- A demoted instance is retired once torn down (as for action-started groups) or with no observations.
+- Undetermined host constants fall back (`false`, `UTC`) with a fault and retry; on determination, every installed app is re-evaluated; determined values hold until restart.
+- LCY's routing pool already settles the start-period question.
 
 ## Open decisions
 
 ### PRX / INFRA / DNS / NAT64 / SEC
-- INFRA: `container_runtime_unavailable` is never cleared in code; spec says cleared once started with both backends reachable.
-- SEC: name the encryption construction (XChaCha20-Poly1305, nonce prefix) or keep "authenticated encryption".
 
 ### ACN / RT
 
@@ -79,7 +86,6 @@ The Linux platform spec (`platform/linux.md`, LINUX) resolves each one for Linux
 
 ## Cross-spec moves
 
-- CONST `l/const.host-has-ipv6` should link to `NAT64#ipv6-egress` instead of restating it.
 - APPS `i/generation.history` redaction rule should match SEC (secret now or protected when recorded).
 
 - SCHED `r/schedule.start-reject` duplicates ACN#start-action.
@@ -105,8 +111,6 @@ POSIX crontab (Issue 8), IANA tz database, SipHash, zxcvbn (ACN).
 
 ### Language A (BSL BND COL CONST APP PARAM SVC)
 Open:
-- CONST: failed egress probe reports false, undetected time zone UTC ("could not determine"): keep+document, block evaluation, or fault+fallback (rec.).
-- CONST: host facts read once at daemon start; pick up network changes without restart?
 - COL: col(external_service) is empty though col(app) includes it: fix code to coerce to itself, or keep.
 - COL: anonymous resources of one type compare equal in only/except: own identity, or accept.
 - COL: col([a,a]) duplicates; col(app) taken early includes later declarations: state sets resolved on use, or leave unstated.
@@ -135,10 +139,6 @@ Glossary: Ingress (ING); External volume, Declared file write (VOL).
 
 ### Runtime C (ACTU IMG SITE PRIO UPD FLT IDN)
 Open:
-- IMG: rt.query records images during a probe in code; spec says no-op: change code or spec.
-- FLT: /faults/clear rejects `_system` (invalid name) though spec lets operators clear `_system`/`seedling` faults: change endpoint, or auto-clear every `_system` kind.
-- FLT: reconciler_panic has no clear path (depends on above).
-- FLT: install_interrupted, audit_lag clear only by operator: keep, or clear install_interrupted on a later successful install.
 Spec leads code:
 - IMG: image_pull_failed filed on the first tick the image is missing (spec: after 5 consecutive failures).
 - IMG: image GC treats a failed pin lookup as not pinned and removes the image.
@@ -179,12 +179,7 @@ Glossary: Web interface (WEB), Actor (i/wire.actor), Console, Safety mode (UI).
 
 ### Runtime A (LIM GEN TRD RCK LCY HIST AUD GC RUN)
 Open:
-- LIM: --script-max-call-depth 0: help says unlimited, engine treats as no calls: fix help, or make 0 unlimited.
 - TRD: /apps/uninstall has no interface spec; app install phases (NotInstalled/Installing/Installed/Uninstalling) have no home spec; SCHED links nonexistent r/lifecycle.app.
-- LCY: sole backend in start period receives traffic (code) vs not (old spec).
-- HIST: "provenance" clashes with definition provenance: rename "operation provenance", or keep.
-- HIST: external volumes get observations never made: carve out declaration-only resources, or stop deriving their state from observations.
-- GC: third retirement case (terminal observation present) may be obsolete and may retire a live later cycle: drop, or keep.
 Spec leads code:
 - GEN: failed decrypt during reconstruction treated as unset (spec: fail).
 - TRD: deregistration that cannot discard state only warns (can leak external volume mappings to the next same-named app).
@@ -207,7 +202,6 @@ Glossary: Managed hostname, Strategy, Policy, Runtime-managed certificate (TLS);
 
 ### Interface B (ACI SHL FWD LOG FLTS EVT KEY IMGM)
 Open:
-- SHL: shell volume-kind params validated but never bound: bind (spec says so), or exclude volume kinds from shells.
 - IMGM: failed pull error code: not_found (code), internal, or new pull_failed.
 - IMGM: pull single attempt vs runtime's retrying pull path: restore retries, or keep.
 Spec leads code:
