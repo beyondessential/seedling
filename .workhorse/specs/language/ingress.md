@@ -123,7 +123,7 @@ Any other `code` MUST throw.
 A definition in which an ingress declares a redirect and, once the definition has evaluated, its termination is not `Terminate.Https`, MUST fail to evaluate, with an error naming the ingress.
 The order of the `tls()` and `redirect` calls MUST NOT matter.
 
-The runtime MUST answer every plaintext HTTP request for the ingress's hostname on `port` with a redirect of `code`.
+The runtime MUST answer every plaintext HTTP request for the ingress's hostname on `port` with a redirect of `code`, except an ACME HTTP-01 challenge request, which the [ingress proxy](../runtime/proxy.md#ingress-serving) answers for a certificate it is acquiring.
 The redirect's `Location` MUST be `https://`, the request's hostname without its port, the ingress's own port preceded by `:` unless that port is 443, and the request's path and query string.
 
 > [!NOTE]

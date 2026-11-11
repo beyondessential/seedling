@@ -302,11 +302,13 @@ The web interface handles these methods itself.
 | `/logs/stream` | Subscription, below |
 | `/shells/start`, `/volumes/shell` | [Shell relay](#shell-relay) |
 | `/forwards/start` | Refusal, below |
+| `/canopy/offer`, `/canopy/withdraw` | Refusal, below |
 
 For any other method, the web interface MUST open a bidirectional stream to the daemon on its shared connection and write the request to it, followed by a newline.
 It MUST then relay the rest of the client's stream to the daemon, and the daemon's stream to the client, each unchanged, and finish each direction when its source ends.
 
 The web interface MUST answer `/forwards/start` with `requirements_invalid`, whose `message` says that a port forward needs a direct Operator Interface connection.
+It MUST answer `/canopy/offer` and `/canopy/withdraw` likewise, since a Canopy offer needs a connection that can answer relay streams.
 
 For `/events/subscribe` and `/logs/stream`, the web interface MUST answer on the client's stream with a response.
 After a successful response it MUST write the subscribed records to the same stream as newline-delimited JSON objects.

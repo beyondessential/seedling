@@ -98,3 +98,10 @@ Suggestion: plaintext ingresses are site attachments and attachment protocols un
 Nit: resolver IPv4 network vs host prefix; IDN site volume creation operations; SITE events vs EVT; PRIO installed vs registered; "healthy" proxy/resolver; LINUX seedling.slice naming.
 
 Round 2 total: 16 critical, ~99 suggestion, ~38 nit. Round 3 required.
+
+### Round 2 resolution
+
+All decided findings applied by the reviewing agents; code divergences collected in round2-divergences.md and filed on D6.
+Also by me: ACME HTTP-01 challenges answered ahead of an ingress redirect (ING, PRX); root glossary action context includes shell closures; WIRE operation_in_progress covers a running issuance; the web relay refuses /canopy/offer and /canopy/withdraw; OBS keys warm_certs on a usable served certificate.
+Accepted from agents: INFRA host-originated redirection covers IPv4 too, matching the new ingress redirection section; re-check hourly floor counts from the last successful re-check, so failures still back off from 15 minutes; registry_error split into desired_state_unreadable and instance_identity_unreadable.
+Waiting on the user: backup-snap- sweep; interface specs for 38 unspecced OI methods.

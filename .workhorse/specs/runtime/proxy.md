@@ -51,6 +51,7 @@ Two ingresses for the same hostname on different ports MUST be served independen
 A redirect an ingress declares MUST answer only on the port it names.
 
 An ingress's [HTTP redirect](../language/ingress.md#redirect-to-https) claims the ingress's hostname on the port the redirect names.
+On that port, the proxy MUST answer an ACME HTTP-01 challenge request for a certificate it is acquiring, ahead of the redirect.
 That claim and a plaintext ingress's claim on the same hostname and port conflict, and the runtime MUST resolve the conflict as [claims across apps](../language/ingress.md#claims-across-apps) and [ingress conflicts](site-resources.md#ingress-conflicts) specify.
 
 ### Plaintext ingresses

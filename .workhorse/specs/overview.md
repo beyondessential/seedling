@@ -164,7 +164,7 @@ Defined in [APP](language/app.md#static-resource).
 
 ### Action context
 
-Evaluation inside a closure the runtime runs as a lifecycle operation.
+Evaluation inside an action closure, including a shell's closure.
 Defined in [APP](language/app.md#action-context).
 
 ### Action

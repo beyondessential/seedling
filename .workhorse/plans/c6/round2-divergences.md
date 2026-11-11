@@ -62,3 +62,17 @@
 - oi/handler/tls.rs:1507 settings: validate contact_email; empty cert_profile counts as null.
 - oi/handler/apps.rs /apps/show: instance health (ContainerHealth, system/podman.rs:908); protocol events InstanceHealthChanged emitted on change; console consumes both.
 - Check: Canopy-only revocation stays with Canopy (runtime/canopy/certificates.rs); canopy_certificate_failed last-strategy condition fires while a usable certificate serves.
+
+## Language
+- oi/handler/actions.rs invoke_action: drop the not_found for a name that is also a shell.
+- Action-context throws missing: on_action/on_start (defs/app/action.rs), on_shell (defs/app/shell.rs), on_install (defs/app/install.rs), description (defs/app.rs:463), Param kind/required/default_value/description/secret (defs/param.rs ~107-190).
+- defs/service.rs:101-110: Service.port must not throw in the action context.
+- Validator context (defs/app.rs:146 ensure_not_validating): also guard builder methods on captured handles, container builders, the app and param calls above, canopy_type, on_change, validate, on_schedule.
+- defs/service.rs:536 route: refuse `{` and control characters other than tab.
+- defs/ingress.rs:208: redirect codes 301/302/307/308 only.
+- defs/collection/selector.rs:80 and runtime/barrier/runtime.rs:2600: anonymous resources match no names/name_patterns (Option<&str>).
+- runtime/barrier/runtime.rs parse_exec_options (~1974-1990): container env rules for rt.exec env.
+- runtime/action_params.rs validate_volume_params (~158): empty optional volume param is absent.
+- defs/container.rs:317-318: interval and timeout at least 1.
+- defs/container.rs mount (~557, ~572): key volume_mounts by canonical path.
+- system/reconcile/proxy.rs: a DTLS ingress is passed through as raw TCP/UDP without terminating DTLS, contrary to ING's termination table.

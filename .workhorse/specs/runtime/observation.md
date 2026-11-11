@@ -53,7 +53,7 @@ For an Ingress instance, the runtime MUST observe whether the proxy is reachable
 
 For each hostname of a TLS-terminating ingress, the runtime MUST observe the hostname's [certificate status](tls/certificates.md#certificate-status), and whether a usable certificate is [served](tls/certificates.md#served-certificate) for it.
 
-Certificate status determines whether an [`rt.warm_certs`](../language/rt.md#certificate-warming) barrier is satisfied.
+Whether a usable certificate is served determines whether an [`rt.warm_certs`](../language/rt.md#certificate-warming) barrier is satisfied.
 
 ## Recording
 
