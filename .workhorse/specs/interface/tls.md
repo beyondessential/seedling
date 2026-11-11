@@ -337,7 +337,7 @@ Otherwise it MUST carry these members.
 | `blocked` | a retry block is set for the hostname |
 | `default` | none of the above: the hostname follows its chain with nothing serving it and nothing in progress |
 
-The runtime MUST derive `status` from the same decision its issuance acts on, as tls.cert.hostname-view requires.
+The runtime MUST derive `status` from the same decision its issuance acts on, as [hostname state](../runtime/tls/certificates.md#hostname-state) requires.
 For a hostname with no runtime-held certificate, `status` MUST reflect a certificate the proxy holds for it, so that a proxy-held certificate past its `notAfter` reports `expired`.
 
 `chain` MUST be `null` for a hostname whose policy names a single strategy.

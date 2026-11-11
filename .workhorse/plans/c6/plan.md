@@ -13,6 +13,7 @@
 - `AGENTS.md` tracey rules are rewritten for `// spec:` citations; `.workhorse/rules.md` gains house style, "what not how", "present not past" sections modelled on bliti.
 - `threat-model.md`, `failure-modes.md`, `README.md` and code doc comments are repointed; `docs/plans/*.md` are left as they stand.
 - Terminology: **app** (not "Seedling Application"); **host** (not node or instance) for the machine one daemon runs on; **runtime** (not "control plane"); **resource graph** for the evaluated definition (formerly "AppDef"), distinct from the **definition bundle**.
+- The generic specs hedge for platforms other than Linux on purpose; `platform/linux.md` (LINUX) resolves those hedges for Linux, and the generic specs keep them.
 - Conflict with `.agents/docs/spec-format.md` (plain bullets, no RFC 2119 keywords): spec-voice wins per the card; recorded in `.workhorse/rules.md`.
 
 ## Mechanics

@@ -7,7 +7,7 @@
 //! This module is the building block; the wire-up that makes the issuance
 //! Coordinator dispatch tailnet hostnames through here lands separately.
 //
-// spec: SITE#tailscale-discovery
+// spec: TLS#tailscale-certificates
 
 use std::{path::PathBuf, sync::Arc};
 

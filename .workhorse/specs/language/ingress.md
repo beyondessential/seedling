@@ -46,6 +46,13 @@ Declaring an ingress whose hostname and port match an ingress already declared i
 > [!NOTE]
 > A script may catch the error with `try..catch`, as [errors](overview.md#evaluation) allows.
 
+### Claims across apps
+
+When ingresses of two apps claim the same hostname and port, the runtime MUST serve the ingress of the app whose install completed first, and MUST leave the other out of the proxy configuration.
+The runtime MUST file an [`ingress_conflict`](../runtime/faults.md#ingress-and-service-faults) fault against the app whose ingress it leaves out.
+Once the served ingress no longer claims the hostname and port, the runtime MUST serve the other.
+How an app's ingress and a site ingress attachment claiming the same hostname and port are handled is specified by [ingress conflicts](../runtime/site-resources.md#ingress-conflicts).
+
 ## Hostnames
 
 A `hostname` MUST meet all of the following, and any other hostname MUST throw:
@@ -109,7 +116,8 @@ The `port` defaults to 80, and MUST be validated as a [port number](overview.md#
 The `code` defaults to 307, and MUST be a [redirection status code](#borrowed-terms) from 300 to 399.
 A `code` outside that range MUST throw.
 
-`redirect` called on an ingress whose termination is not `Terminate.Https` MUST throw.
+A definition in which an ingress declares a redirect and, once the definition has evaluated, its termination is not `Terminate.Https`, MUST fail to evaluate, with an error naming the ingress.
+The order of the `tls()` and `redirect` calls MUST NOT matter.
 
 While the ingress holds a certificate for its hostname, the runtime MUST answer every plaintext HTTP request for that hostname on `port` with a redirect of `code`.
 The redirect's `Location` MUST be `https://`, the request's host, the ingress's own port preceded by `:` unless that port is 443, and the request's path and query string.

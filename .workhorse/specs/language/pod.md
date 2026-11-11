@@ -18,6 +18,7 @@ Every method in this spec is a [builder method](overview.md#builders) available 
 
 `pod.mount(svc: ServicePort)` makes the [Service Port](service.md#service-ports) `svc` reachable from inside the pod.
 The runtime MUST make a mounted Service Port reachable at the hostname `localmount`, on the Service Port's port number, as [pod service mounts](../runtime/infrastructure.md#mount-endpoint-addressing) specifies.
+Mounting a Service Port whose port number matches a Service Port the pod already mounts MUST throw, and MUST leave the earlier mount as it was.
 
 ## Port bindings
 

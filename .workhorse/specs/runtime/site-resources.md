@@ -210,7 +210,7 @@ When the node is renamed, the runtime MUST update the site ingress's hostname in
 When the node identity changes, the runtime MUST delete the discovered site ingress and create a new one.
 When the provider reports that the node is logged out or has no identity, the site ingress becomes stale.
 
-The runtime MUST NOT request certificates for a tailnet hostname from a public certificate authority.
+The discovered site ingress's certificate is obtained as [Tailscale certificates](tls/certificates.md#tailscale-certificates) specifies.
 
 ### Ingress conflicts
 

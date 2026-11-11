@@ -58,6 +58,7 @@ A redirect route MUST NOT displace the fallback route.
 
 The proxy MUST serve each request on an ingress by exactly one route: the route with the longest prefix among those that claim the request.
 A route that claims a request MUST answer it, whether or not it has upstreams.
+A proxied route with no upstreams MUST answer with status 503 (Service Unavailable), [RFC 9110 §15.6.4](https://www.rfc-editor.org/rfc/rfc9110#section-15.6.4).
 
 A proxied route MUST claim every request whose normalised path begins with its prefix.
 A redirect route MUST claim a request whose normalised path equals its prefix or begins with its prefix followed by `/`.

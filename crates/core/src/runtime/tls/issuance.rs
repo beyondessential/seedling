@@ -395,7 +395,7 @@ impl Coordinator {
     /// Tailscale site ingress whose `tls_provider` is `Tailscale`. The
     /// Coordinator dispatches these hostnames to the Tailscale issuer
     /// instead of the ACME pipeline.
-    // spec: SITE#tailscale-discovery
+    // spec: TLS#tailscale-certificates
     fn dispatch_to_tailscale(&self, hostname: &str) -> Result<bool> {
         let host = hostname.to_owned();
         let matched = self
@@ -429,7 +429,7 @@ impl Coordinator {
     /// call `tailscale_issuer::issue`, and finalise + emit faults the
     /// same way the ACME path does so the operator-visible cert state
     /// is consistent across origins.
-    // spec: SITE#tailscale-discovery
+    // spec: TLS#tailscale-certificates
     async fn run_tailscale(
         self: &Arc<Self>,
         hostname: &str,
@@ -568,7 +568,7 @@ impl Coordinator {
             );
         }
 
-        // spec: SITE#tailscale-discovery
+        // spec: TLS#tailscale-certificates
         // Tailscale-discovered hostnames bypass the ACME state machine
         // entirely: there's no operator policy to read, no CA to talk to, and
         // no ARI window. tailscale_issuer fetches a fresh cert+key pair from

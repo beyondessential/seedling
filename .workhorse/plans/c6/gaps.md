@@ -21,11 +21,16 @@ Batches 1 and 2, folded into the specs; code changes filed on D6.
 - `observe_failed` clears on the next successful observation; a fact is recorded again whenever it changes.
 - Proxy, resolver and NAT64 translator idle teardown are MUST, as the original specs and the code have it (the rewrite had softened them).
 - Deployment scale ranges take Rhai's meaning: `..` exclusive, `..=` inclusive.
+- A proxied route with no upstreams answers 503.
+- `redirect` with a non-HTTPS termination fails evaluation once the definition has evaluated, whatever the call order.
+- Two apps claiming one hostname and port: the app whose install completed first is served, the other gets `ingress_conflict`.
+- Mounting two Service Ports with the same port number in one pod throws.
+- An unmapped external service has no target, so its traffic is dropped or rejected (confirmed).
+- Tailscale certificates are specified in TLS (`#tailscale-certificates`); SITE links there.
 
 ## Open decisions
 
 ### PRX / INFRA / DNS / NAT64 / SEC
-- PRX: status for a route with no upstreams: name 502/503, or "an error status" (current).
 - INFRA: `container_runtime_unavailable` is never cleared in code; spec says cleared once started with both backends reachable.
 - SEC: name the encryption construction (XChaCha20-Poly1305, nonce prefix) or keep "authenticated encryption".
 
@@ -56,7 +61,7 @@ Batches 1 and 2, folded into the specs; code changes filed on D6.
 ## Platform hedges
 
 The generic specs hedge on purpose for platforms other than Linux, and these hedges are not gaps.
-A Linux platform spec, if written, resolves each one for Linux. Candidates collected so far:
+The Linux platform spec (`platform/linux.md`, LINUX) resolves each one for Linux:
 
 - CTR default stop timeout (systemd's 90 s default)
 - AUTO restart record and pacing (systemd as the supervisor, `Restart=` pacing, exit status from the unit)
@@ -101,7 +106,6 @@ Open:
 - COL: anonymous resources of one type compare equal in only/except: own identity, or accept.
 - COL: col([a,a]) duplicates; col(app) taken early includes later declarations: state sets resolved on use, or leave unstated.
 - PARAM: validators block only resource declaration: forbid all builder methods, or only declarations.
-- SVC: unmapped external service has no target, so drop-or-reject routing applies: confirm.
 Spec leads code:
 - PARAM: previous generation unbuildable -> handler runs with empty `old` (spec: MUST NOT run with a substitute).
 - PARAM: old.<type>(name) in a change handler returns the current generation's resource (spec: previous).
@@ -115,9 +119,6 @@ Glossary: Script (BSL), Action context (APP), Static resource (APP).
 
 ### Language B (HTTP ING DEP JOB CTR POD VOL)
 Open:
-- ING: redirect() then tls() with a non-HTTPS pairing leaves a redirect on non-HTTPS: tls() throws, tls() clears, or check at end of evaluation.
-- ING: two apps declaring the same (hostname, port) ungoverned: drop both + fault, first-installed wins + fault, or refuse install.
-- POD: two mounted Service Ports with the same port collide at localmount:<port>: second throws, or specify winner.
 Spec leads code:
 - JOB: `deadline` never enforced.
 - CTR: failed allowlist read treated as empty and files the fault (spec forbids).
@@ -200,7 +201,6 @@ Glossary: World observation history, Autonomous operations log, Action execution
 
 ### Runtime TLS (TLS CHAIN TCAN CNR)
 Open:
-- TLS: tailscale policy: specify in TLS, or leave in SITE.
 - CNR: report status `uninstalling` vs OI `Deregistering`: keep (on the wire), or rename.
 Spec leads code:
 - TLS: ARI renewal info fetched only at issuance (RFC 9773 §4.3 requires re-fetch).

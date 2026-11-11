@@ -186,7 +186,7 @@ pub enum TlsCertOrigin {
     AcmeDns,
     /// Issued by the host's local Tailscale facility. Only legal for
     /// hostnames that match a discovered Tailscale site ingress.
-    // spec: SITE#tailscale-discovery
+    // spec: TLS#tailscale-certificates
     Tailscale,
     /// Issued by Canopy against a key the runtime holds.
     // spec: TCAN#serving-and-observation
@@ -255,7 +255,7 @@ pub enum TlsPolicy {
     /// [`super::tls::tailscale_issuer`] for these instead of running
     /// ACME. Only legal on hostnames that match a discovered Tailscale
     /// site ingress.
-    // spec: SITE#tailscale-discovery
+    // spec: TLS#tailscale-certificates
     Tailscale,
     /// Canopy is the chain's only strategy: the hostname never passes to
     /// HTTP-01 or the proxy's internal CA.

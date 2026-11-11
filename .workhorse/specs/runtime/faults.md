@@ -135,7 +135,7 @@ The runtime MUST file and clear the faults below against the app owning the ingr
 
 | kind | subject | filed when | clears when | shape |
 | --- | --- | --- | --- | --- |
-| `ingress_conflict` | the app ingress or the site ingress | an app ingress and a site ingress attachment claim the same hostname and port, as [SITE](site-resources.md#ingress-conflicts) specifies | the hostname and port are no longer in conflict | condition |
+| `ingress_conflict` | the app ingress or the site ingress | an app ingress and a site ingress attachment claim the same hostname and port, as [SITE](site-resources.md#ingress-conflicts) specifies, or an app ingress is left out because another app's ingress [claims](../language/ingress.md#claims-across-apps) them | the hostname and port are no longer in conflict | condition |
 | `proxy_apply_failed` | the app ingress or the site ingress | applying a proxy configuration that includes the ingress fails | a later proxy configuration is applied | condition |
 | `site_ingress_target_missing` | the site ingress attachment | a site ingress attachment forwards to an app service that does not exist | the attachment's target exists, or the attachment is removed | condition |
 | `service_degraded` | the service | the service's routing pool has [fallen back](lifecycle.md#routing-pool) to backends that are running but unhealthy | a backend in the pool is healthy, or the service is unscheduled | condition |

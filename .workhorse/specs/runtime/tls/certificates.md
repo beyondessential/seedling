@@ -34,7 +34,7 @@ No public CA issues certificates for an internal name.
 ### Strategy
 
 One way of obtaining a certificate for a hostname.
-The strategies are Canopy, defined in [TCAN](canopy.md); ACME HTTP-01 and the proxy's internal CA, both carried out by the ingress proxy; and ACME DNS-01, carried out by the runtime.
+The strategies are Canopy, defined in [TCAN](canopy.md); ACME HTTP-01 and the proxy's internal CA, both carried out by the ingress proxy; and ACME DNS-01 and [Tailscale](#tailscale-certificates), both carried out by the runtime.
 
 ### Policy
 
@@ -70,7 +70,7 @@ Every runtime-managed certificate records its origin.
 | `csr` | signed externally against a CSR the runtime generated |
 | `acme_dns` | issued to the runtime through ACME DNS-01 |
 | `canopy` | issued by Canopy against a key the runtime holds |
-| `tailscale` | obtained from the host's Tailscale facility, per [Tailscale site ingresses](../site-resources.md#tailscale-discovery) |
+| `tailscale` | obtained from the host's Tailscale facility, as [Tailscale certificates](#tailscale-certificates) specifies |
 
 The runtime cannot renew a `manual` or `csr` certificate by itself.
 
@@ -153,6 +153,15 @@ The runtime MUST NOT run two ACME orders at once.
 If an issuance fails, the runtime MUST file a fault of kind `cert_issue_failed` against the hostname, carrying the failure, and MUST log it.
 The runtime MUST NOT file a second such fault for a hostname that already has one.
 It MUST clear the fault when an issuance for the hostname succeeds.
+
+## Tailscale certificates
+
+A hostname that a [Tailscale-discovered site ingress](../site-resources.md#tailscale-discovery) names, while that site ingress is not stale and its TLS provisioning mode is `tailscale`, MUST obtain its certificate from the host's Tailscale facility, whatever policy matches it.
+The runtime MUST NOT request a certificate for such a hostname from a public certificate authority.
+
+The runtime MUST store a certificate obtained this way, with its private key, as a runtime-managed certificate of origin `tailscale`.
+It MUST obtain a fresh certificate once the stored one reaches its renewal point.
+Obtaining one MUST pass the same [retry gate](#retry-blocks-and-retries) as any other issuance, and a failure MUST file and clear `cert_issue_failed` as for [ACME DNS-01 issuance](#acme-dns-01-issuance).
 
 ## Renewal
 
