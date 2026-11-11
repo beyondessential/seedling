@@ -1,0 +1,9 @@
+l/collection.interface	COL#collection
+l/collection.one	COL#query-methods
+l/collection.only	COL#query-methods
+l/collection.except	COL#query-methods
+l/collection.select	COL#selection
+l/collection.select.types	COL#selection
+l/collection.select.names	COL#selection
+l/collection.select.name-patterns	COL#selection
+l/collection.col	COL#coercion

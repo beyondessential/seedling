@@ -4,40 +4,24 @@ id: LIM
 
 # Script engine limits
 
-## Script Engine Limits
+Applies to the bounds the [runtime](../overview.md#runtime) places on each evaluation of a BSL script.
 
-<!-- from runtime: Script Engine Limits -->
+## Limits
 
-> r[engine.limits]
-> The runtime must constrain the BSL script engine to prevent unbounded resource consumption.
+The runtime MUST bound the resources a single evaluation of a BSL script can consume, with each of the following limits.
 
-> r[engine.limits.operations]
-> The engine must enforce a maximum number of operations per script evaluation.
-> When the limit is reached, evaluation must fail with an error.
-> The default limit is 100 000 operations.
-> This limit may be overridden at startup.
+| limit | unit | default | daemon option |
+| --- | --- | --- | --- |
+| operations per evaluation | operations | 100 000 | `--script-max-operations` |
+| function call nesting depth | calls | 64 | `--script-max-call-depth` |
+| expression nesting depth | levels | 64 | `--script-max-expr-depth` |
+| string length | bytes | 1 048 576 (1 MiB) | `--script-max-string-size` |
+| array length | elements | 10 000 | `--script-max-array-size` |
+| object map size | entries | 10 000 | `--script-max-map-size` |
 
-> r[engine.limits.call-depth]
-> The engine must enforce a maximum function call nesting depth.
-> The default limit is 64.
-> This limit may be overridden at startup.
+An evaluation that exceeds any limit MUST fail with an error.
 
-> r[engine.limits.expr-depth]
-> The engine must enforce a maximum expression nesting depth.
-> The default limit is 64.
-> This limit may be overridden at startup.
+The expression nesting limit MUST apply both at the top level of a script and within function bodies.
 
-> r[engine.limits.string-size]
-> The engine must enforce a maximum string length in bytes.
-> The default limit is 1 048 576 (1 MiB).
-> This limit may be overridden at startup.
-
-> r[engine.limits.array-size]
-> The engine must enforce a maximum array size in elements.
-> The default limit is 10 000.
-> This limit may be overridden at startup.
-
-> r[engine.limits.map-size]
-> The engine must enforce a maximum object map size in entries.
-> The default limit is 10 000.
-> This limit may be overridden at startup.
+An operator MAY override each limit with its daemon option when the daemon starts.
+Setting the operations, expression nesting, string, array or object map limit to 0 MUST remove that limit.

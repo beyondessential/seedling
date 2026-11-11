@@ -14,7 +14,7 @@ A named task an app declares for an [operator](../overview.md#operator) or the [
 
 ### Action closure
 
-A closure a script hands to the runtime to run with a [runtime handle](rt.md#runtime-handle-1): the closure of an action, a shell or the install action, or a parameter's [change handler](rule:l/param.on-change).
+A closure a script hands to the runtime to run with a [runtime handle](rt.md#runtime-handle): the closure of an action, a shell or the install action, or a parameter's [change handler](rule:l/param.on-change).
 
 ### Shell
 
