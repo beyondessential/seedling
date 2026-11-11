@@ -119,7 +119,6 @@ The server MUST attach the actor of a request to every [event](events.md#event-t
 | `server_busy` | the server's [stream limit](#stream-limit) was reached |
 | `internal` | a failure inside the server, such as a storage error, kept the request from completing |
 | `canopy_disabled` | Canopy access is turned off on the host, and the request was refused for that reason alone |
-| `canopy_unavailable` | Canopy access is enabled, but no client is offering it or the offering client could not reach Canopy |
 
 ## Subscription requests
 

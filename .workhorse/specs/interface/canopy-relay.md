@@ -71,6 +71,7 @@ If the offer does not exist, or was made on another connection, the runtime MUST
 Clients MAY hold several live offers at once, on one connection or several.
 The runtime MUST send each relayed request to the most recently registered live offer.
 When that offer ends, the next most recent live offer MUST serve the following requests.
+The runtime MUST select the offer once the request holds one of the [relay slots](#relay-limits), not before it waits for one.
 
 ## Disabled access
 

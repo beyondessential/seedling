@@ -27,6 +27,11 @@ Batches 1 and 2, folded into the specs; code changes filed on D6.
 - Mounting two Service Ports with the same port number in one pod throws.
 - An unmapped external service has no target, so its traffic is dropped or rejected (confirmed).
 - Tailscale certificates are specified in TLS (`#tailscale-certificates`); SITE links there.
+- Stored certificates' `key_type` names the key's algorithm; only `csr/begin` is limited to P-256 (the rewrite had widened that restriction).
+- `/tls/certificates/attempts/list` limit is 1 to 500; hostname status precedence is `blocked`, `expired`, `error`, `pending`, `active`, `default`.
+- The `tailscale` policy kind is removed; `canopy_unavailable` is dropped from the error codes.
+- The relay selects its offer once a slot is held; `/canopy/offer` on a connection that cannot relay stays `not_found`.
+- CNR keeps `uninstalling` on the wire; an ingress is Ready once the proxy configuration including it is applied.
 
 ## Open decisions
 
@@ -149,12 +154,6 @@ Glossary: Data directory (ACTU); Site volume, Site ingress (SITE).
 ### Interface C (TPL TLSM RLY CLI)
 Open:
 - TPL/APPS: template instantiation whose script fails: code registers + files script_error; app.register says refuse and don't register.
-- TLSM: attempts/list limit uncapped, negative = unbounded: cap (200?), or refuse non-positive.
-- TLSM: dead `tailscale` policy strategy rendered but forbidden by schema: remove, or allow.
-- TLSM: hostname view status precedence when several conditions hold: specify, or meanings only.
-- RLY: canopy_unavailable listed in WIRE but never returned: drop, or use.
-- RLY: offer chosen before waiting for a slot (may go to an ended offer): re-select, or accept.
-- RLY: /canopy/offer outside a relay-capable connection refused as unknown method (not_found): dedicated code?
 - CLI: templates update --source vs positional source elsewhere: align, or keep.
 Spec leads code:
 - TLSM: database failures map to not_found (spec: internal).
@@ -183,7 +182,6 @@ Open:
 - LIM: --script-max-call-depth 0: help says unlimited, engine treats as no calls: fix help, or make 0 unlimited.
 - TRD: /apps/uninstall has no interface spec; app install phases (NotInstalled/Installing/Installed/Uninstalling) have no home spec; SCHED links nonexistent r/lifecycle.app.
 - LCY: sole backend in start period receives traffic (code) vs not (old spec).
-- LCY: ingress Ready requires a valid certificate (old spec) or just proxy config applied (code; spec follows code).
 - HIST: "provenance" clashes with definition provenance: rename "operation provenance", or keep.
 - HIST: external volumes get observations never made: carve out declaration-only resources, or stop deriving their state from observations.
 - GC: third retirement case (terminal observation present) may be obsolete and may retire a live later cycle: drop, or keep.
@@ -200,7 +198,6 @@ Glossary: World observation history, Autonomous operations log, Action execution
 
 ### Runtime TLS (TLS CHAIN TCAN CNR)
 Open:
-- CNR: report status `uninstalling` vs OI `Deregistering`: keep (on the wire), or rename.
 Spec leads code:
 - TLS: ARI renewal info fetched only at issuance (RFC 9773 §4.3 requires re-fetch).
 - TLS: `replaces` names the active certificate of any origin, including non-ACME (RFC 9773 §5); treat as bug.
