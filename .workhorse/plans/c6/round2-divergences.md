@@ -88,3 +88,16 @@
 - SiteIngressAttachmentRemoved carries the target (protocol/src/events.rs, detach).
 - discovery_status: healthy null before the first poll.
 - CLI: no command for /ingresses/site/discovery/refresh (web UI neither).
+
+### SVCM (services), in oi/handler/services.rs unless stated
+- Zero endpoints allowed (SITE changed to match); no change needed there.
+- Duplicate service name, duplicate endpoints within a create → requirements_invalid (not internal).
+- Endpoint add: unknown service → not_found; duplicate endpoint → requirements_invalid (both internal today).
+- Delete and endpoint remove: unknown service or absent endpoint → not_found (requirements_invalid today).
+- Delete while mapped: make the mapping check and the delete one indivisible step.
+- Map: unregistered app → not_found; missing target → requirements_invalid; already-mapped slot → requirements_invalid (internal today).
+- Remap: missing mapping or unregistered app → not_found; missing target → requirements_invalid.
+- Unmap: missing mapping → not_found.
+- remote_host: refuse loopback addresses (127.0.0.0/8, ::1) like localhost.
+- runtime/site_services/resolver.rs: unreadable system DNS configuration at startup never retries and records nothing (endpoints silently unresolved); refresh_due_hosts read failure only logs. Retry, and surface it.
+- CLI services site create cannot pass endpoints (needs an option now that the console flow is endpoint-less-first anyway).

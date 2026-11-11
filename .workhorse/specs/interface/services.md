@@ -44,8 +44,8 @@ An endpoint is identified by all four members together.
 
 `remote_host` MUST be one of:
 
-- an IPv6 address in the IPv6 text form, with no enclosing brackets and no zone index;
-- an IPv4 address as four decimal numbers from 0 to 255 separated by dots, none with a leading zero;
+- an IPv6 address in the IPv6 text form, with no enclosing brackets and no zone index, other than the loopback address `::1`;
+- an IPv4 address as four decimal numbers from 0 to 255 separated by dots, none with a leading zero, outside the loopback range `127.0.0.0/8`;
 - a DNS name.
 
 A DNS name, for `remote_host`, is a string of at most 253 characters made of labels separated by single dots, with no leading or trailing dot.
@@ -54,7 +54,7 @@ The name MUST contain at least one ASCII letter.
 The name MUST NOT be `localhost`, compared case-insensitively.
 
 > [!NOTE]
-> An endpoint is reached from a pod's network, where `localhost` would name the pod and not the operator's machine.
+> An endpoint is reached from a pod's network, where `localhost` or a loopback address would name the pod and not the operator's machine.
 > A name of digits and dots alone would be read as a malformed IPv4 address.
 
 How the runtime routes each form of `remote_host` is specified in [endpoint addressing](../runtime/site-resources.md#endpoint-addressing).
@@ -73,7 +73,7 @@ The server MUST refuse an endpoint object that breaks any rule above with `requi
 
 The server MUST refuse a `name` that breaks the [name rules](../language/overview.md#names) with `requirements_invalid`.
 The server MUST refuse a `name` under which a site service exists with `requirements_invalid`.
-The server MUST refuse an absent or empty `endpoints` with `requirements_invalid`, since a site service has [one or more endpoints](../runtime/site-resources.md#site-services).
+An absent `endpoints` MUST be treated as empty, and a site service MAY be created with [no endpoints](../runtime/site-resources.md#site-services).
 The server MUST refuse `endpoints` holding two identical endpoints with `requirements_invalid`.
 
 The runtime MUST store the site service and all its endpoints in one step, so that a refused or failed request leaves none of them stored.
@@ -133,7 +133,6 @@ On success the result is `{ "added": true }`.
 The server MUST then emit a `SiteServiceEndpointAdded` [event](events.md#site-resource-events) carrying the request's actor, which the audit log records.
 
 For `/services/site/endpoint/remove`, the server MUST refuse an endpoint the site service does not have with `not_found`.
-The server MUST refuse to remove a site service's only endpoint with `requirements_invalid`, since a site service has one or more endpoints.
 On success the result is `{ "removed": true }`.
 The server MUST then emit a `SiteServiceEndpointRemoved` event carrying the request's actor, which the audit log records.
 

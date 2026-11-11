@@ -103,7 +103,8 @@ A retargeting event MUST also identify the previous target.
 
 ## Site services
 
-A site service has a name, an optional description, and one or more endpoints.
+A site service has a name, an optional description, and zero or more endpoints.
+A site service port with no endpoint has no target, as for an [unmapped external service](../language/service.md#external-services).
 Each endpoint has these members:
 
 | member | meaning |

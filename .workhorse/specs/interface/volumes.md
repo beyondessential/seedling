@@ -94,7 +94,7 @@ The server MUST emit a `HeldVolumeRestored` event.
 
 The server MUST reject any other `kind` with `requirements_invalid`.
 The server MUST reject a bind site volume without `host_path`, or whose `host_path` is not an absolute path, with `requirements_invalid`.
-The server MUST reject a managed site volume with `host_path` with `requirements_invalid`.
+The server MUST reject a request giving `host_path` for a managed site volume with `requirements_invalid`.
 The server MUST reject a `name` that is reserved or taken with `requirements_invalid`.
 If the managed site volume's storage cannot be created, the server MUST answer with `internal`.
 
