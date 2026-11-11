@@ -31,7 +31,11 @@ A request that is rejected leaves the schedule due, and a later check requests i
 
 ## Fire times
 
-The runtime MUST record a fire, by setting the schedule's last fire time to the time of the check, when the operation it requested starts, and MUST NOT record it before then.
+The runtime MUST record a fire, by setting the schedule's last fire time to the time of the check, when the operation it requested starts, or when the run [fails param validation](../language/action.md#scheduled-actions).
+The runtime MUST NOT record a fire before either.
+
+> [!NOTE]
+> A run that fails validation is not requested again until the schedule's next boundary.
 The runtime MUST record a queued fire when its operation leaves the queue and starts.
 
 The runtime MUST fire a due schedule once, however many of its boundaries passed since it last fired.

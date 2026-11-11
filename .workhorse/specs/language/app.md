@@ -10,11 +10,15 @@ Applies to the `app` variable, through which a [script](overview.md#script) decl
 
 ### Static context
 
-Evaluation of a script outside every closure the runtime runs as a [lifecycle operation](../overview.md#lifecycle-operation).
+Evaluation of a script outside every [action closure](action.md#action-closure) and every [validator](parameter.md#validators).
 
 ### Action context
 
-Evaluation of a script inside a closure the runtime runs as a lifecycle operation, such as an [action closure](action.md#action-closure) or a [parameter change handler](parameter.md#change-handlers).
+Evaluation of a script inside an action closure, such as an action's closure or a [parameter change handler](parameter.md#change-handlers).
+
+### Validator context
+
+Evaluation of a script inside a parameter's validator.
 
 ### Static resource
 
@@ -41,12 +45,22 @@ A resource of one type MAY share its name with a resource of another type.
 
 In the action context, the same method MUST return a reference to the static resource of that resource type and name, and MUST NOT declare a resource.
 It MUST throw if no static resource of that resource type and name exists.
-[`app.external_volume`](volume.md#external-volumes) behaves differently in the action context.
+`app.external_volume` is the exception: in the action context it returns a dynamic external volume where no static one of that name exists, as [external volumes](volume.md#external-volumes) specifies.
 
 ## Static resource immutability
 
 In the action context, calling a builder method on a static resource MUST throw, whether the script obtained the handle within the closure or captured it from the static context.
 This applies to every builder method of every resource type.
+
+In the action context, `http` on a static Service or External Service MUST throw, and so MUST `ingress` on a static Service.
+The proxy setting methods `compress`, `balance`, `rate_limit`, `headers` and `redirect` MUST throw in the action context when called on an `HttpService` or `HttpServiceRoute` that views a static Service or External Service.
+`service.port`, `httpService.port` and `httpService.route` MUST behave in the action context as they do in the static context.
+
+## Validator context
+
+In the validator context, every method of `app` that declares a resource MUST throw, whether or not it is given a name.
+Calling a builder method on any resource MUST throw, whether the script obtained the handle within the validator or captured it from the static context.
+Calling any other method that changes the app, its parameters' schemas or its actions MUST throw.
 
 ## Anonymous resources
 
@@ -64,6 +78,7 @@ The runtime MUST clean up every dynamic resource when that lifecycle operation e
 `app.description(text: string)` MUST set a free-form, human-readable description of the app, and MUST return `app`.
 An app MUST have no description until a script sets one.
 Calling `app.description` again MUST replace the previous description.
+`app.description` MUST throw when called in the action context.
 
 The runtime MUST report the app's description to operators alongside its name.
 The description MUST NOT affect how the runtime treats the app.

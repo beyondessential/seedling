@@ -31,6 +31,7 @@ An instance MAY skip states.
 For example, a container that exits by itself moves from `Running` or `Ready` directly to `Terminated`, without passing through `Terminating`.
 
 A container MAY return from `Ready` to `Running`, as [containers](#containers) specifies.
+A service MAY return from `Ready` to `Scheduled`, as [services](#services) specifies.
 
 An instance in `Terminated` or `Unscheduled` that is observed being set up or running again MUST begin a new cycle from `Pending`.
 
@@ -71,7 +72,8 @@ The lifecycle states of a service instance have these meanings.
 | `Terminated` | The service's network plumbing has been torn down. |
 | `Unscheduled` | The service's network plumbing has been cleaned up. |
 
-A service whose routing pool becomes empty MUST leave `Ready`.
+A service whose routing pool becomes empty MUST return to `Scheduled`.
+A later observation of a backend in its routing pool MUST return it to `Ready`.
 
 ## Routing pool
 

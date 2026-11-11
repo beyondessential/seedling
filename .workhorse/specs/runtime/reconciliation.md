@@ -35,6 +35,9 @@ An install operation is a lifecycle operation, and the runtime MUST actuate the 
 
 From the moment the runtime initiates an app's [start action](../language/action.md#start-action) until that start action ends, including while it is queued, the app's desired state MUST be as for an app with a lifecycle operation in progress.
 
+> [!NOTE]
+> Holding the whole resource graph back until the start action has run lets the start action bring an app up in its own order after the host restarts.
+
 ## Reconciliation loop
 
 The runtime MUST run a reconciliation loop for as long as it runs.
@@ -60,10 +63,11 @@ It MUST instead return control to the loop, and a later iteration MUST re-evalua
 
 ## Applying absolute state
 
-An installed app's contribution to absolute state MUST be withdrawn only by a [lifecycle](../overview.md#lifecycle-state) transition of that app.
-A failure to compute the contribution MUST NOT withdraw it.
+An app contributes to absolute state while it is `Installing`, `Installed` or `Uninstalling`.
+The runtime MUST withdraw a contribution only when the resources making it leave the app's desired state, or when the app moves to `NotInstalled`.
+The runtime MUST NOT withdraw a contribution because it failed to compute it.
 
-If an iteration cannot compute the contribution of every installed app to an item of absolute state, the runtime MUST NOT apply that item in that iteration.
+If an iteration cannot compute the contribution of every contributing app to an item of absolute state, the runtime MUST NOT apply that item in that iteration.
 The item last applied then stays in force until an iteration computes every contribution.
 
 An iteration that withholds an apply MUST NOT file or clear the fault for that item.
@@ -75,4 +79,4 @@ An iteration that computes every contribution MUST apply the result, including a
 > An absent contribution and a deleted one look the same once applied.
 > Removing the last ingress of the last app leaves the proxy serving nothing, while failing to compute that app's ingresses leaves the proxy as it was.
 
-The runtime MUST tear down infrastructure shared between apps only when no app is installed or installing.
+The runtime MUST tear down infrastructure shared between apps only when no app is `Installing`, `Installed` or `Uninstalling`.

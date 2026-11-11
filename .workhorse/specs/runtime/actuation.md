@@ -70,7 +70,7 @@ The runtime MUST tag every journal entry a container produces with the fields be
 | `SEEDLING_RESOURCE` | workload containers and breadcrumbs | the resource's name |
 | `SEEDLING_INSTANCE` | workload containers and breadcrumbs | the instance's display name |
 | `SEEDLING_INFRA` | infrastructure containers | `proxy` or `resolver` |
-| `SEEDLING_RT_CALL` | breadcrumbs | the `rt.*` method recorded, or `unit_create` or `replay` |
+| `SEEDLING_RT_CALL` | breadcrumbs | the name of the `rt.*` method recorded without its `rt.` prefix, such as `start` or `warm_images`; `sub_action` for an action invocation; `unit_create`; or `replay` |
 | `SEEDLING_SCRIPT_POS` | breadcrumbs | the script position of the call, as `<file>:<line>:<column>` |
 
 A breadcrumb carries `SEEDLING_RESOURCE_KIND`, `SEEDLING_RESOURCE` and `SEEDLING_INSTANCE` only where its action names a single resource or instance.
@@ -78,7 +78,7 @@ It carries `SEEDLING_SCRIPT_POS` only where the script exposed the call's positi
 
 ## Breadcrumbs
 
-The runtime MUST write a breadcrumb to the system journal, tagged as above, for each `rt.*` call an action closure makes, each process supervision unit it creates, and each replay pass of a [lifecycle operation](../overview.md#lifecycle-operation).
+The runtime MUST write a breadcrumb to the system journal, tagged as above, for each `rt.*` call an action closure makes, each action it invokes, each process supervision unit it creates, and each replay pass of a [lifecycle operation](../overview.md#lifecycle-operation).
 A log query at any granularity MUST return breadcrumbs and container output together, in time order.
 
 The runtime MUST write a call's breadcrumb when the call first executes, and MUST NOT write it again when the call is replayed.
@@ -117,6 +117,7 @@ A caller whose creation did not take effect MUST treat the storage as already pr
 If a declared write fails, the runtime MUST remove storage the same step created, so that the next attempt creates and seeds it from scratch.
 
 The runtime MUST apply a tmpfs volume's declared writes each time it creates the volume's directory, including after the host restarts.
+A tmpfs volume's directory and contents MUST survive a restart of the runtime while the host stays up.
 
 ## Exported volumes
 
@@ -126,11 +127,11 @@ A listing of [exported volumes](../language/volume.md#export) MUST report, for e
 
 Stopping a Volume instance MUST remove the volume.
 For a tmpfs volume, the runtime MUST delete its directory.
-For a named non-tmpfs volume, the runtime MUST hold its data as a [held volume](#held-volume).
+For a named non-tmpfs volume, the runtime MUST hold its data as a [held volume](#held-volume), and MUST NOT delete it.
 
 ## Held volumes
 
-The runtime MUST hold a named non-tmpfs volume's data, instead of deleting it, when the volume's name is removed from the app's definition or when the volume's storage cannot be changed in place to the backend the definition requires.
+A named non-tmpfs volume of an app is removed, and its data held as [volume removal](#volume-removal) requires, when the volume's name is removed from the app's definition, when the app is uninstalled, and when the volume's storage cannot be changed in place to the backend the definition requires.
 If the app still declares a volume under the same name, the runtime MUST create a fresh volume and keep the held one beside it.
 
 The runtime MUST hold a managed [site volume](site-resources.md#site-volumes)'s data when an operator deletes it.

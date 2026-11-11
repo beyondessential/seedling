@@ -4,7 +4,7 @@ id: TLS
 
 # TLS certificates
 
-Applies to how the [runtime](../../overview.md#runtime) obtains, stores, selects and serves certificates for the hostnames of TLS-terminating ingresses.
+Applies to how the [runtime](../../overview.md#runtime) obtains, stores, selects and serves certificates for the hostnames of ingresses that terminate TLS, DTLS or HTTPS.
 
 ## Borrowed terms
 
@@ -24,7 +24,7 @@ Applies to how the [runtime](../../overview.md#runtime) obtains, stores, selects
 
 ### Managed hostname
 
-A hostname declared by a TLS-terminating ingress, per [ingress termination](../../language/ingress.md#termination), of an [app](../../overview.md#app) whose [install phase](../../overview.md#install-phase) is not `NotInstalled`.
+A hostname declared by an ingress that terminates TLS, DTLS or HTTPS, per [ingress termination](../../language/ingress.md#termination), of an [app](../../overview.md#app) whose [install phase](../../overview.md#install-phase) is not `NotInstalled`.
 
 ### Internal name
 
@@ -52,13 +52,17 @@ A certificate, with its private key, that the runtime stores and serves to the i
 
 A certificate the ingress proxy obtained itself through ACME HTTP-01 or its internal CA.
 
+### Served certificate
+
+The certificate a hostname is served: the runtime-managed certificate a [lookup](#serving) answers with for the hostname, or, where the lookup answers that it has none, a certificate the ingress proxy holds for it.
+
 ### Primary SAN
 
 The first DNS name in the SAN extension of a certificate's leaf.
 
 ### Certificate label
 
-The hostname a runtime-managed certificate is stored under: for an operator upload, its [primary SAN](#primary-san); for any other certificate, the hostname it was obtained for.
+The hostname a runtime-managed certificate is stored under: for a `manual` or `csr` certificate, its [primary SAN](#primary-san); for any other certificate, the hostname it was obtained for.
 
 ### Renewal point
 
@@ -82,9 +86,22 @@ Every runtime-managed certificate records its origin.
 
 The runtime cannot renew a `manual` or `csr` certificate by itself.
 
+## Certificate states
+
+Every runtime-managed certificate, and every pending [certificate signing request](#certificate-signing-requests), records its state.
+
+| state | meaning |
+| --- | --- |
+| `csr_pending` | a certificate signing request awaiting its certificate, holding a private key and no certificate |
+| `active` | a certificate eligible for [selection](#certificate-selection) |
+| `superseded` | a certificate [retired](#supersession) by one that replaces it in full |
+| `revoked` | a certificate its issuer has revoked, or whose key its issuer has condemned, as [Canopy revocation](canopy.md#revocation) specifies |
+
+The runtime MUST NOT serve a certificate in any state other than `active`.
+
 ## Policies
 
-The runtime MUST obtain the certificate of a managed hostname that no policy matches through the [default chain](chains.md#default-chain).
+Except for a hostname that takes a [Tailscale certificate](#tailscale-certificates), the runtime MUST obtain the certificate of a managed hostname that no policy matches through the [default chain](chains.md#default-chain).
 A definition declares only that an ingress terminates TLS for a hostname, never which strategy obtains its certificate.
 
 The policies an operator can bind are ACME DNS-01 through a named DNS provider, and the [Canopy-only policy](canopy.md#canopy-only-policy).
@@ -92,7 +109,7 @@ The policies an operator can bind are ACME DNS-01 through a named DNS provider, 
 A policy names an exact hostname, the catch-all pattern `*`, or a subdomain pattern `*.<suffix>`.
 The runtime MUST refuse a policy whose pattern is none of these, or whose hostname or suffix is not a valid DNS name.
 An exact pattern MUST match a hostname equal to it, ignoring ASCII case.
-The pattern `*` MUST match every hostname.
+The pattern `*` MUST match every hostname that is not an internal name.
 The pattern `*.<suffix>` MUST match every hostname that ends in `.<suffix>` and is longer than it, at any depth: `*.example.com` matches `foo.example.com` and `a.b.example.com`, and not `example.com`.
 
 > [!NOTE]
@@ -121,7 +138,7 @@ The provider kinds and their credentials are listed in [TLSM](../../interface/tl
 
 ## ACME accounts and settings
 
-The runtime issues ACME DNS-01 certificates against the Let's Encrypt production directory, `https://acme-v02.api.letsencrypt.org/directory`.
+The runtime MUST issue ACME DNS-01 certificates against the Let's Encrypt production directory, `https://acme-v02.api.letsencrypt.org/directory`.
 
 The runtime MUST persist, for each directory it issues against, one ACME account: the account's private key and the account URL the directory returned.
 It MUST store the account private key encrypted at rest with the secret key.
@@ -149,9 +166,10 @@ The operator surface for these settings is specified in [TLSM](../../interface/t
 ## ACME DNS-01 issuance
 
 For a hostname bound to an ACME DNS-01 policy, the runtime MUST carry out the ACME flow itself, publishing challenge records through the policy's DNS provider.
+The runtime MUST start ACME DNS-01 issuance for a hostname bound to an ACME DNS-01 policy that is served no usable certificate, as [issuance](#issuance) and [retry blocks](#retry-blocks-and-retries) permit, unless the hostname takes a [Tailscale certificate](#tailscale-certificates).
 The runtime MUST NOT give DNS provider credentials to the ingress proxy or write them into its configuration.
 
-The runtime MUST publish each challenge record at the name RFC 8555 §8.4 specifies, which for a hostname `*.<base>` is the record name of `<base>`.
+The runtime MUST publish each challenge record at the name RFC 8555 §8.4 specifies.
 The runtime MUST remove every challenge record it published for an issuance once the CA no longer needs it, whether the issuance succeeded or failed at any step.
 
 The runtime MUST generate a new key pair for each issuance, and SHOULD generate an ECDSA key on curve P-256.
@@ -180,7 +198,8 @@ After issuing a certificate, the runtime SHOULD fetch its renewal information if
 While the runtime uses renewal information for a certificate, it MUST fetch it again on the schedule of RFC 9773 §4.3.
 The runtime MUST persist, with the certificate, the start and end of the suggested window and the time it last fetched the information.
 A certificate MUST become due at the start of its suggested window.
-If the directory offers no renewal information, or fetching it fails, the runtime MUST fall back to the one-third rule of the renewal point, and MUST NOT report the absence as a fault.
+If the directory offers no renewal information, or the runtime has not yet fetched it successfully for the certificate, the runtime MUST fall back to the one-third rule of the renewal point, and MUST NOT report the absence as a fault.
+If a later fetch fails, the runtime MUST keep the suggested window it stored.
 
 When the certificate being replaced was issued through the same ACME account and the directory offers renewal information, the order MUST name that certificate's identifier in its `replaces` field, per RFC 9773 §5.
 Otherwise the order MUST omit the field.
@@ -221,11 +240,16 @@ The runtime MUST record every issuance attempt it makes, successful or not, in a
 | field | meaning |
 | --- | --- |
 | hostname | the hostname the attempt was for |
-| trigger | `on_demand` for issuance the runtime started itself, `manual` for an operator's direct issuance, `renewal` for a renewal |
+| trigger | `manual` for an attempt an operator asked for, by direct issuance or by a retry; otherwise `renewal` for an attempt to replace a certificate the hostname has, and `on_demand` for an attempt for a hostname with none |
 | started, finished | when the attempt began, and when it ended |
 | outcome | `pending` while it runs, then `success` or `failure` |
 | certificate | the certificate stored, on success |
 | error | the failure, on failure |
+
+The runtime MUST set the trigger by the same rule whatever strategy makes the attempt.
+
+When the runtime starts, it MUST close as `failure` every attempt still `pending`, other than one recording an open Canopy order.
+The runtime MUST NOT count an attempt it closed this way as a running issuance.
 
 The log is exposed through the Operator Interface, per [TLSM](../../interface/tls.md#issuance-attempts).
 
@@ -282,8 +306,10 @@ If the runtime cannot read back the certificate it has just stored, it MUST fail
 ## Operator-supplied certificates
 
 An operator MAY upload a certificate chain in PEM with its private key.
-The runtime MUST reject an upload whose leaf certificate carries no DNS name in its SAN set.
-It MUST reject an upload whose private key does not match the leaf certificate's public key.
+The runtime MUST accept the chain's certificates in any order.
+The leaf of an upload is the first certificate in it whose public key matches the uploaded private key, or, for an upload against a [certificate signing request](#certificate-signing-requests), the request's stored private key.
+The runtime MUST reject an upload in which no certificate matches the private key.
+It MUST reject an upload whose leaf carries no DNS name in its SAN set.
 It MUST reject an upload whose leaf `notAfter` has passed.
 It MUST accept a leaf whose `notBefore` is in the future, and MUST annotate it as not yet valid.
 It MUST accept a self-issued leaf, and MUST annotate it so that the operator interface can flag it.
@@ -363,7 +389,7 @@ For each managed hostname, the runtime MUST make available to the [Operator Inte
 - the policy that applies, and the pattern it matched;
 - for a hostname on a strategy chain, its [responsible strategy](chains.md#responsible-strategy);
 - the selected or proxy-held certificate, with its origin, issuer, `notBefore` and `notAfter`;
-- its acquisition status, per [ingress certificate observation](../observation.md#ingresses);
+- its [certificate status](#certificate-status);
 - the outcome and error of its latest issuance attempt;
 - any retry block, and any recorded retry not yet consumed;
 - the time of its next expected issuance, and whether that time comes from a suggested window, the one-third rule, the after-failure interval, or an issuance due now.
@@ -373,3 +399,24 @@ The view MUST be available filtered to the hostnames one app declares.
 A hostname declared only by an app whose install phase is `NotInstalled` MUST NOT appear.
 
 The wire form of the view is specified in [TLSM](../../interface/tls.md#hostname-view).
+
+## Certificate status
+
+Every managed hostname has a certificate status, one of these values.
+
+| status | meaning |
+| --- | --- |
+| `blocked` | a [retry block](#retry-blocks-and-retries) is set for the hostname |
+| `expired` | no usable certificate is served for the hostname, and its [selected](#certificate-selection) or proxy-held certificate is past its `notAfter` |
+| `error` | the latest attempt to obtain a certificate for the hostname failed and the runtime is waiting to try again, or the runtime cannot attempt one until a condition changes, such as a missing contact email or Canopy being unable to be asked about the hostname |
+| `pending` | an acquisition is in progress for the hostname |
+| `active` | a usable certificate is served for the hostname |
+| `none` | no usable certificate is served for the hostname, and no acquisition is in progress |
+
+Where the meanings of several values hold at once, the status MUST be the first of them in this order: `blocked`, `expired`, `error`, `pending`, `active`, `none`.
+
+A usable certificate is served for a hostname when its [served certificate](#served-certificate) is a [usable certificate](chains.md#usable-certificate).
+An acquisition is in progress for a hostname while an issuance for it is running, while an order for it is open, while an operator retry recorded for it is not yet consumed, while an issuance for it is due now, and while its responsible strategy is one the ingress proxy carries out and the proxy holds no usable certificate for it.
+
+The runtime MUST derive the status from the decision of [issuance](#issuance).
+If the runtime cannot read whether a usable certificate is served for the hostname, or whether an acquisition is in progress for it, it MUST report the status as undetermined, and MUST NOT report it as any of these values.

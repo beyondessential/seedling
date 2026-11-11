@@ -46,7 +46,7 @@ Paths below are relative to the Canopy base URL the offering client resolves.
 Reports are addressed to the Canopy server identifier the offering client's identity is enrolled as.
 The runtime MUST resolve it with a `GET` to `/servers/self`, taking the `server_id` member of the answer.
 The runtime MUST cache the identifier durably and use the cached value while it has one.
-If a report fails in a way that suggests the cached identifier is wrong or absent, the runtime MUST discard the cached identifier, so that the next report resolves it again.
+If sending a report fails for any reason, the runtime MUST discard the cached identifier, so that the next report resolves it again.
 
 ## Report payload
 
@@ -139,7 +139,8 @@ When an app becomes `not_installed`, the runtime MUST discard its recorded resul
 > Canopy closes a check's issue when the check is `skipped`, so an operating app carries its earlier result instead.
 
 The check's detail members are `status`, the app's status name, and `faults`, the app's active faults.
-Each fault is an object with members `kind`, `description`, and, where the fault is filed against a resource, `resource`, written `<type>/<name>`, or whichever of the two is recorded.
+Each fault is an object with members `kind` and `description`, and `resource` where the fault records a resource type or name.
+`resource` is `<type>/<name>` where the fault records both, and otherwise whichever one it records.
 
 ## Report response
 

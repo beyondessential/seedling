@@ -14,7 +14,7 @@ Applies to the DNS resolver the [runtime](../overview.md#runtime) runs for the w
 
 ## Resolver addresses
 
-The resolver MUST be reachable at the addresses below, derived from the [host prefix](infrastructure.md#host-prefix):
+The resolver MUST be reachable at the addresses below, the IPv6 ones derived from the [host prefix](infrastructure.md#host-prefix):
 
 | address | value |
 | --- | --- |
@@ -34,25 +34,27 @@ The resolver address MUST NOT change while the host prefix does not.
 The runtime MUST run the resolver as an infrastructure container, providing DNS forwarding and caching to every workload container.
 The runtime MUST have the resolver running and healthy before it starts any workload container.
 
-While any app is installed, the runtime MUST check the resolver's health on each [reconciliation](reconciliation.md#reconciliation-loop) iteration.
+While any app is installed or installing, the runtime MUST check the resolver's health on each [reconciliation](reconciliation.md#reconciliation-loop) iteration.
+The resolver is healthy when its health endpoint answers successfully.
 It MUST restart a resolver that is not running.
 It SHOULD restart a running resolver only after its health check has failed on three consecutive iterations.
 The runtime MUST stop the resolver when no app is installed or installing.
 
 On an iteration that fails to bring the resolver up, or does not finish doing so, the runtime MUST file a [`resolver_failed`](faults.md#host-faults) fault.
+When it stops the resolver because no app is installed or installing, the runtime MUST clear `resolver_failed`.
 
 ## Upstreams
 
 The runtime MUST accept a `--dns-upstreams` option naming the upstream DNS servers, as a comma-separated list of IP addresses with ports (`192.0.2.1:53`, `[2001:db8::1]:53`).
 When the option is given, the resolver MUST forward to those servers.
 
-When the option is not given, the resolver MUST forward to the host's system resolver at `127.0.0.54:53`.
-Forwarding to that address MUST work although it is on the host's loopback interface, out of the resolver's reach.
+When the option is not given, the resolver MUST forward to the host's system resolver.
+Forwarding to the system resolver MUST work when the system resolver listens only on the host's loopback interface, out of the resolver's reach.
 The runtime MUST relay the resolver's queries to it through the host side of the resolver network, at port 53.
+The system resolver's address is set by the [platform](../platform/linux.md#host-facilities).
 
 > [!NOTE]
 > Forwarding to the host's resolver lets containers inherit the host's split DNS, per-link resolvers and search domains.
-> `127.0.0.54` is the system resolver's stub address that accepts queries relayed from a source outside the loopback range.
 
 ## Resolver configuration
 

@@ -51,16 +51,9 @@ If a named non-tmpfs volume exists but its storage does not match the storage th
 
 For an Ingress instance, the runtime MUST observe whether the proxy is reachable.
 
-For each hostname of a TLS-terminating ingress, the runtime MUST observe the status of the hostname's certificate.
+For each hostname of a TLS-terminating ingress, the runtime MUST observe the hostname's [certificate status](tls/certificates.md#certificate-status), and whether a usable certificate is [served](tls/certificates.md#served-certificate) for it.
 
-| status | meaning |
-| --- | --- |
-| `none` | no certificate has been acquired and no acquisition is in progress |
-| `pending` | acquisition is in progress |
-| `valid` | an unexpired certificate is held and usable, and its expiry is observable |
-| `failed` | acquisition has failed, and the most recent error is observable |
-
-Certificate status determines whether an ingress is [`Ready`](lifecycle.md#ingresses) and whether an [`rt.warm_certs`](../language/rt.md#certificate-warming) barrier is satisfied.
+Certificate status determines whether an [`rt.warm_certs`](../language/rt.md#certificate-warming) barrier is satisfied.
 
 ## Recording
 
@@ -69,6 +62,7 @@ The runtime MUST NOT treat a fact as recorded unless recording it succeeded.
 Within one run, the runtime MUST NOT record a fact again for an instance while it is unchanged since it was last recorded.
 The runtime MUST record a fact again whenever it differs from the fact last recorded for the instance, including a healthcheck result that changes back to a value recorded earlier.
 
-The runtime MUST record a Service's network as created, and a backend as healthy, from the backends running when the Service's routes are built.
+When it builds a Service's routes, the runtime MUST record the Service's network as created.
+It MUST also record whether the Service's [routing pool](lifecycle.md#routing-pool) holds at least one backend at that time.
 The runtime MUST record an ingress as configured and ready only after a proxy configuration that includes it has been [applied](reconciliation.md#applying-absolute-state) successfully.
 For a resource whose desired state is `Unscheduled`, the runtime MUST record that it was sent the stop, and the removal and cleanup of its network or ingress.

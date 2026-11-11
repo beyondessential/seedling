@@ -54,7 +54,9 @@ A console MUST start in the `read` safety mode.
 A console reloaded in the same browser tab MAY resume an elevation that has not expired.
 
 A control that changes host state MUST require at least the `write` mode.
-A control that removes, revokes, stops, cancels or clears something MUST require the `dangerous` mode, except a control that clears [faults](../overview.md#fault), which MUST require the `write` mode.
+A control that removes, revokes, stops, cancels or clears something MUST require the `dangerous` mode, with two exceptions.
+A control that clears [faults](../overview.md#fault) MUST require the `write` mode.
+Closing a shell the console itself opened, which stops it, MUST be available in every safety mode.
 A control that requires a mode above the console's current one MUST be disabled, and SHOULD show the mode it requires.
 
 > [!NOTE]
@@ -167,7 +169,7 @@ The console MUST show the number of held volumes on every view, and keep it curr
 ## Restart history
 
 The console MUST offer a restart history view at the path `/restarts`.
-It MUST list [restart records](../interface/faults.md#restart-records), most recent first, with their app, instance, time, initiator and exit status, and let the operator filter them by app.
+It MUST list [restart records](../interface/faults.md#restart-records), most recent first, with their app, instance, time and exit status, and let the operator filter them by app.
 It MUST distinguish deliberate restarts from recovery restarts.
 It MUST show the crash-loop rate threshold and window, and let the operator change them.
 
@@ -188,7 +190,8 @@ For an active manual or request-derived certificate that expires within fourteen
 To renew, the console MUST begin a certificate signing request pre-filled, editably, with the certificate's DNS subject alternative names and the hostnames it currently serves.
 Where the certificate already has a pending renewal, the console MUST lead to that renewal instead, and MUST name the certificate a pending renewal renews.
 
-The web interface MUST NOT send the console any private key material, ACME account key or DNS provider credential.
+> [!NOTE]
+> The TLS secrets the Operator Interface withholds, and the console therefore never receives, are set by [TLSM](../interface/tls.md#conventions).
 
 ## Canopy access
 
@@ -208,4 +211,5 @@ The console MUST NOT offer to register or withdraw an offer, to relay a request,
 The console MUST show the open web sessions, shell sessions and port forwards, and the recently active actors, that [`/connected-clients/list`](serving.md#connected-clients) reports.
 Each entry MUST show its actor and when it connected or opened, with the app for a shell or forward.
 A web session entry MUST also show its `last_seen` and its safety mode.
+The console MUST show the number of open web sessions on every view, and keep it current without a reload.
 The console MUST keep the view current from the `WebSessionStarted`, `WebSessionStopped`, `WebSessionModeChanged`, `ShellStarted`, `ShellExited`, `ForwardStarted` and `ForwardStopped` events, without polling.

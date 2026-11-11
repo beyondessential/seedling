@@ -81,7 +81,8 @@ In `ParamSet` and `ParamUnset`, a secret parameter's event MUST carry `redacted`
 | --- | --- | --- |
 | `OperationStarted` | `app`, `action_name`, `operation_id`, `source_generation`, `target_generation`, `trigger` (string) | when a lifecycle operation starts |
 | `OperationCompleted` | `app`, `action_name`, `operation_id`, `source_generation`, `target_generation` | when a lifecycle operation completes successfully |
-| `OperationFailed` | `app`, `action_name`, `operation_id`, `source_generation`, `target_generation`, `error` (string) | when a lifecycle operation fails or is cancelled |
+| `OperationFailed` | `app`, `action_name`, `operation_id`, `source_generation`, `target_generation`, `error` (string) | when a lifecycle operation fails |
+| `OperationCancelled` | `app`, `action_name`, `operation_id`, `source_generation`, `target_generation` | when a lifecycle operation ends [cancelled](../runtime/operations.md#cancellation) |
 
 `trigger` is the operation's [initiating trigger](../runtime/operations.md#initiating-events).
 
@@ -108,6 +109,9 @@ In `ResourceStateChanged`, `resource_type` is the resource's [type name](wire.md
 | `CanopyWithdrawn` | `offer_id`, `reason` (string) | as [Canopy offer lifetime](canopy-relay.md#offer-lifetime) specifies |
 
 `reason` in `CanopyWithdrawn` is one of the reasons [offer lifetime](canopy-relay.md#offer-lifetime) defines.
+
+> [!NOTE]
+> The web interface adds its own web session events to the feed it relays, as [session tracking](../web/serving.md#session-tracking) specifies.
 
 ### Site resource events
 

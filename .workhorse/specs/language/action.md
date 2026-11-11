@@ -35,6 +35,7 @@ Either method returns an `Action` handle for the declared action.
 A `name` that is not a valid [name](overview.md#names) MUST throw.
 The name `install` is reserved for the [install action](#install-action), and declaring an action under it MUST throw.
 Declaring an action under a name an action of the app is already declared under MUST throw, including a declaration through `app.on_start` of a second start action.
+`app.on_action` MUST throw when called in the [action context](app.md#action-context).
 
 The `options` map MAY carry these keys:
 
@@ -50,14 +51,13 @@ A `params` that is not a map MUST throw.
 The runtime MUST call `fn` with two arguments: a runtime handle, then the [param map](#param-map).
 A closure declaring any other number of parameters MUST fail when the runtime calls it.
 
-An action is not a [resource](../overview.md#resource).
-An `Action` handle given where a runtime handle method expects a [selection](rt.md#selections) MUST make that method throw.
+An action is not a [resource](../overview.md#resource), and a runtime handle method given one as a [selection](rt.md#selections) throws.
 
 ## Action handles
 
 `app.action(name: string)` returns the `Action` handle of the action declared under `name`.
 The handle MUST be equivalent to the one the declaring `app.on_action` or `app.on_start` call returned.
-`app.action` called while no action closure is running MUST throw.
+`app.action` MUST throw when called outside the action context.
 A `name` naming no declared action MUST throw.
 The install action has no name, and `app.action` MUST NOT return it.
 
@@ -75,7 +75,7 @@ If validation fails, `invoke` MUST throw without running the closure.
 
 An exception the invoked closure throws MUST propagate to the caller of `invoke`.
 
-`invoke` called while no action closure is running MUST throw.
+`invoke` MUST throw when called outside the action context.
 `invoke` on an action already on the operation's [call stack](../runtime/operations.md#cycles), directly or through other invocations, MUST throw before the closure runs.
 The error MUST name each action on the stack, in call order, followed by the action being invoked.
 
@@ -113,7 +113,8 @@ The runtime MUST validate an invocation's params against the schema, in this ord
 1. A declared param supplied as anything other than a string MUST be rejected.
 2. A declared param that is absent or supplied as the empty string MUST take its `default_value`, if it has one.
 3. A required param that is still absent or empty MUST be rejected.
-4. Each declared param's value MUST then be validated as its kind specifies.
+4. A declared param that is still absent or empty MUST NOT be validated against its kind.
+5. Every other declared param's value MUST then be validated as its kind specifies.
 
 A param the schema does not declare MUST be passed to the closure as supplied.
 
@@ -172,10 +173,11 @@ The start action is the action named `start`, and brings the app up.
 A script declares it with `app.on_start(fn: closure)`, `app.on_start(fn: closure, options: map)` or `app.on_action("start", …)`, each of which returns its `Action` handle.
 The `options` of `app.on_start` MAY carry `description`, as for `app.on_action`.
 An `options` map passed to `app.on_start` carrying any other key MUST throw.
+`app.on_start` MUST throw when called in the action context.
 
 The runtime MUST run the start action as a lifecycle operation when an install operation for the app completes successfully.
 The runtime MUST also run it when the runtime starts with the app installed and no interrupted operation to replay for it.
-Until the start action ends, the runtime holds the rest of the app's resources as [operation initiation](../runtime/operations.md#initiating-events) specifies.
+Until the start action ends, the runtime holds the rest of the app's resources as [desired state](../runtime/reconciliation.md#desired-state) specifies.
 The start action's closure MUST receive an empty param map when the runtime runs it.
 If the script declares no start action, the runtime MUST run it as though its closure called `rt.start(app)`.
 
@@ -187,6 +189,7 @@ The runtime MUST NOT let an operator invoke the start action, and MUST answer an
 A script declares a shell with `app.on_shell(name: string, fn: closure)` or `app.on_shell(name: string, fn: closure, options: map)`, which return no value.
 A `name` that is not a valid name MUST throw.
 Declaring a shell under a name a shell of the app is already declared under MUST throw.
+`app.on_shell` MUST throw when called in the action context.
 The `options` map takes the same keys as for `app.on_action`, and MUST throw on the same conditions.
 
 Shells and actions MUST have separate namespaces.
@@ -238,7 +241,7 @@ Its error MUST carry the exit status, or state that the process did not exit.
 `action.on_schedule(expr: string)` attaches a schedule to the action, and returns the same `Action` handle.
 An action MAY carry several schedules.
 An `expr` that is not a valid [schedule expression](#schedule-expressions) MUST throw.
-`on_schedule` called while an action closure is running MUST throw.
+`on_schedule` MUST throw when called in the action context.
 
 Each time a schedule comes due, the runtime MUST run its action as [scheduled actions](../runtime/scheduled-actions.md) specify.
 The runtime MUST validate a scheduled run against the action's [param schema](#param-schemas) as an invocation that supplies no params, so that each declared param takes its `default_value`.
@@ -277,6 +280,7 @@ The schedule hash MUST be [SipHash-1-3](https://www.aumasson.jp/siphash/siphash.
 The install action sets the app up when an operator installs it.
 A script declares it with `app.on_install(fn: closure)` or `app.on_install(fn: closure, config: map)`, which return no value.
 A second call to `app.on_install` MUST throw.
+`app.on_install` MUST throw when called in the action context.
 
 The `config` map MAY carry `params`, the install action's param schema.
 A `config` carrying any other key MUST throw.

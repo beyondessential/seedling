@@ -37,21 +37,27 @@ A definition that declares a container on which `image` is never called MUST fai
 
 ## Registry allowlist
 
-Each host holds a registry allowlist, which operators edit through the [Operator Interface](../overview.md#operator-interface).
+Each host holds a [registry allowlist](../interface/images.md#registry-allowlist), which operators edit through the [Operator Interface](../overview.md#operator-interface).
 A new host's allowlist MUST hold `docker.io` and `ghcr.io`.
 
 Each time the runtime evaluates an app's definition, it MUST compare the registry of every Deployment and Job image against the allowlist.
 While any image's registry is absent from the allowlist, the runtime MUST hold a [`disallowed_registry`](../runtime/faults.md#app-faults) fault against the app.
 If the runtime cannot read the allowlist, it MUST NOT file or clear the fault.
+The runtime MUST pull an image and start its containers whether or not the image's registry is on the allowlist.
 
 ## Command and arguments
 
 `container.command(entrypoint: array)` sets the container's [entrypoint](#borrowed-terms) to `entrypoint`, replacing the image's.
 `container.command(name: string)` is equivalent to `command([name])`.
+A container whose entrypoint is set to an empty array MUST be run as though `command` had never been called.
 
 `container.arg(vars: array)` appends `vars` to the container's [command arguments](#borrowed-terms).
 `container.arg(var: string)` is equivalent to `arg([var])`.
 A container on which `arg` is called at least once MUST be run with the appended arguments in place of the image's.
+A container whose entrypoint is set and on which `arg` is never called MUST be run with no command arguments, discarding the image's.
+
+> [!NOTE]
+> This follows the convention of Kubernetes, in which a container's `command` replaces the image's entrypoint and its default arguments together.
 
 An array element that is not a string MUST throw.
 
@@ -71,7 +77,7 @@ A value containing a NUL character MUST throw.
 
 `container.mount(mountpoint: string, volume: Volume)` mounts a [volume](volume.md) into the container's filesystem at `mountpoint`.
 `container.mount(mountpoint: string, volume: ExternalVolume)` mounts an [External Volume](volume.md#external-volumes) in the same way.
-A mount at a mountpoint already mounted MUST replace the earlier mount.
+A mount at a mountpoint whose canonical form matches that of a mountpoint already mounted MUST replace the earlier mount.
 
 A `mountpoint` MUST be an absolute path beginning with `/`, and MUST NOT contain a NUL character.
 A mountpoint whose canonical form is `/`, `/proc`, `/sys`, `/dev`, `/etc`, `/bin`, `/sbin`, `/lib`, `/lib64`, `/usr`, `/boot` or `/run` MUST throw.

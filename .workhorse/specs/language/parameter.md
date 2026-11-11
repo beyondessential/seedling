@@ -37,6 +37,7 @@ If the parameter has neither, `param.value()` MUST throw.
 A script MAY attach schema metadata to a `Param` through the builder methods below.
 The metadata governs how operator interfaces present and check the parameter.
 Calling a schema method again MUST replace the value it set before.
+A schema method MUST throw when called in the [action context](app.md#action-context).
 
 | method | sets | default |
 | --- | --- | --- |
@@ -60,17 +61,17 @@ The runtime MUST protect a secret parameter's value as [secret storage](../runti
 ## Change handlers
 
 `param.on_change(fn: closure)` MUST register `fn` as the parameter's change handler, and returns no value.
-`on_change` MUST throw when called in the [action context](app.md#action-context).
+`on_change` MUST throw when called in the action context.
 Calling `on_change` a second time for the same parameter MUST throw.
 
-The runtime MUST invoke the change handler as a [lifecycle operation](../overview.md#lifecycle-operation) whenever the parameter's stored value changes in one of these ways:
+While the app is `Installed`, the runtime MUST invoke the change handler as a [lifecycle operation](../overview.md#lifecycle-operation) whenever the parameter's stored value changes in one of these ways:
 
 - the parameter had no stored value and is given one;
 - the parameter's stored value is replaced by a different value;
 - the parameter's stored value is removed.
 
 Storing the value the parameter already holds is not a change.
-The runtime MUST NOT invoke the handler during the app's initial install.
+The runtime MUST NOT invoke the handler while the app is in any other [install phase](../overview.md#install-phase).
 
 A script MAY pass a closure taking up to two parameters.
 The runtime MUST call `fn` with as many of these arguments as it takes, in this order: the [runtime handle](rt.md#runtime-handle), then an `App` named here `old`.
@@ -101,7 +102,7 @@ The runtime MUST run a validator only while its parameter would be set.
 A parameter that would be unset passes, and its `required` flag governs whether it needs a value.
 
 The runtime MUST NOT give a validator a runtime handle.
-Within a validator, declaring a resource, calling a builder method on any resource, and calling any other method that changes the app MUST throw.
+A validator runs in the [validator context](app.md#validator-context), which refuses every call that changes the app.
 
 > [!NOTE]
 > A validator only judges a proposed value, so a validator that could change the app would make the definition depend on which values were checked.

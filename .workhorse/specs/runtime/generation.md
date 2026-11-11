@@ -49,7 +49,7 @@ The runtime MUST keep a generation history for each app, holding one entry for e
 | previous value | every entry with a parameter | the parameter's value before the change, or none if it was unset |
 | new value | every entry with a parameter | the parameter's value after the change, or none if the change unset it |
 | operation | an entry whose change triggered a lifecycle operation | the operation's identity |
-| outcome | an entry with an operation | `pending` while the operation runs or waits, then `succeeded`, or `failed` with details |
+| outcome | an entry with an operation | `pending` while the operation runs or waits, then `succeeded`, `cancelled`, or `failed` with details |
 
 Values of a secret parameter are protected in history entries as [secret history](secrets.md#generation-history) specifies.
 

@@ -58,16 +58,17 @@ If the runtime restarts while an operation is in progress and decides to [replay
 
 The runtime MAY resume a suspended operation by a replay at any time, and not only after a restart.
 
-A script's action closures MUST NOT have side effects other than through `rt.*` calls.
-Given the same resource graph and parameters, a closure MUST make the same sequence of `rt.*` calls up to any barrier.
+A script's action closures MUST NOT have side effects other than through `rt.*` and `Action.invoke` calls.
+Given the same resource graph and parameters, a closure MUST make the same sequence of `rt.*` and `Action.invoke` calls up to any barrier.
 
 ### Positional replay
 
 The runtime MUST match a call made during a replay to the committed entry at the call's own position in the closure's sequence of calls, and never to an entry elsewhere in the log.
 Two identical calls at different points in a closure are two calls, and a call whose resolved arguments differ between passes is still the same call.
 
-The runtime MUST fail the replay if the entry at a call's position records a different kind of call, or records an argument that is a literal in the script and differs from the call's.
-The runtime MUST NOT compare arguments that may legitimately resolve differently between passes, such as the set of instances a call addresses.
+The runtime MUST fail the replay if the entry at a call's position records a different kind of call.
+It MUST also fail the replay if the entry records a different signal name for an `rt.signal` call, or a different action name for an `Action.invoke` call.
+The runtime MUST NOT compare any other argument, such as the set of instances a call addresses or the path an `rt.write` call writes.
 
 ### Barrier anchoring
 

@@ -54,10 +54,7 @@ Admission for an app that is being uninstalled is governed by [app teardown](app
 | an operator request | the named action, or `install` | `operator` | current | current |
 | a schedule falls due | the [scheduled action](scheduled-actions.md) | `schedule` | current | current |
 
-Until an app's start action ends, its [desired state](reconciliation.md#desired-state) holds only the resources the start action has started or stopped.
-
-> [!NOTE]
-> Holding the whole resource graph back until the start action has run lets the start action bring an app up in its own order after the host restarts.
+Until an app's start action ends, its desired state is held as [desired state](reconciliation.md#desired-state) specifies.
 
 The runtime MUST initiate an operation for a parameter change only when the app is installed, a handler is registered for the parameter, and the change matches one of the handler's [transitions](../language/parameter.md#change-handlers).
 A parameter changed alongside a definition update is a parameter change.

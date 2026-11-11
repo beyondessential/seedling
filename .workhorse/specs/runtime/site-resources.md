@@ -59,8 +59,9 @@ When an operator deletes a managed site volume, the runtime MUST [hold](actuatio
 When an operator deletes a snapshot site volume, the runtime MUST delete its storage.
 When an operator deletes a bind site volume, the runtime MUST forget the volume and MUST leave the host path untouched.
 
-The runtime MUST emit an [event](../interface/events.md) and record an [audit log](audit-log.md#entries) entry when a site volume is created or deleted.
+The runtime MUST emit an [event](../interface/events.md) and record an [audit log](audit-log.md#entries) entry when an operator creates or deletes a site volume.
 A deletion event MUST identify the site volume's kind, and the held volume created when the deletion held the volume's data.
+A snapshot, a promotion and a [restore](actuation.md#held-volumes) each bring a site volume into being with an event of their own, and the runtime MUST NOT emit a creation event for them as well.
 
 ### Site volume names
 
@@ -135,7 +136,7 @@ The runtime MUST route each endpoint as follows:
 On a host without IPv6 egress, AAAA records are unusable.
 The runtime MUST route through NAT64 by embedding the IPv4 address in the Well-Known Prefix.
 
-The runtime MUST report an endpoint as unroutable when it needs NAT64 and NAT64 is not available on the host, or when its name has only AAAA records and the host has no IPv6 egress.
+The runtime MUST report an endpoint as unroutable when it needs NAT64 and NAT64 is not [active](nat64.md#active-nat64), or when its name has only AAAA records and the host has no IPv6 egress.
 The runtime MUST report an endpoint as unresolvable when resolving its name has failed 5 consecutive times.
 An unroutable or unresolvable endpoint MUST raise the [site service faults](faults.md#ingress-and-service-faults) for its site service.
 An unroutable or unresolvable endpoint MUST NOT affect the routing of other endpoints, site services or apps.
@@ -149,7 +150,7 @@ The runtime MUST look the name up again promptly, without waiting for the answer
 A failed lookup MUST NOT be recorded as the family having no records.
 
 A failure MUST count towards the unresolvable threshold only when no lookup returned records and at least one lookup failed.
-The resolver's status report MUST name each family whose lookup is failing, for as long as it fails.
+The `/services/site/resolver-status` method of the [Operator Interface](../overview.md#operator-interface) MUST name each family whose lookup is failing, for as long as it fails.
 
 ### Site service lifecycle
 
@@ -184,9 +185,9 @@ Deleting a site ingress MUST delete its attachments.
 | `acme` | issued by a public certificate authority over ACME |
 | `internal` | issued by the runtime's internal certificate authority |
 | `tailscale` | obtained from the discovery provider's own certificate facility; valid only on a site ingress discovered by `tailscale` |
-| `none` | none; every attachment is plaintext |
+| `none` | none; no attachment terminates TLS |
 
-An attachment on a site ingress whose mode is `none` is a [plaintext ingress](proxy.md#plaintext-ingresses).
+An `http` or `http2` attachment on a site ingress whose mode is `none` is a [plaintext ingress](proxy.md#plaintext-ingresses).
 
 ### Attachments
 
@@ -197,7 +198,16 @@ An attachment is keyed by `(port, protocol)` within its site ingress, and its ta
 | forward | traffic for the attachment's port and protocol is routed to a named service of a named app |
 | redirect | requests for the attachment's port and protocol are answered with a redirect to a configured URL, with a configured status code, optionally keeping the request path |
 
-An attachment's protocols are those an app's [ingress](../language/ingress.md#termination) may declare.
+An attachment's protocol is one of:
+
+| protocol | the attachment accepts | a forward target's service receives |
+| --- | --- | --- |
+| `tcp` | TCP connections, passed through without TLS termination | the TCP stream as it arrived |
+| `udp` | UDP datagrams, passed through without DTLS termination | the datagrams as they arrived |
+| `http` | HTTP, over TLS unless the site ingress's mode is `none` | plaintext HTTP/1.1 |
+| `http2` | HTTP, over TLS unless the site ingress's mode is `none` | cleartext HTTP/2 |
+
+The runtime MUST serve a redirect target only on an `http` or `http2` attachment.
 An attachment takes its hostname and TLS provisioning mode from its site ingress.
 A site ingress MAY carry several attachments that differ in `(port, protocol)`.
 
@@ -219,4 +229,9 @@ The discovered site ingress's certificate is obtained as [Tailscale certificates
 
 When an app's ingress and a site ingress attachment both claim the same `(hostname, port)`, the runtime MUST leave both out of the proxy configuration for as long as the conflict lasts.
 The runtime MUST raise the [`ingress_conflict`](faults.md#ingress-and-service-faults) fault for each side.
+
+When attachments of two site ingresses both claim the same `(hostname, port)`, the runtime MUST serve the attachment created first, and MUST leave the other out of the proxy configuration.
+The runtime MUST raise the `ingress_conflict` fault for the site ingress whose attachment it leaves out.
+Once the served attachment no longer claims the hostname and port, the runtime MUST serve the other.
+
 A conflict on one port MUST NOT affect the serving of other ports on the same hostname.

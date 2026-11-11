@@ -28,6 +28,16 @@ A change to an app's priority MUST take effect without restarting the runtime an
 The runtime MUST apply the new division of contended CPU and I/O to the app's running workloads as soon as it re-derives their ordering.
 A workload's place in the kill order MAY be fixed when its processes start, in which case the change MUST reach each running workload when it next restarts, and every workload started after the change.
 
+## Unreadable priorities
+
+The runtime MUST NOT treat a stored priority it cannot read as absent, and MUST NOT substitute `normal` for it.
+If the runtime cannot read an app's stored priority, it MUST NOT actuate that app in that iteration, so that its running workloads keep running as they are.
+If the runtime cannot read the stored priorities at all, it MUST NOT actuate any app in that iteration.
+The runtime MUST hold an [`app_priorities_unreadable`](faults.md#host-faults) fault while any stored priority cannot be read.
+
+> [!NOTE]
+> A workload started at a standing nobody chose takes a place in the kill order and a share of contended capacity that the operator never set.
+
 ## Kill order
 
 When the host runs out of memory, the order in which workloads are shed MUST be app-major.

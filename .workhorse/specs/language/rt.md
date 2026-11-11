@@ -72,9 +72,9 @@ Restart semantics are specified by [deployment restart](../interface/app-control
 It MUST ignore every other resource of the selection.
 It MUST NOT route traffic to an ingress.
 A certificate acquired this way MUST be the one served when the same ingress is later started.
-A repeated call with the same selection MUST observe the existing certificate state and return at once when every certificate is valid, without beginning acquisition again.
+A repeated call with the same selection MUST observe the existing certificate state and return at once when a usable certificate is [served](../runtime/tls/certificates.md#served-certificate) for every ingress's hostname, without beginning acquisition again.
 
-On a `Started` returned by `rt.warm_certs`, `ready()` and `ready_eventually()` MUST wait until every ingress it holds has a valid certificate, instead of waiting for the Ready state.
+On a `Started` returned by `rt.warm_certs`, `ready()` and `ready_eventually()` MUST wait until a usable certificate is served for the hostname of every ingress it holds, instead of waiting for the Ready state.
 Such a `Started` holding no ingress MUST satisfy them at once.
 Its other barriers MUST throw.
 

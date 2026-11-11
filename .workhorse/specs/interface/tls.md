@@ -33,7 +33,7 @@ A hostname contains at least one ASCII letter.
 
 Every timestamp in a request or result of these methods is an integer count of seconds since 1970-01-01T00:00:00Z, leap seconds excluded.
 
-The runtime MUST NOT return a private key, an ACME account key or DNS provider credentials from any Operator Interface method.
+The runtime MUST NOT return a private key, an ACME account key or a DNS provider's `config` from any Operator Interface method.
 
 If the runtime cannot read or write its TLS state while handling a request, it MUST refuse the request with `internal`.
 It MUST NOT report such a failure as `not_found`.
@@ -131,7 +131,7 @@ Its result is `{ certificates }`, an array with one object per stored certificat
 | `requested_not_covered` | array of strings or null | the requested hostnames the certificate does not cover |
 | `renews` | integer or null | the stored certificate this row's CSR renews |
 | `pending_renewal` | integer or null | the id of this certificate's pending renewal |
-| `state` | string | `csr_pending`, `active`, `superseded`, `failed` or `revoked` |
+| `state` | string | the row's [certificate state](../runtime/tls/certificates.md#certificate-states): `csr_pending`, `active`, `superseded` or `revoked` |
 | `origin` | string | `manual`, `csr`, `acme_dns`, `tailscale` or `canopy` |
 | `key_type` | string | the private key's algorithm, such as `ecdsa_p256` |
 | `issuer` | string or null | the leaf's issuer |
@@ -170,19 +170,20 @@ It MUST be `null` when the row has no requested hostnames, holds no certificate,
 | member | type | required | meaning |
 | --- | --- | --- | --- |
 | `cert_pem` | string | yes | PEM `CERTIFICATE` blocks: the leaf and any intermediates, in any order |
-| `key_pem` | string | yes | the leaf's private key, PEM-encoded PKCS #8 |
+| `key_pem` | string | yes | the leaf's private key, PEM-encoded PKCS #8, by which the runtime identifies the leaf |
 | `note` | string | no | a note for operators |
 
 The runtime MUST accept the leaf and intermediates of `cert_pem` in any order, and MUST ignore PEM blocks of other types.
+It MUST take as the leaf the first certificate whose SubjectPublicKeyInfo matches the public key of `key_pem`, as [operator-supplied certificates](../runtime/tls/certificates.md#operator-supplied-certificates) specifies.
 It MUST store the chain with the leaf first.
 
 The runtime MUST refuse the upload with `requirements_invalid`, naming the failed check in the message, when:
 
-- `cert_pem` holds no `CERTIFICATE` block, or its leaf cannot be parsed;
+- `cert_pem` holds no `CERTIFICATE` block, or a `CERTIFICATE` block in it cannot be parsed;
 - `key_pem` cannot be parsed;
+- no certificate in `cert_pem` has a SubjectPublicKeyInfo matching the public key of `key_pem`;
 - the leaf has no DNS names in its SAN extension;
-- the leaf's `notAfter` has passed, as [operator-supplied certificates](../runtime/tls/certificates.md#operator-supplied-certificates) specifies;
-- the public key of `key_pem` differs from the leaf's SubjectPublicKeyInfo.
+- the leaf's `notAfter` has passed.
 
 On success, the runtime MUST store the certificate in state `active` with origin `manual`, and the private key encrypted at rest under the secret key.
 The stored certificate's `key_type` MUST name the algorithm of the uploaded key.
@@ -247,7 +248,7 @@ If the row is not in state `csr_pending`, the runtime MUST refuse the request wi
 If no stored certificate has that id, the runtime MUST refuse the request with `not_found`.
 If the row is not in state `csr_pending`, the runtime MUST refuse the request with `requirements_invalid`.
 
-The runtime MUST check the certificate as for `upload-manual`, with the row's stored private key in place of `key_pem`.
+The runtime MUST check the certificate as for `upload-manual`, with the row's stored private key in place of `key_pem`, so that the leaf is the certificate whose public key matches the stored key.
 On success, it MUST move the row to state `active`, label it with the certificate's primary SAN, and keep its requested hostnames.
 The certificate MUST bind to the hostnames its own SAN extension covers, and MUST retire the certificates it replaces in full.
 If the row leaves state `csr_pending` before the runtime activates it, the runtime MUST refuse the request with `requirements_invalid` and store or retire nothing.
@@ -279,12 +280,13 @@ The issued certificate MUST retire the certificates it replaces in full.
 
 The result is `{ cert_id, not_after }`, the new certificate's id and `notAfter`.
 The runtime MUST refuse the request with `requirements_invalid`, with a message naming the cause, when the hostname has no `acme_dns` policy, when a [retry block](#retry-blocks) is set for it, or when no contact email is configured.
+If an issuance for the hostname is running, whether reconciliation or an operator started it, the runtime MUST refuse the request with `operation_in_progress`, as [issuance](../runtime/tls/certificates.md#issuance) requires.
 The runtime MUST answer with `internal` when the issuance fails.
 A message for a failed issuance MUST name the stage that failed.
 
 `/tls/certificates/retry` takes `hostname` and queues a fresh attempt to obtain its certificate.
 The runtime MUST clear any retry block for the hostname, record a persistent retry request as [retries](../runtime/tls/certificates.md#retry-blocks-and-retries) specifies, and hand the hostname to issuance.
-The retry MUST start a new cycle of the hostname's chain from its first strategy, as [return to the first strategy](../runtime/tls/chains.md#return-to-the-first-strategy) specifies.
+For a hostname on a strategy chain, the retry MUST start a new cycle of the chain from its first strategy, as [return to the first strategy](../runtime/tls/chains.md#return-to-the-first-strategy) specifies.
 The runtime MUST return before the issuance runs.
 The result is `{ "ok": true }`.
 A retry request recorded before the runtime stops MUST be acted on after it restarts.
@@ -301,7 +303,7 @@ When `app` is given, the array MUST hold only the hostnames that app declares, a
 | `hostname` | string | the hostname |
 | `apps` | array of strings | the apps declaring the hostname, ordered by name |
 | `policy` | object | the policy resolved for the hostname |
-| `status` | string | the hostname's status |
+| `status` | string or null | the hostname's [certificate status](../runtime/tls/certificates.md#certificate-status): `blocked`, `expired`, `error`, `pending`, `active` or `none` |
 | `chain` | object or null | the hostname's position in its strategy chain |
 | `active_cert` | object or null | the certificate serving the hostname |
 | `last_issuance` | object or null | how the serving certificate was obtained |
@@ -321,23 +323,9 @@ Otherwise it MUST carry these members.
 | `pattern` | string | the matching policy's hostname pattern |
 | `is_wildcard_match` | boolean | whether `pattern` differs from `hostname` |
 
-`status` MUST be one of these values.
+`status` MUST be `null` where the runtime reports the certificate status as undetermined.
 
-| `status` | meaning |
-| --- | --- |
-| `active` | a certificate serves the hostname and its `notAfter` has not passed |
-| `expired` | the certificate serving the hostname is past its `notAfter` |
-| `pending` | the runtime is obtaining a certificate the hostname lacks, or acting on a queued operator retry |
-| `error` | the runtime cannot obtain a certificate for the hostname until something changes, or is waiting out the after-failure interval |
-| `blocked` | a retry block is set for the hostname |
-| `default` | none of the above: the hostname follows its chain with nothing serving it and nothing in progress |
-
-Where the meanings of several values hold at once, `status` MUST be the first of them in this order: `blocked`, `expired`, `error`, `pending`, `active`, `default`.
-
-The runtime MUST derive `status` from the same decision its issuance acts on, as [hostname state](../runtime/tls/certificates.md#hostname-state) requires.
-For a hostname with no runtime-held certificate, `status` MUST reflect a certificate the proxy holds for it, so that a proxy-held certificate past its `notAfter` reports `expired`.
-
-`chain` MUST be `null` for a hostname whose policy names a single strategy.
+`chain` MUST be `null` for a hostname on no [strategy chain](../runtime/tls/chains.md#strategy-chain).
 Otherwise it MUST carry these members.
 
 | member | type | meaning |
@@ -354,8 +342,8 @@ While no cycle runs, `responsible` MUST name the strategy that will act when the
 | member | type | meaning |
 | --- | --- | --- |
 | `id` | integer or null | the stored certificate's id, `null` for a proxy-held certificate |
-| `origin` | string | the stored certificate's origin, or `caddy` for a proxy-held certificate |
-| `caddy_issuer` | string | for a proxy-held certificate only: `local` for the proxy's internal CA, otherwise the host of the ACME directory that issued it |
+| `origin` | string | the stored certificate's origin, or `proxy` for a proxy-held certificate |
+| `proxy_issuer` | string | for a proxy-held certificate only: `local` for the proxy's internal CA, otherwise the host of the URL of the ACME directory that issued it |
 | `issuer` | string or null | the leaf's issuer |
 | `not_before` | integer or null | the leaf's `notBefore` |
 | `not_after` | integer or null | the leaf's `notAfter` |
@@ -368,10 +356,10 @@ Otherwise it MUST carry these members.
 
 | member | type | meaning |
 | --- | --- | --- |
-| `kind` | string | the serving certificate's origin, or `caddy` for a proxy-held certificate |
+| `kind` | string | the serving certificate's origin, or `proxy` for a proxy-held certificate |
 | `at` | integer | when the certificate was obtained |
 | `cert_id` | integer or null | the stored certificate's id, `null` for a proxy-held certificate |
-| `provider` | string or null | the DNS provider for `acme_dns`, the `caddy_issuer` value for `caddy`, and otherwise `null` or absent |
+| `provider` | string or null | the DNS provider for `acme_dns`, the `proxy_issuer` value for `proxy`, and otherwise `null` |
 
 The runtime MUST NOT derive `last_issuance` from an issuance attempt whose certificate is no longer stored.
 
@@ -419,12 +407,12 @@ Its result is `{ blocks }`, an array with one object per block, ordered by hostn
 | --- | --- | --- |
 | `hostname` | string | the blocked hostname |
 | `set_at` | integer | when the block was set |
-| `set_by` | string | `auto` for a block the runtime set after a failed issuance, `operator` for one an operator set |
+| `set_by` | string | `operator` |
 | `reason` | string or null | why the block was set |
 
-`/tls/retry-blocks/set` takes `hostname` and `reason`, an optional string, and sets an operator block for the hostname, replacing any block it has.
+`/tls/retry-blocks/set` takes `hostname` and `reason`, an optional string, and sets a block for the hostname, replacing any block it has.
 The result is `{ "ok": true }`.
-The runtime MUST keep an operator block until an operator clears it with `/tls/retry-blocks/clear` or [retries](#operator-driven-issuance) the hostname.
+The runtime MUST keep a block until an operator clears it with `/tls/retry-blocks/clear` or [retries](#operator-driven-issuance) the hostname.
 
 `/tls/retry-blocks/clear` takes `hostname` and removes the hostname's block, if it has one.
 The result is `{ ok, cleared }`, where `ok` is `true` and `cleared` says whether a block was removed.
@@ -445,6 +433,9 @@ The result is `{ ok, cleared }`, where `ok` is `true` and `cleared` says whether
 | --- | --- | --- | --- |
 | `contact_email` | string | no | the new contact email; the empty string clears it |
 | `cert_profile` | string or null | no | the new ACME profile; `null` clears it, so that the CA selects its default profile |
+
+The runtime MUST refuse a `contact_email` that is neither empty nor a single `@` with at least one character on each side of it, with `requirements_invalid`.
+The runtime MUST treat a `cert_profile` that is the empty string as `null`.
 
 The result is `{ "ok": true }`.
 A change MUST take effect from the runtime's next issuance or renewal, without a restart.

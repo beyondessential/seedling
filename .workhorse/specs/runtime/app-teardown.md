@@ -29,8 +29,17 @@ The runtime MAY use a name prefix to enumerate candidates, and MUST then match e
 If the runtime cannot read an app's recorded identities, it MUST NOT advance the app's teardown until it can.
 
 The runtime MUST NOT take an app's lack of recorded identities, on its own, as evidence that its teardown has finished.
-Where the runtime has no recorded identities for an app and cannot rule out that resources of the app remain on the host, it MUST NOT declare the app uninstalled.
-In that case the runtime MUST hold an [`uninstall_unidentifiable_units`](faults.md#app-faults) fault.
+Where the runtime has no recorded identities for an app, it MUST enumerate the resources on the host that may belong to the app, and MUST rule out each one that exactly matches a recorded identity of another app.
+While any enumerated resource is not ruled out, the runtime MUST NOT declare the app uninstalled, and MUST hold an [`uninstall_unidentifiable_units`](faults.md#app-faults) fault.
+If an operator clears that fault, the runtime MUST complete the teardown, leave the resources that were not ruled out untouched, and not file the fault again for that uninstall.
+
+## Teardown
+
+An uninstall MUST bring every resource instance recorded for the app to [`Unscheduled`](lifecycle.md#lifecycle-states).
+The runtime MUST identify each instance it tears down by its recorded identity, as [uninstall scope](#uninstall-scope) specifies.
+
+Teardown completes when every resource instance recorded for the app is `Unscheduled`.
+When teardown completes, the runtime MUST move the app to `NotInstalled`, emit an `AppPhaseChanged` [event](../interface/events.md#event-types), and forget the app's recorded instances.
 
 ## Uninstall admission
 

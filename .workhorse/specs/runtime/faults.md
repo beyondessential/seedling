@@ -79,9 +79,9 @@ The runtime MUST file and clear the faults below against the app the instance be
 | `start_failed` | the instance | starting the instance fails for a reason no other kind names | the instance is observed running | event |
 | `stop_failed` | the instance | stopping the instance fails | a later stop of the instance succeeds, or the instance is observed running | event |
 | `observe_failed` | the instance | observing the instance fails on 3 consecutive iterations of the reconciliation loop | an observation of the instance succeeds | condition |
-| `registry_error` | the instance | the runtime cannot read the instance's recorded identity when starting it | the instance starts | event |
+| `instance_identity_unreadable` | the instance | the runtime cannot read the instance's recorded [identity](identity.md) when starting it | the instance starts | event |
 | `external_volume_not_mapped` | the instance | the instance mounts an external volume that has no mapping | the instance starts | condition |
-| `crash_loop` | the instance | the instance's restart rate reaches the [configured threshold](autonomous.md#crash-loop-detection), or its supervisor has [given up restarting it](autonomous.md#restart-pacing) | the instance is observed healthy, or an operator clears it | latched |
+| `crash_loop` | the instance | the instance's restart rate reaches the [configured threshold](autonomous.md#crash-loop-detection), or its supervisor has [given up restarting it](autonomous.md#restart-pacing) | the instance has stayed running, with no recovery restart, for the [restart window](autonomous.md#crash-loop-detection), or an operator clears it | latched |
 | `health_check_failed` | the instance | the instance has a [healthcheck](../language/deployment.md#health-checks) and has been unhealthy without a break for longer than `start_period` plus `retries` × `interval` | the instance is observed healthy, or is unscheduled | condition |
 | `health_check_replace_failed` | the Deployment | the [replacement guard](autonomous.md#replacement-guard) trips for the Deployment | the app's [generation](../overview.md#generation) changes, or an operator clears it | latched |
 
@@ -115,16 +115,16 @@ The runtime MUST file and clear the faults below against the app, with an empty 
 | --- | --- | --- | --- | --- |
 | `script_error` | none | the app's definition fails to evaluate, at registration, on an update, on a parameter change, on a change to the registry allowlist, when an undetermined [host constant](../language/constants.md#determining-host-constants) is determined, or when the runtime starts | the definition next evaluates | condition |
 | `disallowed_registry` | none | an image a Deployment or Job declares is from a registry outside the [allowlist](../language/container.md#registry-allowlist) | an evaluation finds no declared image outside the allowlist | condition |
-| `registry_error` | none | the runtime cannot compute the app's desired state | the runtime next computes it | condition |
+| `desired_state_unreadable` | none | the runtime cannot compute the app's [desired state](reconciliation.md#desired-state) from its stored records | the runtime next computes it | condition |
 | `operation_failed` | none | a [lifecycle operation](../overview.md#lifecycle-operation) for the app fails, or its action closure does not compile | a later lifecycle operation for the app completes | event |
 | `operation_cancelled` | none | a lifecycle operation for the app is cancelled | a later lifecycle operation for the app completes | event |
 | `install_interrupted` | none | at startup, an interrupted install cannot be resumed because its parameter values are missing or cannot be decrypted | a later install of the app completes, or an operator clears it | latched |
-| `uninstall_unidentifiable_units` | none | an uninstall finds supervised units that may belong to the app but no recorded instance identities to match them against | the app's teardown completes | latched |
+| `uninstall_unidentifiable_units` | none | an uninstall of an app with no recorded identities finds resources on the host that may belong to it, as [uninstall scope](app-teardown.md#uninstall-scope) specifies | the app's teardown completes, or an operator clears it | latched |
 | `definition_unsupported` | none | the running Seedling does not satisfy the app's [Seedling version requirement](../language/bundle.md#seedling-version-requirement) | the definition is replaced by one the running Seedling satisfies, or the runtime starts as a version that satisfies it | condition |
 | `definition_source_moved` | the digest the reference now selects | a successful [re-check](definition-recheck.md#resolution) finds that the reference in the app's fetched definition selects a digest other than the running one | a successful re-check selects the running digest again, or the app's definition is replaced | condition |
 | `definition_recheck_failed` | none | 5 consecutive [re-checks](definition-recheck.md#back-off) of the app's definition fail | a re-check succeeds, or the app's definition is replaced | condition |
 | `schedule_params_invalid` | the action | a schedule of the action comes due and its run [fails param validation](../language/action.md#scheduled-actions) | a later scheduled run of the action passes validation, or the definition no longer schedules the action | event |
-| `canopy_offer_absent` | none | the app [relies on Canopy](canopy-reporting.md#missing-offers) and no offer has been live for 15 minutes | an offer is live, Canopy access is disabled, or the app stops relying on Canopy | condition |
+| `canopy_offer_absent` | none | the app [relies on Canopy](canopy-reporting.md#missing-offers), Canopy access is enabled, and no offer has been live for the period [missing offers](canopy-reporting.md#missing-offers) specifies | an offer is live, Canopy access is disabled, or the app stops relying on Canopy | latched |
 
 An `operation_failed` fault MUST carry the failure.
 A `disallowed_registry` fault MUST name each disallowed registry.
@@ -142,7 +142,7 @@ The runtime MUST file and clear the faults below against the app owning the ingr
 
 | kind | subject | filed when | clears when | shape |
 | --- | --- | --- | --- | --- |
-| `ingress_conflict` | the app ingress or the site ingress | an app ingress and a site ingress attachment claim the same hostname and port, as [SITE](site-resources.md#ingress-conflicts) specifies, or an app ingress is left out because another app's ingress [claims](../language/ingress.md#claims-across-apps) them | the hostname and port are no longer in conflict | condition |
+| `ingress_conflict` | the app ingress or the site ingress | an app ingress and a site ingress attachment claim the same hostname and port, or a site ingress attachment is left out because another site ingress's attachment claims them, as [SITE](site-resources.md#ingress-conflicts) specifies, or an app ingress is left out because another app's ingress [claims](../language/ingress.md#claims-across-apps) them | the hostname and port are no longer in conflict | condition |
 | `proxy_apply_failed` | the app ingress or the site ingress | applying a proxy configuration that includes the ingress fails | a later proxy configuration is applied | condition |
 | `site_ingress_target_missing` | the site ingress attachment | a site ingress attachment forwards to an app service that does not exist | the attachment's target exists, or the attachment is removed | condition |
 | `service_degraded` | the service | the service's routing pool has [fallen back](lifecycle.md#routing-pool) to backends that are running but unhealthy | a backend in the pool is healthy, or the service is unscheduled | condition |
@@ -158,14 +158,14 @@ A site service fault MUST name the failing endpoints, and an unroutable one MUST
 
 | kind | app | subject | filed when | clears when | shape |
 | --- | --- | --- | --- | --- | --- |
-| `cert_acquisition_failed` | the ingress's app | the ingress instance | no valid certificate has been observed for the ingress's hostname 180 seconds after it began to need one, while no acquisition is in progress | a valid certificate is observed for the hostname | condition |
+| `cert_acquisition_failed` | the ingress's app | the ingress instance | no usable certificate has been observed [served](tls/certificates.md#served-certificate) for the ingress's hostname 180 seconds after it began to need one, while no acquisition is in progress for it | a usable certificate is observed served for the hostname | condition |
 | `cert_issue_failed` | `_system` | the hostname | issuing a certificate for the hostname through ACME with DNS validation or through Tailscale fails, or ACME issuance needs a contact email and none is set | a certificate for the hostname is issued, or no ingress needs one for it | event |
 | `cert_expiring_soon` | the ingress's app | the ingress | a certificate the runtime cannot renew itself, [as TLS specifies](tls/certificates.md#expiring-certificates), expires within 14 days | the certificate selected for the hostname is no longer one the runtime cannot renew and expiring within 14 days, or the ingress no longer exists | condition |
 | `canopy_certificate_failed` | the ingress's app | the ingress | the ingress's certificate cannot be obtained or replaced through Canopy, [as TCAN specifies](tls/canopy.md#faults) | none of the [conditions TCAN names](tls/canopy.md#faults) holds, or the ingress no longer exists | condition |
 
 A `cert_acquisition_failed` fault MUST identify the hostname and the most recent acquisition error.
 A `cert_issue_failed` fault MUST carry the failure.
-If the runtime cannot read whether a certificate is held for a hostname, it MUST neither file nor clear `cert_acquisition_failed` for that hostname.
+If the runtime cannot read whether a usable certificate is served for a hostname, it MUST neither file nor clear `cert_acquisition_failed` for that hostname.
 
 ## Host faults
 
@@ -173,8 +173,8 @@ The runtime MUST file and clear the faults below against `_system`, with an empt
 
 | kind | filed when | clears when | shape |
 | --- | --- | --- | --- |
-| `container_runtime_unavailable` | the runtime is running without a working container runtime or process supervisor | the runtime has started with both reachable | condition |
-| `app_priorities_unreadable` | the runtime cannot read the stored app priorities | the runtime next reads them | condition |
+| `container_runtime_unavailable` | the runtime is running without a working container runtime or process supervisor | a [probe](infrastructure.md#unavailable-backends) finds both reachable | condition |
+| `app_priorities_unreadable` | the runtime cannot read the stored [app priorities](priority.md#unreadable-priorities), or any one app's stored priority | the runtime next reads every stored priority | condition |
 | `scaling_decisions_unreadable` | the runtime cannot read the stored operator scaling decisions | the runtime next reads them | condition |
 | `slice_sync_failed` | applying the [resource-control groups](priority.md#resource-control-groups) has failed 5 consecutive times | the groups are next applied | condition |
 | `nat64_setup_failed` | setting up the NAT64 translator fails | the translator is next set up | condition |
@@ -184,17 +184,20 @@ The runtime MUST file and clear the faults below against `_system`, with an empt
 | `ipv4_egress_undetermined` | whether the host has [IPv4 egress](../language/constants.md#host-constants) cannot be determined | the determination succeeds | condition |
 | `timezone_undetermined` | the host's [local time zone](../language/constants.md#host-constants) cannot be determined | the determination succeeds | condition |
 | `operation_state_unreadable` | the runtime cannot read the [persisted operation, its cancel, or the persisted queue](operations.md#unreadable-operation-state) | the read succeeds | condition |
-| `resolver_failed` | starting the resolver fails or does not finish in time | an iteration finds the resolver running | condition |
-| `caddy_failed` | bringing up the proxy fails or does not finish in time, or a [proxy upgrade](proxy.md#proxy-upgrades) is rejected | an iteration finds the proxy healthy | condition |
+| `resolver_failed` | starting the resolver fails or does not finish in time | an iteration finds the resolver running, or the resolver is stopped because no app is installed or installing | condition |
+| `caddy_failed` | bringing up the proxy fails or does not finish in time, or a [proxy upgrade](proxy.md#proxy-upgrades) is rejected | for a failed bring-up, an iteration finds the proxy healthy; for a rejected upgrade, an upgrade succeeds; in either case, the proxy is stopped because no app is installed or installing | condition |
 | `routes_failed` | applying the host's routes fails | the routes are next applied | condition |
 | `nftables_failed` | applying the host's packet-filtering rules fails | the rules are next applied | condition |
 | `proxy_failed` | applying the proxy configuration fails | a proxy configuration is next applied | condition |
 | `tailscale_unreachable` | the Tailscale discovery provider has failed 5 consecutive polls | a poll succeeds | condition |
 | `reconciler_panic` | an iteration of the reconciliation loop panics | an operator clears it | event |
 
-The runtime MUST file `app_priorities_unreadable` and `scaling_decisions_unreadable` on the first failed read, since the runtime holds reconciliation while either persists.
+The runtime MUST file `app_priorities_unreadable` and `scaling_decisions_unreadable` on the first failed read.
+
+> [!NOTE]
+> The runtime holds back the affected apps while either fault is active, as [unreadable priorities](priority.md#unreadable-priorities) and [unreadable scale](autonomous.md#unreadable-scale) specify.
 A withheld apply MUST neither file nor clear `routes_failed`, `nftables_failed` or `proxy_failed`.
-A `container_runtime_unavailable` fault MUST name the unavailable backend and state that no workloads will be actuated until the runtime is restarted with working backends.
+A `container_runtime_unavailable` fault MUST name the unavailable backend and state that no workloads will be actuated until it is reachable.
 A `resolver_failed` or `caddy_failed` fault MUST name the failure.
 
 ## Reporting faults
@@ -205,7 +208,7 @@ The runtime MUST file and clear the faults below against `seedling`, with an emp
 | --- | --- | --- | --- |
 | `canopy_report_failed` | a [report](canopy-reporting.md#report-failure-fault) to Canopy fails while an offer is live | a later report succeeds, Canopy access is disabled, or no offer is live | condition |
 | `audit_lag` | the audit log writer falls behind and drops events | an operator clears it | event |
-| `audit_log_unavailable` | the runtime cannot open the [audit log](audit-log.md#write-failures) | the runtime opens it | condition |
+| `audit_log_unavailable` | the runtime cannot open the [audit log](audit-log.md#write-failures), or cannot write an entry to it | the runtime next writes an entry | condition |
 
 A `canopy_report_failed` fault MUST carry the latest failure.
 An `audit_lag` fault MUST state how many events were dropped.

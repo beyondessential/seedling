@@ -64,6 +64,9 @@ An `options` map with any other key MUST throw.
 
 A script declares an [external volume](#external-volume) with `app.external_volume(name: string)`, which returns an `ExternalVolume`.
 An `ExternalVolume` has no builder methods other than [`description`](overview.md#descriptions).
+
+In the [action context](app.md#action-context), `app.external_volume(name)` MUST return the static external volume `name` if the static context declared one.
+Otherwise it MUST return a [dynamic](app.md#dynamic-resource) external volume named `name`.
 A container mounts an external volume as [volume mounts](container.md#volume-mounts) specifies.
 
 The runtime MUST resolve an external volume's name against the bindings of the [lifecycle operation](../overview.md#lifecycle-operation) in progress, if any, and then against the host's external volume mappings.

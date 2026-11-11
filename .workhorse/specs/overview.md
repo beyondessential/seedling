@@ -16,7 +16,7 @@ The key words MUST, MUST NOT, REQUIRED, SHALL, SHALL NOT, SHOULD, SHOULD NOT, RE
 | --- | --- |
 | [RFC 2119](https://www.rfc-editor.org/rfc/rfc2119) and [RFC 8174](https://www.rfc-editor.org/rfc/rfc8174) | the requirement keywords above |
 | [Rhai](https://rhai.rs/book/) | the scripting language BSL is written in, under [BSL](language/overview.md) |
-| [TOML](https://toml.io/en/) | the bundle metadata file and web interface configuration, under [BND](language/bundle.md), [WEB](web/serving.md) |
+| [TOML 1.0.0](https://toml.io/en/v1.0.0) | the bundle metadata file and web interface configuration, under [BND](language/bundle.md), [WEB](web/serving.md) |
 | [Semantic Versioning 2.0.0](https://semver.org/spec/v2.0.0.html) | Seedling versions, under [BND](language/bundle.md), [STS](interface/status.md) |
 | [Cargo version requirement syntax](https://doc.rust-lang.org/cargo/reference/specifying-dependencies.html#version-requirement-syntax) | version requirements, under [BND](language/bundle.md) |
 | [POSIX `crontab`](https://pubs.opengroup.org/onlinepubs/9799919799/utilities/crontab.html), Issue 8 | schedule expressions, under [ACN](language/action.md) |

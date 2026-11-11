@@ -16,7 +16,7 @@ Applies to the host-level state the [runtime](../overview.md#runtime) keeps bene
 
 ### Host prefix
 
-The IPv6 /48 unique local prefix the runtime derives for its host, within which every address it assigns falls.
+The IPv6 /48 unique local prefix the runtime derives for its host, within which every IPv6 address it assigns falls.
 
 ### Pod network
 
@@ -34,7 +34,9 @@ It MUST still bring up the [Operator Interface](../overview.md#operator-interfac
 While either backend is unavailable, the runtime MUST NOT actuate workloads, or infrastructure that depends on the unavailable backend.
 On each reconciliation iteration while either is unavailable, the runtime MUST file a [`container_runtime_unavailable`](faults.md#host-faults) fault.
 
-The runtime MAY remain without the backends until it is restarted.
+While either backend is unavailable, the runtime MUST probe it again on later reconciliation iterations.
+Successive probes of an unavailable backend MUST be spaced by an increasing delay up to a fixed maximum, and the runtime MUST keep probing at that maximum however long the backend stays unavailable.
+Once both backends are reachable, the runtime MUST clear `container_runtime_unavailable` and actuate workloads as usual.
 
 ## File permissions
 
@@ -111,14 +113,29 @@ The runtime MUST translate traffic addressed to a service's address and declared
 The translation MUST apply to traffic forwarded through the host and to traffic originating on the host.
 Where a service has several backends, the runtime MUST distribute new connections across them.
 
-The runtime MUST apply the service translation, mount translation, ingress redirection and forwarding policy rules together, as one atomic replacement of the rules it last applied.
+The runtime MUST apply the service translation, mount translation, [ingress redirection](#ingress-redirection) and forwarding policy rules together, as one atomic replacement of the rules it last applied.
 These rules are [absolute state](reconciliation.md#absolute-state).
+
+## Ingress redirection
+
+The runtime MUST redirect traffic arriving from the network at an ingress port on any of the host's own addresses to the proxy, at the same port.
+The ingress ports and their protocols are:
+
+| source | port | protocols |
+| --- | --- | --- |
+| an app's [ingress](../language/ingress.md) | the port it declares | TCP, and UDP as well when the ingress terminates DTLS or HTTPS |
+| an app ingress's [HTTP redirect](../language/ingress.md#redirect-to-https) | the port the redirect names | TCP |
+| a [site ingress attachment](site-resources.md#attachments) | the attachment's port | UDP for a `udp` attachment; otherwise TCP, and UDP as well for an `http` or `http2` attachment on a site ingress that terminates TLS |
+
+The runtime MUST redirect IPv6 traffic to the proxy's IPv6 address.
+Where the proxy has an IPv4 address, the runtime MUST also redirect IPv4 traffic to it.
+The runtime MUST NOT redirect the ports of an app that is uninstalling.
 
 ## Host-originated traffic
 
-The runtime MUST redirect traffic originating on the host and addressed to an ingress port on any of the host's own addresses to the proxy, as it redirects traffic arriving from the network.
+The runtime MUST redirect traffic originating on the host and addressed to an ingress port on any of the host's own addresses to the proxy, as it [redirects](#ingress-redirection) traffic arriving from the network.
 The redirection MUST cover the same ports and protocols as the redirection of traffic from the network.
-It MUST apply only to IPv6 traffic addressed to a local address.
+It MUST apply only to traffic addressed to a local address.
 
 A connection from a host process over the loopback interface that the runtime redirects MUST receive the proxy's replies.
 

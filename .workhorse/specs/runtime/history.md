@@ -85,9 +85,13 @@ The runtime MUST record in the action execution log each runtime call a lifecycl
 | time | when the runtime recorded the call |
 | operation | the identity of the lifecycle operation |
 | position | the call's position in the closure's sequence of calls |
-| call | the `rt` method called, such as `start`, `stop` or `warm_certs`, and the resources it named |
+| call | the `rt` method called, such as `start`, `stop` or `warm_certs`, and the resources it named, or `Action.invoke` |
+| invocation | for an `Action.invoke` call, the called action's name and its validated parameter map |
 | barriers | each [barrier](suspension.md#barriers) the call reached: its resources, the lifecycle state it requires, and its deadline |
 | satisfied | for each barrier, whether it has been satisfied |
+
+An entry for a call that acts on the host also holds whether the call was begun or completed, and the values [side-effecting calls](suspension.md#side-effecting-calls) lists for it.
+A barrier's record also holds when the barrier began to wait, as [barrier anchoring](suspension.md#barrier-anchoring) specifies.
 
 Before [`Action.invoke()`](../language/action.md#action-invocation) runs the called closure, the runtime MUST record an entry for the invocation holding the called action's name and its validated parameter map.
 Replay of that entry is specified by [sub-action parameters](operations.md#sub-action-parameters).

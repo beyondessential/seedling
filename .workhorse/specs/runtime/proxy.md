@@ -50,10 +50,14 @@ The runtime MUST route a request to an ingress's target only when the request ar
 Two ingresses for the same hostname on different ports MUST be served independently, each port serving the routes of the ingress declared on it.
 A redirect an ingress declares MUST answer only on the port it names.
 
+An ingress's [HTTP redirect](../language/ingress.md#redirect-to-https) claims the ingress's hostname on the port the redirect names.
+That claim and a plaintext ingress's claim on the same hostname and port conflict, and the runtime MUST resolve the conflict as [claims across apps](../language/ingress.md#claims-across-apps) and [ingress conflicts](site-resources.md#ingress-conflicts) specify.
+
 ### Plaintext ingresses
 
-Whether an ingress terminates TLS is independent of whether it terminates HTTP.
 An ingress that terminates HTTP without terminating TLS is a plaintext ingress.
+A plaintext ingress is an `http` or `http2` [attachment](site-resources.md#attachments) on a site ingress whose TLS provisioning mode is `none`.
+An app's ingress terminates HTTP only together with TLS, as [termination](../language/ingress.md#termination) specifies.
 
 The runtime MUST serve a plaintext ingress as HTTP without TLS on its port, routing matching requests to the ingress's target.
 For a plaintext ingress, the runtime MUST NOT request or provision a certificate for the hostname.
@@ -73,9 +77,9 @@ The runtime MUST emit routes for every HTTP-terminating [ingress](../language/in
 The routes MUST be the same whichever kind of ingress fronts the service.
 Each route's settings MUST be resolved against the app that declares the service.
 
-For each prefix that a [pod binding](../language/pod.md#port-bindings) on any pod of the declaring app binds to the service, the runtime MUST emit one proxied route at that prefix.
-Its upstreams MUST be the addresses of that pod's running instances, each at the pod port of the binding.
-A prefix whose binding pod has no running instance MUST still be emitted, with no upstreams.
+For each prefix that a [pod binding](../language/pod.md#port-bindings) on any pod of the declaring app binds to the service, the runtime MUST emit one proxied route at that prefix, however many pods bind it.
+Its upstreams MUST be the addresses of the running instances of every pod binding the prefix, each at the pod port of that pod's binding.
+A prefix none of whose binding pods has a running instance MUST still be emitted, with no upstreams.
 
 If no pod binds any prefix of the service, the runtime MUST emit a fallback route.
 Its single upstream MUST be the service's address at the service's port, through the service's [routing pool](lifecycle.md#routing-pool).
@@ -226,10 +230,12 @@ The runtime MUST attempt to bring the proxy up when it starts.
 A failure to bring the proxy up MUST NOT prevent the runtime from starting.
 The [Operator Interface](../overview.md#operator-interface), database, scheduler and reconciliation loop MUST come up whether or not the proxy does.
 
-While any app is installed, the runtime MUST check the proxy's health on each [reconciliation](reconciliation.md#reconciliation-loop) iteration and restart it if it is not running or not healthy.
+While any app is installed or installing, the runtime MUST check the proxy's health on each [reconciliation](reconciliation.md#reconciliation-loop) iteration and restart it if it is not running or not healthy.
+The proxy is healthy when it answers the runtime's health query on its administrative interface.
 The runtime MUST stop the proxy when no app is installed or installing.
 
-On an iteration that fails to bring the proxy up, the runtime MUST file a [`caddy_failed`](faults.md#host-faults) fault.
+On an iteration that fails to bring the proxy up, or does not finish doing so, the runtime MUST file a [`caddy_failed`](faults.md#host-faults) fault.
+When it stops the proxy because no app is installed or installing, the runtime MUST clear `caddy_failed`.
 
 ## Proxy image
 
@@ -271,3 +277,4 @@ The runtime SHOULD also apply the persisted configuration to a proxy it starts a
 If the replacement rejects the persisted configuration, the runtime MUST abort the upgrade.
 It MUST stop the replacement, leave the running proxy active and serving, and not record the replacement as active.
 It MUST file the `caddy_failed` fault naming the rejection, and retry the upgrade on a later iteration.
+A `caddy_failed` fault filed for a rejected upgrade MUST clear only when an upgrade succeeds or the proxy is stopped, and MUST NOT clear because the running proxy is healthy.

@@ -382,7 +382,7 @@ The server MUST refuse the request with `not_found` if the app is not registered
 | `redacted` | boolean | present, and true, when the values are withheld |
 | `script_changed` | boolean | true for `register` and `script_update`, false otherwise |
 | `operation_id` | string or null | the lifecycle operation the change triggered, if any |
-| `outcome` | string or null | `pending`, `succeeded` or `failed` for a triggered operation, `null` where none was triggered |
+| `outcome` | string or null | `pending`, `succeeded`, `cancelled` or `failed` for a triggered operation, `null` where none was triggered |
 | `error` | string | present when `outcome` is `failed` and a cause was recorded: a short description of it |
 
 The server MUST withhold both values of an entry whose parameter is secret under the current definition, or whose value was held in secret storage when the change was recorded.

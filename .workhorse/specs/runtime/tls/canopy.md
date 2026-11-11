@@ -61,7 +61,7 @@ Canopy answers a first request as pending, and delivers the certificate when ask
 
 While an order is open for a hostname, the runtime MUST ask again on every report tick, whichever strategy is responsible.
 Once a Canopy certificate serving a hostname reaches its [renewal point](certificates.md#renewal-point), the runtime MUST ask again on every report tick until it has stored a certificate expiring later than the one it holds.
-At any other time the runtime MUST NOT ask.
+The runtime MUST NOT ask Canopy about a hostname except to open an order while Canopy is the hostname's responsible strategy, to collect as this section specifies, or to request a certificate for a new key as [revocation](#revocation) specifies.
 
 > [!NOTE]
 > Asking from the renewal point is how the runtime collects a renewal Canopy has carried out.
@@ -84,6 +84,8 @@ An answer Canopy gave with a success status:
 | `state` `failed` | order failed, with `last_error` as the reason |
 | `state` `revoked` | revoked |
 | anything else | unavailable |
+
+The first row that matches an answer decides its classification.
 
 An answer with an error status, by its status and the problem details `type` member, of the form `/errors/<cause>`:
 
@@ -132,15 +134,16 @@ A listed certificate with `revoked` or `key_must_be_replaced` true condemns the 
 
 When a Canopy certificate is condemned, the runtime MUST stop serving it at once and MUST destroy its key, whether or not the tick has room for further requests.
 If no cycle is running for the hostname, one MUST start, with the condemned certificate as the one being replaced.
-The hostname MUST pass at once to the next strategy in its chain and stay there until the next cycle.
+If the hostname's chain has a strategy after Canopy, the hostname MUST pass at once to it and stay there until the next cycle.
+A hostname whose chain is Canopy alone MUST stay with Canopy.
 The runtime MUST generate a new key, and MUST request a certificate for it, on this tick if the tick has room and otherwise on a later one, and MUST go on asking for it until Canopy delivers or refuses.
 
 ## Serving and observation
 
 A Canopy certificate MUST be served like any other runtime-managed certificate, per [serving](certificates.md#serving), and ranked against other certificates covering the hostname per [certificate selection](certificates.md#certificate-selection).
 
-A Canopy certificate MUST count as the hostname's certificate for [ingress certificate observation](../observation.md#ingresses), so that it satisfies [`rt.warm_certs`](../../language/rt.md#certificate-warming) barriers and an ingress's `Ready` state.
-An open Canopy order MUST be observed as `pending`.
+A Canopy certificate a lookup answers with MUST count as the hostname's [served certificate](certificates.md#served-certificate), so that it satisfies [`rt.warm_certs`](../../language/rt.md#certificate-warming) barriers.
+An open Canopy order MUST count as an acquisition in progress for the hostname's [certificate status](certificates.md#certificate-status).
 
 ## Attempt log entries
 
@@ -149,7 +152,7 @@ Asking again about an open order MUST NOT add an entry.
 
 ## Faults
 
-The runtime MUST hold a fault of kind `canopy_certificate_failed` against each ingress declaring a hostname while any of these holds:
+The runtime MUST hold a fault of kind `canopy_certificate_failed` against each ingress declaring a hostname while any of these holds, unless the hostname is served a usable certificate and its responsible strategy has a fall-through point it has not reached:
 
 - Canopy is the responsible strategy for the hostname and cannot be asked about it;
 - the hostname is under the [Canopy-only policy](#canopy-only-policy) and Canopy cannot be asked about it;
@@ -161,10 +164,8 @@ The fault MUST name the hostname and the reason.
 The runtime MUST clear the fault when none of these holds, or when the ingress no longer exists.
 The runtime MUST bring these faults into line on every report tick, whether or not the report succeeded, and MUST log each fault it files.
 
-A hostname that holds a usable certificate and whose responsible strategy has not reached its fall-through point MUST NOT raise the fault.
-
 > [!NOTE]
-> Such a hostname's chain is still working on its certificate.
+> A hostname excepted from the fault has a chain still working on its certificate.
 
 ## Canopy-only policy
 
