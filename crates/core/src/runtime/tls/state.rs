@@ -1173,6 +1173,7 @@ mod tests {
             ari_polled_at: None,
             created_at: not_before,
             updated_at: not_before,
+            renews: None,
         }
     }
 

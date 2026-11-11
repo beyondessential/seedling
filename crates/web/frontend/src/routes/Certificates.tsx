@@ -44,6 +44,7 @@ import type {
   TlsCsrGetResponse,
   TlsDnsProvider,
   TlsDnsProvidersResponse,
+  TlsHostnamesResponse,
   TlsPoliciesResponse,
   TlsPolicy,
   TlsSettings,
@@ -86,7 +87,8 @@ export default function Certificates() {
   const [providerDialog, setProviderDialog] = useState(false);
   const [policyDialog, setPolicyDialog] = useState(false);
   const [uploadDialog, setUploadDialog] = useState(false);
-  const [csrBeginDialog, setCsrBeginDialog] = useState(false);
+  // Open with the certificate being renewed, or with null for a fresh CSR.
+  const [csrBegin, setCsrBegin] = useState<{ renewing: TlsCertificate | null } | null>(null);
   const [csrShow, setCsrShow] = useState<{ id: number; csrPem: string } | null>(null);
   const [csrUpload, setCsrUpload] = useState<TlsCertificate | null>(null);
   const [removingProvider, setRemovingProvider] = useState<string | null>(null);
@@ -173,12 +175,16 @@ export default function Certificates() {
           }}
           onGenerateCsr={() => {
             clearError();
-            setCsrBeginDialog(true);
+            setCsrBegin({ renewing: null });
           }}
-          onShowCsr={async (c) => {
+          onRenew={(c) => {
+            clearError();
+            setCsrBegin({ renewing: c });
+          }}
+          onShowCsr={async (id) => {
             clearError();
             const result = (await execute("/tls/certificates/csr/get", {
-              id: c.id,
+              id,
             })) as TlsCsrGetResponse | null;
             if (result === null) return;
             setCsrShow({ id: result.id, csrPem: result.csr_pem });
@@ -239,11 +245,12 @@ export default function Certificates() {
         }}
       />
       <CsrBeginDialog
-        open={csrBeginDialog}
-        onClose={() => setCsrBeginDialog(false)}
+        open={csrBegin !== null}
+        renewing={csrBegin?.renewing ?? null}
+        onClose={() => setCsrBegin(null)}
         onSubmitted={(result) => {
           refetchCerts();
-          setCsrBeginDialog(false);
+          setCsrBegin(null);
           setCsrShow({ id: result.id, csrPem: result.csr_pem });
         }}
       />
@@ -613,7 +620,8 @@ interface ManualCertsSectionProps {
   onUpload: () => void;
   onDelete: (cert: TlsCertificate) => void;
   onGenerateCsr: () => void;
-  onShowCsr: (cert: TlsCertificate) => void;
+  onRenew: (cert: TlsCertificate) => void;
+  onShowCsr: (id: number) => void;
   onUploadCsrCert: (cert: TlsCertificate) => void;
   onCancelCsr: (cert: TlsCertificate) => void;
 }
@@ -625,6 +633,7 @@ function ManualCertsSection({
   onUpload,
   onDelete,
   onGenerateCsr,
+  onRenew,
   onShowCsr,
   onUploadCsrCert,
   onCancelCsr,
@@ -695,6 +704,10 @@ function ManualCertsSection({
                   !expired &&
                   c.not_after !== null &&
                   c.not_after - nowSecs <= 14 * 24 * 60 * 60;
+                // w[impl routes.certificates]
+                // Offered once the certificate is within the expiry window;
+                // origin is already narrowed to manual and CSR by the caller.
+                const renewable = c.state === "active" && (expired || expiringSoon);
                 return (
                   <TableRow key={c.id} hover>
                     <TableCell sx={{ fontFamily: "monospace" }}>{c.id}</TableCell>
@@ -716,6 +729,15 @@ function ManualCertsSection({
                             requested {c.requested_hostnames.join(", ")}
                           </Typography>
                         )}
+                      {/* w[impl routes.certificates] */}
+                      {c.renews !== null && (
+                        <Typography
+                          variant="caption"
+                          sx={{ color: "text.secondary", display: "block" }}
+                        >
+                          renews #{c.renews}
+                        </Typography>
+                      )}
                     </TableCell>
                     <TableCell>
                       <Chip label={c.origin} size="small" variant="outlined" />
@@ -769,7 +791,7 @@ function ManualCertsSection({
                             safety="read"
                             tooltip="Show CSR PEM again"
                             size="small"
-                            onClick={() => onShowCsr(c)}
+                            onClick={() => onShowCsr(c.id)}
                           >
                             Show CSR
                           </OutlinedActionButton>
@@ -790,13 +812,36 @@ function ManualCertsSection({
                           </IconActionButton>
                         </>
                       ) : (
-                        <IconActionButton
-                          safety="dangerous"
-                          tooltip="Delete"
-                          onClick={() => onDelete(c)}
-                        >
-                          <DeleteOutlineIcon fontSize="small" />
-                        </IconActionButton>
+                        <>
+                          {/* w[impl routes.certificates] */}
+                          {c.pending_renewal !== null && (
+                            <OutlinedActionButton
+                              safety="read"
+                              tooltip="Show the pending renewal's CSR"
+                              size="small"
+                              onClick={() => onShowCsr(c.pending_renewal!)}
+                            >
+                              Renewal #{c.pending_renewal}
+                            </OutlinedActionButton>
+                          )}
+                          {renewable && c.pending_renewal === null && (
+                            <OutlinedActionButton
+                              safety="write"
+                              tooltip="Generate a CSR renewing this certificate"
+                              size="small"
+                              onClick={() => onRenew(c)}
+                            >
+                              Renew
+                            </OutlinedActionButton>
+                          )}
+                          <IconActionButton
+                            safety="dangerous"
+                            tooltip="Delete"
+                            onClick={() => onDelete(c)}
+                          >
+                            <DeleteOutlineIcon fontSize="small" />
+                          </IconActionButton>
+                        </>
                       )}
                     </TableCell>
                   </TableRow>
@@ -1402,14 +1447,22 @@ function PemField({
 
 interface CsrBeginDialogProps {
   open: boolean;
+  /** The certificate a renewal is begun for, or null for a fresh CSR. */
+  renewing: TlsCertificate | null;
   onClose: () => void;
   onSubmitted: (result: TlsCsrBeginResponse) => void;
 }
 
-function CsrBeginDialog({ open, onClose, onSubmitted }: CsrBeginDialogProps) {
+function CsrBeginDialog({ open, renewing, onClose, onSubmitted }: CsrBeginDialogProps) {
   const [hostnames, setHostnames] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const { execute, error, clearError } = useOiAction();
+
+  // w[impl routes.certificates]
+  // A renewal starts from what the CA issued, not from what was requested.
+  useEffect(() => {
+    if (open) setHostnames(renewing?.san_dns_names?.join(", ") ?? "");
+  }, [open, renewing]);
 
   const names = hostnames.split(/[\s,]+/).filter((n) => n.length > 0);
 
@@ -1424,6 +1477,7 @@ function CsrBeginDialog({ open, onClose, onSubmitted }: CsrBeginDialogProps) {
     try {
       const result = (await execute("/tls/certificates/csr/begin", {
         hostnames: names,
+        ...(renewing !== null && { renews: renewing.id }),
         key_type: "ecdsa_p256",
       })) as TlsCsrBeginResponse | null;
       if (result !== null) {
@@ -1442,7 +1496,9 @@ function CsrBeginDialog({ open, onClose, onSubmitted }: CsrBeginDialogProps) {
 
   return (
     <Dialog open={open} onClose={close} fullWidth maxWidth="sm">
-      <DialogTitle>Generate CSR</DialogTitle>
+      <DialogTitle>
+        {renewing === null ? "Generate CSR" : `Renew certificate #${renewing.id}`}
+      </DialogTitle>
       <DialogContent>
         <Stack spacing={2} sx={{ mt: 1 }}>
           {error && (
@@ -1463,6 +1519,7 @@ function CsrBeginDialog({ open, onClose, onSubmitted }: CsrBeginDialogProps) {
             slotProps={{ htmlInput: { style: { fontFamily: "monospace" } } }}
             helperText="One or more hostnames, or *.suffix wildcards, separated by commas or spaces. The runtime generates an ECDSA P-256 keypair on the server; only the CSR is returned. Get the CSR signed by your CA, then come back to upload the signed cert."
           />
+          {renewing !== null && <ServedHostnames certId={renewing.id} />}
         </Stack>
       </DialogContent>
       <DialogActions>
@@ -1474,6 +1531,31 @@ function CsrBeginDialog({ open, onClose, onSubmitted }: CsrBeginDialogProps) {
         </SolidActionButton>
       </DialogActions>
     </Dialog>
+  );
+}
+
+/** The ingress hostnames a certificate is currently serving, for narrowing a
+ * renewal down from its SAN set. */
+function ServedHostnames({ certId }: { certId: number }) {
+  // w[impl routes.certificates]
+  const { data } = useOiQuery<TlsHostnamesResponse>("/tls/hostnames/list", {});
+  if (data === null) return null;
+  const served = data.hostnames
+    .filter((h) => h.active_cert?.id === certId)
+    .map((h) => h.hostname);
+  return (
+    <Typography variant="body2" sx={{ color: "text.secondary" }}>
+      {served.length === 0 ? (
+        "Serving no hostnames."
+      ) : (
+        <>
+          Serving{" "}
+          <Box component="span" sx={{ fontFamily: "monospace" }}>
+            {served.join(", ")}
+          </Box>
+        </>
+      )}
+    </Typography>
   );
 }
 

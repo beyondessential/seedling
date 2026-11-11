@@ -4,6 +4,7 @@ import { renderWithSession } from "../test/harness";
 import type {
   TlsCertificate,
   TlsDnsProvider,
+  TlsHostnameView,
   TlsPolicy,
   TlsSettings,
 } from "../lib/types";
@@ -34,8 +35,11 @@ const settings: TlsSettings = {
 const manualCert: TlsCertificate = {
   id: 3,
   hostname: "shop.example.com",
+  san_dns_names: ["shop.example.com"],
   requested_hostnames: null,
   requested_not_covered: null,
+  renews: null,
+  pending_renewal: null,
   state: "active",
   origin: "manual",
   key_type: "ecdsa_p256",
@@ -53,8 +57,11 @@ const manualCert: TlsCertificate = {
 const pendingCsr: TlsCertificate = {
   id: 5,
   hostname: "csr.example.com",
+  san_dns_names: null,
   requested_hostnames: ["csr.example.com"],
   requested_not_covered: null,
+  renews: null,
+  pending_renewal: null,
   state: "csr_pending",
   origin: "csr",
   key_type: "ecdsa_p256",
@@ -73,8 +80,11 @@ const pendingCsr: TlsCertificate = {
 const acmeCert: TlsCertificate = {
   id: 8,
   hostname: "auto.example.com",
+  san_dns_names: ["auto.example.com"],
   requested_hostnames: null,
   requested_not_covered: null,
+  renews: null,
+  pending_renewal: null,
   state: "active",
   origin: "acme_dns",
   key_type: "ecdsa_p256",
@@ -654,6 +664,119 @@ describe("Certificates", () => {
         key_type: "ecdsa_p256",
       });
     });
+  });
+
+  // w[verify routes.certificates]
+  it("offers to renew an expiring certificate from what its CA issued", async () => {
+    // Requested one name, issued as a wildcard plus the apex.
+    const widened: TlsCertificate = {
+      ...manualCert,
+      id: 20,
+      hostname: "*.doma.in",
+      san_dns_names: ["*.doma.in", "doma.in"],
+      requested_hostnames: ["a.doma.in"],
+      requested_not_covered: [],
+      origin: "csr",
+      not_after: now + 5 * 86400,
+      serial: "0e20",
+      self_signed: false,
+    };
+    const servedBy = (hostname: string, id: number): TlsHostnameView => ({
+      hostname,
+      apps: ["web"],
+      policy: { strategy: "default" },
+      status: "active",
+      chain: null,
+      active_cert: {
+        id,
+        origin: "csr",
+        issuer: null,
+        not_before: now - 86400,
+        not_after: now + 5 * 86400,
+        self_signed: false,
+        ari_window_start: null,
+        ari_window_end: null,
+      },
+      last_issuance: null,
+      last_error: null,
+      retry_block: null,
+      force_retry_at: null,
+      next_issuance_at: null,
+      next_issuance_source: null,
+    });
+    const { request } = renderWithSession(<Certificates />, {
+      fixtures: baseFixtures({
+        "/tls/certificates/list": { certificates: [manualCert, widened] },
+        "/tls/hostnames/list": {
+          hostnames: [
+            servedBy("a.doma.in", 20),
+            servedBy("b.doma.in", 20),
+            servedBy("shop.example.com", 3),
+          ],
+        },
+        "/tls/certificates/csr/begin": { id: 21, csr_pem: CSR_PEM },
+      }),
+      safetyMode: "write",
+    });
+
+    const row = await waitFor(() => rowFor("0e20"));
+    // A certificate outside the expiry window is not offered a renewal.
+    expect(
+      within(rowFor("ab12cd34")).queryByRole("button", { name: "Renew" }),
+    ).toBeNull();
+
+    fireEvent.click(within(row).getByRole("button", { name: "Renew" }));
+    expect(await screen.findByText("Renew certificate #20")).toBeTruthy();
+    expect((screen.getByLabelText("Hostnames") as HTMLTextAreaElement).value).toBe(
+      "*.doma.in, doma.in",
+    );
+    expect(await screen.findByText("a.doma.in, b.doma.in")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Generate" }));
+
+    await waitFor(() => {
+      expect(request).toHaveBeenCalledWith("/tls/certificates/csr/begin", {
+        hostnames: ["*.doma.in", "doma.in"],
+        renews: 20,
+        key_type: "ecdsa_p256",
+      });
+    });
+  });
+
+  // w[verify routes.certificates]
+  it("leads to a pending renewal rather than offering another", async () => {
+    const expiring: TlsCertificate = {
+      ...manualCert,
+      id: 22,
+      hostname: "old.example.com",
+      not_after: now + 5 * 86400,
+      serial: "0e22",
+      self_signed: false,
+      pending_renewal: 23,
+    };
+    const renewal: TlsCertificate = {
+      ...pendingCsr,
+      id: 23,
+      hostname: "old.example.com",
+      requested_hostnames: ["old.example.com"],
+      renews: 22,
+    };
+    const { request } = renderWithSession(<Certificates />, {
+      fixtures: baseFixtures({
+        "/tls/certificates/list": { certificates: [expiring, renewal] },
+        "/tls/certificates/csr/get": { id: 23, csr_pem: CSR_PEM },
+      }),
+      safetyMode: "write",
+    });
+
+    const row = await waitFor(() => rowFor("0e22"));
+    expect(within(row).queryByRole("button", { name: "Renew" })).toBeNull();
+    expect(screen.getByText("renews #22")).toBeTruthy();
+
+    fireEvent.click(within(row).getByRole("button", { name: "Renewal #23" }));
+    await waitFor(() => {
+      expect(request).toHaveBeenCalledWith("/tls/certificates/csr/get", { id: 23 });
+    });
+    expect(await screen.findByText("Pending CSR #23")).toBeTruthy();
   });
 
   it("re-shows the CSR PEM for a pending certificate", async () => {

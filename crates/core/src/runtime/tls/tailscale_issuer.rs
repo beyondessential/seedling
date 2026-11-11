@@ -186,6 +186,7 @@ async fn persist(
                     metadata,
                     note: None,
                     acme_account_id: None,
+                    renews: None,
                 },
             )?;
             Ok::<_, rusqlite::Error>(id)

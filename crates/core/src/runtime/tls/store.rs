@@ -319,7 +319,8 @@ pub fn clear_policy(db: &Db, hostname: &str) -> rusqlite::Result<bool> {
 /// positional indices the reader depends on.
 const CERT_COLUMNS: &str = "id, hostname, requested_hostnames, state, origin, cert_pem, csr_pem, \
      key_ciphertext, key_type, issuer, not_before, not_after, serial, self_signed, note, \
-     acme_account_id, ari_window_start, ari_window_end, ari_polled_at, created_at, updated_at";
+     acme_account_id, ari_window_start, ari_window_end, ari_polled_at, created_at, updated_at, \
+     renews";
 
 /// The fields of a new certificate row. A struct rather than a parameter list
 /// because `hostname` and `requested_hostnames` are both hostnames sitting next
@@ -343,6 +344,8 @@ pub struct NewCertificate<'a> {
     pub metadata: CertMetadata,
     pub note: Option<&'a str>,
     pub acme_account_id: Option<i64>,
+    /// The certificate a CSR renews; see [`TlsCertificate::renews`].
+    pub renews: Option<i64>,
 }
 
 pub fn insert_certificate(db: &Db, new: NewCertificate<'_>) -> rusqlite::Result<i64> {
@@ -356,8 +359,8 @@ pub fn insert_certificate(db: &Db, new: NewCertificate<'_>) -> rusqlite::Result<
         "INSERT INTO tls_certificates (
             hostname, requested_hostnames, state, origin, cert_pem, csr_pem,
             key_ciphertext, key_type, issuer, not_before, not_after, serial,
-            self_signed, note, acme_account_id, created_at, updated_at
-        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?16)",
+            self_signed, note, acme_account_id, created_at, updated_at, renews
+        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?16, ?17)",
         params![
             new.hostname,
             requested,
@@ -375,6 +378,7 @@ pub fn insert_certificate(db: &Db, new: NewCertificate<'_>) -> rusqlite::Result<
             new.note,
             new.acme_account_id,
             now,
+            new.renews,
         ],
     )?;
     Ok(db.conn.last_insert_rowid())
@@ -617,6 +621,49 @@ pub fn cancel_pending_csr(db: &Db, id: i64) -> rusqlite::Result<CsrCancel> {
     })
 }
 
+/// Whether a certificate can be renewed by a new CSR, per [`renewal_target`].
+#[derive(Debug)]
+pub enum RenewalTarget {
+    Renewable(Box<TlsCertificate>),
+    NotFound,
+    /// Not an active certificate of an origin the runtime cannot renew by
+    /// itself.
+    NotRenewable(TlsCertState, TlsCertOrigin),
+    /// Already has a renewal pending: the id of that CSR row.
+    Pending(i64),
+}
+
+/// Look up `id` as the certificate a new CSR would renew.
+///
+/// Only an active manual upload or CSR-derived certificate is renewed this
+/// way; every other origin the runtime renews itself.
+// r[impl tls.csr.renew]
+pub fn renewal_target(db: &Db, id: i64) -> rusqlite::Result<RenewalTarget> {
+    let Some(cert) = get_certificate(db, id)? else {
+        return Ok(RenewalTarget::NotFound);
+    };
+    let renewable_origin = matches!(cert.origin, TlsCertOrigin::Manual | TlsCertOrigin::Csr);
+    if cert.state != TlsCertState::Active || !renewable_origin {
+        return Ok(RenewalTarget::NotRenewable(cert.state, cert.origin));
+    }
+    if let Some(pending) = pending_renewal_of(db, id)? {
+        return Ok(RenewalTarget::Pending(pending));
+    }
+    Ok(RenewalTarget::Renewable(Box::new(cert)))
+}
+
+/// The pending CSR row renewing certificate `id`, if there is one.
+// r[impl tls.csr.renew]
+pub fn pending_renewal_of(db: &Db, id: i64) -> rusqlite::Result<Option<i64>> {
+    db.conn
+        .query_row(
+            "SELECT id FROM tls_certificates WHERE renews = ?1 AND state = 'csr_pending'",
+            [id],
+            |row| row.get(0),
+        )
+        .optional()
+}
+
 /// A non-SQL failure surfaced through `rusqlite::Error`, as the provider
 /// accessors in this module already do for cipher failures.
 fn unreadable(message: String) -> rusqlite::Error {
@@ -641,6 +688,7 @@ struct ArrivingCert {
     not_before: Option<i64>,
     not_after: Option<i64>,
     self_signed: bool,
+    renews: Option<i64>,
 }
 
 /// Retire the active certificates that the certificate `keep_id` replaces.
@@ -672,7 +720,7 @@ struct ArrivingCert {
 /// Candidates are the other active rows sharing the arriving certificate's own
 /// label, read from its row rather than passed in — a caller that passed a
 /// different string would retire rows under a label the certificate does not
-/// carry. That is how a renewal finds its predecessor. A candidate whose
+/// carry — and, for a CSR begun as a renewal, the certificate it renews. A candidate whose
 /// certificate cannot be read is left alone: being unable to tell what it
 /// serves is not the same as knowing the arriving certificate replaces it.
 ///
@@ -691,7 +739,7 @@ pub fn supersede_other_active_for_hostname(db: &Db, keep_id: i64) -> rusqlite::R
     let arriving = db
         .conn
         .query_row(
-            "SELECT hostname, cert_pem, not_before, not_after, self_signed
+            "SELECT hostname, cert_pem, not_before, not_after, self_signed, renews
              FROM tls_certificates WHERE id = ?1",
             [keep_id],
             |row| {
@@ -702,6 +750,7 @@ pub fn supersede_other_active_for_hostname(db: &Db, keep_id: i64) -> rusqlite::R
                     not_before: row.get(2)?,
                     not_after: row.get(3)?,
                     self_signed: self_signed != 0,
+                    renews: row.get(5)?,
                 })
             },
         )
@@ -746,22 +795,28 @@ pub fn supersede_other_active_for_hostname(db: &Db, keep_id: i64) -> rusqlite::R
     }
 
     // Only what the decision reads — not every candidate's encrypted key.
+    // A renewal also names its predecessor outright, which the CA's choice of
+    // primary SAN may have given a label other than its own.
+    // r[impl tls.csr.renew]
     let candidates: Vec<Candidate> = {
         let mut stmt = db.conn.prepare_cached(
             "SELECT id, self_signed, cert_pem, not_before, not_after
              FROM tls_certificates
-             WHERE hostname = ?1 AND state = 'active' AND id != ?2",
+             WHERE (hostname = ?1 OR id = ?3) AND state = 'active' AND id != ?2",
         )?;
-        stmt.query_map(params![arriving.hostname, keep_id], |row| {
-            let self_signed: i64 = row.get(1)?;
-            Ok(Candidate {
-                id: row.get(0)?,
-                self_signed: self_signed != 0,
-                cert_pem: row.get(2)?,
-                not_before: row.get(3)?,
-                not_after: row.get(4)?,
-            })
-        })?
+        stmt.query_map(
+            params![arriving.hostname, keep_id, arriving.renews],
+            |row| {
+                let self_signed: i64 = row.get(1)?;
+                Ok(Candidate {
+                    id: row.get(0)?,
+                    self_signed: self_signed != 0,
+                    cert_pem: row.get(2)?,
+                    not_before: row.get(3)?,
+                    not_after: row.get(4)?,
+                })
+            },
+        )?
         .collect::<rusqlite::Result<_>>()?
     };
 
@@ -890,6 +945,7 @@ fn row_to_certificate(row: &rusqlite::Row<'_>) -> rusqlite::Result<TlsCertificat
         ari_polled_at: row.get(18)?,
         created_at: row.get(19)?,
         updated_at: row.get(20)?,
+        renews: row.get(21)?,
     })
 }
 
@@ -1796,6 +1852,7 @@ mod tests {
                 },
                 note: None,
                 acme_account_id: None,
+                renews: None,
             },
         )
         .unwrap()
@@ -1837,6 +1894,7 @@ mod tests {
                 },
                 note: None,
                 acme_account_id: None,
+                renews: None,
             },
         )
         .unwrap()
@@ -1896,6 +1954,7 @@ mod tests {
                 metadata,
                 note: None,
                 acme_account_id: None,
+                renews: None,
             },
         )
         .unwrap()
@@ -2155,6 +2214,85 @@ mod tests {
         );
     }
 
+    fn insert_pending_renewal(db: &Db, renews: i64) -> rusqlite::Result<i64> {
+        insert_certificate(
+            db,
+            NewCertificate {
+                hostname: "renewal.example.com",
+                requested_hostnames: Some(&["renewal.example.com"]),
+                state: TlsCertState::CsrPending,
+                origin: TlsCertOrigin::Csr,
+                cert_pem: None,
+                csr_pem: Some("csr"),
+                key_ciphertext: b"key",
+                key_type: KeyType::EcdsaP256,
+                metadata: CertMetadata::default(),
+                note: None,
+                acme_account_id: None,
+                renews: Some(renews),
+            },
+        )
+    }
+
+    /// The database holds the one-pending-renewal rule itself, so two begins
+    /// that each checked first cannot both be stored.
+    // r[verify tls.csr.renew]
+    #[test]
+    fn a_certificate_holds_one_pending_renewal_at_a_time() {
+        let (db, _) = fresh_db();
+        let renewed = insert_labelled_cert(&db, "example.com", &["example.com"]);
+
+        let first = insert_pending_renewal(&db, renewed).unwrap();
+        assert!(matches!(
+            renewal_target(&db, renewed).unwrap(),
+            RenewalTarget::Pending(id) if id == first
+        ));
+        assert!(insert_pending_renewal(&db, renewed).is_err());
+
+        // Once the first is no longer pending another may be begun.
+        cancel_pending_csr(&db, first).unwrap();
+        assert!(matches!(
+            renewal_target(&db, renewed).unwrap(),
+            RenewalTarget::Renewable(_)
+        ));
+        insert_pending_renewal(&db, renewed).unwrap();
+    }
+
+    /// A renewal retires the certificate it renews whatever either is labelled,
+    /// and still only when it replaces it in full.
+    // r[verify tls.csr.renew]
+    // r[verify tls.cert.supersede]
+    #[test]
+    fn a_renewal_retires_what_it_renews_only_when_it_replaces_it() {
+        let (db, _) = fresh_db();
+        let renewed =
+            insert_labelled_cert(&db, "a.example.com", &["a.example.com", "b.example.com"]);
+        let narrower = insert_labelled_cert(&db, "b.example.com", &["b.example.com"]);
+        db.conn
+            .execute(
+                "UPDATE tls_certificates SET renews = ?1 WHERE id = ?2",
+                params![renewed, narrower],
+            )
+            .unwrap();
+        assert_eq!(
+            supersede_other_active_for_hostname(&db, narrower).unwrap(),
+            0
+        );
+
+        let full = insert_labelled_cert(&db, "b.example.com", &["b.example.com", "a.example.com"]);
+        db.conn
+            .execute(
+                "UPDATE tls_certificates SET renews = ?1 WHERE id = ?2",
+                params![renewed, full],
+            )
+            .unwrap();
+        supersede_other_active_for_hostname(&db, full).unwrap();
+        assert_eq!(
+            get_certificate(&db, renewed).unwrap().unwrap().state,
+            TlsCertState::Superseded
+        );
+    }
+
     // r[verify tls.cert.serve]
     #[test]
     fn find_active_for_hostname_skips_an_expired_cert() {
@@ -2243,6 +2381,7 @@ mod tests {
                 metadata: CertMetadata::default(),
                 note: None,
                 acme_account_id: None,
+                renews: None,
             },
         )
         .unwrap();
@@ -2314,6 +2453,7 @@ mod tests {
                 metadata: CertMetadata::default(),
                 note: None,
                 acme_account_id: None,
+                renews: None,
             },
         )
         .unwrap();
@@ -2364,6 +2504,7 @@ mod tests {
                 metadata: CertMetadata::default(),
                 note: None,
                 acme_account_id: None,
+                renews: None,
             },
         )
         .unwrap();

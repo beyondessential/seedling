@@ -1885,6 +1885,15 @@ The BSL surface is intentionally strategy-agnostic: scripts declare only that an
 > - Report an unmet request name by name: when the issued certificate does not cover one or more of the requested hostnames, the upload must warn that the request was not met and say which hostnames were missed, and each missed hostname must go on appearing in the [per-hostname rollup](#r--tls.cert.hostname-view) as having no active certificate for as long as an ingress declares it.
 > - Permit cancellation of a pending CSR by the operator, which must destroy the stored private key.
 
+> r[tls.csr.renew]
+> Operators may begin a CSR as the renewal of an active certificate the runtime cannot renew by itself, which is a manual upload or a CSR-derived certificate; a certificate of any other origin or state cannot be renewed this way.
+> Unless the operator names the hostnames, the renewal requests exactly the DNS names in the renewed certificate's own SAN set, wildcards included, and not the hostnames that certificate's own CSR requested.
+> A CA may sign a name set other than the one requested, typically widening a single name to a wildcard; the issued set is one that CA has already signed, and a wildcard in it goes on covering hostnames added after the renewal. An operator renewing through a CA that will not sign the wildcard again names the hostnames instead.
+> The renewal records the certificate it renews.
+> A certificate has at most one pending renewal: beginning another while one is pending is refused, and uploading or cancelling the pending one ends it.
+> When the renewal's certificate is uploaded, it retires the certificate it renews if it replaces it in full per [tls.cert.supersede](#r--tls.cert.supersede), whichever names the two certificates are labelled by.
+> Deleting the renewed certificate while its renewal is pending leaves the renewal pending, with nothing recorded for it to retire.
+
 > r[tls.dns-provider.lifecycle]
 > The runtime must provide named, separately addressable DNS-provider entries that hold the credentials needed for DNS-01 challenges.
 > Provider credentials must be stored encrypted at rest using the [secret key](#r--secret.key).
@@ -1934,7 +1943,7 @@ The BSL surface is intentionally strategy-agnostic: scripts declare only that an
 > The runtime must reject an operator-supplied certificate whose `notAfter` is already in the past at upload time, and must accept (with annotation) a certificate whose `notBefore` is in the future.
 
 > r[tls.fault.expiring]
-> For certificates that the runtime cannot autonomously renew (manual uploads and CSR-derived certificates), if `notAfter` is within fourteen days, the runtime must file a fault of kind `cert_expiring_soon` against each ingress that uses the affected hostname, identifying the hostname, the strategy, and the expiry timestamp.
+> For certificates that the runtime cannot autonomously renew (manual uploads and CSR-derived certificates), if `notAfter` is within fourteen days, the runtime must file a fault of kind `cert_expiring_soon` against each ingress that uses the affected hostname, identifying the hostname, the strategy, the expiry timestamp, and the certificate, and directing the operator to [renew it](#r--tls.csr.renew).
 > ACME-issued certificates are exempt — the proxy is responsible for autonomous renewal.
 > Canopy-issued certificates are exempt too: renewal is the chain's job, and a chain that cannot replace one is reported by [tls.canopy.fault](#r--tls.canopy.fault).
 > The fault is cleared automatically when a non-expiring certificate replaces the expiring one, or when no ingress references the hostname.

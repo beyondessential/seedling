@@ -1195,10 +1195,12 @@ This section covers the operator interface for the ACME-DNS strategy, manual cer
 
 > i[tls.cert.list]
 > `/tls/certificates/list` returns all stored certificates.
-> Response `result.certificates` is an array of objects each with `id`, `hostname`, `requested_hostnames`, `requested_not_covered`, `state` (`"csr_pending"`, `"active"`, `"superseded"`, `"failed"`, or `"revoked"`), `origin` (`"manual"`, `"csr"`, `"acme_dns"`, or `"canopy"`), `key_type`, `issuer`, `not_before`, `not_after`, `serial`, `self_signed`, `note`, `acme_account_id`, `created_at`, `updated_at`.
+> Response `result.certificates` is an array of objects each with `id`, `hostname`, `san_dns_names`, `requested_hostnames`, `requested_not_covered`, `renews`, `pending_renewal`, `state` (`"csr_pending"`, `"active"`, `"superseded"`, `"failed"`, or `"revoked"`), `origin` (`"manual"`, `"csr"`, `"acme_dns"`, or `"canopy"`), `key_type`, `issuer`, `not_before`, `not_after`, `serial`, `self_signed`, `note`, `acme_account_id`, `created_at`, `updated_at`.
 > `hostname` is a name the certificate covers, used as a display label: for an operator upload its primary SAN, for a runtime-issued certificate the name it was issued for. What the certificate serves is decided by its full SAN list per [tls.cert.validation.san-coverage](runtime.md#r--tls.cert.validation.san-coverage), never by this field.
 > `requested_hostnames` is the set of hostnames the row's CSR requested, null for a row that was not issued against a CSR the runtime generated; it may differ from what the certificate covers, since the CA may sign a different name set.
 > `requested_not_covered` lists those of the requested hostnames the stored certificate does not cover, empty when it covers them all, so that the rule is applied in one place rather than by each client. It is null where there is nothing to decide — no requested hostnames, or no certificate yet — and also where the stored certificate cannot be parsed, which is not the same answer as "covers none of them".
+> `san_dns_names` is the DNS names in the stored certificate's SAN set, null where there is no certificate yet or it cannot be parsed.
+> `renews` is the id of the certificate the row's CSR [renews](runtime.md#r--tls.csr.renew), null when it renews none or that certificate has since been deleted; `pending_renewal` is the id of the row's own renewal while that renewal is pending, otherwise null.
 > Private key material is never returned.
 
 > i[tls.cert.upload-manual]
@@ -1214,8 +1216,11 @@ This section covers the operator interface for the ACME-DNS strategy, manual cer
 > Refused with `requirements_invalid` when a manual policy still references the row, so the operator unbinds the policy first; returns `not_found` when the id is unknown.
 
 > i[tls.cert.csr.begin]
-> `/tls/certificates/csr/begin { hostnames, key_type? }` generates a server-side keypair and a CSR whose SAN set is `hostnames`, and returns `{ id, csr_pem }`.
+> `/tls/certificates/csr/begin { hostnames?, renews?, key_type? }` generates a server-side keypair and a CSR whose SAN set is `hostnames`, and returns `{ id, csr_pem }`.
 > `hostnames` is a non-empty array of at most a hundred names, each entry a hostname or a `*.<suffix>` wildcard; a name repeated is requested once, and anything else is refused with `requirements_invalid`.
+> `renews` is the id of a certificate this CSR [renews](runtime.md#r--tls.csr.renew); when it is given and `hostnames` is not, `hostnames` is that certificate's SAN DNS names.
+> `hostnames` is required when `renews` is not given.
+> `renews` returns `not_found` when the id is unknown, and `requirements_invalid` when the certificate is not an active manual or CSR-derived one, or already has a pending renewal, whose id the message names.
 > The cap is what public certificate authorities accept in one certificate, and it keeps a single request from storing and serving back a certificate request of unbounded size.
 > The private key is stored encrypted at rest using the [secret key](runtime.md#r--secret.key) and never leaves the runtime; only the CSR is returned, both in this response and via subsequent `tls.cert.csr.get` calls while the row remains in `csr_pending`.
 > `key_type` defaults to `"ecdsa_p256"`, which is currently the only accepted value.

@@ -476,6 +476,7 @@ impl<R: CertificateRelay> Engine<R> {
                                 metadata: store::CertMetadata::default(),
                                 note: None,
                                 acme_account_id: None,
+                                renews: None,
                             },
                         )
                     })

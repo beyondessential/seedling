@@ -462,6 +462,7 @@ mod tests {
                     },
                     note: None,
                     acme_account_id: None,
+                    renews: None,
                 },
             )
             .unwrap()
@@ -767,6 +768,7 @@ mod tests {
                     },
                     note: None,
                     acme_account_id: None,
+                    renews: None,
                 },
             )
             .unwrap()
