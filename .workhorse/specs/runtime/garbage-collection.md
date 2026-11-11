@@ -63,9 +63,8 @@ That includes an app with a lifecycle operation in progress, an app that is inst
 
 When the desired state demotes a scaled instance to `Unscheduled`, or a deployment that has become scaled leaves a singleton instance behind, the runtime MUST retire that instance as soon as any of the following holds:
 
-- its [lifecycle state](../overview.md#lifecycle-state) is `Unscheduled`;
-- it has no observations;
-- its observation history holds an observation that its container was removed or its service network was cleaned up.
+- it is [torn down](#instances-started-by-actions);
+- it has no observations.
 
 A failure to read the instance's observation history MUST NOT count as the instance having no observations.
 

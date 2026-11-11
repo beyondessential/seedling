@@ -46,8 +46,9 @@ A script SHOULD treat an architecture it does not recognise as unsupported rathe
 
 `HOST_HAS_IPV4` MUST be `true` when the host's main routing table holds a default IPv4 unicast route, and `false` otherwise.
 The host's choice of IPv4 source address does not affect the value, so a host with a private address behind NAT has IPv4 egress.
+If the routing table cannot be read, whether the host has IPv4 egress is undetermined, and `HOST_HAS_IPV4` MUST be `false` until it is determined.
 
-`HOST_HAS_IPV6` MUST be `true` when the host's main routing table holds a default IPv6 unicast route and a non-loopback interface of the host holds an address within `2000::/3`, and `false` otherwise.
+`HOST_HAS_IPV6` MUST be `true` when the host has [IPv6 egress](../runtime/nat64.md#ipv6-egress), and `false` otherwise, including while that is undetermined.
 
 `NAT64_ACTIVE` MUST be `true` when the host itself provides NAT64 translation for its workloads, and `false` otherwise.
 
@@ -59,7 +60,19 @@ The host's choice of IPv4 source address does not affect the value, so a host wi
 It MAY be empty where the host's identity has no meaning, such as when a script is validated outside a running daemon.
 
 `TIMEZONE` MUST NOT be empty.
-If the runtime cannot determine the host's local time zone, `TIMEZONE` MUST be `UTC`.
+While the runtime cannot determine the host's local time zone, `TIMEZONE` MUST be `UTC`.
+
+### Determining host constants
+
+The runtime MUST determine the host constants when it starts, and MUST NOT change a determined value while it runs.
+
+While whether the host has IPv4 egress is undetermined, the runtime MUST file a system [fault](../overview.md#fault) of kind `ipv4_egress_undetermined`.
+While the host's local time zone is undetermined, the runtime MUST file a system fault of kind `timezone_undetermined`.
+The runtime MUST retry an undetermined value on each later reconciliation iteration until it is determined, and MUST then clear its fault.
+When an undetermined value of `HOST_HAS_IPV4`, `HOST_HAS_IPV6` or `TIMEZONE` is determined, the runtime MUST re-evaluate the definition of every installed app.
+
+> [!NOTE]
+> A change to the host's network or time zone after a value is determined reaches scripts when the runtime next starts.
 
 ## Idle command
 

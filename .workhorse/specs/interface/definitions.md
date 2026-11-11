@@ -23,7 +23,7 @@ Applies to how a request supplies an app's definition, how the [server](overview
 
 A digest identifying a [definition bundle](../overview.md#definition-bundle) by its bundle paths and file contents alone.
 
-### Provenance
+### Definition provenance
 
 The record of how an app's definition reached the host.
 
@@ -44,7 +44,7 @@ A request that supplies a definition MUST carry exactly one of these members.
 The server MUST refuse a request that carries none of them, or more than one, with `requirements_invalid`.
 
 A request that carries `script` or `bundle` MAY also carry `origin`, an object with string members `url` and `revision` and no others, saying where the client obtained the files.
-The server MUST record `origin` in the definition's [provenance](#provenance-reporting) as the client reported it, without verifying it.
+The server MUST record `origin` in the [definition provenance](#provenance-reporting) as the client reported it, without verifying it.
 The server MUST refuse `origin` alongside `reference`, with `requirements_invalid`.
 
 A `reference` MUST name its registry host explicitly, and MUST name a tag, a digest, or both.

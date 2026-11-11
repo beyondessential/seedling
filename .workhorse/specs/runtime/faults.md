@@ -110,12 +110,12 @@ The runtime MUST file and clear the faults below against the app, with an empty 
 
 | kind | subject | filed when | clears when | shape |
 | --- | --- | --- | --- | --- |
-| `script_error` | none | the app's definition fails to evaluate, at registration, on an update, on a parameter change, on a change to the registry allowlist, or when the runtime starts | the definition next evaluates | condition |
+| `script_error` | none | the app's definition fails to evaluate, at registration, on an update, on a parameter change, on a change to the registry allowlist, when an undetermined [host constant](../language/constants.md#determining-host-constants) is determined, or when the runtime starts | the definition next evaluates | condition |
 | `disallowed_registry` | none | an image a Deployment or Job declares is from a registry outside the [allowlist](../language/container.md#registry-allowlist) | no declared image is outside the allowlist | condition |
 | `registry_error` | none | the runtime cannot compute the app's desired state | the runtime next computes it | condition |
 | `operation_failed` | none | a [lifecycle operation](../overview.md#lifecycle-operation) for the app fails, or its action closure does not compile | a later lifecycle operation for the app completes | event |
 | `operation_cancelled` | none | a lifecycle operation for the app is cancelled | a later lifecycle operation for the app completes | event |
-| `install_interrupted` | none | at startup, an interrupted install cannot be resumed because its parameter values are missing or cannot be decrypted | an operator clears it | latched |
+| `install_interrupted` | none | at startup, an interrupted install cannot be resumed because its parameter values are missing or cannot be decrypted | a later install of the app completes, or an operator clears it | latched |
 | `uninstall_unidentifiable_units` | none | an uninstall finds supervised units that may belong to the app but no recorded instance identities to match them against | the app's teardown completes | latched |
 | `definition_unsupported` | none | the running Seedling does not satisfy the app's [Seedling version requirement](../language/bundle.md#seedling-version-requirement) | the definition is replaced by one the running Seedling satisfies, or the runtime starts as a version that satisfies it | condition |
 | `definition_source_moved` | the digest the reference now selects | a successful [re-check](definition-recheck.md#resolution) finds that the reference in the app's fetched definition selects a digest other than the running one | a successful re-check selects the running digest again, or the app's definition is replaced | condition |
@@ -172,6 +172,8 @@ The runtime MUST file and clear the faults below against `_system`, with an empt
 | `nat64_detection_failed` | [detecting](nat64.md#detection) existing NAT64 is undetermined | detection succeeds | condition |
 | `nat64_teardown_failed` | tearing down the NAT64 translator fails | a teardown succeeds, or the translator is next set up | condition |
 | `ipv6_egress_undetermined` | whether the host has [IPv6 egress](nat64.md#ipv6-egress) cannot be determined | the determination succeeds | condition |
+| `ipv4_egress_undetermined` | whether the host has [IPv4 egress](../language/constants.md#host-constants) cannot be determined | the determination succeeds | condition |
+| `timezone_undetermined` | the host's [local time zone](../language/constants.md#host-constants) cannot be determined | the determination succeeds | condition |
 | `operation_state_unreadable` | the runtime cannot read the [persisted operation, its cancel, or the persisted queue](operations.md#unreadable-operation-state) | the read succeeds | condition |
 | `resolver_failed` | starting the resolver fails or does not finish in time | the resolver next starts | condition |
 | `caddy_failed` | bringing up the proxy fails or does not finish in time | the proxy is next brought up | condition |

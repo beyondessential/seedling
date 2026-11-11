@@ -10,7 +10,7 @@ Applies to the templates a [host](../overview.md#host) stores for creating [apps
 
 ### Template
 
-A named [definition bundle](../overview.md#definition-bundle), with its [provenance](definitions.md#provenance-reporting), stored on a host for creating apps from.
+A named [definition bundle](../overview.md#definition-bundle), with its [definition provenance](definitions.md#provenance-reporting), stored on a host for creating apps from.
 
 ### Supported template
 
@@ -94,7 +94,7 @@ Its result is an array with one object per stored template, ordered by name in a
 | --- | --- | --- |
 | `name` | string | the template's name |
 | `body` | string | the template's script files concatenated as the [bundle rules](../language/bundle.md#script-formation) define |
-| `provenance` | object | the template definition's [provenance](definitions.md#provenance-reporting) |
+| `provenance` | object | the [definition provenance](definitions.md#provenance-reporting) of the template's definition |
 | `supported` | boolean | whether the template is a supported template |
 | `description` | string or null | the template's description |
 | `created_at` | string | when the template was stored, as an RFC 3339 timestamp |
@@ -182,7 +182,7 @@ When `script_error` is not `null`, the other members MUST describe the declarati
 | `template` | string | yes | the template to instantiate |
 | `app` | string | yes | the name of the new app |
 
-The runtime MUST register the app as [app registration](apps.md#registration) does, with a copy of the template's bundle as its definition and the template's provenance as the definition's provenance.
+The runtime MUST register the app as [app registration](apps.md#registration) does, with a copy of the template's bundle as its definition and the template's definition provenance as the definition's.
 
 If no template has the name `template`, the runtime MUST refuse the request with `not_found`.
 If `app` is not a valid app name, is reserved, or names a registered app, the runtime MUST refuse the request with `requirements_invalid`.

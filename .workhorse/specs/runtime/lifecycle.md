@@ -36,7 +36,7 @@ An instance in `Terminated` or `Unscheduled` that is observed being set up or ru
 
 ## Derivation
 
-The runtime MUST derive each instance's lifecycle state, and the time of its last transition, from the instance's [world observation history](history.md#world-observation-history) alone.
+Except for an [external volume](#external-volumes), the runtime MUST derive each instance's lifecycle state, and the time of its last transition, from the instance's [world observation history](history.md#world-observation-history) alone.
 The runtime MUST be able to re-derive any instance's current lifecycle state from that history at any time.
 The runtime MUST NOT keep a lifecycle state that cannot be re-derived from the history.
 
@@ -114,6 +114,7 @@ The lifecycle states of a volume instance have these meanings.
 The runtime manages an external volume's lifecycle state entirely itself.
 An external volume MUST be `Ready` as soon as the desired state holds it `Ready`, and `Unscheduled` as soon as the desired state holds it `Unscheduled`.
 An external volume's lifecycle state MUST NOT depend on whether a mapping exists for it.
+The runtime MUST derive an external volume's lifecycle state from the desired state, and MUST NOT record observations of it.
 
 > [!NOTE]
 > A missing mapping is reported by the [external volume unmapped fault](faults.md#workload-faults).

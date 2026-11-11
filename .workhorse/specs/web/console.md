@@ -53,7 +53,7 @@ On receiving an `EventsDropped` event, the console MUST read afresh every view i
 
 ## App definitions
 
-The app detail view MUST show the source of the app's current definition, from its [provenance](../interface/definitions.md#provenance-reporting).
+The app detail view MUST show the source of the app's current definition, from its [definition provenance](../interface/definitions.md#provenance-reporting).
 For a fetched definition, it MUST show the reference and digest.
 For a pushed definition, it MUST show the content hash and the actor who pushed it, with any origin the client reported, marked as reported by the client.
 

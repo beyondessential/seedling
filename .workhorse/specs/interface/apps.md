@@ -36,7 +36,7 @@ The app MUST NOT appear in listings, MUST NOT reappear after the daemon restarts
 
 ## Persistence
 
-The runtime MUST store every registered app, with each of its definitions and their [provenance](definitions.md#provenance-reporting), durably, and MUST load them again when the daemon starts.
+The runtime MUST store every registered app, with each of its definitions and their [definition provenance](definitions.md#provenance-reporting), durably, and MUST load them again when the daemon starts.
 Loading a stored app runs no [validators](params.md#validation).
 If a stored definition fails to evaluate when it is loaded, the runtime MUST file a `script_error` fault against the app.
 
@@ -147,7 +147,7 @@ The server MUST refuse it with `not_found` if the app is not registered.
 | --- | --- | --- |
 | `status` | string | the app's [app status](#status-derivation) |
 | `generation` | integer | the app's current generation |
-| `definition` | object | the [provenance](definitions.md#provenance-reporting) of the current definition |
+| `definition` | object | the [definition provenance](definitions.md#provenance-reporting) of the current definition |
 | `description` | string or null | the app description its definition declares |
 | `canopy_type` | string or null | the [Canopy application type](../language/app.md#canopy-type) its definition declares |
 | `priority` | string | the app's [app priority](app-control.md#app-priority) |
@@ -363,7 +363,7 @@ The result has the members `script`, the app's script [formed](../language/bundl
 The server MUST refuse the request with `not_found` if the app is not registered or has no such generation, and with `bundle_invalid` if the definition's script files break the bundle rules.
 
 `/apps/bundle` takes the same parameters and returns an app's whole definition bundle.
-The result has the members `generation`; `provenance`, the definition's provenance; and `bundle`, in the form of a pushed `bundle` [definition source](definitions.md#definition-sources).
+The result has the members `generation`; `provenance`, the definition provenance; and `bundle`, in the form of a pushed `bundle` [definition source](definitions.md#definition-sources).
 Every generation's bundle MUST remain retrievable for as long as the app is registered.
 
 ## Generation history
@@ -383,7 +383,7 @@ The server MUST refuse the request with `not_found` if the app is not registered
 | `generation` | integer | the generation |
 | `timestamp` | string | the timestamp of the change |
 | `kind` | string | `register`, `script_update`, `param_set` or `param_unset` |
-| `definition` | object | present for `register` and `script_update`: the provenance of the definition the generation installed |
+| `definition` | object | present for `register` and `script_update`: the definition provenance of the definition the generation installed |
 | `param_name` | string | present for `param_set` and `param_unset`, and for a `script_update` that changed a parameter |
 | `previous_value` | string or null | present when `param_name` is and `redacted` is not: the value before the change, or `null` where the parameter was unset |
 | `new_value` | string or null | present when `param_name` is and `redacted` is not: the value after the change, or `null` where the change unset it |

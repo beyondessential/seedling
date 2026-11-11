@@ -47,7 +47,7 @@ Each iteration MUST perform these steps, in order:
 5. Compute the operations needed to bring the derived lifecycle states to the desired state.
 6. For each such operation, decide from the [autonomous operations log](history.md#autonomous-operations-log) whether to perform it, back off, or file a [fault](../overview.md#fault).
 7. Perform the operations decided on in step 6.
-8. Record each operation performed, with its [provenance](history.md#provenance), in the autonomous operations log.
+8. Record each operation performed, with its [operation provenance](history.md#operation-provenance), in the autonomous operations log.
 
 Given a desired state that does not change and a host that functions, successive iterations MUST converge on the desired state.
 

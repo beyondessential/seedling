@@ -44,7 +44,7 @@ The runtime MUST keep a generation history for each app, holding one entry for e
 | created | every entry | when the generation was created |
 | kind | every entry | `register`, `script_update`, `param_set` or `param_unset` |
 | bundle | every entry | the [content hash](../interface/definitions.md#content-hash-computation) of the definition bundle current at this generation |
-| provenance | `register` and `script_update` | the [provenance](../interface/definitions.md#provenance-reporting) of the definition this generation installed |
+| provenance | `register` and `script_update` | the [definition provenance](../interface/definitions.md#provenance-reporting) of the definition it installed |
 | parameter | `param_set`, `param_unset`, and a `script_update` that changed a parameter alongside its definition | the name of the parameter changed |
 | previous value | every entry with a parameter | the parameter's value before the change, or none if it was unset |
 | new value | every entry with a parameter | the parameter's value after the change, or none if the change unset it |

@@ -70,7 +70,7 @@ A member marked "optional" is absent where it has no value.
 | `ResourceStopped` | `app`, `kind` (string), `name` | as [stopping a resource](app-control.md#resource-stop) specifies |
 | `ResourceUnstopped` | `app`, `kind` (string), `name` | as [unstopping a resource](app-control.md#resource-stop) specifies |
 
-`definition` in `AppUpdated` is the new definition's [provenance](definitions.md#provenance-reporting).
+`definition` in `AppUpdated` is the [definition provenance](definitions.md#provenance-reporting) of the new definition.
 In `AppUpdated`, `previous_value` and `new_value` MUST be `null` for an unset value and for a secret parameter.
 `phase` in `AppPhaseChanged` is one of `"not_installed"`, `"installing"`, `"installed"` and `"uninstalling"`.
 In `ParamSet` and `ParamUnset`, a secret parameter's event MUST carry `redacted` `true` and no `previous_value` or `new_value`, as [secret parameter events](params.md#parameter-storage) require.

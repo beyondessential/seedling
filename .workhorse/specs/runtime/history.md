@@ -20,7 +20,7 @@ The record of the operations the runtime has performed on a host without directi
 
 The record, in order, of the runtime calls each [lifecycle operation](../overview.md#lifecycle-operation)'s action closure has made.
 
-### Provenance
+### Operation provenance
 
 The observations and the rule that caused the runtime to perform an autonomous operation.
 
@@ -62,13 +62,13 @@ The runtime MUST record each operation it performs without direction from an act
 | time | when the runtime recorded the operation |
 | instance | the resource instance the operation affected |
 | operation | the operation performed, such as starting a container or rebuilding ingress configuration |
-| provenance | the operation's provenance |
+| provenance | its operation provenance |
 | outcome | success, failure with details, or interrupted; absent while the operation is in progress |
 
-An entry's provenance MUST identify the observations that triggered the operation and the rule that applied.
+An entry's operation provenance MUST identify the observations that triggered the operation and the rule that applied.
 
 > [!NOTE]
-> Examples of provenance: "Container exited (observation at T), OnTerminate policy is Recreate."; "Observed 1 running instance, scale requires 2."; "Ingress controller unreachable (observation at T), rebuilding configuration."
+> Examples of operation provenance: "Container exited (observation at T), OnTerminate policy is Recreate."; "Observed 1 running instance, scale requires 2."; "Ingress controller unreachable (observation at T), rebuilding configuration."
 
 When the runtime starts, it MUST complete every entry still in progress with the outcome interrupted, before it performs any autonomous operation.
 The runtime MUST NOT record an interrupted operation as a success or as a failure, since its real outcome is unknown.

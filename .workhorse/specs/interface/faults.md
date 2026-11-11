@@ -34,11 +34,11 @@ Without `app` the server MUST list every active fault on the host.
 
 ## Clearing faults
 
-`/faults/clear` clears every active fault of one app.
+`/faults/clear` clears every active fault of one app, or every active fault filed against `_system` or `seedling`.
 
 | member | type | required | meaning |
 | --- | --- | --- | --- |
-| `app` | string | yes | the app whose faults to clear |
+| `app` | string | yes | the app whose faults to clear, or `_system` or `seedling` |
 
 The result is `{ "app": <string>, "cleared": <integer> }`, where `cleared` is the number of faults that went from active to cleared.
 The server MUST emit a `FaultCleared` event for each fault it clears.

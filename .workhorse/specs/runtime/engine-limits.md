@@ -25,3 +25,7 @@ The expression nesting limit MUST apply both at the top level of a script and wi
 
 An operator MAY override each limit with its daemon option when the daemon starts.
 Setting the operations, expression nesting, string, array or object map limit to 0 MUST remove that limit.
+The daemon MUST refuse to start with a function call nesting depth of 0.
+
+> [!NOTE]
+> A depth of 0 would allow no function calls at all, and an unbounded depth would let a script overflow the runtime's own stack.

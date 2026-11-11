@@ -367,7 +367,7 @@ pub struct AutonomousOperation {
     pub completed_at: Option<i64>,
 }
 
-// spec: HIST#provenance
+// spec: HIST#operation-provenance
 pub struct Provenance {
     pub observation_ids: Vec<i64>,
     pub rule: String,

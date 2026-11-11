@@ -421,7 +421,7 @@ fn observations_empty_for_unknown_instance() {
 
 // spec: HIST#autonomous-operations-log
 // spec: HIST#autonomous-operations
-// spec: HIST#provenance
+// spec: HIST#operation-provenance
 #[test]
 fn insert_and_retrieve_autonomous_operation() {
     let db = Db::open_in_memory().unwrap();

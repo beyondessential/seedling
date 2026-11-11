@@ -20,9 +20,9 @@ A restart of a container instance that the runtime performs on purpose: a rollin
 
 The number of instances a Deployment is held at: the scale an operator chose for it, clamped to its declared bounds, or the lower bound where no operator has chosen one.
 
-## Provenance
+## Operation provenance
 
-The runtime MUST record each autonomous operation, with its [provenance](history.md#provenance), in the autonomous operations log before performing it.
+The runtime MUST record each autonomous operation, with its [operation provenance](history.md#operation-provenance), in the autonomous operations log before performing it.
 
 ## Restarts
 
