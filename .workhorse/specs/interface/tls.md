@@ -4,190 +4,447 @@ id: TLSM
 
 # TLS certificate management
 
-## TLS Certificate Management
+Applies to the [Operator Interface](../overview.md#operator-interface) methods through which an [operator](../overview.md#operator) manages how a [host](../overview.md#host) obtains the TLS certificates that [TLS](../runtime/tls/certificates.md) specifies.
 
-<!-- from interface: TLS Certificate Management -->
+## Borrowed terms
 
-The TLS certificate operator surface mirrors the runtime concepts defined in [the runtime spec](runtime.md): named DNS providers, per-hostname policies, and a certificate registry covering manual uploads, CSR-derived certs, and certs the runtime obtained itself via ACME or Canopy.
-This section covers the operator interface for the ACME-DNS strategy, manual cert lifecycle, and policy management.
+| term | meaning |
+| --- | --- |
+| ACME | the Automatic Certificate Management Environment protocol, [RFC 8555](https://www.rfc-editor.org/rfc/rfc8555) |
+| DNS-01, HTTP-01 | the ACME challenge types of RFC 8555 §8.4 and §8.3 |
+| ARI | ACME Renewal Information, [RFC 9773](https://www.rfc-editor.org/rfc/rfc9773) |
+| CSR | a certification request in the syntax of PKCS #10, [RFC 2986](https://www.rfc-editor.org/rfc/rfc2986) |
+| SAN | the subject alternative name extension of a certificate, [RFC 5280](https://www.rfc-editor.org/rfc/rfc5280) §4.2.1.6 |
+| SubjectPublicKeyInfo | the public key field of a certificate, RFC 5280 §4.1.2.7 |
+| PEM | the textual encoding of [RFC 7468](https://www.rfc-editor.org/rfc/rfc7468) |
+| PKCS #8 | the private key information syntax of [RFC 5958](https://www.rfc-editor.org/rfc/rfc5958) |
 
-## DNS Providers
+## Terminology
 
-<!-- from interface: TLS Certificate Management / DNS Providers -->
+### Stored certificate
 
-> i[tls.dns-provider.list]
-> `/tls/dns-providers/list` returns the configured DNS providers without their credentials.
-> Response `result.providers` is an array of objects each with `name` (string), `kind` (string), `created_at`, and `updated_at` (Unix timestamp integers).
+A certificate with its private key, or a pending CSR with its private key, held by the [runtime](../overview.md#runtime) under an integer id.
 
-> i[tls.dns-provider.upsert]
-> `/tls/dns-providers/upsert { name, kind, config }` creates a new provider entry or replaces an existing one with the same name.
-> `config` is a provider-specific object whose shape depends on `kind`. For `kind = "route53"` the required fields are `access_key_id`, `secret_access_key`, and an optional `region` (defaults to `us-east-1`).
-> The credentials are stored encrypted at rest and never returned through any operator endpoint.
-> Returns `requirements_invalid` if `name` is empty or `kind` is unknown.
-> When this is the first DNS provider on the node and no `*` policy already exists, the runtime auto-creates a catch-all `*` policy bound to it per [tls.policy.auto-default](rule:r/tls.policy.auto-default); the response field `auto_policy_created` indicates whether that happened.
+### Primary SAN
 
-> i[tls.dns-provider.delete]
-> `/tls/dns-providers/delete { name }` removes a DNS provider entry.
-> Returns `not_found` if no provider with that name exists.
-> Returns `requirements_invalid` if any policy still references the provider; the operator must clear those policies first.
+The first DNS name in the SAN extension of a certificate's leaf.
+
+### Hostname pattern
+
+An exact hostname, the catch-all `*`, or `*.` followed by a hostname, matched against hostnames as [tls.policy.wildcard](rule:r/tls.policy.wildcard) defines.
+
+## Conventions
+
+A hostname, in these methods, is a string of at most 253 characters made of labels separated by dots.
+Each label is 1 to 63 ASCII letters, digits and hyphens, and neither starts nor ends with a hyphen.
+A hostname contains at least one ASCII letter.
+
+Every timestamp in a request or result of these methods is an integer count of seconds since 1970-01-01T00:00:00Z, leap seconds excluded.
+
+The runtime MUST NOT return a private key or DNS provider credentials from any Operator Interface method.
+
+If the runtime cannot read or write its TLS state while handling a request, it MUST refuse the request with `internal`.
+It MUST NOT report such a failure as `not_found`.
+
+A policy or stored certificate written through these methods MUST be taken into account by the next issuance decision the runtime makes and by the next [hostname view](#hostname-view).
+
+## DNS providers
+
+A DNS provider is a named entry holding the credentials the runtime uses for DNS-01 challenges, as [tls.dns-provider.lifecycle](rule:r/tls.dns-provider.lifecycle) specifies.
+
+`/tls/dns-providers/list` takes no parameters.
+Its result is `{ providers }`, an array with one object per provider, ordered by name.
+
+| member | type | meaning |
+| --- | --- | --- |
+| `name` | string | the provider's name |
+| `kind` | string | the provider's kind |
+| `created_at` | integer | when the provider was created |
+| `updated_at` | integer | when the provider was last written |
+
+`/tls/dns-providers/upsert` creates a provider, or replaces the provider of the same name.
+
+| member | type | required | meaning |
+| --- | --- | --- | --- |
+| `name` | string | yes | the provider's name |
+| `kind` | string | yes | the provider's kind |
+| `config` | object | yes | the provider's credentials and settings, in the shape its kind defines |
+
+The only kind is `route53`, for Amazon Route 53, whose `config` has these members.
+
+| member | type | required | meaning |
+| --- | --- | --- | --- |
+| `access_key_id` | string | yes | the access key id |
+| `secret_access_key` | string | yes | the secret access key |
+| `region` | string | no | the region, `us-east-1` if absent |
+
+The runtime MUST refuse an upsert whose `kind` is not a defined kind, or whose `name` is empty or only whitespace, with `requirements_invalid`.
+The runtime MUST store `config` encrypted at rest under the [secret key](rule:r/secret.key).
+
+The result is `{ ok, auto_policy_created }`, where `ok` is `true` and `auto_policy_created` says whether the upsert created the catch-all policy of [tls.policy.auto-default](rule:r/tls.policy.auto-default).
+
+`/tls/dns-providers/delete` takes `name` and removes that provider.
+The result is `{ "ok": true }`.
+If no provider has that name, the runtime MUST refuse the request with `not_found`.
+If a policy references the provider, the runtime MUST refuse the request with `requirements_invalid`.
 
 ## Policies
 
-<!-- from interface: TLS Certificate Management / Policies -->
+A policy binds a [hostname pattern](#hostname-pattern) to a strategy for obtaining certificates.
+A hostname that no policy matches follows the default chain of [tls.strategy.default](rule:r/tls.strategy.default).
+A policy takes effect as [tls.policy.apply](rule:r/tls.policy.apply) specifies.
 
-> i[tls.policy.list]
-> `/tls/policies/list` returns all per-hostname policy rows.
-> Response `result.policies` is an array of objects each with `hostname`, `strategy` (`"acme_dns"`, `"canopy"`, or `"manual"`), and either `dns_provider` (for acme-dns) or `cert_id` (for manual), plus `updated_at`.
-> Hostnames not in this list use the default chain per [tls.strategy.default](rule:r/tls.strategy.default).
+`/tls/policies/list` takes no parameters.
+Its result is `{ policies }`, an array with one object per policy, ordered by pattern.
 
-> i[tls.policy.set-acme-dns]
-> `/tls/policies/set-acme-dns { hostname, dns_provider, directory_url? }` binds `hostname` to the named DNS provider for ACME-DNS-01 issuance.
-> `hostname` may be an exact hostname, the catch-all `*`, or a shell-glob-style subdomain wildcard such as `*.example.com` (which matches `foo.example.com`, `a.b.example.com`, and any deeper subdomain), per [tls.policy.wildcard](rule:r/tls.policy.wildcard).
-> The new policy takes effect on the next reconciliation tick per [tls.policy.apply](rule:r/tls.policy.apply).
-> When `hostname` is exact and the global [contact email](rule:i/tls.settings.set) is configured, the runtime fires a single ACME-DNS issuance attempt asynchronously if no active cert exists yet; the response includes `auto_issue_kicked: true` to signal that.
-> Wildcard policies do not auto-issue (there is no concrete hostname to acquire a cert for); the operator runs [`tls.cert.issue-acme-dns`](rule:i/tls.cert.issue-acme-dns) per hostname.
-> `directory_url` defaults to the Let's Encrypt production directory.
+| member | type | meaning |
+| --- | --- | --- |
+| `hostname` | string | the policy's hostname pattern |
+| `strategy` | string | `acme_dns` or `canopy` |
+| `dns_provider` | string | the bound DNS provider, present only when `strategy` is `acme_dns` |
+| `updated_at` | integer | when the policy was last written |
 
-> i[tls.policy.set-canopy]
-> `/tls/policies/set-canopy { hostname }` binds `hostname` to the Canopy-only policy per [tls.strategy.canopy-only](rule:r/tls.strategy.canopy-only).
-> `hostname` may be an exact hostname, the catch-all `*`, or a shell-glob-style subdomain wildcard, with the matching rules of [tls.policy.wildcard](rule:r/tls.policy.wildcard).
-> The new policy takes effect on the next reconciliation tick per [tls.policy.apply](rule:r/tls.policy.apply).
-> Setting it does not by itself replace a certificate the hostname already holds: a usable certificate is left until its renewal point, or until an operator [retry](rule:i/tls.cert.retry).
+`/tls/policies/set-acme-dns` takes `hostname`, a hostname pattern, and `dns_provider`, a provider name.
+It binds the pattern to ACME issuance over DNS-01 against that provider, as [tls.strategy.acme-dns](rule:r/tls.strategy.acme-dns) specifies, replacing any policy for the same pattern.
+If `hostname` is not a hostname pattern, or no provider is named `dns_provider`, the runtime MUST refuse the request with `requirements_invalid`.
+If `hostname` is an exact hostname, the runtime MUST hand it to issuance as the request completes.
+The result is `{ ok, auto_issue_kicked }`, where `ok` is `true` and `auto_issue_kicked` says whether the hostname was handed to issuance.
 
-> i[tls.policy.clear]
-> `/tls/policies/clear { hostname }` removes any operator policy for `hostname`, returning it to the default chain per [tls.strategy.default](rule:r/tls.strategy.default).
-> Returns `not_found` if no policy exists for the hostname.
+> [!NOTE]
+> Handing a hostname to issuance does not bypass the conditions under which the runtime declines to issue, such as a missing contact email or a retry block.
+> A wildcard pattern names no hostname to issue for; an operator issues for each hostname it matches with [ACME-DNS issuance](#operator-driven-issuance), or lets the runtime issue as ingresses declaring matching hostnames appear.
+
+`/tls/policies/set-canopy` takes `hostname`, a hostname pattern.
+It binds the pattern to the Canopy-only policy of [tls.strategy.canopy-only](rule:r/tls.strategy.canopy-only), replacing any policy for the same pattern.
+If `hostname` is not a hostname pattern, the runtime MUST refuse the request with `requirements_invalid`.
+Setting the policy MUST NOT by itself replace a usable certificate a matching hostname already holds.
+That certificate serves until its renewal point or an operator [retry](#operator-driven-issuance).
+The result is `{ "ok": true }`.
+
+`/tls/policies/clear` takes `hostname`, a hostname pattern, and removes the policy for that pattern.
+The result is `{ "ok": true }`.
+If no policy exists for the pattern, the runtime MUST refuse the request with `not_found`.
 
 ## Certificates
 
-<!-- from interface: TLS Certificate Management / Certificates -->
+`/tls/certificates/list` takes no parameters.
+Its result is `{ certificates }`, an array with one object per stored certificate, newest first.
 
-> i[tls.cert.list]
-> `/tls/certificates/list` returns all stored certificates.
-> Response `result.certificates` is an array of objects each with `id`, `hostname`, `san_dns_names`, `requested_hostnames`, `requested_not_covered`, `renews`, `pending_renewal`, `state` (`"csr_pending"`, `"active"`, `"superseded"`, `"failed"`, or `"revoked"`), `origin` (`"manual"`, `"csr"`, `"acme_dns"`, or `"canopy"`), `key_type`, `issuer`, `not_before`, `not_after`, `serial`, `self_signed`, `note`, `acme_account_id`, `created_at`, `updated_at`.
-> `hostname` is a name the certificate covers, used as a display label: for an operator upload its primary SAN, for a runtime-issued certificate the name it was issued for. What the certificate serves is decided by its full SAN list per [tls.cert.validation.san-coverage](rule:r/tls.cert.validation.san-coverage), never by this field.
-> `requested_hostnames` is the set of hostnames the row's CSR requested, null for a row that was not issued against a CSR the runtime generated; it may differ from what the certificate covers, since the CA may sign a different name set.
-> `requested_not_covered` lists those of the requested hostnames the stored certificate does not cover, empty when it covers them all, so that the rule is applied in one place rather than by each client. It is null where there is nothing to decide — no requested hostnames, or no certificate yet — and also where the stored certificate cannot be parsed, which is not the same answer as "covers none of them".
-> `san_dns_names` is the DNS names in the stored certificate's SAN set, null where there is no certificate yet or it cannot be parsed.
-> `renews` is the id of the certificate the row's CSR [renews](rule:r/tls.csr.renew), null when it renews none or that certificate has since been deleted; `pending_renewal` is the id of the row's own renewal while that renewal is pending, otherwise null.
-> Private key material is never returned.
+| member | type | meaning |
+| --- | --- | --- |
+| `id` | integer | the stored certificate's id |
+| `hostname` | string | a name the certificate covers, as a display label |
+| `san_dns_names` | array of strings or null | the DNS names in the leaf's SAN extension |
+| `requested_hostnames` | array of strings or null | the hostnames the row's CSR requested |
+| `requested_not_covered` | array of strings or null | the requested hostnames the certificate does not cover |
+| `renews` | integer or null | the stored certificate this row's CSR renews |
+| `pending_renewal` | integer or null | the id of this certificate's pending renewal |
+| `state` | string | `csr_pending`, `active`, `superseded`, `failed` or `revoked` |
+| `origin` | string | `manual`, `csr`, `acme_dns`, `tailscale` or `canopy` |
+| `key_type` | string | the private key's algorithm; `ecdsa_p256` is the only value |
+| `issuer` | string or null | the leaf's issuer |
+| `not_before` | integer or null | the leaf's `notBefore` |
+| `not_after` | integer or null | the leaf's `notAfter` |
+| `serial` | string or null | the leaf's serial number |
+| `self_signed` | boolean | whether the leaf's issuer equals its subject |
+| `note` | string or null | the operator's note on an upload |
+| `acme_account_id` | integer or null | the ACME account that issued the certificate |
+| `created_at` | integer | when the row was created |
+| `updated_at` | integer | when the row was last written |
 
-> i[tls.cert.upload-manual]
-> `/tls/certificates/upload-manual { cert_pem, key_pem, note? }` registers an operator-supplied certificate-and-key pair and returns `{ id, primary_san, san_dns_names, warnings }`.
-> The `cert_pem` may carry a leaf with optional intermediates in any PEM order (the runtime re-emits the chain leaf-first); the `key_pem` is a PKCS#8 PEM private key.
-> The runtime validates the upload per [tls.cert.validation.self-signed](rule:r/tls.cert.validation.self-signed) and [tls.cert.validation.expired](rule:r/tls.cert.validation.expired), additionally rejects the upload when the leaf carries no DNS SANs (nothing to bind to), and rejects when the supplied private key's public key does not match the leaf certificate's `SubjectPublicKeyInfo`.
-> Validation rejections return `requirements_invalid` with a message describing the failed rule.
-> On success the cert is stored with the private key encrypted at rest using the [secret key](rule:r/secret.key); the response `warnings` array contains `"self_signed"` when the leaf is self-signed and/or `"not_yet_valid"` when `not_before` is in the future.
-> No per-hostname binding step is required: the runtime auto-binds the cert to every hostname its SAN list covers per [tls.strategy.manual](rule:r/tls.strategy.manual). The new row retires any prior active certificate it fully replaces, per [tls.cert.supersede](rule:r/tls.cert.supersede).
+For an operator upload, `hostname` MUST be the certificate's [primary SAN](#primary-san).
+For a certificate the runtime issued, it MUST be the hostname the runtime issued for.
+For a CSR awaiting its certificate, it MUST be the first requested hostname.
+The hostnames a certificate serves MUST be decided by [SAN coverage](rule:r/tls.cert.validation.san-coverage) alone, never by `hostname`.
 
-> i[tls.cert.delete]
-> `/tls/certificates/delete { id }` removes a stored certificate.
-> Refused with `requirements_invalid` when a manual policy still references the row, so the operator unbinds the policy first; returns `not_found` when the id is unknown.
+`san_dns_names` MUST be `null` when the row holds no certificate or its certificate cannot be parsed.
+`requested_hostnames` MUST be `null` for a row that was not created by a [CSR request](#certificate-signing-requests).
+A CA may sign a name set other than the one requested, so `requested_hostnames` can differ from the names the certificate covers.
 
-> i[tls.cert.csr.begin]
-> `/tls/certificates/csr/begin { hostnames?, renews?, key_type? }` generates a server-side keypair and a CSR whose SAN set is `hostnames`, and returns `{ id, csr_pem }`.
-> `hostnames` is a non-empty array of at most a hundred names, each entry a hostname or a `*.<suffix>` wildcard; a name repeated is requested once, and anything else is refused with `requirements_invalid`.
-> `renews` is the id of a certificate this CSR [renews](rule:r/tls.csr.renew); when it is given and `hostnames` is not, `hostnames` is that certificate's SAN DNS names.
-> `hostnames` is required when `renews` is not given.
-> `renews` returns `not_found` when the id is unknown, and `requirements_invalid` when the certificate is not an active manual or CSR-derived one, or already has a pending renewal, whose id the message names.
-> The cap is what public certificate authorities accept in one certificate, and it keeps a single request from storing and serving back a certificate request of unbounded size.
-> The private key is stored encrypted at rest using the [secret key](rule:r/secret.key) and never leaves the runtime; only the CSR is returned, both in this response and via subsequent `tls.cert.csr.get` calls while the row remains in `csr_pending`.
-> `key_type` defaults to `"ecdsa_p256"`, which is currently the only accepted value.
+The runtime MUST compute `requested_not_covered` under SAN coverage, so that clients need not apply the rule themselves.
+It MUST be empty when the certificate covers every requested hostname.
+It MUST be `null` when the row has no requested hostnames, holds no certificate, or holds a certificate that cannot be parsed.
 
-> i[tls.cert.csr.get]
-> `/tls/certificates/csr/get { id }` returns `{ id, csr_pem }` for a pending CSR row.
-> Returns `not_found` when the id is unknown, and `requirements_invalid` once the row has been transitioned away from `csr_pending` (cert uploaded or row cancelled).
+> [!NOTE]
+> An unparsable certificate yields `null` rather than every requested hostname, since the runtime cannot tell which names the certificate covers.
 
-> i[tls.cert.csr.upload-cert]
-> `/tls/certificates/csr/upload-cert { id, cert_pem }` accepts the externally-signed certificate for a pending CSR, returning `{ id, primary_san, san_dns_names, requested_not_covered, warnings }`.
-> The runtime verifies the leaf cert's `SubjectPublicKeyInfo` matches the stored private key and applies the same validation as [`tls.cert.upload-manual`](rule:i/tls.cert.upload-manual).
-> On success the row transitions to `active`, binds to the hostnames the issued certificate's SAN list covers per [tls.cert.validation.san-coverage](rule:r/tls.cert.validation.san-coverage), and retires any prior active certificate it fully replaces, per [tls.cert.supersede](rule:r/tls.cert.supersede).
-> A CSR that is cancelled before its certificate is uploaded cannot then be activated: the upload returns `requirements_invalid` and nothing is stored or retired.
-> The hostnames the CSR was requested for are retained on the row and reported by [`tls.cert.list`](rule:i/tls.cert.list).
-> `requested_not_covered` lists the requested hostnames the issued certificate does not cover, empty when it covers them all.
-> Validation rejections return `requirements_invalid`; non-fatal warnings come back in the response `warnings` array: `self_signed`, `not_yet_valid`, and `request_not_covered` when the issued certificate does not cover every requested hostname.
+`renews` MUST be `null` when the row renews no certificate or the renewed certificate has been deleted.
+`pending_renewal` MUST be `null` unless a CSR renewing this certificate is in state `csr_pending`.
 
-> i[tls.cert.csr.cancel]
-> `/tls/certificates/csr/cancel { id }` cancels a pending CSR row, deleting the stored private key.
-> Refused with `requirements_invalid` when the row is no longer `csr_pending`; for active certs use [`tls.cert.delete`](rule:i/tls.cert.delete) instead.
-> The state is checked as part of the deletion, so a certificate uploaded for the CSR while the cancellation is in flight is either never activated or never deleted: a cancellation that loses the race to an upload is refused and the certificate stays active.
+`/tls/certificates/upload-manual` stores a certificate and private key an operator supplies.
 
-> i[tls.cert.issue-acme-dns]
-> `/tls/certificates/issue-acme-dns { hostname }` synchronously runs the ACME-DNS-01 issuance flow for `hostname` via the issuance coordinator.
-> The hostname must resolve (per [tls.policy.wildcard](rule:r/tls.policy.wildcard)) to an `acme_dns` policy with a configured DNS provider; otherwise the call returns `internal` with a descriptive message.
-> Contact email and directory come from the global [TLS settings](rule:i/tls.settings.set); if no contact email is configured, the call returns `internal` with a descriptive message.
-> The call blocks for the full duration of the ACME flow (typically tens of seconds) and returns `{ cert_id, not_after }` on success.
-> Failure returns `internal` with a message identifying the stage that failed.
-> The newly-issued certificate retires any prior active certificate it fully replaces, per [tls.cert.supersede](rule:r/tls.cert.supersede).
+| member | type | required | meaning |
+| --- | --- | --- | --- |
+| `cert_pem` | string | yes | PEM `CERTIFICATE` blocks: the leaf first, then any intermediates |
+| `key_pem` | string | yes | the leaf's private key, PEM-encoded PKCS #8 |
+| `note` | string | no | a note for operators |
 
-> i[tls.cert.retry]
-> `/tls/certificates/retry { hostname }` queues a retry for `hostname` and returns immediately.
-> The runtime clears any operator pause for the hostname, writes a persistent force-retry signal per [tls.cert.force-retry](rule:r/tls.cert.force-retry), and nudges the issuance coordinator.
-> The retry starts a new cycle of the hostname's chain from its first strategy, per [tls.chain.return](rule:r/tls.chain.return), so a hostname that passed to a later strategy asks Canopy again.
-> The actual issuance runs in the background; the cert appears in [`tls.cert.list`](rule:i/tls.cert.list) once issuance completes.
-> Survives a daemon restart: if the daemon dies between this call and the coordinator picking it up, the next reconciler tick after restart still processes it.
+The runtime MUST take the first `CERTIFICATE` block of `cert_pem` as the leaf, and MUST ignore PEM blocks of other types.
+It MUST store the `CERTIFICATE` blocks in the order given.
+
+The runtime MUST refuse the upload with `requirements_invalid`, naming the failed check in the message, when:
+
+- `cert_pem` holds no `CERTIFICATE` block, or its leaf cannot be parsed;
+- `key_pem` cannot be parsed;
+- the leaf has no DNS names in its SAN extension;
+- the leaf's `notAfter` has passed, as [tls.cert.validation.expired](rule:r/tls.cert.validation.expired) specifies;
+- the public key of `key_pem` differs from the leaf's SubjectPublicKeyInfo.
+
+On success, the runtime MUST store the certificate in state `active` with origin `manual`, and the private key encrypted at rest under the secret key.
+The certificate MUST bind to the hostnames it covers as [tls.strategy.manual](rule:r/tls.strategy.manual) specifies, with no per-hostname step.
+It MUST retire the certificates it replaces in full, as [tls.cert.supersede](rule:r/tls.cert.supersede) specifies.
+
+The result is an object with these members.
+
+| member | type | meaning |
+| --- | --- | --- |
+| `id` | integer | the new stored certificate's id |
+| `primary_san` | string | the leaf's primary SAN |
+| `san_dns_names` | array of strings | the DNS names in the leaf's SAN extension |
+| `warnings` | array of strings | `self_signed` when the leaf is [self-signed](rule:r/tls.cert.validation.self-signed), and `not_yet_valid` when its `notBefore` is in the future |
+
+`/tls/certificates/delete` takes `id` and removes that stored certificate.
+The result is `{ "ok": true }`.
+If no stored certificate has that id, the runtime MUST refuse the request with `not_found`.
+
+## Certificate signing requests
+
+The CSR methods carry out the flow of [tls.csr.flow](rule:r/tls.csr.flow).
+
+`/tls/certificates/csr/begin` generates a key pair and a CSR.
+
+| member | type | required | meaning |
+| --- | --- | --- | --- |
+| `hostnames` | array of strings | unless `renews` is given | the names to request |
+| `renews` | integer | no | the stored certificate this CSR [renews](rule:r/tls.csr.renew) |
+| `key_type` | string | no | the key algorithm, `ecdsa_p256` if absent |
+
+Each entry of `hostnames` MUST be a hostname, or `*.` followed by a hostname.
+`hostnames` MUST hold at least one and at most 100 entries.
+The runtime MUST refuse a request breaking either rule with `requirements_invalid`.
+The runtime MUST request once each name that differs from an earlier one only in ASCII case, keeping the first spelling.
+
+> [!NOTE]
+> 100 names is the most that public certificate authorities accept in one certificate.
+
+If `renews` is given and `hostnames` is not, the runtime MUST request the DNS names in the renewed certificate's own SAN extension.
+If it cannot read that SAN extension, or the extension holds no DNS names, it MUST refuse the request with `internal`, naming the certificate.
+If neither `hostnames` nor `renews` is given, the runtime MUST refuse the request with `requirements_invalid`.
+
+If `renews` names no stored certificate, the runtime MUST refuse the request with `not_found`.
+If the named certificate is not an active certificate of origin `manual` or `csr`, or already has a pending renewal, the runtime MUST refuse the request with `requirements_invalid`.
+A refusal for a pending renewal MUST name the pending renewal's id.
+The runtime MUST check the renewed certificate again as it stores the new row, so that a renewal begun or the certificate retired meanwhile is refused.
+
+If `key_type` is given and is not `ecdsa_p256`, the runtime MUST refuse the request with `requirements_invalid`.
+
+The runtime MUST generate the key pair itself and store the private key encrypted at rest under the secret key.
+The CSR's SAN extension MUST hold exactly the requested names, in order, and its subject MUST be empty.
+The runtime MUST store a row in state `csr_pending` with origin `csr`, recording the requested names and any renewed certificate.
+
+The result is `{ id, csr_pem }`, the new row's id and the PEM-encoded CSR.
+
+`/tls/certificates/csr/get` takes `id` and returns `{ id, csr_pem }` for a row in state `csr_pending`.
+If no stored certificate has that id, the runtime MUST refuse the request with `not_found`.
+If the row is not in state `csr_pending`, the runtime MUST refuse the request with `requirements_invalid`.
+
+`/tls/certificates/csr/upload-cert` takes `id`, a row in state `csr_pending`, and `cert_pem`, the certificate signed for its CSR in the form `upload-manual` accepts.
+If no stored certificate has that id, the runtime MUST refuse the request with `not_found`.
+If the row is not in state `csr_pending`, the runtime MUST refuse the request with `requirements_invalid`.
+
+The runtime MUST check the certificate as for `upload-manual`, with the row's stored private key in place of `key_pem`.
+On success, it MUST move the row to state `active`, label it with the certificate's primary SAN, and keep its requested hostnames.
+The certificate MUST bind to the hostnames its own SAN extension covers, and MUST retire the certificates it replaces in full.
+If the row leaves state `csr_pending` before the runtime activates it, the runtime MUST refuse the request with `requirements_invalid` and store or retire nothing.
+
+The result is an object with these members.
+
+| member | type | meaning |
+| --- | --- | --- |
+| `id` | integer | the row's id |
+| `primary_san` | string | the certificate's primary SAN |
+| `san_dns_names` | array of strings | the DNS names in the certificate's SAN extension |
+| `requested_not_covered` | array of strings | the requested hostnames the certificate does not cover |
+| `warnings` | array of strings | the warnings of `upload-manual`, and `request_not_covered` when `requested_not_covered` is not empty |
+
+`/tls/certificates/csr/cancel` takes `id` and deletes that row with its private key.
+The result is `{ "ok": true }`.
+If no stored certificate has that id, the runtime MUST refuse the request with `not_found`.
+If the row is not in state `csr_pending`, the runtime MUST refuse the request with `requirements_invalid`.
+The runtime MUST check the state and delete the row in one atomic step, so that a certificate uploaded for the CSR while the cancellation is handled is either never activated or never deleted.
+
+## Operator-driven issuance
+
+`/tls/certificates/issue-acme-dns` takes `hostname` and runs ACME issuance over DNS-01 for it, returning when the issuance finishes.
+The hostname's policy MUST be an `acme_dns` policy, matched as [tls.policy.wildcard](rule:r/tls.policy.wildcard) specifies.
+The issuance MUST use the contact email and certificate profile of the [settings](#settings).
+It MUST proceed even when the hostname's certificate is not due for renewal, or the runtime is waiting out the delay that follows a failed attempt.
+It MUST be logged as an [issuance attempt](#issuance-attempts) triggered by `manual`.
+The issued certificate MUST retire the certificates it replaces in full.
+
+The result is `{ cert_id, not_after }`, the new certificate's id and `notAfter`.
+The runtime MUST refuse the request with `internal`, with a message naming the cause, when the hostname has no `acme_dns` policy, when a [retry block](#retry-blocks) is set for it, when no contact email is configured, or when the issuance fails.
+A message for a failed issuance MUST name the stage that failed.
+
+`/tls/certificates/retry` takes `hostname` and queues a fresh attempt to obtain its certificate.
+The runtime MUST clear any retry block for the hostname, record a persistent retry request as [tls.cert.force-retry](rule:r/tls.cert.force-retry) specifies, and hand the hostname to issuance.
+The retry MUST start a new cycle of the hostname's chain from its first strategy, as [tls.chain.return](rule:r/tls.chain.return) specifies.
+The runtime MUST return before the issuance runs.
+The result is `{ "ok": true }`.
+A retry request recorded before the runtime stops MUST be acted on after it restarts.
 
 ## Hostname view
 
-<!-- from interface: TLS Certificate Management / Hostname view -->
+`/tls/hostnames/list` returns the per-hostname rollup of [tls.cert.hostname-view](rule:r/tls.cert.hostname-view).
+It takes `app`, optional, an app name.
+Its result is `{ hostnames }`, an array with one object per hostname in the rollup's scope, ordered by hostname.
+When `app` is given, the array MUST hold only the hostnames that app declares, and each `apps` member MUST name only that app.
 
-> i[tls.hostname.list]
-> `/tls/hostnames/list { app? }` returns a per-hostname rollup covering every TLS-terminating ingress hostname currently declared by a registered app.
-> When `app` is supplied, only hostnames declared by that app are returned.
-> Response `result.hostnames` is an array; each entry has:
->
-> - `hostname`
-> - `apps`: array of app names declaring this hostname (multiple when several apps share an ingress)
-> - `policy`: `{ strategy: "default" | "acme_dns" | "canopy" | "manual", dns_provider?, cert_id?, pattern?, is_wildcard_match? }` — `default` means no policy is bound and the hostname follows the default chain; `pattern` is the matched policy pattern (which may be a wildcard), `is_wildcard_match` is true when the resolved policy was a wildcard rather than an exact match
-> - `status`: `"active" | "expired" | "error" | "pending" | "blocked" | "no_cert" | "default"` — derived from policy, active certificate, last attempt, and any retry block or queued retry. For `default`-strategy hostnames, `status` reflects the proxy's on-disk certificate when one is available (so a Caddy-served cert near expiry surfaces as `expired` rather than indistinguishably as `default`).
-> - `chain`: `{ responsible, fall_through_at?, next_cycle_at? }` — the strategy currently responsible for the hostname (`"canopy"`, `"acme_http01"`, or `"internal_ca"`), when it falls through to the next strategy in Unix seconds if it will, and when the next cycle starts per [tls.chain.cycle](rule:r/tls.chain.cycle). Where no cycle is running, the strategy named is the one that will act when the next one starts. Null for a hostname on no chain, which is one bound to a policy naming a single strategy
-> - `active_cert`: `{ id, origin, caddy_issuer?, issuer, not_before, not_after, self_signed, ari_window_start, ari_window_end }` or null. `id` is null for proxy-managed certs; `origin` is `"caddy"` for those, with `caddy_issuer` naming the proxy's issuer subdir (`local` for its internal CA, otherwise the host of the ACME directory).
-> - `last_issuance`: `{ kind, at, cert_id?, provider? }` describing when and how the active certificate was last obtained, or null when no issuance has run; `kind` is the origin of the certificate that issuance produced (`"manual"`, `"csr"`, `"acme_dns"`, `"tailscale"` or `"canopy"`, with `provider` set to the DNS provider for `acme_dns`), or `"caddy"` for proxy-managed certs (with `provider` set to the issuer subdir). An issuance whose certificate is no longer stored says nothing about how the active certificate was obtained, so it is not reported.
-> - `last_error`: error message from the most recent failed attempt for this hostname, when the latest attempt was a failure, otherwise null
-> - `retry_block`: `{ set_at, reason }` when an operator pause is set, otherwise null
-> - `force_retry_at`: timestamp of a queued operator-driven retry awaiting the coordinator, otherwise null
-> - `next_issuance_at`: expected next issuance time in Unix seconds, or null
-> - `next_issuance_source`: `"ari" | "fallback" | "immediate" | "debounce"` describing how `next_issuance_at` was derived (RFC 9773 ARI window, the runtime's lifetime-fraction fallback, "as soon as the coordinator runs", or "the time the after-failure debounce expires"), or null when the strategy is manual or the certificate is one the proxy obtained for itself
->
-> The view is the canonical operator surface for what TLS hostnames exist and what state they are in; it deliberately replaces the older "list every stored cert" and "list every recent attempt" views, which exposed implementation rather than per-hostname state.
+| member | type | meaning |
+| --- | --- | --- |
+| `hostname` | string | the hostname |
+| `apps` | array of strings | the apps declaring the hostname, ordered by name |
+| `policy` | object | the policy resolved for the hostname |
+| `status` | string | the hostname's status |
+| `chain` | object or null | the hostname's position in its strategy chain |
+| `active_cert` | object or null | the certificate serving the hostname |
+| `last_issuance` | object or null | how the serving certificate was obtained |
+| `last_error` | string or null | the error of the hostname's latest attempt, when that attempt failed |
+| `retry_block` | object or null | `{ set_at, reason }` when a retry block is set |
+| `force_retry_at` | integer or null | when a queued operator retry was requested |
+| `next_issuance_at` | integer or null | when the runtime next expects to issue |
+| `next_issuance_source` | string or null | how `next_issuance_at` was derived |
 
-## Cert attempt log
+`policy` MUST be `{ "strategy": "default" }` when no policy matches the hostname.
+Otherwise it MUST carry these members.
 
-<!-- from interface: TLS Certificate Management / Cert attempt log -->
+| member | type | meaning |
+| --- | --- | --- |
+| `strategy` | string | `acme_dns` or `canopy` |
+| `dns_provider` | string | the bound DNS provider, present only for `acme_dns` |
+| `pattern` | string | the matching policy's hostname pattern |
+| `is_wildcard_match` | boolean | whether `pattern` differs from `hostname` |
 
-> i[tls.cert.attempts.list]
-> `/tls/certificates/attempts/list { hostname?, limit? }` returns the recent issuance-attempt log.
-> Newest first; capped at `limit` (default 100).
-> Each entry has `id`, `hostname`, `triggered_by` (`on_demand` | `manual` | `renewal`), `started_at`, `finished_at` (null while pending), `outcome` (`pending` | `success` | `failure`), `cert_id` (set on success), and `error` (set on failure).
-> When `hostname` is supplied, scopes the result to that hostname.
+`status` MUST be one of these values.
+
+| `status` | meaning |
+| --- | --- |
+| `active` | a certificate serves the hostname and its `notAfter` has not passed |
+| `expired` | the certificate serving the hostname is past its `notAfter` |
+| `pending` | the runtime is obtaining a certificate the hostname lacks, or acting on a queued operator retry |
+| `error` | the runtime cannot obtain a certificate for the hostname until something changes, or is waiting out the delay after a failed attempt |
+| `blocked` | a retry block is set for the hostname |
+| `default` | none of the above: the hostname follows its chain with nothing serving it and nothing in progress |
+
+The runtime MUST derive `status` from the same decision its issuance acts on, as tls.cert.hostname-view requires.
+For a hostname with no runtime-held certificate, `status` MUST reflect a certificate the proxy holds for it, so that a proxy-held certificate past its `notAfter` reports `expired`.
+
+`chain` MUST be `null` for a hostname whose policy names a single strategy.
+Otherwise it MUST carry these members.
+
+| member | type | meaning |
+| --- | --- | --- |
+| `responsible` | string | `canopy`, `acme_http01` or `internal_ca` |
+| `fall_through_at` | integer or null | when the responsible strategy passes to the next, if it will |
+| `next_cycle_at` | integer or null | when the next cycle starts, as [tls.chain.cycle](rule:r/tls.chain.cycle) defines |
+
+While a cycle runs, `responsible` MUST name the strategy acting in it.
+While no cycle runs, `responsible` MUST name the strategy that will act when the next cycle starts.
+
+`active_cert` MUST describe the stored certificate serving the hostname, or else a certificate the proxy holds for it, or be `null` when there is neither.
+
+| member | type | meaning |
+| --- | --- | --- |
+| `id` | integer or null | the stored certificate's id, `null` for a proxy-held certificate |
+| `origin` | string | the stored certificate's origin, or `caddy` for a proxy-held certificate |
+| `caddy_issuer` | string | for a proxy-held certificate only: `local` for the proxy's internal CA, otherwise the host of the ACME directory that issued it |
+| `issuer` | string or null | the leaf's issuer |
+| `not_before` | integer or null | the leaf's `notBefore` |
+| `not_after` | integer or null | the leaf's `notAfter` |
+| `self_signed` | boolean | whether the leaf's issuer equals its subject |
+| `ari_window_start` | integer or null | the start of the ARI suggested renewal window |
+| `ari_window_end` | integer or null | the end of the ARI suggested renewal window |
+
+`last_issuance` MUST be `null` when the runtime knows of no issuance of the serving certificate.
+Otherwise it MUST carry these members.
+
+| member | type | meaning |
+| --- | --- | --- |
+| `kind` | string | the serving certificate's origin, or `caddy` for a proxy-held certificate |
+| `at` | integer | when the certificate was obtained |
+| `cert_id` | integer or null | the stored certificate's id, `null` for a proxy-held certificate |
+| `provider` | string or null | the DNS provider for `acme_dns`, the `caddy_issuer` value for `caddy`, and otherwise `null` or absent |
+
+The runtime MUST NOT derive `last_issuance` from an issuance attempt whose certificate is no longer stored.
+
+`next_issuance_source` MUST be `null` exactly when `next_issuance_at` is `null`, except for `immediate`, and otherwise one of these values.
+
+| value | meaning |
+| --- | --- |
+| `ari` | `next_issuance_at` is the start of the certificate's ARI suggested window |
+| `fallback` | `next_issuance_at` is the runtime's lifetime-fraction renewal point |
+| `immediate` | issuance is due as soon as the runtime acts, and `next_issuance_at` is `null` |
+| `debounce` | `next_issuance_at` is when the delay after a failed attempt ends |
+
+## Issuance attempts
+
+`/tls/certificates/attempts/list` returns the log of [issuance attempts](rule:r/tls.cert.attempt-log), newest first.
+
+| member | type | required | meaning |
+| --- | --- | --- | --- |
+| `hostname` | string | no | return only attempts for this hostname |
+| `limit` | integer | no | the most entries to return, 100 if absent |
+
+Its result is `{ attempts }`, an array of objects with these members.
+
+| member | type | meaning |
+| --- | --- | --- |
+| `id` | integer | the attempt's id |
+| `hostname` | string | the hostname the attempt was for |
+| `triggered_by` | string | `on_demand`, `manual` or `renewal` |
+| `started_at` | integer | when the attempt started |
+| `finished_at` | integer or null | when the attempt finished, `null` while it runs |
+| `outcome` | string | `pending`, `success` or `failure` |
+| `cert_id` | integer or null | the certificate a successful attempt produced |
+| `error` | string or null | why a failed attempt failed |
 
 ## Retry blocks
 
-<!-- from interface: TLS Certificate Management / Retry blocks -->
+A retry block pauses the runtime's issuance for a hostname, as [tls.cert.retry-block](rule:r/tls.cert.retry-block) specifies.
 
-> i[tls.retry-block.list]
-> `/tls/retry-blocks/list` returns the current per-hostname retry blocks.
-> Response `result.blocks` is an array of `{ hostname, set_at, set_by, reason }`.
-> `set_by` is `auto` for runtime-imposed blocks following an issuance failure, and `operator` for blocks set explicitly via [`tls.retry-block.set`](rule:i/tls.retry-block.set).
+`/tls/retry-blocks/list` takes no parameters.
+Its result is `{ blocks }`, an array with one object per block, ordered by hostname.
 
-> i[tls.retry-block.set]
-> `/tls/retry-blocks/set { hostname, reason? }` sets an operator retry block for `hostname`.
-> While the block is set, on-demand ACME-DNS issuance for the hostname is skipped per [tls.cert.retry-block](rule:r/tls.cert.retry-block).
-> An operator block is not auto-cleared; only a manual call to [`tls.retry-block.clear`](rule:i/tls.retry-block.clear) (or a successful manual issuance via [`tls.cert.issue-acme-dns`](rule:i/tls.cert.issue-acme-dns)) removes it.
+| member | type | meaning |
+| --- | --- | --- |
+| `hostname` | string | the blocked hostname |
+| `set_at` | integer | when the block was set |
+| `set_by` | string | `auto` for a block the runtime set after a failed issuance, `operator` for one an operator set |
+| `reason` | string or null | why the block was set |
 
-> i[tls.retry-block.clear]
-> `/tls/retry-blocks/clear { hostname }` removes the retry block for `hostname` if any.
-> Returns `{ cleared: bool }` indicating whether a block was removed.
+`/tls/retry-blocks/set` takes `hostname` and `reason`, an optional string, and sets an operator block for the hostname, replacing any block it has.
+The result is `{ "ok": true }`.
+The runtime MUST keep an operator block until an operator clears it with `/tls/retry-blocks/clear` or [retries](#operator-driven-issuance) the hostname.
+
+`/tls/retry-blocks/clear` takes `hostname` and removes the hostname's block, if it has one.
+The result is `{ ok, cleared }`, where `ok` is `true` and `cleared` says whether a block was removed.
 
 ## Settings
 
-<!-- from interface: TLS Certificate Management / Settings -->
+`/tls/settings/get` takes no parameters and returns the host's TLS settings.
 
-> i[tls.settings.get]
-> `/tls/settings/get` returns the global TLS settings as `{ contact_email, cert_profile, updated_at }`. Empty `contact_email` means none is configured. `cert_profile` is null when no profile has been set, otherwise the configured ACME profile name.
+| member | type | meaning |
+| --- | --- | --- |
+| `contact_email` | string | the [contact email](rule:r/tls.settings.contact-email) for ACME account registration, empty when none is configured |
+| `cert_profile` | string or null | the [ACME profile](rule:r/tls.settings.cert-profile) requested on every order, `null` when none is configured |
+| `updated_at` | integer | when the settings were last written |
 
-> i[tls.settings.set]
-> `/tls/settings/set { contact_email?, cert_profile? }` updates whichever fields are present.
-> `contact_email` (string) sets the operator contact email used for ACME account registration; pass an empty string to clear.
-> `cert_profile` (string or null) opts into a non-default ACME profile (e.g. Let's Encrypt's `shortlived` for ~6-day certs) per [tls.settings.cert-profile](rule:r/tls.settings.cert-profile); pass `null` to clear so the CA selects its default profile, or omit the field to leave it unchanged.
-> Both updates take effect on the next renewal pass without daemon restart.
+`/tls/settings/set` changes the settings it is given and leaves the others unchanged.
+
+| member | type | required | meaning |
+| --- | --- | --- | --- |
+| `contact_email` | string | no | the new contact email; the empty string clears it |
+| `cert_profile` | string or null | no | the new ACME profile; `null` clears it, so that the CA selects its default profile |
+
+The result is `{ "ok": true }`.
+A change MUST take effect from the runtime's next issuance or renewal, without a restart.
