@@ -119,6 +119,8 @@ The runtime MUST file and clear the faults below against the app, with an empty 
 | `uninstall_unidentifiable_units` | none | an uninstall finds supervised units that may belong to the app but no recorded instance identities to match them against | the app's teardown completes | latched |
 | `definition_unsupported` | none | the running Seedling does not satisfy the app's [Seedling version requirement](../language/bundle.md#seedling-version-requirement) | the definition is replaced by one the running Seedling satisfies, or the runtime starts as a version that satisfies it | condition |
 | `definition_source_moved` | the digest the reference now selects | a successful [re-check](definition-recheck.md#resolution) finds that the reference in the app's fetched definition selects a digest other than the running one | a successful re-check selects the running digest again, or the app's definition is replaced | condition |
+| `definition_recheck_failed` | none | 5 consecutive [re-checks](definition-recheck.md#back-off) of the app's definition fail | a re-check succeeds, or the app's definition is replaced | condition |
+| `schedule_params_invalid` | the action | a schedule of the action comes due and its run [fails param validation](../language/action.md#scheduled-actions) | a later scheduled run of the action passes validation, or the definition no longer schedules the action | event |
 | `canopy_offer_absent` | none | the app [relies on Canopy](canopy-reporting.md#missing-offers) and no offer has been live for 15 minutes | an offer is live, Canopy access is disabled, or the app stops relying on Canopy | condition |
 
 A `definition_source_moved` fault MUST identify the reference and both digests.
@@ -167,6 +169,10 @@ The runtime MUST file and clear the faults below against `_system`, with an empt
 | `scaling_decisions_unreadable` | the runtime cannot read the stored operator scaling decisions | the runtime next reads them | condition |
 | `slice_sync_failed` | applying the [resource-control groups](priority.md#resource-control-groups) has failed 5 consecutive times | the groups are next applied | condition |
 | `nat64_setup_failed` | setting up the NAT64 translator fails | the translator is next set up | condition |
+| `nat64_detection_failed` | [detecting](nat64.md#detection) existing NAT64 is undetermined | detection succeeds | condition |
+| `nat64_teardown_failed` | tearing down the NAT64 translator fails | a teardown succeeds, or the translator is next set up | condition |
+| `ipv6_egress_undetermined` | whether the host has [IPv6 egress](nat64.md#ipv6-egress) cannot be determined | the determination succeeds | condition |
+| `operation_state_unreadable` | the runtime cannot read the [persisted operation, its cancel, or the persisted queue](operations.md#unreadable-operation-state) | the read succeeds | condition |
 | `resolver_failed` | starting the resolver fails or does not finish in time | the resolver next starts | condition |
 | `caddy_failed` | bringing up the proxy fails or does not finish in time | the proxy is next brought up | condition |
 | `routes_failed` | applying the host's routes fails | the routes are next applied | condition |
@@ -186,5 +192,6 @@ The runtime MUST file and clear the faults below against `seedling`, with an emp
 | --- | --- | --- | --- |
 | `canopy_report_failed` | a [report](canopy-reporting.md#report-failure-fault) to Canopy fails while an offer is live | a later report succeeds, Canopy access is disabled, or no offer is live | condition |
 | `audit_lag` | the audit log writer falls behind and drops events | an operator clears it | event |
+| `audit_log_unavailable` | the runtime cannot open the [audit log](audit-log.md#write-failures) | the runtime opens it | condition |
 
 An `audit_lag` fault MUST state how many events were dropped.

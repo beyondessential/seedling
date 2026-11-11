@@ -210,7 +210,7 @@ A `container` object has these members.
 | --- | --- | --- |
 | `image` | string or null | the image reference |
 | `command`, `args` | array of strings or null | the entrypoint and its arguments |
-| `env` | object | each environment variable's name and value |
+| `env` | object | each environment variable's name and value, or `null` for a [redacted](#redacted-environment-values) value |
 | `volume_mounts` | object | for each mount path, `{ "kind": "volume", "name": <string or null> }` or `{ "kind": "external_volume", "name": <string> }` |
 | `on_exit` | string | `"default"`, `"restart"`, `"terminate"` or `"restart_on_failure"` |
 | `memory` | string or null | the memory limit |
@@ -222,6 +222,10 @@ A `container` object has these members.
 | `healthcheck` | object or null | `kind` (`"command"`), `cmd` (array of strings), `interval_secs`, `timeout_secs`, `retries`, `start_period_secs`, and `on_failure` (`"replace"` or `"monitor"`) |
 | `stop_signal` | string or null | the stop signal |
 | `stop_timeout_secs` | integer or null | the stop timeout |
+
+### Redacted environment values
+
+The server MUST report as `null` the value of an environment variable whose value contains the stored value of a parameter whose effective [secret flag](../language/parameter.md#secret-parameters) is true.
 
 A `pod` object has the members `service_mounts`, each `"<service>:<port>"`; `http_bindings`, each `"<pod port> -> <service> <prefix>"`; and `tcp_bindings` and `udp_bindings`, each `"<pod port> -> <service>:<port>"`.
 Each is an array of strings in ascending order.

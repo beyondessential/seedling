@@ -51,3 +51,5 @@ Signed off on `runtime/reconciliation.md` and `overview.md`.
 ## Gaps
 
 Collected per batch in `gaps.md` beside this plan: open decisions, places the spec now leads the code, cross-spec moves for the review loop.
+Spec-leads-code items are filed as themed issues on D6, which brings the code in line after this card merges.
+Open decisions are settled in batches with the user; each settled batch moves to `gaps.md`'s "Decided" section, is folded into the specs, and its code changes are filed on D6.

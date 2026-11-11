@@ -16,7 +16,11 @@ A parameter whose effective [`secret` flag](../language/parameter.md#secret-para
 
 The runtime MUST keep a secret key for protecting secret values at rest, in the file `seedling.db.key` in its [data directory](actuation.md#data-directory), beside the database.
 The key file MUST carry the same [file permissions](infrastructure.md#file-permissions) as the database.
-If no key file exists when the runtime starts, the runtime MUST create one holding a freshly generated key.
+If no key file exists when the runtime starts and the database holds no value protected under the secret key, the runtime MUST create one holding a freshly generated key.
+If no key file exists while the database holds a value protected under the secret key, the runtime MUST NOT start, and MUST report an error naming the missing key file.
+
+> [!NOTE]
+> A fresh key cannot decrypt the values already stored, so creating one would leave every protected value unreadable without saying so.
 
 ## Storage
 

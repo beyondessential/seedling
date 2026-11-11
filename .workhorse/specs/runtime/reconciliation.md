@@ -33,6 +33,8 @@ Its running instances MUST keep the specification they were last started with, a
 
 An install operation is a lifecycle operation, and the runtime MUST actuate the resources its closure places in the desired state as for any other.
 
+From the moment the runtime initiates an app's [start action](../language/action.md#start-action) until that start action ends, including while it is queued, the app's desired state MUST be as for an app with a lifecycle operation in progress.
+
 ## Reconciliation loop
 
 The runtime MUST run a reconciliation loop for as long as it runs.

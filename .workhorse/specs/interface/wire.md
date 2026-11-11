@@ -71,7 +71,7 @@ A method that defines no parameters MUST ignore `params`.
 
 The server MUST accept a request of up to 4,194,304 bytes.
 The server MUST answer an unknown method with `not_found`.
-The server MUST answer a request it cannot parse as a request object, including one longer than it accepts, with `not_found`.
+The server MUST answer a request it cannot parse as a request object, including one longer than it accepts, with `requirements_invalid`.
 
 The server MUST write its response as one JSON object and then finish the stream.
 The end of the stream ends the response, and no length prefix or line feed delimits it.
@@ -92,6 +92,7 @@ A failed request MUST leave the connection usable for further requests.
 | `session` | string | no | an opaque identifier for the actor's session |
 
 The actor is the client's assertion, and the server MUST record it as the client supplied it.
+The server MUST refuse a request whose `actor` is not an object, or carries a member of another type than the table gives, with `requirements_invalid`.
 
 If a request has no `actor` member, the server MUST attribute it to an actor whose `kind` is `ctl`, whose `id` is the [fingerprint](transport.md#fingerprint) of the client's key, and whose `display` is that key's label in the [authorised key set](transport.md#authorised-key-set), or the fingerprint where the key has no label.
 That actor has no `session`.
@@ -102,13 +103,13 @@ The server MUST attach the actor of a request to every [event](events.md#event-t
 
 | code | meaning |
 | --- | --- |
-| `not_found` | the method, or the app, resource, action, generation, shell session, port forward or other object the request names, does not exist, or the request cannot be parsed |
+| `not_found` | the method, or the app, resource, action, generation, shell session, port forward or other object the request names, does not exist |
 | `not_installed` | the request needs the app installed, and it is not |
 | `already_installed` | an install was requested for an app that is installed or uninstalling |
 | `install_in_progress` | an install was requested for an app whose install is running |
 | `operation_in_progress` | the request conflicts with a lifecycle operation running or queued for the app, or with a change to the app being applied; `message` names which |
 | `already_queued` | a lifecycle operation is already queued for the app |
-| `requirements_invalid` | the request's parameters are missing, malformed or out of range; `message` names each offending field |
+| `requirements_invalid` | the request cannot be parsed, or its actor or parameters are missing, malformed or out of range; `message` names each offending field |
 | `script_error` | a definition failed to parse or evaluate; `message` gives the error |
 | `validation_failed` | a [parameter validator](params.md#validation) rejected the proposed values; `message` names each rejecting parameter and its reason |
 | `bundle_invalid` | a definition bundle breaks the [bundle rules](definitions.md#bundle-rules); `message` names the offending path or field |

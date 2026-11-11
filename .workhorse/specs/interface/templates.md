@@ -26,7 +26,7 @@ Updating or removing a template MUST NOT change any app instantiated from it.
 
 ## Template names
 
-A template name MUST follow the rules for app names in [bsl.name](../language/overview.md#names).
+A template name MUST follow the rules for app names in [names](../language/overview.md#names).
 The runtime MUST refuse a request naming a template by an invalid name with `requirements_invalid`.
 
 Template names and app names are separate namespaces.
@@ -115,6 +115,7 @@ If no template has the given name, the runtime MUST refuse the request with `not
 A supplied definition MUST replace the stored bundle and its provenance.
 The runtime MUST check a supplied definition as for [creation](#creation), and MUST NOT evaluate it.
 If no definition is supplied, the stored bundle and provenance MUST be left unchanged.
+The runtime MUST refuse an update that supplies `origin` without a definition, with `requirements_invalid`.
 
 A `description` that is a string MUST replace the stored description, and a `description` of `null` MUST clear it.
 If `description` is absent, the stored description MUST be left unchanged.

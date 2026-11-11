@@ -84,7 +84,7 @@ Relayed requests already in flight MUST be left to finish or reach their [deadli
 
 ## Relay streams
 
-To relay a request, the runtime opens a bidirectional stream, as [stream.canopy](wire.md#canopy-relay-streams) specifies, on the connection holding the selected offer.
+To relay a request, the runtime opens a bidirectional stream, as [Canopy relay streams](wire.md#canopy-relay-streams) specifies, on the connection holding the selected offer.
 It writes a header line, then the request body as raw bytes, then finishes its side of the stream.
 
 | member | type | meaning |

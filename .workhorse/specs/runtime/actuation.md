@@ -180,6 +180,8 @@ Snapshot site volumes are not held, as [SITE](site-resources.md#site-volume-snap
 A held volume MUST record the context it came from: an app volume its app, and a site volume the app name `_site`.
 
 If the volume has no storage, holding it MUST succeed without recording a held volume, and the removal that required the hold MUST proceed.
+The runtime MUST commit the held volume's record before it moves the volume's data.
+If the move then fails, the runtime MUST remove the record.
 If the volume has storage the runtime cannot hold, because the runtime does not own it or because moving it failed, the hold MUST fail and the removal MUST NOT proceed.
 
 The runtime MUST NOT delete a held volume's data until an operator confirms its deletion.

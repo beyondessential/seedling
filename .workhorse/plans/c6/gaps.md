@@ -1,28 +1,35 @@
 # Gaps from the rewrite
 
+## Decided
+
+Batches 1 and 2, folded into the specs; code changes filed on D6.
+
+- Could-not-determine cases follow AGENTS.md: NAT64 detection and IPv6 egress undetermined (NAT64 active, forced synthesis, fault, retry), NAT64 teardown fault, unobserved exit status not success, re-check fault after 5 failures, audit log unavailable fault, unreadable operation state holds operations with a fault.
+- Effects recorded before they happen: action log begin/complete entries (signal and exec throw on an incomplete entry, write repeats); held volume record committed before the move.
+- Malformed requests and actors get `requirements_invalid`; journal open failure `internal`; connected-clients read failure `daemon_unavailable`; STS `null`; forward id, template origin, TLSM preconditions and DNS provider config validated as `requirements_invalid`.
+- BSL throws: duplicate action, shell and install declarations; `install` reserved as an action name; `on_schedule` inside a closure; non-ready barriers on warm `Started`; whitespace in `user`; a container with no image fails evaluation.
+- `seedling-op-` reserved for external volume mapping names; `_system` is not a valid app name, so needs no reservation.
+- Container `env` in `/apps/show` reports values containing a secret parameter's value as `null`; plan diffs carry field names only.
+- Database side files created owner-only; a missing key file with protected values present stops startup (no fault: the daemon is not running to serve one).
+- Resolver healthy before workloads stays MUST.
+- Start action runs after a successful install (trigger `install`) and at runtime start (`boot`); the app's desired state is held to what the start action has started until it ends.
+- Scheduled runs validate an empty invocation against the schema; failure files `schedule_params_invalid`.
+- `rt.stop` default deadline is the longest stop timeout of the stopped containers plus 30 s; CTR's 90 s default stop timeout is a MUST.
+- Queued operations are persisted and restored at startup.
+- An install that cannot be replayed is recovered as a stuck install.
+- A restart replacing a failed run is a recovery restart, whoever performs it.
+- `observe_failed` clears on the next successful observation; a fact is recorded again whenever it changes.
+
 ## Open decisions
 
 ### PRX / INFRA / DNS / NAT64 / SEC
 - PRX: status for a route with no upstreams: name 502/503, or "an error status" (current).
 - PRX/DNS: proxy and resolver teardown on an idle host written as SHOULD.
 - INFRA: `container_runtime_unavailable` is never cleared in code; spec says cleared once started with both backends reachable.
-- INFRA: should WAL/SHM side files fall under the database-file permission rule?
-- DNS: resolver healthy before any workload starts: keep MUST (spec leads code) or drop.
 - DNS: host resolver `127.0.0.54` as a host requirement or a note.
-- NAT64: failed `ipv4only.arpa` lookup and unreadable route/address state become definite answers (violates "could not determine"): keep defaults with a fault, or treat as unknown.
-- NAT64: should a failed translator teardown file a fault (today only logs)?
-- SEC: missing key file with secret rows present: refuse to start, or keep auto-create (silently orphans values).
 - SEC: name the encryption construction (XChaCha20-Poly1305, nonce prefix) or keep "authenticated encryption".
 
 ### ACN / RT
-- ACN: start action never run automatically in code; keep both triggers (after install, at runtime start), post-install only, or make on_start ordinary.
-- ACN: duplicate on_action/on_start/on_shell/on_install names silently replace: throw, or last wins.
-- ACN: on_action("install") collides with the install action at dispatch: reserve the name, or route install by flag.
-- ACN: scheduled fires pass an empty param map without applying the schema: apply it (fault on required without default), or keep.
-- ACN: on_schedule on a handle inside a closure: throw or leave unspecified.
-- RT: rt.stop default deadline 30 s vs 90 s default stop timeout: raise, or tie to the container's stop timeout.
-- RT: scheduled()/running()/terminated() on a warm Started: throw, or define.
-- RT: unobserved exit status counted as success ("could not determine"): keep or count as failure.
 
 ## Spec leads or contradicts code
 
@@ -98,9 +105,6 @@ Open:
 - ING: redirect() then tls() with a non-HTTPS pairing leaves a redirect on non-HTTPS: tls() throws, tls() clears, or check at end of evaluation.
 - ING: two apps declaring the same (hostname, port) ungoverned: drop both + fault, first-installed wins + fault, or refuse install.
 - DEP: scale(1..4) read as inclusive though Rhai `..` is exclusive; `..=` unsupported: keep+note, accept `..=` too, or only `..=`.
-- CTR: no stop timeout leaves systemd's default; spec SHOULD 90 s: pin 90, or drop the number.
-- CTR: container with no image: throw at end of evaluation, fault at start, or unspecified.
-- CTR: trimming `user` is a coercion: keep as defined coercion, or throw on whitespace.
 - POD: two mounted Service Ports with the same port collide at localmount:<port>: second throws, or specify winner.
 Spec leads code:
 - JOB: `deadline` never enforced.
@@ -114,7 +118,6 @@ Glossary: Ingress (ING); External volume, Declared file write (VOL).
 ### Runtime C (ACTU IMG SITE PRIO UPD FLT IDN)
 Open:
 - ACTU: journal field names (SEEDLING_*) as contract (kept) or implementation detail; "system journal" vs "host log".
-- ACTU: hold renames data before writing its record; record write failure leaves data moved but invisible: needs a rule.
 - IMG: rt.query records images during a probe in code; spec says no-op: change code or spec.
 - FLT: /faults/clear rejects `_system` (invalid name) though spec lets operators clear `_system`/`seedling` faults: change endpoint, or auto-clear every `_system` kind.
 - FLT: reconciler_panic has no clear path (depends on above).
@@ -133,10 +136,7 @@ Glossary: Data directory (ACTU); Site volume, Site ingress (SITE).
 
 ### Interface C (TPL TLSM RLY CLI)
 Open:
-- TPL: /templates/update with origin but no definition silently drops origin: refuse with requirements_invalid (rec.), or ignore.
 - TPL/APPS: template instantiation whose script fails: code registers + files script_error; app.register says refuse and don't register.
-- TLSM: issue-acme-dns precondition failures reported as internal: keep, or requirements_invalid.
-- TLSM: dns-providers/upsert doesn't validate config against provider kind.
 - TLSM: attempts/list limit uncapped, negative = unbounded: cap (200?), or refuse non-positive.
 - TLSM: manual upload always reports key_type ecdsa_p256: restrict uploads to P-256, or detect.
 - TLSM: dead `tailscale` policy strategy rendered but forbidden by schema: remove, or allow.
@@ -154,7 +154,6 @@ Glossary: Canopy (defined in RLY for now).
 ### Web (WEB UI)
 Open:
 - WEB: interface name matching no interface: skip with warning (current spec), or fatal.
-- WEB: /connected-clients/list when shells/forwards can't be read: fail with daemon_unavailable, or null member.
 - WEB: auth_required "password" even when password login disabled: keep, add a none value, or unspecified.
 - WEB: heartbeat returning alive:false after reap: console reconnects, or server re-records.
 - UI: dangerous tier for destructive controls: MUST with fault-clearing exception named, or SHOULD.
@@ -172,12 +171,10 @@ Glossary: Web interface (WEB), Actor (i/wire.actor), Console, Safety mode (UI).
 Open:
 - LIM: --script-max-call-depth 0: help says unlimited, engine treats as no calls: fix help, or make 0 unlimited.
 - TRD: /apps/uninstall has no interface spec; app install phases (NotInstalled/Installing/Installed/Uninstalling) have no home spec; SCHED links nonexistent r/lifecycle.app.
-- RCK: persistently failing re-checks only log: add a fault after N, or accept.
 - LCY: sole backend in start period receives traffic (code) vs not (old spec).
 - LCY: ingress Ready requires a valid certificate (old spec) or just proxy config applied (code; spec follows code).
 - HIST: "provenance" clashes with definition provenance: rename "operation provenance", or keep.
 - HIST: external volumes get observations never made: carve out declaration-only resources, or stop deriving their state from observations.
-- AUD: failure to open the log at startup disables auditing for the run: retry+fault, or fatal.
 - GC: third retirement case (terminal observation present) may be obsolete and may retire a live later cycle: drop, or keep.
 Spec leads code:
 - GEN: failed decrypt during reconstruction treated as unset (spec: fail).
@@ -192,7 +189,6 @@ Glossary: World observation history, Autonomous operations log, Action execution
 
 ### Runtime TLS (TLS CHAIN TCAN CNR)
 Open:
-- TLS: Canopy report fault under `seedling`, cert_issue_failed under `_system`, neither reserved: reserve both, or a non-app fault scope. (Joins FLT/IDN items.)
 - TLS: tailscale policy: specify in TLS, or leave in SITE.
 - CNR: report status `uninstalling` vs OI `Deregistering`: keep (on the wire), or rename.
 Spec leads code:
@@ -205,8 +201,6 @@ Glossary: Managed hostname, Strategy, Policy, Runtime-managed certificate (TLS);
 ### Interface B (ACI SHL FWD LOG FLTS EVT KEY IMGM)
 Open:
 - SHL: shell volume-kind params validated but never bound: bind (spec says so), or exclude volume kinds from shells.
-- FWD/SHL: malformed forward_id -> not_found, malformed session_id -> requirements_invalid: align on requirements_invalid, or keep.
-- LOG: journal open failure reported as server_busy: internal, or keep.
 - IMGM: failed pull error code: not_found (code), internal, or new pull_failed.
 - IMGM: pull single attempt vs runtime's retrying pull path: restore retries, or keep.
 Spec leads code:
@@ -222,17 +216,7 @@ Glossary: Install phase (ACI; also asked by TRD).
 
 ### Runtime B (OPS SCHED SUSP AUTO OBS)
 Open:
-- OPS: start action at boot (trigger `boot`) never run: implement, or drop the row and the language promise. (Joins ACN item.)
-- OPS: queued operations in memory only; restart drops queued on_change handlers and operator actions: persist, report the drop, or accept.
-- OPS: install that cannot be replayed goes to NotInstalled (strands resources); spec says recovered as stuck install (Uninstalling): keep spec, or NotInstalled + later sweep.
-- OPS: unreadable persisted cancel flag: replay starts cancelled, or refuse with fault.
-- OPS: unreadable persisted operation at startup: fault, or keep retrying.
-- OPS: `seedling-op-` generated volume prefix not reserved (shadows operator mappings): reserve, or accept.
 - OPS/TRD/ACI: app phases have no defining rule: which spec owns them.
-- SUSP: action log committed only at end of pass, so crash after signal/write/exec repeats it: (a) record intent before effect, (b) commit after each effect, (c) weaken language wording.
-- AUTO: reconciler-issued restart of a failed unit recorded as deliberate (never counts toward crash loop): should count as recovery?
-- OBS: observe_failed clears only when next seen running and healthy (code) vs next successful observation (spec): confirm.
-- OBS: each (instance, kind) recorded once until restart, so later health changes are lost (contradicts LCY unhealthy->Ready): spec says don't record an unchanged fact again: confirm.
 Spec leads code:
 - OPS: operation record not persisted before running (only warns); failed reconstruction of `old` -> empty app; replay ignores target generation; failed persisted-operation read -> none (stuck sweep can tear down a live install); failed cancel-flag read -> not cancelled; generation outcome never recorded (record_outcome test-only), cancelled reported as OperationFailed; EVT trigger list has `boot`, lacks `replay`.
 - SCHED: queued fires never stamped, so they double-fire; unparseable last_fired_at -> never fired.
@@ -244,11 +228,7 @@ Glossary: Action closure, Dynamic resource, App phase (OPS); Barrier (SUSP/RT); 
 
 ### Interface A (OI TRN WIRE STS APPS DEFN CTL PRM)
 Open:
-- WIRE: malformed actor silently replaced by a synthesised one: refuse with requirements_invalid (rec.), or keep.
-- WIRE: unparseable/oversized request -> not_found: switch to requirements_invalid?
-- STS: unreadable values reported as null (confirm representation).
 - APPS: resource `type` externalvolume vs def.kind external_volume vs plan ExternalVolume: unify?
-- APPS: container env in /apps/show and plan diffs can carry plaintext secret params: redact? (security)
 Spec leads code:
 - TRN: bootstrap authorized_keys fingerprints imported without normalising (uppercase/prefixed never match).
 - WIRE: control request over 64 KiB with no newline loses its actor (affects pushed bundles via web); /forwards/start error responses lack trailing newline; `deregistering` code defined but unused (dropped).

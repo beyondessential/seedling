@@ -178,7 +178,8 @@ Without `app` the server MUST list every active forward on the host.
 
 On success the result is `{}`.
 The server MUST let any operator stop any forward, whichever connection opened it.
-The server MUST reject a `forward_id` that is not a UUID, or that names no active forward, with `not_found`.
+The server MUST reject a `forward_id` that is not a UUID with `requirements_invalid`.
+The server MUST reject a `forward_id` that names no active forward with `not_found`.
 A stopped forward MUST end as [forward lifetime](#forward-lifetime) specifies.
 
 ## Concurrency

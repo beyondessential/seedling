@@ -101,7 +101,7 @@ If a path in the bundle is absolute, or has an empty or `..` segment, the CLI MU
 
 ## Registry tags
 
-`registries tags <repository>` MUST list a repository's tags as [definition.tags](definitions.md#repository-tags) does.
+`registries tags <repository>` MUST list a repository's tags as [repository tags](definitions.md#repository-tags) does.
 
 ## Canopy access
 

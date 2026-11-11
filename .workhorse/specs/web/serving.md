@@ -398,7 +398,7 @@ Each `web` entry has these members.
 | `actor_kind`, `actor_id`, `actor_display` | string or null | The session actor's `kind`, `id` and `display` |
 | `safety_mode` | string | The recorded safety mode |
 
-If the web interface cannot read the shells or the forwards from the daemon, it MUST NOT report them as an empty array.
+If the web interface cannot read the shells or the forwards from the daemon, it MUST fail the request with `daemon_unavailable`, and MUST NOT report them as an empty array.
 
 `actors` MUST hold one entry for each pair of non-empty actor `kind` and `id` carried by an event on the relayed feed in the past ten minutes.
 

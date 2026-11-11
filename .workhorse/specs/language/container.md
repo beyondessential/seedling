@@ -33,6 +33,7 @@ A reference MUST have the form `registry/path`, followed by `:tag`, `@digest`, o
 | `digest` | `algorithm:hex`, where `algorithm` is non-empty and of lowercase ASCII letters and digits, and `hex` is at least 32 lowercase hexadecimal digits |
 
 A reference with neither a tag nor a digest MUST throw.
+A definition that declares a container on which `image` is never called MUST fail to evaluate, with an error naming the container's resource.
 
 ## Registry allowlist
 
@@ -111,7 +112,7 @@ A container on which it is never called MUST have a read-only root filesystem, w
 
 `container.user(spec: string)` sets the user, and optionally the group, the container's process runs as.
 A `spec` is a numeric user id, a `uid:gid` pair, or a name defined in the image.
-Leading and trailing whitespace MUST be removed from `spec`, and a `spec` that is then empty or contains whitespace MUST throw.
+A `spec` that is empty or contains whitespace MUST throw.
 A container on which `user` is never called runs as the user its image names.
 
 > [!NOTE]
@@ -132,4 +133,4 @@ If a container sets no stop signal, the runtime MUST send `SIGTERM`.
 
 `container.stop_timeout(seconds: number)` sets how long the runtime waits after sending the stop signal before sending `SIGKILL`.
 A `seconds` MUST be an integer from 1 to 4294967295.
-If a container sets no stop timeout, the runtime SHOULD wait 90 seconds.
+If a container sets no stop timeout, the runtime MUST wait 90 seconds.

@@ -39,7 +39,16 @@ The runtime MUST decide whether NAT64 is active once, when it starts.
 
 In `auto` mode, the runtime MUST detect existing NAT64 by resolving `ipv4only.arpa` through the host's resolver when it starts.
 If the response contains an IPv6 address other than the IPv4-mapped form of `192.0.0.170` or `192.0.0.171`, the network provides NAT64 and DNS64, and NAT64 MUST NOT be active.
-Otherwise NAT64 MUST be active.
+If the resolver answers without such an address, NAT64 MUST be active.
+
+A lookup that fails or receives no answer leaves detection undetermined.
+The runtime MUST NOT report an undetermined detection as the network providing or lacking NAT64.
+While detection is undetermined, NAT64 MUST be active, and the runtime MUST file a system [fault](../overview.md#fault) of kind `nat64_detection_failed`.
+The runtime MUST retry detection on each later reconciliation iteration until it succeeds, and MUST then clear that fault.
+A detection that succeeds after the runtime has started MUST NOT change whether NAT64 is active until the runtime next starts.
+
+> [!NOTE]
+> A translator that runs while the network also provides NAT64 costs little, while a missing one cuts workloads off from IPv4 destinations; an offline host whose resolver cannot answer still needs its workloads to start.
 
 ## Translator
 
@@ -64,16 +73,19 @@ The runtime MUST clear that fault when set-up succeeds.
 
 A teardown that cannot establish whether the translator is installed has failed.
 The runtime MUST NOT report the translator removed while it remains installed.
-After a failed teardown, the runtime MUST attempt the teardown again on each iteration while no app is installed.
+After a failed teardown, the runtime MUST file a system fault of kind `nat64_teardown_failed`, and MUST attempt the teardown again on each iteration while no app is installed.
+The runtime MUST clear that fault when a teardown succeeds or the translator is next set up.
 
 ## IPv6 egress
 
 When it starts, the runtime MUST determine whether the host has IPv6 egress to the internet.
 The host has IPv6 egress when its main routing table holds a default IPv6 unicast route (`::/0`) and a non-loopback interface carries an address within `2000::/3`.
 The determination MUST rest only on the host's routing and address state, and MUST NOT depend on DNS resolution or on sending traffic.
-If that state cannot be read, the host MUST be taken to have no IPv6 egress.
+If that state cannot be read, the determination is undetermined, and the runtime MUST NOT report it as the host having or lacking IPv6 egress.
+While it is undetermined, the resolver MUST synthesise as for a host without IPv6 egress, and the runtime MUST file a system fault of kind `ipv6_egress_undetermined`.
+The runtime MUST retry the determination on each later reconciliation iteration until it succeeds, and MUST then clear that fault.
 
-The runtime MUST record the outcome once, and MUST NOT change it while it runs.
+The runtime MUST record the first determined outcome, and MUST NOT change it while it runs.
 
 ## DNS64
 

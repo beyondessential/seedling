@@ -74,6 +74,7 @@ It MUST NOT route traffic to an ingress.
 
 On a `Started` returned by `rt.warm_certs`, `ready()` and `ready_eventually()` MUST wait until every ingress it holds has a valid certificate, instead of waiting for the Ready state.
 Such a `Started` holding no ingress MUST satisfy them at once.
+Its other barriers MUST throw.
 
 > [!NOTE]
 > In a [change handler](parameter.md#change-handlers), `app` is the app at the new generation, so `rt.warm_certs(app)` warms the ingresses of the new generation and none that only the previous one declared.
@@ -86,6 +87,7 @@ The runtime MUST [pin](../runtime/images.md#pins) each distinct image reference 
 
 On a `Started` returned by `rt.warm_images`, `ready()` and `ready_eventually()` MUST wait until every image it covers is present locally, instead of waiting for the Ready state.
 Such a `Started` covering no image MUST satisfy them at once.
+Its other barriers MUST throw.
 
 > [!NOTE]
 > A selection can hold an anonymous job that is never started: `rt.warm_images(app.job().image("registry/foo:1.2.3"))` pre-loads an image ahead of the deploy that uses it.
@@ -168,7 +170,7 @@ A `Started` returned by a Collection method MUST keep the barriers of the `Start
 | `ready_eventually()` | Ready | none | the `Started` |
 | `terminated_eventually()` | Terminated | none | a `Termination` |
 
-The default deadline of `rt.stop` is 30 seconds.
+The default deadline of `rt.stop` is 30 seconds more than the longest [stop timeout](container.md#stopping) among the containers of the resources it stops, or 30 seconds where it stops no container.
 
 `deadline` is an integer number of seconds.
 A positive `deadline` MUST be used as given, zero MUST select the default, and a negative `deadline` MUST make the barrier throw.
@@ -187,7 +189,7 @@ A `Termination` is an opaque value standing for how the resources of a `Started`
 The error SHOULD name the resources that did not succeed.
 
 A deployment or job instance succeeded if its most recent run exited with status 0.
-If the runtime did not observe that run's exit status, the run failed if the host's process supervisor reported it as failed, and succeeded otherwise once the run has ended.
+If the runtime did not observe that run's exit status, the run succeeded only if the host's process supervisor reported it as succeeded.
 Any other resource succeeded once it reached Terminated.
 A resource whose outcome the runtime cannot determine MUST count as not having succeeded.
 

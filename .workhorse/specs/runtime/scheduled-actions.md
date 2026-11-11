@@ -26,7 +26,7 @@ The runtime MUST fire a due schedule only for an app in the `Installed` phase, a
 > [!NOTE]
 > A schedule that fired for an app whose install keeps failing would hold the app's one operation slot and keep a corrected definition from ever being applied.
 
-The runtime MUST fire a due schedule by requesting its action as a [lifecycle operation](../overview.md#lifecycle-operation) with an empty parameter map and the trigger `schedule`, subject to the [concurrency rules](operations.md#concurrency).
+The runtime MUST fire a due schedule by requesting its action as a [lifecycle operation](../overview.md#lifecycle-operation) with no supplied params and the trigger `schedule`, subject to the [concurrency rules](operations.md#concurrency).
 A request that is rejected leaves the schedule due, and a later check requests it again.
 
 ## Fire times
@@ -36,10 +36,6 @@ The runtime MUST record a queued fire when its operation leaves the queue and st
 
 The runtime MUST fire a due schedule once, however many of its boundaries passed since it last fired.
 Once it has fired, the runtime evaluates the next boundary from the new fire time.
-
-> [!NOTE]
-> A queued request exists only in memory.
-> Recording its fire before it starts would lose it on a restart while the record says it fired, leaving nothing to catch up.
 
 ## Start action
 

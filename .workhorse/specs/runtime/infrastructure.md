@@ -40,7 +40,8 @@ The runtime MAY remain without the backends until it is restarted.
 
 ## File permissions
 
-The runtime MUST create every private key file and the database file with permissions granting read and write to the owner and nothing to group or others (mode `0600`).
+The runtime MUST create every private key file, the database file, and every file kept beside the database file for the database's own use, with permissions granting read and write to the owner and nothing to group or others (mode `0600`).
+Each such file MUST carry those permissions from the moment it is created, before any content is written to it.
 The runtime MUST refuse to use a key file or database file whose group or other permission bits are set, and MUST report an error naming the file and its mode.
 
 ## Database

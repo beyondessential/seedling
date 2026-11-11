@@ -32,4 +32,7 @@ The runtime SHOULD begin that delay at 15 minutes, double it with each consecuti
 However long an app's re-checks have been failing, the runtime MUST make another attempt once the maximum delay has passed since the last failure.
 A successful re-check MUST reset the delay.
 
+After 5 consecutive failed re-checks of an app, the runtime MUST file a [fault](../overview.md#fault) of kind `definition_recheck_failed` against the app, and MUST keep re-checking at the delay above.
+The runtime MUST clear that fault when a re-check of the app succeeds, or when the app's definition is replaced.
+
 One app's failed or slow re-checks MUST NOT delay another app's re-checks.

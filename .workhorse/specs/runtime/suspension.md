@@ -119,12 +119,15 @@ The runtime MUST record when each barrier began to wait, and MUST keep that time
 | `rt.write` | the target volume and the path written | the contents written |
 | `rt.exec` | the target instance and the command's exit code | the command, its arguments and its options |
 
-The runtime MUST commit each such entry no later than the end of the pass that made the call.
-Once an entry is committed, the runtime MUST NOT repeat the call's effect on a replay.
-On a replay, the runtime MUST return from `rt.exec` the exit code the entry records.
+Before performing a call's effect, the runtime MUST commit an entry recording that the call was begun.
+Once the effect is complete, the runtime MUST commit the entry's completion, with what the table records, before the closure continues.
+
+On a replay, the runtime MUST NOT repeat the effect of a call whose entry is complete, and MUST return from `rt.exec` the exit code the entry records.
+On a replay that reaches an `rt.signal` or `rt.exec` call whose entry was begun but not completed, the runtime MUST NOT repeat the effect, and the call MUST throw, with an error stating that the effect may already have happened.
+On a replay that reaches an `rt.write` call whose entry was begun but not completed, the runtime MUST perform the write again.
 
 > [!NOTE]
-> A host that stops after a call's effect and before the end of the pass replays the call and repeats its effect.
+> Writing the same contents to the same path a second time leaves the volume as one write would, while a second signal or command can have consequences the first did not.
 
 The runtime MUST run an `rt.exec` command inside the target's running container, with the container's namespaces, working directory, user and environment, and MUST block the closure until the command exits.
 

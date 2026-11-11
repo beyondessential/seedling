@@ -10,7 +10,7 @@ Applies to the operations the [runtime](../overview.md#runtime) performs without
 
 ### Recovery restart
 
-A restart of a container instance that brings it back after it exited unexpectedly.
+A restart of a container instance that brings it back after it exited unexpectedly, whichever component performs it, including the runtime starting a replacement for an instance whose run ended in failure.
 
 ### Deliberate restart
 

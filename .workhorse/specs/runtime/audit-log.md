@@ -43,6 +43,10 @@ After the file at the configured path has been renamed or removed, the runtime M
 A failure to open or write the audit log MUST NOT block or stop the runtime.
 The runtime MUST report each failure to write an entry in its own log.
 
+If the runtime cannot open the audit log, it MUST file a fault of kind `audit_log_unavailable` against the app name `seedling`, and MUST try to open it again before writing each later entry.
+The fault MUST state how many events went unwritten while it was active.
+The runtime MUST clear that fault once it has opened the audit log.
+
 If events are lost to the audit log because the runtime fell behind in writing them, the runtime MUST hold a [fault](../overview.md#fault) of kind `audit_lag` against the app name `seedling`, giving the number of events lost.
 At most one such fault MUST be active at a time.
 The fault MUST stay active until an operator [clears](../interface/faults.md#clearing-faults) it.

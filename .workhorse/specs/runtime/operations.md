@@ -35,17 +35,29 @@ If an operation is requested for an app while another app's operation is in prog
 The runtime MUST NOT hold more than one queued operation for an app, and MUST reject a request for an app that already has one queued.
 The runtime MUST start queued operations in the order they were requested, each once the operation in progress ends.
 
+The runtime MUST persist a queued request durably, with its app, action, trigger, source and target generations, and parameters, before it accepts the request.
+If the runtime cannot persist the request, it MUST reject it.
+When the runtime starts, it MUST restore its queue from the persisted requests, in the order they were requested, after deciding whether to replay an interrupted operation.
+The runtime MUST discard a restored request whose app is no longer registered.
+The runtime MUST clear a persisted request when the operation it describes starts or is rejected.
+
 Admission for an app that is being uninstalled is governed by [app teardown](app-teardown.md#uninstall-admission).
 
 ## Initiating events
 
 | event | operation | trigger | source generation | target generation |
 | --- | --- | --- | --- | --- |
-| the runtime starts with no interrupted operation | the start action, for each installed app | `boot` | current | current |
+| the runtime starts | the [start action](../language/action.md#start-action), for each installed app with no interrupted operation | `boot` | current | current |
+| an install operation completes successfully | the start action | `install` | current | current |
 | the runtime starts with an interrupted operation | the interrupted operation, [replayed](#interrupted-operations) | `replay` | as persisted | as persisted |
 | a parameter change | the changed parameter's `on_change` handler | `param_change` | before the change | produced by the change |
 | an operator request | the named action, or `install` | `operator` | current | current |
 | a schedule falls due | the [scheduled action](scheduled-actions.md) | `schedule` | current | current |
+
+Until an app's start action ends, its [desired state](reconciliation.md#desired-state) holds only what the start action has started or stopped.
+
+> [!NOTE]
+> Holding the whole resource graph back until the start action has run lets the start action bring an app up in its own order after the host restarts.
 
 The runtime MUST initiate an operation for a parameter change only when the app is installed, a handler is registered for the parameter, and the change matches one of the handler's [transitions](../language/parameter.md#change-handlers).
 A parameter changed alongside a definition update is a parameter change.
@@ -87,7 +99,7 @@ The runtime MUST clear the persisted operation when the operation ends.
 
 ## Interrupted operations
 
-When the runtime starts, it MUST read the persisted operation, if any, and decide whether to replay it before the reconciliation loop first runs.
+When the runtime starts, it MUST read the persisted operation, if any, and decide whether to replay it before the reconciliation loop first starts an operation.
 
 The runtime MUST replay an interrupted install only if the app is registered, the persisted parameters can be read, and the app is `Installing` or `NotInstalled`.
 The runtime MUST replay any other interrupted operation only if the app is registered, the persisted parameters can be read, and the app is `Installed`.
@@ -96,6 +108,12 @@ Where the runtime does not replay an interrupted operation, it MUST clear the pe
 Where the operation not replayed was an install of an app in `Installing`, the runtime MUST file a fault of kind `install_interrupted` against the app and recover the app as a [stuck install](#stuck-install-recovery).
 
 If the runtime cannot read whether an interrupted operation exists, it MUST NOT perform stuck-install recovery or [startup cleanup](suspension.md#abandoned-replay), since both act on that operation's absence.
+
+### Unreadable operation state
+
+If the runtime cannot read the persisted operation, whether a cancel was persisted for it, or the persisted queue, it MUST file a system [fault](../overview.md#fault) of kind `operation_state_unreadable`.
+Until the read succeeds, the runtime MUST NOT start any lifecycle operation, and MUST retry the read on each reconciliation iteration.
+Once the read succeeds, the runtime MUST decide replay and restore its queue as on starting, and MUST clear the fault.
 
 ## Stuck-install recovery
 
@@ -125,7 +143,7 @@ The runtime MUST file a fault of kind `operation_cancelled` against the app, dis
 
 The runtime MUST persist an accepted cancel request durably against the identifier of the operation it cancels.
 When the runtime replays an operation whose cancel was persisted, it MUST begin the replay cancelled, so that the operation ends at its first barrier or `rt.*` call without repeating work.
-If the runtime cannot read whether a cancel was persisted for the operation it is about to replay, it MUST NOT replay the operation as though no cancel had been requested.
+If the runtime cannot read whether a cancel was persisted for the operation it is about to replay, it MUST NOT replay the operation, and its state is [unreadable](#unreadable-operation-state).
 
 The runtime MUST apply a persisted cancel only to the operation it was requested for.
 The runtime MUST NOT let a later operation inherit it, whether that operation was dequeued after it or started afresh.
@@ -134,14 +152,14 @@ The runtime MUST NOT let a later operation inherit it, whether that operation wa
 
 The runtime hands a volume to an action closure, such as the site volume an operator names for a `volume` action parameter, through an operation-scoped volume binding.
 
-For each volume it hands over, the runtime MUST generate a name, bind it to the host path and access mode for the duration of the operation, and pass the name to the closure as the parameter `<key>_volume`, where `<key>` is the binding's logical key.
+For each volume it hands over, the runtime MUST generate a name from the [reserved](identity.md#reserved-names) prefix `seedling-op-`, bind it to the host path and access mode for the duration of the operation, and pass the name to the closure as the parameter `<key>_volume`, where `<key>` is the binding's logical key.
 The runtime MUST remove the binding when the operation ends.
 A script resolves the volume with `app.external_volume(param["<key>_volume"])`.
 
 The runtime MUST NOT let a script choose the generated name, and the name MUST NOT appear among the parameters the operation was requested with.
 
 > [!NOTE]
-> A script reads the generated name from its parameter and never constructs it, so the form of the name is not part of the contract.
+> A script reads the generated name from its parameter and never constructs it, so the form of the name past its prefix is not part of the contract.
 
 Where the runtime needs a closure to use a particular file within a bound volume, it MAY pass the file name as the parameter `<key>_filename`.
 A script handed `<key>_filename` MUST use that file name.

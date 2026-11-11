@@ -33,6 +33,8 @@ The definitions of the params an action, shell or install action accepts, keyed 
 A script declares an action with `app.on_action(name: string, fn: closure)` or `app.on_action(name: string, fn: closure, options: map)`.
 Either method returns an `Action` handle for the declared action.
 A `name` that is not a valid [name](overview.md#names) MUST throw.
+The name `install` is reserved for the [install action](#install-action), and declaring an action under it MUST throw.
+Declaring an action under a name an action of the app is already declared under MUST throw, including a declaration through `app.on_start` of a second start action.
 
 The `options` map MAY carry these keys:
 
@@ -171,8 +173,9 @@ A script declares it with `app.on_start(fn: closure)`, `app.on_start(fn: closure
 The `options` of `app.on_start` MAY carry `description`, as for `app.on_action`.
 An `options` map passed to `app.on_start` carrying any other key MUST throw.
 
-The runtime MUST run the start action as a lifecycle operation when an install operation for the app completes.
-The runtime MUST also run it when the runtime starts with the app installed.
+The runtime MUST run the start action as a lifecycle operation when an install operation for the app completes successfully.
+The runtime MUST also run it when the runtime starts with the app installed and no interrupted operation to replay for it.
+Until the start action ends, the runtime holds the rest of the app's resources as [operation initiation](../runtime/operations.md#initiating-events) specifies.
 The start action's closure MUST receive an empty param map when the runtime runs it.
 If the script declares no start action, the runtime MUST run it as though its closure called `rt.start(app)`.
 
@@ -183,6 +186,7 @@ The runtime MUST NOT let an operator invoke the start action, and MUST answer an
 
 A script declares a shell with `app.on_shell(name: string, fn: closure)` or `app.on_shell(name: string, fn: closure, options: map)`, which return no value.
 A `name` that is not a valid name MUST throw.
+Declaring a shell under a name a shell of the app is already declared under MUST throw.
 The `options` map takes the same keys as for `app.on_action`, and MUST throw on the same conditions.
 
 Shells and actions MUST have separate namespaces.
@@ -214,9 +218,11 @@ If the closure called `shell.error`, that error MUST carry `message`.
 `action.on_schedule(expr: string)` attaches a schedule to the action, and returns the same `Action` handle.
 An action MAY carry several schedules.
 An `expr` that is not a valid [schedule expression](#schedule-expressions) MUST throw.
+`on_schedule` called while an action closure is running MUST throw.
 
 Each time a schedule comes due, the runtime MUST run its action as [scheduled actions](../runtime/scheduled-actions.md) specify.
-The closure of an action run by a schedule MUST receive an empty param map.
+The runtime MUST validate a scheduled run against the action's [param schema](#param-schemas) as an invocation that supplies no params, so that each declared param takes its `default_value`.
+If that validation fails, the runtime MUST NOT run the closure, and MUST file a [fault](../overview.md#fault) of kind `schedule_params_invalid` against the app, with the action's name as its subject.
 
 ### Schedule expressions
 
@@ -249,6 +255,7 @@ The schedule hash MUST be [SipHash-1-3](https://www.aumasson.jp/siphash/siphash.
 
 The install action sets the app up when an operator installs it.
 A script declares it with `app.on_install(fn: closure)` or `app.on_install(fn: closure, config: map)`, which return no value.
+A second call to `app.on_install` MUST throw.
 
 The `config` map MAY carry `params`, the install action's param schema.
 A `config` carrying any other key MUST throw.

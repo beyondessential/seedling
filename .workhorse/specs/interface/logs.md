@@ -24,6 +24,7 @@ The server MUST reject with `requirements_invalid` a request that carries both `
 The server MUST reject with `requirements_invalid` a request that carries `resource` or `instance` without `app`, or `instance` without `resource`.
 The server MUST reject an `infra` other than `"proxy"` or `"resolver"` with `requirements_invalid`.
 The server MUST reject a request naming an app that is not registered with `not_found`.
+If the server cannot open the host's log store, it MUST answer with `internal`.
 
 ## Entry selection
 
