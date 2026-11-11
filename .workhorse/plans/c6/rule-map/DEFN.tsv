@@ -1,9 +1,0 @@
-i/definition.source	DEFN#definition-sources
-i/definition.bundle.limits	DEFN#bundle-rules
-i/definition.bundle.seedling-versions	DEFN#seedling-version-support
-i/definition.content-hash	DEFN#content-hash-computation
-i/definition.fetch	DEFN#fetching
-i/definition.fetch.select	DEFN#artefact-selection
-i/definition.fetch.access	DEFN#registry-access
-i/definition.provenance	DEFN#provenance-reporting
-i/definition.tags	DEFN#repository-tags

@@ -1,6 +1,0 @@
-r/tls.chain.cycle	CHAIN#cycles
-r/tls.chain.ladder	CHAIN#fall-through
-r/tls.chain.refusal	CHAIN#refusal-handling
-r/tls.chain.no-certificate	CHAIN#hostnames-with-no-certificate
-r/tls.chain.return	CHAIN#return-to-the-first-strategy
-r/tls.chain.proxy-gate	CHAIN#proxy-strategies

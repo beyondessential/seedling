@@ -1,7 +1,0 @@
-r/namespace.reserved	IDN#reserved-names
-r/identity.stable	IDN#instance-identity
-r/identity.components	IDN#instance-identity
-r/identity.scaled	IDN#scaled-instances
-r/identity.anonymous	IDN#anonymous-instances
-r/identity.job	IDN#job-instances
-r/identity.job.shell	IDN#job-instances

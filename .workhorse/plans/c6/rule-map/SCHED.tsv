@@ -1,8 +1,0 @@
-r/schedule.tick	SCHED#firing
-r/schedule.fire	SCHED#firing
-r/schedule.fire.installed-only	SCHED#firing
-r/schedule.state	SCHED#schedule-records
-r/schedule.catch-up	SCHED#fire-times
-r/schedule.prune	SCHED#schedule-records
-r/schedule.audit	SCHED#firing
-r/schedule.start-reject	ACN#start-action

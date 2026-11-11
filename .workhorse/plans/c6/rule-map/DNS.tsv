@@ -1,8 +1,0 @@
-r/infra.resolver	DNS#resolver-lifecycle
-r/infra.resolver.config	DNS#resolver-configuration
-r/infra.resolver.upstreams	DNS#upstreams
-r/infra.resolver.address	DNS#resolver-addresses
-r/infra.resolver.startup	DNS#resolver-lifecycle
-r/infra.resolver.upgrade	DNS#resolver-replacement
-r/infra.resolver.config.apply	DNS#resolver-replacement
-r/infra.pod.dns	DNS#container-dns

@@ -1,6 +1,0 @@
-i/logs.stream	LOG#log-stream-request
-i/logs.target	LOG#log-stream-request
-i/logs.follow	LOG#entry-selection
-i/logs.tail	LOG#entry-selection
-i/logs.entry	LOG#log-entries
-i/logs.not-found	LOG#log-stream-request

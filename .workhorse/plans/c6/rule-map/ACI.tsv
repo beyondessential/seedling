@@ -1,6 +1,0 @@
-i/action.not-installed-gate	ACI#invoking-an-action
-i/action.invoke	ACI#invoking-an-action
-i/action.cancel	ACI#cancellation
-i/action.invoke.install	ACI#install
-i/action.invoke.install.validation	ACI#install-parameters
-i/action.invoke.install.completion	ACI#install-completion
