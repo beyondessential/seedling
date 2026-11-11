@@ -38,16 +38,16 @@ Signed off on `runtime/reconciliation.md` and `overview.md`.
 
 ## Steps
 
-- [ ] Split `docs/spec/*.md` into `.workhorse/specs/` per `split.py`
-- [ ] Pilot: root overview and `runtime/reconciliation.md`; voice signed off
-- [ ] Terminology sweep across split specs
-- [ ] Voice rewrite, one spec per pass, each emitting its rule map
-- [ ] Sweep code annotations and spec links from the rule map
-- [ ] Remove tracey config and workflow; add CI checks
-- [ ] Update `AGENTS.md`, add `.workhorse/rules.md`, repoint docs
-- [ ] cargo build, clippy, tests; CI scripts pass locally
+- [x] Split `docs/spec/*.md` into `.workhorse/specs/` per `split.py`
+- [x] Pilot: root overview and `runtime/reconciliation.md`; voice signed off
+- [x] Terminology sweep across split specs
+- [x] Voice rewrite, one spec per pass, each emitting its rule map
+- [x] Sweep code annotations and spec links from the rule map
+- [x] Remove tracey config and workflow; add CI checks
+- [x] Update `AGENTS.md`, add `.workhorse/rules.md`, repoint docs
+- [x] cargo build, clippy, tests; CI scripts pass locally
 - [ ] Pause for the whole-spec review loop
 
 ## Gaps
 
-(running list)
+Collected per batch in `gaps.md` beside this plan: open decisions, places the spec now leads the code, cross-spec moves for the review loop.
