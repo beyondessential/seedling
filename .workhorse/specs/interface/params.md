@@ -119,7 +119,7 @@ The result has these members.
 | member | type | meaning |
 | --- | --- | --- |
 | `diff` | array | one entry per resource added, removed or modified |
-| `on_change_would_fire` | array of strings | in ascending order, the parameters whose value the change alters and for which the proposed definition registers an `on_change` handler |
+| `on_change_would_fire` | array of strings | in ascending order, the parameters whose `on_change` handler the server would schedule if the change were committed, as [parameter set](#parameter-set) specifies |
 | `errors` | array of strings | the evaluation errors, if the proposed definition fails to evaluate |
 | `rejections` | array | one `{ "name": <string>, "reason": <string> }` for each parameter whose validator rejects the proposed values |
 

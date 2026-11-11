@@ -44,9 +44,9 @@ The runtime determines both values.
 Its values include `x86_64`, `aarch64`, `arm` and `riscv64`, and other values MAY appear.
 A script SHOULD treat an architecture it does not recognise as unsupported rather than throw.
 
-`HOST_HAS_IPV4` MUST be `true` when the host's main routing table holds a default IPv4 unicast route, and `false` otherwise.
+`HOST_HAS_IPV4` MUST be `true` when the host has a default IPv4 unicast route configured, and `false` otherwise.
 The host's choice of IPv4 source address does not affect the value, so a host with a private address behind NAT has IPv4 egress.
-If the routing table cannot be read, whether the host has IPv4 egress is undetermined, and `HOST_HAS_IPV4` MUST be `false` until it is determined.
+If the host's routes cannot be read, whether the host has IPv4 egress is undetermined, and `HOST_HAS_IPV4` MUST be `false` until it is determined.
 
 `HOST_HAS_IPV6` MUST be `true` when the host has [IPv6 egress](../runtime/nat64.md#ipv6-egress), and `false` otherwise, including while that is undetermined.
 

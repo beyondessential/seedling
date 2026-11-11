@@ -122,8 +122,8 @@ An app's status is the first of these that applies:
 
 1. `uninstalling`: the app is being torn down after an uninstall.
 2. `installing`: an install of the app is in progress.
-3. `not_installed`: the app is not installed.
-4. `operating`: the lifecycle operation running on the host is one of the app's; a queued operation does not count.
+3. `operating`: the lifecycle operation running on the host is one of the app's; a queued operation does not count.
+4. `not_installed`: the app is not installed.
 5. `faulted`: at least one active fault is filed against the app.
 6. `degraded`: at least one of the app's resources is not at its desired [lifecycle state](../overview.md#lifecycle-state).
 7. `running`: none of the above.

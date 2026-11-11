@@ -65,7 +65,7 @@ An array element of the wrong type MUST NOT be dropped from the array.
 An unrecognised key in an options map MUST NOT be skipped.
 An out-of-range number MUST NOT be truncated or wrapped into range.
 
-The error message SHOULD name the argument as the script author wrote it, the type or range expected, and the type or value supplied.
+The error message MUST name the argument as the script author wrote it, the type or range expected, and the type or value supplied.
 
 Where a specification defines a coercion for an argument, such as [`col`](collection.md#coercion), that coercion applies in place of these rules.
 

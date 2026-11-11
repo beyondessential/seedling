@@ -56,7 +56,7 @@ A parameter whose kind is `"password"` or `"weak-password"` MUST be secret unles
 A script MAY call `secret` before or after `kind`, and an explicit `secret` call MUST take precedence over the kind in either direction.
 
 The runtime MUST protect a secret parameter's value as [secret storage](../runtime/secrets.md#storage) and [redaction](../runtime/secrets.md#redaction) specify.
-The runtime MUST NOT write a secret parameter's value to its logs.
+The runtime MUST NOT write a secret parameter's value to its logs, or emit it in an [event](../interface/events.md).
 
 ## Change handlers
 
@@ -73,8 +73,8 @@ The runtime MUST invoke the change handler as a [lifecycle operation](../overvie
 Storing the value the parameter already holds is not a change.
 The runtime MUST NOT invoke the handler during the app's initial install.
 
-The runtime MUST call `fn` with two arguments: the [runtime instance](rt.md#handle-availability), and an `App` named here `old`.
-A script MUST therefore pass a closure that takes two parameters.
+A script MAY pass a closure taking up to two parameters.
+The runtime MUST call `fn` with as many of these arguments as it takes, in this order: the [runtime instance](rt.md#handle-availability), then an `App` named here `old`.
 
 `old` MUST reflect the previous [generation](../overview.md#generation): the previous generation's definition, evaluated with the parameter values held before the change.
 When the change arrives together with a new definition, the runtime MUST invoke the handler the new definition registers, and `old` MUST reflect the previous definition at the previous values.

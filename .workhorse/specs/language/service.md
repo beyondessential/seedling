@@ -33,9 +33,9 @@ A [pod binding](pod.md#port-bindings) MAY attach it to a pod port with a differe
 
 The runtime MUST deliver TCP and UDP traffic addressed to a service port to a target bound to that port.
 If a service port has no target, the runtime MUST drop or reject traffic addressed to it.
-Where a service port has several targets, the runtime SHOULD distribute traffic among them round-robin.
+Where a service port has several targets, the runtime MUST distribute traffic among them round-robin.
 
-The runtime MUST distribute HTTP traffic that reaches a service through an [ingress](ingress.md#declaration) under the service's [balancing policy](http-service.md#balancing).
+The runtime MUST distribute HTTP traffic that reaches a service through an [ingress](ingress.md#declaration) under the [balancing policy](http-service.md#balancing) of the route the traffic reaches.
 
 ## Export
 

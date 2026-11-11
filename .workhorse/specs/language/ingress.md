@@ -80,7 +80,7 @@ Exactly four pairings are valid:
 | `Terminate.Https` | `Output.Http2` | HTTP/1.1 and HTTP/2 over TLS on TCP, and HTTP/3 on UDP | cleartext HTTP/2 |
 
 Any other pairing MUST throw.
-The error SHOULD name the pairing supplied and the four valid pairings.
+The error MUST name the pairing supplied and the four valid pairings.
 A second `tls()` call MUST replace the first.
 
 An ingress terminating TLS or DTLS MUST NOT interpret the application protocol inside it.
@@ -127,5 +127,5 @@ The redirect's `Location` MUST be `https://`, the request's host, the ingress's 
 
 ## Certificates
 
-The runtime SHOULD obtain a certificate for the hostname of every ingress that terminates TLS, DTLS or HTTPS, as [certificates](../runtime/tls/certificates.md) specifies.
+Whenever it is able to, the runtime MUST obtain a certificate for the hostname of every ingress that terminates TLS, DTLS or HTTPS, as [certificates](../runtime/tls/certificates.md) specifies.
 The runtime MUST NOT make a certificate's private key available to the app.

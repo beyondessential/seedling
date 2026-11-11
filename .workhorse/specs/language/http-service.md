@@ -157,7 +157,7 @@ A script declares compression of proxied responses with `compress(enabled: bool)
 | --- | --- | --- | --- |
 | `encodings` | array of `"zstd"` and `"gzip"` | `["zstd", "gzip"]` | the content codings offered, most preferred first |
 | `minimum_length` | integer | 512 | the length in bytes below which a response is served uncompressed |
-| `content_types` | array of strings | listed below | the media types eligible for compression |
+| `content_types` | array of strings | text-like types, below | the media types eligible for compression |
 
 Every field is OPTIONAL.
 An `encodings` entry other than `"zstd"` or `"gzip"` MUST throw, and so MUST an empty `encodings` array.
@@ -168,7 +168,7 @@ A `config` with any other key MUST throw.
 A `content_types` entry ending in `*` matches every media type beginning with the text before the `*`.
 Any other entry matches that media type exactly.
 
-The default `content_types` is `application/atom+xml*`, `application/eot*`, `application/font*`, `application/geo+json*`, `application/graphql+json*`, `application/graphql-response+json*`, `application/javascript*`, `application/json*`, `application/ld+json*`, `application/manifest+json*`, `application/opentype*`, `application/otf*`, `application/rss+xml*`, `application/truetype*`, `application/ttf*`, `application/vnd.api+json*`, `application/vnd.ms-fontobject*`, `application/wasm*`, `application/x-httpd-cgi*`, `application/x-javascript*`, `application/x-opentype*`, `application/x-otf*`, `application/x-perl*`, `application/x-protobuf*`, `application/x-ttf*`, `application/xhtml+xml*`, `application/xml*`, `font/ttf*`, `font/otf*`, `image/svg+xml*`, `image/vnd.microsoft.icon*`, `image/x-icon*`, `multipart/bag*`, `multipart/mixed*` and `text/*`.
+The default `content_types` MUST cover text and text-like media types: markup, stylesheets, scripts, JSON and other structured text, SVG, and fonts.
 
 How the runtime compresses is specified by [route compression](../runtime/proxy.md#compression).
 

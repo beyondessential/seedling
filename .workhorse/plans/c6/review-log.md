@@ -31,3 +31,9 @@ For the user: deregistering code dropped; log instance exact match; log stream m
 Restored: OPS operation volumes get fresh unique names; FLT faults not passed to scripts; health_check_failed clears on unschedule; cert_acquisition_failed identifies hostname and error; CNR re-resolves identity only on failures suggesting it is wrong; AUTO clamps on any re-evaluation; SUSP cadence MAY with example; GEN bundle sharing MUST; RCN no unbounded blocking; OBS fact at most once per run (check against decided "record again on change"); RCK infrequent and spread as MUST, 6 h as example.
 
 For the user: cancel at barrier or rt call; NotInstalled with recorded instances moved to Uninstalling; image_pull_failed threshold and subject; cert_acquisition_failed 180 s; faulted resources excluded from reconciliation (drop); code-derived fault kinds; rt.exec output MUST (RT); crash-loop defaults; clamping deletes scale; sub-action history; bundle on every history entry; re-check back-off values; first schedule fire; audit file mode; engine limit details; new lifecycle cycle; CNR additions.
+
+### Fidelity: interface A
+
+Restored: STS no expensive computation; APPS status order (operating above not_installed); PRM plan lists handlers that would be scheduled; TLSM manual upload accepts any PEM order, stored leaf first; TLSM CSR SAN set without order or subject constraint.
+
+For the user: TLSM stale manual-policy claims; auto_issue_kicked; APPS removal only when not installed; uninstall specified twice (APPS and ACI); Faulted vs Degraded meaning; restarts shape; history redaction shape; route served and `/` route; install result and no-install-action; empty string as no value; unknown parameter keys (originals conflict); PRM internal path; DEFN limits and digests; STS SemVer.

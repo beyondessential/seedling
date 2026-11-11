@@ -175,12 +175,12 @@ It MUST be `null` when the row has no requested hostnames, holds no certificate,
 
 | member | type | required | meaning |
 | --- | --- | --- | --- |
-| `cert_pem` | string | yes | PEM `CERTIFICATE` blocks: the leaf first, then any intermediates |
+| `cert_pem` | string | yes | PEM `CERTIFICATE` blocks: the leaf and any intermediates, in any order |
 | `key_pem` | string | yes | the leaf's private key, PEM-encoded PKCS #8 |
 | `note` | string | no | a note for operators |
 
-The runtime MUST take the first `CERTIFICATE` block of `cert_pem` as the leaf, and MUST ignore PEM blocks of other types.
-It MUST store the `CERTIFICATE` blocks in the order given.
+The runtime MUST accept the leaf and intermediates of `cert_pem` in any order, and MUST ignore PEM blocks of other types.
+It MUST store the chain with the leaf first.
 
 The runtime MUST refuse the upload with `requirements_invalid`, naming the failed check in the message, when:
 
@@ -240,7 +240,7 @@ The runtime MUST check the renewed certificate again as it stores the new row, s
 If `key_type` is given and is not `ecdsa_p256`, the runtime MUST refuse the request with `requirements_invalid`.
 
 The runtime MUST generate the key pair itself and store the private key encrypted at rest under the secret key.
-The CSR's SAN extension MUST hold exactly the requested names, in order, and its subject MUST be empty.
+The CSR's SAN extension MUST hold exactly the requested names.
 The runtime MUST store a row in state `csr_pending` with origin `csr`, recording the requested names and any renewed certificate.
 
 The result is `{ id, csr_pem }`, the new row's id and the PEM-encoded CSR.

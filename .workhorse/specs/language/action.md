@@ -77,7 +77,7 @@ An exception the invoked closure throws MUST propagate to the caller of `invoke`
 
 `invoke` called while no action closure is running MUST throw.
 `invoke` on an action already on the operation's call stack, directly or through other invocations, MUST throw before the closure runs.
-The error SHOULD name the chain of actions that forms the cycle.
+The error MUST name the chain of actions that forms the cycle.
 
 ## Param delivery
 
@@ -117,8 +117,8 @@ The runtime MUST validate an invocation's params against the schema, in this ord
 
 A param the schema does not declare MUST be passed to the closure as supplied.
 
-A presentation layer SHOULD pre-fill a param's input with its `default_value`.
-A presentation layer SHOULD NOT let an operator submit a required param empty.
+A presentation layer MUST pre-fill a param's input with its `default_value`.
+A presentation layer MUST NOT let an operator submit a required param empty.
 
 ### Param kinds
 
@@ -142,11 +142,11 @@ A presentation layer MAY warn about an `email` value that is valid but unlikely 
 
 The runtime MUST reject a `password` value it judges weak.
 The runtime SHOULD judge a value weak when [zxcvbn](https://www.usenix.org/conference/usenixsecurity16/technical-sessions/presentation/wheeler) scores it below 3.
-A presentation layer SHOULD indicate the strength of a `weak-password` value as it is entered.
+A presentation layer SHOULD indicate the strength of a `weak-password` value as it is entered, and MUST NOT refuse a `weak-password` value for its strength.
 A presentation layer SHOULD offer a generator of strong passwords for `password` and `weak-password` params.
 
 A presentation layer SHOULD offer a one-click generator for a `random` param, beside manual entry.
-That generator's default output SHOULD be 32 random bytes written as 64 lowercase hexadecimal digits.
+That generator's default output MUST be 32 random bytes written as 64 lowercase hexadecimal digits.
 
 > [!NOTE]
 > The `random` kind does not imply `secret`, so a script keeping sensitive material in a `random` param sets `secret: true`.

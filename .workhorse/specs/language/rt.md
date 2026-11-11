@@ -123,7 +123,7 @@ Each name MUST match `[A-Za-z_][A-Za-z0-9_]*`.
 An `options` map carrying any other key, an `env` that is not a map, an invalid name, or a value that is not a string MUST make `rt.exec` throw.
 
 The runtime MUST NOT return the command's standard output or standard error to the script.
-The runtime SHOULD record them with the target container's logs.
+The runtime MUST record them with the target container's logs.
 Each call MUST run its command at most once, including when the action closure is replayed, and a replayed call MUST return the exit status recorded when it ran.
 `rt.exec` called while no action closure is running MUST throw.
 
@@ -161,14 +161,18 @@ A `Started` returned by a Collection method MUST keep the barriers of the `Start
 
 `Started` has these barriers, each waiting until every resource it holds has reached the lifecycle state named, or a [later one](../runtime/lifecycle.md#transitions):
 
-| barrier | state | default deadline in seconds | returns |
+| barrier | state | default deadline | returns |
 | --- | --- | --- | --- |
-| `scheduled()`, `scheduled(deadline)` | Scheduled | 30 | the `Started` |
-| `running()`, `running(deadline)` | Running | 30 | the `Started` |
-| `ready()`, `ready(deadline)` | Ready | 30 | the `Started` |
-| `terminated()`, `terminated(deadline)` | Terminated | 21600 | a [`Termination`](#termination) |
+| `scheduled()`, `scheduled(deadline)` | Scheduled | short | the `Started` |
+| `running()`, `running(deadline)` | Running | short | the `Started` |
+| `ready()`, `ready(deadline)` | Ready | short | the `Started` |
+| `terminated()`, `terminated(deadline)` | Terminated | long | a [`Termination`](#termination) |
 | `ready_eventually()` | Ready | none | the `Started` |
 | `terminated_eventually()` | Terminated | none | a `Termination` |
+
+The runtime sets the value of each default deadline.
+A short default deadline MUST be on the order of tens of seconds, and a long one on the order of hours.
+Every default deadline MUST be a positive number of seconds.
 
 The default deadline of `rt.stop` is 30 seconds more than the longest [stop timeout](container.md#stopping) among the containers of the resources it stops, or 30 seconds where it stops no container.
 
@@ -186,7 +190,6 @@ While a barrier waits, the action closure is suspended as [suspension](../runtim
 A `Termination` is an opaque value standing for how the resources of a `Started` ended.
 
 `termination.ensure_success()` returns no value, and MUST throw unless every resource the `Termination` covers succeeded.
-The error SHOULD name the resources that did not succeed.
 
 A deployment or job instance succeeded if its most recent run exited with status 0.
 If the runtime did not observe that run's exit status, the run succeeded only if the host's process supervisor reported it as succeeded.
@@ -205,4 +208,4 @@ An `Executed` is an opaque value standing for a command `rt.exec` ran.
 
 An exit status MUST be the command's exit code, from 0 to 255, or 128 plus the signal number for a command a signal ended.
 `ensure_success()` MUST throw if the exit status is not 0.
-Its error MUST carry the exit status, and SHOULD name the container instance the command ran in.
+Its error MUST carry the exit status.

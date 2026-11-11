@@ -75,7 +75,7 @@ Calling `app.canopy_type` again MUST replace the previous type.
 A definition that never calls it declares no Canopy type.
 How the runtime reports an app with a Canopy type is specified in [CNR](../runtime/canopy-reporting.md).
 
-A Canopy type MUST consist of one or more segments joined by hyphens, each segment one or more lowercase ASCII letters and digits, beginning with a letter, as the regular expression `^[a-z][a-z0-9]*(-[a-z0-9]+)*$` gives.
+A Canopy type MUST begin with a lowercase ASCII letter, and MUST consist of one or more segments of lowercase ASCII letters and digits joined by single hyphens, as the regular expression `^[a-z][a-z0-9]*(-[a-z0-9]+)*$` gives.
 `app.canopy_type` MUST throw when given any other value.
 
 > [!NOTE]
