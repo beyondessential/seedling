@@ -4,62 +4,80 @@ id: DNS
 
 # Resolver
 
-## Resolver
+Applies to the DNS resolver the [runtime](../overview.md#runtime) runs for the workload containers on a [host](../overview.md#host).
 
-<!-- from runtime: Infrastructure / Resolver -->
+## Borrowed terms
 
-> r[infra.resolver]
-> The runtime must run a resolver infrastructure container that provides DNS forwarding and
-> caching to all workload containers. The resolver container follows the same lifecycle as
-> the proxy container: it is started when workloads are present and torn down when no
-> workloads remain.
+| term | meaning |
+| --- | --- |
+| TTL | The time a resource record may be cached, [RFC 1035 §3.2.1](https://www.rfc-editor.org/rfc/rfc1035#section-3.2.1). |
 
-> r[infra.resolver.config]
-> The runtime must generate a resolver configuration that forwards all queries to the
-> configured upstreams (see [infra.resolver.upstreams](rule:r/infra.resolver.upstreams)) and
-> caches responses. When [NAT64 is active](rule:r/infra.nat64.mode), the configuration must
-> additionally enable DNS64 synthesis of AAAA records under the well-known prefix
-> `64:ff9b::/96`.
+## Resolver addresses
 
-> r[infra.resolver.upstreams]
-> The runtime must accept a command-line argument that specifies an explicit list of
-> upstream DNS servers (`host:port` addresses) for the resolver to forward to. When the
-> argument is unset, the runtime must arrange for the resolver to forward to the host's
-> system DNS (so containers inherit the host's split-DNS and search-domain configuration);
-> this arrangement must work even when the host system DNS listens only on loopback
-> addresses unreachable from inside the resolver container.
+The resolver MUST be reachable at the addresses below, derived from the [host prefix](infrastructure.md#host-prefix):
 
-> r[infra.resolver.address]
-> The resolver must listen on a stable node-wide IPv6 address derived from the node prefix,
-> so that all workload containers can reach it at a predictable address. The address is
-> `<prefix>:fd00::53` within the resolver network, where `53` is the hexadecimal last
-> group, so that operators can write firewall and monitoring rules against it.
+| address | value |
+| --- | --- |
+| resolver network | `<host prefix>:fd00::/64` and `10.89.254.0/24` |
+| resolver address | `<host prefix>:fd00::53` |
+| host side of the resolver network | `<host prefix>:fd00::1` and `10.89.254.1` |
 
-> r[infra.resolver.startup]
-> The runtime must ensure the resolver container is running and healthy before beginning the
-> reconciliation loop. On each startup, the runtime verifies resolver health and restarts
-> the resolver if necessary.
+The resolver MUST listen at the resolver address.
+The resolver address MUST NOT change while the host prefix does not.
 
-> r[infra.resolver.upgrade]
-> When the resolver container image changes, the runtime must replace the running resolver
-> with one started from the new image, in the resolver slot that is not active, at the
-> [resolver address](rule:r/infra.resolver.address). The resolver address can be held by one
-> container at a time, so the replacement stops the running resolver first and resolution
-> is briefly unavailable. The active slot is persisted in the database, and a replacement
-> interrupted at any point must be completed on a later reconciliation tick without
-> operator action.
+> [!NOTE]
+> The last group of the resolver address is hexadecimal `53`, matching the DNS port, so that operators can write firewall and monitoring rules against a predictable address.
+> The resolver network carries IPv4 so that the resolver can reach IPv4 upstream servers.
 
-> r[infra.resolver.config.apply]
-> The resolver must serve the configuration the runtime currently generates. The runtime
-> records on each resolver container the configuration and address it was started with, and
-> when that differs from what is currently generated, or is absent, it must replace the
-> container as for an [image change](rule:r/infra.resolver.upgrade).
+## Resolver lifecycle
+
+The runtime MUST run the resolver as an infrastructure container, providing DNS forwarding and caching to every workload container.
+The runtime MUST have the resolver running and healthy before it starts any workload container.
+
+While any app is installed, the runtime MUST check the resolver's health on each [reconciliation](reconciliation.md#reconciliation-loop) iteration.
+It MUST restart a resolver that is not running.
+It SHOULD restart a running resolver only after its health check has failed on three consecutive iterations.
+The runtime SHOULD stop the resolver when no app is installed or installing.
+
+On an iteration that fails to bring the resolver up, or does not finish doing so, the runtime MUST file a system [fault](../overview.md#fault) of kind `resolver_failed` naming the failure.
+The runtime MUST clear that fault on an iteration that finds the resolver running.
+
+## Upstreams
+
+The runtime MUST accept a `--dns-upstreams` option naming the upstream DNS servers, as a comma-separated list of IP addresses with ports (`192.0.2.1:53`, `[2001:db8::1]:53`).
+When the option is given, the resolver MUST forward to those servers.
+
+When the option is not given, the resolver MUST forward to the host's system resolver at `127.0.0.54:53`.
+This MUST work although that address is on the host's loopback interface, out of the resolver's reach.
+The runtime MUST relay the resolver's queries to it through the host side of the resolver network, at port 53.
+
+> [!NOTE]
+> Forwarding to the host's resolver lets containers inherit the host's split DNS, per-link resolvers and search domains.
+> `127.0.0.54` is the system resolver's stub address that accepts queries relayed from a source outside the loopback range.
+
+## Resolver configuration
+
+The resolver MUST forward every query to its upstreams.
+The resolver SHOULD cache responses.
+It MUST NOT serve a cached response beyond its TTL, and SHOULD NOT serve one for more than 30 seconds.
+
+The resolver MUST synthesise AAAA records as [DNS64](nat64.md#dns64) specifies.
+
+## Resolver replacement
+
+The resolver MUST serve the configuration the runtime currently generates, from the resolver image the runtime runs.
+The runtime MUST record on each resolver instance the configuration and address it was started with.
+
+If the running resolver's image differs from the image the runtime runs, or its recorded configuration or address differs from the current one or is absent, the runtime MUST replace it.
+The replacement MUST listen at the resolver address.
+Because one instance can hold the resolver address at a time, the runtime MUST stop the running resolver before starting the replacement.
+
+The runtime MUST persist which resolver instance is active, recording the replacement as active before starting it.
+A replacement interrupted at any point MUST be completed on a later iteration without operator action.
+
+> [!NOTE]
+> Resolution is unavailable to workloads between the running resolver stopping and the replacement starting.
 
 ## Container DNS
 
-<!-- from runtime: Infrastructure / Container DNS -->
-
-> r[infra.pod.dns]
-> Every workload container must be configured to use the [resolver](rule:r/infra.resolver) as
-> its DNS server. The runtime must pass the resolver's address to the container runtime so
-> that the container's `/etc/resolv.conf` points at the resolver.
+The runtime MUST configure every workload container with the resolver address as its only DNS server, so that the container's `/etc/resolv.conf` names the resolver.
