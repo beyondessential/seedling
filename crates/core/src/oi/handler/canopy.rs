@@ -45,8 +45,8 @@ pub(crate) struct SettingsParams {
     pub enabled: bool,
 }
 
-// RLY#offers
-// RLY#disabled-access
+// spec: RLY#offers
+// spec: RLY#disabled-access
 /// Register the calling connection as a Canopy provider.
 ///
 /// Needs the connection itself, not just the request, so it is dispatched from
@@ -91,7 +91,7 @@ pub(crate) fn offer(
     Ok(json!({ "offer_id": offer.offer_id }))
 }
 
-// RLY#offer-lifetime
+// spec: RLY#offer-lifetime
 pub(crate) fn withdraw(
     state: &Arc<OiState>,
     conn: &quinn::Connection,
@@ -114,7 +114,7 @@ pub(crate) fn withdraw(
     Ok(json!({}))
 }
 
-// RLY#settings
+// spec: RLY#settings
 pub(crate) fn get_settings(state: &OiState) -> HandlerResult {
     let settings = state
         .db
@@ -126,8 +126,8 @@ pub(crate) fn get_settings(state: &OiState) -> HandlerResult {
     }))
 }
 
-// RLY#settings
-// RLY#disabled-access
+// spec: RLY#settings
+// spec: RLY#disabled-access
 pub(crate) fn set_settings(
     state: &Arc<OiState>,
     params: SettingsParams,
@@ -171,7 +171,7 @@ pub(crate) fn set_settings(
     Ok(json!({}))
 }
 
-// RLY#status
+// spec: RLY#status
 pub(crate) fn status(state: &Arc<OiState>) -> HandlerResult {
     let settings = state
         .db

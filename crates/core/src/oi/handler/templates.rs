@@ -132,7 +132,7 @@ where
     Ok(DescriptionUpdate::Set(opt))
 }
 
-// TPL#creation
+// spec: TPL#creation
 pub(crate) fn create_template(
     state: &OiState,
     params: CreateParams,
@@ -176,7 +176,7 @@ pub(crate) fn create_template(
     }))
 }
 
-// TPL#listing
+// spec: TPL#listing
 pub(crate) fn list_templates(state: &OiState) -> HandlerResult {
     let rows = state.db.call(runtime::templates::list).map_err(internal)?;
 
@@ -194,7 +194,7 @@ pub(crate) fn list_templates(state: &OiState) -> HandlerResult {
     Ok(json!(out))
 }
 
-// TPL#inspection
+// spec: TPL#inspection
 pub(crate) fn show_template(state: &OiState, params: NameParams) -> HandlerResult {
     let name = params.name;
     let name_for_db = name.clone();
@@ -221,7 +221,7 @@ pub(crate) fn show_template(state: &OiState, params: NameParams) -> HandlerResul
     }))
 }
 
-// TPL#update
+// spec: TPL#update
 pub(crate) fn update_template(
     state: &OiState,
     params: UpdateParams,
@@ -264,7 +264,7 @@ pub(crate) fn update_template(
     Ok(json!({ "updated": true }))
 }
 
-// TPL#removal
+// spec: TPL#removal
 pub(crate) fn remove_template(
     state: &OiState,
     params: NameParams,
@@ -285,7 +285,7 @@ pub(crate) fn remove_template(
     Ok(json!({ "removed": true }))
 }
 
-// TPL#preview
+// spec: TPL#preview
 pub(crate) fn preview_template(
     state: &OiState,
     params: PreviewParams,
@@ -359,7 +359,7 @@ pub(crate) fn preview_template(
     }))
 }
 
-// TPL#instantiation
+// spec: TPL#instantiation
 pub(crate) fn instantiate_template(
     state: &OiState,
     params: InstantiateParams,

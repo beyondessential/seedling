@@ -28,6 +28,14 @@ done < <(grep -rnE --include='*.rs' --include='*.ts' --include='*.tsx' --include
     --exclude-dir=target --exclude-dir=node_modules --exclude-dir=dist --exclude=check-spec-citations.sh \
     'spec: [A-Z][A-Z0-9]+' crates/ etc/ || true)
 
+# A comment holding only `ID#slug` is a citation missing its `spec:` prefix,
+# which the check above would never see.
+while IFS= read -r hit; do
+    violations+=("${hit%%:*}:$(cut -d: -f2 <<<"$hit"): missing 'spec:' prefix")
+done < <(grep -rnE --include='*.rs' --include='*.ts' --include='*.tsx' --include='*.sh' \
+    --exclude-dir=target --exclude-dir=node_modules --exclude-dir=dist --exclude=check-spec-citations.sh \
+    '^\s*//\s*[A-Z][A-Z0-9]+#[a-z0-9_-]+(,? [A-Z][A-Z0-9]+#[a-z0-9_-]+)*\s*$' crates/ etc/ || true)
+
 if ((${#violations[@]})); then
     echo "error: spec citations that resolve to no spec or heading:" >&2
     printf '  %s\n' "${violations[@]}" >&2

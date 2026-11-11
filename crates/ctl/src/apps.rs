@@ -9,8 +9,7 @@ use super::{
     print_result,
 };
 
-// CLI#action-shell-and-install-parameters
-// CLI#action-shell-and-install-parameters
+// spec: CLI#action-shell-and-install-parameters
 fn parse_positional_params(args: &[String]) -> serde_json::Map<String, serde_json::Value> {
     let mut map = serde_json::Map::new();
     for arg in args {

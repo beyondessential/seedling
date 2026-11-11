@@ -47,8 +47,7 @@ fn cert_hash_hex(identity: &Identity) -> String {
     digest.as_ref().iter().map(|b| format!("{b:02x}")).collect()
 }
 
-// WEB#webtransport-certificate
-// WEB#webtransport-certificate
+// spec: WEB#webtransport-certificate
 pub struct CertStore {
     pub current: CertEntry,
     pub next: Option<CertEntry>,

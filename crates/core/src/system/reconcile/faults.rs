@@ -65,7 +65,7 @@ impl Reconciler {
         });
     }
 
-    // FLT#workload-faults
+    // spec: FLT#workload-faults
     // An image_pull_failed fault is scoped to an IMAGE reference, not to a
     // specific instance — the fault's meaning is "this image is unavailable",
     // and anyone observing that image present on the system resolves it. We
@@ -309,7 +309,7 @@ impl Reconciler {
         });
     }
 
-    // FLT#workload-faults
+    // spec: FLT#workload-faults
     pub(super) fn file_unit_failure_faults(
         &self,
         app: &AppName,

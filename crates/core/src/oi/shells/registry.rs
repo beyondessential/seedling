@@ -98,7 +98,7 @@ fn set_pty_size(fd: std::os::unix::io::RawFd, (rows, cols): (u16, u16)) {
     unsafe { libc::ioctl(fd, libc::TIOCSWINSZ as _, &ws) };
 }
 
-// SHL#listing-sessions
+// spec: SHL#listing-sessions
 pub struct ShellRecord {
     pub session_id: SessionId,
     pub app: AppName,
@@ -146,7 +146,7 @@ impl ShellRegistry {
         true
     }
 
-    // SHL#resizing-a-terminal
+    // spec: SHL#resizing-a-terminal
     pub fn resize(&self, id: &SessionId, rows: u16, cols: u16) -> bool {
         let mut sessions = self.sessions.lock();
         let Some(session) = sessions.get_mut(id) else {
@@ -159,7 +159,7 @@ impl ShellRegistry {
         true
     }
 
-    // SHL#stopping-a-session
+    // spec: SHL#stopping-a-session
     pub fn stop(&self, id: &SessionId) -> bool {
         let mut sessions = self.sessions.lock();
         let Some(session) = sessions.remove(id) else {
@@ -169,7 +169,7 @@ impl ShellRegistry {
         true
     }
 
-    // SHL#listing-sessions
+    // spec: SHL#listing-sessions
     pub fn list(&self, app: Option<&str>) -> Vec<ShellRecord> {
         self.sessions
             .lock()

@@ -30,7 +30,7 @@ const PERMISSIONS_POLICY: &str = "accelerometer=(), autoplay=(), camera=(), \
 display-capture=(), encrypted-media=(), fullscreen=(), geolocation=(), \
 gyroscope=(), magnetometer=(), microphone=(), midi=(), payment=(), usb=()";
 
-// WEB#console-delivery
+// spec: WEB#console-delivery
 pub fn router(state: AppState) -> Router {
     let wt_port = state.wt_port;
     security_headers(
@@ -43,7 +43,7 @@ pub fn router(state: AppState) -> Router {
     .with_state(state)
 }
 
-// WEB#security-headers
+// spec: WEB#security-headers
 fn security_headers<S: Clone + Send + Sync + 'static>(
     router: Router<S>,
     wt_port: u16,
@@ -79,7 +79,7 @@ fn security_headers<S: Clone + Send + Sync + 'static>(
         ))
 }
 
-// WEB#security-headers
+// spec: WEB#security-headers
 // connect-src names the WebTransport origin precisely instead of a `https:`
 // scheme wildcard. The endpoint shares the page's hostname (the WebTransport
 // URL is built the same way in `auth::handle_connect`) on the dedicated
@@ -126,7 +126,7 @@ async fn healthz() -> impl IntoResponse {
     (StatusCode::OK, Json(json!({ "status": "ok" })))
 }
 
-// WEB#authentication
+// spec: WEB#authentication
 async fn connect(
     State(state): State<AppState>,
     headers: HeaderMap,

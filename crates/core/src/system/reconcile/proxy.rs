@@ -33,8 +33,8 @@ pub(super) struct ProxyBuildOutput {
     pub ready_observations: Vec<(ResourceInstance, &'static str, serde_json::Value)>,
 }
 
-// AUTO#ingress-and-network-repair
-// FLT#filing-and-clearing
+// spec: AUTO#ingress-and-network-repair
+// spec: FLT#filing-and-clearing
 pub(super) fn collect(
     snapshot: &AppDef,
     desired: &DesiredState,

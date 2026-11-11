@@ -9,7 +9,7 @@ use seedling_protocol::client::OiClient;
 /// printed as raw JSON lines or as human-readable text. `follow`
 /// determines whether we listen for Ctrl-C (follow mode) or simply
 /// drain the stream until the server closes it.
-// CLI#log-display
+// spec: CLI#log-display
 pub(super) async fn stream_logs(
     client: &OiClient,
     params: serde_json::Value,
@@ -41,7 +41,7 @@ async fn run_log_session(
     let stdout = io::stdout();
     let mut out = stdout.lock();
 
-    // CLI#shutdown
+    // spec: CLI#shutdown
     loop {
         let result = if follow {
             tokio::select! {
@@ -105,7 +105,7 @@ fn print_entry(out: &mut impl Write, line: &[u8], json_mode: bool) -> io::Result
         .and_then(|s| s.as_str())
         .unwrap_or("");
 
-    // CLI#log-display
+    // spec: CLI#log-display
     // Mark Seedling-side breadcrumbs ("rt.start(...)", "Action.invoke(...)",
     // unit-create, replay markers) with a leading caret so the operator
     // can distinguish them from container stdout/stderr at a glance.

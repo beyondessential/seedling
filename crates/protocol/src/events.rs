@@ -23,7 +23,7 @@ pub struct AppUpdatedParam {
     pub new_value: Option<String>,
 }
 
-// EVT#event-types
+// spec: EVT#event-types
 #[derive(Debug, Clone, Serialize)]
 #[serde(tag = "type")]
 pub enum OiEvent {
@@ -1289,7 +1289,7 @@ impl EventSender {
 
     /// Build a context for the three operation lifecycle events.
     /// The context is `Clone + Send + 'static` and can cross the blocking thread boundary.
-    // WIRE#actor-attribution
+    // spec: WIRE#actor-attribution
     pub fn operation(
         &self,
         app: AppName,
@@ -1454,7 +1454,7 @@ impl EventSenderWithActor {
         )
     }
 
-    // WIRE#actor-attribution
+    // spec: WIRE#actor-attribution
     pub fn operation(
         &self,
         app: AppName,

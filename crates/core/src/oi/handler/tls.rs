@@ -39,7 +39,7 @@ mod tests;
 // DNS providers
 // ---------------------------------------------------------------------------
 
-// TLSM#dns-providers
+// spec: TLSM#dns-providers
 pub(crate) fn list_dns_providers(state: &OiState) -> HandlerResult {
     let rows = state.db.call(store::list_dns_providers).map_err(db_error)?;
     let result: Vec<Value> = rows
@@ -65,7 +65,7 @@ pub(crate) struct UpsertDnsProviderParams {
     pub config: Value,
 }
 
-// TLSM#dns-providers
+// spec: TLSM#dns-providers
 pub(crate) fn upsert_dns_provider(
     state: &OiState,
     params: UpsertDnsProviderParams,
@@ -106,7 +106,7 @@ pub(crate) struct DnsProviderNameParams {
     pub name: String,
 }
 
-// TLSM#dns-providers
+// spec: TLSM#dns-providers
 pub(crate) fn delete_dns_provider(state: &OiState, params: DnsProviderNameParams) -> HandlerResult {
     let name = params.name.clone();
     let removed = state
@@ -140,7 +140,7 @@ pub(crate) fn delete_dns_provider(state: &OiState, params: DnsProviderNameParams
 // Policies
 // ---------------------------------------------------------------------------
 
-// TLSM#policies
+// spec: TLSM#policies
 pub(crate) fn list_policies(state: &OiState) -> HandlerResult {
     let rows = state.db.call(store::list_policies).map_err(db_error)?;
     let result: Vec<Value> = rows
@@ -176,7 +176,7 @@ pub(crate) struct SetAcmeDnsParams {
     pub dns_provider: String,
 }
 
-// TLSM#policies
+// spec: TLSM#policies
 /// Validate a TLS policy hostname pattern.
 ///
 /// `TLS#policies` defines the shapes: the catch-all `*`, a
@@ -257,7 +257,7 @@ pub(crate) struct HostnameParams {
     pub hostname: String,
 }
 
-// TLSM#policies
+// spec: TLSM#policies
 // spec: TCAN#canopy-only-policy
 pub(crate) fn set_policy_canopy(state: &OiState, params: HostnameParams) -> HandlerResult {
     let hostname = params.hostname;
@@ -274,7 +274,7 @@ pub(crate) fn set_policy_canopy(state: &OiState, params: HostnameParams) -> Hand
     Ok(json!({ "ok": true }))
 }
 
-// TLSM#policies
+// spec: TLSM#policies
 pub(crate) fn clear_policy(state: &OiState, params: HostnameParams) -> HandlerResult {
     let hostname = params.hostname.clone();
     let cleared = state
@@ -295,7 +295,7 @@ pub(crate) fn clear_policy(state: &OiState, params: HostnameParams) -> HandlerRe
 // Certificates
 // ---------------------------------------------------------------------------
 
-// TLSM#certificates
+// spec: TLSM#certificates
 pub(crate) fn list_certificates(state: &OiState) -> HandlerResult {
     let rows = state.db.call(store::list_certificates).map_err(db_error)?;
     // Each certificate's pending renewal, read off the same listing rather
@@ -375,7 +375,7 @@ pub(crate) struct IssueAcmeDnsParams {
 ///
 /// `contact_email` and `directory_url` are no longer accepted as
 /// per-call overrides — the global setting is the source of truth.
-// TLSM#operator-driven-issuance
+// spec: TLSM#operator-driven-issuance
 pub(crate) fn issue_acme_dns(state: &OiState, params: IssueAcmeDnsParams) -> HandlerResult {
     let coord = Arc::clone(&state.tls_coordinator);
     let hostname = params.hostname;
@@ -438,7 +438,7 @@ pub(crate) struct UploadManualParams {
 /// cert's `SubjectPublicKeyInfo`. Stored with the key encrypted at
 /// rest. Returns `{ id, warnings }` (warnings: `self_signed`,
 /// `not_yet_valid`, …).
-// TLSM#certificates
+// spec: TLSM#certificates
 // spec: TLS#certificate-selection
 pub(crate) fn upload_manual(state: &OiState, params: UploadManualParams) -> HandlerResult {
     let UploadManualParams {
@@ -508,7 +508,7 @@ pub(crate) struct CertIdParams {
 /// Delete a stored certificate. Refused with a clear precondition
 /// error when a policy still references the row, so the operator
 /// gets pointed at the correct unbinding step.
-// TLSM#certificates
+// spec: TLSM#certificates
 pub(crate) fn delete_certificate(state: &OiState, params: CertIdParams) -> HandlerResult {
     let CertIdParams { id } = params;
     let removed = state
@@ -565,7 +565,7 @@ const CSR_HOSTNAME_LIMIT: usize = 100;
 /// wildcard, at least one of them and at most [`CSR_HOSTNAME_LIMIT`], each
 /// once. Repeats are dropped rather than refused, keeping the first spelling,
 /// since DNS names compare without case.
-// TLSM#certificate-signing-requests
+// spec: TLSM#certificate-signing-requests
 fn csr_hostname_set(hostnames: Vec<String>) -> Result<Vec<String>, OiError> {
     // Counted before anything is allocated for it, so an oversized request
     // costs nothing to refuse.
@@ -610,7 +610,7 @@ fn csr_hostname_set(hostnames: Vec<String>) -> Result<Vec<String>, OiError> {
 /// the operator has the CSR signed externally, they upload the signed
 /// cert via `tls.cert.csr.upload-cert` to transition the row to
 /// `active`.
-// TLSM#certificate-signing-requests
+// spec: TLSM#certificate-signing-requests
 // spec: TLS#certificate-signing-requests
 pub(crate) fn csr_begin(state: &OiState, params: CsrBeginParams) -> HandlerResult {
     let CsrBeginParams {
@@ -775,7 +775,7 @@ fn renewal_seed(cert: &TlsCertificate) -> Result<Vec<String>, OiError> {
 /// Re-fetch the PEM CSR for a pending row. Returns `not_found` when the
 /// id is unknown, and `requirements_invalid` when the row is no longer
 /// in `csr_pending` (cert already uploaded or row cancelled).
-// TLSM#certificate-signing-requests
+// spec: TLSM#certificate-signing-requests
 pub(crate) fn csr_get(state: &OiState, params: CertIdParams) -> HandlerResult {
     let CertIdParams { id } = params;
     let cert = state
@@ -821,7 +821,7 @@ pub(crate) struct CsrUploadCertParams {
 /// a binding: an issued certificate that misses some of them is still stored
 /// and still serves what it does cover, with `request_not_covered` in the
 /// response warnings and the missed names in `requested_not_covered`.
-// TLSM#certificate-signing-requests
+// spec: TLSM#certificate-signing-requests
 // spec: TLS#certificate-signing-requests
 pub(crate) fn csr_upload_cert(state: &OiState, params: CsrUploadCertParams) -> HandlerResult {
     let CsrUploadCertParams { id, cert_pem } = params;
@@ -917,7 +917,7 @@ pub(crate) fn csr_upload_cert(state: &OiState, params: CsrUploadCertParams) -> H
 /// `csr_pending` so an operator cannot accidentally drop an active
 /// cert via this path; deletion of an active cert goes through
 /// `tls.cert.delete` instead.
-// TLSM#certificate-signing-requests
+// spec: TLSM#certificate-signing-requests
 // spec: TLS#certificate-signing-requests
 pub(crate) fn csr_cancel(state: &OiState, params: CertIdParams) -> HandlerResult {
     let CertIdParams { id } = params;
@@ -970,7 +970,7 @@ pub(crate) struct RetryParams {
 /// reconciler / coordinator runs the actual ACME flow in the background.
 /// Survives a daemon restart between this call and the actual flow:
 /// the force-retry row stays in the DB until consumed.
-// TLSM#operator-driven-issuance
+// spec: TLSM#operator-driven-issuance
 pub(crate) fn retry(state: &OiState, params: RetryParams) -> HandlerResult {
     let RetryParams { hostname } = params;
     let host_for_db = hostname.clone();
@@ -1004,7 +1004,7 @@ pub(crate) struct ListHostnamesParams {
     pub app: Option<String>,
 }
 
-// TLSM#hostname-view
+// spec: TLSM#hostname-view
 // spec: TLS#hostname-state
 pub(crate) fn list_hostnames(state: &OiState, params: ListHostnamesParams) -> HandlerResult {
     // Use the same managed-ingresses enumeration the issuance
@@ -1393,7 +1393,7 @@ fn default_attempts_limit() -> i64 {
     100
 }
 
-// TLSM#issuance-attempts
+// spec: TLSM#issuance-attempts
 pub(crate) fn list_attempts(state: &OiState, params: ListAttemptsParams) -> HandlerResult {
     let ListAttemptsParams { hostname, limit } = params;
     let rows = state
@@ -1422,7 +1422,7 @@ pub(crate) fn list_attempts(state: &OiState, params: ListAttemptsParams) -> Hand
 // Retry blocks
 // ---------------------------------------------------------------------------
 
-// TLSM#retry-blocks
+// spec: TLSM#retry-blocks
 pub(crate) fn list_retry_blocks(state: &OiState) -> HandlerResult {
     let rows = state.db.call(store::list_retry_blocks).map_err(db_error)?;
     let result: Vec<Value> = rows
@@ -1446,7 +1446,7 @@ pub(crate) struct SetRetryBlockParams {
     pub reason: Option<String>,
 }
 
-// TLSM#retry-blocks
+// spec: TLSM#retry-blocks
 pub(crate) fn set_retry_block(state: &OiState, params: SetRetryBlockParams) -> HandlerResult {
     let SetRetryBlockParams { hostname, reason } = params;
     state
@@ -1458,7 +1458,7 @@ pub(crate) fn set_retry_block(state: &OiState, params: SetRetryBlockParams) -> H
     Ok(json!({ "ok": true }))
 }
 
-// TLSM#retry-blocks
+// spec: TLSM#retry-blocks
 pub(crate) fn clear_retry_block(state: &OiState, params: HostnameParams) -> HandlerResult {
     let HostnameParams { hostname } = params;
     let cleared = state
@@ -1472,7 +1472,7 @@ pub(crate) fn clear_retry_block(state: &OiState, params: HostnameParams) -> Hand
 // Settings
 // ---------------------------------------------------------------------------
 
-// TLSM#settings
+// spec: TLSM#settings
 pub(crate) fn get_settings(state: &OiState) -> HandlerResult {
     let s = state.db.call(store::get_settings).map_err(db_error)?;
     Ok(json!({
@@ -1495,7 +1495,7 @@ pub(crate) struct SetSettingsParams {
     pub cert_profile: Option<Option<String>>,
 }
 
-// TLSM#settings
+// spec: TLSM#settings
 pub(crate) fn set_settings(state: &OiState, params: SetSettingsParams) -> HandlerResult {
     let SetSettingsParams {
         contact_email,

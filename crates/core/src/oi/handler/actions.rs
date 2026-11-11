@@ -29,7 +29,7 @@ pub(crate) struct InvokeActionParams {
     pub params: Option<serde_json::Map<String, serde_json::Value>>,
 }
 
-// ACI#cancellation
+// spec: ACI#cancellation
 #[derive(Deserialize)]
 pub(crate) struct CancelActionParams {
     pub app: AppName,
@@ -37,7 +37,7 @@ pub(crate) struct CancelActionParams {
 
 /// Request cancellation of the currently-active operation for `app`.
 // spec: OPS#cancellation
-// ACI#cancellation
+// spec: ACI#cancellation
 pub(crate) fn cancel_action(state: &Arc<OiState>, params: CancelActionParams) -> HandlerResult {
     let app_name = &params.app;
     let outcome = state.scheduler.lock().request_cancel(app_name);
@@ -122,7 +122,6 @@ fn validation_error_to_oi(e: ParamValidationError) -> OiError {
 }
 
 // spec: ACN#param-delivery
-// spec: ACN#param-delivery
 fn validate_action_params(
     params: &serde_json::Map<String, serde_json::Value>,
 ) -> Result<(), OiError> {
@@ -139,7 +138,7 @@ fn validate_volume_params(
         .map_err(validation_error_to_oi)
 }
 
-// ACI#invoking-an-action
+// spec: ACI#invoking-an-action
 fn apply_action_param_schema(
     action_params_schema: &BTreeMap<ParamName, ParamDef>,
     params: &mut serde_json::Map<String, serde_json::Value>,
@@ -147,8 +146,7 @@ fn apply_action_param_schema(
     action_params::apply_schema(action_params_schema, params).map_err(validation_error_to_oi)
 }
 
-// ACI#invoking-an-action
-// ACI#invoking-an-action
+// spec: ACI#invoking-an-action
 pub(crate) fn invoke_action(
     state: &Arc<OiState>,
     params: InvokeActionParams,
@@ -165,7 +163,7 @@ pub(crate) fn invoke_action(
             .get(app_name.as_str())
             .ok_or_else(|| OiError::not_found(format!("app not found: {app_name}")))?;
 
-        // ACI#invoking-an-action
+        // spec: ACI#invoking-an-action
         if !matches!(*entry.phase.lock(), AppPhase::Installed) {
             return Err(OiError::new(
                 ErrorCode::NotInstalled,
@@ -173,7 +171,7 @@ pub(crate) fn invoke_action(
             ));
         }
 
-        // ACI#invoking-an-action - reject if script_error fault is active
+        // spec: ACI#invoking-an-action - reject if script_error fault is active
         if entry.script_error.is_some() {
             return Err(OiError::script_error(format!(
                 "app has a script error: {app_name}"
@@ -197,7 +195,7 @@ pub(crate) fn invoke_action(
             .get(action_name.as_str())
             .ok_or_else(|| OiError::not_found(format!("action not found: {action_name}")))?;
 
-        // ACI#invoking-an-action
+        // spec: ACI#invoking-an-action
         apply_action_param_schema(&action_def.params, &mut action_params)?;
         // spec: ACN#volume-params
         validate_volume_params(state, &action_def.params, &action_params)?;

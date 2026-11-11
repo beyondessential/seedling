@@ -426,7 +426,7 @@ pub(crate) fn validate_name(name: &str) -> Result<(), OiError> {
             "name must not start with an underscore".to_string(),
         ));
     }
-    // BSL#names: ^[a-zA-Z][a-zA-Z0-9-]{1,60}[a-zA-Z0-9]$
+    // spec: BSL#names: ^[a-zA-Z][a-zA-Z0-9-]{1,60}[a-zA-Z0-9]$
     let ok = name.len() >= 3
         && name.len() <= 63
         && name.starts_with(|c: char| c.is_ascii_alphabetic())
@@ -471,7 +471,7 @@ pub(crate) fn serialize_param_schema(
         .collect()
 }
 
-// APPS#listing
+// spec: APPS#listing
 // spec: CTL#resource-stop
 pub(crate) fn list_apps(state: &OiState) -> HandlerResult {
     // spec: CTL#app-priority
@@ -519,7 +519,7 @@ pub(crate) fn list_apps(state: &OiState) -> HandlerResult {
     Ok(json!(result))
 }
 
-// APPS#description
+// spec: APPS#description
 pub(crate) fn describe_app(state: &OiState, params: AppParams) -> HandlerResult {
     let name = params.app.as_str();
 
@@ -547,7 +547,7 @@ pub(crate) fn describe_app(state: &OiState, params: AppParams) -> HandlerResult 
         .db
         .call(move |db| faults::list_active_faults(db, Some(&name_owned)).unwrap_or_default());
 
-    // APPS#description — app-level faults from the DB.
+    // spec: APPS#description — app-level faults from the DB.
     let app_faults_json: Vec<Value> = all_faults_for_app
         .iter()
         .filter(|f| f.resource_type.is_none())
@@ -575,7 +575,7 @@ pub(crate) fn describe_app(state: &OiState, params: AppParams) -> HandlerResult 
 
     let def = entry.app.def.load();
 
-    // APPS#description
+    // spec: APPS#description
     // spec: APPS#parameters
     let params_json: Vec<Value> = def
         .params
@@ -597,7 +597,7 @@ pub(crate) fn describe_app(state: &OiState, params: AppParams) -> HandlerResult 
         })
         .collect();
 
-    // APPS#description — params stored in the DB that the current script does
+    // spec: APPS#description — params stored in the DB that the current script does
     // not reference; shown for operator awareness only.
     let unknown_params_json: Vec<Value> = stored_params
         .iter()
@@ -605,7 +605,7 @@ pub(crate) fn describe_app(state: &OiState, params: AppParams) -> HandlerResult 
         .map(|(k, v)| json!({ "name": k, "value": v }))
         .collect();
 
-    // APPS#description
+    // spec: APPS#description
     let mut actions_json: Vec<Value> = def.actions.values().map(action_entry_json).collect();
     for s in def.shells.values() {
         actions_json.push(shell_entry_json(s));
@@ -633,7 +633,7 @@ pub(crate) fn describe_app(state: &OiState, params: AppParams) -> HandlerResult 
             | AppStatus::Installing
             | AppStatus::Uninstalling
     );
-    // APPS#description
+    // spec: APPS#description
     // Pre-render each resource's static declaration while we still hold the
     // def. The DB closure below only needs plain data (no locks) to augment
     // with instance state, faults, stopped flag, and current scale.
@@ -977,7 +977,7 @@ fn definition_for(
     Ok((gen_n, bundle, source))
 }
 
-// APPS#definition-retrieval
+// spec: APPS#definition-retrieval
 pub(crate) fn get_app_script(state: &OiState, params: GetScriptParams) -> HandlerResult {
     let (generation, bundle, _) = definition_for(state, &params.app, params.generation)?;
     // spec: APPS#definition-retrieval
@@ -1282,8 +1282,8 @@ pub(crate) fn dry_run_plan(state: &OiState, params: PlanParams, ctx: &RequestCtx
     }))
 }
 
-// APPS#registration
-// APPS#persistence
+// spec: APPS#registration
+// spec: APPS#persistence
 pub(crate) fn register_app(
     state: &OiState,
     params: CreateParams,
@@ -1390,7 +1390,7 @@ pub(crate) fn register_resolved(
     Ok(json!({ "generation": generation }))
 }
 
-// APPS#removal
+// spec: APPS#removal
 pub(crate) fn deregister_app(
     state: &OiState,
     params: AppParams,
@@ -1636,7 +1636,7 @@ pub(crate) fn validation_error(rejections: &[crate::runtime::apps::Rejection]) -
     )
 }
 
-// APPS#update
+// spec: APPS#update
 pub(crate) fn update_app(state: &OiState, params: UpdateParams, ctx: &RequestCtx) -> HandlerResult {
     let name = params.app.as_str();
 
@@ -1856,7 +1856,7 @@ pub(crate) fn update_app(state: &OiState, params: UpdateParams, ctx: &RequestCtx
         entry.tick_notify.notify_one();
     }
 
-    // FWD#forward-lifetime — tear down any forward whose target service,
+    // spec: FWD#forward-lifetime — tear down any forward whose target service,
     // or port for its proto, is no longer declared in the new AppDef.
     {
         // Collected before the forwards lock is taken: that lock is on the

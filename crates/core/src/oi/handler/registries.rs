@@ -35,7 +35,7 @@ pub(crate) fn list_tags(state: &OiState, params: TagsParams) -> HandlerResult {
     Ok(json!({ "tags": tags }))
 }
 
-// IMGM#registry-allowlist
+// spec: IMGM#registry-allowlist
 pub(crate) fn list_registries(state: &OiState) -> HandlerResult {
     let registries = state
         .db
@@ -44,7 +44,7 @@ pub(crate) fn list_registries(state: &OiState) -> HandlerResult {
     Ok(json!({ "registries": registries }))
 }
 
-// IMGM#registry-allowlist
+// spec: IMGM#registry-allowlist
 pub(crate) fn add_registry(state: &OiState, params: RegistryParams) -> HandlerResult {
     let registry = params.registry.clone();
     state
@@ -63,7 +63,7 @@ pub(crate) fn add_registry(state: &OiState, params: RegistryParams) -> HandlerRe
     Ok(json!({ "ok": true }))
 }
 
-// IMGM#registry-allowlist
+// spec: IMGM#registry-allowlist
 pub(crate) fn remove_registry(state: &OiState, params: RegistryParams) -> HandlerResult {
     let registry = params.registry.clone();
     let removed = state

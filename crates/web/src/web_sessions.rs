@@ -5,7 +5,7 @@ use parking_lot::Mutex;
 use seedling_protocol::actor::Actor;
 use uuid::Uuid;
 
-// WEB#session-tracking
+// spec: WEB#session-tracking
 /// A session is considered stale when its `last_seen` is older than this. The
 /// reaper task drops stale sessions and emits `WebSessionStopped` events.
 pub const STALE_CUTOFF: SignedDuration = SignedDuration::from_secs(600);
@@ -13,7 +13,7 @@ pub const STALE_CUTOFF: SignedDuration = SignedDuration::from_secs(600);
 /// How often the reaper task runs.
 pub const REAPER_TICK: Duration = Duration::from_secs(60);
 
-// UI#guarded-controls
+// spec: UI#guarded-controls
 /// The advisory safety tier reported by a browser session. The server records
 /// and broadcasts whatever the client reports without enforcing it on any OI
 /// request.

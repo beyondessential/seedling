@@ -116,7 +116,7 @@ impl FaultMeta {
     }
 }
 
-// FLTS#fault-records
+// spec: FLTS#fault-records
 pub fn file_fault(
     db: &crate::runtime::db::Db,
     app: &AppName,
@@ -250,7 +250,7 @@ pub fn clear_fault(
     Ok(())
 }
 
-// FLTS#listing-faults
+// spec: FLTS#listing-faults
 pub fn list_active_faults(
     db: &crate::runtime::db::Db,
     app: Option<&AppName>,

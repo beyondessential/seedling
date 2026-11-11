@@ -179,7 +179,7 @@ enum PodObservation<'a> {
     },
 }
 
-// OBS#containers
+// spec: OBS#containers
 async fn observe_one_pod<'a>(
     observer: &Observer,
     actuator: &Actuator,
@@ -239,7 +239,7 @@ async fn observe_one_pod<'a>(
         .iter()
         .any(|(f, _)| matches!(f, ObservationFact::ContainerRunning { .. }));
 
-    // UPD#stale-instances
+    // spec: UPD#stale-instances
     let observed_spec_hash = facts.iter().find_map(|(f, _)| {
         if let ObservationFact::ContainerSpecHash(h) = f {
             Some(h.clone())
@@ -373,10 +373,9 @@ async fn observe_one_pod<'a>(
     }))
 }
 
-// ACTU#deployment-and-job-instances
-// ACTU#deployment-and-job-instances
-// FLT#filing-and-clearing
-// FLT#workload-faults
+// spec: ACTU#deployment-and-job-instances
+// spec: FLT#filing-and-clearing
+// spec: FLT#workload-faults
 // spec: AUTO#job-completion
 #[expect(
     clippy::too_many_arguments,
@@ -459,7 +458,8 @@ async fn actuate_one_pod(
         if obs.is_running && (!obs.spec_stale || inhibit_stop) {
             // Running and either current-spec or kept alive by rolling strategy.
             result.unit_healthy = Some(dr.instance.clone());
-            // FLT#workload-faults A running container means its image is
+            // spec: FLT#workload-faults
+            // A running container means its image is
             // present on the node. Report the image as successfully pulled so
             // the faults reconciler can clear any stale image_pull_failed
             // fault for the same reference — including ones filed against a
@@ -545,7 +545,7 @@ async fn actuate_one_pod(
                 return Some(obs.result);
             }
 
-            // FLT#workload-faults
+            // spec: FLT#workload-faults
             // If the unit is in a broken state (failed, or active but the
             // container is not running), or the running container has a
             // stale spec, tear it down so the next tick can start a fresh
@@ -640,7 +640,7 @@ async fn actuate_one_pod(
             };
             op.complete(&outcome);
         }
-        // ACTU#deployment-and-job-instances
+        // spec: ACTU#deployment-and-job-instances
         // A pod network can outlive its container: when podman --rm removes
         // the container on exit, the per-pod network stays behind until
         // explicitly removed. The previous guard only fired for
@@ -712,7 +712,7 @@ fn compute_stop_inhibitions(
     }
 
     match on_update {
-        // UPD#replace-updates
+        // spec: UPD#replace-updates
         OnUpdate::Replace => {
             debug!(
                 deployment = deployment_name,
@@ -721,7 +721,7 @@ fn compute_stop_inhibitions(
             );
             (HashSet::new(), false)
         }
-        // UPD#rolling-updates
+        // spec: UPD#rolling-updates
         OnUpdate::Rolling => {
             let current_ready: Vec<&ObservedInstance<'_>> = instances
                 .iter()
@@ -850,7 +850,7 @@ pub(super) async fn observe_and_actuate(
 
     for (idx, obs) in observed.iter().enumerate() {
         match &obs.dr.definition {
-            // UPD#jobs
+            // spec: UPD#jobs
             Resource::Job(_) => job_indices.push(idx),
             Resource::Deployment(_) => {
                 let dep_name = obs

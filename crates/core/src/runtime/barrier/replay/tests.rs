@@ -133,7 +133,6 @@ fn db_action_log_barrier_suspends_then_resumes() {
     assert_eq!(entries.len(), 1, "no duplicate entries after second pass");
 }
 
-// SUSP#replay
 // spec: SUSP#replay
 #[test]
 fn db_action_log_sequential_barriers() {

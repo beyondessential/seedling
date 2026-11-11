@@ -34,15 +34,15 @@ struct Migration {
 // spec: SUSP#replay
 const SQL_V2: &str = include_str!("db/migrations/v02.sql");
 const SQL_V3: &str = include_str!("db/migrations/v03.sql");
-// APPS#persistence
+// spec: APPS#persistence
 const SQL_V4: &str = include_str!("db/migrations/v04.sql");
-// KEY#authorising-a-key
+// spec: KEY#authorising-a-key
 const SQL_V5: &str = include_str!("db/migrations/v05.sql");
-// PRM#parameter-storage
+// spec: PRM#parameter-storage
 const SQL_V6: &str = include_str!("db/migrations/v06.sql");
 const SQL_V7: &str = include_str!("db/migrations/v07.sql");
 const SQL_V8: &str = include_str!("db/migrations/v08.sql");
-// FLTS#fault-records
+// spec: FLTS#fault-records
 const SQL_V9: &str = include_str!("db/migrations/v09.sql");
 const SQL_V10: &str = include_str!("db/migrations/v10.sql");
 const SQL_V11: &str = include_str!("db/migrations/v11.sql");
@@ -497,7 +497,7 @@ pub struct Db {
 }
 
 impl Db {
-    // INFRA#file-permissions
+    // spec: INFRA#file-permissions
     pub fn open(path: &Path) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
         if path.exists() {
             let mode = path.metadata()?.permissions().mode() & 0o777;
@@ -513,7 +513,7 @@ impl Db {
 
         let conn = Connection::open(path)?;
 
-        // INFRA#database
+        // spec: INFRA#database
         conn.busy_timeout(Duration::from_secs(5))?;
 
         if let Ok(meta) = path.metadata()

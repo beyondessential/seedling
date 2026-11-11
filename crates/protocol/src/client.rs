@@ -282,7 +282,7 @@ pub struct OiClient {
 }
 
 impl OiClient {
-    // WIRE#actor-attribution
+    // spec: WIRE#actor-attribution
     pub async fn connect(
         addr: SocketAddr,
         auth: ClientAuth,
@@ -315,7 +315,7 @@ impl OiClient {
             .with_custom_certificate_verifier(verifier)
             .with_client_cert_resolver(build_client_cert_resolver(identity)?);
         tls_config.key_log = Arc::new(rustls::KeyLogFile::new());
-        // TRN#connection
+        // spec: TRN#connection
         tls_config.alpn_protocols = vec![OI_ALPN.to_vec()];
 
         let quic_config = quinn::crypto::rustls::QuicClientConfig::try_from(tls_config)
@@ -361,7 +361,7 @@ impl OiClient {
             .map_err(|e| ClientError::Transport(Box::new(e)))
     }
 
-    // WIRE#stream-dispatch
+    // spec: WIRE#stream-dispatch
     /// Accept an incoming server-initiated bidirectional stream.
     ///
     /// The server opens these to push work to a client that has offered to do
@@ -442,7 +442,7 @@ impl OiClient {
         send.finish()
             .map_err(|e| ClientError::Transport(Box::new(e)))?;
 
-        // WIRE#control-requests — the FIN is the message boundary, so the envelope
+        // spec: WIRE#control-requests — the FIN is the message boundary, so the envelope
         // is read to end rather than to a newline it does not carry.
         let body = recv
             .read_to_end(RESPONSE_LIMIT)
@@ -498,7 +498,7 @@ impl OiClient {
     }
 
     /// Send a single JSON request and return the parsed result value.
-    // WIRE#actor-attribution
+    // spec: WIRE#actor-attribution
     pub async fn request(&self, method: &str, params: Value) -> Result<Value, ClientError> {
         let req_bytes = serde_json::to_vec(&serde_json::json!({
             "method": method,
@@ -579,14 +579,14 @@ impl OiClient {
             cell: Arc::clone(&cell),
         });
 
-        // TRN#fingerprint-probe
+        // spec: TRN#fingerprint-probe
         let ephemeral = super::keys::ClientIdentity::ephemeral();
         let mut tls_config = TlsClientConfig::builder()
             .dangerous()
             .with_custom_certificate_verifier(verifier)
             .with_client_cert_resolver(build_client_cert_resolver(&ephemeral)?);
         tls_config.key_log = Arc::new(rustls::KeyLogFile::new());
-        // TRN#connection — probe must be indistinguishable from a real connection.
+        // spec: TRN#connection — probe must be indistinguishable from a real connection.
         tls_config.alpn_protocols = vec![OI_ALPN.to_vec()];
 
         let quic_config = quinn::crypto::rustls::QuicClientConfig::try_from(tls_config)

@@ -78,7 +78,7 @@ pub enum AppPhase {
     Uninstalling,
 }
 
-// APPS#status-derivation
+// spec: APPS#status-derivation
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum AppStatus {
@@ -154,7 +154,7 @@ impl AppRegistry {
         self.entries.contains_key(name)
     }
 
-    // APPS#registration
+    // spec: APPS#registration
     pub fn register(
         &mut self,
         name: AppName,
@@ -213,9 +213,9 @@ impl AppRegistry {
         self.entries.remove(name).is_some()
     }
 
-    // APPS#update
-    // PRM#parameter-set
-    // PRM#parameter-unset
+    // spec: APPS#update
+    // spec: PRM#parameter-set
+    // spec: PRM#parameter-unset
     /// Re-evaluate the app's current definition with updated stored params.
     ///
     /// On success the entry's app is updated and any active script-error
@@ -303,14 +303,14 @@ impl AppRegistry {
     }
 
     /// Every registered app's name, sorted.
-    // APPS#listing
+    // spec: APPS#listing
     pub fn names(&self) -> Vec<AppName> {
         let mut names: Vec<_> = self.entries.values().map(|e| e.name.clone()).collect();
         names.sort();
         names
     }
 
-    // APPS#persistence
+    // spec: APPS#persistence
     pub fn load_from_db(
         db: &Db,
         cipher: &Cipher,
@@ -386,7 +386,7 @@ impl AppRegistry {
         Ok(registry)
     }
 
-    // APPS#persistence
+    // spec: APPS#persistence
     pub fn persist_app(db: &Db, entry: &AppEntry) -> rusqlite::Result<()> {
         let (installed, uninstalling, installing) = encode_phase(&entry.phase.lock());
         db.conn.execute(
@@ -660,7 +660,7 @@ fn run_definition(
         // for a bundle written for another Seedling) evaluates to nothing.
         Err(e) => return (app, Err(ScriptError(e.to_string()))),
     };
-    // PRM#parameter-storage — pre-populate stored values so is_set()/value() work
+    // spec: PRM#parameter-storage — pre-populate stored values so is_set()/value() work
     // during script evaluation. AppDef.params (the BSL-declared set) is
     // populated by the script itself via app.param() calls.
     *app.stored.lock() = params.clone();

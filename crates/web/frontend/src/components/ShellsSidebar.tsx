@@ -10,7 +10,7 @@ import { useSessionContext } from "./SessionProvider";
 const MIN_WIDTH = 300;
 const MAX_WIDTH = 1400;
 
-// UI#shells
+// spec: UI#shells
 function ShellInstance({ tab, active }: { tab: ShellTab; active: boolean }) {
   const containerRef = useRef<HTMLDivElement>(null);
   const termRef = useRef<Terminal | null>(null);
@@ -197,7 +197,7 @@ function ShellInstance({ tab, active }: { tab: ShellTab; active: boolean }) {
   );
 }
 
-// UI#shells
+// spec: UI#shells
 export function ShellsSidebar() {
   const {
     shellTabs, activeShellId, setActiveShellId, closeShell,

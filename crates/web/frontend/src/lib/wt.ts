@@ -94,7 +94,7 @@ export class WtClient {
     return { ok: true, value: body.result ?? body };
   }
 
-  // UI#operator-capabilities
+  // spec: UI#operator-capabilities
   async streamLogs(
     params: LogStreamParams,
     onEntry: (entry: LogEntry) => void,
@@ -105,7 +105,7 @@ export class WtClient {
     });
   }
 
-  // UI#event-feed
+  // spec: UI#event-feed
   async subscribeEvents(
     onEvent: (event: SeedlingEvent) => void,
     signal: AbortSignal,
@@ -115,8 +115,8 @@ export class WtClient {
     });
   }
 
-  // WEB#shell-relay
-  // UI#shells
+  // spec: WEB#shell-relay
+  // spec: UI#shells
   async openShell(
     params: OpenShellParams,
     uniRouter: UniRouter,
@@ -168,7 +168,7 @@ export class WtClient {
     return { sessionId, writer, exitCode, stdout, stderr };
   }
 
-  // UI#shells
+  // spec: UI#shells
   async openVolumeShell(
     params: OpenVolumeShellParams,
     uniRouter: UniRouter,

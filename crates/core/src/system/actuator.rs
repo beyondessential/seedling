@@ -96,7 +96,7 @@ pub enum ActuateError {
         source: crate::runtime::registry::RegistryError,
         backtrace: snafu::Backtrace,
     },
-    // FLT#workload-faults
+    // spec: FLT#workload-faults
     #[snafu(display("external volume '{name}' is not mapped"))]
     ExternalVolumeNotMapped {
         name: String,

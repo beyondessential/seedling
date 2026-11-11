@@ -4,7 +4,7 @@ use std::time::{Duration, Instant};
 use argon2::{Argon2, PasswordHash, PasswordVerifier};
 use seedling_protocol::actor::Actor;
 
-// WEB#password-login
+// spec: WEB#password-login
 pub fn verify_password(hash_str: &str, password: &str) -> bool {
     let Ok(parsed) = PasswordHash::new(hash_str) else {
         tracing::warn!("configured password_hash is not a valid PHC string");
@@ -22,7 +22,7 @@ pub struct SessionEntry {
 
 pub type Sessions = parking_lot::Mutex<std::collections::HashMap<String, SessionEntry>>;
 
-// WEB#password-login
+// spec: WEB#password-login
 pub fn issue_session_token(sessions: &Sessions, actor: Arc<Actor>, lifetime: Duration) -> String {
     let token = uuid::Uuid::new_v4().to_string();
     let expires = Instant::now() + lifetime;

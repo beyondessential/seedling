@@ -25,7 +25,7 @@ pub(crate) struct InvokeInstallParams {
     pub params: Option<BTreeMap<String, String>>,
 }
 
-// ACI#install-parameters
+// spec: ACI#install-parameters
 pub(in crate::oi) fn validate_requirements(
     schema: &BTreeMap<ParamName, ParamDef>,
     submitted: &BTreeMap<String, String>,
@@ -34,7 +34,7 @@ pub(in crate::oi) fn validate_requirements(
         .map_err(|e| OiError::new(ErrorCode::RequirementsInvalid, e.to_string()))
 }
 
-// ACI#install-parameters
+// spec: ACI#install-parameters
 fn validate_install_params(
     state: &OiState,
     app_name: &AppName,
@@ -58,9 +58,9 @@ fn validate_install_params(
     }
 }
 
-// ACI#invoking-an-action
-// ACI#install
-// ACI#install-parameters
+// spec: ACI#invoking-an-action
+// spec: ACI#install
+// spec: ACI#install-parameters
 pub(crate) fn invoke_install(
     state: &Arc<OiState>,
     params: InvokeInstallParams,
@@ -76,7 +76,7 @@ pub(crate) fn invoke_install(
             .get(app_name.as_str())
             .ok_or_else(|| OiError::not_found(format!("app not found: {app_name}")))?;
 
-        // ACI#install - only NotInstalled apps may start an install.
+        // spec: ACI#install - only NotInstalled apps may start an install.
         // Installing: an install for this app is already running — distinct error.
         // Installed / Uninstalling: install already happened (or is unwinding).
         match *entry.phase.lock() {
@@ -95,7 +95,7 @@ pub(crate) fn invoke_install(
             }
         }
 
-        // ACI#install - reject if script_error fault is active
+        // spec: ACI#install - reject if script_error fault is active
         if entry.script_error.is_some() {
             return Err(OiError::script_error(format!(
                 "app has a script error: {app_name}"

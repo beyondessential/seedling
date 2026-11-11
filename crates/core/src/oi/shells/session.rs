@@ -713,7 +713,7 @@ pub(super) async fn run_to_exit(
             break 'run Err(Some(-1));
         }
 
-        // SHL#session-end
+        // spec: SHL#session-end
         match relay_session(recv, &mut live.exec, &mut streams.stdout, stop).await {
             Some(status) => Ok(status.ok().and_then(|s| s.code()).unwrap_or(-1)),
             None => Err(None),

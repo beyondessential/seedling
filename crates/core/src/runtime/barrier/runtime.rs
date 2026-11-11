@@ -1017,7 +1017,6 @@ impl RuntimeInstance {
     }
 
     // spec: RT#certificate-warming
-    // spec: RT#certificate-warming
     fn do_warm_certs(
         &mut self,
         resources_with_defs: Vec<(ResourceInstance, Option<crate::defs::resource::Resource>)>,

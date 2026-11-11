@@ -1,4 +1,4 @@
-// WIRE#actor-attribution
+// spec: WIRE#actor-attribution
 #[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Actor {
     #[serde(skip_serializing_if = "Option::is_none")]

@@ -22,8 +22,8 @@ use crate::{
     system::{translate::proxy::instance_ipv6, types::ServiceRoute},
 };
 
-// AUTO#ingress-and-network-repair
-// FLT#filing-and-clearing
+// spec: AUTO#ingress-and-network-repair
+// spec: FLT#filing-and-clearing
 #[expect(
     clippy::type_complexity,
     reason = "flattening the tuple would hurt readability"

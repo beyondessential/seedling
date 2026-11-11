@@ -44,7 +44,7 @@ struct Args {
     #[arg(long)]
     config: Option<PathBuf>,
 
-    // WEB#listen-addresses
+    // spec: WEB#listen-addresses
     /// Network interface(s) to bind on (comma-separated names).
     #[arg(long, value_delimiter = ',')]
     interface: Vec<String>,
@@ -53,7 +53,7 @@ struct Args {
     #[arg(long)]
     listen: Vec<SocketAddr>,
 
-    // WEB#listen-addresses
+    // spec: WEB#listen-addresses
     /// Interface(s) to bind the WebTransport listener on, overriding
     /// `--interface`/`--listen` for WebTransport only (comma-separated names).
     /// WebTransport cannot be carried by an HTTP reverse proxy, so this exposes
@@ -62,7 +62,7 @@ struct Args {
     #[arg(long, value_delimiter = ',')]
     wt_interface: Vec<String>,
 
-    // WEB#listen-addresses
+    // spec: WEB#listen-addresses
     /// Explicit WebTransport listen address(es), overriding
     /// `--interface`/`--listen` for WebTransport only. May be repeated.
     #[arg(long)]
@@ -76,12 +76,12 @@ struct Args {
     #[arg(long, default_value_t = DEFAULT_WT_PORT, conflicts_with = "listen")]
     wt_port: u16,
 
-    // WEB#tailscale-identity
+    // spec: WEB#tailscale-identity
     /// Trust Tailscale identity headers for authentication.
     #[arg(long)]
     trust_tailscale_headers: bool,
 
-    // WEB#development-bypass
+    // spec: WEB#development-bypass
     /// Bypass all authentication. Only allowed on loopback addresses.
     #[arg(long)]
     dev_no_auth: bool,
@@ -99,7 +99,7 @@ struct Args {
     #[cfg_attr(debug_assertions, arg(conflicts_with = "daemon_trust_any"))]
     daemon_fingerprint: Option<String>,
 
-    // WEB#daemon-connection
+    // spec: WEB#daemon-connection
     /// Path to a file containing the daemon's SHA-256 SPKI fingerprint (hex) to
     /// pin. Re-read on each connection attempt, so the daemon may publish it
     /// after this process starts (see the daemon's `oi.fingerprint` file).
@@ -142,7 +142,7 @@ impl DaemonPin {
     }
 }
 
-// WEB#daemon-connection
+// spec: WEB#daemon-connection
 async fn connect_daemon_with_retry(
     addr: std::net::SocketAddr,
     pin: &DaemonPin,
@@ -150,7 +150,7 @@ async fn connect_daemon_with_retry(
 ) -> DaemonConn {
     let mut backoff = Duration::from_secs(1);
     loop {
-        // WEB#daemon-connection — resolve the pinned fingerprint per attempt so a
+        // spec: WEB#daemon-connection — resolve the pinned fingerprint per attempt so a
         // daemon that has not yet published its fingerprint file does not make
         // startup fail; we retry until the file appears.
         match pin.resolve() {
@@ -303,7 +303,7 @@ async fn main() {
         std::process::exit(1);
     });
 
-    // WEB#development-bypass — dev-no-auth must not be used with non-loopback addresses.
+    // spec: WEB#development-bypass — dev-no-auth must not be used with non-loopback addresses.
     if args.dev_no_auth {
         for addr in http_addrs.iter().chain(wt_addrs.iter()) {
             if !interfaces::is_loopback(addr) {
@@ -321,7 +321,7 @@ async fn main() {
     #[cfg(not(debug_assertions))]
     let trust_any = false;
 
-    // WEB#daemon-connection — a fingerprint file takes precedence and is resolved per
+    // spec: WEB#daemon-connection — a fingerprint file takes precedence and is resolved per
     // attempt; otherwise the pin is fixed at startup.
     let daemon_pin = if let Some(path) = args.daemon_fingerprint_file {
         DaemonPin::File(path)
@@ -340,7 +340,7 @@ async fn main() {
 
     let key_file = args.key_file.unwrap_or_else(DaemonConn::default_key_path);
 
-    // WEB#daemon-connection
+    // spec: WEB#daemon-connection
     let daemon =
         Arc::new(connect_daemon_with_retry(args.daemon_addr, &daemon_pin, &key_file).await);
 

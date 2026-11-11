@@ -610,9 +610,7 @@ impl Reconciler {
         }
     }
 
-    // RCN#desired-state
-    // RCN#desired-state
-    // RCN#desired-state
+    // spec: RCN#desired-state
     ///
     /// Returns the snapshots alongside how many installed apps were dropped
     /// because computing their desired state failed. The count is not
@@ -1027,10 +1025,8 @@ impl Reconciler {
     // Tick — main reconciliation loop body
     // -----------------------------------------------------------------------
 
-    // RCN#reconciliation-loop
-    // RCN#reconciliation-loop
-    // RCN#reconciliation-loop
-    // FLT#filing-and-clearing
+    // spec: RCN#reconciliation-loop
+    // spec: FLT#filing-and-clearing
     #[tracing::instrument(skip_all, level = "debug")]
     pub async fn tick(&mut self) -> bool {
         // spec: INFRA#unavailable-backends — when the daemon came up without a
@@ -1191,7 +1187,7 @@ impl Reconciler {
         }
 
         // --- Process caddy result ---
-        // AUTO#ingress-and-network-repair
+        // spec: AUTO#ingress-and-network-repair
         let caddy_addrs = match caddy_result {
             Ok(Ok(addrs)) => match caddy::build_client(&addrs.admin_socket) {
                 Ok(client) => {
@@ -1670,20 +1666,20 @@ impl Reconciler {
         // rollouts are automatically cleared.
         self.rolling_updates.clear();
         for (app_name, mut pod_update) in pod_updates {
-            // FLT#workload-faults
+            // spec: FLT#workload-faults
             self.file_image_pull_faults(&app_name, &pod_update);
-            // FLT#workload-faults
+            // spec: FLT#workload-faults
             self.file_unit_failure_faults(&app_name, &pod_update);
-            // AUTO#restart-record
-            // AUTO#crash-loop-detection
+            // spec: AUTO#restart-record
+            // spec: AUTO#crash-loop-detection
             // Restart bookkeeping runs first: it appends rate-derived crash
             // loops to the update so both triggers file through one path.
             self.record_restarts(&app_name, &mut pod_update);
-            // FLT#workload-faults
+            // spec: FLT#workload-faults
             self.file_crash_loop_faults(&app_name, &pod_update);
-            // FLT#workload-faults
+            // spec: FLT#workload-faults
             self.file_health_check_faults(&app_name, &pod_update);
-            // FLT#workload-faults
+            // spec: FLT#workload-faults
             self.file_external_volume_faults(&app_name, &pod_update);
             self.file_instance_registry_faults(&app_name, &pod_update);
             self.file_pod_actuation_faults(&app_name, &pod_update);

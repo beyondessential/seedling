@@ -20,8 +20,8 @@ use crate::{
     system::translate::proxy::instance_ipv6,
 };
 
-// FWD#requesting-a-forward
-// FWD#udp-tunnelling
+// spec: FWD#requesting-a-forward
+// spec: FWD#udp-tunnelling
 pub(crate) async fn forward_port_session(
     conn: quinn::Connection,
     mut send: quinn::SendStream,
@@ -142,7 +142,7 @@ pub(crate) async fn forward_port_session(
     let forward_id = ForwardId::generate();
     let (stop_tx, mut stop_rx) = tokio::sync::watch::channel(false);
 
-    // FWD#udp-tunnelling
+    // spec: FWD#udp-tunnelling
     let max_udp_payload: Option<u64> = match proto {
         ForwardProto::Udp => conn.max_datagram_size().map(|s| s.saturating_sub(2) as u64),
         ForwardProto::Tcp => None,
@@ -291,7 +291,7 @@ pub(crate) async fn forward_port_session(
             }
             msg = status_rx.recv() => {
                 if let Some(msg) = msg {
-                    // FWD#status-messages
+                    // spec: FWD#status-messages
                     let line = serde_json::to_vec(&serde_json::json!({
                         "status": { "level": msg.level, "message": msg.message }
                     })).unwrap_or_default();
@@ -318,8 +318,8 @@ pub(crate) async fn forward_port_session(
     );
 }
 
-// WIRE#port-forward-data
-// FWD#tcp-tunnelling
+// spec: WIRE#port-forward-data
+// spec: FWD#tcp-tunnelling
 pub(crate) async fn handle_forward_stream(
     (mut send, mut recv): (quinn::SendStream, quinn::RecvStream),
     forward_id_str: String,
@@ -393,8 +393,8 @@ async fn open_udp_relay(
     Ok(socket)
 }
 
-// FWD#udp-tunnelling
-// WIRE#port-forward-data
+// spec: FWD#udp-tunnelling
+// spec: WIRE#port-forward-data
 async fn udp_relay_task(
     mut udp_rx: tokio::sync::mpsc::Receiver<Vec<u8>>,
     conn: quinn::Connection,

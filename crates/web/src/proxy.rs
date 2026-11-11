@@ -70,8 +70,8 @@ pub async fn peek_request(
     })
 }
 
-// WEB#request-relay
-// WEB#session-establishment
+// spec: WEB#request-relay
+// spec: WEB#session-establishment
 /// Splice a pre-peeked request through to a daemon stream.
 pub async fn proxy_from_peeked(
     wt_send: &mut wtransport::SendStream,

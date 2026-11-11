@@ -184,7 +184,7 @@ pub fn get_label(db: &Db, fingerprint: &str) -> rusqlite::Result<Option<String>>
     rows.next()?.map(|r| r.get(0)).transpose()
 }
 
-// KEY#listing-keys
+// spec: KEY#listing-keys
 pub fn list_keys(db: &Db) -> rusqlite::Result<Vec<(String, String, i64)>> {
     let mut stmt = db.conn.prepare(
         "SELECT fingerprint, label, added_at \
@@ -195,7 +195,7 @@ pub fn list_keys(db: &Db) -> rusqlite::Result<Vec<(String, String, i64)>> {
 }
 
 /// Insert a key, or update its label if it already exists.
-// KEY#authorising-a-key
+// spec: KEY#authorising-a-key
 pub fn authorize_key(
     db: &Db,
     trusted: &TrustedKeys,
@@ -216,7 +216,7 @@ pub fn authorize_key(
 }
 
 /// Remove a key. Returns `true` if it was present and removed.
-// KEY#revoking-a-key
+// spec: KEY#revoking-a-key
 pub fn revoke_key(db: &Db, trusted: &TrustedKeys, fp: &str) -> rusqlite::Result<bool> {
     let rows = db
         .conn

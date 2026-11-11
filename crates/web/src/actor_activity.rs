@@ -4,7 +4,7 @@ use jiff::{SignedDuration, Timestamp};
 use parking_lot::Mutex;
 use serde_json::Value;
 
-// WEB#connected-clients
+// spec: WEB#connected-clients
 /// Activity entries older than this are dropped at list time. Matches the
 /// web-session stale cutoff so the connected-clients view has a consistent
 /// "operator is here" window.

@@ -25,12 +25,12 @@ async fn component_status(state: &Arc<OiState>, containers: &[&str]) -> &'static
 /// responsive use this instead of /server/status — it never touches the
 /// container runtime, never allocates a registry read lock, and returns the
 /// same shape regardless of daemon state.
-// STS#liveness
+// spec: STS#liveness
 pub(crate) fn ping() -> HandlerResult {
     Ok(json!({}))
 }
 
-// STS#infrastructure-status
+// spec: STS#infrastructure-status
 pub(crate) async fn get_infra_status(state: &Arc<OiState>) -> HandlerResult {
     let proxy = component_status(state, &["seedling-caddy-blue", "seedling-caddy-green"]).await;
     let resolver = component_status(
@@ -41,7 +41,7 @@ pub(crate) async fn get_infra_status(state: &Arc<OiState>) -> HandlerResult {
     Ok(json!({ "proxy": proxy, "resolver": resolver }))
 }
 
-// STS#server-status
+// spec: STS#server-status
 pub(crate) fn get_status(state: &OiState) -> HandlerResult {
     let uptime = state.start_time.elapsed().as_secs();
     let hostname = whoami::devicename()

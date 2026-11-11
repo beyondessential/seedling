@@ -24,7 +24,7 @@ pub(crate) struct StopShellParams {
     pub session_id: String,
 }
 
-// SHL#resizing-a-terminal
+// spec: SHL#resizing-a-terminal
 pub(crate) fn resize_shell(state: &Arc<OiState>, params: ResizeShellParams) -> HandlerResult {
     let id: SessionId = params
         .session_id
@@ -39,7 +39,7 @@ pub(crate) fn resize_shell(state: &Arc<OiState>, params: ResizeShellParams) -> H
     Ok(json!({}))
 }
 
-// SHL#listing-sessions
+// spec: SHL#listing-sessions
 pub(crate) fn list_shells(state: &Arc<OiState>, params: ListShellsParams) -> HandlerResult {
     let records = state.shells.list(params.app.as_deref());
     let list: Vec<serde_json::Value> = records
@@ -57,7 +57,7 @@ pub(crate) fn list_shells(state: &Arc<OiState>, params: ListShellsParams) -> Han
     Ok(json!({ "shells": list }))
 }
 
-// SHL#stopping-a-session
+// spec: SHL#stopping-a-session
 pub(crate) fn stop_shell(state: &Arc<OiState>, params: StopShellParams) -> HandlerResult {
     let id: SessionId = params
         .session_id

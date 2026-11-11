@@ -55,7 +55,7 @@ fn build_tls_config(
         .with_cert_resolver(resolver);
 
     tls_config.key_log = Arc::new(rustls::KeyLogFile::new());
-    // TRN#connection
+    // spec: TRN#connection
     tls_config.alpn_protocols = vec![OI_ALPN.to_vec()];
 
     Ok(tls_config)
@@ -69,7 +69,7 @@ fn extract_client_fp(conn: &quinn::Connection) -> Option<String> {
     certs.first().map(|c| keys::fingerprint(c.as_ref()))
 }
 
-// WIRE#actor-attribution
+// spec: WIRE#actor-attribution
 fn synthesise_actor(state: &OiState, fp: Option<&str>) -> Arc<Actor> {
     let id = fp.map(str::to_owned);
     let display = fp
@@ -95,10 +95,10 @@ fn publish_fingerprint(data_dir: &Path, fingerprint: &str) -> std::io::Result<()
     std::fs::write(data_dir.join("oi.fingerprint"), format!("{fingerprint}\n"))
 }
 
-// TRN#connection
-// TRN#server-identity
-// TRN#client-authentication
-// TRN#listen-addresses
+// spec: TRN#connection
+// spec: TRN#server-identity
+// spec: TRN#client-authentication
+// spec: TRN#listen-addresses
 pub async fn run(
     state: Arc<OiState>,
     addrs: &[SocketAddr],
@@ -200,10 +200,10 @@ async fn accept_loop(endpoint: Endpoint, state: Arc<OiState>, stream_semaphore: 
     }
 }
 
-// WIRE#control-requests
-// WIRE#stream-dispatch
-// WIRE#stream-limit
-// WIRE#port-forward-data
+// spec: WIRE#control-requests
+// spec: WIRE#stream-dispatch
+// spec: WIRE#stream-limit
+// spec: WIRE#port-forward-data
 async fn handle_connection(
     conn: quinn::Connection,
     state: Arc<OiState>,
@@ -294,13 +294,13 @@ async fn handle_connection(
         }
     }
 
-    // FWD#forward-lifetime — tear down all port forwards belonging to this connection.
+    // spec: FWD#forward-lifetime — tear down all port forwards belonging to this connection.
     let entries = state.forwards.lock().remove_by_conn(conn_id);
     for entry in entries {
         let _ = entry.stop_tx.send(true);
     }
 
-    // RLY#offer-lifetime — an offer lives no longer than the connection
+    // spec: RLY#offer-lifetime — an offer lives no longer than the connection
     // that made it. No actor on the event: nobody asked for this, the connection
     // simply went away.
     let ended = state.canopy.remove_by_conn(conn_id);
@@ -330,7 +330,7 @@ async fn handle_bidi_stream(
     state: Arc<OiState>,
     stream_semaphore: Arc<Semaphore>,
 ) {
-    // WIRE#stream-limit
+    // spec: WIRE#stream-limit
     let stream_permit = match stream_semaphore.try_acquire() {
         Ok(permit) => permit,
         Err(_) => {
@@ -370,7 +370,7 @@ async fn handle_bidi_stream(
 
     tracing::trace!(line = %String::from_utf8_lossy(&line).trim_end(), "bidi stream dispatch");
 
-    // WIRE#port-forward-data — forward data stream, identified by the "forward" key.
+    // spec: WIRE#port-forward-data — forward data stream, identified by the "forward" key.
     if let Some(forward_id) = first_obj
         .get("forward")
         .and_then(|v| v.as_str())
@@ -386,7 +386,7 @@ async fn handle_bidi_stream(
         .and_then(|m| m.as_str())
         .map(str::to_owned);
 
-    // EVT#subscription
+    // spec: EVT#subscription
     if maybe_method.as_deref() == Some("/events/subscribe") {
         drop(stream_permit);
         // Send the response on the bidi stream first.
@@ -398,7 +398,7 @@ async fn handle_bidi_stream(
         }
         let _ = send.finish();
 
-        // WIRE#subscription-requests
+        // spec: WIRE#subscription-requests
         // Open a server-initiated unidirectional stream and push events.
         let uni = match conn.open_uni().await {
             Ok(s) => s,
@@ -413,7 +413,7 @@ async fn handle_bidi_stream(
         return;
     }
 
-    // LOG#log-stream-request
+    // spec: LOG#log-stream-request
     if maybe_method.as_deref() == Some("/logs/stream") {
         drop(stream_permit);
         #[derive(serde::Deserialize)]
@@ -472,7 +472,7 @@ async fn handle_bidi_stream(
         }
         let _ = send.finish();
 
-        // WIRE#subscription-requests
+        // spec: WIRE#subscription-requests
         let uni = match conn.open_uni().await {
             Ok(s) => s,
             Err(e) => {
@@ -492,14 +492,14 @@ async fn handle_bidi_stream(
         return;
     }
 
-    // SHL#volume-shells
+    // spec: SHL#volume-shells
     if maybe_method.as_deref() == Some("/volumes/shell") {
         drop(stream_permit);
         open_volume_shell_session(conn, send, recv, leftover, line, state).await;
         return;
     }
 
-    // STS#infrastructure-status
+    // spec: STS#infrastructure-status
     if maybe_method.as_deref() == Some("/infra/status") {
         let result = super::handler::get_infra_status(&state).await;
         let response = match result {
@@ -516,7 +516,7 @@ async fn handle_bidi_stream(
         return;
     }
 
-    // FWD#requesting-a-forward — /forwards/start keeps the control stream open for the
+    // spec: FWD#requesting-a-forward — /forwards/start keeps the control stream open for the
     // duration of the forward; it must be handled outside the normal req/resp path.
     if maybe_method.as_deref() == Some("/forwards/start") {
         drop(stream_permit);
@@ -524,7 +524,7 @@ async fn handle_bidi_stream(
         return;
     }
 
-    // WIRE#actor-attribution — extract actor from request or synthesise from client identity.
+    // spec: WIRE#actor-attribution — extract actor from request or synthesise from client identity.
     let client_fp = extract_client_fp(&conn);
     let actor = first_obj
         .get("actor")
@@ -538,7 +538,7 @@ async fn handle_bidi_stream(
     let rest = recv.read_to_end(MAX_REQUEST_SIZE).await.unwrap_or_default();
     let buf = [line, rest].concat();
 
-    // RLY#offers — registering an offer needs the connection it arrived on,
+    // spec: RLY#offers — registering an offer needs the connection it arrived on,
     // so these are dispatched here rather than through the shared table. Done
     // after the actor is resolved so their events carry it like every other
     // request's do.
@@ -587,8 +587,8 @@ async fn read_json_line(
     Ok((buf[..total].to_vec(), Vec::new()))
 }
 
-// WIRE#subscription-requests
-// EVT#ordering
+// spec: WIRE#subscription-requests
+// spec: EVT#ordering
 async fn event_stream_task(
     mut send: quinn::SendStream,
     rx: tokio::sync::broadcast::Receiver<seedling_protocol::events::OiEvent>,
@@ -1091,7 +1091,7 @@ mod auth_tests {
         }
     }
 
-    // TRN#client-authentication
+    // spec: TRN#client-authentication
     // A hostile client presenting a key the daemon does not trust must not
     // obtain a usable connection, while a trusted key is admitted.
     #[tokio::test]

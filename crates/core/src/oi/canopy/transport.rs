@@ -28,7 +28,7 @@ impl OiCanopyTransport {
 
 #[async_trait]
 impl CanopyTransport for OiCanopyTransport {
-    // RLY#unavailability
+    // spec: RLY#unavailability
     async fn call(&self, request: CanopyRequest) -> Result<CanopyResponse> {
         if !self.canopy.is_enabled() {
             return Err(miette!("Canopy access is turned off for this instance"));
@@ -40,7 +40,7 @@ impl CanopyTransport for OiCanopyTransport {
             .current()
             .ok_or_else(|| miette!("no client is currently offering to reach Canopy"))?;
 
-        // RLY#relay-limits
+        // spec: RLY#relay-limits
         let _slot = self.canopy.acquire_slot().await;
 
         let (parts, body) = request.into_parts();

@@ -8,7 +8,7 @@
  *   // In a shell component: const stream = await router.register(id);
  */
 
-// WEB#shell-relay
+// spec: WEB#shell-relay
 export class UniRouter {
   private waiting = new Map<
     bigint,

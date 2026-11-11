@@ -6,7 +6,7 @@ use seedling_protocol::actor::Actor;
 use seedling_protocol::names::{AppName, ForwardId};
 use tokio::sync::{mpsc, watch};
 
-// FWD#requesting-a-forward
+// spec: FWD#requesting-a-forward
 #[derive(Debug, Clone, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ForwardProto {
@@ -32,7 +32,7 @@ impl fmt::Display for ForwardError {
 
 impl std::error::Error for ForwardError {}
 
-// FWD#status-messages
+// spec: FWD#status-messages
 /// A runtime condition to report on a forward's control stream.
 pub struct ForwardStatus {
     pub level: &'static str,
@@ -92,7 +92,7 @@ pub struct ForwardEntry {
     pub udp_dropped: u64,
 }
 
-// FWD#listing-forwards
+// spec: FWD#listing-forwards
 pub struct ForwardRecord {
     pub forward_id: ForwardId,
     pub app: AppName,
@@ -103,7 +103,7 @@ pub struct ForwardRecord {
     pub actor: Option<Actor>,
 }
 
-// FWD#concurrency
+// spec: FWD#concurrency
 pub struct ForwardRegistry {
     by_id: HashMap<ForwardId, ForwardEntry>,
     /// (conn_id, forward_key) → forward_id for every live forward: the key
@@ -236,7 +236,7 @@ impl ForwardRegistry {
             .map(|e| (e.target_addr, e.port, e.status_tx.clone()))
     }
 
-    // FWD#listing-forwards
+    // spec: FWD#listing-forwards
     pub fn list(&self, app: Option<&str>) -> Vec<ForwardRecord> {
         self.by_id
             .values()
@@ -253,7 +253,7 @@ impl ForwardRegistry {
             .collect()
     }
 
-    // FWD#forward-lifetime
+    // spec: FWD#forward-lifetime
     /// Remove all forwards for the given connection and return their entries so
     /// the caller can send the stop signal and drop `udp_tx`.
     pub fn remove_by_conn(&mut self, conn_id: usize) -> Vec<ForwardEntry> {
@@ -269,7 +269,7 @@ impl ForwardRegistry {
             .collect()
     }
 
-    // FWD#forward-lifetime
+    // spec: FWD#forward-lifetime
     /// Remove all forwards for `app` where `is_stale` returns `true` and return
     /// their entries so the caller can send stop signals.
     pub fn remove_stale_for_app(

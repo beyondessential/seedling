@@ -665,7 +665,7 @@ async fn cleanup_dynamic_resources(
         }
     }
 
-    // FLT#workload-faults FLT#workload-faults
+    // spec: FLT#workload-faults
     // Clear per-instance faults for every dynamic resource that we just
     // tore down. Without this, faults filed against short-lived Job
     // instances (image_pull_failed, container_start_failed, …) persist
@@ -794,7 +794,7 @@ pub fn spawn_accepted_operation(
     let is_install = action_name == "install";
 
     tokio::spawn(async move {
-        // WIRE#actor-attribution
+        // spec: WIRE#actor-attribution
         let op_ctx = event_tx.operation(
             app_name.clone(),
             action_name.clone(),

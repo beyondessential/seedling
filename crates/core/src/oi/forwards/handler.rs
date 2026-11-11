@@ -17,7 +17,7 @@ pub(crate) struct StopForwardParams {
     pub forward_id: String,
 }
 
-// FWD#listing-forwards
+// spec: FWD#listing-forwards
 pub(crate) fn list_forwards(state: &Arc<OiState>, params: ListForwardsParams) -> HandlerResult {
     let app = params.app.as_deref();
     let records = state.forwards.lock().list(app);
@@ -38,7 +38,7 @@ pub(crate) fn list_forwards(state: &Arc<OiState>, params: ListForwardsParams) ->
     Ok(json!({ "forwards": list }))
 }
 
-// FWD#stopping-a-forward
+// spec: FWD#stopping-a-forward
 pub(crate) fn stop_forward(state: &Arc<OiState>, params: StopForwardParams) -> HandlerResult {
     let id_str = &params.forward_id;
     let forward_id: ForwardId = id_str

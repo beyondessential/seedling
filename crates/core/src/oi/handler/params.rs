@@ -273,9 +273,8 @@ pub(crate) fn schedule_on_change(
     }
 }
 
-// PRM#parameter-storage
-// PRM#parameter-set
-// PRM#parameter-storage
+// spec: PRM#parameter-storage
+// spec: PRM#parameter-set
 // spec: PRM#parameter-storage
 // spec: PARAM#change-handlers
 pub(crate) fn set_param(
@@ -384,7 +383,7 @@ pub(crate) fn set_param(
     Ok(json!({ "schedule": schedule, "generation": generation }))
 }
 
-// PRM#parameter-unset
+// spec: PRM#parameter-unset
 // spec: PARAM#change-handlers
 pub(crate) fn unset_param(
     state: &OiState,

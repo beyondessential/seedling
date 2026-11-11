@@ -21,7 +21,7 @@ pub type WtTokens = Mutex<std::collections::HashMap<String, WtTokenEntry>>;
 /// Single-use WT tokens are valid for 30 seconds to bridge POST /connect → WT handshake.
 pub const WT_TOKEN_LIFETIME: Duration = Duration::from_secs(30);
 
-// WEB#session-establishment
+// spec: WEB#session-establishment
 pub fn issue_wt_token(tokens: &WtTokens, actor: Arc<Actor>) -> String {
     let token = uuid::Uuid::new_v4().to_string();
     let expires = Instant::now() + WT_TOKEN_LIFETIME;
@@ -40,7 +40,7 @@ pub fn issue_wt_token(tokens: &WtTokens, actor: Arc<Actor>) -> String {
 }
 
 /// Validates and consumes a single-use WT token. Returns the associated actor or None.
-// WEB#session-establishment
+// spec: WEB#session-establishment
 pub fn consume_wt_token(tokens: &WtTokens, token: &str) -> Option<Arc<Actor>> {
     let mut map = tokens.lock();
     let entry = map.get_mut(token)?;

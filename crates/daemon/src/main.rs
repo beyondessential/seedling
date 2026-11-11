@@ -86,7 +86,7 @@ struct Args {
     #[arg(long)]
     stub_backends: bool,
 
-    // TRN#listen-addresses
+    // spec: TRN#listen-addresses
     /// Network interface(s) to bind the OI on (comma-separated names).
     /// All IPv4 and IPv6 addresses of each interface are used.
     /// Failure to resolve a named interface is fatal.
@@ -1104,7 +1104,7 @@ async fn main() {
         });
     }
 
-    // TRN#listen-addresses
+    // spec: TRN#listen-addresses
     let oi_addrs = resolve_oi_addrs(&args.interface, &args.listen, args.port);
     let (_fingerprint, oi_endpoints) = oi::run(
         Arc::clone(&oi_state),
@@ -1159,7 +1159,7 @@ async fn main() {
 /// both stay on the books rather than being written off as a teardown that did
 /// not happen. The next start finds them again.
 // spec: SUSP#abandoned-replay
-// FLT#workload-faults FLT#workload-faults
+// spec: FLT#workload-faults
 fn tear_down_dynamic_resources(
     driver: &Arc<seedling_core::system::System>,
     db: &DbHandle,
@@ -1579,7 +1579,7 @@ fn revert_install_and_fault(state: &Arc<OiState>, app_name: &AppName) {
     }
 }
 
-// TRN#listen-addresses
+// spec: TRN#listen-addresses
 fn resolve_oi_addrs(
     interfaces: &[String],
     explicit: &[std::net::SocketAddr],

@@ -391,7 +391,7 @@ uuid_newtype! {
 uuid_newtype! {
     /// Identifier for a registration by a client offering to carry Canopy
     /// requests. Ephemeral: it lives no longer than the connection that made it.
-    // RLY#offers
+    // spec: RLY#offers
     OfferId
 }
 

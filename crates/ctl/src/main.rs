@@ -48,7 +48,7 @@ struct Cli {
     #[arg(long, conflicts_with = "fingerprint")]
     trust_any: bool,
 
-    // CLI#client-identity-key
+    // spec: CLI#client-identity-key
     /// Path to the client identity key file. Defaults to a per-user state
     /// directory. Override to use a distinct identity, or to pre-generate a
     /// key at a chosen path (e.g. with `client fingerprint`) so it can be
@@ -246,7 +246,7 @@ async fn main() {
         return;
     }
 
-    // WIRE#actor-attribution
+    // spec: WIRE#actor-attribution
     let actor = {
         let username = whoami::username().unwrap_or_else(|_| String::from("unknown"));
         let hostname = whoami::devicename().unwrap_or_else(|_| String::from("unknown"));

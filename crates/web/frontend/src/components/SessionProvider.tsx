@@ -277,7 +277,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
   }, [session, doReconnect]);
 
   // Start the uni-stream router pump for the duration of a session.
-  // WEB#shell-relay
+  // spec: WEB#shell-relay
   useEffect(() => {
     if (!session) {
       setUniRouter(null);

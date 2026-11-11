@@ -160,9 +160,9 @@ pub fn dispatch_connection_bound(
     }
 
     let result = (|| match req.method.as_str() {
-        // RLY#offers
+        // spec: RLY#offers
         "/canopy/offer" => canopy::offer(state, conn, parse_params(req.params)?, ctx),
-        // RLY#offer-lifetime
+        // spec: RLY#offer-lifetime
         "/canopy/withdraw" => canopy::withdraw(state, conn, parse_params(req.params)?, ctx),
         other => Err(OiError::new(
             ErrorCode::NotFound,
@@ -184,105 +184,105 @@ fn parse_and_dispatch(state: &Arc<OiState>, buf: &[u8], ctx: &RequestCtx) -> Han
         .map_err(|e| OiError::new(ErrorCode::NotFound, format!("invalid request: {e}")))?;
 
     let result = match req.method.as_str() {
-        // STS#liveness
+        // spec: STS#liveness
         "/server/ping" => status::ping(),
-        // STS#server-status
+        // spec: STS#server-status
         "/server/status" => status::get_status(state),
-        // APPS#listing
+        // spec: APPS#listing
         "/apps/list" => apps::list_apps(state),
-        // APPS#description
+        // spec: APPS#description
         "/apps/show" => apps::describe_app(state, parse_params(req.params)?),
         "/apps/create" => apps::register_app(state, parse_params(req.params)?, ctx),
         "/apps/remove" => apps::deregister_app(state, parse_params(req.params)?, ctx),
         "/apps/uninstall" => apps::uninstall_app(state, parse_params(req.params)?),
         "/apps/update" => apps::update_app(state, parse_params(req.params)?, ctx),
-        // CTL#scaling
+        // spec: CTL#scaling
         "/apps/scale" => apps::scale_app(state, parse_params(req.params)?, ctx),
-        // CTL#app-priority
+        // spec: CTL#app-priority
         "/apps/priority" => apps::set_priority(state, parse_params(req.params)?, ctx),
-        // CTL#deployment-restart
+        // spec: CTL#deployment-restart
         "/apps/restart" => apps::restart_deployment(state, parse_params(req.params)?, ctx),
-        // CTL#resource-stop
+        // spec: CTL#resource-stop
         "/apps/resource/stop" => apps::stop_resource(state, parse_params(req.params)?, ctx),
-        // CTL#resource-stop
+        // spec: CTL#resource-stop
         "/apps/resource/unstop" => apps::unstop_resource(state, parse_params(req.params)?, ctx),
-        // CTL#resource-stop
+        // spec: CTL#resource-stop
         "/apps/unstop" => apps::unstop_all_resources(state, parse_params(req.params)?, ctx),
-        // APPS#definition-retrieval
+        // spec: APPS#definition-retrieval
         "/apps/script" => apps::get_app_script(state, parse_params(req.params)?),
-        // APPS#definition-retrieval
+        // spec: APPS#definition-retrieval
         "/apps/bundle" => apps::get_app_bundle(state, parse_params(req.params)?),
-        // APPS#generation-history
+        // spec: APPS#generation-history
         "/apps/generations" => apps::list_generations(state, parse_params(req.params)?),
-        // PRM#change-planning
+        // spec: PRM#change-planning
         "/apps/plan" => apps::dry_run_plan(state, parse_params(req.params)?, ctx),
-        // PRM#parameter-set
+        // spec: PRM#parameter-set
         "/apps/params/set" => params::set_param(state, parse_params(req.params)?, ctx),
-        // PRM#parameter-unset
+        // spec: PRM#parameter-unset
         "/apps/params/unset" => params::unset_param(state, parse_params(req.params)?, ctx),
-        // ACI#invoking-an-action
+        // spec: ACI#invoking-an-action
         "/apps/action/invoke" => actions::invoke_action(state, parse_params(req.params)?, ctx),
-        // ACI#cancellation
+        // spec: ACI#cancellation
         "/apps/action/cancel" => actions::cancel_action(state, parse_params(req.params)?),
-        // ACI#install
+        // spec: ACI#install
         "/apps/install/invoke" => {
             actions::install::invoke_install(state, parse_params(req.params)?, ctx)
         }
-        // KEY#listing-keys
+        // spec: KEY#listing-keys
         "/keys/list" => key_mgmt::list_keys(state),
-        // KEY#authorising-a-key
+        // spec: KEY#authorising-a-key
         "/keys/authorise" => key_mgmt::authorize_key(state, parse_params(req.params)?),
-        // KEY#revoking-a-key
+        // spec: KEY#revoking-a-key
         "/keys/revoke" => key_mgmt::revoke_key(state, parse_params(req.params)?),
-        // SHL#resizing-a-terminal
+        // spec: SHL#resizing-a-terminal
         "/shells/resize" => super::shells::resize_shell(state, parse_params(req.params)?),
-        // SHL#listing-sessions
+        // spec: SHL#listing-sessions
         "/shells/list" => super::shells::list_shells(state, parse_params(req.params)?),
-        // SHL#stopping-a-session
+        // spec: SHL#stopping-a-session
         "/shells/stop" => super::shells::stop_shell(state, parse_params(req.params)?),
-        // FWD#listing-forwards
+        // spec: FWD#listing-forwards
         "/forwards/list" => {
             super::forwards::handler::list_forwards(state, parse_params(req.params)?)
         }
-        // FWD#stopping-a-forward
+        // spec: FWD#stopping-a-forward
         "/forwards/stop" => {
             super::forwards::handler::stop_forward(state, parse_params(req.params)?)
         }
-        // FLTS#listing-faults
+        // spec: FLTS#listing-faults
         "/faults/list" => faults::list_faults(state, parse_params(req.params)?),
-        // FLTS#clearing-faults
+        // spec: FLTS#clearing-faults
         "/faults/clear" => faults::clear_app_faults(state, parse_params(req.params)?),
-        // FLTS#listing-restarts
+        // spec: FLTS#listing-restarts
         "/restarts/list" => restarts::list_restarts(state, parse_params(req.params)?),
-        // FLTS#crash-loop-settings
+        // spec: FLTS#crash-loop-settings
         "/restarts/settings/get" => restarts::get_settings(state),
-        // FLTS#crash-loop-settings
+        // spec: FLTS#crash-loop-settings
         "/restarts/settings/set" => restarts::set_settings(state, parse_params(req.params)?),
-        // RLY#status
+        // spec: RLY#status
         "/canopy/status" => canopy::status(state),
-        // RLY#settings
+        // spec: RLY#settings
         "/canopy/settings/get" => canopy::get_settings(state),
-        // RLY#settings
+        // spec: RLY#settings
         "/canopy/settings/set" => canopy::set_settings(state, parse_params(req.params)?, ctx),
-        // IMGM#registry-allowlist
+        // spec: IMGM#registry-allowlist
         "/registries/list" => registries::list_registries(state),
-        // IMGM#registry-allowlist
+        // spec: IMGM#registry-allowlist
         "/registries/add" => registries::add_registry(state, parse_params(req.params)?),
-        // IMGM#registry-allowlist
+        // spec: IMGM#registry-allowlist
         "/registries/remove" => registries::remove_registry(state, parse_params(req.params)?),
-        // DEFN#repository-tags
+        // spec: DEFN#repository-tags
         "/registries/tags" => registries::list_tags(state, parse_params(req.params)?),
-        // IMGM#listing-images
+        // spec: IMGM#listing-images
         "/images/list" => images::list_images(state),
-        // IMGM#pulling-an-image
+        // spec: IMGM#pulling-an-image
         "/images/pull" => images::pull_image(state, parse_params(req.params)?),
-        // IMGM#removing-an-image
+        // spec: IMGM#removing-an-image
         "/images/remove" => images::remove_image(state, parse_params(req.params)?),
-        // IMGM#image-pins
+        // spec: IMGM#image-pins
         "/images/pins/list" => images::list_pins(state, parse_params(req.params)?),
-        // IMGM#image-pins
+        // spec: IMGM#image-pins
         "/images/pins/clear" => images::clear_pins(state, parse_params(req.params)?),
-        // IMGM#image-discovery
+        // spec: IMGM#image-discovery
         "/apps/images/discover" => images::discover_images(state, parse_params(req.params)?),
         "/volumes/held/list" => volumes::list_held(state),
         "/volumes/held/delete" => volumes::delete_held(state, parse_params(req.params)?, ctx),
@@ -372,69 +372,69 @@ fn parse_and_dispatch(state: &Arc<OiState>, buf: &[u8], ctx: &RequestCtx) -> Han
         "/ingresses/site/discovery/status" => ingresses::discovery_status(state),
         // spec: SITE#tailscale-discovery
         "/ingresses/site/discovery/refresh" => ingresses::discovery_refresh(state),
-        // TPL#creation
+        // spec: TPL#creation
         "/templates/create" => templates::create_template(state, parse_params(req.params)?, ctx),
-        // TPL#listing
+        // spec: TPL#listing
         "/templates/list" => templates::list_templates(state),
-        // TPL#inspection
+        // spec: TPL#inspection
         "/templates/show" => templates::show_template(state, parse_params(req.params)?),
-        // TPL#update
+        // spec: TPL#update
         "/templates/update" => templates::update_template(state, parse_params(req.params)?, ctx),
-        // TPL#removal
+        // spec: TPL#removal
         "/templates/remove" => templates::remove_template(state, parse_params(req.params)?, ctx),
-        // TPL#preview
+        // spec: TPL#preview
         "/templates/preview" => templates::preview_template(state, parse_params(req.params)?, ctx),
-        // TPL#instantiation
+        // spec: TPL#instantiation
         "/templates/instantiate" => {
             templates::instantiate_template(state, parse_params(req.params)?, ctx)
         }
-        // TLSM#dns-providers
+        // spec: TLSM#dns-providers
         "/tls/dns-providers/list" => tls::list_dns_providers(state),
-        // TLSM#dns-providers
+        // spec: TLSM#dns-providers
         "/tls/dns-providers/upsert" => tls::upsert_dns_provider(state, parse_params(req.params)?),
-        // TLSM#dns-providers
+        // spec: TLSM#dns-providers
         "/tls/dns-providers/delete" => tls::delete_dns_provider(state, parse_params(req.params)?),
-        // TLSM#policies
+        // spec: TLSM#policies
         "/tls/policies/list" => tls::list_policies(state),
-        // TLSM#policies
+        // spec: TLSM#policies
         "/tls/policies/set-acme-dns" => tls::set_policy_acme_dns(state, parse_params(req.params)?),
-        // TLSM#policies
+        // spec: TLSM#policies
         "/tls/policies/set-canopy" => tls::set_policy_canopy(state, parse_params(req.params)?),
-        // TLSM#policies
+        // spec: TLSM#policies
         "/tls/policies/clear" => tls::clear_policy(state, parse_params(req.params)?),
-        // TLSM#certificates
+        // spec: TLSM#certificates
         "/tls/certificates/list" => tls::list_certificates(state),
-        // TLSM#certificates
+        // spec: TLSM#certificates
         "/tls/certificates/upload-manual" => tls::upload_manual(state, parse_params(req.params)?),
-        // TLSM#certificates
+        // spec: TLSM#certificates
         "/tls/certificates/delete" => tls::delete_certificate(state, parse_params(req.params)?),
-        // TLSM#certificate-signing-requests
+        // spec: TLSM#certificate-signing-requests
         "/tls/certificates/csr/begin" => tls::csr_begin(state, parse_params(req.params)?),
-        // TLSM#certificate-signing-requests
+        // spec: TLSM#certificate-signing-requests
         "/tls/certificates/csr/get" => tls::csr_get(state, parse_params(req.params)?),
-        // TLSM#certificate-signing-requests
+        // spec: TLSM#certificate-signing-requests
         "/tls/certificates/csr/upload-cert" => {
             tls::csr_upload_cert(state, parse_params(req.params)?)
         }
-        // TLSM#certificate-signing-requests
+        // spec: TLSM#certificate-signing-requests
         "/tls/certificates/csr/cancel" => tls::csr_cancel(state, parse_params(req.params)?),
-        // TLSM#operator-driven-issuance
+        // spec: TLSM#operator-driven-issuance
         "/tls/certificates/issue-acme-dns" => tls::issue_acme_dns(state, parse_params(req.params)?),
-        // TLSM#operator-driven-issuance
+        // spec: TLSM#operator-driven-issuance
         "/tls/certificates/retry" => tls::retry(state, parse_params(req.params)?),
-        // TLSM#settings
+        // spec: TLSM#settings
         "/tls/settings/get" => tls::get_settings(state),
-        // TLSM#settings
+        // spec: TLSM#settings
         "/tls/settings/set" => tls::set_settings(state, parse_params(req.params)?),
-        // TLSM#hostname-view
+        // spec: TLSM#hostname-view
         "/tls/hostnames/list" => tls::list_hostnames(state, parse_params(req.params)?),
-        // TLSM#issuance-attempts
+        // spec: TLSM#issuance-attempts
         "/tls/certificates/attempts/list" => tls::list_attempts(state, parse_params(req.params)?),
-        // TLSM#retry-blocks
+        // spec: TLSM#retry-blocks
         "/tls/retry-blocks/list" => tls::list_retry_blocks(state),
-        // TLSM#retry-blocks
+        // spec: TLSM#retry-blocks
         "/tls/retry-blocks/set" => tls::set_retry_block(state, parse_params(req.params)?),
-        // TLSM#retry-blocks
+        // spec: TLSM#retry-blocks
         "/tls/retry-blocks/clear" => tls::clear_retry_block(state, parse_params(req.params)?),
         other => Err(OiError::not_found(format!("unknown method: {other}"))),
     };

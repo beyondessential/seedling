@@ -35,7 +35,7 @@ pub(crate) fn test_peer() -> std::sync::Arc<dyn RelayPeer> {
     std::sync::Arc::new(peer::NullPeer)
 }
 
-// RLY#offers
+// spec: RLY#offers
 /// A live registration by a client offering to carry Canopy requests.
 #[derive(Clone)]
 pub struct Offer {
@@ -55,7 +55,7 @@ pub struct Offer {
     seq: u64,
 }
 
-// RLY#offer-lifetime
+// spec: RLY#offer-lifetime
 /// Why an offer ended, reported on the `CanopyWithdrawn` event.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum WithdrawReason {
@@ -83,7 +83,7 @@ pub struct CanopyState {
     /// conn_id → offer ids, for bulk teardown when a connection closes.
     conn_to_ids: Mutex<HashMap<usize, Vec<OfferId>>>,
     next_seq: AtomicU64,
-    // RLY#relay-limits
+    // spec: RLY#relay-limits
     /// Bounds how many relayed requests may be in flight at once. Seedling's
     /// own use is one report on a timer; the bound is here to contain a future
     /// consumer rather than to shape today's traffic.
@@ -93,7 +93,7 @@ pub struct CanopyState {
     /// database. The database remains the source of truth across restarts;
     /// this is loaded from it at startup and updated alongside it.
     enabled: AtomicBool,
-    // RLY#status
+    // spec: RLY#status
     /// Outcome of the most recent report attempt, for the status surface. Not
     /// persisted: after a restart there genuinely has been no attempt yet, and
     /// reporting a stale one as current would be worse than reporting none.
@@ -124,7 +124,7 @@ impl CanopyState {
         }
     }
 
-    // RLY#status
+    // spec: RLY#status
     /// The last hostname a report tick asked Canopy about, so the next one
     /// starts after it rather than at the front of the list again.
     pub fn asked_through(&self) -> Option<String> {
@@ -155,7 +155,7 @@ impl CanopyState {
         self.enabled.store(enabled, Ordering::Relaxed);
     }
 
-    // RLY#offers
+    // spec: RLY#offers
     /// Register an offer and return its identifier.
     pub fn offer(
         &self,
@@ -184,7 +184,7 @@ impl CanopyState {
         offer
     }
 
-    // RLY#offer-lifetime
+    // spec: RLY#offer-lifetime
     /// End an offer made by `conn_id`. Returns `false` when no such offer
     /// exists, or when it belongs to a different connection — one connection
     /// must not be able to revoke another's offer.
@@ -201,7 +201,7 @@ impl CanopyState {
         }
     }
 
-    // RLY#offer-lifetime
+    // spec: RLY#offer-lifetime
     /// Drop every offer made by a connection, for use when it closes.
     pub fn remove_by_conn(&self, conn_id: usize) -> Vec<Offer> {
         let ids = self.conn_to_ids.lock().remove(&conn_id).unwrap_or_default();
@@ -211,7 +211,7 @@ impl CanopyState {
             .collect()
     }
 
-    // RLY#disabled-access
+    // spec: RLY#disabled-access
     /// Drop every offer, for use when Canopy access is turned off.
     ///
     /// Disabling takes effect at once rather than at the offering clients' next
@@ -225,7 +225,7 @@ impl CanopyState {
         self.offers.lock().drain().map(|(_, o)| o).collect()
     }
 
-    // RLY#offer-selection
+    // spec: RLY#offer-selection
     /// The offer that would serve the next request: the most recently
     /// registered one still live.
     ///
@@ -244,7 +244,7 @@ impl CanopyState {
         self.offers.lock().len()
     }
 
-    // RLY#relay-limits
+    // spec: RLY#relay-limits
     /// Wait for an in-flight slot. The permit is released when dropped.
     pub async fn acquire_slot(&self) -> tokio::sync::SemaphorePermit<'_> {
         self.inflight

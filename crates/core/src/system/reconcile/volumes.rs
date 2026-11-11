@@ -41,7 +41,7 @@ async fn process_one_volume(
         remove_failure: None,
     };
 
-    // OBS#volumes
+    // spec: OBS#volumes
     let facts = match observer.observe(&dr.instance, &dr.definition).await {
         Ok(f) => f,
         Err(e) => {
@@ -122,7 +122,7 @@ async fn process_one_volume(
             create_op.complete(&create_outcome);
         }
         LifecycleState::Ready if !volume_present => {
-            // ACTU#volume-creation-and-seeding
+            // spec: ACTU#volume-creation-and-seeding
             let op = autonomous_ops::record(
                 db,
                 &dr.instance,
@@ -148,7 +148,7 @@ async fn process_one_volume(
             result
                 .observations
                 .push((dr.instance.clone(), "stop_sent", json!({})));
-            // ACTU#volume-removal
+            // spec: ACTU#volume-removal
             let op = autonomous_ops::record(
                 db,
                 &dr.instance,

@@ -156,7 +156,7 @@ fn select_pool(entries: Vec<TaggedBackend>) -> (Vec<(Ipv6Addr, u16)>, bool) {
     }
 }
 
-// AUTO#ingress-and-network-repair
+// spec: AUTO#ingress-and-network-repair
 pub(super) fn build_ingress_rules(
     snapshot: &AppDef,
     caddy_ip: Ipv6Addr,

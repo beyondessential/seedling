@@ -1,13 +1,14 @@
 use serde::Serialize;
 
-// WIRE#error-codes
+// spec: WIRE#error-codes
 #[derive(Debug, Clone, Copy, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ErrorCode {
     NotFound,
     NotInstalled,
     AlreadyInstalled,
-    // WIRE#error-codes InstallInProgress distinguishes "install is running
+    // spec: WIRE#error-codes
+    // InstallInProgress distinguishes "install is running
     // right now" from "install already succeeded (or uninstall is in flight)".
     InstallInProgress,
     OperationInProgress,

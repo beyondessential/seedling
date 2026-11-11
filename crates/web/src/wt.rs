@@ -33,7 +33,7 @@ pub fn bind_wt_endpoint(addr: SocketAddr, state: &AppState) -> std::io::Result<E
 
 /// Serve WebTransport sessions on a bound endpoint, presenting the new
 /// certificate to new sessions whenever `rotation_rx` fires.
-// WEB#request-relay
+// spec: WEB#request-relay
 pub async fn run_wt_server(
     endpoint: Endpoint<Server>,
     addr: SocketAddr,
@@ -81,7 +81,7 @@ async fn handle_incoming(incoming: wtransport::endpoint::IncomingSession, state:
         return;
     }
 
-    // WEB#session-establishment — resolve actor from the single-use token embedded in the URL.
+    // spec: WEB#session-establishment — resolve actor from the single-use token embedded in the URL.
     let token = extract_query_param(&path, "t");
     let actor = match token.and_then(|t| state::consume_wt_token(&state.wt_tokens, &t)) {
         Some(a) => a,
@@ -138,10 +138,10 @@ async fn handle_incoming(incoming: wtransport::endpoint::IncomingSession, state:
         ))
         .await;
 
-    // WEB#request-relay
-    // UI#event-feed
-    // UI#operator-capabilities
-    // WEB#shell-relay
+    // spec: WEB#request-relay
+    // spec: UI#event-feed
+    // spec: UI#operator-capabilities
+    // spec: WEB#shell-relay
     while let Ok((mut wt_send, wt_recv)) = conn.accept_bi().await {
         let state3 = state.clone();
         let actor2 = Arc::clone(&actor);
@@ -234,7 +234,7 @@ async fn handle_incoming(incoming: wtransport::endpoint::IncomingSession, state:
             // server-initiated uni streams (stdout, stderr) that must be
             // forwarded as WT uni streams with an 8-byte BE stream ID prefix so
             // the browser can demux them.
-            // WEB#shell-relay UI#shells
+            // spec: WEB#shell-relay, UI#shells
             if peeked.method == "/shells/start" || peeked.method == "/volumes/shell" {
                 crate::shell::handle_shell_start(state3, conn2, wt_send, peeked).await;
                 return;
@@ -380,7 +380,7 @@ pub async fn run_session_reaper(
 }
 
 /// Background task: check for cert rotation every hour.
-// WEB#webtransport-certificate
+// spec: WEB#webtransport-certificate
 pub async fn run_cert_rotation(
     cert_store: Arc<parking_lot::RwLock<crate::wt_cert::CertStore>>,
     rotation_tx: watch::Sender<()>,

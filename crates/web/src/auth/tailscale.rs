@@ -4,7 +4,7 @@ use seedling_protocol::actor::Actor;
 const HEADER_LOGIN: &str = "tailscale-user-login";
 const HEADER_NAME: &str = "tailscale-user-name";
 
-// WEB#tailscale-identity
+// spec: WEB#tailscale-identity
 pub fn extract_actor(headers: &HeaderMap) -> Option<Actor> {
     let id = headers.get(HEADER_LOGIN)?.to_str().ok()?.to_owned();
     let display = headers

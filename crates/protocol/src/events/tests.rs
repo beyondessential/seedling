@@ -54,7 +54,6 @@ fn emit_without_subscribers_is_dropped_silently() {
 }
 
 // spec: EVT#event-types
-// spec: EVT#event-types
 #[test]
 fn app_lifecycle_events_wire_shape() {
     let app = app();

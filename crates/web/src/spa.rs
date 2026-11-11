@@ -10,8 +10,8 @@ use crate::state::AppState;
 #[folder = "frontend/dist/"]
 struct Assets;
 
-// WEB#console-delivery
-// UI#operator-capabilities
+// spec: WEB#console-delivery
+// spec: UI#operator-capabilities
 pub async fn handler(State(state): State<AppState>, req: Request<Body>) -> impl IntoResponse {
     if let Some(port) = state.vite_port {
         return vite_proxy(port, req.uri()).await;

@@ -42,7 +42,7 @@ impl std::fmt::Display for RelayFailure {
 
 impl std::error::Error for RelayFailure {}
 
-// RLY#relay-streams
+// spec: RLY#relay-streams
 /// Relay one request through `offer` and return whatever Canopy answered.
 ///
 /// Any status is a success here, including a non-2xx one: individual endpoints
@@ -73,7 +73,7 @@ pub async fn relay_request(
         .map_err(|e| RelayFailure::Peer(format!("cannot half-close the relay stream: {e}")))?;
     drop(send);
 
-    // RLY#relay-limits
+    // spec: RLY#relay-limits
     // On a timeout the read future is dropped, which drops the stream's read
     // half, which is how the peer is told to stop sending: an answer arriving
     // later has nowhere to go.
@@ -89,7 +89,7 @@ pub async fn relay_request(
             headers,
             body,
         }),
-        // RLY#relay-errors
+        // spec: RLY#relay-errors
         RelayResponse::Error { error } => Err(RelayFailure::Client(error)),
     }
 }

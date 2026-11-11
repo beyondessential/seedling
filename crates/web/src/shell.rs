@@ -84,8 +84,8 @@ impl Drop for ShellSessionGuard {
     }
 }
 
-// UI#shells
-// WEB#shell-relay
+// spec: UI#shells
+// spec: WEB#shell-relay
 /// Handle a `/shells/start` request from the browser.
 ///
 /// Opens the shell session on the daemon using the shared connection, wires up

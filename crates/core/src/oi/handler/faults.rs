@@ -11,7 +11,7 @@ pub(crate) struct ListFaultsParams {
     pub app: Option<AppName>,
 }
 
-// FLTS#listing-faults
+// spec: FLTS#listing-faults
 pub(crate) fn list_faults(state: &OiState, params: ListFaultsParams) -> HandlerResult {
     let app = params.app.clone();
     let records = state
@@ -41,7 +41,7 @@ pub(crate) struct ClearAppFaultsParams {
     pub app: AppName,
 }
 
-// FLTS#clearing-faults
+// spec: FLTS#clearing-faults
 /// Clear every active fault for the given app. Returns the number of faults
 /// cleared. The runtime never re-files cleared faults that were derived
 /// observationally (e.g. `image_pull_failed`) — they will be re-filed on the

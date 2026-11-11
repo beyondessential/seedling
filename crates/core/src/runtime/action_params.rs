@@ -86,7 +86,6 @@ impl std::fmt::Display for ParamValidationError {
 impl std::error::Error for ParamValidationError {}
 
 // spec: ACN#param-delivery
-// spec: ACN#param-delivery
 /// Reject any param key ending in a reserved suffix.
 pub fn reject_reserved_keys(
     params: &serde_json::Map<String, serde_json::Value>,

@@ -294,7 +294,7 @@ impl System {
     }
 }
 
-// INFRA#host-prefix-derivation
+// spec: INFRA#host-prefix-derivation
 /// Derive the node's /48 ULA prefix from `/etc/machine-id`.
 ///
 /// The raw machine-id content (whitespace-trimmed) is hashed with SHA-256;
@@ -336,7 +336,7 @@ pub fn node_prefix_from_machine_id() -> std::io::Result<Ipv6Net> {
 pub type SystemSetup = (Arc<System>, Arc<tokio::sync::RwLock<reqwest::Client>>);
 
 impl System {
-    // PRX#proxy-lifecycle
+    // spec: PRX#proxy-lifecycle
     /// Initialize all system backends, ensure Caddy is running, and return the
     /// assembled `System` handle alongside the Caddy admin client handle.
     ///

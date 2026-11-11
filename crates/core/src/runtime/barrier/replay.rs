@@ -381,7 +381,7 @@ pub fn run_operation<W: WorldStateOracle + 'static>(
             d.name = app_name.clone();
             d
         });
-        // PRM#parameter-storage — restore persisted param values so is_set()/value()
+        // spec: PRM#parameter-storage — restore persisted param values so is_set()/value()
         // return correct results when the script is re-evaluated for closure recovery.
         *fresh_app.stored.lock() = app.stored.lock().clone();
         begin_closure_capture();

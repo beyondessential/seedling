@@ -18,8 +18,8 @@ use sha2::{Digest, Sha256};
 
 /// Load an Ed25519 signing key from a PKCS#8 DER file, or generate and
 /// persist one if the file does not exist.
-// INFRA#file-permissions
-// CLI#client-identity-key
+// spec: INFRA#file-permissions
+// spec: CLI#client-identity-key
 pub fn load_or_generate(path: &Path) -> io::Result<SigningKey> {
     if path.exists() {
         #[cfg(unix)]
