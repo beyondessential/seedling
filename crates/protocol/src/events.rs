@@ -27,7 +27,7 @@ pub struct AppUpdatedParam {
 #[derive(Debug, Clone, Serialize)]
 #[serde(tag = "type")]
 pub enum OiEvent {
-    // spec: AUD#generations
+    // spec: EVT#event-types
     AppRegistered {
         timestamp: Timestamp,
         app: AppName,
@@ -41,7 +41,6 @@ pub enum OiEvent {
         #[serde(skip_serializing_if = "Option::is_none")]
         actor: Option<Arc<Actor>>,
     },
-    // spec: AUD#generations
     // spec: EVT#event-types
     AppUpdated {
         timestamp: Timestamp,
@@ -69,7 +68,7 @@ pub enum OiEvent {
         #[serde(skip_serializing_if = "Option::is_none")]
         actor: Option<Arc<Actor>>,
     },
-    // spec: AUD#generations
+    // spec: EVT#event-types
     // spec: PRM#parameter-storage
     ParamSet {
         timestamp: Timestamp,
@@ -86,7 +85,7 @@ pub enum OiEvent {
         #[serde(skip_serializing_if = "Option::is_none")]
         actor: Option<Arc<Actor>>,
     },
-    // spec: AUD#generations
+    // spec: EVT#event-types
     // spec: PRM#parameter-storage
     ParamUnset {
         timestamp: Timestamp,

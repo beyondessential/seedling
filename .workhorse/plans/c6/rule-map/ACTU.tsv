@@ -7,9 +7,9 @@ r/actuate.container.journal-metadata	ACTU#container-logs
 r/actuate.infra.journal-metadata	ACTU#container-logs
 r/actuate.breadcrumb	ACTU#breadcrumbs
 r/actuate.breadcrumb.replay	ACTU#breadcrumbs
-r/actuate.ingress.plaintext	ACTU#plaintext-ingresses
-r/actuate.ingress.port-scope	ACTU#port-scope
-r/actuate.ingress.warm-certs	ACTU#certificate-warming
+r/actuate.ingress.plaintext	PRX#plaintext-ingresses
+r/actuate.ingress.port-scope	PRX#port-scope
+r/actuate.ingress.warm-certs	RT#certificate-warming
 r/volume.export.host-path	ACTU#exported-volumes
 r/actuate.volume.start	ACTU#volume-creation-and-seeding
 r/actuate.volume.tmpfs	ACTU#volume-storage

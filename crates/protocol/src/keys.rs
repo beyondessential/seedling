@@ -19,7 +19,7 @@ use sha2::{Digest, Sha256};
 /// Load an Ed25519 signing key from a PKCS#8 DER file, or generate and
 /// persist one if the file does not exist.
 // INFRA#file-permissions
-// KEY#client-identity-key
+// CLI#client-identity-key
 pub fn load_or_generate(path: &Path) -> io::Result<SigningKey> {
     if path.exists() {
         #[cfg(unix)]
@@ -257,7 +257,7 @@ mod tests {
     use super::*;
 
     // spec: INFRA#file-permissions
-    // spec: KEY#client-identity-key
+    // spec: CLI#client-identity-key
     #[test]
     fn load_or_generate_creates_key_with_owner_only_perms() {
         let dir = tempfile::tempdir().expect("tempdir");
@@ -268,7 +268,7 @@ mod tests {
     }
 
     // spec: INFRA#file-permissions
-    // spec: KEY#client-identity-key
+    // spec: CLI#client-identity-key
     #[test]
     fn load_or_generate_rejects_existing_key_with_group_perms() {
         let dir = tempfile::tempdir().expect("tempdir");

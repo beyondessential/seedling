@@ -133,4 +133,4 @@ A container using it needs an image whose `sleep` accepts `infinity`.
 
 ## Per-user state
 
-A client's state directory, in which the [client key](../interface/keys.md) and the web interface's client key are kept by default, MUST be `$XDG_STATE_HOME`, or `~/.local/state` where it is unset, as the XDG base directories define it.
+A client's state directory, in which the [client key](../interface/client.md#client-identity-key) and the web interface's client key are kept by default, MUST be `$XDG_STATE_HOME`, or `~/.local/state` where it is unset, as the XDG base directories define it.

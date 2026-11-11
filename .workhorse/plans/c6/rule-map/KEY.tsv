@@ -1,5 +1,5 @@
 i/key.list	KEY#listing-keys
 i/key.authorize	KEY#authorising-a-key
 i/key.revoke	KEY#revoking-a-key
-i/key.client.file-permissions	KEY#client-identity-key
-i/key.client.path	KEY#client-identity-key
+i/key.client.file-permissions	CLI#client-identity-key
+i/key.client.path	CLI#client-identity-key

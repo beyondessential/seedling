@@ -96,7 +96,7 @@ A `health_check_replace_failed` fault MUST identify the failed replacement and t
 
 ### Withholding faults
 
-A withholding fault is one under which the runtime stops acting on its subject until the fault clears: `external_volume_not_mapped`, `crash_loop` and `health_check_replace_failed`.
+A withholding fault is one under which the runtime stops acting on its subject until the fault clears: `external_volume_not_mapped`, `crash_loop` ([no autonomous restart](autonomous.md#crash-loop-detection)) and `health_check_replace_failed` ([no further replacements](autonomous.md#replacement-guard)).
 An app holding one is [`faulted`](../interface/apps.md#status-derivation) rather than `degraded`.
 
 ## Volume faults
@@ -162,8 +162,8 @@ A site service fault MUST name the failing endpoints, and an unroutable one MUST
 | --- | --- | --- | --- | --- | --- |
 | `cert_acquisition_failed` | the ingress's app | the ingress instance | no valid certificate has been observed for the ingress's hostname 180 seconds after it began to need one, while no acquisition is in progress | a valid certificate is observed for the hostname | condition |
 | `cert_issue_failed` | `_system` | the hostname | issuing a certificate for the hostname through ACME with DNS validation or through Tailscale fails, or ACME issuance needs a contact email and none is set | a certificate for the hostname is issued, or no ingress needs one for it | event |
-| `cert_expiring_soon` | the ingress's app | the ingress | a certificate the runtime cannot renew itself, [as TLS specifies](tls/certificates.md#expiring-certificates), expires within 14 days | a certificate expiring later replaces it, or no ingress uses the hostname | condition |
-| `canopy_certificate_failed` | the ingress's app | the ingress | the ingress's certificate cannot be obtained or replaced through Canopy, [as TCAN specifies](tls/canopy.md#faults) | a usable certificate replaces the one in doubt | condition |
+| `cert_expiring_soon` | the ingress's app | the ingress | a certificate the runtime cannot renew itself, [as TLS specifies](tls/certificates.md#expiring-certificates), expires within 14 days | the certificate selected for the hostname is no longer one the runtime cannot renew and expiring within 14 days, or the ingress no longer exists | condition |
+| `canopy_certificate_failed` | the ingress's app | the ingress | the ingress's certificate cannot be obtained or replaced through Canopy, [as TCAN specifies](tls/canopy.md#faults) | none of the [conditions TCAN names](tls/canopy.md#faults) holds, or the ingress no longer exists | condition |
 
 A `cert_acquisition_failed` fault MUST identify the hostname and the most recent acquisition error.
 A `cert_issue_failed` fault MUST carry the failure.

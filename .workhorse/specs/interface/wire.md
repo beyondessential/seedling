@@ -121,7 +121,7 @@ Wherever a message names a [resource type](../language/overview.md#resource-type
 | `fetch_failed` | a definition could not be [fetched](definitions.md#fetching), or an image [pulled](images.md#pulling-an-image), from its registry; `message` gives the cause |
 | `registry_not_allowed` | the registry a reference names is not on the [registry allowlist](images.md#registry-allowlist) |
 | `server_busy` | the server's [stream limit](#stream-limit) was reached |
-| `internal` | a failure inside the server, such as a storage error, kept the request from completing |
+| `internal` | a failure inside the server, such as a storage error, kept the request from completing; a read that fails is answered with `internal`, never as `not_found` or an empty result |
 | `canopy_disabled` | Canopy access is turned off on the host, and the request was refused for that reason alone |
 
 ## Subscription requests

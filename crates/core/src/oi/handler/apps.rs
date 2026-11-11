@@ -173,7 +173,7 @@ pub(crate) fn persist_app_fields(
     installing: bool,
 ) -> rusqlite::Result<()> {
     db.conn.execute(
-        // spec: HIST#durability
+        // spec: INFRA#database
         "INSERT INTO registered_apps \
              (name, installed, uninstalling, installing, current_generation) \
          VALUES (?1, ?2, ?3, ?4, ?5) \

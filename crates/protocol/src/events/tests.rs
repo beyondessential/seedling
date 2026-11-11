@@ -54,7 +54,7 @@ fn emit_without_subscribers_is_dropped_silently() {
 }
 
 // spec: EVT#event-types
-// spec: AUD#generations
+// spec: EVT#event-types
 #[test]
 fn app_lifecycle_events_wire_shape() {
     let app = app();
@@ -135,7 +135,7 @@ fn app_lifecycle_events_wire_shape() {
 
 // spec: EVT#event-types
 // spec: PRM#parameter-storage
-// spec: AUD#generations
+// spec: EVT#event-types
 #[test]
 fn param_events_wire_shape() {
     let app = app();

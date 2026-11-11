@@ -5,4 +5,4 @@ r/schedule.state	SCHED#schedule-records
 r/schedule.catch-up	SCHED#fire-times
 r/schedule.prune	SCHED#schedule-records
 r/schedule.audit	SCHED#firing
-r/schedule.start-reject	SCHED#start-action
+r/schedule.start-reject	ACN#start-action

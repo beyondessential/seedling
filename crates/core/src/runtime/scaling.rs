@@ -36,7 +36,7 @@ pub fn save_scaling_decision(
 ) -> rusqlite::Result<()> {
     let now = jiff::Timestamp::now().to_string();
     db.conn.execute(
-        // spec: HIST#durability
+        // spec: INFRA#database
         "INSERT INTO scaling_decisions (app, deployment, scale, updated_at)
          VALUES (?1, ?2, ?3, ?4)
          ON CONFLICT(app, deployment) DO UPDATE SET

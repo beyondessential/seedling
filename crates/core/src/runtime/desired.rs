@@ -330,7 +330,7 @@ pub fn insert_dynamic_resource(
     description: Option<&str>,
 ) -> rusqlite::Result<()> {
     db.conn.execute(
-        // spec: HIST#durability
+        // spec: INFRA#database
         "INSERT INTO dynamic_resources
              (instance_id, app, operation_id, kind, display_name, resource_name, description)
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)

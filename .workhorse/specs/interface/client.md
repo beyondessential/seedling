@@ -13,6 +13,21 @@ Applies to the [CLI](#cli), the reference command-line client of the [Operator I
 `seedling-ctl`, the command-line program through which an [operator](../overview.md#operator) uses the Operator Interface.
 Commands in this spec are written without the program name: `apps create` is `seedling-ctl apps create`.
 
+## Client identity key
+
+The command-line client authenticates with an Ed25519 key ([RFC 8032](https://www.rfc-editor.org/rfc/rfc8032)) held in a key file as a DER-encoded PKCS#8 private key ([RFC 5958](https://www.rfc-editor.org/rfc/rfc5958), [RFC 8410](https://www.rfc-editor.org/rfc/rfc8410)).
+
+The client MUST read the key file from the path given by its `--key-file` option.
+Without the option, the client MUST use `seedling/client.key` under the user's state directory (`$XDG_STATE_HOME`, or its platform equivalent).
+If the key file does not exist, the client MUST generate a key and write it there, creating missing parent directories.
+
+The client MUST create the key file readable and writable by its owner only.
+The client MUST refuse to load a key file that grants any permission to its group or to other users, and MUST report an error naming the file.
+
+> [!NOTE]
+> A distinct key file gives a caller a distinct identity, such as a co-located service that needs its own authorised key.
+> A key can be generated at a chosen path and authorised before its first use.
+
 ## Shutdown
 
 The CLI MUST put the local terminal into raw mode for a shell session, and MUST restore it when the session ends.

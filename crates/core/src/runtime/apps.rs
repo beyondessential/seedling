@@ -390,7 +390,7 @@ impl AppRegistry {
     pub fn persist_app(db: &Db, entry: &AppEntry) -> rusqlite::Result<()> {
         let (installed, uninstalling, installing) = encode_phase(&entry.phase.lock());
         db.conn.execute(
-            // spec: HIST#durability
+            // spec: INFRA#database
             "INSERT INTO registered_apps \
                  (name, installed, uninstalling, installing, current_generation) \
              VALUES (?1, ?2, ?3, ?4, ?5) \

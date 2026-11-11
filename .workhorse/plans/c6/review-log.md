@@ -45,3 +45,9 @@ Accepted code-derived details: recorded in gaps.md "Decided in the review loop".
 Code checks filed on D6.
 Asked the user: Faulted vs Degraded; shell attach timing; rt.write on mapped external volumes.
 Settled by the user: withholding faults decide faulted; blocking shell.attach with ShellExit; rt.write to mapped external volumes unless read-only.
+
+### Structure
+
+Moved: Barrier defined once in RT (SUSP keeps the mechanism); cycle errors to ACN; sub-action validation and reserved keys to ACN; start-action schedule rule to ACN; secret redaction to SEC; rate-limit budgets to PRX; container defaults to CTR; 0640 writes to ACTU; ingress serving to PRX; certificate warming to RT; template and Canopy offer events to EVT; key fingerprint to the root term; TLS terms from TLSM to TLS; client identity key to CLI; fault restatements across 18 specs now link FLT rows, with descriptions moved into FLT.
+Fixed by me after: FLT clearing wording for cert_expiring_soon and canopy_certificate_failed taken from TLS and TCAN; AUD#generations removed (EVT holds the members), citations to EVT; field ownership moved to INFRA#database, upsert citations retargeted; WIRE internal row says a failed read is never not_found or empty; withholding faults link AUTO.
+Left: WebSession events and web error codes stay in WEB; hostname syntax differs between TLSM and ING (not unified); /volumes/*, /services/exported/list and OI certificate statuses need design, not moves.

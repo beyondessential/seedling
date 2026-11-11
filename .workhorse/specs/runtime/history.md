@@ -30,8 +30,7 @@ The runtime MUST store the world observation history, the autonomous operations 
 Every record MUST survive a restart of the runtime, including one after unexpected termination or loss of power to the host.
 A write that changes several records together MUST be atomic.
 
-A writer that updates a stored record that another writer also updates MUST change only the fields it owns.
-It MUST leave every other field as it was, including fields added to the record after the writer was written.
+Writers of these records follow the [database](infrastructure.md#database) rule on shared records.
 
 ## Observations
 

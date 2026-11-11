@@ -4,7 +4,7 @@ id: KEY
 
 # Key management
 
-Applies to the set of client keys authorised to connect to the [Operator Interface](../overview.md#operator-interface), and to the client identity key the command-line client keeps.
+Applies to the set of client keys authorised to connect to the [Operator Interface](../overview.md#operator-interface).
 
 ## Fingerprints
 
@@ -47,18 +47,3 @@ An authorised key MUST be able to connect from the time the request succeeds.
 On success the result is `{}`.
 The server MUST reject a fingerprint that is not in the authorised set with `not_found`.
 Revocation MUST take effect on connections already open, as [client authentication](transport.md#client-authentication) requires.
-
-## Client identity key
-
-The command-line client authenticates with an Ed25519 key ([RFC 8032](https://www.rfc-editor.org/rfc/rfc8032)) held in a key file as a DER-encoded PKCS#8 private key ([RFC 5958](https://www.rfc-editor.org/rfc/rfc5958), [RFC 8410](https://www.rfc-editor.org/rfc/rfc8410)).
-
-The client MUST read the key file from the path given by its `--key-file` option.
-Without the option, the client MUST use `seedling/client.key` under the user's state directory (`$XDG_STATE_HOME`, or its platform equivalent).
-If the key file does not exist, the client MUST generate a key and write it there, creating missing parent directories.
-
-The client MUST create the key file readable and writable by its owner only.
-The client MUST refuse to load a key file that grants any permission to its group or to other users, and MUST report an error naming the file.
-
-> [!NOTE]
-> A distinct key file gives a caller a distinct identity, such as a co-located service that needs its own authorised key.
-> A key can be generated at a chosen path and authorised before its first use.

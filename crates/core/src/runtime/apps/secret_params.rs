@@ -60,7 +60,7 @@ pub fn upsert_secret_param(
         .encrypt(value)
         .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
     db.conn.execute(
-        // spec: HIST#durability
+        // spec: INFRA#database
         "INSERT INTO secret_params (app_name, param_name, ciphertext) VALUES (?1, ?2, ?3) \
          ON CONFLICT(app_name, param_name) DO UPDATE SET ciphertext = excluded.ciphertext",
         rusqlite::params![app_name, param_name, ct],

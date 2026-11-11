@@ -46,6 +46,9 @@ The runtime MUST refuse to use a key file or database file whose group or other 
 
 The runtime MUST keep its database in the file `seedling.db` in its [data directory](actuation.md#data-directory).
 
+A writer that updates a stored record that another writer also updates MUST change only the fields it owns.
+It MUST leave every other field as it was, including fields added to the record after the writer was written.
+
 The runtime MUST wait for a database write that is blocked by a concurrent writer, rather than failing it immediately.
 It SHOULD wait at least five seconds before failing such a write.
 

@@ -12,7 +12,7 @@ r/operation.cancel.stuck-recovery	OPS#stuck-install-recovery
 r/operation.params	OPS#persistence
 r/operation.volume-param	OPS#operation-scoped-volumes
 r/operation.volume-param.filename	OPS#operation-scoped-volumes
-r/operation.volume-param.reserved	OPS#reserved-parameter-keys
+r/operation.volume-param.reserved	ACN#param-delivery
 r/operation.composition	OPS#action-composition
 r/operation.composition.cycles	OPS#cycles
 r/operation.composition.params	OPS#sub-action-parameters

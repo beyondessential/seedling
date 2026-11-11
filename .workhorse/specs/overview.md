@@ -35,9 +35,9 @@ The key words MUST, MUST NOT, REQUIRED, SHALL, SHALL NOT, SHOULD, SHOULD NOT, RE
 | [RFC 7250](https://www.rfc-editor.org/rfc/rfc7250) | raw public keys in TLS, under [TRN](interface/transport.md) |
 | [RFC 7301](https://www.rfc-editor.org/rfc/rfc7301) | ALPN, under [TRN](interface/transport.md) |
 | [RFC 6066](https://www.rfc-editor.org/rfc/rfc6066) | server name indication, under [TLS](runtime/tls/certificates.md) |
-| [RFC 8032](https://www.rfc-editor.org/rfc/rfc8032) | Ed25519, under [KEY](interface/keys.md) |
-| [RFC 8410](https://www.rfc-editor.org/rfc/rfc8410) | Ed25519 keys in PKIX, under [KEY](interface/keys.md), [TRN](interface/transport.md) |
-| [RFC 5958](https://www.rfc-editor.org/rfc/rfc5958) | private key encoding, under [KEY](interface/keys.md), [TLSM](interface/tls.md) |
+| [RFC 8032](https://www.rfc-editor.org/rfc/rfc8032) | Ed25519, under [CLI](interface/client.md) |
+| [RFC 8410](https://www.rfc-editor.org/rfc/rfc8410) | Ed25519 keys in PKIX, under [CLI](interface/client.md), [TRN](interface/transport.md) |
+| [RFC 5958](https://www.rfc-editor.org/rfc/rfc5958) | private key encoding, under [CLI](interface/client.md), [TLSM](interface/tls.md) |
 | [RFC 5280](https://www.rfc-editor.org/rfc/rfc5280) | X.509 certificates and SubjectPublicKeyInfo, under [TRN](interface/transport.md), [TLS](runtime/tls/certificates.md), [TLSM](interface/tls.md) |
 | [RFC 2986](https://www.rfc-editor.org/rfc/rfc2986) | certificate signing requests, under [TLS](runtime/tls/certificates.md), [TLSM](interface/tls.md), [TCAN](runtime/tls/canopy.md) |
 | [RFC 7468](https://www.rfc-editor.org/rfc/rfc7468) | PEM encoding, under [TLS](runtime/tls/certificates.md), [TLSM](interface/tls.md) |

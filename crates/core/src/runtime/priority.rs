@@ -94,7 +94,7 @@ pub fn load_app_priority(db: &Db, app: &AppName) -> rusqlite::Result<Option<AppP
 pub fn save_app_priority(db: &Db, app: &AppName, priority: AppPriority) -> rusqlite::Result<()> {
     let now = jiff::Timestamp::now().to_string();
     db.conn.execute(
-        // spec: HIST#durability
+        // spec: INFRA#database
         "INSERT INTO app_priorities (app, priority, updated_at)
          VALUES (?1, ?2, ?3)
          ON CONFLICT(app) DO UPDATE SET

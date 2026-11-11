@@ -27,12 +27,6 @@ The runtime MUST create the file readable and writable by its owner only.
 The runtime MUST write to the audit log every event it publishes on the [event feed](../interface/events.md#event-types).
 The audit log MUST be in JSON Lines, each entry being one event in the event feed's JSON representation, with its `type` and `timestamp` members.
 
-## Generations
-
-An entry recording a change to an app's definition or parameter values, including a registration, a definition update, a parameter set and a parameter unset, MUST include the [generation](../overview.md#generation) the change created.
-An entry recording any such change other than a registration MUST also include the generation the change superseded.
-An entry recording a [lifecycle operation](../overview.md#lifecycle-operation) that a generation change triggered MUST include the operation's source and target generations.
-
 ## Rotation
 
 The runtime MUST support rotation of the audit log by an external tool that renames or removes the file.
