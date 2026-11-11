@@ -15,7 +15,7 @@ pub mod relay;
 /// another: a pushed definition bundle is the large case.
 pub const REQUEST_LIMIT: usize = 4 * 1024 * 1024;
 
-// i[transport.alpn]
+// TRN#connection
 /// ALPN identifier negotiated for OI QUIC connections.
 ///
 /// Bumping this string is the lever for incompatible protocol revisions —

@@ -3,7 +3,7 @@
 // the stub backends would happily accept but that we'd then have to keep
 // in sync with the language).
 //
-// w[verify routes.apps]
+// spec: UI#operator-capabilities
 
 import { expect, test } from "../test-fixtures";
 

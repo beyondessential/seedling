@@ -4,7 +4,7 @@ fn enabled(settings: CompressSettings) -> Option<CompressDecl> {
     Some(CompressDecl::Enabled(settings))
 }
 
-// l[verify service.http.proxy-settings.resolution]
+// spec: HTTP#resolution
 #[test]
 fn unset_everywhere_resolves_to_defaults() {
     let r = resolve(&ProxySettings::default(), None);
@@ -17,7 +17,7 @@ fn unset_everywhere_resolves_to_defaults() {
     assert_eq!(r.balance.interval_secs, DEFAULT_INTERVAL_SECS);
 }
 
-// l[verify service.http.proxy-settings.resolution]
+// spec: HTTP#resolution
 #[test]
 fn route_overrides_only_the_fields_it_names() {
     let service = ProxySettings {
@@ -49,7 +49,7 @@ fn route_overrides_only_the_fields_it_names() {
     assert_eq!(r.compress.expect("still on").minimum_length, 1024);
 }
 
-// l[verify service.http.proxy-settings.resolution]
+// spec: HTTP#resolution
 #[test]
 fn service_values_apply_when_route_declares_nothing() {
     let service = ProxySettings {
@@ -69,7 +69,7 @@ fn service_values_apply_when_route_declares_nothing() {
     assert_eq!(r.balance.interval_secs, 1.0);
 }
 
-// l[verify service.http.compress]
+// spec: HTTP#compression
 #[test]
 fn route_can_switch_compression_off() {
     let service = ProxySettings {
@@ -83,7 +83,7 @@ fn route_can_switch_compression_off() {
     assert!(resolve(&service, Some(&route)).compress.is_none());
 }
 
-// l[verify service.http.compress]
+// spec: HTTP#compression
 #[test]
 fn route_can_switch_compression_back_on_over_a_disabling_service() {
     let service = ProxySettings {
@@ -99,7 +99,7 @@ fn route_can_switch_compression_back_on_over_a_disabling_service() {
     assert_eq!(c.minimum_length, DEFAULT_MINIMUM_LENGTH);
 }
 
-// l[verify service.http.compress]
+// spec: HTTP#compression
 #[test]
 fn service_level_disable_covers_a_silent_route() {
     let service = ProxySettings {
@@ -113,7 +113,7 @@ fn service_level_disable_covers_a_silent_route() {
     );
 }
 
-// l[verify service.balance]
+// spec: HTTP#balancing
 #[test]
 fn zero_try_duration_survives_resolution() {
     let service = ProxySettings {
@@ -129,7 +129,7 @@ fn zero_try_duration_survives_resolution() {
     assert_eq!(r.balance.interval_secs, 0.0);
 }
 
-// l[verify service.balance]
+// spec: HTTP#balancing
 #[test]
 fn zero_interval_meeting_a_nonzero_duration_across_levels_is_not_emitted() {
     // Neither level is invalid on its own, so parsing cannot catch this.
@@ -161,7 +161,7 @@ fn map(pairs: Vec<(&str, Dynamic)>) -> Map {
     pairs.into_iter().map(|(k, v)| (k.into(), v)).collect()
 }
 
-// l[verify service.http.compress.fields]
+// spec: HTTP#compression
 #[test]
 fn compress_fields_parse() {
     let m = map(vec![
@@ -181,7 +181,7 @@ fn compress_fields_parse() {
     assert_eq!(parsed.content_types, Some(vec!["text/*".to_string()]));
 }
 
-// l[verify service.http.compress.fields]
+// spec: HTTP#compression
 #[test]
 fn compress_rejects_bad_values() {
     let unknown_encoding = map(vec![(
@@ -203,7 +203,7 @@ fn compress_rejects_bad_values() {
     assert!(parse_compress(unknown_field).is_err());
 }
 
-// l[verify service.balance]
+// spec: HTTP#balancing
 #[test]
 fn balance_fields_parse_ints_and_floats() {
     let m = map(vec![
@@ -217,7 +217,7 @@ fn balance_fields_parse_ints_and_floats() {
     assert_eq!(parsed.interval_secs, Some(0.5));
 }
 
-// l[verify service.balance]
+// spec: HTTP#balancing
 #[test]
 fn balance_rejects_bad_values() {
     let bad_policy = map(vec![("policy", Dynamic::from("sticky".to_string()))]);
@@ -234,7 +234,7 @@ fn balance_rejects_bad_values() {
     assert!(parse_balance(unknown_field).is_err());
 }
 
-// l[verify service.balance]
+// spec: HTTP#balancing
 #[test]
 fn balance_allows_zero_interval_when_retrying_is_off() {
     let m = map(vec![
@@ -251,13 +251,13 @@ fn limit(max_events: u64, window_secs: f64) -> Option<RateLimitDecl> {
     }))
 }
 
-// l[verify service.http.rate-limit]
+// spec: HTTP#rate-limiting
 #[test]
 fn unset_everywhere_is_not_rate_limited() {
     assert_eq!(resolve(&ProxySettings::default(), None).rate_limit, None);
 }
 
-// l[verify service.http.proxy-settings.resolution]
+// spec: HTTP#resolution
 #[test]
 fn service_rate_limit_applies_to_a_route_declaring_none() {
     let service = ProxySettings {
@@ -272,7 +272,7 @@ fn service_rate_limit_applies_to_a_route_declaring_none() {
     assert_eq!(rl.settings.window_secs, 1.0);
 }
 
-// l[verify service.http.proxy-settings.resolution]
+// spec: HTTP#resolution
 #[test]
 fn route_rate_limit_replaces_the_services_outright() {
     let service = ProxySettings {
@@ -293,7 +293,7 @@ fn route_rate_limit_replaces_the_services_outright() {
     assert_eq!(rl.settings.window_secs, 60.0);
 }
 
-// l[verify service.http.proxy-settings.resolution]
+// spec: HTTP#resolution
 #[test]
 fn route_can_switch_off_a_limit_the_service_declared() {
     let service = ProxySettings {
@@ -307,7 +307,7 @@ fn route_can_switch_off_a_limit_the_service_declared() {
     assert_eq!(resolve(&service, Some(&route)).rate_limit, None);
 }
 
-// l[verify service.http.proxy-settings.resolution]
+// spec: HTTP#resolution
 #[test]
 fn rate_limit_does_not_disturb_compression_or_balancing() {
     let service = ProxySettings {
@@ -319,7 +319,7 @@ fn rate_limit_does_not_disturb_compression_or_balancing() {
     assert_eq!(r.balance.policy, LbPolicy::RoundRobin);
 }
 
-// l[verify service.http.rate-limit.fields]
+// spec: HTTP#rate-limiting
 #[test]
 fn rate_limit_parses_ints_and_floats() {
     let m = map(vec![
@@ -340,7 +340,7 @@ fn rate_limit_parses_ints_and_floats() {
     );
 }
 
-// l[verify service.http.rate-limit.fields]
+// spec: HTTP#rate-limiting
 #[test]
 fn rate_limit_requires_both_fields() {
     let no_window = map(vec![("max_events", Dynamic::from(10_i64))]);
@@ -352,7 +352,7 @@ fn rate_limit_requires_both_fields() {
     assert!(parse_rate_limit(map(vec![])).is_err());
 }
 
-// l[verify service.http.rate-limit.fields]
+// spec: HTTP#rate-limiting
 #[test]
 fn rate_limit_rejects_bad_values() {
     let zero_events = map(vec![
@@ -393,7 +393,7 @@ fn rate_limit_rejects_bad_values() {
     assert!(parse_rate_limit(unknown_field).is_err());
 }
 
-// l[verify service.http.rate-limit.fields]
+// spec: HTTP#rate-limiting
 #[test]
 fn rate_limit_rejects_out_of_range_values() {
     let too_many = map(vec![
@@ -417,7 +417,7 @@ fn rate_limit_rejects_out_of_range_values() {
     assert!(parse_rate_limit(geological).is_err());
 }
 
-// l[verify service.http.rate-limit.fields]
+// spec: HTTP#rate-limiting
 #[test]
 fn rate_limit_accepts_the_bounds_themselves() {
     let at_bounds = map(vec![
@@ -433,7 +433,7 @@ fn rate_limit_accepts_the_bounds_themselves() {
     assert!(parse_rate_limit(at_floor).is_ok());
 }
 
-// l[verify service.http.rate-limit.fields]
+// spec: HTTP#rate-limiting
 #[test]
 fn rate_limit_names_a_misspelled_key_rather_than_the_field_it_displaced() {
     let typo = map(vec![
@@ -448,7 +448,7 @@ fn rate_limit_names_a_misspelled_key_rather_than_the_field_it_displaced() {
     );
 }
 
-// l[verify service.http.proxy-settings.resolution]
+// spec: HTTP#resolution
 #[test]
 fn an_inherited_limit_stays_the_services_however_many_routes_take_it() {
     let service = ProxySettings {
@@ -508,7 +508,7 @@ fn op(rules: &HeaderRules, name: &str) -> Option<HeaderOp> {
         .map(|(_, v)| v.clone())
 }
 
-// l[verify service.http.headers]
+// spec: HTTP#header-operations
 #[test]
 fn both_directions_carry_their_own_operations() {
     let h = headers(
@@ -530,7 +530,7 @@ fn both_directions_carry_their_own_operations() {
     );
 }
 
-// l[verify service.http.headers]
+// spec: HTTP#header-operations
 #[test]
 fn a_declaration_naming_no_direction_is_refused() {
     assert!(headers_err(r#"#{}"#).contains("requires `request`"));
@@ -540,14 +540,14 @@ fn a_declaration_naming_no_direction_is_refused() {
     assert!(e.contains("unknown") && e.contains("requests"), "{e}");
 }
 
-// l[verify service.http.headers.fields]
+// spec: HTTP#header-operations
 #[test]
 fn a_direction_naming_no_operation_is_refused() {
     let e = headers_err(r#"#{ response: #{} }"#);
     assert!(e.contains("requires `replace`, `add`, or `remove`"), "{e}");
 }
 
-// l[verify service.http.headers.fields]
+// spec: HTTP#header-operations
 #[test]
 fn a_value_is_a_string_or_an_array_of_them() {
     // Several values is the case `Set-Cookie` needs, since several cookies
@@ -570,7 +570,7 @@ fn a_value_is_a_string_or_an_array_of_them() {
     );
 }
 
-// l[verify service.http.headers.fields]
+// spec: HTTP#header-operations
 #[test]
 fn an_empty_array_is_refused_rather_than_read_as_a_removal() {
     let e = headers_err(r#"#{ response: #{ replace: #{ "X-Thing": [] } } }"#);
@@ -579,7 +579,7 @@ fn an_empty_array_is_refused_rather_than_read_as_a_removal() {
     assert!(e.contains("must not be empty"), "{e}");
 }
 
-// l[verify service.http.headers.fields]
+// spec: HTTP#header-operations
 #[test]
 fn a_value_carrying_a_line_ending_is_refused() {
     // Otherwise the value ends its own header and begins another of the
@@ -595,7 +595,7 @@ fn a_value_carrying_a_line_ending_is_refused() {
     }
 }
 
-// l[verify service.http.headers.fields]
+// spec: HTTP#header-operations
 #[test]
 fn a_value_carrying_any_other_control_character_is_refused() {
     // The line endings are the injection vector, but the rest are no more
@@ -614,7 +614,7 @@ fn a_value_carrying_any_other_control_character_is_refused() {
     assert!(header_value("café".to_string(), "at").is_ok());
 }
 
-// l[verify service.http.headers.fields]
+// spec: HTTP#header-operations
 #[test]
 fn a_value_carrying_a_brace_is_refused() {
     // The proxy substitutes a braced word naming its own state — including
@@ -628,7 +628,7 @@ fn a_value_carrying_a_brace_is_refused() {
     }
 }
 
-// l[verify service.http.headers.fields]
+// spec: HTTP#header-operations
 #[test]
 fn a_wildcard_in_a_name_is_refused() {
     // `*` is a token character, so it passes the field-name grammar, but a
@@ -645,7 +645,7 @@ fn a_wildcard_in_a_name_is_refused() {
     }
 }
 
-// l[verify service.http.headers.fields]
+// spec: HTTP#header-operations
 #[test]
 fn a_direction_past_the_operation_bound_is_refused() {
     let ops = |n: usize| {
@@ -658,7 +658,7 @@ fn a_direction_past_the_operation_bound_is_refused() {
     assert!(e.contains("more than the"), "{e}");
 }
 
-// l[verify service.http.headers.fields]
+// spec: HTTP#header-operations
 #[test]
 fn a_value_past_the_length_bound_is_refused() {
     let value = |n: usize| {
@@ -672,7 +672,7 @@ fn a_value_past_the_length_bound_is_refused() {
     assert!(e.contains("at most"), "{e}");
 }
 
-// l[verify service.http.headers.fields]
+// spec: HTTP#header-operations
 #[test]
 fn a_name_outside_the_http_token_characters_is_refused() {
     for name in ["X Thing", "X:Thing", "X\u{e9}"] {
@@ -682,7 +682,7 @@ fn a_name_outside_the_http_token_characters_is_refused() {
     assert!(headers_err(r#"#{ response: #{ remove: [""] } }"#).contains("must not be empty"));
 }
 
-// l[verify service.http.headers.fields]
+// spec: HTTP#header-operations
 #[test]
 fn the_headers_the_proxy_owns_are_refused() {
     // Keep-alive is the one an app would legitimately reach for, and is
@@ -705,7 +705,7 @@ fn the_headers_the_proxy_owns_are_refused() {
     }
 }
 
-// l[verify service.http.headers.fields]
+// spec: HTTP#header-operations
 #[test]
 fn one_name_may_not_carry_two_operations() {
     let e = headers_err(r#"#{ response: #{ replace: #{ "X-A": "1" }, remove: ["X-A"] } }"#);
@@ -716,7 +716,7 @@ fn one_name_may_not_carry_two_operations() {
     assert!(e.contains("more than one operation"), "{e}");
 }
 
-// l[verify service.http.headers.fields]
+// spec: HTTP#header-operations
 #[test]
 fn a_name_keeps_the_spelling_it_was_given() {
     let h = headers(r#"#{ response: #{ remove: ["X-Powered-By"] } }"#);
@@ -733,7 +733,7 @@ fn with_headers(h: HeaderSettings) -> ProxySettings {
     }
 }
 
-// l[verify service.http.proxy-settings.resolution]
+// spec: HTTP#resolution
 #[test]
 fn a_route_overrides_only_the_headers_it_names() {
     let service = with_headers(headers(
@@ -762,7 +762,7 @@ fn a_route_overrides_only_the_headers_it_names() {
     );
 }
 
-// l[verify service.http.proxy-settings.resolution]
+// spec: HTTP#resolution
 #[test]
 fn a_route_may_override_with_a_different_operation() {
     // The route's operation replaces the service's outright rather than
@@ -773,7 +773,7 @@ fn a_route_may_override_with_a_different_operation() {
     assert_eq!(op(&r.response, "x-a"), Some(HeaderOp::Remove));
 }
 
-// l[verify service.http.proxy-settings.resolution]
+// spec: HTTP#resolution
 #[test]
 fn an_override_is_recognised_whatever_the_case() {
     // HTTP field names are case-insensitive, so a route spelling a header
@@ -800,7 +800,7 @@ fn an_override_is_recognised_whatever_the_case() {
     );
 }
 
-// l[verify service.http.proxy-settings.resolution]
+// spec: HTTP#resolution
 #[test]
 fn a_route_declaring_no_headers_inherits_the_services() {
     let service = with_headers(headers(r#"#{ response: #{ remove: ["Server"] } }"#));
@@ -809,7 +809,7 @@ fn a_route_declaring_no_headers_inherits_the_services() {
     assert_eq!(resolve(&service, None).headers, service.headers);
 }
 
-// l[verify service.http.proxy-settings.resolution]
+// spec: HTTP#resolution
 #[test]
 fn headers_do_not_disturb_the_other_settings() {
     // Each setting resolves on its own: declaring headers on a route must not
@@ -829,7 +829,7 @@ fn headers_do_not_disturb_the_other_settings() {
     assert_eq!(op(&r.headers.response, "server"), Some(HeaderOp::Remove));
 }
 
-// l[verify service.http.headers.fields]
+// spec: HTTP#header-operations
 #[test]
 fn the_encoding_the_proxy_applied_is_refused() {
     // The handler's response operations run after compression has named the
@@ -852,7 +852,7 @@ fn the_encoding_the_proxy_applied_is_refused() {
     );
 }
 
-// l[verify service.http.headers.fields]
+// spec: HTTP#header-operations
 #[test]
 fn an_empty_operation_map_is_refused() {
     // As much a no-op as an empty `remove`, which already throws: a
@@ -866,7 +866,7 @@ fn an_empty_operation_map_is_refused() {
     }
 }
 
-// l[verify service.http.headers.fields]
+// spec: HTTP#header-operations
 #[test]
 fn a_name_past_the_length_bound_is_refused() {
     let name = |n: usize| format!(r#"#{{ response: #{{ remove: ["{}"] }} }}"#, "x".repeat(n));
@@ -875,7 +875,7 @@ fn a_name_past_the_length_bound_is_refused() {
     assert!(e.contains("at most"), "{e}");
 }
 
-// l[verify service.http.headers.fields]
+// spec: HTTP#header-operations
 #[test]
 fn an_operation_past_the_value_count_bound_is_refused() {
     // The operation count alone does not bound the declaration: one name may
@@ -892,7 +892,7 @@ fn an_operation_past_the_value_count_bound_is_refused() {
     assert!(e.contains("one header may carry"), "{e}");
 }
 
-// l[verify service.http.headers]
+// spec: HTTP#header-operations
 #[test]
 fn layering_lets_a_later_declaration_add_without_discarding() {
     // What a second `headers()` call does. Per name the later one wins; the

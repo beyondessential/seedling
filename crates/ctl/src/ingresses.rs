@@ -297,7 +297,7 @@ mod tests {
         assert!(parse_app_service("api/").is_err());
     }
 
-    // r[verify ingress.site.lifecycle]
+    // spec: SITE#sources
     // The two flags mean different things on the wire, so they must not both
     // be accepted — the help used to claim an empty `--description` cleared
     // the description, which it does not.

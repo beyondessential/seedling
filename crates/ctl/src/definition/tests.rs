@@ -8,7 +8,7 @@ fn write(root: &Path, rel: &str, contents: &[u8]) {
     std::fs::write(path, contents).unwrap();
 }
 
-// i[verify ctl.definition.folder]
+// spec: CLI#definition-folders
 #[test]
 fn folders_skip_vcs_metadata_and_seedignored_paths() {
     let dir = tempfile::tempdir().unwrap();
@@ -27,7 +27,7 @@ fn folders_skip_vcs_metadata_and_seedignored_paths() {
     );
 }
 
-// i[verify ctl.definition.folder]
+// spec: CLI#definition-folders
 #[test]
 fn a_symlink_is_reported_and_nothing_is_read() {
     let dir = tempfile::tempdir().unwrap();
@@ -40,7 +40,7 @@ fn a_symlink_is_reported_and_nothing_is_read() {
     read_folder(dir.path()).unwrap();
 }
 
-// i[verify ctl.definition.source]
+// spec: CLI#definition-sources
 #[test]
 fn github_folder_urls_split_into_every_ref_and_path() {
     let url =
@@ -59,7 +59,7 @@ fn github_folder_urls_split_into_every_ref_and_path() {
     assert!(GithubUrl::parse("./local/folder").is_none());
 }
 
-// i[verify ctl.definition.source]
+// spec: CLI#definition-sources
 #[test]
 fn a_github_tarball_yields_the_named_folder() {
     let mut builder = tar::Builder::new(Vec::new());
@@ -88,7 +88,7 @@ fn a_github_tarball_yields_the_named_folder() {
     );
 }
 
-// i[verify ctl.definition.source]
+// spec: CLI#definition-sources
 #[test]
 fn a_pushed_bundle_carries_its_origin() {
     let def = Definition::Bundle {
@@ -108,7 +108,7 @@ fn a_pushed_bundle_carries_its_origin() {
     );
 }
 
-// i[verify ctl.definition.param]
+// spec: CLI#parameter-change-on-update
 #[test]
 fn one_param_change_rides_along() {
     assert_eq!(
@@ -123,7 +123,7 @@ fn one_param_change_rides_along() {
     assert!(param_change(Some("a=b"), Some("c")).is_err());
 }
 
-// i[verify ctl.definition.export]
+// spec: CLI#definition-export
 #[test]
 fn export_reproduces_the_bundle_into_a_new_folder_only() {
     let bundle: Map<String, Value> = [
@@ -150,8 +150,8 @@ fn export_reproduces_the_bundle_into_a_new_folder_only() {
     export(&bundle, &empty).unwrap();
 }
 
-// i[verify ctl.definition.source]
-// i[verify ctl.definition.folder]
+// spec: CLI#definition-sources
+// spec: CLI#definition-folders
 #[test]
 fn a_tarball_entry_may_not_escape_the_folder_or_be_a_link() {
     fn tarball(build: impl FnOnce(&mut tar::Builder<Vec<u8>>)) -> Vec<u8> {

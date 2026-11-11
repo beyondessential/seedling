@@ -21,7 +21,7 @@ Applies to the HTTP view of a service in BSL: its routes, route redirects, and t
 
 ### HTTP service
 
-A view of a [service](rule:l/service.type) through which HTTP traffic on one of its ports is routed by URL prefix.
+A view of a [service](service.md#declaration) through which HTTP traffic on one of its ports is routed by URL prefix.
 
 ### Route
 
@@ -33,10 +33,10 @@ The compression, balancing, rate-limiting and header settings declared on a serv
 
 ## Declaration
 
-A script obtains an HTTP service with `service.http()` or `service.http(port: number)`, on a Service or on an [External Service](rule:l/service.external).
+A script obtains an HTTP service with `service.http()` or `service.http(port: number)`, on a Service or on an [External Service](service.md#external-services).
 Either method returns an `HttpService`.
-The `port` is the [Service Port](rule:l/service.port) on which the HTTP service is reached, and defaults to 80.
-A `port` MUST be validated as a [port number](rule:l/bsl.port).
+The `port` is the [Service Port](service.md#service-ports) on which the HTTP service is reached, and defaults to 80.
+A `port` MUST be validated as a [port number](overview.md#ports).
 
 An `HttpService` is a view of its Service and not a resource of its own.
 Settings declared through an `HttpService` MUST be recorded on the Service it views.
@@ -57,7 +57,7 @@ Two spellings with the same normalised form MUST name the same route.
 > [!NOTE]
 > `route("/v1/login/")` and `route("/v1/login")` are one route, and `route("//")` is the route `/`.
 
-Requests are matched to routes as [routing](rule:r/service.http.route.routing) specifies.
+Requests are matched to routes as [routing](../runtime/proxy.md#route-emission) specifies.
 The runtime MUST pass a request to a pod with its path unchanged, including the matched prefix.
 
 > [!NOTE]
@@ -131,7 +131,7 @@ A `code` MUST be one of 301, 302, 307 or 308, and any other value MUST throw.
 
 > [!NOTE]
 > A redirect on `/` would answer for the whole hostname.
-> Retiring a hostname is a [site ingress redirect attachment](rule:r/ingress.site.attachment), made by an operator.
+> Retiring a hostname is a [site ingress redirect attachment](../runtime/site-resources.md#attachments), made by an operator.
 
 A prefix MUST be either a redirect or bound by a pod.
 Declaring a redirect on a prefix a pod binds through [`pod.http`](pod.md#port-bindings) MUST throw, and so MUST binding a pod to a prefix declared as a redirect, in either order.
@@ -170,7 +170,7 @@ Any other entry matches that media type exactly.
 
 The default `content_types` is `application/atom+xml*`, `application/eot*`, `application/font*`, `application/geo+json*`, `application/graphql+json*`, `application/graphql-response+json*`, `application/javascript*`, `application/json*`, `application/ld+json*`, `application/manifest+json*`, `application/opentype*`, `application/otf*`, `application/rss+xml*`, `application/truetype*`, `application/ttf*`, `application/vnd.api+json*`, `application/vnd.ms-fontobject*`, `application/wasm*`, `application/x-httpd-cgi*`, `application/x-javascript*`, `application/x-opentype*`, `application/x-otf*`, `application/x-perl*`, `application/x-protobuf*`, `application/x-ttf*`, `application/xhtml+xml*`, `application/xml*`, `font/ttf*`, `font/otf*`, `image/svg+xml*`, `image/vnd.microsoft.icon*`, `image/x-icon*`, `multipart/bag*`, `multipart/mixed*` and `text/*`.
 
-How the runtime compresses is specified by [route compression](rule:r/service.http.route.compression).
+How the runtime compresses is specified by [route compression](../runtime/proxy.md#compression).
 
 ## Balancing
 
@@ -205,7 +205,7 @@ If resolution yields an `interval` of zero and a non-zero `try_duration`, the ru
 > A zero interval with a non-zero try duration retries without pause, spinning whenever every backend is unreachable.
 > A route can reach that pairing only by taking one value from its service and the other from itself, which no single declaration can see.
 
-How the runtime balances is specified by [route balancing](rule:r/service.http.route.balancing).
+How the runtime balances is specified by [route balancing](../runtime/proxy.md#balancing).
 
 ## Rate limiting
 
@@ -227,7 +227,7 @@ A missing field, a field outside its range, a non-finite `window`, and any other
 > The ranges bound plausibility, not tuning.
 > A limit is enforced by a proxy every app on the host shares, which holds `max_events` timestamps per client until the window has elapsed, for as many clients as send traffic.
 
-How the runtime enforces a limit is specified by [route rate limiting](rule:r/service.http.route.rate-limiting).
+How the runtime enforces a limit is specified by [route rate limiting](../runtime/proxy.md#rate-limiting).
 
 ## Header operations
 
@@ -274,7 +274,7 @@ These names, in any case, are `Connection`, `Keep-Alive`, `Proxy-Authenticate`, 
 > A proxy may read `*` in a field name as a wildcard, which would let a declaration naming one header reach every header.
 > The proxy holds the connection to the client and the connection to the pod as two separate things, and owns the headers describing each.
 > `Content-Encoding` names the compression the proxy applied, and a response whose encoding is renamed or removed cannot be decoded by the client.
-> [Persistent connections](rule:r/ingress.persistent-connections) are served without being asked for.
+> [Persistent connections](../runtime/proxy.md#persistent-connections) are served without being asked for.
 
 Within one direction of one `headers()` call, a name appearing under more than one operation MUST throw, whatever its case.
 
@@ -303,7 +303,7 @@ A service and a route that each name different headers MAY exceed them between t
 A second `headers()` call on the same service or route MUST layer over the first by header name, within each direction.
 The later call's operation MUST win for each header it names, and the earlier call's operation MUST stand for the rest.
 
-How the runtime applies header operations is specified by [route headers](rule:r/service.http.route.headers).
+How the runtime applies header operations is specified by [route headers](../runtime/proxy.md#header-operations).
 
 ## Resolution
 

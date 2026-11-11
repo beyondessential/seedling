@@ -34,13 +34,13 @@ A deployment with no stored decision has its declared lower bound as its effecti
 | `high` | integer | the declared upper bound |
 | `current` | integer or null | the effective scale: the stored decision clamped to the declared bounds, or the lower bound where no decision is stored |
 
-If the stored decision cannot be read, `current` MUST be `null`, as [unreadable scaling decisions](rule:r/scaling.decision.unreadable) requires, and `low` and `high` are still reported.
+If the stored decision cannot be read, `current` MUST be `null`, as [unreadable scaling decisions](../runtime/autonomous.md#unreadable-scale) requires, and `low` and `high` are still reported.
 A client MUST NOT take a `null` `current` as a scale.
 A client adjusting a deployment by a step MUST report the scale as unavailable rather than count from zero or from a bound.
 
 ## App priority
 
-`/apps/priority` sets an app's [app priority](rule:r/priority.app).
+`/apps/priority` sets an app's [app priority](../runtime/priority.md#priority-setting).
 
 | parameter | type | required | meaning |
 | --- | --- | --- | --- |
@@ -51,12 +51,12 @@ The server MUST refuse any other `priority` with `requirements_invalid`, leaving
 The server MUST refuse the request with `not_found` if the app is not registered.
 The result is `{ "priority": <string> }`, giving the priority stored.
 
-The runtime MUST store the app priority durably, and MUST apply it to the app's running workloads without restarting or redeploying them, as [priority settings](rule:r/priority.settings) specifies.
+The runtime MUST store the app priority durably, and MUST apply it to the app's running workloads without restarting or redeploying them, as [priority settings](../runtime/priority.md#priority-setting) specifies.
 
 Uninstalling an app MUST discard its stored app priority, and an app with none stored has the priority `normal`.
 
 `/apps/show` and each entry of `/apps/list` report the app's priority in a `priority` member.
-`/apps/show` reports, for each deployment, a `priority` member giving the [deployment priority](rule:l/deployment.priority) its definition declares, or `normal` where it declares none.
+`/apps/show` reports, for each deployment, a `priority` member giving the [deployment priority](../language/deployment.md#priority) its definition declares, or `normal` where it declares none.
 If the stored app priority cannot be read, the server MUST refuse `/apps/show` and `/apps/list` with `internal`, and MUST NOT report `normal` in its place.
 
 ## Deployment restart
@@ -110,7 +110,7 @@ The result is `{}`.
 The server MUST refuse all three methods with `operation_in_progress` while a lifecycle operation is running or queued for the app, or a change to the app is being applied.
 
 > [!NOTE]
-> An operator cancels a running operation with [`/apps/action/cancel`](rule:i/action.cancel), or waits for a queued one or a change to finish.
+> An operator cancels a running operation with [`/apps/action/cancel`](actions.md#cancellation), or waits for a queued one or a change to finish.
 > A change to the desired state made while an action closure drives the same resources would race it.
 
 Uninstalling an app MUST discard every stop recorded for it.

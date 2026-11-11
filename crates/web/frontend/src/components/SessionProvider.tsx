@@ -277,7 +277,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
   }, [session, doReconnect]);
 
   // Start the uni-stream router pump for the duration of a session.
-  // w[shells.wire]
+  // WEB#shell-relay
   useEffect(() => {
     if (!session) {
       setUniRouter(null);
@@ -310,7 +310,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     return () => abort.abort();
   }, [session]);
 
-  // w[impl sessions.heartbeat]
+  // spec: WEB#session-tracking
   // Ping the server every two minutes so the session's last_seen stays fresh.
   // The 10-minute stale cutoff tolerates four missed heartbeats before
   // reaping; with a single missed heartbeat being the common transient case,
@@ -321,7 +321,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
   // the cutoff. Best-effort — the browser may have already torn down the
   // transport.
   //
-  // w[impl sessions.safety-mode]
+  // spec: UI#guarded-controls
   // Each heartbeat carries the local safety mode so peers can render an
   // accurate per-session indicator. The current mode is read through a ref to
   // avoid restarting the interval on every change; the ad-hoc heartbeat
@@ -358,7 +358,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     };
   }, [session]);
 
-  // w[impl sessions.safety-mode]
+  // spec: UI#guarded-controls
   // Send an ad-hoc heartbeat the moment the operator changes mode so peers
   // see the new state without waiting for the next two-minute tick. The
   // initial-mount heartbeat is already covered by the effect above; we skip

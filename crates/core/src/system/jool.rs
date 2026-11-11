@@ -144,7 +144,7 @@ async fn ensure_instance() -> Result<(), JoolError> {
     .fail()
 }
 
-// r[impl infra.nat64.translator.lifecycle]
+// spec: NAT64#translator-lifecycle
 async fn remove_instance() -> Result<(), JoolError> {
     if !instance_exists().await? {
         return Ok(());
@@ -164,7 +164,7 @@ async fn remove_instance() -> Result<(), JoolError> {
 }
 
 pub async fn setup_nat64() -> Result<(), JoolError> {
-    // r[impl infra.nat64.forwarding]
+    // spec: NAT64#translator
     ensure_forwarding_enabled().await?;
     ensure_module_loaded().await?;
     ensure_instance().await
@@ -205,7 +205,7 @@ async fn run_command(program: &str, args: &[&str]) -> Result<Output, JoolError> 
 mod tests {
     use super::*;
 
-    // r[verify infra.nat64.translator.lifecycle]
+    // spec: NAT64#translator-lifecycle
     #[test]
     fn our_instance_is_found_among_others() {
         let listing =
@@ -215,7 +215,7 @@ mod tests {
         assert_eq!(names, ["other", "seedling"]);
     }
 
-    // r[verify infra.nat64.translator.lifecycle]
+    // spec: NAT64#translator-lifecycle
     #[test]
     fn a_similar_name_is_not_our_instance() {
         let listing = "Namespace,Name,Framework\n0xabc,seedling-old,Netfilter\n";
@@ -223,7 +223,7 @@ mod tests {
         assert!(!names.iter().any(|n| n == JOOL_INSTANCE));
     }
 
-    // r[verify infra.nat64.translator.lifecycle]
+    // spec: NAT64#translator-lifecycle
     #[test]
     fn a_listing_with_no_instances_is_empty() {
         assert!(
@@ -234,7 +234,7 @@ mod tests {
         assert!(parse_instance_names("").unwrap().is_empty());
     }
 
-    // r[verify infra.nat64.translator.lifecycle]
+    // spec: NAT64#translator-lifecycle
     // A listing this does not recognise must not read as "not installed",
     // which would let teardown report success over a live translator.
     #[test]

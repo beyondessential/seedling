@@ -28,7 +28,7 @@ const nothingOffering = {
 };
 
 describe("Canopy", () => {
-  // w[verify routes.canopy]
+  // spec: UI#canopy-access
   it("shows the carrying client and the endpoint it reaches", async () => {
     renderWithSession(<Canopy />, {
       fixtures: { "/canopy/status": offered },
@@ -39,7 +39,7 @@ describe("Canopy", () => {
     expect(screen.getByText("2026-07-30T08:00:00Z")).toBeTruthy();
   });
 
-  // w[verify routes.canopy]
+  // spec: UI#canopy-access
   it("says nothing is wrong when no client is offering", async () => {
     renderWithSession(<Canopy />, {
       fixtures: { "/canopy/status": nothingOffering },
@@ -52,7 +52,7 @@ describe("Canopy", () => {
     expect(screen.getByText(/nothing is wrong/)).toBeTruthy();
   });
 
-  // w[verify routes.canopy]
+  // spec: UI#canopy-access
   it("lists each reported application with its type, linked to the app", async () => {
     renderWithSession(<Canopy />, {
       fixtures: {
@@ -72,7 +72,7 @@ describe("Canopy", () => {
     expect(screen.getByText("tamanu-facility")).toBeTruthy();
   });
 
-  // w[verify routes.canopy]
+  // spec: UI#canopy-access
   it("says so when no app is reported as an application", async () => {
     renderWithSession(<Canopy />, {
       fixtures: { "/canopy/status": offered },
@@ -80,7 +80,7 @@ describe("Canopy", () => {
     expect(await screen.findByText("No app declares a Canopy type.")).toBeTruthy();
   });
 
-  // w[verify routes.canopy]
+  // spec: UI#canopy-access
   it("shows whether access is enabled", async () => {
     renderWithSession(<Canopy />, {
       fixtures: { "/canopy/status": offered },
@@ -88,7 +88,7 @@ describe("Canopy", () => {
     expect(await screen.findByText("Enabled")).toBeTruthy();
   });
 
-  // w[verify routes.canopy]
+  // spec: UI#canopy-access
   it("turns access off through the settings method", async () => {
     const { request } = renderWithSession(<Canopy />, {
       fixtures: { "/canopy/status": offered },
@@ -103,7 +103,7 @@ describe("Canopy", () => {
     );
   });
 
-  // w[verify routes.canopy]
+  // spec: UI#canopy-access
   it("turns access back on through the same method", async () => {
     const { request } = renderWithSession(<Canopy />, {
       fixtures: { "/canopy/status": { ...nothingOffering, enabled: false } },
@@ -118,7 +118,7 @@ describe("Canopy", () => {
     );
   });
 
-  // w[verify routes.canopy]
+  // spec: UI#canopy-access
   it("offers no way to relay a request or force a report", async () => {
     // The relay carries what the runtime needs; a control for relaying an
     // arbitrary request would hand any operator the carrying client's full
@@ -132,7 +132,7 @@ describe("Canopy", () => {
     expect(screen.queryByRole("button", { name: /request/i })).toBeNull();
   });
 
-  // w[verify routes.canopy]
+  // spec: UI#canopy-access
   it("shows the error from a failed report", async () => {
     renderWithSession(<Canopy />, {
       fixtures: {
@@ -150,7 +150,7 @@ describe("Canopy", () => {
     expect(screen.getByText("canopy returned 401")).toBeTruthy();
   });
 
-  // w[verify routes.canopy]
+  // spec: UI#canopy-access
   it("says so when the server identity has not been resolved yet", async () => {
     renderWithSession(<Canopy />, {
       fixtures: { "/canopy/status": nothingOffering },

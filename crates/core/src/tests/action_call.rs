@@ -1,12 +1,12 @@
 //! Tests for `app.action()` and `Action.invoke()`.
 //!
 //! Spec coverage:
-//! - l[verify action.lookup]
-//! - l[verify action.call]
-//! - r[verify operation.composition]
-//! - r[verify operation.composition.cycles]
-//! - r[verify operation.composition.params]
-//! - r[verify history.action-log.entries]
+//! - spec: ACN#action-handles
+//! - spec: ACN#action-invocation
+//! - spec: OPS#action-composition
+//! - spec: OPS#cycles
+//! - spec: OPS#sub-action-parameters
+//! - spec: HIST#action-calls
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
@@ -99,7 +99,7 @@ fn err_string(e: Box<rhai::EvalAltResult>) -> String {
     buf
 }
 
-// l[verify action.lookup]
+// spec: ACN#action-handles
 #[test]
 fn app_action_in_static_context_throws() {
     let err = crate::tests::run_test_script_err(
@@ -114,7 +114,7 @@ fn app_action_in_static_context_throws() {
     );
 }
 
-// l[verify action.lookup]
+// spec: ACN#action-handles
 #[test]
 fn app_action_unknown_name_throws() {
     let err = invoke_action(
@@ -134,7 +134,7 @@ fn app_action_unknown_name_throws() {
     );
 }
 
-// l[verify action.lookup]
+// spec: ACN#action-handles
 #[test]
 fn install_is_not_reachable_via_app_action() {
     let err = invoke_action(
@@ -155,7 +155,7 @@ fn install_is_not_reachable_via_app_action() {
     );
 }
 
-// l[verify action.lookup]
+// spec: ACN#action-handles
 #[test]
 fn start_is_callable_by_name() {
     invoke_action(
@@ -177,8 +177,8 @@ fn start_is_callable_by_name() {
     .expect("start must be callable");
 }
 
-// l[verify action.call]
-// r[verify operation.composition]
+// spec: ACN#action-invocation
+// spec: OPS#action-composition
 #[test]
 fn call_runs_inner_closure_with_validated_params() {
     let observed: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
@@ -213,8 +213,8 @@ fn call_runs_inner_closure_with_validated_params() {
     let _ = observed;
 }
 
-// l[verify action.call]
-// r[verify operation.composition.params]
+// spec: ACN#action-invocation
+// spec: OPS#sub-action-parameters
 #[test]
 fn missing_required_param_throws() {
     let err = invoke_action(
@@ -239,8 +239,8 @@ fn missing_required_param_throws() {
     );
 }
 
-// l[verify action.call]
-// r[verify operation.composition.params]
+// spec: ACN#action-invocation
+// spec: OPS#sub-action-parameters
 #[test]
 fn reserved_key_in_params_throws() {
     let err = invoke_action(
@@ -261,8 +261,8 @@ fn reserved_key_in_params_throws() {
     );
 }
 
-// l[verify action.call]
-// r[verify operation.composition.params]
+// spec: ACN#action-invocation
+// spec: OPS#sub-action-parameters
 #[test]
 fn default_value_applied_when_omitted() {
     invoke_action(
@@ -286,7 +286,7 @@ fn default_value_applied_when_omitted() {
     .expect("default must be applied");
 }
 
-// l[verify action.call]
+// spec: ACN#action-invocation
 #[test]
 fn exception_from_called_closure_propagates() {
     let err = invoke_action(
@@ -309,7 +309,7 @@ fn exception_from_called_closure_propagates() {
     );
 }
 
-// r[verify operation.composition.cycles]
+// spec: OPS#cycles
 #[test]
 fn direct_self_call_is_rejected() {
     let err = invoke_action(
@@ -329,7 +329,7 @@ fn direct_self_call_is_rejected() {
     );
 }
 
-// r[verify operation.composition.cycles]
+// spec: OPS#cycles
 //
 // Indirect cycles (alpha → bravo → alpha) cannot be exercised through
 // the Rhai surface here: nested closure invocations re-borrow the
@@ -363,8 +363,8 @@ fn indirect_cycle_detection_walks_the_full_stack() {
     );
 }
 
-// l[verify action.call]
-// r[verify history.action-log.entries]
+// spec: ACN#action-invocation
+// spec: HIST#action-calls
 #[test]
 fn sub_action_invoked_log_entry_records_validated_params() {
     use crate::runtime::barrier::CallKind;

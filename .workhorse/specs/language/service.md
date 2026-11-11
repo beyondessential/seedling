@@ -27,7 +27,7 @@ Anonymous services are specified in [APP](app.md#anonymous-resources).
 `port` follows the [port rules](overview.md#ports).
 
 A service port's number is the port at which a client connects to the service.
-A [pod binding](rule:l/pod.tcp) MAY attach it to a pod port with a different number.
+A [pod binding](pod.md#port-bindings) MAY attach it to a pod port with a different number.
 
 ## Routing
 
@@ -35,7 +35,7 @@ The runtime MUST deliver TCP and UDP traffic addressed to a service port to a ta
 If a service port has no target, the runtime MUST drop or reject traffic addressed to it.
 Where a service port has several targets, the runtime SHOULD distribute traffic among them round-robin.
 
-The runtime MUST distribute HTTP traffic that reaches a service through an [ingress](rule:l/ingress.type) under the service's [balancing policy](rule:l/service.balance).
+The runtime MUST distribute HTTP traffic that reaches a service through an [ingress](ingress.md#declaration) under the service's [balancing policy](http-service.md#balancing).
 
 ## Export
 
@@ -51,11 +51,11 @@ The runtime MUST list each exported service to operators, with its export descri
 
 `app.external_service(name: string)` MUST return an `ExternalService` for the named external service.
 An `ExternalService` MUST offer the methods `port`, `http`, `balance` and `description`, with the meanings they have on a `Service`.
-A script MAY [mount](rule:l/pod.mount-serviceport) or bind an external service's ports as for any service.
+A script MAY [mount](pod.md#service-mounts) or bind an external service's ports as for any service.
 
 The runtime MUST route traffic for an external service to the endpoint an operator has mapped to it.
 An external service with no mapping has no target.
-Changes to the mapping are specified in [external service mappings](rule:r/service.external.mapping.events).
+Changes to the mapping are specified in [external service mappings](../runtime/site-resources.md#external-mappings).
 
 In the [action context](app.md#action-context), `app.external_service(name)` MUST return a reference to the static external service of that name, and MUST throw if there is none, as for every [named resource](app.md#named-resources).
 The reference is immutable like every static resource, so `description`, `balance` and `http` MUST throw on it.

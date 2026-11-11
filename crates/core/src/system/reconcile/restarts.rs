@@ -53,8 +53,8 @@ fn exit_status(exit: UnitExit) -> ExitStatus {
 /// Split from the `Reconciler` method so the counter arithmetic — deltas,
 /// resets, and the runtime-initiated exclusion — can be exercised directly
 /// against a database without standing up a reconciliation tick.
-// r[impl autonomous.restart.record]
-// r[impl autonomous.restart.rate]
+// spec: AUTO#restart-record
+// spec: AUTO#crash-loop-detection
 pub(super) fn reconcile_counters(
     db: &Db,
     app: &AppName,
@@ -70,7 +70,7 @@ pub(super) fn reconcile_counters(
         .flatten()
         .map(|g| g as i64);
 
-    // r[impl autonomous.restart.record]
+    // spec: AUTO#restart-record
     // A start the reconciler issued for an instance it has already run is a
     // deliberate restart. The fresh transient unit's counter begins at zero, so
     // re-baseline here rather than reading the drop as a reset next tick.
@@ -159,7 +159,7 @@ pub(super) fn reconcile_counters(
             }
         }
 
-        // r[impl autonomous.restart.rate]
+        // spec: AUTO#crash-loop-detection
         match restarts::recent_recovery_count(db, &hex, settings.window_secs) {
             Ok(count) if count >= settings.threshold => rate_loops.push(CrashLoop {
                 instance: instance.clone(),
@@ -178,8 +178,8 @@ pub(super) fn reconcile_counters(
 }
 
 impl super::Reconciler {
-    // r[impl autonomous.restart.record]
-    // r[impl autonomous.restart.rate]
+    // spec: AUTO#restart-record
+    // spec: AUTO#crash-loop-detection
     /// Run the restart bookkeeping for one app's pod update, appending any
     /// rate-derived crash loops to the update's list.
     ///
@@ -208,7 +208,7 @@ impl super::Reconciler {
     }
 }
 
-// r[impl gc.restarts]
+// spec: GC#restart-records
 /// Drop restart bookkeeping for instances that no longer exist, and re-apply
 /// the per-instance cap. Recording already enforces the cap on write; this
 /// catches rows left by an older build or a partial write.

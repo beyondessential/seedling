@@ -25,15 +25,13 @@ pub struct FiredSchedule {
     pub generation: u64,
 }
 
-// r[impl schedule.tick]
-// r[impl schedule.fire]
-// r[impl schedule.fire.installed-only]
-// r[impl schedule.catch-up]
+// spec: SCHED#firing
+// spec: SCHED#fire-times
 ///
 /// `app_generations` returns `Some(generation)` for apps in the `Installed`
 /// phase and `None` for any other state (NotInstalled, Installing,
 /// Uninstalling, or unknown app). This is the gate for
-/// `r[schedule.fire.installed-only]`: a schedule is only fired when the
+/// `SCHED#firing`: a schedule is only fired when the
 /// callback returns a generation, so that stuck install attempts and
 /// in-progress uninstalls don't keep monopolising the scheduler slot.
 pub fn check_due_schedules(
@@ -95,7 +93,7 @@ pub fn check_due_schedules(
         // on fire, find_next() on the next tick returns the next future
         // boundary, so we do not fire repeatedly for older missed windows.
         if next_fire <= now {
-            // r[impl schedule.fire.installed-only]
+            // spec: SCHED#firing
             let Some((generation, phase)) = installed_app(&row.app) else {
                 tracing::debug!(
                     app = %row.app,
@@ -104,7 +102,7 @@ pub fn check_due_schedules(
                 );
                 continue;
             };
-            // r[impl app.uninstall.exclusive]
+            // spec: TRD#uninstall-admission
             // The phase behind `installed_app` was read before the scheduler
             // was locked, so an uninstall can have landed in between. The
             // scheduler reads it again under its own lock.
@@ -121,12 +119,12 @@ pub fn check_due_schedules(
             let accepted = matches!(result, ScheduleResult::Accepted);
             match result {
                 ScheduleResult::Accepted | ScheduleResult::Queued => {
-                    // r[impl schedule.catch-up]
+                    // spec: SCHED#fire-times
                     // Stamp the fire when it happens, not when it is intended.
                     // A queued fire exists only in the scheduler's in-memory
                     // VecDeque, so stamping it here lost the operation on a
                     // restart while the database said it had fired — and
-                    // r[schedule.catch-up] then had nothing to catch up on.
+                    // SCHED#fire-times then had nothing to catch up on.
                     // While it stays queued the next tick's re-fire is
                     // rejected as SameAppAlreadyQueued and silently dropped,
                     // so leaving it unstamped cannot double-fire; after a
@@ -156,7 +154,7 @@ pub fn check_due_schedules(
                             .find(|q| q.app == row.app)
                             .map(|q| q.operation_id.clone())
                     };
-                    // r[impl schedule.audit]
+                    // spec: SCHED#firing
                     tracing::info!(
                         app = %row.app,
                         action = %row.action,
@@ -202,7 +200,7 @@ impl ScheduleTicker {
         Self { last_check: None }
     }
 
-    // r[impl schedule.tick]
+    // spec: SCHED#firing
     /// Returns `Some(now)` if it is time to run a schedule tick, updating
     /// internal state. The caller should then pass `now` to
     /// `check_due_schedules`. Returns `None` if the interval has not elapsed.
@@ -240,7 +238,7 @@ mod tests {
         ActionName::new(s).unwrap()
     }
 
-    // r[verify schedule.state]
+    // spec: SCHED#schedule-records
     #[test]
     fn schedule_table_roundtrip() {
         let db = Db::open_in_memory().unwrap();
@@ -270,7 +268,7 @@ mod tests {
         );
     }
 
-    // r[verify schedule.prune]
+    // spec: SCHED#schedule-records
     #[test]
     fn prune_removes_stale_schedules() {
         let db = Db::open_in_memory().unwrap();
@@ -288,8 +286,7 @@ mod tests {
         assert_eq!(rows[0].action, "backup");
     }
 
-    // r[verify schedule.fire]
-    // r[verify schedule.tick]
+    // spec: SCHED#firing
     #[test]
     fn check_due_fires_overdue_schedule() {
         let db = Db::open_in_memory().unwrap();
@@ -315,7 +312,7 @@ mod tests {
         assert!(fired[0].accepted);
     }
 
-    // r[verify schedule.catch-up]
+    // spec: SCHED#fire-times
     // A schedule whose next fire time sits well in the past (because the
     // daemon was offline through the cron boundary) must fire once on the
     // next tick, rather than staying stuck forever because the old 59 s
@@ -354,7 +351,7 @@ mod tests {
         );
     }
 
-    // r[verify schedule.start-reject]
+    // spec: SCHED#start-action
     #[test]
     fn on_schedule_rejects_start_action() {
         use crate::defs::action::Action;

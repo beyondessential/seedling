@@ -1,6 +1,6 @@
 //! Host-level system facts surfaced to BSL as `const.*` constants.
 //!
-//! Values populated here back constants defined in `docs/spec/language.md`.
+//! Values populated here back constants defined in `spec: CONST`.
 //! Some values (IPv4/IPv6 egress, BTRFS availability, etc.) can only be
 //! determined asynchronously or from runtime daemon state, so they are
 //! cached here once at daemon startup and read synchronously from

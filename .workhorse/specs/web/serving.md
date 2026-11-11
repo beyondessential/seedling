@@ -97,8 +97,8 @@ The web interface MUST connect to the daemon's Operator Interface as a client, a
 It MUST authenticate with a persistent client key, generating it on first start, so that an operator authorises the web interface once.
 It SHOULD log the key's fingerprint when it starts.
 
-The web interface MUST verify the daemon by pinning its [SPKI fingerprint](rule:i/transport.server-identity).
-The fingerprint MAY be given directly, or as the path of a file holding it, such as the [file the daemon publishes](rule:i/transport.server-identity.published).
+The web interface MUST verify the daemon by pinning its [SPKI fingerprint](../interface/transport.md#server-identity).
+The fingerprint MAY be given directly, or as the path of a file holding it, such as the [file the daemon publishes](../interface/transport.md#server-identity).
 The web interface MUST NOT start when it is given neither.
 When given a file, the web interface MUST read it afresh on every connection attempt and ignore surrounding whitespace.
 A file that is absent, unreadable or holds only whitespace MUST count as a failed attempt.
@@ -116,7 +116,7 @@ When a request finds the daemon connection broken, the web interface MUST open a
 Requests that found the same broken connection MUST share one replacement attempt.
 The web interface MUST NOT close any daemon connection other than the one found broken.
 
-Requests the web interface makes on its own behalf MUST carry its own [actor](rule:i/wire.actor), with `kind` `web`, `id` the first eight hexadecimal digits of its client key's fingerprint, and `display` `seedling-web`.
+Requests the web interface makes on its own behalf MUST carry its own [actor](../interface/wire.md#actor-attribution), with `kind` `web`, `id` the first eight hexadecimal digits of its client key's fingerprint, and `display` `seedling-web`.
 
 ## Console delivery
 
@@ -180,7 +180,7 @@ The web interface MUST try these credential sources in order, and authenticate t
 3. The `token` member.
 4. The `password` member, checked as [password login](#password-login) specifies.
 
-The web interface MUST resolve an [actor](rule:i/wire.actor) for the request from the source that authenticated it.
+The web interface MUST resolve an [actor](../interface/wire.md#actor-attribution) for the request from the source that authenticated it.
 
 | source | `kind` | `id` | `display` | `session` |
 | --- | --- | --- | --- | --- |
@@ -293,7 +293,7 @@ The web interface MUST relay each log stream over a daemon connection of its own
 When the daemon refuses a log stream, the web interface MUST relay the daemon's error `code` and `message`.
 When the daemon ends a log stream, the web interface MUST finish the client's stream.
 
-The web interface returns these error codes in addition to those [WIRE](rule:i/wire.error-codes) defines.
+The web interface returns these error codes in addition to those [WIRE](../interface/wire.md#error-codes) defines.
 
 | code | meaning |
 | --- | --- |
@@ -312,12 +312,12 @@ A client subscribing through the web interface MUST first receive the most recen
 Each event MUST reach a subscriber once, in the order the web interface relayed it, with no gap or overlap between the replayed and the live events.
 
 The web interface MUST relay the daemon's `EventsDropped` events unchanged.
-When a subscriber falls behind the web interface's own feed and the web interface skips events for it, the web interface MUST write an `EventsDropped` event to that subscriber, with the meaning [event gap](rule:i/event.gap) gives it.
+When a subscriber falls behind the web interface's own feed and the web interface skips events for it, the web interface MUST write an `EventsDropped` event to that subscriber, with the meaning [event gap](../interface/events.md#gaps) gives it.
 When the web interface subscribes to the daemon again after losing a subscription, it MUST relay an `EventsDropped` event without a `skipped` member to every subscriber.
 
 ## Shell relay
 
-This section applies to `/shells/start` ([SHL](rule:i/shell.open)) and `/volumes/shell` ([SHL](rule:i/volumes.shell)) requests.
+This section applies to `/shells/start` ([SHL](../interface/shells.md#opening-an-app-shell)) and `/volumes/shell` ([SHL](../interface/shells.md#volume-shells)) requests.
 
 The web interface MUST open a bidirectional stream to the daemon on its shared connection and write the request to it.
 It MUST relay the daemon's first line to the client unchanged, whether a handshake response or an error envelope.
@@ -330,8 +330,8 @@ Output streams open at the same time on one web session MUST begin with differen
 A client MUST route each incoming unidirectional stream to its shell by those eight bytes, and MUST accept a stream that arrives before it has read the handshake response.
 
 The web interface MUST relay the bytes the client writes after its request to the daemon unchanged, and finish the daemon stream when the client's direction ends.
-It MUST relay the daemon's [exit frame](rule:i/shell.exit) to the client and then finish the client's stream.
-If the daemon's stream ends without a complete, newline-terminated exit frame, the web interface MUST stop the shell with [`/shells/stop`](rule:i/shell.stop).
+It MUST relay the daemon's [exit frame](../interface/shells.md#session-end) to the client and then finish the client's stream.
+If the daemon's stream ends without a complete, newline-terminated exit frame, the web interface MUST stop the shell with [`/shells/stop`](../interface/shells.md#stopping-a-session).
 
 The web interface MUST take a shell's output streams from the daemon connection that carried its handshake.
 When the web interface replaces its daemon connection, shells started on the old connection end, and the old connection's closing MUST NOT affect shells started on the new one.
@@ -384,8 +384,8 @@ The web interface MUST emit exactly one `WebSessionStopped` event for each web s
 | member | type | meaning |
 | --- | --- | --- |
 | `web` | array of object | Every recorded web session |
-| `shells` | array of object | The daemon's [shell records](rule:i/shell.list) |
-| `forwards` | array of object | The daemon's [port forwards](rule:i/forward.list) |
+| `shells` | array of object | The daemon's [shell records](../interface/shells.md#listing-sessions) |
+| `forwards` | array of object | The daemon's [port forwards](../interface/port-forwards.md#listing-forwards) |
 | `actors` | array of object | The actors recently active on the host |
 
 Each `web` entry has these members.

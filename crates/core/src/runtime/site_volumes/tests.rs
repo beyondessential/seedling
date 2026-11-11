@@ -15,7 +15,7 @@ fn def(name: &str, kind: SiteVolumeKind) -> SiteVolumeDef {
     }
 }
 
-// r[verify volume.site]
+// spec: SITE#site-volumes
 #[test]
 fn create_and_get_round_trips_all_kinds() {
     let db = Db::open_in_memory().expect("open");
@@ -90,7 +90,7 @@ fn create_and_get_round_trips_all_kinds() {
     );
 }
 
-// r[verify volume.site.snapshot]
+// spec: SITE#site-volume-snapshots
 #[test]
 fn only_snapshot_volumes_are_read_only() {
     let managed = def("m", SiteVolumeKind::Managed);
@@ -111,7 +111,7 @@ fn only_snapshot_volumes_are_read_only() {
     assert!(snap.is_read_only());
 }
 
-// r[verify volume.site]
+// spec: SITE#site-volumes
 #[test]
 fn list_returns_volumes_sorted_by_name() {
     let db = Db::open_in_memory().expect("open");
@@ -126,7 +126,7 @@ fn list_returns_volumes_sorted_by_name() {
     assert_eq!(names, ["alpha", "mu", "zeta"]);
 }
 
-// r[verify volume.site.lifecycle]
+// spec: SITE#site-volumes
 #[test]
 fn delete_removes_volume_and_reports_whether_row_existed() {
     let db = Db::open_in_memory().expect("open");

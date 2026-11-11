@@ -82,7 +82,7 @@ export function SafetyModeSwitcher({ peerElevation }: { peerElevation?: PeerElev
   const [anchorEl, setAnchorEl] = useState<HTMLElement | null>(null);
   const [pendingDangerous, setPendingDangerous] = useState(false);
 
-  // w[impl sessions.safety-mode]
+  // spec: UI#guarded-controls
   // Per-tier peer counts drive the inline indicator on the matching menu
   // item. The session-count icon in the navbar already flags peer
   // elevation globally, so we don't repeat that signal alongside the
@@ -165,7 +165,7 @@ export function SafetyModeSwitcher({ peerElevation }: { peerElevation?: PeerElev
               : m !== "read"
                 ? `${MODE_TOOLTIP[m]} · auto-reverts after ${ELEVATION_MINUTES} min`
                 : MODE_TOOLTIP[m];
-          // w[impl sessions.safety-mode]
+          // spec: UI#guarded-controls
           const peerCount = m !== "read" ? peerCountAt(m) : 0;
           return (
             <MenuItem

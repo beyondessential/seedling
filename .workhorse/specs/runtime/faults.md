@@ -44,7 +44,7 @@ A fault about an [app](../overview.md#app) as a whole has an empty subject.
 The runtime MUST file a fault about the host rather than an app against the app name `_system`.
 The runtime MUST file a fault about its own reporting to other systems against the app name `seedling`.
 
-The runtime MUST surface every active fault through the [Operator Interface](../overview.md#operator-interface), in the [fault record](rule:i/fault.record) shape.
+The runtime MUST surface every active fault through the [Operator Interface](../overview.md#operator-interface), in the [fault record](../interface/faults.md#fault-records) shape.
 The runtime MUST emit an [event](../interface/events.md) when it files a fault and when it clears one.
 The runtime SHOULD log an error when it files a fault.
 
@@ -81,9 +81,9 @@ The runtime MUST file and clear the faults below against the app the instance be
 | `observe_failed` | the instance | observing the instance fails on 3 consecutive iterations of the reconciliation loop | an observation of the instance succeeds | condition |
 | `registry_error` | the instance | the runtime cannot read the instance's recorded identity when starting it | the instance starts | event |
 | `external_volume_not_mapped` | the instance | the instance mounts an external volume that has no mapping | the instance starts | condition |
-| `crash_loop` | the instance | the instance's restart rate reaches the [configured threshold](rule:r/autonomous.restart.rate), or its supervisor has [given up restarting it](rule:r/autonomous.restart.start-limit-hit) | the instance is observed healthy, or an operator clears it | latched |
-| `health_check_failed` | the instance | the instance has a [healthcheck](rule:l/deployment.healthcheck) and has been unhealthy without a break for longer than `start_period` plus `retries` × `interval` | the instance is observed healthy | condition |
-| `health_check_replace_failed` | the Deployment | the [replacement guard](rule:r/autonomous.healthcheck-replace.guard) trips for the Deployment | the app's [generation](../overview.md#generation) changes, or an operator clears it | latched |
+| `crash_loop` | the instance | the instance's restart rate reaches the [configured threshold](autonomous.md#crash-loop-detection), or its supervisor has [given up restarting it](autonomous.md#restart-pacing) | the instance is observed healthy, or an operator clears it | latched |
+| `health_check_failed` | the instance | the instance has a [healthcheck](../language/deployment.md#health-checks) and has been unhealthy without a break for longer than `start_period` plus `retries` × `interval` | the instance is observed healthy | condition |
+| `health_check_replace_failed` | the Deployment | the [replacement guard](autonomous.md#replacement-guard) trips for the Deployment | the app's [generation](../overview.md#generation) changes, or an operator clears it | latched |
 
 An `image_pull_failed` fault MUST name the image reference.
 An `external_volume_not_mapped` fault MUST name the external volume, and the runtime MUST NOT start the instance while the mapping is missing.
@@ -111,15 +111,15 @@ The runtime MUST file and clear the faults below against the app, with an empty 
 | kind | subject | filed when | clears when | shape |
 | --- | --- | --- | --- | --- |
 | `script_error` | none | the app's definition fails to evaluate, at registration, on an update, on a parameter change, on a change to the registry allowlist, or when the runtime starts | the definition next evaluates | condition |
-| `disallowed_registry` | none | an image a Deployment or Job declares is from a registry outside the [allowlist](rule:l/container.image.registry-allowlist) | no declared image is outside the allowlist | condition |
+| `disallowed_registry` | none | an image a Deployment or Job declares is from a registry outside the [allowlist](../language/container.md#registry-allowlist) | no declared image is outside the allowlist | condition |
 | `registry_error` | none | the runtime cannot compute the app's desired state | the runtime next computes it | condition |
 | `operation_failed` | none | a [lifecycle operation](../overview.md#lifecycle-operation) for the app fails, or its action closure does not compile | a later lifecycle operation for the app completes | event |
 | `operation_cancelled` | none | a lifecycle operation for the app is cancelled | a later lifecycle operation for the app completes | event |
 | `install_interrupted` | none | at startup, an interrupted install cannot be resumed because its parameter values are missing or cannot be decrypted | an operator clears it | latched |
 | `uninstall_unidentifiable_units` | none | an uninstall finds supervised units that may belong to the app but no recorded instance identities to match them against | the app's teardown completes | latched |
-| `definition_unsupported` | none | the running Seedling does not satisfy the app's [Seedling version requirement](rule:l/bsl.bundle.seedling-versions) | the definition is replaced by one the running Seedling satisfies, or the runtime starts as a version that satisfies it | condition |
-| `definition_source_moved` | the digest the reference now selects | a successful [re-check](rule:r/definition.recheck) finds that the reference in the app's fetched definition selects a digest other than the running one | a successful re-check selects the running digest again, or the app's definition is replaced | condition |
-| `canopy_offer_absent` | none | the app [relies on Canopy](rule:r/canopy.offer.absent) and no offer has been live for 15 minutes | an offer is live, Canopy access is disabled, or the app stops relying on Canopy | condition |
+| `definition_unsupported` | none | the running Seedling does not satisfy the app's [Seedling version requirement](../language/bundle.md#seedling-version-requirement) | the definition is replaced by one the running Seedling satisfies, or the runtime starts as a version that satisfies it | condition |
+| `definition_source_moved` | the digest the reference now selects | a successful [re-check](definition-recheck.md#resolution) finds that the reference in the app's fetched definition selects a digest other than the running one | a successful re-check selects the running digest again, or the app's definition is replaced | condition |
+| `canopy_offer_absent` | none | the app [relies on Canopy](canopy-reporting.md#missing-offers) and no offer has been live for 15 minutes | an offer is live, Canopy access is disabled, or the app stops relying on Canopy | condition |
 
 A `definition_source_moved` fault MUST identify the reference and both digests.
 A re-check that fails MUST neither file nor clear it.
@@ -136,7 +136,7 @@ The runtime MUST file and clear the faults below against the app owning the ingr
 | `ingress_conflict` | the app ingress or the site ingress | an app ingress and a site ingress attachment claim the same hostname and port, as [SITE](site-resources.md#ingress-conflicts) specifies | the hostname and port are no longer in conflict | condition |
 | `proxy_apply_failed` | the app ingress or the site ingress | applying a proxy configuration that includes the ingress fails | a later proxy configuration is applied | condition |
 | `site_ingress_target_missing` | the site ingress attachment | a site ingress attachment forwards to an app service that does not exist | the attachment's target exists, or the attachment is removed | condition |
-| `service_degraded` | the service | the service's routing pool has [fallen back](rule:r/lifecycle.service.routing-pool) to backends that are running but unhealthy | a backend in the pool is healthy, or the service is unscheduled | condition |
+| `service_degraded` | the service | the service's routing pool has [fallen back](lifecycle.md#routing-pool) to backends that are running but unhealthy | a backend in the pool is healthy, or the service is unscheduled | condition |
 | `site_service_endpoint_unresolvable` | the site service | an endpoint of the site service is [unresolvable](site-resources.md#endpoint-addressing) | no endpoint of the site service is unresolvable | condition |
 | `site_service_endpoint_unroutable` | the site service | an endpoint of the site service is [unroutable](site-resources.md#endpoint-addressing) | no endpoint of the site service is unroutable | condition |
 
@@ -151,8 +151,8 @@ A site service fault MUST name the failing endpoints, and an unroutable one MUST
 | --- | --- | --- | --- | --- | --- |
 | `cert_acquisition_failed` | the ingress's app | the ingress instance | no valid certificate has been observed for the ingress's hostname 180 seconds after it began to need one, while no acquisition is in progress | a valid certificate is observed for the hostname | condition |
 | `cert_issue_failed` | `_system` | the hostname | issuing a certificate for the hostname through ACME with DNS validation or through Tailscale fails, or ACME issuance needs a contact email and none is set | a certificate for the hostname is issued, or no ingress needs one for it | event |
-| `cert_expiring_soon` | the ingress's app | the ingress | a certificate the runtime cannot renew itself, [as TLS specifies](rule:r/tls.fault.expiring), expires within 14 days | a certificate expiring later replaces it, or no ingress uses the hostname | condition |
-| `canopy_certificate_failed` | the ingress's app | the ingress | the ingress's certificate cannot be obtained or replaced through Canopy, [as TCAN specifies](rule:r/tls.canopy.fault) | a usable certificate replaces the one in doubt | condition |
+| `cert_expiring_soon` | the ingress's app | the ingress | a certificate the runtime cannot renew itself, [as TLS specifies](tls/certificates.md#expiring-certificates), expires within 14 days | a certificate expiring later replaces it, or no ingress uses the hostname | condition |
+| `canopy_certificate_failed` | the ingress's app | the ingress | the ingress's certificate cannot be obtained or replaced through Canopy, [as TCAN specifies](tls/canopy.md#faults) | a usable certificate replaces the one in doubt | condition |
 
 If the runtime cannot read whether a certificate is held for a hostname, it MUST neither file nor clear `cert_acquisition_failed` for that hostname.
 
@@ -184,7 +184,7 @@ The runtime MUST file and clear the faults below against `seedling`, with an emp
 
 | kind | filed when | clears when | shape |
 | --- | --- | --- | --- |
-| `canopy_report_failed` | a [report](rule:r/canopy.report.fault) to Canopy fails while an offer is live | a later report succeeds, Canopy access is disabled, or no offer is live | condition |
+| `canopy_report_failed` | a [report](canopy-reporting.md#report-failure-fault) to Canopy fails while an offer is live | a later report succeeds, Canopy access is disabled, or no offer is live | condition |
 | `audit_lag` | the audit log writer falls behind and drops events | an operator clears it | event |
 
 An `audit_lag` fault MUST state how many events were dropped.

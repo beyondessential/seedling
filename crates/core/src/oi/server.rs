@@ -55,7 +55,7 @@ fn build_tls_config(
         .with_cert_resolver(resolver);
 
     tls_config.key_log = Arc::new(rustls::KeyLogFile::new());
-    // i[transport.alpn]
+    // TRN#connection
     tls_config.alpn_protocols = vec![OI_ALPN.to_vec()];
 
     Ok(tls_config)
@@ -69,7 +69,7 @@ fn extract_client_fp(conn: &quinn::Connection) -> Option<String> {
     certs.first().map(|c| keys::fingerprint(c.as_ref()))
 }
 
-// i[wire.actor]
+// WIRE#actor-attribution
 fn synthesise_actor(state: &OiState, fp: Option<&str>) -> Arc<Actor> {
     let id = fp.map(str::to_owned);
     let display = fp
@@ -90,15 +90,15 @@ fn synthesise_actor(state: &OiState, fp: Option<&str>) -> Arc<Actor> {
 
 /// Write the server's SPKI fingerprint (hex, newline-terminated) to
 /// `oi.fingerprint` in the data directory.
-// i[impl transport.server-identity.published]
+// spec: TRN#server-identity
 fn publish_fingerprint(data_dir: &Path, fingerprint: &str) -> std::io::Result<()> {
     std::fs::write(data_dir.join("oi.fingerprint"), format!("{fingerprint}\n"))
 }
 
-// i[transport.quic]
-// i[transport.server-identity]
-// i[transport.client-auth]
-// i[transport.listen]
+// TRN#connection
+// TRN#server-identity
+// TRN#client-authentication
+// TRN#listen-addresses
 pub async fn run(
     state: Arc<OiState>,
     addrs: &[SocketAddr],
@@ -200,10 +200,10 @@ async fn accept_loop(endpoint: Endpoint, state: Arc<OiState>, stream_semaphore: 
     }
 }
 
-// i[stream.control]
-// i[stream.dispatch]
-// i[stream.concurrency-limit]
-// i[datagram.forward]
+// WIRE#control-requests
+// WIRE#stream-dispatch
+// WIRE#stream-limit
+// WIRE#port-forward-data
 async fn handle_connection(
     conn: quinn::Connection,
     state: Arc<OiState>,
@@ -224,14 +224,14 @@ async fn handle_connection(
         .or_else(|| client_fp.clone())
         .unwrap_or_else(|| "unauthenticated".to_owned());
 
-    // i[impl transport.client-auth] — the handshake authorised this
+    // spec: TRN#client-authentication — the handshake authorised this
     // connection once; the subscription is how it learns that the key it
     // was authorised with has since gone.
     let mut keys_changed = state.trusted_keys.subscribe();
 
     loop {
         tokio::select! {
-            // i[impl key.revoke]
+            // spec: KEY#revoking-a-key
             Ok(()) = keys_changed.changed() => {
                 // Asked afresh rather than taken from the signal, so a
                 // connection that slept through several changes still sees
@@ -294,13 +294,13 @@ async fn handle_connection(
         }
     }
 
-    // i[forward.lifetime] — tear down all port forwards belonging to this connection.
+    // FWD#forward-lifetime — tear down all port forwards belonging to this connection.
     let entries = state.forwards.lock().remove_by_conn(conn_id);
     for entry in entries {
         let _ = entry.stop_tx.send(true);
     }
 
-    // i[canopy.offer.lifetime] — an offer lives no longer than the connection
+    // RLY#offer-lifetime — an offer lives no longer than the connection
     // that made it. No actor on the event: nobody asked for this, the connection
     // simply went away.
     let ended = state.canopy.remove_by_conn(conn_id);
@@ -316,7 +316,7 @@ async fn handle_connection(
             None,
         );
     }
-    // r[impl canopy.report.fault] — losing the last offer ends the expectation
+    // spec: CNR#report-failure-fault — losing the last offer ends the expectation
     // to report, so a fault from when it held must not outlive it.
     if !ended.is_empty() {
         crate::runtime::canopy::absent::offer_was_live(&state);
@@ -330,7 +330,7 @@ async fn handle_bidi_stream(
     state: Arc<OiState>,
     stream_semaphore: Arc<Semaphore>,
 ) {
-    // i[stream.concurrency-limit]
+    // WIRE#stream-limit
     let stream_permit = match stream_semaphore.try_acquire() {
         Ok(permit) => permit,
         Err(_) => {
@@ -370,7 +370,7 @@ async fn handle_bidi_stream(
 
     tracing::trace!(line = %String::from_utf8_lossy(&line).trim_end(), "bidi stream dispatch");
 
-    // i[stream.forward] — forward data stream, identified by the "forward" key.
+    // WIRE#port-forward-data — forward data stream, identified by the "forward" key.
     if let Some(forward_id) = first_obj
         .get("forward")
         .and_then(|v| v.as_str())
@@ -386,7 +386,7 @@ async fn handle_bidi_stream(
         .and_then(|m| m.as_str())
         .map(str::to_owned);
 
-    // i[event.subscribe]
+    // EVT#subscription
     if maybe_method.as_deref() == Some("/events/subscribe") {
         drop(stream_permit);
         // Send the response on the bidi stream first.
@@ -398,7 +398,7 @@ async fn handle_bidi_stream(
         }
         let _ = send.finish();
 
-        // i[stream.events]
+        // WIRE#subscription-requests
         // Open a server-initiated unidirectional stream and push events.
         let uni = match conn.open_uni().await {
             Ok(s) => s,
@@ -413,7 +413,7 @@ async fn handle_bidi_stream(
         return;
     }
 
-    // i[logs.stream]
+    // LOG#log-stream-request
     if maybe_method.as_deref() == Some("/logs/stream") {
         drop(stream_permit);
         #[derive(serde::Deserialize)]
@@ -472,7 +472,7 @@ async fn handle_bidi_stream(
         }
         let _ = send.finish();
 
-        // i[stream.logs]
+        // WIRE#subscription-requests
         let uni = match conn.open_uni().await {
             Ok(s) => s,
             Err(e) => {
@@ -485,21 +485,21 @@ async fn handle_bidi_stream(
         return;
     }
 
-    // i[impl shell.concurrent]
+    // spec: SHL#concurrency
     if maybe_method.as_deref() == Some("/shells/start") {
         drop(stream_permit);
         open_shell_session(conn, send, recv, leftover, line, state).await;
         return;
     }
 
-    // i[volumes.shell]
+    // SHL#volume-shells
     if maybe_method.as_deref() == Some("/volumes/shell") {
         drop(stream_permit);
         open_volume_shell_session(conn, send, recv, leftover, line, state).await;
         return;
     }
 
-    // i[status.infra]
+    // STS#infrastructure-status
     if maybe_method.as_deref() == Some("/infra/status") {
         let result = super::handler::get_infra_status(&state).await;
         let response = match result {
@@ -516,7 +516,7 @@ async fn handle_bidi_stream(
         return;
     }
 
-    // i[forward.request] — /forwards/start keeps the control stream open for the
+    // FWD#requesting-a-forward — /forwards/start keeps the control stream open for the
     // duration of the forward; it must be handled outside the normal req/resp path.
     if maybe_method.as_deref() == Some("/forwards/start") {
         drop(stream_permit);
@@ -524,7 +524,7 @@ async fn handle_bidi_stream(
         return;
     }
 
-    // i[wire.actor] — extract actor from request or synthesise from client identity.
+    // WIRE#actor-attribution — extract actor from request or synthesise from client identity.
     let client_fp = extract_client_fp(&conn);
     let actor = first_obj
         .get("actor")
@@ -538,7 +538,7 @@ async fn handle_bidi_stream(
     let rest = recv.read_to_end(MAX_REQUEST_SIZE).await.unwrap_or_default();
     let buf = [line, rest].concat();
 
-    // i[canopy.offer] — registering an offer needs the connection it arrived on,
+    // RLY#offers — registering an offer needs the connection it arrived on,
     // so these are dispatched here rather than through the shared table. Done
     // after the actor is resolved so their events carry it like every other
     // request's do.
@@ -587,8 +587,8 @@ async fn read_json_line(
     Ok((buf[..total].to_vec(), Vec::new()))
 }
 
-// i[stream.events]
-// i[event.ordering]
+// WIRE#subscription-requests
+// EVT#ordering
 async fn event_stream_task(
     mut send: quinn::SendStream,
     rx: tokio::sync::broadcast::Receiver<seedling_protocol::events::OiEvent>,
@@ -610,7 +610,7 @@ async fn pump_events(
             Ok(event) => event,
             Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
                 tracing::warn!("event subscriber lagged, dropped {n} events");
-                // i[impl event.gap]
+                // spec: EVT#gaps
                 seedling_protocol::events::OiEvent::events_dropped(Some(n))
             }
             Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
@@ -636,7 +636,7 @@ mod event_stream_tests {
 
     use super::*;
 
-    // i[verify event.gap]
+    // spec: EVT#gaps
     #[tokio::test]
     async fn lagged_subscriber_receives_gap_marker() {
         let (tx, rx) = tokio::sync::broadcast::channel(2);
@@ -760,8 +760,8 @@ mod connection_tests {
         state.canopy.count()
     }
 
-    // i[verify canopy.offer]
-    // i[verify canopy.offer.lifetime]
+    // spec: RLY#offers
+    // spec: RLY#offer-lifetime
     #[test]
     fn an_offer_is_registered_over_a_connection_and_dies_with_it() {
         let oi = TestOi::new();
@@ -801,7 +801,7 @@ mod connection_tests {
         });
     }
 
-    // r[verify canopy.report.fault]
+    // spec: CNR#report-failure-fault
     #[test]
     fn losing_the_last_offer_clears_a_report_fault() {
         let oi = TestOi::new();
@@ -850,7 +850,7 @@ mod connection_tests {
         });
     }
 
-    // i[verify canopy.withdraw]
+    // spec: RLY#offer-lifetime
     #[test]
     fn a_client_can_withdraw_its_own_offer_and_keep_the_connection() {
         let oi = TestOi::new();
@@ -889,7 +889,7 @@ mod connection_tests {
         });
     }
 
-    // i[verify canopy.offer.disabled]
+    // spec: RLY#disabled-access
     #[test]
     fn a_disabled_instance_refuses_an_offer() {
         let oi = TestOi::new();
@@ -928,8 +928,8 @@ mod connection_tests {
             .is_ok()
     }
 
-    // i[verify key.revoke]
-    // i[verify transport.client-auth]
+    // spec: KEY#revoking-a-key
+    // spec: TRN#client-authentication
     #[test]
     fn revoking_a_key_closes_the_connection_it_authenticated() {
         let oi = TestOi::new();
@@ -981,7 +981,7 @@ mod connection_tests {
         });
     }
 
-    // i[verify key.revoke]
+    // spec: KEY#revoking-a-key
     #[test]
     fn revoking_one_key_leaves_another_clients_connection_alone() {
         let oi = TestOi::new();
@@ -1026,7 +1026,7 @@ mod auth_tests {
     use super::{Arc, build_tls_config, publish_fingerprint};
     use crate::oi::auth::{TrustedKeys, new_trusted_keys};
 
-    // i[verify transport.server-identity.published]
+    // spec: TRN#server-identity
     // The published file must carry exactly the fingerprint clients pin, so a
     // reader that trims whitespace recovers the fingerprint verbatim.
     #[test]
@@ -1091,7 +1091,7 @@ mod auth_tests {
         }
     }
 
-    // i[transport.client-auth]
+    // TRN#client-authentication
     // A hostile client presenting a key the daemon does not trust must not
     // obtain a usable connection, while a trusted key is admitted.
     #[tokio::test]

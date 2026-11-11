@@ -50,7 +50,7 @@ interface ReportedApplication {
   type: string;
 }
 
-// w[impl routes.canopy]
+// spec: UI#canopy-access
 export default function Canopy() {
   const { data, loading, error, refetch } = useOiQuery<CanopyStatus>(
     "/canopy/status",

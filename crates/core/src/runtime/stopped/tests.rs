@@ -7,7 +7,7 @@ fn app(s: &str) -> AppName {
     AppName::new(s).unwrap()
 }
 
-// i[verify resource.stop]
+// spec: CTL#resource-stop
 #[test]
 fn stop_and_load_round_trip_is_idempotent() {
     let db = Db::open_in_memory().expect("open");
@@ -21,7 +21,7 @@ fn stop_and_load_round_trip_is_idempotent() {
     assert!(stopped.contains(&(ResourceKind::Ingress, "public".to_owned())));
 }
 
-// i[verify resource.stop]
+// spec: CTL#resource-stop
 #[test]
 fn load_stopped_is_scoped_to_app() {
     let db = Db::open_in_memory().expect("open");
@@ -33,7 +33,7 @@ fn load_stopped_is_scoped_to_app() {
     assert!(load_stopped(&db, &app("app-c")).expect("load c").is_empty());
 }
 
-// i[verify resource.unstop]
+// spec: CTL#resource-stop
 #[test]
 fn unstop_removes_only_the_named_resource() {
     let db = Db::open_in_memory().expect("open");
@@ -52,7 +52,7 @@ fn unstop_removes_only_the_named_resource() {
     );
 }
 
-// i[verify resource.unstop-all]
+// spec: CTL#resource-stop
 #[test]
 fn unstop_all_clears_only_that_app() {
     let db = Db::open_in_memory().expect("open");

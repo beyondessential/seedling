@@ -3,7 +3,7 @@
 // exiting. We verify by pointing it at a port nothing is listening on
 // and watching the backoff schedule walk through 1s → 2s.
 //
-// w[verify daemon.connect-retry]
+// spec: WEB#daemon-connection
 
 import { expect, test } from "@playwright/test";
 

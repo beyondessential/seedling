@@ -14,7 +14,7 @@ A named task an app declares for an [operator](../overview.md#operator) or the [
 
 ### Action closure
 
-A closure a script hands to the runtime to run with a [runtime handle](rt.md#runtime-handle): the closure of an action, a shell or the install action, or a parameter's [change handler](rule:l/param.on-change).
+A closure a script hands to the runtime to run with a [runtime handle](rt.md#runtime-handle): the closure of an action, a shell or the install action, or a parameter's [change handler](parameter.md#change-handlers).
 
 ### Shell
 
@@ -32,7 +32,7 @@ The definitions of the params an action, shell or install action accepts, keyed 
 
 A script declares an action with `app.on_action(name: string, fn: closure)` or `app.on_action(name: string, fn: closure, options: map)`.
 Either method returns an `Action` handle for the declared action.
-A `name` that is not a valid [name](rule:l/bsl.name) MUST throw.
+A `name` that is not a valid [name](overview.md#names) MUST throw.
 
 The `options` map MAY carry these keys:
 
@@ -64,7 +64,7 @@ The install action has no name, and `app.action` MUST NOT return it.
 `action.invoke()` and `action.invoke(params: map)` run the action's closure inline, within the [lifecycle operation](../overview.md#lifecycle-operation) of the calling action closure, and return no value.
 `action.invoke()` MUST behave as `action.invoke(#{})`.
 The runtime MUST call the invoked closure with the caller's runtime handle.
-How the invoked closure shares the caller's operation is specified by [action composition](rule:r/operation.composition).
+How the invoked closure shares the caller's operation is specified by [action composition](../runtime/operations.md#action-composition).
 
 Every value in `params` MUST be representable in JSON: a unit, a boolean, an integer, a finite floating-point number, a string, or an array or map of such values.
 Any other value MUST make `invoke` throw.
@@ -84,7 +84,7 @@ If the invoker supplies no params, the param map MUST be empty.
 
 Param keys ending in `_volume` or `_filename` are reserved for the runtime.
 The runtime MUST reject any invocation, by an operator or by `invoke`, whose supplied params include a reserved key.
-The runtime MUST insert reserved keys only as [operation volume params](rule:r/operation.volume-param) specify.
+The runtime MUST insert reserved keys only as [operation volume params](../runtime/operations.md#operation-scoped-volumes) specify.
 
 > [!NOTE]
 > A declared param's name is a valid name, which cannot contain `_`, so no declared param collides with a reserved key.
@@ -104,7 +104,7 @@ A param schema is an object map from param name to a param definition, which is 
 Declaring a param schema MUST throw if any param name is not a valid name, any definition is not a map, a definition carries any other key, a key's value is not of the type in the table, or `kind` names no param kind.
 
 `secret` defaults to `true` for the `password` and `weak-password` kinds and to `false` for every other kind.
-The runtime MUST handle a param whose `secret` is `true` as it handles a [secret parameter](rule:l/param.schema.secret).
+The runtime MUST handle a param whose `secret` is `true` as it handles a [secret parameter](parameter.md#secret-parameters).
 
 The runtime MUST validate an invocation's params against the schema, in this order, before the closure runs:
 
@@ -152,13 +152,13 @@ That generator's default output SHOULD be 32 random bytes written as 64 lowercas
 ### Volume params
 
 The `volume` kind MUST be accepted in the param schemas of actions and shells.
-It MUST throw in the install action's param schema and in a [parameter's kind](rule:l/param.schema.kind).
+It MUST throw in the install action's param schema and in a [parameter's kind](parameter.md#schema).
 
 The runtime MUST reject an invocation whose `volume` param names a site volume that does not exist.
-When it dispatches the invocation, the runtime MUST bind the named site volume for the operation, as [operation volume params](rule:r/operation.volume-param) specify.
+When it dispatches the invocation, the runtime MUST bind the named site volume for the operation, as [operation volume params](../runtime/operations.md#operation-scoped-volumes) specify.
 In the param map the closure receives, the runtime MUST replace the param's own key with the key `<name>_volume`, whose value names that binding.
 If the binding cannot be made at dispatch, the runtime MUST fail the invocation without running the closure.
-A closure obtains the bound volume with `app.external_volume(param["<name>_volume"])`, as [operation-scoped external volumes](rule:l/volume.external.dynamic) specify.
+A closure obtains the bound volume with `app.external_volume(param["<name>_volume"])`, as [operation-scoped external volumes](volume.md#external-volumes) specify.
 
 > [!NOTE]
 > A volume binding lasts for one operation, while a parameter or an install param outlives it.
@@ -176,7 +176,7 @@ The runtime MUST also run it when the runtime starts with the app installed.
 The start action's closure MUST receive an empty param map when the runtime runs it.
 If the script declares no start action, the runtime MUST run it as though its closure called `rt.start(app)`.
 
-The runtime MUST NOT let an operator invoke the start action, and MUST answer an [action invocation](rule:i/action.invoke) naming it with `not_found`.
+The runtime MUST NOT let an operator invoke the start action, and MUST answer an [action invocation](../interface/actions.md#invoking-an-action) naming it with `not_found`.
 `on_schedule` on the start action's handle MUST throw.
 
 ## Shells
@@ -192,13 +192,13 @@ The runtime MUST run a shell's closure only when an operator opens a session of 
 The runtime MUST call `fn` with three arguments: a runtime handle, a [shell control](#shell-control), then the param map.
 A closure declaring any other number of parameters MUST fail when the runtime calls it.
 The runtime MUST validate a shell's params as it validates an action's.
-How a shell session relates to lifecycle operations is specified by [shell sessions](rule:r/operation.shell).
+How a shell session relates to lifecycle operations is specified by [shell sessions](../runtime/operations.md#shell-sessions).
 
 ### Shell control
 
 A shell control is a `ShellControl` value with two methods.
 
-`shell.attach(job: Job)` designates the [job](rule:l/job.type) the session runs, and returns no value.
+`shell.attach(job: Job)` designates the [job](job.md#instances) the session runs, and returns no value.
 `shell.attach` given anything other than a Job MUST throw.
 A second `shell.attach` within one run of the closure MUST throw.
 
@@ -256,7 +256,7 @@ A `params` that is not a map MUST throw.
 
 The runtime MUST call `fn` with two arguments: a runtime handle, then the param map.
 Every value in the install action's param map is a string.
-The runtime MUST run the install action only when an operator [installs the app](rule:i/action.invoke.install).
+The runtime MUST run the install action only when an operator [installs the app](../interface/actions.md#install).
 The install action is not registered under a name, and neither `app.action` nor `invoke` can reach it.
 
 If the script declares no install action, installing the app MUST behave as though the install action's closure called `rt.start(app)`.

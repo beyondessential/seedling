@@ -8,7 +8,7 @@ Applies to the set of client keys authorised to connect to the [Operator Interfa
 
 ## Fingerprints
 
-A fingerprint names a client key as [client authentication](rule:i/transport.client-auth) defines it: 64 hexadecimal digits.
+A fingerprint names a client key as [client authentication](transport.md#client-authentication) defines it: 64 hexadecimal digits.
 The server MUST accept a fingerprint with surrounding whitespace, in either case, and with or without a `sha256:` or `SHA256:` prefix, and MUST store and compare it as 64 lower-case hexadecimal digits.
 The server MUST reject any other value with `requirements_invalid`.
 
@@ -46,7 +46,7 @@ An authorised key MUST be able to connect from the time the request succeeds.
 
 On success the result is `{}`.
 The server MUST reject a fingerprint that is not in the authorised set with `not_found`.
-Revocation MUST take effect on connections already open, as [client authentication](rule:i/transport.client-auth) requires.
+Revocation MUST take effect on connections already open, as [client authentication](transport.md#client-authentication) requires.
 
 ## Client identity key
 

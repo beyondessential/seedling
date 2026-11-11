@@ -24,7 +24,7 @@ use crate::{
 
 /// A template request's definition: as for an app, with the script text
 /// given as `body`.
-// i[impl template.definition]
+// spec: TPL#template-definitions
 #[derive(Deserialize, Default)]
 pub(crate) struct TemplateDefinition {
     #[serde(default)]
@@ -56,7 +56,7 @@ fn internal(e: impl std::fmt::Display) -> OiError {
 /// held to the bundle rules as for an app, but stored even when the running
 /// Seedling does not support it, in which case the rest of its metadata is
 /// left for a Seedling that does.
-// i[impl template.create]
+// spec: TPL#creation
 fn resolve_for_template(
     state: &OiState,
     input: DefinitionInput,
@@ -132,13 +132,13 @@ where
     Ok(DescriptionUpdate::Set(opt))
 }
 
-// i[template.create]
+// TPL#creation
 pub(crate) fn create_template(
     state: &OiState,
     params: CreateParams,
     ctx: &RequestCtx,
 ) -> HandlerResult {
-    // i[impl template.name] — validation runs inside TemplateName::deserialize.
+    // spec: TPL#template-names — validation runs inside TemplateName::deserialize.
     let name_for_check = params.name.clone();
     let already = state
         .db
@@ -176,7 +176,7 @@ pub(crate) fn create_template(
     }))
 }
 
-// i[template.list]
+// TPL#listing
 pub(crate) fn list_templates(state: &OiState) -> HandlerResult {
     let rows = state.db.call(runtime::templates::list).map_err(internal)?;
 
@@ -194,7 +194,7 @@ pub(crate) fn list_templates(state: &OiState) -> HandlerResult {
     Ok(json!(out))
 }
 
-// i[template.show]
+// TPL#inspection
 pub(crate) fn show_template(state: &OiState, params: NameParams) -> HandlerResult {
     let name = params.name;
     let name_for_db = name.clone();
@@ -221,7 +221,7 @@ pub(crate) fn show_template(state: &OiState, params: NameParams) -> HandlerResul
     }))
 }
 
-// i[template.update]
+// TPL#update
 pub(crate) fn update_template(
     state: &OiState,
     params: UpdateParams,
@@ -264,7 +264,7 @@ pub(crate) fn update_template(
     Ok(json!({ "updated": true }))
 }
 
-// i[template.remove]
+// TPL#removal
 pub(crate) fn remove_template(
     state: &OiState,
     params: NameParams,
@@ -285,7 +285,7 @@ pub(crate) fn remove_template(
     Ok(json!({ "removed": true }))
 }
 
-// i[template.preview]
+// TPL#preview
 pub(crate) fn preview_template(
     state: &OiState,
     params: PreviewParams,
@@ -359,7 +359,7 @@ pub(crate) fn preview_template(
     }))
 }
 
-// i[template.instantiate]
+// TPL#instantiation
 pub(crate) fn instantiate_template(
     state: &OiState,
     params: InstantiateParams,
@@ -375,7 +375,7 @@ pub(crate) fn instantiate_template(
         .map_err(internal)?
         .ok_or_else(|| OiError::not_found(format!("template not found: {template_name}")))?;
 
-    // i[impl template.instantiate] — a verbatim copy of the bundle, carrying
+    // spec: TPL#instantiation — a verbatim copy of the bundle, carrying
     // the template's provenance.
     apps_handler::check_registrable(state, &app_name)?;
     let register_result = apps_handler::register_resolved(

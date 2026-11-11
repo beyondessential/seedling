@@ -32,7 +32,7 @@ describe("SafetyModeSwitcher", () => {
     expect(screen.queryByText(/Write ·/)).toBeNull();
   });
 
-  // w[verify sessions.safety-mode]
+  // spec: UI#guarded-controls
   it("switches to write mode with a countdown that ticks down", () => {
     renderSwitcher();
     switchTo("Write");
@@ -50,7 +50,7 @@ describe("SafetyModeSwitcher", () => {
     expect(screen.getByText("Write · 29s")).toBeTruthy();
   });
 
-  // w[verify sessions.safety-mode]
+  // spec: UI#guarded-controls
   it("reverts the chip to read-only when the elevation expires", () => {
     renderSwitcher();
     switchTo("Write");
@@ -87,7 +87,7 @@ describe("SafetyModeSwitcher", () => {
     expect(stored.mode).toBe("dangerous");
   });
 
-  // w[verify sessions.safety-mode]
+  // spec: UI#guarded-controls
   it("flags peer sessions already elevated at each tier in the menu", () => {
     renderSwitcher({ tier: "dangerous", writeCount: 2, dangerousCount: 1 });
     fireEvent.click(screen.getByText("Read-only"));

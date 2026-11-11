@@ -19,7 +19,7 @@ use crate::runtime::db::Db;
 /// The bound is per instance rather than global, and applied on write rather
 /// than by rate-limiting what gets recorded: a hard crash loop produces rows
 /// fastest exactly when the per-attempt exit codes are the diagnostic.
-// r[impl gc.restarts]
+// spec: GC#restart-records
 pub const RETAIN_PER_INSTANCE: usize = 50;
 
 /// Why a restart happened.
@@ -30,7 +30,7 @@ pub const RETAIN_PER_INSTANCE: usize = 50;
 /// service supervisor the runtime performs both kinds, and a field recording
 /// the actor would put every restart in one bucket and leave the crash-loop
 /// rate permanently at zero.
-// r[impl autonomous.restart.record]
+// spec: AUTO#restart-record
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Cause {
@@ -90,7 +90,7 @@ pub struct ExitStatus {
     pub code: i32,
 }
 
-// i[impl restart.record]
+// spec: FLTS#restart-records
 #[derive(Debug, Clone, Serialize)]
 pub struct RestartRecord {
     pub id: i64,
@@ -106,7 +106,7 @@ pub struct RestartRecord {
 }
 
 /// Crash-loop rate parameters.
-// r[impl autonomous.restart.rate.settings]
+// spec: AUTO#crash-loop-detection
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 pub struct RestartSettings {
     pub threshold: i64,
@@ -122,7 +122,7 @@ pub const MIN_WINDOW_SECS: i64 = 60;
 
 /// What the instance's restart history looks like right now, for the app
 /// description surface.
-// i[impl app.describe]
+// spec: APPS#description
 #[derive(Debug, Clone, Serialize)]
 pub struct RestartSummary {
     /// Recovery restarts inside the current rate window.
@@ -154,7 +154,7 @@ pub struct RestartSubject {
     pub generation: Option<i64>,
 }
 
-// r[impl autonomous.restart.record]
+// spec: AUTO#restart-record
 /// Record one restart. `at_ms` lets a caller recording a burst of counter
 /// deltas stamp them apart rather than collapsing them onto one instant.
 pub fn record(
@@ -186,7 +186,7 @@ pub fn record(
     Ok(id)
 }
 
-// r[impl gc.restarts]
+// spec: GC#restart-records
 /// Drop all but the `retain` most recent records for one instance.
 pub fn prune_instance(db: &Db, instance_id: &str, retain: usize) -> rusqlite::Result<usize> {
     db.conn.execute(
@@ -231,7 +231,7 @@ fn row_to_record(row: &rusqlite::Row<'_>) -> rusqlite::Result<RestartRecord> {
 const SELECT_COLS: &str = "id, instance_id, app, resource_type, resource_name, generation, \
                            recorded_at, cause, exit_code, exit_kind";
 
-// i[impl restart.list]
+// spec: FLTS#listing-restarts
 /// Restart records, most recent first, optionally narrowed to one app and/or
 /// one instance.
 pub fn list(
@@ -255,7 +255,7 @@ pub fn list(
     rows.collect()
 }
 
-// r[impl autonomous.restart.rate]
+// spec: AUTO#crash-loop-detection
 /// Recovery restarts recorded for an instance within the last `window_secs`.
 /// Deliberate restarts are excluded: a rolling update must not read as a crash
 /// burst.
@@ -357,8 +357,8 @@ pub fn clear_baseline(db: &Db, instance_id: &str) -> rusqlite::Result<()> {
 // Settings
 // ---------------------------------------------------------------------------
 
-// r[impl autonomous.restart.rate.settings]
-// i[impl restart.settings]
+// spec: AUTO#crash-loop-detection
+// spec: FLTS#crash-loop-settings
 pub fn settings(db: &Db) -> rusqlite::Result<RestartSettings> {
     db.conn.query_row(
         "SELECT threshold, window_secs FROM restart_settings WHERE singleton = 1",
@@ -388,8 +388,8 @@ impl std::fmt::Display for SettingsError {
     }
 }
 
-// r[impl autonomous.restart.rate.settings]
-// i[impl restart.settings]
+// spec: AUTO#crash-loop-detection
+// spec: FLTS#crash-loop-settings
 /// Update either or both settings. Omitted fields are left as they are. The
 /// reconciler reads the settings on each tick, so a change takes effect on the
 /// next one without restarting the runtime.

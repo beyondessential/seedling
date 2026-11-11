@@ -86,7 +86,7 @@ pub fn standings<T: Send + 'static>(
     })
 }
 
-// i[impl app.status] i[impl app.status.priority]
+// spec: APPS#status-derivation
 /// The status of one app.
 ///
 /// `active` is the scheduler's active operation, from [`active_operation`].
@@ -224,7 +224,7 @@ fn steady(
         scale_bounds,
     } in &snapshot.resources
     {
-        // i[impl resource.stop]
+        // spec: CTL#resource-stop
         // As the steady desired state has it: a stopped resource, or a
         // deployment scaled to zero, is meant to have nothing Ready.
         let desired = if stopped.contains(&(*kind, name.as_str().to_owned())) {

@@ -20,7 +20,7 @@ use crate::{
 // /images/list
 // ---------------------------------------------------------------------------
 
-// i[image.list]
+// IMGM#listing-images
 pub(crate) fn list_images(state: &OiState) -> HandlerResult {
     let (images, in_use_ids) = tokio::task::block_in_place(|| {
         tokio::runtime::Handle::current().block_on(async {
@@ -156,7 +156,7 @@ pub(crate) struct PullParams {
     pub app: Option<String>,
 }
 
-// i[image.pull]
+// IMGM#pulling-an-image
 pub(crate) fn pull_image(state: &OiState, params: PullParams) -> HandlerResult {
     if params.reference.trim().is_empty() {
         return Err(OiError::new(
@@ -205,7 +205,7 @@ pub(crate) struct RemoveParams {
     pub force: bool,
 }
 
-// i[image.remove]
+// IMGM#removing-an-image
 pub(crate) fn remove_image(state: &OiState, params: RemoveParams) -> HandlerResult {
     if params.reference.trim().is_empty() {
         return Err(OiError::new(
@@ -280,7 +280,7 @@ pub(crate) struct PinsListParams {
     pub app: Option<String>,
 }
 
-// i[image.pin.list]
+// IMGM#image-pins
 pub(crate) fn list_pins(state: &OiState, params: PinsListParams) -> HandlerResult {
     let app: Option<AppName> = match params.app {
         Some(s) => Some(AppName::new(&s).map_err(|e| {
@@ -317,7 +317,7 @@ pub(crate) struct PinsClearParams {
     pub reference: Option<String>,
 }
 
-// i[image.pin.clear]
+// IMGM#image-pins
 pub(crate) fn clear_pins(state: &OiState, params: PinsClearParams) -> HandlerResult {
     let app = AppName::new(&params.app)
         .map_err(|e| OiError::new(ErrorCode::RequirementsInvalid, format!("invalid app: {e}")))?;
@@ -353,7 +353,7 @@ pub(crate) struct DiscoverParams {
     pub lenient: bool,
 }
 
-// i[image.discover]
+// IMGM#image-discovery
 pub(crate) fn discover_images(state: &OiState, params: DiscoverParams) -> HandlerResult {
     let name = AppName::new(&params.app)
         .map_err(|e| OiError::new(ErrorCode::RequirementsInvalid, format!("invalid app: {e}")))?;
@@ -448,7 +448,7 @@ pub(crate) fn discover_images(state: &OiState, params: DiscoverParams) -> Handle
 ///   orphan pins are stamped with a 30-day expiry, which the reconciler
 ///   sweeps once it passes. Pins with references matching the (possibly
 ///   partial) safe set have their expiration cleared.
-// r[impl image.pin.update-reconcile]
+// spec: IMG#pin-reconciliation
 pub(crate) fn reconcile_pins_post_update(state: &OiState, app_name: &AppName) {
     let (app, bundle) = {
         let reg = state.registry.read();

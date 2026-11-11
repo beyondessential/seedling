@@ -46,7 +46,7 @@ Calling a schema method again MUST replace the value it set before.
 | `description(description: string)` | a human-readable description | none |
 | `secret(secret: bool)` | whether the value is [secret](#secret-parameters) | implied by `kind` |
 
-`kind` MUST accept `"text"`, `"multiline"`, `"email"`, `"password"`, `"weak-password"` and `"random"`, each with the meaning the [install parameter kinds](rule:l/action.install.requirements) give it.
+`kind` MUST accept `"text"`, `"multiline"`, `"email"`, `"password"`, `"weak-password"` and `"random"`, each with the meaning the [install parameter kinds](action.md#param-schemas) give it.
 `kind` MUST throw when given `"volume"`, which only action and shell parameters accept, or any value it does not define.
 
 ## Secret parameters
@@ -55,7 +55,7 @@ A parameter is secret when its `secret` flag is `true`.
 A parameter whose kind is `"password"` or `"weak-password"` MUST be secret unless the script sets `secret(false)`.
 A script MAY call `secret` before or after `kind`, and an explicit `secret` call MUST take precedence over the kind in either direction.
 
-The runtime MUST protect a secret parameter's value as [secret storage](rule:r/secret.storage) and [redaction](rule:r/secret.redaction) specify.
+The runtime MUST protect a secret parameter's value as [secret storage](../runtime/secrets.md#storage) and [redaction](../runtime/secrets.md#redaction) specify.
 The runtime MUST NOT write a secret parameter's value to its logs.
 
 ## Change handlers
@@ -73,7 +73,7 @@ The runtime MUST invoke the change handler as a [lifecycle operation](../overvie
 Storing the value the parameter already holds is not a change.
 The runtime MUST NOT invoke the handler during the app's initial install.
 
-The runtime MUST call `fn` with two arguments: the [runtime instance](rule:l/rt.var), and an `App` named here `old`.
+The runtime MUST call `fn` with two arguments: the [runtime instance](rt.md#handle-availability), and an `App` named here `old`.
 A script MUST therefore pass a closure that takes two parameters.
 
 `old` MUST reflect the previous [generation](../overview.md#generation): the previous generation's definition, evaluated with the parameter values held before the change.
@@ -103,4 +103,4 @@ A parameter that would be unset passes, and its `required` flag governs whether 
 The runtime MUST NOT give a validator a runtime instance.
 Declaring a resource within a validator MUST throw.
 
-When the runtime runs validators, and which request a rejection refuses, is specified in [parameter validation](rule:i/param.validation).
+When the runtime runs validators, and which request a rejection refuses, is specified in [parameter validation](../interface/params.md#validation).

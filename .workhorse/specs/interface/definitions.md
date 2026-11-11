@@ -124,7 +124,7 @@ It MUST refuse it with `fetch_failed`, naming the tied entries, if more than one
 
 ### Registry access
 
-The server MUST refuse a fetch with `registry_not_allowed` if the reference's registry is not on the [registry allowlist](rule:i/registry.list), before making any request to that registry.
+The server MUST refuse a fetch with `registry_not_allowed` if the reference's registry is not on the [registry allowlist](images.md#registry-allowlist), before making any request to that registry.
 
 The server MUST authenticate to a registry with the credentials the host's container engine uses to pull images, so that a registry the host can pull images from serves definitions without further configuration.
 

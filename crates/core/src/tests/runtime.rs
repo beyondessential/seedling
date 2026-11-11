@@ -1,8 +1,6 @@
 use super::*;
 
-// l[verify rt.var]
-// l[verify rt.type]
-// l[verify rt.constructor]
+// spec: RT#handle-availability
 #[test]
 fn rt_available_in_actions() {
     exercise(
@@ -15,7 +13,7 @@ fn rt_available_in_actions() {
     );
 }
 
-// l[verify rt.methods]
+// spec: RT
 #[test]
 fn rt_methods_are_defined() {
     exercise(
@@ -31,8 +29,7 @@ fn rt_methods_are_defined() {
     );
 }
 
-// l[verify rt.lifecyle]
-// l[verify rt.started.default-deadlines]
+// spec: RT#barriers
 #[test]
 fn rt_lifecycle_states_accessible() {
     exercise(
@@ -49,8 +46,8 @@ fn rt_lifecycle_states_accessible() {
     );
 }
 
-// l[verify rt.start]
-// l[verify rt.started.state-methods]
+// spec: RT#starting-resources
+// spec: RT#barriers
 #[test]
 fn exercise_start_action() {
     exercise(
@@ -65,7 +62,7 @@ fn exercise_start_action() {
     );
 }
 
-// l[verify rt.stop]
+// spec: RT#stopping-resources
 #[test]
 fn exercise_stop() {
     exercise(
@@ -80,7 +77,7 @@ fn exercise_stop() {
     );
 }
 
-// l[verify rt.stop]
+// spec: RT#stopping-resources
 #[test]
 fn exercise_stop_with_deadline() {
     exercise(
@@ -94,7 +91,7 @@ fn exercise_stop_with_deadline() {
     );
 }
 
-// l[verify rt.query]
+// spec: RT#querying-resources
 #[test]
 fn exercise_query() {
     exercise(
@@ -108,7 +105,7 @@ fn exercise_query() {
     );
 }
 
-// l[verify rt.warm-certs]
+// spec: RT#certificate-warming
 #[test]
 fn exercise_warm_certs() {
     exercise(
@@ -123,7 +120,7 @@ fn exercise_warm_certs() {
     );
 }
 
-// l[verify rt.warm-images]
+// spec: RT#image-warming
 #[test]
 fn exercise_warm_images() {
     exercise(
@@ -137,7 +134,7 @@ fn exercise_warm_images() {
     );
 }
 
-// l[verify rt.warm-images]
+// spec: RT#image-warming
 #[test]
 fn warm_images_accepts_dynamic_job_with_image() {
     exercise(
@@ -150,7 +147,7 @@ fn warm_images_accepts_dynamic_job_with_image() {
     );
 }
 
-// l[verify rt.warm-images]
+// spec: RT#image-warming
 #[test]
 fn warm_images_ignores_non_container_resources() {
     exercise(
@@ -165,7 +162,7 @@ fn warm_images_ignores_non_container_resources() {
     );
 }
 
-// l[verify rt.warm-certs]
+// spec: RT#certificate-warming
 #[test]
 fn warm_certs_ignores_non_ingress_resources() {
     exercise(
@@ -180,7 +177,7 @@ fn warm_certs_ignores_non_ingress_resources() {
     );
 }
 
-// l[verify rt.started.type]
+// spec: RT#started
 #[test]
 fn started_is_a_collection() {
     exercise(
@@ -198,7 +195,7 @@ fn started_is_a_collection() {
     );
 }
 
-// l[verify rt.started.state-methods]
+// spec: RT#barriers
 #[test]
 fn started_state_methods_with_deadline() {
     exercise(
@@ -215,9 +212,8 @@ fn started_state_methods_with_deadline() {
     );
 }
 
-// l[verify rt.started.terminated]
-// l[verify rt.termination.type]
-// l[verify rt.termination.ensure-success]
+// spec: RT#barriers
+// spec: RT#termination
 #[test]
 fn exercise_terminated_ensure_success() {
     exercise(
@@ -230,7 +226,7 @@ fn exercise_terminated_ensure_success() {
     );
 }
 
-// l[verify rt.termination.type]
+// spec: RT#termination
 #[test]
 fn termination_type_is_opaque() {
     exercise(
@@ -245,7 +241,7 @@ fn termination_type_is_opaque() {
     );
 }
 
-// l[verify rt.started.ready-eventually]
+// spec: RT#barriers
 #[test]
 fn started_ready_eventually_is_callable() {
     exercise(
@@ -261,7 +257,7 @@ fn started_ready_eventually_is_callable() {
     );
 }
 
-// l[verify rt.restart]
+// spec: RT#deployment-restart
 #[test]
 fn rt_restart_is_callable() {
     exercise(
@@ -274,7 +270,7 @@ fn rt_restart_is_callable() {
     );
 }
 
-// l[verify rt.signal]
+// spec: RT#signal-delivery
 #[test]
 fn rt_signal_is_callable() {
     exercise(

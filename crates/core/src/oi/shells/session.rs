@@ -37,8 +37,7 @@ pub(super) struct SessionStreams {
 }
 
 impl SessionStreams {
-    // i[impl shell.close]
-    // i[impl shell.exit]
+    // spec: SHL#session-end
     /// Ends the session: writes the exit frame and closes all three streams.
     /// `reason` is why a session that failed to start ended, and is written to
     /// stderr for the client to show.
@@ -56,7 +55,7 @@ impl SessionStreams {
     }
 }
 
-// i[impl stream.shell.framing]
+// spec: WIRE#shell-sessions
 /// A frame as it goes on the wire: one JSON line, newline included.
 fn frame_bytes(frame: &serde_json::Value) -> Vec<u8> {
     let mut line = frame.to_string().into_bytes();
@@ -93,7 +92,7 @@ pub(crate) async fn open_shell_session(
     initial_line: Vec<u8>,
     state: Arc<OiState>,
 ) {
-    // i[impl shell.open]
+    // spec: SHL#opening-an-app-shell
     #[derive(serde::Deserialize)]
     struct Params {
         app: AppName,
@@ -137,8 +136,8 @@ pub(crate) async fn open_shell_session(
     let initial_cols = params.cols;
     let submitted_params = params.params.unwrap_or_default();
 
-    // i[impl shell.open]
-    // r[impl operation.volume-param.reserved]
+    // spec: SHL#opening-an-app-shell
+    // spec: OPS#reserved-parameter-keys
     if let Some(reserved) = submitted_params
         .keys()
         .find(|k| k.ends_with("_volume") || k.ends_with("_filename"))
@@ -200,7 +199,7 @@ pub(crate) async fn open_shell_session(
             }
         };
 
-    // i[impl stream.shell]
+    // spec: WIRE#shell-sessions
     let (stdout_send, stdout_stream_id) = match conn.open_uni().await {
         Ok(s) => {
             let id = s.id().index();
@@ -299,7 +298,7 @@ impl StartupFailure {
     }
 }
 
-// i[impl shell.startup]
+// spec: SHL#session-startup
 /// Registers the session under its id, then tells the client the id. The id is
 /// never given out for a session that cannot be listed, resized or stopped.
 /// Returns `false`, with the session gone again, if the client could not be
@@ -316,8 +315,7 @@ pub(super) async fn begin_session(
     let app = session.app.clone();
     state.shells.insert(session);
 
-    // i[impl shell.open]
-    // i[impl shell.streams]
+    // spec: SHL#opening-an-app-shell
     let handshake = write_frame(
         send,
         &serde_json::json!({
@@ -336,7 +334,7 @@ pub(super) async fn begin_session(
         return false;
     }
 
-    // i[impl shell.start]
+    // spec: SHL#session-events
     state.event_tx.shell_started(session_id, &app, event_name);
     true
 }
@@ -353,7 +351,7 @@ pub(super) async fn abort_startup(
         let _ = state.container_runtime.remove_network(network).await;
     }
     state.shells.remove(&session_id);
-    // i[impl shell.exit]
+    // spec: SHL#session-end
     state.event_tx.shell_exited(session_id, -1);
     streams.end(-1, failure.reason.as_deref()).await;
 }
@@ -462,9 +460,9 @@ async fn start_app_shell(
                     active_progress: None,
                     tick_notify: None,
                     params: validated_params.clone(),
-                    // r[impl operation.shell]
+                    // spec: OPS#shell-sessions
                     is_shell: true,
-                    // r[impl operation.shell.resources]
+                    // spec: OPS#shell-sessions
                     // Passing None means rt.start_* calls do not persist
                     // dynamic resources to the desired state, so resources
                     // created within a shell session disappear when the
@@ -494,7 +492,7 @@ async fn start_app_shell(
                     );
                     break false;
                 }
-                // r[impl operation.cancel]
+                // spec: OPS#cancellation
                 // The session was stopped while the script waited.
                 OperationResult::Cancelled => break false,
                 OperationResult::Suspended(_) => cancel.wait_for(Duration::from_secs(2)),
@@ -505,7 +503,7 @@ async fn start_app_shell(
         success
     });
 
-    // i[impl shell.startup]
+    // spec: SHL#session-startup
     let script_ok = tokio::select! {
         _ = stop.requested() => {
             // The script's thread cannot be abandoned: it sees the stop at its
@@ -564,7 +562,7 @@ async fn start_app_shell(
         .clone()
         .unwrap_or_default();
     if !image.is_empty() {
-        // i[impl shell.startup]
+        // spec: SHL#session-startup
         tokio::select! {
             _ = stop.requested() => return Err(StartupFailure::stopped(None)),
             ensured = ensure_image(state, app_name, shell_name, &image) => {
@@ -622,7 +620,7 @@ async fn start_app_shell(
         }
     };
 
-    // l[impl action.shell]
+    // spec: ACN#shells
     // Match the reconciler's volume/external-volume resolution so a shell
     // session sees the same on-disk state as a Job (bind-mounts under the
     // volume store directory, same external-volume mappings). Previously we
@@ -652,7 +650,7 @@ async fn start_app_shell(
         "shell".to_string(),
     );
 
-    // i[impl shell.startup]
+    // spec: SHL#session-startup
     if stop.is_requested() {
         return Err(StartupFailure::stopped(Some(net_name)));
     }
@@ -699,7 +697,7 @@ pub(super) async fn run_to_exit(
     // The job has exited on its own, with this status, or it has to be stopped
     // and the exit code is the one its termination gives (or the one forced).
     let job_exit: Result<i32, Option<i32>> = 'run: {
-        // i[impl shell.startup]
+        // spec: SHL#session-startup
         // A stop that arrived while the job was starting has already removed
         // the session; the job is stopped as soon as it is known.
         let attached = state.shells.attach(
@@ -715,7 +713,7 @@ pub(super) async fn run_to_exit(
             break 'run Err(Some(-1));
         }
 
-        // i[shell.close]
+        // SHL#session-end
         match relay_session(recv, &mut live.exec, &mut streams.stdout, stop).await {
             Some(status) => Ok(status.ok().and_then(|s| s.code()).unwrap_or(-1)),
             None => Err(None),
@@ -725,7 +723,7 @@ pub(super) async fn run_to_exit(
     let exit_code = match job_exit {
         Ok(code) => code,
         Err(forced) => {
-            // i[impl shell.cleanup]
+            // spec: SHL#session-end
             if let Some(pid) = live.exec.child.id() {
                 unsafe { libc::kill(pid as libc::pid_t, libc::SIGTERM) };
             }
@@ -754,14 +752,14 @@ pub(super) async fn run_to_exit(
     };
 
     state.shells.remove(&session_id);
-    // i[impl shell.exit]
+    // spec: SHL#session-end
     state.event_tx.shell_exited(session_id, exit_code);
     let _ = state.container_runtime.remove_network(&live.net_name).await;
     streams.end(exit_code, None).await;
     exit_code
 }
 
-// i[impl stream.shell]
+// spec: WIRE#shell-sessions
 /// Relay stdin from the session stream into the job and the job's output onto
 /// the stdout stream until the session ends. Returns the job's exit status when
 /// the job exiting is what ended it, and `None` when the client closed stdin,
@@ -793,7 +791,7 @@ pub(super) async fn relay_session(
 mod tests {
     use super::*;
 
-    // i[verify stream.shell.framing]
+    // spec: WIRE#shell-sessions
     #[test]
     fn every_frame_is_one_newline_terminated_line() {
         for frame in [
@@ -810,14 +808,14 @@ mod tests {
         }
     }
 
-    // i[verify stream.shell.framing]
+    // spec: WIRE#shell-sessions
     #[test]
     fn error_text_with_newlines_stays_on_one_line() {
         let bytes = frame_bytes(&error_frame("shell_error", "line one\nline two"));
         assert_eq!(bytes.iter().filter(|b| **b == b'\n').count(), 1);
     }
 
-    // i[verify shell.exit]
+    // spec: SHL#session-end
     #[test]
     fn exit_frame_carries_only_the_exit_code() {
         assert_eq!(exit_frame(-1), serde_json::json!({ "exit_code": -1 }));

@@ -9,8 +9,8 @@ use super::super::{
 use super::App;
 
 pub(super) fn on_app(builder: &mut TypeBuilder<App>) {
-    // l[impl service.type]
-    // l[impl app.resources.context.named]
+    // spec: SVC#declaration
+    // spec: APP#named-resources
     builder.with_fn(
         "service",
         |this: &mut App, name: &str| -> Result<Service, Box<EvalAltResult>> {
@@ -41,7 +41,7 @@ pub(super) fn on_app(builder: &mut TypeBuilder<App>) {
         },
     );
 
-    // l[impl app.resources.context.anonymous]
+    // spec: APP#anonymous-resources
     builder.with_fn(
         "service",
         |_this: &mut App| -> Result<Service, Box<EvalAltResult>> {
@@ -52,9 +52,8 @@ pub(super) fn on_app(builder: &mut TypeBuilder<App>) {
         },
     );
 
-    // l[impl service.external]
-    // l[impl service.external.action-context]
-    // l[impl app.resources.context.named]
+    // spec: SVC#external-services
+    // spec: APP#named-resources
     builder.with_fn(
         "external_service",
         |this: &mut App, name: &str| -> Result<ExternalService, Box<EvalAltResult>> {

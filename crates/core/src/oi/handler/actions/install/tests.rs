@@ -7,7 +7,7 @@ use crate::runtime::action_params::{is_strong_password, is_valid_email};
 
 use super::validate_requirements;
 
-// i[verify action.invoke.install.validation]
+// spec: ACI#install-parameters
 #[test]
 fn valid_email_basic() {
     assert!(is_valid_email("user@example.com"));
@@ -15,45 +15,45 @@ fn valid_email_basic() {
     assert!(is_valid_email("user+tag@sub.example.org"));
 }
 
-// i[verify action.invoke.install.validation]
+// spec: ACI#install-parameters
 #[test]
 fn invalid_email_no_at() {
     assert!(!is_valid_email("notanemail"));
     assert!(!is_valid_email(""));
 }
 
-// i[verify action.invoke.install.validation]
+// spec: ACI#install-parameters
 #[test]
 fn invalid_email_no_dot_in_domain() {
     assert!(!is_valid_email("user@nodot"));
 }
 
-// i[verify action.invoke.install.validation]
+// spec: ACI#install-parameters
 #[test]
 fn invalid_email_empty_local() {
     assert!(!is_valid_email("@example.com"));
 }
 
-// i[verify action.invoke.install.validation]
+// spec: ACI#install-parameters
 #[test]
 fn invalid_email_domain_starts_with_dot() {
     assert!(!is_valid_email("user@.example.com"));
 }
 
-// i[verify action.invoke.install.validation]
+// spec: ACI#install-parameters
 #[test]
 fn invalid_email_domain_ends_with_dot() {
     assert!(!is_valid_email("user@example.com."));
 }
 
-// i[verify action.invoke.install.validation]
+// spec: ACI#install-parameters
 #[test]
 fn strong_password_accepted() {
     assert!(is_strong_password("correct-horse-battery-staple-42!"));
     assert!(is_strong_password("Tr0ub4dor&3xtraL0ng"));
 }
 
-// i[verify action.invoke.install.validation]
+// spec: ACI#install-parameters
 #[test]
 fn weak_password_rejected() {
     assert!(!is_strong_password("password"));
@@ -78,7 +78,7 @@ fn req(kind: ParamKind, required: bool, default: Option<&str>) -> ParamDef {
     }
 }
 
-// i[verify action.invoke.install.validation]
+// spec: ACI#install-parameters
 #[test]
 fn empty_schema_empty_submitted_ok() {
     let result = validate_requirements(&BTreeMap::new(), &BTreeMap::new());
@@ -86,7 +86,7 @@ fn empty_schema_empty_submitted_ok() {
     assert!(result.unwrap().is_empty());
 }
 
-// i[verify action.invoke.install.validation]
+// spec: ACI#install-parameters
 #[test]
 fn required_field_missing_returns_error() {
     let s = schema(&[("email", req(ParamKind::Text, true, None))]);
@@ -95,7 +95,7 @@ fn required_field_missing_returns_error() {
     assert!(result.unwrap_err().message.contains("email"));
 }
 
-// i[verify action.invoke.install.validation]
+// spec: ACI#install-parameters
 #[test]
 fn required_field_with_default_filled_in() {
     let s = schema(&[("site", req(ParamKind::Text, true, Some("default-site")))]);
@@ -107,7 +107,7 @@ fn required_field_with_default_filled_in() {
     );
 }
 
-// i[verify action.invoke.install.validation]
+// spec: ACI#install-parameters
 #[test]
 fn optional_field_absent_is_ok() {
     let s = schema(&[("note", req(ParamKind::Text, false, None))]);
@@ -115,7 +115,7 @@ fn optional_field_absent_is_ok() {
     assert!(result.is_ok());
 }
 
-// i[verify action.invoke.install.validation]
+// spec: ACI#install-parameters
 #[test]
 fn invalid_email_field_returns_error() {
     let s = schema(&[("email", req(ParamKind::Email, true, None))]);
@@ -126,7 +126,7 @@ fn invalid_email_field_returns_error() {
     assert!(result.unwrap_err().message.contains("email"));
 }
 
-// i[verify action.invoke.install.validation]
+// spec: ACI#install-parameters
 #[test]
 fn valid_email_field_passes() {
     let s = schema(&[("email", req(ParamKind::Email, true, None))]);
@@ -136,7 +136,7 @@ fn valid_email_field_passes() {
     assert!(result.is_ok());
 }
 
-// i[verify action.invoke.install.validation]
+// spec: ACI#install-parameters
 #[test]
 fn weak_password_field_returns_error() {
     let s = schema(&[("pw", req(ParamKind::Password, true, None))]);
@@ -147,7 +147,7 @@ fn weak_password_field_returns_error() {
     assert!(result.unwrap_err().message.contains("pw"));
 }
 
-// i[verify action.invoke.install.validation]
+// spec: ACI#install-parameters
 #[test]
 fn strong_password_field_passes() {
     let s = schema(&[("pw", req(ParamKind::Password, true, None))]);
@@ -160,7 +160,7 @@ fn strong_password_field_passes() {
     assert!(result.is_ok());
 }
 
-// i[verify action.invoke.install.validation]
+// spec: ACI#install-parameters
 #[test]
 fn weak_password_kind_always_passes() {
     let s = schema(&[("pw", req(ParamKind::WeakPassword, true, None))]);
@@ -170,7 +170,7 @@ fn weak_password_kind_always_passes() {
     assert!(result.is_ok());
 }
 
-// i[verify action.invoke.install.validation]
+// spec: ACI#install-parameters
 #[test]
 fn multiple_errors_collected() {
     let s = schema(&[
@@ -200,7 +200,7 @@ const INSTALL_SCRIPT: &str = r#"
     });
 "#;
 
-// i[verify action.invoke.install]
+// spec: ACI#install
 #[test]
 fn install_on_unknown_app_is_not_found() {
     let oi = TestOi::new();
@@ -210,7 +210,7 @@ fn install_on_unknown_app_is_not_found() {
     assert_eq!(code, "not_found");
 }
 
-// i[verify action.invoke.install]
+// spec: ACI#install
 #[test]
 fn install_without_handler_completes_immediately_and_only_once() {
     let oi = TestOi::with_app("demo");
@@ -225,7 +225,7 @@ fn install_without_handler_completes_immediately_and_only_once() {
     assert_eq!(code, "already_installed");
 }
 
-// i[verify action.invoke.install.validation]
+// spec: ACI#install-parameters
 #[test]
 fn install_params_without_schema_are_rejected() {
     let oi = TestOi::with_app("demo");
@@ -239,7 +239,7 @@ fn install_params_without_schema_are_rejected() {
     assert!(message.contains("no install params"), "message: {message}");
 }
 
-// i[verify action.invoke.install.validation]
+// spec: ACI#install-parameters
 #[test]
 fn install_with_missing_required_requirement_is_rejected() {
     let oi = TestOi::new();
@@ -255,7 +255,7 @@ fn install_with_missing_required_requirement_is_rejected() {
     assert!(message.contains("admin-email"), "message: {message}");
 }
 
-// i[verify action.invoke.install.validation]
+// spec: ACI#install-parameters
 #[test]
 fn install_with_invalid_requirement_value_is_rejected() {
     let oi = TestOi::new();

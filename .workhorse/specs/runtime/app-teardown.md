@@ -9,7 +9,7 @@ Applies to the removal of an [app](../overview.md#app)'s resources from a [host]
 ## Deregistration
 
 Deregistering an app MUST discard all state the runtime holds under the app's name.
-That state includes the operator-configured [external service mappings](rule:r/service.external.mapping.events) and [external volume mappings](rule:r/volume.external.mapping.events) made for the app.
+That state includes the operator-configured [external service mappings](site-resources.md#external-mappings) and [external volume mappings](site-resources.md#external-mappings) made for the app.
 If any of that state cannot be discarded, the deregistration MUST fail and leave the app registered.
 
 > [!NOTE]
@@ -51,5 +51,5 @@ Once an app has left the installed phase to be torn down, the runtime MUST NOT a
 > Admission is one decision, made where operations are admitted.
 
 > [!NOTE]
-> An operator who wants the uninstall to proceed [cancels](rule:r/operation.cancel) the operation and retries.
+> An operator who wants the uninstall to proceed [cancels](operations.md#cancellation) the operation and retries.
 > Cancelling on the operator's behalf would need a bound on how long the uninstall waits for the closure to unwind, and an uninstall that stops waiting leaves the app half torn down.

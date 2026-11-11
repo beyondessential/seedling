@@ -2,7 +2,7 @@
 
 BSL (BES Seedling Language) is the scripting language used to define and manage applications on a Seedling node. It describes not just what to run, but how to upgrade it, how operators can interact with it, and what happens on first install.
 
-The full language specification is at [`docs/spec/language.md`](spec/language.md). This document is a practical guide to writing a script, with a reference summary and annotated examples. When this document and the spec disagree, the spec wins.
+The full language specification is at [`.workhorse/specs/language/`](../.workhorse/specs/language/). This document is a practical guide to writing a script, with a reference summary and annotated examples. When this document and the spec disagree, the spec wins.
 
 ## Language fundamentals
 

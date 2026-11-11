@@ -52,7 +52,7 @@ pub fn deployment_spec(
         volumes_dir,
         external_volumes,
     );
-    // i[impl deployment.restart]
+    // spec: CTL#deployment-restart
     if restart_gen > 0 {
         spec.labels
             .insert("seedling.restart-gen".to_string(), restart_gen.to_string());
@@ -101,13 +101,13 @@ pub fn job_spec(
 pub fn podman_args(spec: &ContainerSpec) -> Vec<String> {
     let mut args = vec!["podman".to_string(), "run".to_string(), "--rm".to_string()];
 
-    // r[impl actuate.container.journal-metadata]
+    // spec: ACTU#container-logs
     // Disable podman's built-in journald log driver; container stdout/stderr flows
     // through podman's own process stdout, which systemd captures once. Without this,
     // both podman's journald driver and systemd's unit capture write the same lines.
     args.push("--log-driver=none".to_string());
 
-    // r[impl actuate.container.hardening]
+    // spec: ACTU#container-hardening
     args.push("--cap-drop=ALL".to_string());
     for cap in &spec.extra_caps {
         args.push(format!("--cap-add={cap}"));
@@ -132,7 +132,7 @@ pub fn podman_args(spec: &ContainerSpec) -> Vec<String> {
     if let Some(workdir) = &spec.workdir {
         args.push(format!("--workdir={workdir}"));
     }
-    // r[impl actuate.container.user]
+    // spec: ACTU#container-hardening
     if let Some(user) = &spec.user {
         args.push("--user".to_string());
         args.push(user.clone());
@@ -184,13 +184,13 @@ pub fn podman_args(spec: &ContainerSpec) -> Vec<String> {
         args.push(format!("{host}:{ip}"));
     }
 
-    // r[impl infra.pod.dns]
+    // spec: DNS#container-dns
     for dns in &spec.dns_servers {
         args.push("--dns".to_string());
         args.push(dns.to_string());
     }
 
-    // l[impl deployment.healthcheck]
+    // spec: DEP#health-checks
     if let Some(health) = &spec.health {
         args.push("--health-cmd".to_string());
         // Podman accepts a shell command string or a JSON array for health checks.
@@ -205,7 +205,7 @@ pub fn podman_args(spec: &ContainerSpec) -> Vec<String> {
         args.push(health.retries.to_string());
         args.push("--health-start-period".to_string());
         args.push(format!("{}s", health.start_period.as_secs()));
-        // r[impl autonomous.healthcheck-replace]
+        // spec: AUTO#health-check-replacement
         // Seedling owns the response to a failing healthcheck (replace flow).
         // Tell podman to never act on its own — never kill, never restart.
         args.push("--health-on-failure".to_string());
@@ -242,7 +242,7 @@ pub fn spec_hash(spec: &ContainerSpec) -> String {
 
     // `stop_signal` and `stop_timeout_secs` are applied as systemd unit
     // properties, not podman flags, so hashing the argv alone missed them:
-    // `r[update.spec-hash]` wants the full configuration, and changing either
+    // `UPD#stale-instances` wants the full configuration, and changing either
     // left the reconciler seeing a running instance as up to date, so the new
     // stop behaviour never reached it.
     //
@@ -298,7 +298,7 @@ fn spec_from_pod(
         .iter()
         .map(|(path, vm)| {
             if let VolumeMount::ExternalVolume(ev) = vm {
-                // l[impl volume.external.dynamic]
+                // spec: VOL#external-volumes
                 // Operation-scoped binding takes precedence over the static mapping table.
                 if let Some(binding) = &ev.operation_binding {
                     return Mount {
@@ -331,11 +331,11 @@ fn spec_from_pod(
                             .clone()
                             .expect("anonymous volume must have an anon_id"),
                     };
-                    // r[impl actuate.volume.storage]
+                    // spec: ACTU#volume-storage
                     let is_named = v.name.is_some();
                     let tmpfs = v.def.lock().tmpfs;
                     if tmpfs {
-                        // r[impl actuate.volume.tmpfs]
+                        // spec: ACTU#volume-storage
                         // Tmpfs volumes (named or anonymous) are bind-mounted
                         // from the tmpfs-backed host directory the actuator
                         // creates and seeds.

@@ -55,7 +55,7 @@ function formatTime(unix: number | null): string {
   return new Date(unix * 1000).toLocaleString();
 }
 
-// w[impl routes.certificates]
+// spec: UI#certificates
 export default function Certificates() {
   const {
     data: providers,
@@ -638,7 +638,7 @@ function ManualCertsSection({
   onUploadCsrCert,
   onCancelCsr,
 }: ManualCertsSectionProps) {
-  // w[impl routes.certificates]
+  // spec: UI#certificates
   // Group the listing by the certificate's label (then newest expiry first
   // within a group).
   const sorted = [...certs].sort(
@@ -697,14 +697,14 @@ function ManualCertsSection({
             <TableBody>
               {sorted.map((c) => {
                 const pending = c.state === "csr_pending";
-                // w[impl routes.certificates]
+                // spec: UI#certificates
                 // Certificates within fourteen days of expiry are flagged.
                 const expired = c.not_after !== null && c.not_after <= nowSecs;
                 const expiringSoon =
                   !expired &&
                   c.not_after !== null &&
                   c.not_after - nowSecs <= 14 * 24 * 60 * 60;
-                // w[impl routes.certificates]
+                // spec: UI#certificates
                 // Offered once the certificate is within the expiry window;
                 // origin is already narrowed to manual and CSR by the caller.
                 const renewable = c.state === "active" && (expired || expiringSoon);
@@ -713,7 +713,7 @@ function ManualCertsSection({
                     <TableCell sx={{ fontFamily: "monospace" }}>{c.id}</TableCell>
                     <TableCell sx={{ fontFamily: "monospace" }}>
                       {c.hostname}
-                      {/* w[impl routes.certificates] */}
+                      {/* spec: UI#certificates */}
                       {/* Only worth showing where the request was for more
                           than the primary SAN, or something else; otherwise
                           it repeats it. */}
@@ -729,7 +729,7 @@ function ManualCertsSection({
                             requested {c.requested_hostnames.join(", ")}
                           </Typography>
                         )}
-                      {/* w[impl routes.certificates] */}
+                      {/* spec: UI#certificates */}
                       {c.renews !== null && (
                         <Typography
                           variant="caption"
@@ -759,7 +759,7 @@ function ManualCertsSection({
                         {c.self_signed && (
                           <Chip label="self-signed" size="small" color="warning" variant="outlined" />
                         )}
-                        {/* w[impl routes.certificates] */}
+                        {/* spec: UI#certificates */}
                         {c.requested_not_covered !== null &&
                           c.requested_not_covered.length > 0 && (
                           <Chip
@@ -813,7 +813,7 @@ function ManualCertsSection({
                         </>
                       ) : (
                         <>
-                          {/* w[impl routes.certificates] */}
+                          {/* spec: UI#certificates */}
                           {c.pending_renewal !== null && (
                             <OutlinedActionButton
                               safety="read"
@@ -1458,7 +1458,7 @@ function CsrBeginDialog({ open, renewing, onClose, onSubmitted }: CsrBeginDialog
   const [submitting, setSubmitting] = useState(false);
   const { execute, error, clearError } = useOiAction();
 
-  // w[impl routes.certificates]
+  // spec: UI#certificates
   // A renewal starts from what the CA issued, not from what was requested.
   useEffect(() => {
     if (open) setHostnames(renewing?.san_dns_names?.join(", ") ?? "");
@@ -1506,7 +1506,7 @@ function CsrBeginDialog({ open, renewing, onClose, onSubmitted }: CsrBeginDialog
               {error.message}
             </Alert>
           )}
-          {/* w[impl routes.certificates] */}
+          {/* spec: UI#certificates */}
           <TextField
             autoFocus
             label="Hostnames"
@@ -1537,7 +1537,7 @@ function CsrBeginDialog({ open, renewing, onClose, onSubmitted }: CsrBeginDialog
 /** The ingress hostnames a certificate is currently serving, for narrowing a
  * renewal down from its SAN set. */
 function ServedHostnames({ certId }: { certId: number }) {
-  // w[impl routes.certificates]
+  // spec: UI#certificates
   const { data } = useOiQuery<TlsHostnamesResponse>("/tls/hostnames/list", {});
   if (data === null) return null;
   const served = data.hostnames

@@ -22,7 +22,7 @@ A file a script declares to be written into a volume, as a path within the volum
 
 ## Declaration
 
-A script declares a volume with `app.volume(name: string)`, or an anonymous volume with `app.volume()`, each of which returns a `Volume` [builder](rule:l/bsl.builder).
+A script declares a volume with `app.volume(name: string)`, or an anonymous volume with `app.volume()`, each of which returns a `Volume` [builder](overview.md#builders).
 A container mounts a volume as [volume mounts](container.md#volume-mounts) specifies.
 
 ## Storage options
@@ -37,13 +37,13 @@ A tmpfs volume's contents do not survive a restart of the host.
 ## Declared file writes
 
 `volume.write(path: string, contents: string)` and `volume.write(path: string, contents: File)` declare a file write of `contents` at `path`.
-A [`File`](rule:l/file.type) MUST be written byte for byte as the bundle holds it, and a string as its UTF-8 encoding.
+A [`File`](bundle.md#bundle-files) MUST be written byte for byte as the bundle holds it, and a string as its UTF-8 encoding.
 
-`volume.write_dir(path: string, dir: Directory)` declares one file write for each file in the [`Directory`](rule:l/app.dir), at that file's path relative to the directory, beneath `path`.
+`volume.write_dir(path: string, dir: Directory)` declares one file write for each file in the [`Directory`](bundle.md#bundle-files), at that file's path relative to the directory, beneath `path`.
 Each file MUST be written byte for byte as the bundle holds it.
 
 When the runtime applies declared file writes, it MUST apply them in the order the script declared them, and each MUST replace whatever its path held.
-When the runtime applies declared file writes is specified by [actuation](rule:r/actuate.volume.start).
+When the runtime applies declared file writes is specified by [actuation](../runtime/actuation.md#volume-creation-and-seeding).
 The runtime MUST create each written file with permissions no broader than `0640`.
 
 ### Write paths
@@ -64,7 +64,7 @@ An `options` map with any other key MUST throw.
 ## External volumes
 
 A script declares an [external volume](#external-volume) with `app.external_volume(name: string)`, which returns an `ExternalVolume`.
-An `ExternalVolume` has no builder methods other than [`description`](rule:l/bsl.resource.description).
+An `ExternalVolume` has no builder methods other than [`description`](overview.md#descriptions).
 A container mounts an external volume as [volume mounts](container.md#volume-mounts) specifies.
 
 The runtime MUST resolve an external volume's name against the bindings of the [lifecycle operation](../overview.md#lifecycle-operation) in progress, if any, and then against the host's external volume mappings.
@@ -72,6 +72,6 @@ An operation's bindings are made by the runtime for that operation, and are not 
 A name resolved against an operation's binding MUST refer to the bound storage until the operation ends, and to nothing after it.
 
 > [!NOTE]
-> An operation's binding names are generated for each invocation and reach the action closure in reserved parameters, as [operation volume parameters](rule:r/operation.volume-param) specifies.
+> An operation's binding names are generated for each invocation and reach the action closure in reserved parameters, as [operation volume parameters](../runtime/operations.md#operation-scoped-volumes) specifies.
 
-An external volume that resolves to nothing is handled as [an unmapped external volume](rule:r/fault.external-volume-unmapped) specifies.
+An external volume that resolves to nothing is handled as [an unmapped external volume](../runtime/faults.md#workload-faults) specifies.

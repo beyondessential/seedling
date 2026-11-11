@@ -20,8 +20,8 @@ use crate::{
     system::translate::proxy::instance_ipv6,
 };
 
-// i[forward.request]
-// i[forward.mtu]
+// FWD#requesting-a-forward
+// FWD#udp-tunnelling
 pub(crate) async fn forward_port_session(
     conn: quinn::Connection,
     mut send: quinn::SendStream,
@@ -142,13 +142,13 @@ pub(crate) async fn forward_port_session(
     let forward_id = ForwardId::generate();
     let (stop_tx, mut stop_rx) = tokio::sync::watch::channel(false);
 
-    // i[forward.mtu]
+    // FWD#udp-tunnelling
     let max_udp_payload: Option<u64> = match proto {
         ForwardProto::Udp => conn.max_datagram_size().map(|s| s.saturating_sub(2) as u64),
         ForwardProto::Tcp => None,
     };
 
-    // i[impl forward.request] — a UDP forward whose relay cannot reach the
+    // spec: FWD#requesting-a-forward — a UDP forward whose relay cannot reach the
     // service is refused here, rather than reported as started with every
     // datagram then vanishing.
     let udp_socket = match proto {
@@ -210,7 +210,7 @@ pub(crate) async fn forward_port_session(
         }
     };
 
-    // i[impl forward.request] — the app's definition may have been replaced
+    // spec: FWD#requesting-a-forward — the app's definition may have been replaced
     // between the check above and this registration, and that update's
     // teardown pass could not see a forward that was not yet registered.
     // Checked again now that it is: an update landing after this point finds
@@ -270,7 +270,7 @@ pub(crate) async fn forward_port_session(
         app = %params.app, service = %params.service, port = params.port,
         fwd = %forward_id, "forward started"
     );
-    // i[impl forward.start]
+    // spec: FWD#forward-events
     state
         .event_tx
         .forward_started(forward_id, &params.app, &params.service, params.port);
@@ -291,7 +291,7 @@ pub(crate) async fn forward_port_session(
             }
             msg = status_rx.recv() => {
                 if let Some(msg) = msg {
-                    // i[forward.status]
+                    // FWD#status-messages
                     let line = serde_json::to_vec(&serde_json::json!({
                         "status": { "level": msg.level, "message": msg.message }
                     })).unwrap_or_default();
@@ -308,7 +308,7 @@ pub(crate) async fn forward_port_session(
     if let Some(entry) = state.forwards.lock().remove(&forward_id) {
         let _ = entry.stop_tx.send(true);
     }
-    // i[impl forward.start]
+    // spec: FWD#forward-events
     state.event_tx.forward_stopped(forward_id);
 
     let _ = send.finish();
@@ -318,8 +318,8 @@ pub(crate) async fn forward_port_session(
     );
 }
 
-// i[stream.forward]
-// i[forward.tunnel.tcp]
+// WIRE#port-forward-data
+// FWD#tcp-tunnelling
 pub(crate) async fn handle_forward_stream(
     (mut send, mut recv): (quinn::SendStream, quinn::RecvStream),
     forward_id_str: String,
@@ -345,7 +345,7 @@ pub(crate) async fn handle_forward_stream(
         Ok(t) => t,
         Err(e) => {
             tracing::warn!(fwd = %forward_id, "TCP connect to {target} failed: {e}");
-            // i[impl forward.status]
+            // spec: FWD#status-messages
             let _ = status_tx.try_send(ForwardStatus::warn(format!(
                 "connection to the service failed: {e}"
             )));
@@ -393,8 +393,8 @@ async fn open_udp_relay(
     Ok(socket)
 }
 
-// i[forward.tunnel.udp]
-// i[datagram.forward]
+// FWD#udp-tunnelling
+// WIRE#port-forward-data
 async fn udp_relay_task(
     mut udp_rx: tokio::sync::mpsc::Receiver<Vec<u8>>,
     conn: quinn::Connection,
@@ -411,7 +411,7 @@ async fn udp_relay_task(
             payload = udp_rx.recv() => {
                 match payload {
                     Some(data) => match socket.send(&data).await {
-                        // i[impl forward.status]
+                        // spec: FWD#status-messages
                         // Reported once an episode, as the registry reports
                         // dropped datagrams: a service that has gone away
                         // fails every send, and one message per datagram is
@@ -440,7 +440,7 @@ async fn udp_relay_task(
             }
             n = socket.recv(&mut buf) => {
                 match n {
-                    // i[impl forward.relay.resilience]
+                    // spec: FWD#relay-resilience
                     // A zero-length datagram is legal UDP, and an ICMP
                     // port-unreachable surfaces here as ECONNREFUSED on a
                     // connected socket. Both used to fall into the same
@@ -497,7 +497,7 @@ async fn udp_relay_task(
         }
     }
 
-    // i[impl forward.relay.resilience] — nothing else observes this task, so
+    // spec: FWD#relay-resilience — nothing else observes this task, so
     // an unannounced exit left the forward in `/forwards/list` looking
     // healthy with no relay behind it.
     tracing::info!(key = forward_key, "UDP relay ended");

@@ -144,7 +144,7 @@ describe("TlsHostnamesTable", () => {
     ).toBeTruthy();
   });
 
-  // w[verify routes.certificates]
+  // spec: UI#certificates
   it("renders hostname rows with status, policy, and issuance details", async () => {
     renderWithSession(<TlsHostnamesTable />, {
       fixtures: { "/tls/hostnames/list": allRows },
@@ -170,7 +170,7 @@ describe("TlsHostnamesTable", () => {
     expect(screen.getByText("queued")).toBeTruthy();
   });
 
-  // w[verify routes.certificates]
+  // spec: UI#certificates
   it("shows the strategy responsible and when it falls through", async () => {
     renderWithSession(<TlsHostnamesTable />, {
       fixtures: { "/tls/hostnames/list": { hostnames: [canopyRow, canopyOnlyRow, defaultRow] } },
@@ -206,7 +206,7 @@ describe("TlsHostnamesTable", () => {
     expect(within(row).queryByText(/ACME-DNS/)).toBeNull();
   });
 
-  // w[verify routes.certificates]
+  // spec: UI#certificates
   it("offers a retry wherever Canopy is the one being asked", async () => {
     const { request } = renderWithSession(<TlsHostnamesTable />, {
       fixtures: { "/tls/hostnames/list": { hostnames: [canopyRow, canopyOnlyRow, defaultRow] } },

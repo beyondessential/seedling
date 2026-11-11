@@ -17,7 +17,7 @@ use crate::{
 
 /// The definition fields a request may carry; exactly one of `script`,
 /// `bundle`, and `reference`.
-// i[impl definition.source]
+// spec: DEFN#definition-sources
 #[derive(Deserialize, Default)]
 pub(crate) struct DefinitionInput {
     #[serde(default)]
@@ -65,7 +65,7 @@ fn allowed_registries(state: &OiState) -> Result<Vec<String>, OiError> {
 }
 
 /// Parse a reference and check it against the allowlist, before any request.
-// i[impl definition.fetch.access]
+// spec: DEFN#registry-access
 pub(crate) fn allowed_reference(state: &OiState, raw: &str) -> Result<DefinitionRef, OiError> {
     let reference = DefinitionRef::parse(raw)?;
     fetch::check_allowed(&allowed_registries(state)?, &reference)?;
@@ -75,8 +75,8 @@ pub(crate) fn allowed_reference(state: &OiState, raw: &str) -> Result<Definition
 /// Resolve the supplied definition without storing anything: decode a
 /// pushed bundle, or fetch one. Nothing else about it is checked here; the
 /// caller decides whether the running Seedling must support it.
-// i[impl definition.source]
-// i[impl definition.fetch]
+// spec: DEFN#definition-sources
+// spec: DEFN#fetching
 pub(crate) fn resolve(
     state: &OiState,
     input: DefinitionInput,

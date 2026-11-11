@@ -24,7 +24,7 @@ Applies to how the [runtime](../../overview.md#runtime) obtains, stores, selects
 
 ### Managed hostname
 
-A hostname declared by a TLS-terminating ingress, per [ingress termination](rule:l/ingress.termination), of an [app](../../overview.md#app) whose status is anything other than `NotInstalled`.
+A hostname declared by a TLS-terminating ingress, per [ingress termination](../../language/ingress.md#termination), of an [app](../../overview.md#app) whose status is anything other than `NotInstalled`.
 
 ### Internal name
 
@@ -70,7 +70,7 @@ Every runtime-managed certificate records its origin.
 | `csr` | signed externally against a CSR the runtime generated |
 | `acme_dns` | issued to the runtime through ACME DNS-01 |
 | `canopy` | issued by Canopy against a key the runtime holds |
-| `tailscale` | obtained from the host's Tailscale facility, per [Tailscale site ingresses](rule:r/ingress.site.tailscale) |
+| `tailscale` | obtained from the host's Tailscale facility, per [Tailscale site ingresses](../site-resources.md#tailscale-discovery) |
 
 The runtime cannot renew a `manual` or `csr` certificate by itself.
 
@@ -105,7 +105,7 @@ The runtime MUST rebuild the proxy configuration to match.
 ## DNS providers
 
 A DNS provider entry is a named set of credentials the runtime uses to publish DNS-01 challenge records.
-The runtime MUST store provider credentials encrypted at rest with the [secret key](rule:r/secret.key), and MUST NOT return them through any interface.
+The runtime MUST store provider credentials encrypted at rest with the [secret key](../secrets.md#secret-key), and MUST NOT return them through any interface.
 Several policies MAY name the same provider.
 The runtime MUST refuse to delete a provider that any policy names.
 
@@ -347,7 +347,7 @@ For each managed hostname, the runtime MUST make available to the [Operator Inte
 - the apps declaring it;
 - the policy that applies, and the pattern it matched;
 - the selected or proxy-held certificate, with its origin, issuer, `notBefore` and `notAfter`;
-- its acquisition status, per [ingress certificate observation](rule:r/observe.ingress.certs);
+- its acquisition status, per [ingress certificate observation](../observation.md#ingresses);
 - the outcome and error of its latest issuance attempt;
 - any retry block, and any recorded retry not yet consumed;
 - the time of its next expected issuance, and whether that time comes from a suggested window, the one-third rule, the after-failure interval, or an issuance due now.

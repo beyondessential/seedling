@@ -22,11 +22,11 @@ The number of instances a Deployment is held at: the scale an operator chose for
 
 ## Provenance
 
-The runtime MUST record each autonomous operation, with its [provenance](rule:r/history.operations.provenance), in the autonomous operations log before performing it.
+The runtime MUST record each autonomous operation, with its [provenance](history.md#provenance), in the autonomous operations log before performing it.
 
 ## Restarts
 
-When a container instance in the desired state reaches the `Terminated` lifecycle state and its [`on_exit`](rule:l/container.on-exit) or [`on_terminate`](rule:l/deployment.on-terminate) strategy calls for it to be recreated, the runtime MUST start a replacement.
+When a container instance in the desired state reaches the `Terminated` lifecycle state and its [`on_exit`](../language/container.md#exit-strategy) or [`on_terminate`](../language/deployment.md#update-and-termination-strategies) strategy calls for it to be recreated, the runtime MUST start a replacement.
 
 ### Restart record
 
@@ -43,14 +43,14 @@ The runtime MUST record a restart even when the instance restarted and returned 
 
 ### Crash-loop detection
 
-When the number of recovery restarts recorded for an instance within the restart window reaches the restart threshold, the runtime MUST file a [`crash_loop` fault](rule:r/fault.crash-loop) against the instance.
+When the number of recovery restarts recorded for an instance within the restart window reaches the restart threshold, the runtime MUST file a [`crash_loop` fault](faults.md#workload-faults) against the instance.
 The runtime MUST NOT count deliberate restarts towards the threshold.
 
 > [!NOTE]
 > Counting deliberate restarts would make every rolling update read as a burst of crashes.
 > The rate catches a container that crashes a few times a day indefinitely without ever exhausting a supervisor's start limit.
 
-The runtime MUST let an operator read and set the threshold and the window through the [restart settings](rule:i/restart.settings), and MUST apply a change without restarting.
+The runtime MUST let an operator read and set the threshold and the window through the [restart settings](../interface/faults.md#crash-loop-settings), and MUST apply a change without restarting.
 
 | setting | default |
 | --- | --- |
@@ -71,7 +71,7 @@ The runtime MUST NOT hold back from replacing a unit whose specification no long
 > Replacing a unit while the supervisor paces it resets the supervisor's restart accounting, so the start limit is never reached.
 > A container that fails shortly after each start spends most of each cycle being paced, so a runtime that acts during that window replaces the unit on nearly every iteration.
 
-When the supervisor has given up restarting an instance because it reached its start limit, the runtime MUST file a [`crash_loop` fault](rule:r/fault.crash-loop) against the instance even if the recorded rate is below the threshold.
+When the supervisor has given up restarting an instance because it reached its start limit, the runtime MUST file a [`crash_loop` fault](faults.md#workload-faults) against the instance even if the recorded rate is below the threshold.
 
 While an instance has an active `crash_loop` fault, whichever condition filed it, the runtime MUST NOT restart the instance automatically.
 The runtime MUST still tear the instance down when it leaves the desired state.
@@ -123,18 +123,18 @@ The runtime MUST clamp before reconciliation acts on the new definition.
 
 ## Health-check replacement
 
-When an instance of a Deployment whose healthcheck declares [`on_failure: "replace"`](rule:l/deployment.healthcheck.on-failure) is observed unhealthy, the runtime MUST:
+When an instance of a Deployment whose healthcheck declares [`on_failure: "replace"`](../language/deployment.md#failure-response) is observed unhealthy, the runtime MUST:
 
 1. Start one instance beyond the Deployment's effective scale as a replacement.
-2. Keep the unhealthy instance running, in the [routing pool in degraded mode](rule:r/lifecycle.service.routing-pool), while the replacement starts.
+2. Keep the unhealthy instance running, in the [routing pool in degraded mode](lifecycle.md#routing-pool), while the replacement starts.
 3. Once the replacement is observed healthy, retire the unhealthy instance through the normal scale-down path.
 
 The runtime MUST NOT start a replacement for an instance of a Deployment that declares `on_failure: "monitor"`.
 
 ### Replacement guard
 
-The runtime MUST require a fresh instance brought up by a [rolling update](rule:r/update.rolling) or by a health-check replacement to become healthy within its grace window of `start_period + retries × interval`, from its declared healthcheck.
-If it does not, the runtime MUST stop it, file a [`health_check_replace_failed` fault](rule:r/fault.healthcheck-replace-failed), and start no further fresh instances of the Deployment, by rolling update or by replacement, until the app's generation changes or an operator clears the fault.
+The runtime MUST require a fresh instance brought up by a [rolling update](update-strategies.md#rolling-updates) or by a health-check replacement to become healthy within its grace window of `start_period + retries × interval`, from its declared healthcheck.
+If it does not, the runtime MUST stop it, file a [`health_check_replace_failed` fault](faults.md#workload-faults), and start no further fresh instances of the Deployment, by rolling update or by replacement, until the app's generation changes or an operator clears the fault.
 The runtime MUST keep the instance it was to replace running in degraded mode.
 
 The runtime MUST apply the guard to every Deployment that declares a healthcheck, whatever its `on_failure` policy.

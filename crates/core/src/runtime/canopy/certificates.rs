@@ -83,7 +83,7 @@ impl Budget {
 }
 
 /// The fault kind for a Canopy certificate that cannot be had.
-// r[impl tls.canopy.fault]
+// spec: TCAN#faults
 pub const FAULT_KIND: &str = "canopy_certificate_failed";
 
 /// What one tick's certificate work did.
@@ -267,7 +267,7 @@ fn ask_for(hostname: &str, c: &ChainDecision, forced: bool) -> Option<Ask> {
     })
 }
 
-// r[impl tls.canopy.revoked]
+// spec: TCAN#revocation
 async fn replace_condemned<R: CertificateRelay>(
     state: &Arc<OiState>,
     engine: &Engine<R>,
@@ -347,7 +347,7 @@ async fn replace_condemned<R: CertificateRelay>(
 /// something to replace and passes to the next strategy at once. Without this a
 /// revocation before the renewal point would record nothing, and the hostname
 /// would read as never having had a certificate and stay with Canopy.
-// r[impl tls.canopy.revoked]
+// spec: TCAN#revocation
 fn revocation_ask(hostname: &str, c: &ChainDecision, now: i64) -> Option<Ask> {
     match &c.cycle {
         chain::Cycle::Running(_) => ask_for(hostname, c, false),
@@ -500,7 +500,7 @@ async fn ask_canopy<R: CertificateRelay>(
 /// Against the position the engine hands back and never the one the caller
 /// asked from: a revocation writes where the hostname now stands before the
 /// replacement is asked for, and recording the earlier position would undo it.
-// r[impl tls.canopy.fault]
+// spec: TCAN#faults
 fn record_engine_failure(state: &Arc<OiState>, failed: &canopy::Failed) {
     let canopy::Failed { ask, error } = failed;
     let reason = format!("the request to Canopy could not be made: {error}");
@@ -536,8 +536,8 @@ fn record_engine_failure(state: &Arc<OiState>, failed: &canopy::Failed) {
 /// One fault per ingress that declares a hostname Canopy cannot provide a
 /// certificate for, keyed by the ingress, so it clears when the ingress no
 /// longer needs it and never clears another kind of fault.
-// r[impl tls.canopy.fault]
-// r[impl tls.canopy-only.untyped]
+// spec: TCAN#faults
+// spec: TCAN#canopy-only-policy
 fn sync_faults(state: &Arc<OiState>, managed: &[ManagedIngress], snap: &Snapshot) {
     let mut desired: BTreeMap<FaultKey, (FaultMeta, String)> = BTreeMap::new();
     for ingress in managed {
@@ -687,8 +687,8 @@ mod tests {
         });
     }
 
-    // r[verify tls.canopy-only.untyped]
-    // r[verify tls.canopy.fault]
+    // spec: TCAN#canopy-only-policy
+    // spec: TCAN#faults
     #[test]
     fn a_canopy_only_hostname_nothing_can_ask_about_is_faulted_until_it_can_be() {
         let oi = TestOi::new();
@@ -730,7 +730,7 @@ mod tests {
         );
     }
 
-    // r[verify tls.canopy.fault]
+    // spec: TCAN#faults
     #[test]
     fn a_hostname_with_no_certificate_whose_request_keeps_failing_is_faulted() {
         let oi = TestOi::new();
@@ -782,7 +782,7 @@ mod tests {
         assert!(active_faults(&oi).is_empty());
     }
 
-    // r[verify tls.canopy.fault]
+    // spec: TCAN#faults
     #[test]
     fn trouble_while_a_certificate_is_still_usable_files_nothing() {
         let oi = TestOi::new();
@@ -822,7 +822,7 @@ mod tests {
         );
     }
 
-    // r[verify tls.canopy.fault]
+    // spec: TCAN#faults
     #[test]
     fn a_chain_that_ran_out_of_strategies_without_a_replacement_is_faulted() {
         let oi = TestOi::new();
@@ -928,7 +928,7 @@ mod tests {
         .await;
     }
 
-    // r[verify tls.canopy.request]
+    // spec: TCAN#requests
     #[test]
     fn one_request_is_made_for_a_hostname_however_many_apps_declare_it() {
         let oi = TestOi::new();
@@ -955,7 +955,7 @@ mod tests {
         );
     }
 
-    // r[verify tls.canopy.request]
+    // spec: TCAN#requests
     #[test]
     fn apps_of_different_types_on_one_hostname_send_no_type() {
         let oi = TestOi::new();
@@ -976,8 +976,8 @@ mod tests {
         );
     }
 
-    // r[verify tls.canopy.request]
-    // r[verify tls.policy.wildcard]
+    // spec: TCAN#requests
+    // spec: TLS#policies
     #[test]
     fn a_wildcard_policy_asks_for_each_concrete_hostname_and_never_the_wildcard() {
         let oi = TestOi::new();
@@ -997,8 +997,8 @@ mod tests {
         assert_eq!(names, ["a.example.com", "b.example.com"]);
     }
 
-    // r[verify tls.strategy.default]
-    // r[verify tls.chain.no-certificate]
+    // spec: CHAIN#default-chain
+    // spec: CHAIN#hostnames-with-no-certificate
     #[test]
     fn nothing_is_asked_of_canopy_for_a_hostname_the_proxy_alone_serves() {
         let oi = TestOi::new();
@@ -1016,8 +1016,8 @@ mod tests {
         assert!(recorder.0.lock().is_empty());
     }
 
-    // r[verify tls.cert.force-retry]
-    // r[verify tls.chain.return]
+    // spec: TLS#retry-blocks-and-retries
+    // spec: CHAIN#return-to-the-first-strategy
     #[test]
     fn an_operator_retry_asks_canopy_again_for_a_hostname_a_refusal_moved_on() {
         let oi = TestOi::new();
@@ -1097,8 +1097,8 @@ mod tests {
         assert!(row.row.open_order_since.is_some());
     }
 
-    // r[verify tls.canopy-only.untyped]
-    // r[verify tls.canopy.fault]
+    // spec: TCAN#canopy-only-policy
+    // spec: TCAN#faults
     #[test]
     fn the_faults_follow_the_hostname_not_the_relay() {
         let oi = TestOi::new();
@@ -1154,8 +1154,8 @@ mod tests {
         })
     }
 
-    // r[verify tls.canopy.revoked]
-    // r[verify tls.chain.no-certificate]
+    // spec: TCAN#revocation
+    // spec: CHAIN#hostnames-with-no-certificate
     #[test]
     fn a_revocation_before_the_renewal_point_still_passes_the_hostname_on() {
         let oi = TestOi::new();
@@ -1241,7 +1241,7 @@ mod tests {
         }
     }
 
-    // r[verify tls.canopy.fault]
+    // spec: TCAN#faults
     #[test]
     fn a_failure_before_the_question_is_put_is_recorded_and_faulted() {
         let oi = TestOi::new();
@@ -1317,8 +1317,8 @@ mod tests {
     /// would read as back on Canopy with nothing to replace and no order
     /// outstanding, and would wait out the after-failure hour for a
     /// replacement it is supposed to be collecting every tick.
-    // r[verify tls.canopy.revoked]
-    // r[verify tls.canopy.fault]
+    // spec: TCAN#revocation
+    // spec: TCAN#faults
     #[test]
     fn a_failure_after_a_revocation_does_not_undo_it() {
         let oi = TestOi::new();
@@ -1389,7 +1389,7 @@ mod tests {
         );
     }
 
-    // r[verify tls.canopy.request]
+    // spec: TCAN#requests
     #[test]
     fn each_tick_carries_on_from_where_the_last_one_stopped() {
         let oi = TestOi::new();
@@ -1431,7 +1431,7 @@ mod tests {
         );
     }
 
-    // r[verify tls.canopy.request]
+    // spec: TCAN#requests
     #[test]
     fn one_tick_asks_about_no_more_hostnames_than_it_can_wait_for() {
         let oi = TestOi::new();
@@ -1454,8 +1454,8 @@ mod tests {
         assert_eq!(recorder.0.lock().len(), MOST_ASKED_PER_TICK);
     }
 
-    // r[verify tls.canopy.revoked]
-    // r[verify tls.chain.return]
+    // spec: TCAN#revocation
+    // spec: CHAIN#return-to-the-first-strategy
     #[test]
     fn a_hostname_a_revocation_touched_is_not_asked_again_in_the_same_tick() {
         let oi = TestOi::new();
@@ -1533,7 +1533,7 @@ mod tests {
             .build()
     }
 
-    // r[verify tls.canopy.revoked]
+    // spec: TCAN#revocation
     #[test]
     fn a_revocation_stops_the_certificate_at_once_and_budgets_only_its_replacement() {
         let oi = TestOi::new();
@@ -1597,7 +1597,7 @@ mod tests {
         }
     }
 
-    // r[verify tls.canopy.fault]
+    // spec: TCAN#faults
     #[test]
     fn an_install_canopy_plays_no_part_in_does_not_run_the_chain_machinery() {
         let oi = TestOi::new();

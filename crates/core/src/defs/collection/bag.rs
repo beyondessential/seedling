@@ -10,7 +10,7 @@ pub trait ResourceBag {
 
 pub(crate) struct AppBag(pub App);
 
-// l[impl action.type]
+// spec: ACN#action-declaration
 // Actions are intentionally absent from the App's resource bag: they are
 // invocable handles, not schedulable resources. `app.select(...)` and
 // `col(app)` produce only the App's named resources, and `rt.start(app)`

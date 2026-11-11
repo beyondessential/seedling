@@ -52,7 +52,7 @@ A client MUST support Ed25519 keys as [RFC 8410](https://www.rfc-editor.org/rfc/
 
 The server MUST generate its key pair the first time it starts, and MUST persist the private key in the file `oi.key` in its data directory.
 On every later start the server MUST use the key in that file, so its fingerprint stays the same across restarts.
-The key file is subject to the [private key file permissions](rule:r/infra.key.file-permissions).
+The key file is subject to the [private key file permissions](../runtime/infrastructure.md#file-permissions).
 
 Each time it starts, the server MUST write its fingerprint, followed by a line feed, to the file `oi.fingerprint` in its data directory.
 A failure to write that file MUST NOT stop the server serving.

@@ -18,7 +18,7 @@ Applies to the BSL `Container` interface: the builder methods and semantics ever
 
 `Container` is an interface, and no value has the type `Container`.
 [Deployments](deployment.md) and [Jobs](job.md) implement it, through the [Pod](pod.md) interface.
-Every method in this spec is a [builder method](rule:l/bsl.builder) available on each type that implements `Container`.
+Every method in this spec is a [builder method](overview.md#builders) available on each type that implements `Container`.
 
 ## Image
 
@@ -80,7 +80,7 @@ The canonical form resolves `.` and `..` segments and collapses repeated `/`, wi
 ## Exit strategy
 
 `container.on_exit(strategy: OnExit)` sets the strategy the runtime follows when the container's command exits.
-The default is [`OnExit.Restart`](rule:l/const.on-exit.restart) for a Deployment and [`OnExit.Terminate`](rule:l/const.on-exit.terminate) for a Job.
+The default is [`OnExit.Restart`](constants.md#onexit) for a Deployment and [`OnExit.Terminate`](constants.md#onexit) for a Job.
 
 ## Resource limits
 
@@ -100,7 +100,7 @@ The default is 256.
 
 ## Privileges
 
-The runtime starts every container with the restricted privileges [container hardening](rule:r/actuate.container.hardening) specifies.
+The runtime starts every container with the restricted privileges [container hardening](../runtime/actuation.md#container-hardening) specifies.
 
 `container.cap_add(capability: string)` grants the container one [capability](#borrowed-terms).
 A `capability` MUST be one of `AUDIT_CONTROL`, `AUDIT_READ`, `AUDIT_WRITE`, `BLOCK_SUSPEND`, `BPF`, `CHECKPOINT_RESTORE`, `CHOWN`, `DAC_OVERRIDE`, `DAC_READ_SEARCH`, `FOWNER`, `FSETID`, `IPC_LOCK`, `IPC_OWNER`, `KILL`, `LEASE`, `LINUX_IMMUTABLE`, `MAC_ADMIN`, `MAC_OVERRIDE`, `MKNOD`, `NET_ADMIN`, `NET_BIND_SERVICE`, `NET_BROADCAST`, `NET_RAW`, `PERFMON`, `SETFCAP`, `SETGID`, `SETPCAP`, `SETUID`, `SYS_ADMIN`, `SYS_BOOT`, `SYS_CHROOT`, `SYS_MODULE`, `SYS_NICE`, `SYS_PACCT`, `SYS_PTRACE`, `SYS_RAWIO`, `SYS_RESOURCE`, `SYS_TIME`, `SYS_TTY_CONFIG`, `SYSLOG` or `WAKE_ALARM`, compared case-insensitively, and any other name MUST throw.
@@ -115,7 +115,7 @@ Leading and trailing whitespace MUST be removed from `spec`, and a `spec` that i
 A container on which `user` is never called runs as the user its image names.
 
 > [!NOTE]
-> A container that must run as a non-root user needs `user`, since [container user](rule:r/actuate.container.user) prevents an entrypoint from dropping privileges itself.
+> A container that must run as a non-root user needs `user`, since [container user](../runtime/actuation.md#container-hardening) prevents an entrypoint from dropping privileges itself.
 
 ## Working directory
 

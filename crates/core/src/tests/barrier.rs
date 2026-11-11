@@ -44,9 +44,8 @@ fn registry() -> Arc<dyn crate::runtime::InstanceRegistry> {
     Arc::new(EphemeralInstanceRegistry::new())
 }
 
-// r[verify operation.lifecycle]
-// r[verify barrier.suspension]
-// r[verify barrier.condition]
+// spec: OPS#operation
+// spec: SUSP#barriers
 #[test]
 fn barrier_satisfied_on_first_pass() {
     let (engine, mut scope, app, ast) = setup_with_script(
@@ -93,8 +92,7 @@ fn barrier_satisfied_on_first_pass() {
     assert!(matches!(result, OperationResult::Completed));
 }
 
-// r[verify barrier.suspension]
-// r[verify barrier.resume]
+// spec: SUSP#barriers
 #[test]
 fn barrier_suspends_then_resumes() {
     let (engine, mut scope, app, ast) = setup_with_script(
@@ -176,9 +174,7 @@ fn barrier_suspends_then_resumes() {
     assert!(matches!(r, OperationResult::Completed));
 }
 
-// r[verify barrier.suspension]
-// r[verify barrier.resume]
-// r[verify barrier.condition]
+// spec: SUSP#barriers
 #[test]
 fn sequential_barriers() {
     let (engine, mut scope, app, ast) = setup_with_script(
@@ -402,8 +398,8 @@ fn barrier_succeeds_after_deadline_when_oracle_reached() {
     );
 }
 
-// r[verify barrier.deadline]
-// l[verify rt.started.state-methods]
+// spec: SUSP#deadlines
+// spec: RT#barriers
 // `ready(0)` means "use the default deadline", not "fail immediately".
 // This used to assert the opposite: zero mapped to `Some(0)`, which the
 // `elapsed >= d` check tripped on the very next pass, so a script asking for
@@ -488,10 +484,9 @@ fn barrier_deadline_zero_uses_the_state_default() {
     );
 }
 
-// r[verify barrier.replay]
-// r[verify barrier.replay.determinism]
-// r[verify reconciliation.idempotency]
-// r[verify history.action-log.replay]
+// spec: SUSP#replay
+// spec: RCN#reconciliation-loop
+// spec: HIST#action-calls
 #[test]
 fn replay_idempotency() {
     let (engine, mut scope, app, ast) = setup_with_script(
@@ -589,7 +584,7 @@ fn replay_idempotency() {
     );
 }
 
-// r[verify barrier.replay.rt-stop]
+// spec: SUSP#rtstop
 #[test]
 fn rt_stop_acts_as_barrier() {
     let (engine, mut scope, app, ast) = setup_with_script(
@@ -671,8 +666,8 @@ fn rt_stop_acts_as_barrier() {
     assert!(matches!(r, OperationResult::Completed));
 }
 
-// l[verify rt.warm-certs]
-// r[verify observe.ingress.certs]
+// spec: RT#certificate-warming
+// spec: OBS#ingresses
 #[test]
 fn warm_certs_barrier_uses_cert_oracle() {
     let (engine, mut scope, app, ast) = setup_with_script(
@@ -728,7 +723,7 @@ fn warm_certs_barrier_uses_cert_oracle() {
     );
 }
 
-// l[verify rt.warm-certs]
+// spec: RT#certificate-warming
 #[test]
 fn warm_certs_barrier_suspends_when_cert_not_valid() {
     let (engine, mut scope, app, ast) = setup_with_script(
@@ -779,8 +774,8 @@ fn warm_certs_barrier_suspends_when_cert_not_valid() {
     );
 }
 
-// l[verify rt.warm-images]
-// r[verify actuate.image.warm]
+// spec: RT#image-warming
+// spec: IMG#image-warming
 #[test]
 fn warm_images_barrier_uses_image_oracle() {
     let (engine, mut scope, app, ast) = setup_with_script(
@@ -833,7 +828,7 @@ fn warm_images_barrier_uses_image_oracle() {
     );
 }
 
-// l[verify rt.warm-images]
+// spec: RT#image-warming
 #[test]
 fn warm_images_barrier_suspends_when_image_absent() {
     let (engine, mut scope, app, ast) = setup_with_script(
@@ -883,7 +878,7 @@ fn warm_images_barrier_suspends_when_image_absent() {
     );
 }
 
-// r[verify barrier.suspension]
+// spec: SUSP#barriers
 #[test]
 fn stub_runtime_still_passes_language_tests() {
     // The existing exercise() helper uses RuntimeInstance::stub() (no context),
@@ -899,8 +894,8 @@ fn stub_runtime_still_passes_language_tests() {
     );
 }
 
-// l[verify rt.started.terminated-eventually]
-// r[verify barrier.deadline]
+// spec: RT#barriers
+// spec: SUSP#deadlines
 #[test]
 fn terminated_eventually_never_times_out() {
     // Even with a very large elapsed time, a deadline-less barrier must
@@ -1007,7 +1002,7 @@ fn terminated_eventually_never_times_out() {
     );
 }
 
-// r[verify operation.cancel]
+// spec: OPS#cancellation
 #[test]
 fn cancel_aborts_with_cancelled_result() {
     let (engine, mut scope, app, ast) = setup_with_script(
@@ -1059,7 +1054,7 @@ fn cancel_aborts_with_cancelled_result() {
     );
 }
 
-// r[verify barrier.suspension.poll-backoff]
+// spec: SUSP#re-evaluation-cadence
 #[test]
 fn dynamic_poll_interval_follows_piecewise_schedule() {
     use crate::oi::handler::actions::lifecycle::dynamic_poll_interval;
@@ -1082,15 +1077,15 @@ fn dynamic_poll_interval_follows_piecewise_schedule() {
     assert_eq!(dynamic_poll_interval(24 * 3600), Duration::from_secs(300));
 }
 
-// r[verify barrier.deadline]
-// r[verify barrier.replay.rt-stop]
+// spec: SUSP#deadlines
+// spec: SUSP#rtstop
 #[test]
 fn rt_stop_deadline_is_enforced() {
     // Previously rt.stop() stored the deadline in the BarrierRecord but
     // never actually read it; a resource that refused to terminate left the
     // closure suspended indefinitely.
     //
-    // This used to force expiry with deadline=0, which `l[rt.stop]` defines
+    // This used to force expiry with deadline=0, which `RT#stopping-resources` defines
     // as "use the default" rather than "expire at once" — so it now uses the
     // smallest real deadline and lets it actually elapse between the pass
     // that records `started_at` and the pass that checks it.
@@ -1262,7 +1257,7 @@ fn job(name: &str) -> ResourceInstance {
     )
 }
 
-// r[verify barrier.replay.anchor]
+// spec: SUSP#barrier-anchoring
 #[test]
 fn terminated_barrier_does_not_short_circuit_against_an_earlier_stop() {
     // `do_stop` is the only writer of a satisfied record with
@@ -1343,7 +1338,7 @@ fn terminated_barrier_does_not_short_circuit_against_an_earlier_stop() {
     );
 }
 
-// r[verify barrier.satisfaction.recorded]
+// spec: SUSP#barrier-anchoring
 #[test]
 fn a_barrier_that_passes_on_a_replay_pass_is_recorded_as_satisfied() {
     // Satisfaction was marked on pending entries only, and on a replay pass
@@ -1421,8 +1416,8 @@ fn a_barrier_that_passes_on_a_replay_pass_is_recorded_as_satisfied() {
     );
 }
 
-// r[verify operation.composition.params.replay]
-// r[verify barrier.replay.positional]
+// spec: OPS#sub-action-parameters
+// spec: SUSP#positional-replay
 //
 // Lives here rather than beside the other `Action.invoke` tests because it
 // needs the real replay context: the stub runtime those use has no action
@@ -1503,7 +1498,7 @@ fn a_replayed_sub_action_call_recovers_its_recorded_params() {
     );
 }
 
-// r[verify scaling.decision.actions]
+// spec: AUTO#scale
 #[test]
 fn an_action_addresses_every_replica_the_deployment_is_scaled_to() {
     // The replica set was sized from `scale.start`, the low end of the
@@ -1564,8 +1559,8 @@ fn an_action_addresses_every_replica_the_deployment_is_scaled_to() {
     );
 }
 
-// l[verify rt.started.type]
-// l[verify collection.except]
+// spec: RT#started
+// spec: COL#query-methods
 #[test]
 fn except_on_a_started_stops_waiting_for_the_excluded_resource() {
     // The collection methods returned the whole group whatever they were
@@ -1603,9 +1598,9 @@ fn except_on_a_started_stops_waiting_for_the_excluded_resource() {
     );
 }
 
-// l[verify rt.started.type]
-// l[verify collection.only]
-// l[verify collection.select]
+// spec: RT#started
+// spec: COL#query-methods
+// spec: COL#selection
 #[test]
 fn only_and_select_narrow_a_started_to_the_resources_they_name() {
     let (engine, mut scope, app, ast) = setup_with_script(
@@ -1640,8 +1635,8 @@ fn only_and_select_narrow_a_started_to_the_resources_they_name() {
     );
 }
 
-// l[verify rt.started.type]
-// l[verify collection.one]
+// spec: RT#started
+// spec: COL#query-methods
 #[test]
 fn one_on_a_started_yields_a_single_resource_and_null_when_empty() {
     let (engine, mut scope, app, ast) = setup_with_script(
@@ -1678,8 +1673,8 @@ fn one_on_a_started_yields_a_single_resource_and_null_when_empty() {
     assert!(matches!(r, OperationResult::Completed), "{r:?}");
 }
 
-// r[verify barrier.satisfaction.recorded]
-// r[verify barrier.deadline]
+// spec: SUSP#barrier-anchoring
+// spec: SUSP#deadlines
 #[test]
 fn a_second_barrier_on_one_started_does_not_rearm_its_wait_each_pass() {
     // One log entry holds one barrier record, and both barriers on a
@@ -1743,7 +1738,7 @@ fn a_second_barrier_on_one_started_does_not_rearm_its_wait_each_pass() {
     );
 }
 
-// r[verify gc.instances.operation-keep-set]
+// spec: GC#instances-started-by-actions
 #[test]
 fn stopping_an_already_stopped_deployment_does_not_mint_instances_to_wait_on() {
     // rt.stop addresses the instances a deployment has, so refusing to
@@ -1828,8 +1823,8 @@ fn stopping_an_already_stopped_deployment_does_not_mint_instances_to_wait_on() {
     );
 }
 
-// r[verify barrier.deadline]
-// r[verify barrier.satisfaction.recorded]
+// spec: SUSP#deadlines
+// spec: SUSP#barrier-anchoring
 #[test]
 fn the_second_barrier_on_one_started_still_times_out() {
     // Two barriers on one `Started` share one record. Abstaining whenever
@@ -1894,7 +1889,7 @@ fn the_second_barrier_on_one_started_still_times_out() {
     }
 }
 
-// r[verify barrier.replay.anchor]
+// spec: SUSP#barrier-anchoring
 #[test]
 fn a_narrowed_barrier_does_not_satisfy_the_broader_one_beside_it() {
     // Narrowed groups carry the anchor of the call they came from, so a
@@ -1959,7 +1954,7 @@ fn a_narrowed_barrier_does_not_satisfy_the_broader_one_beside_it() {
     }
 }
 
-// r[verify barrier.replay.positional]
+// spec: SUSP#positional-replay
 #[test]
 fn a_start_replayed_against_a_stop_entry_diverges() {
     // The rt.* surfaces advanced past the committed entry at their position
@@ -2025,7 +2020,7 @@ fn a_start_replayed_against_a_stop_entry_diverges() {
     }
 }
 
-// r[verify barrier.deadline]
+// spec: SUSP#deadlines
 #[test]
 fn a_barrier_on_a_narrowed_group_still_times_out() {
     // Keeping narrowed groups off the shared record stopped them aliasing
@@ -2086,7 +2081,7 @@ fn a_barrier_on_a_narrowed_group_still_times_out() {
     }
 }
 
-// r[verify barrier.replay.positional]
+// spec: SUSP#positional-replay
 #[test]
 fn a_stop_replayed_against_a_start_entry_diverges() {
     // rt.stop took the committed entry at its position whatever kind it
@@ -2163,8 +2158,7 @@ fn a_stop_replayed_against_a_start_entry_diverges() {
     }
 }
 
-// r[verify barrier.satisfaction.recorded]
-// r[verify barrier.replay.anchor]
+// spec: SUSP#barrier-anchoring
 #[test]
 fn each_barrier_on_one_call_keeps_its_own_record() {
     // Three barriers on one call: a narrowed one, and two over the whole

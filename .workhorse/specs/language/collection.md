@@ -30,7 +30,7 @@ A value of type `Collection`: a group of zero or more resources, of any [resourc
 An action handle is among the values that coerce to an empty collection.
 
 > [!NOTE]
-> An action is invoked through [`Action.invoke`](rule:l/action.call), not acted on as a resource, so no collection holds one.
+> An action is invoked through [`Action.invoke`](action.md#action-invocation), not acted on as a resource, so no collection holds one.
 
 ## Query methods
 

@@ -6,7 +6,7 @@ use seedling_protocol::actor::Actor;
 use seedling_protocol::names::{AppName, ForwardId};
 use tokio::sync::{mpsc, watch};
 
-// i[forward.request]
+// FWD#requesting-a-forward
 #[derive(Debug, Clone, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ForwardProto {
@@ -32,7 +32,7 @@ impl fmt::Display for ForwardError {
 
 impl std::error::Error for ForwardError {}
 
-// i[forward.status]
+// FWD#status-messages
 /// A runtime condition to report on a forward's control stream.
 pub struct ForwardStatus {
     pub level: &'static str,
@@ -92,7 +92,7 @@ pub struct ForwardEntry {
     pub udp_dropped: u64,
 }
 
-// i[forward.record]
+// FWD#listing-forwards
 pub struct ForwardRecord {
     pub forward_id: ForwardId,
     pub app: AppName,
@@ -103,7 +103,7 @@ pub struct ForwardRecord {
     pub actor: Option<Actor>,
 }
 
-// i[forward.concurrent]
+// FWD#concurrency
 pub struct ForwardRegistry {
     by_id: HashMap<ForwardId, ForwardEntry>,
     /// (conn_id, forward_key) → forward_id for every live forward: the key
@@ -126,7 +126,7 @@ impl ForwardRegistry {
         }))
     }
 
-    // i[impl forward.key-exhaustion]
+    // spec: FWD#forward-keys
     /// Allocate a `forward_key` on the entry's connection and record the entry
     /// under it in the same step, so no other forward can be handed that key
     /// while this one lives. Every forward holds its key, whatever its proto:
@@ -179,7 +179,7 @@ impl ForwardRegistry {
         self.by_id.len()
     }
 
-    // i[impl forward.status]
+    // spec: FWD#status-messages
     /// Hand a datagram's payload to the UDP forward holding `key` on the
     /// connection. Datagrams the relay has no room for are dropped, and the
     /// forward is told once when dropping starts and once, with the count,
@@ -236,7 +236,7 @@ impl ForwardRegistry {
             .map(|e| (e.target_addr, e.port, e.status_tx.clone()))
     }
 
-    // i[forward.list]
+    // FWD#listing-forwards
     pub fn list(&self, app: Option<&str>) -> Vec<ForwardRecord> {
         self.by_id
             .values()
@@ -253,7 +253,7 @@ impl ForwardRegistry {
             .collect()
     }
 
-    // i[forward.lifetime]
+    // FWD#forward-lifetime
     /// Remove all forwards for the given connection and return their entries so
     /// the caller can send the stop signal and drop `udp_tx`.
     pub fn remove_by_conn(&mut self, conn_id: usize) -> Vec<ForwardEntry> {
@@ -269,7 +269,7 @@ impl ForwardRegistry {
             .collect()
     }
 
-    // i[forward.script-update]
+    // FWD#forward-lifetime
     /// Remove all forwards for `app` where `is_stale` returns `true` and return
     /// their entries so the caller can send stop signals.
     pub fn remove_stale_for_app(
@@ -335,7 +335,7 @@ mod tests {
         }
     }
 
-    // i[verify forward.key-exhaustion]
+    // spec: FWD#forward-keys
     #[test]
     fn wrapped_key_is_not_reissued_while_a_tcp_forward_holds_it() {
         let registry = ForwardRegistry::new();
@@ -371,7 +371,7 @@ mod tests {
         );
     }
 
-    // i[verify forward.key-exhaustion]
+    // spec: FWD#forward-keys
     #[test]
     fn exhausted_key_space_is_refused() {
         let registry = ForwardRegistry::new();
@@ -394,7 +394,7 @@ mod tests {
         assert_eq!(plural(2, "datagram"), "2 datagrams");
     }
 
-    // i[verify forward.status]
+    // spec: FWD#status-messages
     #[test]
     fn a_caught_up_report_the_status_channel_had_no_room_for_is_not_lost() {
         let registry = ForwardRegistry::new();
@@ -436,7 +436,7 @@ mod tests {
         );
     }
 
-    // i[verify forward.status]
+    // spec: FWD#status-messages
     #[test]
     fn backpressure_is_reported_once_per_episode() {
         let registry = ForwardRegistry::new();

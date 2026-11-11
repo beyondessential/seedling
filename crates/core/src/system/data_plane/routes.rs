@@ -249,7 +249,7 @@ mod tests {
         m
     }
 
-    // r[verify infra.nat64.ipv6-egress]
+    // spec: NAT64#ipv6-egress
     // The kernel keeps the table id in a u8 header field and, for ids that do
     // not fit, an RTA_TABLE attribute that takes precedence. Reading only the
     // header would put a large-id route in whichever table the u8 happened to
@@ -261,7 +261,7 @@ mod tests {
         assert_eq!(effective_table(&msg(254, Some(1000))), 1000);
     }
 
-    // r[verify infra.nat64.ipv6-egress]
+    // spec: NAT64#ipv6-egress
     #[test]
     fn a_policy_table_is_not_the_main_table() {
         assert_ne!(effective_table(&msg(0, Some(100))), MAIN_ROUTE_TABLE);

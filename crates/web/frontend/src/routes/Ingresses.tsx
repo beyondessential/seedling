@@ -1,4 +1,4 @@
-// w[impl routes.ingresses]
+// spec: UI#operator-capabilities
 import AddIcon from "@mui/icons-material/Add";
 import DeleteOutlineIcon from "@mui/icons-material/DeleteOutlineOutlined";
 import LinkOffIcon from "@mui/icons-material/LinkOff";

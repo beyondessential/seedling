@@ -36,7 +36,7 @@ pub(super) struct PullState {
     /// attempted once the flag was set. A registry that was briefly
     /// unreachable therefore disabled actuation of the workload permanently,
     /// until the daemon restarted.
-    // r[impl actuate.image.retry]
+    // spec: IMG#image-pulls
     pub(super) gate: RetryGate,
 }
 
@@ -59,7 +59,7 @@ impl PullState {
 /// which is the hammering this back-off exists to stop.
 ///
 /// A success is unconditional — the image is present however it got there.
-// r[impl actuate.image.retry]
+// spec: IMG#image-pulls
 fn finish_pull(
     map: &mut std::collections::HashMap<String, PullState>,
     image: &str,
@@ -106,8 +106,8 @@ fn finish_pull(
 }
 
 impl Actuator {
-    // r[impl reconciliation.liveness]
-    // r[impl actuate.image.retry]
+    // spec: RCN#reconciliation-loop
+    // spec: IMG#image-pulls
     /// Check image availability; spawn background pull if missing.
     /// Returns `Ok(())` if the image is locally present, or
     /// `Err(ActuateError::ImageUnavailable)` if a pull is in progress or
@@ -187,7 +187,7 @@ mod tests {
         s
     }
 
-    // r[verify actuate.image.retry]
+    // spec: IMG#image-pulls
     #[test]
     fn a_superseded_pull_failing_does_not_disturb_the_live_attempt() {
         let stale = Instant::now();
@@ -210,7 +210,7 @@ mod tests {
         );
     }
 
-    // r[verify actuate.image.retry]
+    // spec: IMG#image-pulls
     #[test]
     fn the_live_attempt_failing_clears_in_flight_and_paces_the_retry() {
         let live = Instant::now();
@@ -224,7 +224,7 @@ mod tests {
         assert_eq!(state.gate.failures(), 1);
     }
 
-    // r[verify actuate.image.retry]
+    // spec: IMG#image-pulls
     #[test]
     fn a_success_drops_the_entry_whichever_attempt_won() {
         let live = Instant::now();

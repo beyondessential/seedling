@@ -4,13 +4,13 @@ id: SUSP
 
 # Suspension and replay
 
-Applies to how the [runtime](../overview.md#runtime) suspends a [lifecycle operation](../overview.md#lifecycle-operation)'s action closure on a barrier, and replays it from the [action log](rule:r/history.action-log) to resume it or to recover it after a restart.
+Applies to how the [runtime](../overview.md#runtime) suspends a [lifecycle operation](../overview.md#lifecycle-operation)'s action closure on a barrier, and replays it from the [action log](history.md#action-execution-log) to resume it or to recover it after a restart.
 
 ## Terminology
 
 ### Barrier
 
-A call in an action closure that waits for resource instances to reach a [lifecycle state](../overview.md#lifecycle-state): a [state method](rule:l/rt.started.state-methods) on a `Started`, or [`rt.stop`](#rtstop).
+A call in an action closure that waits for resource instances to reach a [lifecycle state](../overview.md#lifecycle-state): a [state method](../language/rt.md#barriers) on a `Started`, or [`rt.stop`](#rtstop).
 
 ### Pass
 
@@ -26,7 +26,7 @@ When an action closure reaches a barrier whose condition is not satisfied, the r
 To the script, the barrier call blocks.
 
 A barrier's condition names resource instances and a required lifecycle state.
-The condition is satisfied when every named instance has reached or passed the required state, as derived from the [world observation history](rule:r/history.world.state-derivation).
+The condition is satisfied when every named instance has reached or passed the required state, as derived from the [world observation history](lifecycle.md#derivation).
 
 When a suspended barrier's condition is satisfied, the runtime MUST resume the closure, which continues from the point immediately after the barrier call.
 
@@ -90,7 +90,7 @@ The runtime MUST decide whether a barrier has already been satisfied from its an
 
 An entry MUST hold a record for each barrier asserted on its call, identified by the barrier's position among them in the order the closure asserts them.
 The runtime MUST NOT identify a barrier by its resources or its required state.
-A barrier on a `Started` that a [Collection](rule:l/collection.interface) method has narrowed is a barrier on the original call, with its own record on that call's entry.
+A barrier on a `Started` that a [Collection](../language/collection.md#collection) method has narrowed is a barrier on the original call, with its own record on that call's entry.
 
 > [!NOTE]
 > A replica can be added or retired between passes and the barrier is still the same one, and a closure can assert the same state twice on one call.
@@ -107,11 +107,11 @@ The runtime MUST record when each barrier began to wait, and MUST keep that time
 
 ## rt.stop
 
-[`rt.stop`](rule:l/rt.stop) is a barrier: the runtime MUST suspend the closure until every resource it names has terminated, under the same deadline, recording and replay rules as any other barrier.
+[`rt.stop`](../language/rt.md#stopping-resources) is a barrier: the runtime MUST suspend the closure until every resource it names has terminated, under the same deadline, recording and replay rules as any other barrier.
 
 ## Side-effecting calls
 
-[`rt.signal`](rule:l/rt.signal), [`rt.write`](rule:l/rt.write) and [`rt.exec`](rule:l/rt.exec) act on the host directly, and the runtime MUST record each call in the action log.
+[`rt.signal`](../language/rt.md#signal-delivery), [`rt.write`](../language/rt.md#volume-writes) and [`rt.exec`](../language/rt.md#command-execution) act on the host directly, and the runtime MUST record each call in the action log.
 
 | call | entry records | entry omits |
 | --- | --- | --- |
@@ -128,11 +128,11 @@ On a replay, the runtime MUST return from `rt.exec` the exit code the entry reco
 
 The runtime MUST run an `rt.exec` command inside the target's running container, with the container's namespaces, working directory, user and environment, and MUST block the closure until the command exits.
 
-The runtime MUST resolve an `rt.write` target to the volume's storage on the host as for a static `Volume.write`, and MUST write under the [confinement](rule:r/storage.confinement) that holds every path the runtime owns.
+The runtime MUST resolve an `rt.write` target to the volume's storage on the host as for a static `Volume.write`, and MUST write under the [confinement](actuation.md#storage-confinement) that holds every path the runtime owns.
 
 ## Abandoned replay
 
-When it starts, the runtime MUST tear down the [dynamic resources](rule:l/app.resources.dynamic) that previous runs recorded, except those recorded against the operation it is about to replay, which the replay adopts.
+When it starts, the runtime MUST tear down the [dynamic resources](../language/app.md#dynamic-resource-lifetime) that previous runs recorded, except those recorded against the operation it is about to replay, which the replay adopts.
 Where the replay does not then start, for any reason, the runtime MUST tear down the resources it spared and forget their records before it goes on serving.
 
 The runtime MUST forget only the records of resources it has torn down.

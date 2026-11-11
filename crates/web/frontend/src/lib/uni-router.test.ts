@@ -74,7 +74,7 @@ function toArray(u: Uint8Array): number[] {
   return out;
 }
 
-// w[verify shells.wire]
+// spec: WEB#shell-relay
 describe("UniRouter", () => {
   it("routes a stream to a handler registered before delivery", async () => {
     const router = new UniRouter();

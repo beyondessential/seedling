@@ -27,7 +27,7 @@ pub struct ConnectResponse {
     pub cert_hashes: Vec<String>,
 }
 
-// w[auth.connect]
+// WEB#authentication
 pub async fn handle_connect(
     state: AppState,
     headers: HeaderMap,
@@ -70,13 +70,13 @@ pub async fn handle_connect(
 }
 
 /// Check credentials in order: Tailscale → dev bypass → session token → password.
-// w[auth.connect]
+// WEB#authentication
 fn resolve_actor(
     state: &AppState,
     headers: &HeaderMap,
     body: &ConnectRequest,
 ) -> Option<Arc<Actor>> {
-    // w[auth.tailscale]
+    // WEB#tailscale-identity
     if state.trust_tailscale
         && let Some(actor) = tailscale::extract_actor(headers)
     {
@@ -87,7 +87,7 @@ fn resolve_actor(
         }));
     }
 
-    // w[auth.dev]
+    // WEB#development-bypass
     if state.dev_no_auth {
         return Some(Arc::new(Actor {
             kind: Some("dev".to_owned()),
@@ -105,7 +105,7 @@ fn resolve_actor(
     }
 
     // Password login.
-    // w[auth.password]
+    // WEB#password-login
     if let (Some(pw), Some(hash)) = (&body.password, &state.password_hash)
         && password::verify_password(hash, pw)
     {

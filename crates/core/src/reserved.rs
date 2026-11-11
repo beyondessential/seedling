@@ -58,7 +58,7 @@ impl std::fmt::Display for ReservedName {
 ///
 /// Creation only — never update or delete. An operator with a legacy
 /// `backup-snap-*` volume must still be able to manage it out of existence.
-// r[impl namespace.reserved]
+// spec: IDN#reserved-names
 pub fn check_site_volume_name(name: &SiteVolumeName) -> Result<(), ReservedName> {
     for prefix in RESERVED_SITE_VOLUME_PREFIXES {
         if name.as_str().starts_with(prefix) {
@@ -77,7 +77,7 @@ pub fn check_site_volume_name(name: &SiteVolumeName) -> Result<(), ReservedName>
 /// Reject a site-ingress name the daemon claims.
 ///
 /// Creation only, for the same reason as above.
-// r[impl namespace.reserved]
+// spec: IDN#reserved-names
 pub fn check_site_ingress_name(name: &SiteIngressName) -> Result<(), ReservedName> {
     if RESERVED_SITE_INGRESS_NAMES.contains(&name.as_str()) {
         return Err(ReservedName {
@@ -92,8 +92,8 @@ pub fn check_site_ingress_name(name: &SiteIngressName) -> Result<(), ReservedNam
 ///
 /// Creation only, for the same reason as above: an operator whose app predates
 /// the reservation must still be able to manage it out of existence.
-// r[impl priority.groups-owned]
-// r[impl namespace.reserved]
+// spec: PRIO#resource-control-groups
+// spec: IDN#reserved-names
 pub fn check_app_name(name: &AppName) -> Result<(), ReservedName> {
     if RESERVED_APP_NAMES.contains(&name.as_str()) {
         return Err(ReservedName {
@@ -110,7 +110,7 @@ pub fn check_app_name(name: &AppName) -> Result<(), ReservedName> {
 mod tests {
     use super::*;
 
-    // r[verify namespace.reserved]
+    // spec: IDN#reserved-names
     #[test]
     fn snapshot_prefix_is_reserved() {
         let reserved = SiteVolumeName::new("backup-snap-archive").unwrap();
@@ -123,7 +123,7 @@ mod tests {
         assert!(check_site_volume_name(&contains).is_ok());
     }
 
-    // r[verify priority.groups-owned]
+    // spec: PRIO#resource-control-groups
     #[test]
     fn the_infra_slice_app_name_is_reserved() {
         let reserved = AppName::new(crate::system::priority::INFRA_COMPONENT).unwrap();
@@ -132,7 +132,7 @@ mod tests {
         assert!(check_app_name(&ordinary).is_ok());
     }
 
-    // r[verify namespace.reserved]
+    // spec: IDN#reserved-names
     #[test]
     fn tailscale_ingress_name_is_reserved() {
         let reserved = SiteIngressName::new("tailscale").unwrap();

@@ -96,7 +96,7 @@ The actor is the client's assertion, and the server MUST record it as the client
 If a request has no `actor` member, the server MUST attribute it to an actor whose `kind` is `ctl`, whose `id` is the [fingerprint](transport.md#fingerprint) of the client's key, and whose `display` is that key's label in the [authorised key set](transport.md#authorised-key-set), or the fingerprint where the key has no label.
 That actor has no `session`.
 
-The server MUST attach the actor of a request to every [event](rule:i/event.types) the request causes, and to the [audit log](rule:r/audit.log) entries it records for the request.
+The server MUST attach the actor of a request to every [event](events.md#event-types) the request causes, and to the [audit log](../runtime/audit-log.md#storage) entries it records for the request.
 
 ## Error codes
 
@@ -114,7 +114,7 @@ The server MUST attach the actor of a request to every [event](rule:i/event.type
 | `bundle_invalid` | a definition bundle breaks the [bundle rules](definitions.md#bundle-rules); `message` names the offending path or field |
 | `unsupported_seedling` | a definition does not [support](definitions.md#seedling-version-support) the running Seedling version |
 | `fetch_failed` | a definition could not be [fetched](definitions.md#fetching); `message` gives the cause |
-| `registry_not_allowed` | the registry a reference names is not on the [registry allowlist](rule:i/registry.list) |
+| `registry_not_allowed` | the registry a reference names is not on the [registry allowlist](images.md#registry-allowlist) |
 | `server_busy` | the server's [stream limit](#stream-limit) was reached |
 | `internal` | a failure inside the server, such as a storage error, kept the request from completing |
 | `canopy_disabled` | Canopy access is turned off on the host, and the request was refused for that reason alone |
@@ -132,8 +132,8 @@ A client MUST treat a bidirectional stream that ends without a response as an er
 A client MUST report an error response's `code` and `message` to its caller.
 A client MUST NOT wait without limit for the unidirectional stream after a successful response, since the server can fail to open it.
 
-After a successful `/events/subscribe`, the server MUST open one unidirectional stream and write [events](rule:i/event.subscribe) to it as JSON objects, each followed by a line feed, for as long as the connection lasts.
-After a successful `/logs/stream`, the server MUST open one unidirectional stream and write [log entries](rule:i/logs.stream) to it as JSON objects, each followed by a line feed.
+After a successful `/events/subscribe`, the server MUST open one unidirectional stream and write [events](events.md#subscription) to it as JSON objects, each followed by a line feed, for as long as the connection lasts.
+After a successful `/logs/stream`, the server MUST open one unidirectional stream and write [log entries](logs.md#log-stream-request) to it as JSON objects, each followed by a line feed.
 Without follow mode the server MUST finish the stream once it has written the entries the request selects.
 In follow mode the server MUST keep the stream open and write new entries as they appear, until the connection ends.
 
@@ -154,7 +154,7 @@ A shell session uses three streams:
 - a server-initiated unidirectional stream carrying the shell's standard error.
 
 On the session stream, the client MUST write the request's opening line and then the shell's standard input as raw bytes, for the rest of the stream's life.
-The server MUST write the [handshake response](rule:i/shell.open) on the session stream and, when the session ends, the [exit frame](rule:i/shell.exit), and nothing else.
+The server MUST write the [handshake response](shells.md#opening-an-app-shell) on the session stream and, when the session ends, the [exit frame](shells.md#session-end), and nothing else.
 
 Each end MUST relay standard input and output independently.
 Output waiting to be delivered MUST NOT hold up standard input, nor delay the server noticing that the session has ended.
@@ -162,14 +162,14 @@ Output waiting to be delivered MUST NOT hold up standard input, nor delay the se
 ## Port forward data
 
 Each TCP connection tunnelled through a port forward uses one client-initiated bidirectional stream.
-Its opening line MUST be `{ "forward": "<forward_id>" }`, naming the forward the [`/forwards/start`](rule:i/forward.request) response gave.
+Its opening line MUST be `{ "forward": "<forward_id>" }`, naming the forward the [`/forwards/start`](port-forwards.md#requesting-a-forward) response gave.
 After the opening line, each direction carries the tunnelled connection's bytes unchanged.
-Each direction of the stream MUST be finished when the matching direction of the tunnelled connection ends, and the stream MUST be reset when the tunnelled connection fails, as [TCP tunnelling](rule:i/forward.tunnel.tcp) specifies.
+Each direction of the stream MUST be finished when the matching direction of the tunnelled connection ends, and the stream MUST be reset when the tunnelled connection fails, as [TCP tunnelling](port-forwards.md#tcp-tunnelling) specifies.
 
 Each UDP datagram tunnelled through a port forward is carried as one QUIC datagram.
 A datagram MUST begin with the forward's 16-bit `forward_key`, in network byte order, immediately followed by the UDP payload.
 The server MUST ignore a datagram shorter than 2 bytes, and one whose key names no forward of the connection.
-A payload too large for the path's datagram limit is dropped, and reported as a [forward status](rule:i/forward.status) message.
+A payload too large for the path's datagram limit is dropped, and reported as a [forward status](port-forwards.md#status-messages) message.
 
 ## Canopy relay streams
 
@@ -179,7 +179,7 @@ A header line MUST NOT exceed 65,536 bytes including its line feed.
 
 The server MUST write the request's header line and body and then finish its side of the stream.
 The client MUST write the response's header line and body and then finish its side.
-The header lines' members are defined by the [Canopy relay](rule:i/canopy.relay).
+The header lines' members are defined by the [Canopy relay](canopy-relay.md#relay-streams).
 
 ## Stream limit
 

@@ -39,7 +39,7 @@ use serde::{Deserialize, Serialize};
 /// Stored DNS provider credentials, keyed by an operator-chosen name. The
 /// `config` is provider-specific JSON; for `route53` it is
 /// `{"access_key_id": ..., "secret_access_key": ..., "region": ...}`.
-// r[impl tls.dns-provider.lifecycle]
+// spec: TLS#dns-providers
 #[derive(Debug, Clone)]
 pub struct DnsProviderEntry {
     pub name: String,
@@ -82,8 +82,8 @@ impl DnsProviderKind {
 /// A stored certificate. The same row models manual uploads, CSR-derived
 /// certs, and ACME-DNS-issued certs. The `origin` discriminates and drives
 /// renewal scheduling.
-// r[impl tls.strategy.manual]
-// r[impl tls.csr.flow]
+// spec: TLS#certificate-selection
+// spec: TLS#certificate-signing-requests
 #[derive(Debug, Clone)]
 pub struct TlsCertificate {
     pub id: i64,
@@ -93,14 +93,14 @@ pub struct TlsCertificate {
     /// statement about what the row serves — that is decided by the full SAN
     /// list at resolution time, and the serving lookups confirm this label
     /// against the certificate rather than trusting it.
-    // r[impl tls.cert.validation.san-coverage]
+    // spec: TLS#coverage
     pub hostname: String,
     /// For a row issued against a CSR the runtime generated: the hostnames
     /// that CSR requested, in the order they were asked for. A CA may sign a
     /// name set other than the one requested, so this records what was asked
     /// for and is not necessarily covered by the certificate that arrived.
     /// `None` for every other row.
-    // r[impl tls.csr.flow]
+    // spec: TLS#certificate-signing-requests
     pub requested_hostnames: Option<Vec<String>>,
     pub state: TlsCertState,
     pub origin: TlsCertOrigin,
@@ -122,23 +122,23 @@ pub struct TlsCertificate {
     /// ACME Renewal Information (RFC 9773) suggested-window start, in
     /// Unix seconds. When set, the renewal task should not renew before
     /// this time. Populated at issuance and refreshed periodically.
-    // r[impl tls.cert.ari]
+    // spec: TLS#renewal
     pub ari_window_start: Option<i64>,
     /// ARI suggested-window end, in Unix seconds. The renewal task
     /// renews when `now >= ari_window_start`; missing ARI data falls
     /// back to a fixed 1/3-lifetime threshold.
-    // r[impl tls.cert.ari]
+    // spec: TLS#renewal
     pub ari_window_end: Option<i64>,
     /// When the ARI window was last fetched, in Unix seconds. Drives
     /// re-poll cadence.
-    // r[impl tls.cert.ari]
+    // spec: TLS#renewal
     pub ari_polled_at: Option<i64>,
     pub created_at: i64,
     pub updated_at: i64,
     /// For a CSR begun as a renewal: the certificate it renews, which its
     /// upload retires when it replaces it in full. `None` once that
     /// certificate is deleted.
-    // r[impl tls.csr.renew]
+    // spec: TLS#certificate-signing-requests
     pub renews: Option<i64>,
 }
 
@@ -151,7 +151,7 @@ pub enum TlsCertState {
     Failed,
     /// Canopy reported the certificate revoked or its key condemned. Never
     /// served and never counted as usable.
-    // r[impl tls.canopy.revoked]
+    // spec: TCAN#revocation
     Revoked,
 }
 
@@ -186,10 +186,10 @@ pub enum TlsCertOrigin {
     AcmeDns,
     /// Issued by the host's local Tailscale facility. Only legal for
     /// hostnames that match a discovered Tailscale site ingress.
-    // r[impl ingress.site.tailscale]
+    // spec: SITE#tailscale-discovery
     Tailscale,
     /// Issued by Canopy against a key the runtime holds.
-    // r[impl tls.canopy.serve]
+    // spec: TCAN#serving-and-observation
     Canopy,
 }
 
@@ -244,7 +244,7 @@ impl KeyType {
 /// the default chain: Canopy, then ACME HTTP-01 via Caddy. Manual certs do not
 /// require a per-hostname policy: they auto-bind by SAN coverage at
 /// resolution time (see [`store::find_active_for_hostname`]).
-// r[impl tls.strategy.acme-dns]
+// spec: TLS#acme-dns-01-issuance
 #[derive(Debug, Clone)]
 pub enum TlsPolicy {
     AcmeDns {
@@ -255,11 +255,11 @@ pub enum TlsPolicy {
     /// [`super::tls::tailscale_issuer`] for these instead of running
     /// ACME. Only legal on hostnames that match a discovered Tailscale
     /// site ingress.
-    // r[impl ingress.site.tailscale]
+    // spec: SITE#tailscale-discovery
     Tailscale,
     /// Canopy is the chain's only strategy: the hostname never passes to
     /// HTTP-01 or the proxy's internal CA.
-    // r[impl tls.strategy.canopy-only]
+    // spec: TCAN#canopy-only-policy
     Canopy,
 }
 
@@ -273,7 +273,7 @@ pub struct TlsPolicyRow {
 /// A hostname's recorded position in its strategy chain; see
 /// [`chain::Row`] for what the position means and why it is only sometimes
 /// recorded.
-// r[impl tls.chain.ladder]
+// spec: CHAIN#fall-through
 #[derive(Debug, Clone)]
 pub struct TlsChainRow {
     pub hostname: String,
@@ -285,7 +285,7 @@ pub struct TlsChainRow {
 
 /// Persisted ACME account. The same `(directory_url, contact_email)` pair
 /// must reuse the same row across daemon restarts.
-// r[impl tls.acme.account.persist]
+// spec: TLS#acme-accounts-and-settings
 #[derive(Debug, Clone)]
 pub struct AcmeAccount {
     pub id: i64,
@@ -301,14 +301,13 @@ pub struct AcmeAccount {
 /// account registration, plus an optional ACME profile name that the
 /// runtime forwards to the CA when present (e.g. Let's Encrypt's
 /// `shortlived` for ~6-day certs).
-// r[impl tls.settings.contact-email]
-// r[impl tls.settings.cert-profile]
+// spec: TLS#acme-accounts-and-settings
 #[derive(Debug, Clone, Default)]
 pub struct TlsSettings {
     pub contact_email: String,
     /// ACME profile name forwarded on every order. `None` (or stored
     /// empty string) means "let the CA pick its default profile".
-    // r[impl tls.settings.cert-profile]
+    // spec: TLS#acme-accounts-and-settings
     pub cert_profile: Option<String>,
     pub updated_at: i64,
 }
@@ -374,7 +373,7 @@ impl AttemptOutcome {
 
 /// One row of the cert-attempt log. Covers every issuance attempt (success
 /// or failure) with the trigger that initiated it.
-// r[impl tls.cert.attempt-log]
+// spec: TLS#attempt-log
 #[derive(Debug, Clone)]
 pub struct TlsCertAttempt {
     pub id: i64,
@@ -420,7 +419,7 @@ impl RetryBlockSource {
 /// behaviour after a failed attempt was dropped in favour of the
 /// reconciler-driven model, where a recent failure naturally debounces
 /// the next attempt via the attempt log.
-// r[impl tls.cert.retry-block]
+// spec: TLS#retry-blocks-and-retries
 #[derive(Debug, Clone)]
 pub struct TlsCertRetryBlock {
     pub hostname: String,
@@ -434,7 +433,7 @@ pub struct TlsCertRetryBlock {
 /// bypassing the recent-failure debounce. Survives daemon restarts: an
 /// operator can click retry, the daemon can crash before processing, and
 /// the next start-up's reconciler tick picks it up.
-// r[impl tls.cert.force-retry]
+// spec: TLS#retry-blocks-and-retries
 #[derive(Debug, Clone)]
 pub struct TlsCertForceRetry {
     pub hostname: String,

@@ -13,7 +13,7 @@ fn oi_with_fault() -> TestOi {
     oi
 }
 
-// i[verify fault.list]
+// spec: FLTS#listing-faults
 #[test]
 fn list_returns_all_faults_or_filters_by_app() {
     let oi = oi_with_fault();
@@ -30,7 +30,7 @@ fn list_returns_all_faults_or_filters_by_app() {
     assert!(filtered.as_array().unwrap().is_empty());
 }
 
-// i[verify fault.clear-app]
+// spec: FLTS#clearing-faults
 #[test]
 fn clear_app_faults_reports_count_and_empties_list() {
     let oi = oi_with_fault();

@@ -26,7 +26,7 @@ use crate::{
 /// cert hasn't been observed valid. Caddy's internal CA issues immediately;
 /// public ACME issuance can take seconds to a minute. Three minutes leaves
 /// generous margin for transient network issues.
-// r[impl fault.cert-acquisition]
+// spec: FLT#certificate-faults
 const CERT_ACQUISITION_DEADLINE: Duration = Duration::from_secs(180);
 
 /// Input to the DB lookup performed in emit_state_changes.
@@ -141,9 +141,9 @@ impl Reconciler {
         self.prev_states = new_states;
     }
 
-    // r[impl observe.ingress.certs]
-    // r[impl fault.cert-acquisition]
-    // r[impl tls.canopy.serve]
+    // spec: OBS#ingresses
+    // spec: FLT#certificate-faults
+    // spec: TCAN#serving-and-observation
     pub(super) async fn observe_warm_certs(&mut self, apps: &[AppSnapshot]) {
         let targets = super::phases::warm_cert_targets(apps, &*self.registry);
         if targets.is_empty() {
@@ -256,7 +256,7 @@ impl Reconciler {
         self.persist_obs(observations);
     }
 
-    // r[impl gc.instances]
+    // spec: GC#unscheduled-instances
     /// Delete excess instances that have reached `Unscheduled` this tick so
     /// that scale-up immediately allocates fresh instances rather than reusing
     /// stale IDs.  Only runs for `Installed` apps (uninstall cleanup is handled
@@ -277,7 +277,7 @@ impl Reconciler {
                 let (state, has_observations, has_terminal_obs) = self.db.call(move |db| {
                     let obs = query_observations(db, &instance).unwrap_or_default();
                     let has_obs = !obs.is_empty();
-                    // r[impl gc.instances.never-actuated]
+                    // spec: GC#demoted-instances
                     // Multiple observations recorded in a single tick may share
                     // a timestamp, in which case `query_observations` returns
                     // them in undefined order and `derive_lifecycle_state` can
@@ -344,7 +344,7 @@ impl Reconciler {
     /// Only apps whose desired state this tick computed from the definition
     /// (and which are still steady now), plus apps that are not installed,
     /// contribute; every other app's instances are left alone.
-    // r[impl gc.instances]
+    // spec: GC#unscheduled-instances
     pub(super) fn sweep_unscheduled_instances(&mut self, apps: &[AppSnapshot]) {
         let now = std::time::Instant::now();
         if self
@@ -373,8 +373,8 @@ impl Reconciler {
         }
     }
 
-    // r[impl observe.persist]
-    // r[impl history.world.source]
+    // spec: OBS#recording
+    // spec: HIST#observations
     // `batch` is collected from probing real podman/systemd state during the
     // current tick — every entry persisted here corresponds to a check or
     // event actually observed, never a synthesised or expected value.
@@ -411,7 +411,7 @@ impl Reconciler {
 /// may have started since it was taken, and an operation resolves its own
 /// scaled groups. An app not installed desires nothing. An app the registry
 /// does not hold may simply have failed to load, so it gets no entry.
-// r[impl gc.instances]
+// spec: GC#unscheduled-instances
 fn known_desired_state(apps: &[AppSnapshot], registry: &AppRegistry) -> KnownDesiredState {
     let still_steady = |entry: &AppEntry| {
         *entry.phase.lock() == AppPhase::Installed && entry.active_progress.read().is_none()
@@ -439,7 +439,7 @@ fn known_desired_state(apps: &[AppSnapshot], registry: &AppRegistry) -> KnownDes
     known
 }
 
-// r[impl gc.instances.never-actuated]
+// spec: GC#demoted-instances
 fn retire_eligible(state: LifecycleState, has_observations: bool, has_terminal_obs: bool) -> bool {
     matches!(state, LifecycleState::Unscheduled) || !has_observations || has_terminal_obs
 }
@@ -456,7 +456,7 @@ mod tests {
         AppName::new(s).expect("app name")
     }
 
-    // i[verify event.types]
+    // spec: EVT#event-types
     // `desired.resources` has one entry per instance, so a deployment scaled
     // to 3 produced 3 identical groups; each then expanded to all 3
     // instances, so one state change was reported three times.
@@ -473,7 +473,7 @@ mod tests {
         assert_eq!(groups[0].kind_str, "deployment");
     }
 
-    // i[verify event.types]
+    // spec: EVT#event-types
     #[test]
     fn distinct_resources_stay_distinct() {
         let raw = vec![
@@ -495,19 +495,19 @@ mod tests {
     }
     use super::*;
 
-    // r[verify gc.instances.never-actuated]
+    // spec: GC#demoted-instances
     #[test]
     fn unscheduled_state_is_eligible() {
         assert!(retire_eligible(LifecycleState::Unscheduled, true, false));
     }
 
-    // r[verify gc.instances.never-actuated]
+    // spec: GC#demoted-instances
     #[test]
     fn no_observations_is_eligible() {
         assert!(retire_eligible(LifecycleState::Pending, false, false));
     }
 
-    // r[verify gc.instances.never-actuated]
+    // spec: GC#demoted-instances
     #[test]
     fn pending_with_terminal_observation_is_eligible() {
         // The observation-derivation can wedge at Pending when same-tick
@@ -583,7 +583,7 @@ mod tests {
         }
     }
 
-    // r[verify gc.instances]
+    // spec: GC#unscheduled-instances
     #[test]
     fn only_apps_with_a_known_desired_state_are_swept() {
         let scaled = || ResourceInstance::new_scaled(app("demo"), ResourceKind::Deployment, "web");

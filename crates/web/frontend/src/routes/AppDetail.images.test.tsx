@@ -41,7 +41,7 @@ const pin: ImagePin = {
 };
 
 describe("AppDetail images", () => {
-  // w[verify routes.images.app-detail]
+  // spec: UI#images
   it("lists in-use and pinned images and clears all pins", async () => {
     const fixtures = {
       ...baseFixtures(makeDetail()),
@@ -80,7 +80,7 @@ describe("AppDetail images", () => {
     );
   });
 
-  // w[verify routes.images.confirm]
+  // spec: UI#images
   it("confirms before removing an unused image", async () => {
     const unused = makeImage({
       image_id: "sha256:8899aabbccddeeff",
@@ -111,7 +111,7 @@ describe("AppDetail images", () => {
     );
   });
 
-  // w[verify routes.images.discover]
+  // spec: UI#images
   it("discovers handler images, surfaces probe problems, and warms a reference", async () => {
     const discover: DiscoverResponse = {
       per_handler: [

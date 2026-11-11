@@ -7,7 +7,7 @@ fn app(s: &str) -> AppName {
     AppName::new(s).unwrap()
 }
 
-// i[verify deployment.restart]
+// spec: CTL#deployment-restart
 #[test]
 fn load_defaults_to_zero_and_bump_increments() {
     let db = Db::open_in_memory().expect("open");
@@ -30,7 +30,7 @@ fn load_defaults_to_zero_and_bump_increments() {
     );
 }
 
-// i[verify deployment.restart]
+// spec: CTL#deployment-restart
 #[test]
 fn generations_are_scoped_per_app_and_deployment() {
     let db = Db::open_in_memory().expect("open");

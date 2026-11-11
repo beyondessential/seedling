@@ -24,7 +24,7 @@ A route on an ingress that forwards each request it claims to one of its upstrea
 
 ### Redirect route
 
-A route that answers each request it claims with a redirect, declared on an [HTTP service route](rule:l/service.http.route.redirect) rather than bound by a pod.
+A route that answers each request it claims with a redirect, declared on an [HTTP service route](../language/http-service.md#route-redirects) rather than bound by a pod.
 
 ### Upstream
 
@@ -40,16 +40,16 @@ A request path with duplicate `/` separators collapsed, dot segments removed as 
 
 ## Route emission
 
-The runtime MUST emit routes for every HTTP-terminating [ingress](../language/ingress.md), whether declared by an app or attached as a [site ingress](rule:r/ingress.site.attachment), from the service the ingress fronts.
+The runtime MUST emit routes for every HTTP-terminating [ingress](../language/ingress.md), whether declared by an app or attached as a [site ingress](site-resources.md#attachments), from the service the ingress fronts.
 The routes MUST be the same whichever kind of ingress fronts the service.
 Each route's settings MUST be resolved against the app that declares the service.
 
-For each prefix that a [pod binding](rule:l/pod.http) on any pod of the declaring app binds to the service, the runtime MUST emit one proxied route at that prefix.
+For each prefix that a [pod binding](../language/pod.md#port-bindings) on any pod of the declaring app binds to the service, the runtime MUST emit one proxied route at that prefix.
 Its upstreams MUST be the addresses of that pod's running instances, each at the pod port of the binding.
 A prefix whose binding pod has no running instance MUST still be emitted, with no upstreams.
 
 If no pod binds any prefix of the service, the runtime MUST emit a fallback route.
-Its single upstream MUST be the service's address at the service's port, through the service's [routing pool](rule:r/lifecycle.service.routing-pool).
+Its single upstream MUST be the service's address at the service's port, through the service's [routing pool](lifecycle.md#routing-pool).
 
 The runtime MUST emit each redirect route the service declares, whether or not any pod binds a prefix of the service.
 A redirect route MUST NOT displace the fallback route.
@@ -67,7 +67,7 @@ Prefixes MUST be compared with the normalised path, so that requests differing o
 > A proxied route claims on characters, so `/api` claims `/apis`.
 > A redirect route claims on segment boundaries, because the remainder of the path is spliced into the `Location` it answers with: under `/v1/login`, a request for `/v1/login.example.net` would otherwise contribute a remainder that names a host.
 
-On the plaintext listener of an ingress that declares an [HTTP redirect](rule:l/ingress.redirect), that redirect MUST answer every request, and the ingress's other routes MUST NOT be served there.
+On the plaintext listener of an ingress that declares an [HTTP redirect](../language/ingress.md#redirect-to-https), that redirect MUST answer every request, and the ingress's other routes MUST NOT be served there.
 
 > [!NOTE]
 > A plaintext request under a redirect route's prefix is therefore moved to HTTPS first and meets the redirect route on arrival.
@@ -92,7 +92,7 @@ A target naming neither token MUST be served as declared.
 
 > [!NOTE]
 > Reading the tail from the decoded path would let a `%3F` in a path segment reach the client as the `?` that opens a query.
-> A brace is excluded because a proxy may read a braced word as a placeholder naming its own state, the reason a [header value](rule:l/service.http.headers.fields) refuses one, and the request-target is written by the client rather than the app.
+> A brace is excluded because a proxy may read a braced word as a placeholder naming its own state, the reason a [header value](../language/http-service.md#header-operations) refuses one, and the request-target is written by the client rather than the app.
 
 ## Settings scope
 
@@ -104,14 +104,14 @@ The proxy MUST NOT apply compression, balancing, rate limiting or header operati
 
 ## Compression
 
-Every proxied route MUST compress the responses it serves according to its resolved [compression settings](rule:l/service.http.compress).
+Every proxied route MUST compress the responses it serves according to its resolved [compression settings](../language/http-service.md#compression).
 Where a client's `Accept-Encoding` ([RFC 9110 §12.5.3](https://www.rfc-editor.org/rfc/rfc9110#section-12.5.3)) gives several of the route's encodings equal preference, the proxy SHOULD choose the earliest in the route's declared order.
 
 The proxy MUST forward a response that already carries a content coding as it stands, without applying a further one.
 
 ## Balancing
 
-Every proxied route MUST distribute requests across its upstreams according to its resolved [balancing settings](rule:l/service.balance).
+Every proxied route MUST distribute requests across its upstreams according to its resolved [balancing settings](../language/http-service.md#balancing).
 
 Within the route's try duration, a request whose connection to an upstream cannot be established MUST be attempted against another upstream from the route's pool, whatever the request's method.
 The proxy MUST wait the route's interval between attempts.
@@ -121,20 +121,20 @@ A response carrying an error status MUST be returned to the client as it stands.
 
 > [!NOTE]
 > A request that never connected cannot have been acted on, so retrying it is safe for any method.
-> This is what lets a request arriving while an instance shuts down during a [rolling update](rule:r/update.rolling) reach a surviving instance.
+> This is what lets a request arriving while an instance shuts down during a [rolling update](update-strategies.md#rolling-updates) reach a surviving instance.
 > On a fallback route, with its single upstream, the policy has no effect but the try duration and interval still do.
 
 The proxy MUST NOT remove an upstream from a route's pool on the strength of its own health checks.
 The upstreams a route is given MUST be the only judgement of which backends are eligible.
 
 > [!NOTE]
-> Eligibility is decided by the routing pool from the runtime's own [healthchecks](rule:l/deployment.healthcheck), and the pool keeps every running backend in service when no healthy one exists.
+> Eligibility is decided by the routing pool from the runtime's own [healthchecks](../language/deployment.md#health-checks), and the pool keeps every running backend in service when no healthy one exists.
 > Health checking in the proxy would contradict the pool by reducing capacity to nothing in that case.
 > Retrying an unreachable upstream covers only the interval between a backend becoming unusable and the pool being recomputed.
 
 ## Rate limiting
 
-A proxied route with a resolved [rate limit](rule:l/service.http.rate-limit) MUST reject a client's requests beyond that limit before proxying them.
+A proxied route with a resolved [rate limit](../language/http-service.md#rate-limiting) MUST reject a client's requests beyond that limit before proxying them.
 A route whose resolved limit is absent MUST NOT be rate limited.
 
 A limit declared on a route MUST be one budget for that route.
@@ -159,7 +159,7 @@ A request MUST be counted only against the budget of the route that serves it, a
 
 ## Header operations
 
-Every proxied route MUST apply its resolved request [header operations](rule:l/service.http.headers) to each request before proxying it, and its resolved response operations to each response before returning it.
+Every proxied route MUST apply its resolved request [header operations](../language/http-service.md#header-operations) to each request before proxying it, and its resolved response operations to each response before returning it.
 A redirect route MUST apply its resolved response operations to the redirect it serves.
 
 A request operation MUST reach the upstream.
@@ -175,7 +175,7 @@ A redirect route's `Location` MUST be the one computed from its target.
 
 ## Settings inspection
 
-The resolved compression, balancing, rate-limit and header settings of a service and of each of its routes MUST be readable when [describing the app](rule:i/app.describe.proxy-settings) that declares the service.
+The resolved compression, balancing, rate-limit and header settings of a service and of each of its routes MUST be readable when [describing the app](../interface/apps.md#proxy-settings) that declares the service.
 A route's proxy settings MUST come only from the app's definition.
 
 ## Persistent connections
@@ -187,7 +187,7 @@ The proxy MUST NOT add connection-specific fields to responses to keep a connect
 
 > [!NOTE]
 > Connection-specific fields make a response malformed on HTTP/2 ([RFC 9113 §8.2.2](https://www.rfc-editor.org/rfc/rfc9113#section-8.2.2)) and HTTP/3 ([RFC 9114 §4.2](https://www.rfc-editor.org/rfc/rfc9114#section-4.2)).
-> An app [cannot declare them](rule:l/service.http.headers.fields) as header operations, and needs no declaration for persistence.
+> An app [cannot declare them](../language/http-service.md#header-operations) as header operations, and needs no declaration for persistence.
 
 ## Proxy lifecycle
 
@@ -213,11 +213,11 @@ Before a proxy image is published, and whenever the runtime's configuration outp
 It MUST also be checked, with the proxy's own validation, against configurations the runtime emits for every feature it can emit.
 That check MUST be shown to reject a configuration carrying a field the image does not accept.
 
-The proxy MUST store the certificates it obtains where the runtime [observes certificate status](rule:r/observe.ingress.certs).
+The proxy MUST store the certificates it obtains where the runtime [observes certificate status](observation.md#ingresses).
 
 > [!NOTE]
 > A proxy that obtains certificates but stores them elsewhere serves traffic correctly while the runtime reports that no certificate exists.
-> The [certificate metadata](rule:r/tls.cert.metadata) is then missing too, and every [`rt.warm_certs`](rule:l/rt.warm-certs) barrier waiting on the certificate stalls.
+> The [certificate metadata](tls/certificates.md#hostname-state) is then missing too, and every [`rt.warm_certs`](../language/rt.md#certificate-warming) barrier waiting on the certificate stalls.
 
 ## Proxy upgrades
 

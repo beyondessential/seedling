@@ -14,7 +14,7 @@ One turn of the runtime's reporting schedule, which recurs whether or not a repo
 
 ### Relying on Canopy
 
-An app relies on Canopy while its current definition declares a [Canopy application type](rule:l/app.canopy-type).
+An app relies on Canopy while its current definition declares a [Canopy application type](../language/app.md#canopy-type).
 
 ## Canopy access
 
@@ -30,12 +30,12 @@ The operator surface for the setting, and the offers through which requests reac
 ## Report schedule
 
 The runtime MUST run a report tick every 60 seconds for as long as it runs.
-On each tick, while Canopy access is enabled and at least one [offer](rule:i/canopy.offer) is live, the runtime MUST send one report.
+On each tick, while Canopy access is enabled and at least one [offer](../interface/canopy-relay.md#offers) is live, the runtime MUST send one report.
 While access is disabled or no offer is live, the runtime MUST NOT attempt a report, and MUST NOT open a connection of its own to reach Canopy.
 
 The absence of an offer is a deployment choice, and MUST NOT raise a fault except for apps relying on Canopy, as [missing offers](#missing-offers) specifies.
 
-Every request to Canopy MUST travel through the [relay](rule:i/canopy.relay).
+Every request to Canopy MUST travel through the [relay](../interface/canopy-relay.md#relay-streams).
 Paths below are relative to the Canopy base URL the offering client resolves.
 
 ## Server identity
@@ -76,7 +76,7 @@ The machine checks are a fixed set describing Seedling itself, so that Canopy's 
 | `health/proxy` | the ingress proxy is running | | the ingress proxy is not running | |
 | `health/resolver` | the resolver is running | | the resolver is not running | |
 
-App statuses are those of [app status](rule:i/app.status).
+App statuses are those of [app status](../interface/apps.md#status-derivation).
 An app that is `NotInstalled`, `Installing`, `Deregistering` or `Operating` MUST NOT affect the result of `health/apps`.
 
 If the runtime cannot determine a check's result, it MUST report the check as `broken`, and MUST NOT report it as `failed`.

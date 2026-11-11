@@ -79,7 +79,7 @@ export function useEventRefresh(
     const cutoff = oldFirst ? events.indexOf(oldFirst) : events.length;
     const newCount = cutoff === -1 ? events.length : cutoff;
     for (let i = 0; i < newCount; i++) {
-      // w[impl routes.events.gap]
+      // spec: WEB#event-relay
       if (events[i].type === "EventsDropped" || matches(events[i])) {
         scheduleRefetch();
         break;

@@ -113,7 +113,7 @@ describe("EditScript", () => {
     expect(await screen.findByText(/no such app/)).toBeTruthy();
   });
 
-  // w[verify routes.apps.definition.edit]
+  // spec: UI#app-definitions
   it("carries sidecar files over when the script is edited", async () => {
     const { request } = renderEdit({
       "/apps/script": { script: "// v1", files: ["app.seed.rhai"], generation: 3 },
@@ -142,7 +142,7 @@ describe("EditScript", () => {
     );
   });
 
-  // w[verify routes.apps.definition.edit]
+  // spec: UI#app-definitions
   it("will not apply before the definition's files are known", async () => {
     for (const fixture of [
       { ok: false, error: { code: "internal", message: "bundle unavailable" } },
@@ -166,7 +166,7 @@ describe("EditScript", () => {
     expect(await screen.findByText(/bundle unavailable/)).toBeTruthy();
   });
 
-  // w[verify routes.apps.definition.edit]
+  // spec: UI#app-definitions
   it("opens a script spanning several files read-only", async () => {
     renderEdit({
       "/apps/script": {

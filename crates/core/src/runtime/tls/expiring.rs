@@ -39,7 +39,7 @@ pub struct IngressTarget {
 
 /// Walk `targets` and reconcile `cert_expiring_soon` faults against them.
 /// Pure DB work; safe to call from inside a `DbHandle::call` closure.
-// r[impl tls.fault.expiring]
+// spec: TLS#expiring-certificates
 pub fn sweep(db: &Db, targets: &[IngressTarget]) -> rusqlite::Result<()> {
     // Only what is stored matters here: the sweep reads each hostname's
     // active certificate and files on its origin and expiry, and acts on no
@@ -124,7 +124,7 @@ fn compute_desired(
     if not_after - now > EXPIRY_WINDOW_SECS {
         return None;
     }
-    // r[impl tls.csr.renew]
+    // spec: TLS#certificate-signing-requests
     let description = format!(
         "certificate {} for {} (strategy: {strategy}) expires at unix={not_after}; \
          the runtime cannot autonomously renew this cert — renew it with \
@@ -197,8 +197,8 @@ mod tests {
             .count()
     }
 
-    // r[verify tls.fault.expiring]
-    // r[verify tls.csr.renew]
+    // spec: TLS#expiring-certificates
+    // spec: TLS#certificate-signing-requests
     #[test]
     fn files_fault_for_manual_cert_within_window() {
         let (db, _) = fresh_db();
@@ -256,7 +256,7 @@ mod tests {
         assert_eq!(active_count(&db, FAULT_KIND), 0);
     }
 
-    // r[verify tls.fault.expiring]
+    // spec: TLS#expiring-certificates
     #[test]
     fn no_fault_for_canopy_origin() {
         let (db, _) = fresh_db();

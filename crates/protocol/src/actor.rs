@@ -1,4 +1,4 @@
-// i[wire.actor]
+// WIRE#actor-attribution
 #[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Actor {
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -17,7 +17,7 @@ mod tests {
 
     use super::*;
 
-    // i[verify wire.actor]
+    // spec: WIRE#actor-attribution
     #[test]
     fn serialisation_omits_absent_fields() {
         assert_eq!(serde_json::to_value(Actor::default()).unwrap(), json!({}));
@@ -34,7 +34,7 @@ mod tests {
         );
     }
 
-    // i[verify wire.actor]
+    // spec: WIRE#actor-attribution
     #[test]
     fn all_fields_round_trip() {
         let full = Actor {

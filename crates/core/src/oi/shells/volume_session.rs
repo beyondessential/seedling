@@ -54,7 +54,7 @@ fn sanitise_name(s: &str) -> String {
         .to_owned()
 }
 
-// i[impl volumes.shell]
+// spec: SHL#volume-shells
 pub(crate) async fn open_volume_shell_session(
     conn: quinn::Connection,
     mut send: quinn::SendStream,
@@ -68,7 +68,7 @@ pub(crate) async fn open_volume_shell_session(
         volumes: Vec<VolumeShellMount>,
         rows: u16,
         cols: u16,
-        // i[impl volumes.shell] — when true, every resolved bind mount is
+        // spec: SHL#volume-shells — when true, every resolved bind mount is
         // forced read-only inside the shell container, regardless of whether
         // the underlying volume is inherently writable.
         #[serde(default)]
@@ -216,7 +216,7 @@ pub(crate) async fn open_volume_shell_session(
     match state.container_runtime.image_exists(image).await {
         Ok(true) => {}
         Ok(false) => {
-            // i[impl volumes.shell.image]
+            // spec: SHL#volume-shell-image
             // Build the alpine-based shell image on first use. We avoid
             // pulling a generic distro image so operators can rely on a
             // known toolset (editors, rsync, etc.) being available.
@@ -275,7 +275,7 @@ pub(crate) async fn open_volume_shell_session(
 
     let stop = StopSignal::new();
     let volumes_app = AppName::new_unchecked("_volumes");
-    // i[impl volumes.shell]
+    // spec: SHL#volume-shells
     let session = ShellSession::starting(
         session_id,
         volumes_app,
@@ -319,7 +319,7 @@ pub(crate) async fn open_volume_shell_session(
         .map(|r| Mount {
             source: MountSource::Bind(r.source),
             target: r.target,
-            // i[impl volumes.shell] — `force_ro` overrides the per-volume
+            // spec: SHL#volume-shells — `force_ro` overrides the per-volume
             // default; the inherent read-only flag still wins for snapshot
             // site volumes when `force_ro` is false.
             read_only: r.read_only || force_ro,
@@ -353,7 +353,7 @@ pub(crate) async fn open_volume_shell_session(
         // listing or editing files owned by other UIDs (e.g. postgres's
         // `0700 999:999` data dir) fails. Grant the four caps needed for
         // root to actually behave like root over the filesystem.
-        // i[impl volumes.shell.caps]
+        // spec: SHL#volume-shell-privileges
         extra_caps: vec![
             "DAC_OVERRIDE".to_owned(),
             "DAC_READ_SEARCH".to_owned(),
@@ -368,7 +368,7 @@ pub(crate) async fn open_volume_shell_session(
         stop_timeout_secs: None,
     };
 
-    // i[impl shell.startup]
+    // spec: SHL#session-startup
     if stop.is_requested() {
         abort_startup(
             &state,
@@ -408,7 +408,7 @@ pub(crate) async fn open_volume_shell_session(
     tracing::info!(%session_name, %exit_code, "volume shell session ended");
 }
 
-// i[impl volumes.shell.image]
+// spec: SHL#volume-shell-image
 /// Container image used for volume-shell sessions. Built locally from
 /// [`VOLUME_SHELL_CONTAINERFILE`] on first use; the `localhost/` prefix
 /// keeps the image off the registry-allowlist path.

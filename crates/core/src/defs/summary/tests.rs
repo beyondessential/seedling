@@ -156,7 +156,7 @@ fn end_to_end_real_app_diff() {
     );
 }
 
-// i[verify plan.dry-run]
+// spec: PRM#change-planning
 #[test]
 fn container_def_summary_captures_env_on_exit_and_healthcheck() {
     use seedling_protocol::env::EnvVar;
@@ -199,7 +199,7 @@ fn container_def_summary_captures_env_on_exit_and_healthcheck() {
     assert_eq!(hc.on_failure, "monitor");
 }
 
-// i[verify plan.dry-run]
+// spec: PRM#change-planning
 #[test]
 fn container_def_summary_defaults_on_exit_to_default() {
     use crate::defs::container::ContainerDef;
@@ -209,7 +209,7 @@ fn container_def_summary_defaults_on_exit_to_default() {
     assert!(summary.healthcheck.is_none());
 }
 
-// i[verify plan.dry-run]
+// spec: PRM#change-planning
 #[test]
 fn volume_summary_captures_writes_and_export() {
     use crate::defs::export::ExportOptions;
@@ -241,7 +241,7 @@ fn volume_summary_captures_writes_and_export() {
     assert_eq!(summary.description.as_deref(), Some("main volume"));
 }
 
-// i[verify plan.dry-run]
+// spec: PRM#change-planning
 #[test]
 fn diff_fields_reports_volume_writes_change() {
     use crate::defs::volume::Volume;
@@ -260,7 +260,7 @@ fn diff_fields_reports_volume_writes_change() {
     assert_eq!(fields, vec!["writes".to_owned()]);
 }
 
-// i[verify plan.dry-run]
+// spec: PRM#change-planning
 #[test]
 fn service_summary_flags_http_and_export() {
     use crate::defs::export::ExportOptions;

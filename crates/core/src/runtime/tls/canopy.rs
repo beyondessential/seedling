@@ -115,7 +115,7 @@ impl CertificateRelay for CanopyRelay {
 }
 
 /// What Canopy's answer means for the hostname.
-// r[impl tls.canopy.outcomes]
+// spec: TCAN#answers
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Answer {
     /// A chain that can be served now.
@@ -165,8 +165,8 @@ fn tidy(reason: impl AsRef<str>) -> String {
 }
 
 /// Classify Canopy's answer to a request that reached it.
-// r[impl tls.canopy.outcomes]
-// r[impl tls.canopy.revoked]
+// spec: TCAN#answers
+// spec: TCAN#revocation
 pub fn classify_response(response: &CertificateResponse) -> Answer {
     if response.key_must_be_replaced {
         return Answer::Revoked {
@@ -233,7 +233,7 @@ const CANOPY_CAUSE: &str = "/errors/";
 /// side, a condemned key calls for a new one, and a cause this runtime does not
 /// recognise, or one named by something other than Canopy, is no word of
 /// Canopy's to act on.
-// r[impl tls.canopy.outcomes]
+// spec: TCAN#answers
 pub fn classify_failure(failure: &RelayFailure) -> Answer {
     let (status, body) = match failure {
         RelayFailure::Status { status, body } => (*status, body.as_str()),
@@ -348,8 +348,8 @@ impl<R: CertificateRelay> Engine<R> {
     /// Ask Canopy for the hostname's certificate, and keep the answer.
     ///
     /// The same call opens an order and collects it, and is safe to repeat.
-    // r[impl tls.canopy.request]
-    // r[impl tls.canopy.collect]
+    // spec: TCAN#requests
+    // spec: TCAN#collection
     pub async fn ask(&self, ask: Ask) -> Asked {
         match self.request_and_apply(&ask).await {
             Ok(ApplyResult::Done(outcome)) => Ok(outcome),
@@ -360,7 +360,7 @@ impl<R: CertificateRelay> Engine<R> {
 
     /// A certificate Canopy reported revoked, or whose key it reported
     /// condemned: stop serving it, replace the key and open a new order.
-    // r[impl tls.canopy.revoked]
+    // spec: TCAN#revocation
     pub async fn revoke_and_reorder(&self, ask: Ask, cert_id: i64, reason: String) -> Asked {
         match self.revoke(&ask, cert_id, reason) {
             Ok(replacement) => self.reorder(ask, replacement).await,
@@ -376,7 +376,7 @@ impl<R: CertificateRelay> Engine<R> {
     /// revoked stops being served the moment the runtime learns of it. The
     /// chain row it leaves carries the open order, which is what has a later
     /// opportunity ask for the replacement.
-    // r[impl tls.canopy.revoked]
+    // spec: TCAN#revocation
     pub fn revoke(&self, ask: &Ask, cert_id: i64, reason: String) -> Result<Replacement> {
         let for_apply = ask.clone();
         let now = jiff::Timestamp::now().as_second();
@@ -437,7 +437,7 @@ impl<R: CertificateRelay> Engine<R> {
     /// Stored before the request goes out, so a restart between the two finds
     /// the key again and asks about the same one rather than opening a second
     /// order.
-    // r[impl tls.canopy.key]
+    // spec: TCAN#keys
     fn key_for(&self, hostname: &str) -> Result<KeyMaterial> {
         let host = hostname.to_owned();
         let existing = self
@@ -567,7 +567,7 @@ fn position(db: &Db, ask: &Ask) -> rusqlite::Result<(chain::Row, Option<String>)
 /// hostname's recorded position: the two drifted apart whenever something
 /// rewrote the position while an order was in flight, and an attempt the caller
 /// believed closed then stayed open for ever.
-// r[impl tls.canopy.attempts]
+// spec: TCAN#attempt-log-entries
 fn close_attempt(
     db: &Db,
     ask: &Ask,
@@ -590,7 +590,7 @@ fn close_attempt(
 /// transaction: the certificate, the attempt log, and the hostname's recorded
 /// position. A restart can then find the hostname where the answer left it and
 /// never half-way.
-// r[impl tls.canopy.outcomes]
+// spec: TCAN#answers
 fn apply(
     db: &Db,
     ask: &Ask,
@@ -614,7 +614,7 @@ fn apply(
                     );
                 }
             };
-            // r[impl tls.cert.validation.san-coverage]
+            // spec: TLS#coverage
             // The signing request named exactly the hostname, so a chain for
             // anything else is not what was asked for, whoever sent it: coverage
             // is all that binds a certificate to a name, and one that carried
@@ -714,7 +714,7 @@ fn apply(
         }
         Answer::Pending => pending(db, row, ask, now),
         Answer::Refused { reason } => {
-            // r[impl tls.chain.refusal]
+            // spec: CHAIN#refusal-handling
             close_attempt(db, ask, AttemptOutcome::Failure, None, Some(&reason), true)?;
             let advances =
                 ask.canopy_responsible && !ask.replacing.is_none() && ask.step + 1 < ask.chain_len;
@@ -728,7 +728,7 @@ fn apply(
             Ok(ApplyResult::Done(Outcome::Refused(reason)))
         }
         Answer::OrderFailed { reason } => {
-            // r[impl tls.chain.no-certificate]
+            // spec: CHAIN#hostnames-with-no-certificate
             // A strategy that fails is asked again at the after-failure cadence,
             // as one that refuses is. Canopy goes on retrying the order on its
             // own side meanwhile, and the next ask collects whatever came of it.
@@ -753,7 +753,7 @@ fn apply(
 }
 
 /// The order is open: note it, once.
-// r[impl tls.canopy.attempts]
+// spec: TCAN#attempt-log-entries
 fn pending(db: &Db, mut row: chain::Row, ask: &Ask, now: i64) -> rusqlite::Result<ApplyResult> {
     // One entry per order, asked of the log rather than of the position, which
     // something may have rewritten while the order was in flight.
@@ -792,7 +792,7 @@ fn unavailable(
 /// Stop serving a revoked certificate, destroy its key, and record where the
 /// hostname stands: the revoked certificate is the one being replaced, and the
 /// hostname has passed to the next strategy at once.
-// r[impl tls.canopy.revoked]
+// spec: TCAN#revocation
 fn apply_revocation(
     db: &Db,
     ask: &Ask,
@@ -829,7 +829,7 @@ fn apply_revocation(
             // A replacement is outstanding from here until Canopy delivers one
             // or refuses: the hostname serves on the next strategy meanwhile,
             // and this is what has it go on asking.
-            // r[impl tls.canopy.revoked]
+            // spec: TCAN#revocation
             open_order_since: Some(now),
             retry_not_before: None,
         },
@@ -857,7 +857,7 @@ pub struct Condemned {
 ///
 /// Matched on the name and on the key's fingerprint, so a revocation of an
 /// older key for the same name is not read as one of the key now held.
-// r[impl tls.canopy.revoked]
+// spec: TCAN#revocation
 pub fn condemned_by(
     db: &Db,
     held: &[bestool_canopy::schema::HeldCertificate],

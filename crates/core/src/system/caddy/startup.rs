@@ -46,7 +46,7 @@ pub(crate) fn admin_socket_path(data_dir: &Path, container_name: &str) -> PathBu
     socket_run_dir(data_dir, container_name).join("admin.sock")
 }
 
-// r[impl infra.proxy.startup]
+// spec: PRX#proxy-lifecycle
 /// Returns the /64 infrastructure prefix for the seedling-proxy network.
 ///
 /// The network sits at `fd5e:edXX:XXXX:ff00::/64` within the node's /48,
@@ -99,7 +99,7 @@ pub(crate) enum CaddyStartupError {
         source: reqwest::Error,
         backtrace: snafu::Backtrace,
     },
-    // r[impl infra.proxy.upgrade.rollback]
+    // spec: PRX#proxy-upgrades
     #[snafu(display("upgraded Caddy rejected the replayed proxy config: {source}"))]
     ConfigRejected {
         #[snafu(source(from(super::proxy::CaddyError, Box::new)))]
@@ -133,7 +133,7 @@ fn write_active_container(conn: &rusqlite::Connection, name: &str) -> rusqlite::
     Ok(())
 }
 
-// r[impl infra.proxy.upgrade.cache]
+// spec: PRX#proxy-upgrades
 /// Read the cached proxy config, if any. The cache stores the
 /// Seedling-internal `ProxyConfig` rather than the post-build Caddy JSON,
 /// so the replay path can rebuild the JSON in whatever format the current
@@ -153,7 +153,7 @@ pub(crate) fn read_cached_proxy_config(
     Ok(json_str.and_then(|s| parse_cached_proxy_config(&s)))
 }
 
-// r[impl infra.proxy.upgrade.cache]
+// spec: PRX#proxy-upgrades
 pub(crate) fn parse_cached_proxy_config(json: &str) -> Option<ProxyConfig> {
     let mut doc: serde_json::Value = serde_json::from_str(json).ok()?;
     backfill_redirect_targets(&mut doc);
@@ -170,7 +170,7 @@ pub(crate) fn parse_cached_proxy_config(json: &str) -> Option<ProxyConfig> {
 ///
 /// A vhost whose class has no listener was served nowhere, and expands to
 /// nothing.
-// r[impl infra.proxy.upgrade.cache]
+// spec: PRX#proxy-upgrades
 fn backfill_vhost_ports(doc: &mut serde_json::Value) {
     let ports_of = |doc: &serde_json::Value, protos: &[&str]| -> Vec<u64> {
         let mut ports: Vec<u64> = doc["listeners"]
@@ -246,7 +246,7 @@ fn backfill_redirect_targets(doc: &mut serde_json::Value) {
     }
 }
 
-// r[impl infra.proxy.upgrade.cache]
+// spec: PRX#proxy-upgrades
 pub(crate) fn write_cached_proxy_config(
     data_dir: &std::path::Path,
     config: &ProxyConfig,
@@ -358,7 +358,7 @@ async fn start_slot(
             log_extra_fields: vec![("SEEDLING_INFRA".to_owned(), "proxy".to_owned())],
             kill_signal: None,
             timeout_stop_secs: None,
-            // r[impl priority.kill-order]
+            // spec: PRIO#kill-order
             // Infrastructure ranks above every app workload: a host under
             // memory pressure must not lose the components that route to
             // whatever survives.
@@ -437,7 +437,7 @@ async fn poll_until_healthy(
     }
 }
 
-// r[impl infra.proxy.startup]
+// spec: PRX#proxy-lifecycle
 /// Ensure the Caddy proxy container is running and healthy.
 ///
 /// Implements a blue/green upgrade strategy: if the active container is running
@@ -596,14 +596,14 @@ pub(crate) async fn ensure_caddy_running(
                     desired_image = %desired_id,
                     "caddy image mismatch; performing blue/green upgrade"
                 );
-                // r[impl infra.proxy.upgrade]
+                // spec: PRX#proxy-upgrades
                 start_slot(other, container, process, data_dir).await?;
                 let deadline = tokio::time::Instant::now() + Duration::from_secs(60);
                 let other_socket = admin_socket_path(data_dir, other);
                 let new_addrs =
                     poll_until_healthy(other, container, deadline, &other_socket).await?;
 
-                // r[impl infra.proxy.upgrade.cache]
+                // spec: PRX#proxy-upgrades
                 // Replay the cached proxy config against the new container,
                 // rebuilt fresh via build_caddy_config so the JSON we POST
                 // is in whatever format the current daemon emits — not
@@ -612,7 +612,7 @@ pub(crate) async fn ensure_caddy_running(
                     let caddy_json = build_caddy_config(&cached);
                     let proxy =
                         CaddyProxy::new(&new_addrs.admin_socket).context(ClientBuildSnafu)?;
-                    // r[impl infra.proxy.upgrade.rollback]
+                    // spec: PRX#proxy-upgrades
                     if let Err(e) = proxy.apply_raw_json(&caddy_json).await {
                         tracing::warn!(
                             error = %e,
@@ -649,7 +649,7 @@ pub(crate) async fn ensure_caddy_running(
     let active_socket = admin_socket_path(data_dir, &active);
     let addrs = poll_until_healthy(&active, container, deadline, &active_socket).await?;
 
-    // r[impl infra.proxy.upgrade.cache]
+    // spec: PRX#proxy-upgrades
     // Replay the cached proxy config, rebuilt fresh via build_caddy_config
     // so the POSTed JSON is in the format the running daemon emits. A
     // rejection here is non-fatal — the next reconciler tick will push the

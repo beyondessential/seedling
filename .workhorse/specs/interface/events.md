@@ -8,8 +8,8 @@ Applies to the event feed, through which the [Operator Interface](../overview.md
 
 ## Subscription
 
-`/events/subscribe` is a [subscription request](rule:i/stream.subscribe) that takes no parameters.
-On success the result is `{}`, and the server then delivers events on a server-initiated unidirectional stream as [event stream framing](rule:i/stream.events) specifies, for as long as the connection lasts.
+`/events/subscribe` is a [subscription request](wire.md#subscription-requests) that takes no parameters.
+On success the result is `{}`, and the server then delivers events on a server-initiated unidirectional stream as [event stream framing](wire.md#subscription-requests) specifies, for as long as the connection lasts.
 
 ## Event objects
 
@@ -21,7 +21,7 @@ Every event MUST carry these members:
 | `type` | string | the event's type, from the [event types](#event-types) |
 | `timestamp` | string | when the event occurred, as an [RFC 3339](https://www.rfc-editor.org/rfc/rfc3339) timestamp |
 
-When a request on the Operator Interface causes an event, the event MUST carry an `actor` member holding the [actor](rule:i/wire.actor) resolved from that request.
+When a request on the Operator Interface causes an event, the event MUST carry an `actor` member holding the [actor](wire.md#actor-attribution) resolved from that request.
 An event the runtime causes on its own, such as an operation with the trigger `boot` or `schedule`, MUST NOT carry `actor`.
 
 A client MUST ignore members it does not recognise, and SHOULD ignore events whose `type` it does not recognise.
@@ -34,7 +34,7 @@ Members of the same name carry the same type and meaning across event types.
 | --- | --- | --- |
 | `app` | string | an [app](../overview.md#app)'s name |
 | `generation`, `previous_generation` | integer | an app's [generation](../overview.md#generation) after and before the change |
-| `source_generation`, `target_generation` | integer | an operation's [source and target generations](rule:r/operation.lifecycle.generations) |
+| `source_generation`, `target_generation` | integer | an operation's [source and target generations](../runtime/operations.md#initiating-events) |
 | `action_name` | string | the name of the action an operation runs |
 | `operation_id` | string | a [lifecycle operation](../overview.md#lifecycle-operation)'s identifier |
 | `session_id` | string | a [shell session](shells.md#shell-session)'s identifier |
@@ -58,22 +58,22 @@ A member marked "optional" is absent where it has no value.
 
 | `type` | members | emitted |
 | --- | --- | --- |
-| `AppRegistered` | `app`, `generation` | as [registration](rule:i/app.register) specifies |
-| `AppDeregistered` | `app` | as [deregistration](rule:i/app.deregister) specifies |
-| `AppUpdated` | `app`, `generation`, `previous_generation` (integer or null), `definition` (object); and `name`, `previous_value`, `new_value` when a parameter changed alongside | as [definition update](rule:i/app.update) specifies |
+| `AppRegistered` | `app`, `generation` | as [registration](apps.md#registration) specifies |
+| `AppDeregistered` | `app` | as [deregistration](apps.md#removal) specifies |
+| `AppUpdated` | `app`, `generation`, `previous_generation` (integer or null), `definition` (object); and `name`, `previous_value`, `new_value` when a parameter changed alongside | as [definition update](apps.md#update) specifies |
 | `AppPhaseChanged` | `app`, `phase` | on every change of an app's phase |
-| `AppPriorityChanged` | `app`, `priority` (string), `previous_priority` (string) | as [priority change](rule:i/app.priority.set) specifies |
-| `ParamSet` | `app`, `name`, `previous_value` (string, optional), `new_value` (string, optional), `redacted` (`true`, optional), `generation`, `previous_generation` | as [setting a parameter](rule:i/param.set) specifies |
-| `ParamUnset` | `app`, `name`, `previous_value` (string, optional), `redacted` (`true`, optional), `generation`, `previous_generation` | as [unsetting a parameter](rule:i/param.unset) specifies |
-| `ScaleChanged` | `app`, `deployment`, `scale`, `previous_scale`, `bounds_low`, `bounds_high` (integers) | when a deployment's scale changes, by [operator request](rule:i/scale.set) or [autonomously](rule:r/autonomous.scale) |
-| `DeploymentRestarted` | `app`, `deployment`, `operation_id` | as [deployment restart](rule:i/deployment.restart) specifies |
-| `ResourceStopped` | `app`, `kind` (string), `name` | as [stopping a resource](rule:i/resource.stop) specifies |
-| `ResourceUnstopped` | `app`, `kind` (string), `name` | as [unstopping a resource](rule:i/resource.unstop) specifies |
+| `AppPriorityChanged` | `app`, `priority` (string), `previous_priority` (string) | as [priority change](app-control.md#app-priority) specifies |
+| `ParamSet` | `app`, `name`, `previous_value` (string, optional), `new_value` (string, optional), `redacted` (`true`, optional), `generation`, `previous_generation` | as [setting a parameter](params.md#parameter-set) specifies |
+| `ParamUnset` | `app`, `name`, `previous_value` (string, optional), `redacted` (`true`, optional), `generation`, `previous_generation` | as [unsetting a parameter](params.md#parameter-unset) specifies |
+| `ScaleChanged` | `app`, `deployment`, `scale`, `previous_scale`, `bounds_low`, `bounds_high` (integers) | when a deployment's scale changes, by [operator request](app-control.md#scaling) or [autonomously](../runtime/autonomous.md#scale) |
+| `DeploymentRestarted` | `app`, `deployment`, `operation_id` | as [deployment restart](app-control.md#deployment-restart) specifies |
+| `ResourceStopped` | `app`, `kind` (string), `name` | as [stopping a resource](app-control.md#resource-stop) specifies |
+| `ResourceUnstopped` | `app`, `kind` (string), `name` | as [unstopping a resource](app-control.md#resource-stop) specifies |
 
-`definition` in `AppUpdated` is the new definition's [provenance](rule:i/definition.provenance).
+`definition` in `AppUpdated` is the new definition's [provenance](definitions.md#provenance-reporting).
 In `AppUpdated`, `previous_value` and `new_value` MUST be `null` for an unset value and for a secret parameter.
 `phase` in `AppPhaseChanged` is one of `"not_installed"`, `"installing"`, `"installed"` and `"uninstalling"`.
-In `ParamSet` and `ParamUnset`, a secret parameter's event MUST carry `redacted` `true` and no `previous_value` or `new_value`, as [secret parameter events](rule:i/param.store.secret) require.
+In `ParamSet` and `ParamUnset`, a secret parameter's event MUST carry `redacted` `true` and no `previous_value` or `new_value`, as [secret parameter events](params.md#parameter-storage) require.
 
 ### Operation events
 
@@ -83,7 +83,7 @@ In `ParamSet` and `ParamUnset`, a secret parameter's event MUST carry `redacted`
 | `OperationCompleted` | `app`, `action_name`, `operation_id`, `source_generation`, `target_generation` | when a lifecycle operation completes successfully |
 | `OperationFailed` | `app`, `action_name`, `operation_id`, `source_generation`, `target_generation`, `error` (string) | when a lifecycle operation fails or is cancelled |
 
-`trigger` is the operation's [initiating trigger](rule:r/operation.lifecycle.events).
+`trigger` is the operation's [initiating trigger](../runtime/operations.md#initiating-events).
 
 ### Fault and resource events
 
@@ -104,8 +104,8 @@ In `ResourceStateChanged`, `resource_type` is the resource's kind in lower case,
 | `ShellExited` | `session_id`, `exit_code` (integer) | as [shell session events](shells.md#session-events) specifies |
 | `ForwardStarted` | `forward_id`, `app`, `service` (string), `port` (integer) | as [forward events](port-forwards.md#forward-events) specifies |
 | `ForwardStopped` | `forward_id` | as [forward events](port-forwards.md#forward-events) specifies |
-| `CanopyOffered` | `offer_id`, `agent` (string), `endpoint` (string) | as [Canopy offers](rule:i/canopy.offer) specifies |
-| `CanopyWithdrawn` | `offer_id`, `reason` (string) | as [Canopy offer lifetime](rule:i/canopy.offer.lifetime) specifies |
+| `CanopyOffered` | `offer_id`, `agent` (string), `endpoint` (string) | as [Canopy offers](canopy-relay.md#offers) specifies |
+| `CanopyWithdrawn` | `offer_id`, `reason` (string) | as [Canopy offer lifetime](canopy-relay.md#offer-lifetime) specifies |
 
 `reason` in `CanopyWithdrawn` is `"requested"`, `"disconnected"` or `"disabled"`.
 
@@ -116,30 +116,30 @@ In `ResourceStateChanged`, `resource_type` is the resource's kind in lower case,
 | `HeldVolumeCreated` | `held_id`, `app`, `volume_name` (string), `reason` (string) | as [held volumes](../runtime/actuation.md#held-volumes) specifies |
 | `HeldVolumeDeleted` | `held_id` | as [held volumes](../runtime/actuation.md#held-volumes) specifies |
 | `HeldVolumeRestored` | `held_id`, `site_name` (string) | as [held volumes](../runtime/actuation.md#held-volumes) specifies |
-| `SiteVolumeCreated` | `name`, `kind` (string), `host_path` (string, optional) | as [site volume events](rule:r/volume.site.lifecycle.events) specifies |
-| `SiteVolumeDeleted` | `name`, `kind` (string), `held_id` (optional) | as [site volume events](rule:r/volume.site.lifecycle.events) specifies |
-| `SiteVolumeSnapshotted` | `name`, `source` (volume target) | as [snapshot events](rule:r/volume.site.snapshot.events) specifies |
-| `SiteVolumePromoted` | `name`, `source` (string) | as [promotion events](rule:r/volume.site.promote.events) specifies |
-| `ExternalVolumeMapped` | `app`, `external_name`, `target` (volume target), `read_only` (boolean) | as [external volume mapping events](rule:r/volume.external.mapping.events) specifies |
-| `ExternalVolumeUnmapped` | `app`, `external_name` | as [external volume mapping events](rule:r/volume.external.mapping.events) specifies |
-| `ExternalVolumeRemapped` | `app`, `external_name`, `target` (volume target), `read_only` (boolean), `previous_target` (volume target), `previous_read_only` (boolean) | as [external volume mapping events](rule:r/volume.external.mapping.events) specifies |
-| `SiteServiceCreated` | `name`, `description` (optional) | as [site service events](rule:r/service.site.lifecycle.events) specifies |
-| `SiteServiceDeleted` | `name` | as [site service events](rule:r/service.site.lifecycle.events) specifies |
-| `SiteServiceEndpointAdded` | `name`, `service_port` (integer), `protocol` (string), `remote_host` (string), `remote_port` (integer) | as [site service events](rule:r/service.site.lifecycle.events) specifies |
-| `SiteServiceEndpointRemoved` | `name`, `service_port` (integer), `protocol` (string), `remote_host` (string), `remote_port` (integer) | as [site service events](rule:r/service.site.lifecycle.events) specifies |
-| `ExternalServiceMapped` | `app`, `external_name`, `target` (service target) | as [external service mapping events](rule:r/service.external.mapping.events) specifies |
-| `ExternalServiceUnmapped` | `app`, `external_name` | as [external service mapping events](rule:r/service.external.mapping.events) specifies |
-| `ExternalServiceRemapped` | `app`, `external_name`, `target` (service target), `previous_target` (service target) | as [external service mapping events](rule:r/service.external.mapping.events) specifies |
-| `SiteIngressCreated` | `name`, `hostname` (string), `source` (string), `discovered_provider` (string, optional), `tls_provider` (string), `description` (optional) | as [site ingress events](rule:r/ingress.site.lifecycle.events) specifies |
-| `SiteIngressUpdated` | `name`, `hostname` (string), `tls_provider` (string), `description` (optional) | as [site ingress events](rule:r/ingress.site.lifecycle.events) specifies |
-| `SiteIngressDeleted` | `name`, `source` (string) | as [site ingress events](rule:r/ingress.site.lifecycle.events) specifies |
-| `SiteIngressAttachmentAdded` | `name`, `port` (integer), `protocol` (string), `target_kind` (string), `target_app` (string, optional), `target_service` (string, optional), `redirect_url` (string, optional), `redirect_code` (integer, optional) | as [site ingress events](rule:r/ingress.site.lifecycle.events) specifies |
-| `SiteIngressAttachmentUpdated` | as `SiteIngressAttachmentAdded` | as [site ingress events](rule:r/ingress.site.lifecycle.events) specifies |
-| `SiteIngressAttachmentRemoved` | `name`, `port` (integer), `protocol` (string) | as [site ingress events](rule:r/ingress.site.lifecycle.events) specifies |
-| `TemplateCreated` | `name` | as [template creation](rule:i/template.create) specifies |
-| `TemplateUpdated` | `name` | as [template update](rule:i/template.update) specifies |
-| `TemplateRemoved` | `name` | as [template removal](rule:i/template.remove) specifies |
-| `TemplateInstantiated` | `template` (string), `app` | as [template instantiation](rule:i/template.instantiate) specifies |
+| `SiteVolumeCreated` | `name`, `kind` (string), `host_path` (string, optional) | as [site volume events](../runtime/site-resources.md#site-volumes) specifies |
+| `SiteVolumeDeleted` | `name`, `kind` (string), `held_id` (optional) | as [site volume events](../runtime/site-resources.md#site-volumes) specifies |
+| `SiteVolumeSnapshotted` | `name`, `source` (volume target) | as [snapshot events](../runtime/site-resources.md#site-volume-snapshots) specifies |
+| `SiteVolumePromoted` | `name`, `source` (string) | as [promotion events](../runtime/site-resources.md#snapshot-promotion) specifies |
+| `ExternalVolumeMapped` | `app`, `external_name`, `target` (volume target), `read_only` (boolean) | as [external volume mapping events](../runtime/site-resources.md#external-mappings) specifies |
+| `ExternalVolumeUnmapped` | `app`, `external_name` | as [external volume mapping events](../runtime/site-resources.md#external-mappings) specifies |
+| `ExternalVolumeRemapped` | `app`, `external_name`, `target` (volume target), `read_only` (boolean), `previous_target` (volume target), `previous_read_only` (boolean) | as [external volume mapping events](../runtime/site-resources.md#external-mappings) specifies |
+| `SiteServiceCreated` | `name`, `description` (optional) | as [site service events](../runtime/site-resources.md#site-service-lifecycle) specifies |
+| `SiteServiceDeleted` | `name` | as [site service events](../runtime/site-resources.md#site-service-lifecycle) specifies |
+| `SiteServiceEndpointAdded` | `name`, `service_port` (integer), `protocol` (string), `remote_host` (string), `remote_port` (integer) | as [site service events](../runtime/site-resources.md#site-service-lifecycle) specifies |
+| `SiteServiceEndpointRemoved` | `name`, `service_port` (integer), `protocol` (string), `remote_host` (string), `remote_port` (integer) | as [site service events](../runtime/site-resources.md#site-service-lifecycle) specifies |
+| `ExternalServiceMapped` | `app`, `external_name`, `target` (service target) | as [external service mapping events](../runtime/site-resources.md#external-mappings) specifies |
+| `ExternalServiceUnmapped` | `app`, `external_name` | as [external service mapping events](../runtime/site-resources.md#external-mappings) specifies |
+| `ExternalServiceRemapped` | `app`, `external_name`, `target` (service target), `previous_target` (service target) | as [external service mapping events](../runtime/site-resources.md#external-mappings) specifies |
+| `SiteIngressCreated` | `name`, `hostname` (string), `source` (string), `discovered_provider` (string, optional), `tls_provider` (string), `description` (optional) | as [site ingress events](../runtime/site-resources.md#attachments) specifies |
+| `SiteIngressUpdated` | `name`, `hostname` (string), `tls_provider` (string), `description` (optional) | as [site ingress events](../runtime/site-resources.md#attachments) specifies |
+| `SiteIngressDeleted` | `name`, `source` (string) | as [site ingress events](../runtime/site-resources.md#attachments) specifies |
+| `SiteIngressAttachmentAdded` | `name`, `port` (integer), `protocol` (string), `target_kind` (string), `target_app` (string, optional), `target_service` (string, optional), `redirect_url` (string, optional), `redirect_code` (integer, optional) | as [site ingress events](../runtime/site-resources.md#attachments) specifies |
+| `SiteIngressAttachmentUpdated` | as `SiteIngressAttachmentAdded` | as [site ingress events](../runtime/site-resources.md#attachments) specifies |
+| `SiteIngressAttachmentRemoved` | `name`, `port` (integer), `protocol` (string) | as [site ingress events](../runtime/site-resources.md#attachments) specifies |
+| `TemplateCreated` | `name` | as [template creation](templates.md#creation) specifies |
+| `TemplateUpdated` | `name` | as [template update](templates.md#update) specifies |
+| `TemplateRemoved` | `name` | as [template removal](templates.md#removal) specifies |
+| `TemplateInstantiated` | `template` (string), `app` | as [template instantiation](templates.md#instantiation) specifies |
 
 In `SiteVolumeCreated`, `kind` is `"managed"` or `"bind"`, and `host_path` is present for a bind site volume.
 In `SiteVolumeDeleted`, `kind` is `"managed"`, `"bind"` or `"snapshot"`, and `held_id` is present where the deletion made a held volume.
@@ -150,7 +150,7 @@ In the attachment events, `target_kind` is `"forward"` or `"redirect"`; a forwar
 
 | `type` | members | emitted |
 | --- | --- | --- |
-| `ServerBusy` | `reason` (string) | when the server refuses a stream at its [concurrency limit](rule:i/stream.concurrency-limit) |
+| `ServerBusy` | `reason` (string) | when the server refuses a stream at its [concurrency limit](wire.md#stream-limit) |
 | `EventsDropped` | `skipped` (integer, optional) | as [gaps](#gaps) specifies |
 
 ## Ordering

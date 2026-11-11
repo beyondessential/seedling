@@ -45,11 +45,11 @@ pub struct ParsedChain {
     /// `AuthorityKeyIdentifier` extension, when present. Required (with
     /// the serial) to construct the RFC 9773 cert identifier the CA needs
     /// for ARI lookups and `replaces` on renewal.
-    // r[impl tls.cert.ari]
+    // spec: TLS#renewal
     pub leaf_aki_der: Option<Vec<u8>>,
     /// DER-encoded ASN.1 INTEGER serial number from the leaf certificate.
     /// (Note: this is the *encoded* form, not a big-integer representation.)
-    // r[impl tls.cert.ari]
+    // spec: TLS#renewal
     pub leaf_serial_der: Vec<u8>,
 }
 
@@ -100,7 +100,7 @@ pub fn parse_chain(pem: &str) -> Result<ParsedChain> {
     let serial = cert.tbs_certificate.raw_serial_as_string();
 
     let san_dns_names = san_dns_names(&cert);
-    // r[impl tls.cert.ari]
+    // spec: TLS#renewal
     // AKI keyIdentifier octet-string contents (not the TLV wrapper);
     // RFC 9773 § 4.1 takes those bytes base64url-encoded.
     let mut leaf_aki_der = None;
@@ -161,7 +161,7 @@ fn san_dns_names(cert: &x509_parser::certificate::X509Certificate<'_>) -> Vec<St
 
 /// The leaf certificate's SubjectPublicKeyInfo, DER-encoded, so a certificate
 /// that came back for a key can be checked against the key that was sent.
-// r[impl tls.canopy.key]
+// spec: TCAN#keys
 pub fn leaf_spki_der(pem: &str) -> Result<Vec<u8>> {
     let blocks = pem::parse_many(pem.as_bytes()).map_err(|e| {
         PemSnafu {
@@ -198,8 +198,8 @@ pub struct LeafFacts {
 
 /// [`leaf_san_dns_names`] plus whether the leaf is self-issued, without a
 /// second pass over the PEM.
-// r[impl tls.cert.supersede]
-// r[impl tls.strategy.manual]
+// spec: TLS#supersession
+// spec: TLS#certificate-selection
 pub fn leaf_facts(pem: &str) -> Result<LeafFacts> {
     let cert = leaf_of(pem)?;
     let (_, cert) =
@@ -236,7 +236,7 @@ fn leaf_of(pem: &str) -> Result<pem::Pem> {
 /// coverage check wants none of that, and coverage is checked per serving
 /// lookup, per listed certificate, and per supersession candidate — so it gets
 /// a path that reads the leaf and stops.
-// r[impl tls.cert.validation.san-coverage]
+// spec: TLS#coverage
 pub fn leaf_san_dns_names(pem: &str) -> Result<Vec<String>> {
     let block = leaf_of(pem)?;
 
@@ -257,13 +257,13 @@ pub fn leaf_san_dns_names(pem: &str) -> Result<Vec<String>> {
 /// An error means the certificate could not be read, which is not the same
 /// answer as "covers none of them" — callers must decide what to do about not
 /// knowing rather than treating it as a negative.
-// r[impl tls.cert.validation.san-coverage]
+// spec: TLS#coverage
 pub fn not_covered(pem: &str, hostnames: &[String]) -> Result<Vec<String>> {
     Ok(sans_not_covering(&leaf_san_dns_names(pem)?, hostnames))
 }
 
 /// Those of `hostnames` no DNS name in `sans` covers, in the order given.
-// r[impl tls.cert.validation.san-coverage]
+// spec: TLS#coverage
 pub fn sans_not_covering(sans: &[String], hostnames: &[String]) -> Vec<String> {
     hostnames
         .iter()
@@ -275,7 +275,7 @@ pub fn sans_not_covering(sans: &[String], hostnames: &[String]) -> Vec<String> {
 /// Returns true if any DNS name in `sans` covers `hostname`. Wildcard rules
 /// per RFC 6125: `*.example.com` covers exactly one extra left-most label,
 /// matches `foo.example.com` but not `example.com` and not `a.b.example.com`.
-// r[impl tls.cert.validation.san-coverage]
+// spec: TLS#coverage
 pub fn san_covers(sans: &[String], hostname: &str) -> bool {
     let host_lc = hostname.to_ascii_lowercase();
     for san in sans {
@@ -303,7 +303,7 @@ pub fn san_covers(sans: &[String], hostname: &str) -> bool {
 /// is what lets the SAN index find a hostname's candidates by equality rather
 /// than by testing every certificate; the two have to agree, and a test holds
 /// them to it.
-// r[impl tls.cert.validation.san-coverage]
+// spec: TLS#coverage
 pub fn covering_sans(hostname: &str) -> Vec<String> {
     let host_lc = hostname.to_ascii_lowercase();
     let wildcard = match host_lc.split_once('.') {
@@ -368,7 +368,7 @@ mod tests {
 
     /// The index finds candidates by [`covering_sans`] and nothing else, so a
     /// SAN it does not produce is a certificate the lookup never sees.
-    // r[verify tls.cert.validation.san-coverage]
+    // spec: TLS#coverage
     #[test]
     fn covering_sans_agree_with_san_covers() {
         let names = [

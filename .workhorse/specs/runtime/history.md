@@ -87,10 +87,10 @@ The runtime MUST record in the action execution log each runtime call a lifecycl
 | operation | the identity of the lifecycle operation |
 | position | the call's position in the closure's sequence of calls |
 | call | the `rt` method called, such as `start`, `stop` or `warm_certs`, and the resources it named |
-| barriers | each [barrier](rule:r/barrier.suspension) the call reached: its resources, the lifecycle state it requires, and its deadline |
+| barriers | each [barrier](suspension.md#barriers) the call reached: its resources, the lifecycle state it requires, and its deadline |
 | satisfied | for each barrier, whether it has been satisfied |
 
-Before [`Action.invoke()`](rule:l/action.call) runs the called closure, the runtime MUST record an entry for the invocation holding the called action's name and its validated parameter map.
-Replay of that entry is specified by [composition replay](rule:r/operation.composition.params.replay).
+Before [`Action.invoke()`](../language/action.md#action-invocation) runs the called closure, the runtime MUST record an entry for the invocation holding the called action's name and its validated parameter map.
+Replay of that entry is specified by [composition replay](operations.md#sub-action-parameters).
 
-The action execution log MUST hold enough to [replay](rule:r/barrier.replay) an interrupted lifecycle operation from its beginning and fast-forward to the point of interruption.
+The action execution log MUST hold enough to [replay](suspension.md#replay) an interrupted lifecycle operation from its beginning and fast-forward to the point of interruption.

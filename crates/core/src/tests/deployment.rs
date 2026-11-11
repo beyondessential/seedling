@@ -1,9 +1,9 @@
 use super::*;
 use defs::resource::ResourceKind;
 
-// l[verify deployment.type]
-// l[verify container.image]
-// l[verify deployment.scale]
+// spec: DEP#declaration
+// spec: CTR#image
+// spec: DEP#scale
 #[test]
 fn deployment_with_image_and_scale() {
     let app = run_test_script_app(
@@ -33,7 +33,7 @@ fn deployment_with_image_and_scale() {
     }
 }
 
-// l[verify deployment.scale]
+// spec: DEP#scale
 #[test]
 fn deployment_scale_range() {
     let app = run_test_script_app(
@@ -56,8 +56,8 @@ fn deployment_scale_range() {
     }
 }
 
-// l[verify deployment.on-update]
-// l[verify const.on-update.replace]
+// spec: DEP#update-and-termination-strategies
+// spec: CONST#onupdate
 #[test]
 fn deployment_on_update_replace() {
     let app = run_test_script_app(
@@ -80,8 +80,8 @@ fn deployment_on_update_replace() {
     }
 }
 
-// l[verify deployment.on-terminate]
-// l[verify const.on-terminate.recreate]
+// spec: DEP#update-and-termination-strategies
+// spec: CONST#onterminate
 #[test]
 fn deployment_on_terminate_recreate() {
     let app = run_test_script_app(
@@ -107,7 +107,7 @@ fn deployment_on_terminate_recreate() {
     }
 }
 
-// l[verify deployment.scale.max-lower-bound]
+// spec: DEP#scale
 #[test]
 fn scale_fixed_rejects_above_10() {
     let _ = run_test_script_err(
@@ -117,7 +117,7 @@ fn scale_fixed_rejects_above_10() {
     );
 }
 
-// l[verify deployment.scale.max-lower-bound]
+// spec: DEP#scale
 #[test]
 fn scale_fixed_accepts_10() {
     let app = run_test_script_app(
@@ -139,7 +139,7 @@ fn scale_fixed_accepts_10() {
     }
 }
 
-// l[verify deployment.scale.max-lower-bound]
+// spec: DEP#scale
 #[test]
 fn scale_range_lower_bound_rejects_above_10() {
     let _ = run_test_script_err(
@@ -149,7 +149,7 @@ fn scale_range_lower_bound_rejects_above_10() {
     );
 }
 
-// l[verify deployment.scale.max-lower-bound]
+// spec: DEP#scale
 #[test]
 fn scale_range_lower_bound_accepts_10() {
     let app = run_test_script_app(
@@ -171,7 +171,7 @@ fn scale_range_lower_bound_accepts_10() {
     }
 }
 
-// l[verify deployment.scale]
+// spec: DEP#scale
 #[test]
 fn scale_fixed_rejects_zero() {
     let _ = run_test_script_err(
@@ -181,7 +181,7 @@ fn scale_fixed_rejects_zero() {
     );
 }
 
-// l[verify deployment.scale]
+// spec: DEP#scale
 #[test]
 fn scale_fixed_rejects_negative() {
     let _ = run_test_script_err(
@@ -191,7 +191,7 @@ fn scale_fixed_rejects_negative() {
     );
 }
 
-// l[verify deployment.scale]
+// spec: DEP#scale
 #[test]
 fn scale_range_allows_zero_lower_bound() {
     let app = run_test_script_app(
@@ -213,7 +213,7 @@ fn scale_range_allows_zero_lower_bound() {
     }
 }
 
-// l[verify deployment.pod]
+// spec: DEP#declaration
 #[test]
 fn deployment_implements_pod_interface() {
     let app = run_test_script_app(
@@ -247,8 +247,8 @@ fn deployment_implements_pod_interface() {
     }
 }
 
-// l[verify bsl.args.strict]
-// l[verify deployment.scale]
+// spec: BSL#arguments
+// spec: DEP#scale
 // An inverted range is an empty one: `scale(5..2)` stored bounds no replica
 // count can satisfy rather than naming the mistake.
 #[test]

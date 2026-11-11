@@ -86,7 +86,7 @@ struct Args {
     #[arg(long)]
     stub_backends: bool,
 
-    // i[transport.listen]
+    // TRN#listen-addresses
     /// Network interface(s) to bind the OI on (comma-separated names).
     /// All IPv4 and IPv6 addresses of each interface are used.
     /// Failure to resolve a named interface is fatal.
@@ -107,7 +107,7 @@ struct Args {
     /// skipped. When unset, CoreDNS forwards to seedling's in-process
     /// forwarder, which proxies to systemd-resolved's extra stub at
     /// `127.0.0.54:53` (preserving split DNS, search domains, etc.).
-    // r[impl infra.resolver.upstreams]
+    // spec: DNS#upstreams
     #[arg(long, value_delimiter = ',')]
     dns_upstreams: Vec<std::net::SocketAddr>,
 }
@@ -264,7 +264,7 @@ async fn main() {
         )
     });
 
-    // r[impl startup.btrfs]
+    // spec: ACTU#btrfs-check
     let use_btrfs = match seedling_core::system::volume_store::is_btrfs(&data_dir) {
         Ok(true) => {
             tracing::info!("data directory is on BTRFS; using subvolumes for named volumes");
@@ -315,8 +315,8 @@ async fn main() {
 
     let tick_notify = Arc::new(Notify::new());
 
-    // r[impl infra.nat64.mode]
-    // r[impl infra.nat64.detection]
+    // spec: NAT64#mode
+    // spec: NAT64#detection
     let nat64_active = if args.stub_backends {
         false
     } else {
@@ -329,30 +329,24 @@ async fn main() {
         "NAT64 decision",
     );
 
-    // r[impl infra.nat64.translator]
+    // spec: NAT64#translator
     if !args.stub_backends
         && nat64_active
         && let Err(e) = seedling_core::system::jool::setup_nat64().await
     {
-        // r[impl infra.nat64.translator.lifecycle]
+        // spec: NAT64#translator-lifecycle
         fatal!("failed to set up NAT64 translator: {e}");
     }
 
-    // r[impl infra.nat64.ipv6-egress]
-    // l[impl const.host-has-ipv4]
-    // l[impl const.host-has-ipv6]
+    // spec: NAT64#ipv6-egress
+    // spec: CONST#host-constants
     let (ipv4_egress, ipv6_egress) = if args.stub_backends {
         (false, false)
     } else {
         (detect_ipv4_egress().await, detect_ipv6_egress().await)
     };
 
-    // l[impl const.host-has-ipv4]
-    // l[impl const.host-has-ipv6]
-    // l[impl const.nat64-active]
-    // l[impl const.has-snapshots]
-    // l[impl const.node-name]
-    // l[impl const.timezone]
+    // spec: CONST#host-constants
     seedling_core::sysconst::set(seedling_core::sysconst::SystemFacts {
         ipv4_egress,
         ipv6_egress,
@@ -362,7 +356,7 @@ async fn main() {
         timezone: seedling_core::sysconst::detect_timezone(),
     });
 
-    // r[impl infra.nat64.dns64.force-translation]
+    // spec: NAT64#dns64
     // Force DNS64 to translate all names only when seedling is itself
     // providing NAT64 and the host cannot route native IPv6. If an external
     // NAT64+DNS64 setup is in play, trust its own policy.
@@ -427,7 +421,7 @@ async fn main() {
     let registry = tokio::task::block_in_place(|| {
         AppRegistry::load_from_db(&db, &cipher, Arc::clone(&tick_notify), &script_limits).inspect(
             |registry| {
-                // i[impl app.persist] — a stored definition that no longer
+                // spec: APPS#persistence — a stored definition that no longer
                 // evaluates is faulted, and one that evaluates again clears
                 // its old fault.
                 for entry in registry.iter() {
@@ -446,7 +440,7 @@ async fn main() {
     // Load the persisted in-flight operation (if any) so we can both skip its
     // resources during orphan cleanup below and replay it after the reconciler
     // comes online.
-    // r[impl operation.lifecycle.events] r[impl barrier.replay]
+    // spec: OPS#initiating-events, SUSP#replay
     // ---------------------------------------------------------------------------
 
     let persisted_operation = db
@@ -533,7 +527,7 @@ async fn main() {
 
     seedling_core::system::leftover_snapshots::sweep(&db, &driver.volume_store).await;
 
-    // r[impl actuate.volume.tmpfs]
+    // spec: ACTU#volume-storage
     // Reset the tmpfs-volume bind-mount root on startup. /run is tmpfs so
     // contents are already gone after a host reboot, but a daemon restart
     // alone leaves the directory tree intact — clear it so each fresh run
@@ -643,7 +637,7 @@ async fn main() {
     // Audit log — subscribe before anything emits events.
     let _audit_handle = audit::spawn_audit_task(args.audit_log, event_tx.subscribe(), db.clone());
 
-    // r[impl history.operations.interrupted]
+    // spec: HIST#autonomous-operations
     // Before the reconciler starts, so no record it makes can be caught. Fatal
     // like the other startup reads: once the reconciler is recording, the
     // previous run's records can no longer be told apart from its own.
@@ -661,7 +655,7 @@ async fn main() {
     let instance_gc = InstanceGcConfig::from(&args.gc);
     let _gc_handle = seedling_core::runtime::gc::spawn_gc_task(db.clone(), args.gc.into());
 
-    // r[impl ingress.site.tailscale]
+    // spec: SITE#tailscale-discovery
     // Spawn the Tailscale discovery provider. It polls the host's
     // tailscaled local API on its own cadence and reconciles a single
     // discovered site ingress against the runtime DB. We always
@@ -677,7 +671,7 @@ async fn main() {
 
     let shells = seedling_core::oi::shells::ShellRegistry::new();
 
-    // r[impl tls.cert.eager-issuance]
+    // spec: TLS#issuance
     // The TLS issuance coordinator owns every ACME-DNS flow: the
     // reconciler hands it the set of TLS-terminating hostnames each
     // tick, and the OI / CLI route operator-driven retries through it
@@ -686,7 +680,7 @@ async fn main() {
     let tls_coordinator =
         seedling_core::runtime::tls::issuance::Coordinator::new(db.clone(), Arc::clone(&cipher));
 
-    // r[impl tls.cert.serve]
+    // spec: TLS#serving
     // Bind the cert-serving HTTP endpoint on the seedling-proxy bridge
     // gateway so only Caddy + host processes can reach it. Token-in-path
     // protects against host-local enumeration; the URL we hand to Caddy
@@ -731,7 +725,7 @@ async fn main() {
         (Some(url), handle)
     };
 
-    // r[impl tls.acme.renewal.auto]
+    // spec: TLS#renewal
     // Spawn the ACME-DNS renewal task. Each tick (default hourly) it
     // asks the issuance coordinator to ensure every hostname whose
     // unified state says "issue now" — same decision function the
@@ -746,13 +740,13 @@ async fn main() {
         );
     }
 
-    // r[impl tls.cert.serve]
+    // spec: TLS#serving
     // Keep the certificate SAN index in line with the certificates it indexes:
     // it narrows every certificate lookup, so a certificate missing from it is
     // one no lookup finds.
     let _san_index_handle = seedling_core::runtime::tls::san_index::spawn(db.clone());
 
-    // r[impl service.site.address]
+    // spec: SITE#endpoint-addressing
     // Spawn the site-service DNS resolver alongside the reconciler so
     // operator-supplied DNS-named endpoints get periodically re-resolved
     // and the reconciler is kicked when their addresses change.
@@ -804,7 +798,7 @@ async fn main() {
     // OI server
     // ---------------------------------------------------------------------------
 
-    // r[impl canopy.settings.enabled] — the database is the source of truth
+    // spec: CNR#canopy-access — the database is the source of truth
     // across restarts; the in-memory mirror is what the relay's hot path reads.
     let canopy_state = Arc::new(seedling_core::oi::canopy::CanopyState::new());
     match db.call(seedling_core::runtime::canopy::get_settings) {
@@ -854,7 +848,7 @@ async fn main() {
     // Replay any interrupted lifecycle operation. Runs after OiState is built
     // but before the reconciler starts ticking, so the install closure's
     // rt.start() calls are picked up by the first reconciliation tick.
-    // r[impl operation.lifecycle.events] r[impl barrier.replay]
+    // spec: OPS#initiating-events, SUSP#replay
     // ---------------------------------------------------------------------------
 
     let persisted_op_app = persisted_operation.as_ref().map(|op| op.app.clone());
@@ -862,7 +856,7 @@ async fn main() {
         replay_interrupted_operation(Arc::clone(&oi_state), op);
     }
 
-    // r[impl operation.cancel.stuck-recovery]
+    // spec: OPS#stuck-install-recovery
     // Recover apps left in inconsistent state by a previous run:
     //
     // 1. `Installing` phase with no matching current_operation. Causes: a
@@ -948,7 +942,7 @@ async fn main() {
         });
     }
 
-    // r[impl fault.definition-unsupported] — the condition changes only when
+    // spec: FLT#app-faults — the condition changes only when
     // a definition is replaced or the runtime starts as another version, so
     // it is converged for every app here and on each replacement.
     {
@@ -957,7 +951,7 @@ async fn main() {
             .read()
             .iter()
             .map(|e| {
-                // r[impl canopy.app.key] — only a definition that evaluated
+                // spec: CNR#applications — only a definition that evaluated
                 // says what its type is; one that did not says nothing.
                 let canopy_type = e
                     .script_error
@@ -984,14 +978,14 @@ async fn main() {
         });
     }
 
-    // r[impl definition.recheck]
+    // spec: RCK#resolution
     let _definition_recheck_handle = seedling_core::runtime::definition::recheck::spawn(
         Arc::clone(&registry),
         db.clone(),
         Arc::clone(&oi_state.definition_registry),
     );
 
-    // r[impl canopy.report.schedule] — reports go quiet on their own when no
+    // spec: CNR#report-schedule — reports go quiet on their own when no
     // client is offering to carry them, so this runs unconditionally.
     let _canopy_report_handle = seedling_core::runtime::canopy::spawn(Arc::clone(&oi_state));
 
@@ -1004,7 +998,7 @@ async fn main() {
             let mut interval = tokio::time::interval(Duration::from_secs(5));
             interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
             let mut idle = false;
-            // r[impl schedule.tick]
+            // spec: SCHED#firing
             let mut schedule_ticker = seedling_core::runtime::schedules::ScheduleTicker::new();
             loop {
                 if idle {
@@ -1018,11 +1012,11 @@ async fn main() {
                     }
                 }
 
-                // r[impl schedule.tick]
+                // spec: SCHED#firing
                 // Snapshot generations before acquiring the DB to maintain
                 // consistent lock order (registry → db) across the codebase.
                 if let Some(now) = schedule_ticker.maybe_tick() {
-                    // r[impl schedule.fire.installed-only]
+                    // spec: SCHED#firing
                     // Only Installed apps' schedules may fire. Apps still
                     // installing, uninstalling, or never installed are
                     // excluded — otherwise a permanently-failing install
@@ -1110,7 +1104,7 @@ async fn main() {
         });
     }
 
-    // i[transport.listen]
+    // TRN#listen-addresses
     let oi_addrs = resolve_oi_addrs(&args.interface, &args.listen, args.port);
     let (_fingerprint, oi_endpoints) = oi::run(
         Arc::clone(&oi_state),
@@ -1139,8 +1133,8 @@ async fn main() {
     }
 }
 
-// r[impl operation.lifecycle.events] r[impl barrier.replay]
-// i[impl action.invoke.install.validation]
+// spec: OPS#initiating-events, SUSP#replay
+// spec: ACI#install-parameters
 /// Resume an interrupted lifecycle operation. Called after OiState is built
 /// and the cipher is available, before the reconciler starts ticking.
 ///
@@ -1164,8 +1158,8 @@ async fn main() {
 /// never in this list, and one whose teardown failed is left out of it, so
 /// both stay on the books rather than being written off as a teardown that did
 /// not happen. The next start finds them again.
-// r[impl barrier.replay.abandoned]
-// r[fault.image-pull] r[fault.container-start]
+// spec: SUSP#abandoned-replay
+// FLT#workload-faults FLT#workload-faults
 fn tear_down_dynamic_resources(
     driver: &Arc<seedling_core::system::System>,
     db: &DbHandle,
@@ -1187,7 +1181,7 @@ fn tear_down_dynamic_resources(
         let net_name = format!("seedling-{}", record.display_name);
         let container_name = record.display_name.clone();
         let driver_ref = Arc::clone(driver);
-        // r[impl barrier.replay.abandoned]
+        // spec: SUSP#abandoned-replay
         // Whether the world actually gave the resource up. A teardown that
         // failed, or one whose outcome could not be established, is not a
         // teardown: deleting the row on either would leave a live container
@@ -1311,7 +1305,7 @@ fn tear_down_dynamic_resources(
 /// that the replay adopts them. Nothing else ever will: the rows name an
 /// operation no live operation claims, and the next start reads the same
 /// persisted row and spares them again on the same reasoning.
-// r[impl barrier.replay.abandoned]
+// spec: SUSP#abandoned-replay
 fn abandon_spared_resources(
     driver: &Arc<seedling_core::system::System>,
     db: &DbHandle,
@@ -1344,7 +1338,7 @@ fn abandon_spared_resources(
     }
 }
 
-// r[impl barrier.replay.abandoned]
+// spec: SUSP#abandoned-replay
 /// Replay an interrupted lifecycle operation, and where it does not start,
 /// hand back the resources startup spared on its behalf.
 ///
@@ -1396,7 +1390,7 @@ fn start_replay(
         return false;
     };
 
-    // r[impl operation.params]
+    // spec: OPS#persistence
     // Restore the encrypted params that were persisted when the operation
     // began. Every persisted lifecycle operation has params (empty map for
     // actions that take none), so a None here is an install-specific
@@ -1456,7 +1450,7 @@ fn start_replay(
         });
         return false;
     }
-    // r[impl schedule.fire.installed-only]
+    // spec: SCHED#firing
     // A non-install operation only makes sense on an Installed app. If a
     // crash interrupted a scheduled action that fired in a window before the
     // installed-phase gate landed, the persisted row would otherwise replay
@@ -1494,7 +1488,7 @@ fn start_replay(
         return false;
     }
 
-    // r[impl operation.cancel.persistence]
+    // spec: OPS#cancel-persistence
     // A cancel request issued before the crash has been persisted to
     // current_operation.cancel_requested; flip the newly-minted token so
     // the replay unwinds cleanly at the first barrier instead of re-doing
@@ -1535,7 +1529,7 @@ fn start_replay(
 
 /// Flip a persisted Installing row back to NotInstalled and file a fault
 /// indicating the install was interrupted and could not be replayed.
-// i[impl action.invoke.install.completion]
+// spec: ACI#install-completion
 fn revert_install_and_fault(state: &Arc<OiState>, app_name: &AppName) {
     use seedling_core::runtime::apps::AppPhase;
     use seedling_core::runtime::history::clear_current_operation;
@@ -1585,7 +1579,7 @@ fn revert_install_and_fault(state: &Arc<OiState>, app_name: &AppName) {
     }
 }
 
-// i[transport.listen]
+// TRN#listen-addresses
 fn resolve_oi_addrs(
     interfaces: &[String],
     explicit: &[std::net::SocketAddr],
@@ -1606,7 +1600,7 @@ fn resolve_oi_addrs(
 ///
 /// Split from [`resolve_oi_addrs`] so the decision is testable without
 /// touching the host's interface list or exiting the process.
-// i[impl transport.listen]
+// spec: TRN#listen-addresses
 fn select_oi_addrs(
     interfaces: &[String],
     explicit: &[std::net::SocketAddr],
@@ -1665,7 +1659,7 @@ mod tests {
         }
     }
 
-    // r[verify barrier.replay.abandoned]
+    // spec: SUSP#abandoned-replay
     // Startup cleanup spares the replay's resources, and before this every
     // abort path in the replay returned without them: they survived carrying
     // an operation_id no live operation claims, and the next start read the
@@ -1700,7 +1694,7 @@ mod tests {
         );
     }
 
-    // r[verify barrier.replay.abandoned]
+    // spec: SUSP#abandoned-replay
     // Every teardown call fails against an unreachable backend, so nothing was
     // actually torn down. Deleting the rows anyway would leave live containers
     // with no record, no fault and nothing left to find them by: the
@@ -1764,14 +1758,14 @@ mod tests {
         })
     }
 
-    // i[verify transport.listen]
+    // spec: TRN#listen-addresses
     #[test]
     fn no_configuration_listens_on_loopback() {
         let addrs = select_oi_addrs(&[], &[], 7891, &[]).expect("default");
         assert_eq!(addrs, vec!["[::1]:7891".parse::<SocketAddr>().unwrap()]);
     }
 
-    // i[verify transport.listen]
+    // spec: TRN#listen-addresses
     #[test]
     fn a_named_interface_contributes_its_addresses() {
         let available = [iface("eth0", [10, 0, 0, 5])];
@@ -1780,7 +1774,7 @@ mod tests {
         assert_eq!(addrs, vec!["10.0.0.5:7891".parse::<SocketAddr>().unwrap()]);
     }
 
-    // i[verify transport.listen]
+    // spec: TRN#listen-addresses
     // An interface that has not come up yet is indistinguishable from one that
     // resolved to nothing, so it must not be silently skipped: doing so left
     // the daemon reporting ready with no OI listener at all.
@@ -1794,7 +1788,7 @@ mod tests {
         );
     }
 
-    // i[verify transport.listen]
+    // spec: TRN#listen-addresses
     // The same applies when another interface did resolve: binding the subset
     // silently drops whichever address the operator asked for.
     #[test]
@@ -1809,7 +1803,7 @@ mod tests {
         .expect_err("a partial resolution must not bind the subset");
     }
 
-    // i[verify transport.listen]
+    // spec: TRN#listen-addresses
     #[test]
     fn explicit_addresses_are_kept_alongside_interface_addresses() {
         let available = [iface("eth0", [10, 0, 0, 5])];

@@ -14,7 +14,7 @@ pub struct VolumeStore {
     volumes_dir: PathBuf,
     use_btrfs: bool,
     /// Held while a site volume's name is found free and then taken.
-    // r[impl volume.site.name-taken]
+    // spec: SITE#site-volume-names
     site_name_claim: parking_lot::Mutex<()>,
 }
 
@@ -37,7 +37,7 @@ impl VolumeStore {
     /// that, not around the look alone. One lock covers every name: these
     /// are rare operator commands, and a per-name map would have to be
     /// reaped to avoid growing with every name ever used.
-    // r[impl volume.site.name-taken]
+    // spec: SITE#site-volume-names
     pub fn claim_site_name(&self) -> parking_lot::MutexGuard<'_, ()> {
         self.site_name_claim.lock()
     }
@@ -61,11 +61,11 @@ impl VolumeStore {
     /// an earlier tick, or created by a concurrent caller between this one's
     /// look and its own create. The two are the same answer to the caller:
     /// somebody else owns seeding it.
-    // r[impl actuate.volume.btrfs]
-    // r[impl actuate.volume.start]
+    // spec: ACTU#volume-storage
+    // spec: ACTU#volume-creation-and-seeding
     pub async fn create(&self, name: &VolumeName) -> std::io::Result<bool> {
         let path = self.path(name);
-        // r[impl storage.confinement]
+        // spec: ACTU#storage-confinement
         if owned_dir_async(&path).await? {
             return Ok(false);
         }
@@ -114,7 +114,7 @@ impl VolumeStore {
         app: &str,
     ) -> std::io::Result<bool> {
         let legacy_path = self.volumes_dir.join(legacy);
-        // r[impl storage.confinement] — the migration moves the storage, so
+        // spec: ACTU#storage-confinement — the migration moves the storage, so
         // a symlink wearing the legacy name is refused rather than rehomed.
         if !owned_dir_async(&legacy_path).await? {
             return Ok(false);
@@ -124,7 +124,7 @@ impl VolumeStore {
             return Ok(false);
         }
 
-        // r[impl storage.confinement] — classify the canonical path before
+        // spec: ACTU#storage-confinement — classify the canonical path before
         // deciding what to do with it. A regular file or a symlink wearing
         // the name is refused with an error naming it, rather than reaching
         // a directory read that fails with a bare NotADirectory and aborts
@@ -156,7 +156,7 @@ impl VolumeStore {
 
     pub async fn remove(&self, name: &VolumeName) -> std::io::Result<()> {
         let path = self.path(name);
-        // r[impl storage.confinement] — a symlink here is refused rather
+        // spec: ACTU#storage-confinement — a symlink here is refused rather
         // than unlinked, so a volume whose storage was relocated by hand
         // is never reported as deleted while its data stays where it is.
         if !owned_dir_async(&path).await? {
@@ -187,7 +187,7 @@ impl VolumeStore {
     /// could not be carried out is an error, and the two must stay distinct —
     /// callers hold in order to remove something, and removing on the strength
     /// of a hold that did not happen orphans the data.
-    // r[impl actuate.volume.hold]
+    // spec: ACTU#held-volumes
     pub async fn hold(
         &self,
         name: &VolumeName,
@@ -205,7 +205,7 @@ impl VolumeStore {
     /// so UIs can distinguish site-origin holds from app-origin ones.
     ///
     /// `Ok(None)` means there was no storage to hold; see [`Self::hold`].
-    // r[impl actuate.volume.hold]
+    // spec: ACTU#held-volumes
     pub async fn hold_site(
         &self,
         name: &str,
@@ -224,11 +224,11 @@ impl VolumeStore {
         app: &str,
         reason: &str,
     ) -> std::io::Result<Option<HeldVolumeMeta>> {
-        // r[impl storage.confinement] — holding moves the storage aside,
+        // spec: ACTU#storage-confinement — holding moves the storage aside,
         // and moving a symlink would record a held volume with none of the
         // data behind it. That is an error and stops the caller; storage
         // that is simply not there is not, and lets the caller carry on.
-        // r[impl actuate.volume.hold]
+        // spec: ACTU#held-volumes
         if !owned_dir_async(src).await? {
             tracing::info!(
                 app = app,
@@ -311,7 +311,7 @@ impl VolumeStore {
     /// directory is missing, or if a site volume with the target name is
     /// already present on disk. The caller is responsible for inserting the
     /// `site_volumes` row and emitting the corresponding events.
-    // r[impl actuate.volume.hold.restore]
+    // spec: ACTU#held-volumes
     pub async fn restore_held_to_site(
         &self,
         id: &HeldVolumeId,
@@ -327,7 +327,7 @@ impl VolumeStore {
                 format!("no held volume with id {id}"),
             ));
         }
-        // r[impl storage.confinement]
+        // spec: ACTU#storage-confinement
         if !owned_dir_async(&data_path).await? {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::NotFound,
@@ -336,7 +336,7 @@ impl VolumeStore {
         }
 
         let dest = self.site_path(target_name);
-        // r[impl storage.confinement]
+        // spec: ACTU#storage-confinement
         if owned_dir_async(&dest).await? {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::AlreadyExists,
@@ -372,7 +372,7 @@ impl VolumeStore {
         }
 
         // Remove the data (could be a BTRFS subvolume or plain directory).
-        // r[impl storage.confinement]
+        // spec: ACTU#storage-confinement
         if owned_dir_async(&data_path).await? {
             if is_btrfs_subvolume(&data_path).await {
                 btrfs_delete_subvolume(&data_path).await?;
@@ -404,7 +404,7 @@ impl VolumeStore {
     /// directory, a file, or a symlink whose target is gone. The question
     /// callers ask is whether the name is free, so a name occupied by
     /// something the runtime would refuse to act on is not free either.
-    // r[impl volume.site.name-taken]
+    // spec: SITE#site-volume-names
     pub fn site_exists(&self, name: &str) -> bool {
         std::fs::symlink_metadata(self.site_path(name)).is_ok()
     }
@@ -431,10 +431,10 @@ impl VolumeStore {
         Ok(out)
     }
 
-    // r[impl volume.site.lifecycle]
+    // spec: SITE#site-volumes
     pub async fn create_site(&self, name: &str) -> std::io::Result<()> {
         let path = self.site_path(name);
-        // r[impl storage.confinement]
+        // spec: ACTU#storage-confinement
         owned_dir_async(&path).await?;
         if self.use_btrfs {
             btrfs_create_subvolume(&path).await
@@ -445,7 +445,7 @@ impl VolumeStore {
 
     pub async fn remove_site(&self, name: &str) -> std::io::Result<()> {
         let path = self.site_path(name);
-        // r[impl storage.confinement]
+        // spec: ACTU#storage-confinement
         if !owned_dir_async(&path).await? {
             return Ok(());
         }
@@ -456,7 +456,7 @@ impl VolumeStore {
         }
     }
 
-    // r[impl volume.site.snapshot]
+    // spec: SITE#site-volume-snapshots
     /// Create a read-only BTRFS snapshot at `site-{name}` from `source_path`.
     /// Errors if BTRFS is not in use.
     pub async fn snapshot_site(
@@ -479,7 +479,7 @@ impl VolumeStore {
         btrfs_snapshot_readonly(source_path, &dest).await
     }
 
-    // r[impl volume.site.promote]
+    // spec: SITE#snapshot-promotion
     /// Create a writable BTRFS snapshot at `site-{name}` from `source_path`.
     /// Used to promote a read-only snapshot site volume into a fresh
     /// read-write managed site volume. Errors if BTRFS is not in use.
@@ -527,7 +527,7 @@ async fn is_btrfs_subvolume(path: &Path) -> bool {
         .is_ok_and(|s| s.success())
 }
 
-// r[impl startup.btrfs]
+// spec: ACTU#btrfs-check
 pub fn is_btrfs(path: &Path) -> std::io::Result<bool> {
     const BTRFS_SUPER_MAGIC: u64 = 0x9123683E;
     let stat = rustix::fs::statfs(path).map_err(std::io::Error::from)?;
@@ -614,7 +614,7 @@ mod tests {
         std::os::unix::fs::symlink(target, store.path(name)).unwrap();
     }
 
-    // r[verify storage.confinement]
+    // spec: ACTU#storage-confinement
     #[tokio::test]
     async fn removing_a_symlinked_volume_is_refused_rather_than_reported_done() {
         let (_data, store) = store();
@@ -635,7 +635,7 @@ mod tests {
         );
     }
 
-    // r[verify storage.confinement]
+    // spec: ACTU#storage-confinement
     #[tokio::test]
     async fn removing_a_site_volume_that_is_a_symlink_is_refused() {
         let (_data, store) = store();
@@ -654,7 +654,7 @@ mod tests {
         );
     }
 
-    // r[verify storage.confinement]
+    // spec: ACTU#storage-confinement
     #[tokio::test]
     async fn holding_a_symlinked_volume_is_refused_rather_than_recorded_empty() {
         let (_data, store) = store();
@@ -676,7 +676,7 @@ mod tests {
 
     /// The migration moves storage, so a canonical path that is not a
     /// directory is refused rather than renamed over or read as empty.
-    // r[verify storage.confinement]
+    // spec: ACTU#storage-confinement
     #[tokio::test]
     async fn migrating_onto_a_canonical_path_that_is_a_file_is_refused_by_name() {
         let (_data, store) = store();
@@ -703,7 +703,7 @@ mod tests {
         assert!(store.list_held().unwrap().is_empty());
     }
 
-    // r[verify storage.confinement]
+    // spec: ACTU#storage-confinement
     #[tokio::test]
     async fn migrating_onto_an_empty_canonical_path_replaces_it() {
         let (_data, store) = store();
@@ -725,7 +725,7 @@ mod tests {
         assert!(store.list_held().unwrap().is_empty());
     }
 
-    // r[verify actuate.volume.hold]
+    // spec: ACTU#held-volumes
     #[tokio::test]
     async fn migrating_onto_a_canonical_path_holding_data_holds_it_first() {
         let (_data, store) = store();
@@ -749,7 +749,7 @@ mod tests {
         assert!(store.path(&name).join("data.db").exists());
     }
 
-    // r[verify storage.confinement]
+    // spec: ACTU#storage-confinement
     #[tokio::test]
     async fn removing_a_volume_that_is_not_there_is_still_nothing_to_do() {
         let (_data, store) = store();

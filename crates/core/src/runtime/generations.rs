@@ -13,7 +13,7 @@ use crate::{
     },
 };
 
-// r[impl generation.definition]
+// spec: GEN#generation-numbers
 pub type Generation = u64;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -72,7 +72,7 @@ impl Outcome {
 }
 
 #[derive(Debug, Clone)]
-// r[impl generation.history]
+// spec: GEN#history-entries
 pub struct HistoryEntry {
     pub generation: Generation,
     pub created_at: String,
@@ -143,7 +143,7 @@ impl From<apps::ScriptError> for Error {
     }
 }
 
-// r[impl generation.script-storage]
+// spec: GEN#bundle-storage
 pub fn store_bundle(db: &Db, bundle: &Bundle) -> rusqlite::Result<()> {
     db.conn.execute(
         "INSERT INTO definition_bundles (hash, contents) VALUES (?1, ?2)
@@ -154,7 +154,7 @@ pub fn store_bundle(db: &Db, bundle: &Bundle) -> rusqlite::Result<()> {
 }
 
 /// Load a stored bundle by content hash.
-// r[impl generation.script-storage]
+// spec: GEN#bundle-storage
 pub fn load_bundle(db: &Db, hash: &str) -> Result<Arc<Bundle>, Error> {
     let mut stmt = db
         .conn
@@ -181,7 +181,7 @@ pub fn load_bundle(db: &Db, hash: &str) -> Result<Arc<Bundle>, Error> {
 
 /// The Seedling version requirement a stored bundle declares, read without
 /// materialising the bundle or re-hashing it.
-// r[impl generation.script-storage]
+// spec: GEN#bundle-storage
 pub fn bundle_requirement(db: &Db, hash: &str) -> Result<Option<String>, Error> {
     let mut stmt = db
         .conn
@@ -199,7 +199,7 @@ pub fn bundle_requirement(db: &Db, hash: &str) -> Result<Option<String>, Error> 
 }
 
 /// Delete stored bundles no generation or template references.
-// r[impl generation.deregister]
+// spec: GEN#lineage
 pub fn gc_bundles(db: &Db) -> rusqlite::Result<()> {
     db.conn.execute(
         "DELETE FROM definition_bundles
@@ -222,7 +222,7 @@ pub fn current(db: &Db, app: &AppName) -> rusqlite::Result<Option<Generation>> {
     }
 }
 
-// r[impl generation.monotonic]
+// spec: GEN#generation-numbers
 fn next_generation_for(db: &Db, app: &AppName) -> rusqlite::Result<Generation> {
     let mut stmt = db
         .conn
@@ -272,7 +272,7 @@ fn encrypt(cipher: &Cipher, value: Option<&str>) -> rusqlite::Result<Option<Vec<
         .transpose()
 }
 
-// r[impl generation.bumps]
+// spec: GEN#generation-numbers
 fn insert_register_or_update(
     db: &Db,
     app: &AppName,
@@ -367,7 +367,7 @@ fn current_bundle_hash(db: &Db, app: &AppName) -> rusqlite::Result<String> {
 
 /// Write a parameter change onto a history row, each of its two values in
 /// the column its own storage calls for.
-// r[impl secret.history]
+// spec: SEC#generation-history
 fn write_param_change(
     db: &Db,
     app: &AppName,
@@ -408,14 +408,14 @@ fn write_param_change(
 
 /// Bump the generation for a parameter set or unset, under the definition
 /// the app is already running. `new_value` of `None` is an unset.
-// r[impl secret.history]
+// spec: SEC#generation-history
 pub fn bump_param_change(
     db: &Db,
     app: &AppName,
     change: &ParamChange<'_>,
     cipher: &Cipher,
 ) -> rusqlite::Result<Generation> {
-    // r[impl generation.bumps]
+    // spec: GEN#generation-numbers
     db.atomically(|db| {
         let hash = current_bundle_hash(db, app)?;
         let gen_n = next_generation_for(db, app)?;
@@ -554,8 +554,8 @@ pub fn get(
 /// For each parameter, the most recent change at or before `generation` is
 /// taken, whether a ParamSet, a ParamUnset, or a ScriptUpdate that changed it
 /// alongside its definition; an unset (or no change) yields None.
-// r[impl secret.history]
-// r[impl generation.reconstruction]
+// spec: SEC#generation-history
+// spec: GEN#reconstruction
 pub fn param_map_at(
     db: &Db,
     app: &AppName,
@@ -610,8 +610,7 @@ pub fn param_map_at(
 
 /// Look up the definition active at a specific generation: the bundle hash
 /// and provenance of the most recent Register/ScriptUpdate at or before it.
-// r[impl generation.previous]
-// r[impl generation.reconstruction]
+// spec: GEN#reconstruction
 pub fn definition_at(
     db: &Db,
     app: &AppName,
@@ -653,7 +652,7 @@ pub fn bundle_hash_at(db: &Db, app: &AppName, generation: Generation) -> Result<
 /// Reconstruct the AppDef as it was at a specific generation by loading the
 /// bundle active at that generation and evaluating it with the parameter
 /// map at that generation.
-// r[impl generation.reconstruction]
+// spec: GEN#reconstruction
 pub fn reconstruct_app_def(
     db: &Db,
     app: &AppName,
@@ -679,7 +678,7 @@ pub fn reconstruct_app_def(
 
 /// Delete all generation history and orphaned bundles for an app.
 /// Called as part of deregistration.
-// r[impl generation.deregister]
+// spec: GEN#lineage
 pub fn delete_for_app(db: &Db, app: &AppName) -> rusqlite::Result<()> {
     db.conn
         .execute("DELETE FROM generations WHERE app = ?1", [app])?;

@@ -164,7 +164,7 @@ async fn started(state: &OiState, stdin: impl AsyncWrite + Send + Unpin + 'stati
     }
 }
 
-// i[verify shell.cleanup]
+// spec: SHL#session-end
 #[test]
 fn stdin_failure_after_exec_removes_the_job_and_its_network() {
     let oi = TestOi::new();
@@ -210,7 +210,7 @@ fn stdin_failure_after_exec_removes_the_job_and_its_network() {
     });
 }
 
-// i[verify shell.startup]
+// spec: SHL#session-startup
 #[test]
 fn stop_that_lands_before_the_job_attaches_ends_the_job() {
     let oi = TestOi::new();
@@ -249,7 +249,7 @@ fn stop_that_lands_before_the_job_attaches_ends_the_job() {
     });
 }
 
-// i[verify shell.stop]
+// spec: SHL#stopping-a-session
 #[test]
 fn stop_after_the_job_is_running_ends_the_session() {
     let oi = TestOi::new();

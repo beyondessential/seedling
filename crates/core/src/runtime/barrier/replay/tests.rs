@@ -22,8 +22,7 @@ fn dep(name: &str) -> ResourceInstance {
     ResourceInstance::new_singleton(app_name(), ResourceKind::Deployment, name)
 }
 
-// r[verify barrier.suspension]
-// r[verify barrier.resume]
+// spec: SUSP#barriers
 #[test]
 fn db_action_log_barrier_suspends_then_resumes() {
     let (engine, mut scope, app, ast) = {
@@ -134,8 +133,8 @@ fn db_action_log_barrier_suspends_then_resumes() {
     assert_eq!(entries.len(), 1, "no duplicate entries after second pass");
 }
 
-// r[barrier.replay]
-// r[verify barrier.replay.determinism]
+// SUSP#replay
+// spec: SUSP#replay
 #[test]
 fn db_action_log_sequential_barriers() {
     let (engine, mut scope, app, ast) = {
@@ -273,7 +272,7 @@ fn db_action_log_sequential_barriers() {
     assert_eq!(entries[1].call_index, 1);
 }
 
-// r[verify barrier.replay.positional]
+// spec: SUSP#positional-replay
 // Positional matching, not value matching. Both halves of the old
 // value-scan were wrong: a second identical call matched the first entry
 // and was swallowed, and a call whose arguments resolved differently
@@ -313,7 +312,7 @@ mod positional {
         )
     }
 
-    // r[verify barrier.replay.positional]
+    // spec: SUSP#positional-replay
     #[test]
     fn two_identical_calls_consume_two_entries() {
         let db = instance("db");
@@ -330,7 +329,7 @@ mod positional {
         assert!(ctx.replay_step(CallKind::Signal, None).unwrap().is_none());
     }
 
-    // r[verify barrier.replay.positional]
+    // spec: SUSP#positional-replay
     // The instance set can differ between passes — a replica added or
     // retired — and that does not make it a different call. Matching by value
     // found nothing here and re-delivered a signal already delivered.
@@ -348,7 +347,7 @@ mod positional {
         assert_ne!(replayed.unwrap().resources, after);
     }
 
-    // r[verify barrier.replay.positional]
+    // spec: SUSP#positional-replay
     #[test]
     fn a_diverged_log_fails_rather_than_guessing() {
         let mut ctx = ctx_with(vec![entry(0, CallKind::Exec, vec![instance("db")])]);
@@ -373,7 +372,7 @@ mod positional {
         assert!(message.contains("Signal"), "{message}");
     }
 
-    // r[verify barrier.replay.positional]
+    // spec: SUSP#positional-replay
     // Position alone is not enough for an argument that comes from the script
     // text. A script edited from SIGHUP to SIGTERM at the same position would
     // otherwise be treated as already replayed, and the new signal never
@@ -410,7 +409,7 @@ mod positional {
         );
     }
 
-    // r[verify barrier.replay.positional]
+    // spec: SUSP#positional-replay
     #[test]
     fn a_log_entry_with_no_recorded_argument_says_so() {
         let mut committed = vec![entry(0, CallKind::Signal, vec![instance("db")])];

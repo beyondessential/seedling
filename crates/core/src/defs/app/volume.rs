@@ -11,8 +11,8 @@ use super::super::{
 use super::App;
 
 pub(super) fn on_app(builder: &mut TypeBuilder<App>) {
-    // l[impl volume.type]
-    // l[impl app.resources.context.named]
+    // spec: VOL#declaration
+    // spec: APP#named-resources
     builder.with_fn(
         "volume",
         |this: &mut App, name: &str| -> Result<Volume, Box<EvalAltResult>> {
@@ -22,7 +22,7 @@ pub(super) fn on_app(builder: &mut TypeBuilder<App>) {
             if is_in_action_closure() {
                 super::static_ref::<Volume>(name)
             } else {
-                // l[impl app.resources.static]
+                // spec: APP#static-resource
                 let id = ResourceId {
                     kind: ResourceKind::Volume,
                     name: rname.clone(),
@@ -43,9 +43,9 @@ pub(super) fn on_app(builder: &mut TypeBuilder<App>) {
         },
     );
 
-    // l[impl volume.type]
-    // l[impl app.resources.context.anonymous]
-    // l[impl app.resources.dynamic]
+    // spec: VOL#declaration
+    // spec: APP#anonymous-resources
+    // spec: APP#dynamic-resource-lifetime
     builder.with_fn(
         "volume",
         |_this: &mut App| -> Result<Volume, Box<EvalAltResult>> {
@@ -58,8 +58,7 @@ pub(super) fn on_app(builder: &mut TypeBuilder<App>) {
         },
     );
 
-    // l[impl volume.external]
-    // l[impl volume.external.dynamic]
+    // spec: VOL#external-volumes
     builder.with_fn(
         "external_volume",
         |this: &mut App, name: &str| -> Result<Dynamic, Box<EvalAltResult>> {
@@ -67,7 +66,7 @@ pub(super) fn on_app(builder: &mut TypeBuilder<App>) {
         },
     );
 
-    // r[impl image.discover]
+    // spec: IMG#image-discovery
     // Probe-robust fallback: handlers taking a `kind: "volume"` param call
     // `app.external_volume(param["output_volume"])`, and probing without
     // caller-supplied params makes that argument unit. Rather than bubble

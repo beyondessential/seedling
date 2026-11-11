@@ -7,7 +7,7 @@ use super::{
     service::{HttpService, HttpServiceRoute, Service, ServicePort},
 };
 
-// l[impl pod.interface]
+// spec: POD#pod-interface
 #[derive(Debug, Default, Clone)]
 pub struct PodDef {
     pub container: Holder<ContainerDef>,
@@ -41,7 +41,7 @@ impl PodDef {
             resource,
         );
 
-        // l[impl pod.mount-serviceport]
+        // spec: POD#service-mounts
         builder.with_fn(
             "mount",
             move |this: &mut T, svc: ServicePort| -> Result<T, Box<EvalAltResult>> {
@@ -51,7 +51,7 @@ impl PodDef {
             },
         );
 
-        // l[impl pod.http] — route form
+        // spec: POD#port-bindings — route form
         builder.with_fn(
             "http",
             move |this: &mut T,
@@ -60,7 +60,7 @@ impl PodDef {
                   -> Result<T, Box<EvalAltResult>> {
                 this.ensure_unfrozen()?;
                 let port = Port::new(port)?;
-                // l[impl service.http.route.redirect]
+                // spec: HTTP#route-redirects
                 // Refuses a prefix already declared as a redirect, and records
                 // the binding so one declared afterwards is refused too.
                 route.record_binding()?;
@@ -72,7 +72,7 @@ impl PodDef {
             },
         );
 
-        // l[impl pod.http] — HttpService form (defaults to route("/"))
+        // spec: POD#port-bindings — HttpService form (defaults to route("/"))
         builder.with_fn(
             "http",
             move |this: &mut T, port: i64, service: HttpService| -> Result<T, Box<EvalAltResult>> {
@@ -81,7 +81,7 @@ impl PodDef {
                 // Binding a bare service is binding it at "/", so the service
                 // must learn about that route the same as an explicit one.
                 let mut route = service.root_route();
-                // l[impl service.http.route.redirect]
+                // spec: HTTP#route-redirects
                 route.record_binding()?;
                 ext(this).lock().http_bindings.push(HttpBinding {
                     pod_port: port,
@@ -91,7 +91,7 @@ impl PodDef {
             },
         );
 
-        // l[impl pod.tcp] — ServicePort form
+        // spec: POD#port-bindings — ServicePort form
         builder.with_fn(
             "tcp",
             move |this: &mut T, port: i64, svc: ServicePort| -> Result<T, Box<EvalAltResult>> {
@@ -105,7 +105,7 @@ impl PodDef {
             },
         );
 
-        // l[impl pod.tcp] — Service form (defaults to svc.port(port))
+        // spec: POD#port-bindings — Service form (defaults to svc.port(port))
         builder.with_fn(
             "tcp",
             move |this: &mut T, port: i64, svc: Service| -> Result<T, Box<EvalAltResult>> {
@@ -123,7 +123,7 @@ impl PodDef {
             },
         );
 
-        // l[impl pod.udp] — ServicePort form
+        // spec: POD#port-bindings — ServicePort form
         builder.with_fn(
             "udp",
             move |this: &mut T, port: i64, svc: ServicePort| -> Result<T, Box<EvalAltResult>> {
@@ -137,7 +137,7 @@ impl PodDef {
             },
         );
 
-        // l[impl pod.udp] — Service form (defaults to svc.port(port))
+        // spec: POD#port-bindings — Service form (defaults to svc.port(port))
         builder.with_fn(
             "udp",
             move |this: &mut T, port: i64, svc: Service| -> Result<T, Box<EvalAltResult>> {

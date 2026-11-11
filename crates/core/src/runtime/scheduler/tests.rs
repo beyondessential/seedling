@@ -46,7 +46,7 @@ fn phase(p: AppPhase) -> Mutex<AppPhase> {
 // Scheduler — admission
 // -----------------------------------------------------------------------
 
-// r[verify app.uninstall.exclusive]
+// spec: TRD#uninstall-admission
 // The gate used to live in the handlers, one copy each, and only some of them
 // had it: an operator action, a param change's handler, a scheduled firing and
 // an install all admit operations, and a rule applied per caller holds only
@@ -73,7 +73,7 @@ fn an_app_being_uninstalled_is_refused() {
     );
 }
 
-// r[verify app.uninstall.exclusive]
+// spec: TRD#uninstall-admission
 #[test]
 fn an_installed_app_is_admitted() {
     let mut s = Scheduler::new();
@@ -95,7 +95,7 @@ fn an_installed_app_is_admitted() {
 // Scheduler — single-app behaviour
 // -----------------------------------------------------------------------
 
-// r[verify operation.lifecycle.single]
+// spec: OPS#concurrency
 #[test]
 fn empty_scheduler_accepts_first_request() {
     let mut s = Scheduler::new();
@@ -115,7 +115,7 @@ fn empty_scheduler_accepts_first_request() {
     assert_eq!(active.action, "start");
 }
 
-// r[verify operation.lifecycle.single.intra-app]
+// spec: OPS#concurrency
 #[test]
 fn same_app_second_request_rejected() {
     let mut s = Scheduler::new();
@@ -140,7 +140,7 @@ fn same_app_second_request_rejected() {
     );
 }
 
-// r[verify operation.lifecycle.single.intra-app]
+// spec: OPS#concurrency
 #[test]
 fn same_app_different_action_still_rejected() {
     let mut s = Scheduler::new();
@@ -169,7 +169,7 @@ fn same_app_different_action_still_rejected() {
 // Scheduler — inter-app queuing
 // -----------------------------------------------------------------------
 
-// r[verify operation.lifecycle.single.inter-app]
+// spec: OPS#concurrency
 #[test]
 fn different_app_request_is_queued() {
     let mut s = Scheduler::new();
@@ -198,7 +198,7 @@ fn different_app_request_is_queued() {
     assert_eq!(s.queue[0].app, "app2");
 }
 
-// r[verify operation.lifecycle.single.inter-app]
+// spec: OPS#concurrency
 #[test]
 fn already_queued_app_is_rejected() {
     let mut s = Scheduler::new();
@@ -231,7 +231,7 @@ fn already_queued_app_is_rejected() {
     );
 }
 
-// r[verify operation.lifecycle.single.inter-app]
+// spec: OPS#concurrency
 #[test]
 fn two_different_apps_can_both_queue() {
     let mut s = Scheduler::new();
@@ -268,7 +268,7 @@ fn two_different_apps_can_both_queue() {
     assert_eq!(s.queue.len(), 2);
 }
 
-// r[verify operation.lifecycle.single.inter-app]
+// spec: OPS#concurrency
 #[test]
 fn queued_app_rejected_regardless_of_action_name() {
     let mut s = Scheduler::new();
@@ -305,7 +305,7 @@ fn queued_app_rejected_regardless_of_action_name() {
 // Scheduler — completion and dequeue
 // -----------------------------------------------------------------------
 
-// r[verify operation.lifecycle.completion]
+// spec: OPS#completion
 #[test]
 fn complete_current_with_empty_queue_clears_active() {
     let mut s = Scheduler::new();
@@ -322,8 +322,8 @@ fn complete_current_with_empty_queue_clears_active() {
     assert!(s.active().is_none());
 }
 
-// r[verify operation.lifecycle.completion]
-// r[verify operation.lifecycle.single.inter-app]
+// spec: OPS#completion
+// spec: OPS#concurrency
 #[test]
 fn complete_current_dequeues_next_and_makes_it_active() {
     let mut s = Scheduler::new();
@@ -353,8 +353,8 @@ fn complete_current_dequeues_next_and_makes_it_active() {
     assert_eq!(active.operation_id, next.operation_id);
 }
 
-// r[verify operation.lifecycle.completion]
-// r[verify operation.lifecycle.single.inter-app]
+// spec: OPS#completion
+// spec: OPS#concurrency
 #[test]
 fn queue_is_drained_in_fifo_order() {
     let mut s = Scheduler::new();
@@ -394,7 +394,7 @@ fn queue_is_drained_in_fifo_order() {
     assert!(s.active().is_none());
 }
 
-// r[verify operation.lifecycle.completion]
+// spec: OPS#completion
 #[test]
 fn after_complete_same_app_can_be_requested_again() {
     let mut s = Scheduler::new();
@@ -425,7 +425,7 @@ fn after_complete_same_app_can_be_requested_again() {
 // Scheduler — call stack and cycle detection
 // -----------------------------------------------------------------------
 
-// r[verify operation.composition]
+// spec: OPS#action-composition
 #[test]
 fn push_call_with_no_cycle_succeeds() {
     let mut s = Scheduler::new();
@@ -442,7 +442,7 @@ fn push_call_with_no_cycle_succeeds() {
     assert!(s.push_call(&act("configure")).is_ok());
 }
 
-// r[verify operation.composition.cycles]
+// spec: OPS#cycles
 #[test]
 fn push_call_detects_direct_cycle() {
     let mut s = Scheduler::new();
@@ -460,7 +460,7 @@ fn push_call_detects_direct_cycle() {
     assert_eq!(err.stack, vec!["start"]);
 }
 
-// r[verify operation.composition.cycles]
+// spec: OPS#cycles
 #[test]
 fn push_call_detects_transitive_cycle() {
     let mut s = Scheduler::new();
@@ -480,7 +480,7 @@ fn push_call_detects_transitive_cycle() {
     assert_eq!(err.stack, vec!["start", "setup", "configure"]);
 }
 
-// r[verify operation.composition]
+// spec: OPS#action-composition
 #[test]
 fn pop_call_allows_reuse_of_action_name() {
     let mut s = Scheduler::new();
@@ -498,7 +498,7 @@ fn pop_call_allows_reuse_of_action_name() {
     assert!(s.push_call(&act("setup")).is_ok());
 }
 
-// r[verify operation.lifecycle.completion]
+// spec: OPS#completion
 #[test]
 fn complete_current_clears_call_stack() {
     let mut s = Scheduler::new();
@@ -525,7 +525,7 @@ fn complete_current_clears_call_stack() {
     assert!(s.call_stack().is_empty());
 }
 
-// r[verify operation.composition]
+// spec: OPS#action-composition
 #[test]
 fn call_stack_is_empty_at_start_of_new_operation() {
     let mut s = Scheduler::new();
@@ -545,7 +545,7 @@ fn call_stack_is_empty_at_start_of_new_operation() {
 // Backoff
 // -----------------------------------------------------------------------
 
-// r[verify history.operations.rate-limiting]
+// spec: HIST#autonomous-operations
 #[test]
 fn no_ops_means_no_backoff() {
     let id = dep_id();
@@ -553,7 +553,7 @@ fn no_ops_means_no_backoff() {
     assert!(result.is_none());
 }
 
-// r[verify history.operations.rate-limiting]
+// spec: HIST#autonomous-operations
 #[test]
 fn single_recent_op_backs_off_for_base_period() {
     let id = dep_id();
@@ -564,7 +564,7 @@ fn single_recent_op_backs_off_for_base_period() {
     assert_eq!(result, Some(Duration::from_secs(4)));
 }
 
-// r[verify history.operations.rate-limiting]
+// spec: HIST#autonomous-operations
 #[test]
 fn two_recent_ops_back_off_longer() {
     let id = dep_id();
@@ -578,7 +578,7 @@ fn two_recent_ops_back_off_longer() {
     assert_eq!(result, Some(Duration::from_secs(9)));
 }
 
-// r[verify history.operations.rate-limiting]
+// spec: HIST#autonomous-operations
 #[test]
 fn backoff_duration_increases_with_op_count() {
     let id = dep_id();
@@ -599,7 +599,7 @@ fn backoff_duration_increases_with_op_count() {
     assert!(wait3 > wait2, "backoff should grow: {wait3:?} > {wait2:?}");
 }
 
-// r[verify history.operations.rate-limiting]
+// spec: HIST#autonomous-operations
 #[test]
 fn backoff_caps_at_maximum() {
     let id = dep_id();
@@ -613,7 +613,7 @@ fn backoff_caps_at_maximum() {
     assert_eq!(result, Some(Duration::from_secs(299)));
 }
 
-// r[verify history.operations.rate-limiting]
+// spec: HIST#autonomous-operations
 #[test]
 fn waited_full_backoff_period_proceeds() {
     let id = dep_id();
@@ -624,7 +624,7 @@ fn waited_full_backoff_period_proceeds() {
     assert!(result.is_none());
 }
 
-// r[verify history.operations.rate-limiting]
+// spec: HIST#autonomous-operations
 #[test]
 fn gap_since_last_op_resets_backoff() {
     let id = dep_id();
@@ -637,7 +637,7 @@ fn gap_since_last_op_resets_backoff() {
     assert!(result.is_none(), "backoff should reset after gap");
 }
 
-// r[verify history.operations.rate-limiting]
+// spec: HIST#autonomous-operations
 #[test]
 fn ops_for_different_resource_are_ignored() {
     let web = dep_id();
@@ -649,7 +649,7 @@ fn ops_for_different_resource_are_ignored() {
     assert!(result.is_none());
 }
 
-// r[verify history.operations.rate-limiting]
+// spec: HIST#autonomous-operations
 #[test]
 fn ops_for_different_operation_are_ignored() {
     let id = dep_id();
@@ -660,7 +660,7 @@ fn ops_for_different_operation_are_ignored() {
     assert!(result.is_none());
 }
 
-// r[verify history.operations.rate-limiting]
+// spec: HIST#autonomous-operations
 #[test]
 fn mixed_ops_only_matching_ones_contribute_to_backoff() {
     let web = dep_id();
@@ -697,7 +697,7 @@ fn fire(s: &Arc<Mutex<Scheduler>>, name: &str) -> ScheduleResult {
     )
 }
 
-// r[verify operation.lifecycle.param-change]
+// spec: OPS#parameter-changes
 // A param change checked that the app was free, committed, and then admitted
 // its handler. A scheduled firing admitted in between had the handler
 // refused after the value was already stored.
@@ -729,7 +729,7 @@ fn a_held_app_admits_nothing_until_its_handler_takes_the_hold_s_place() {
     assert_eq!(s.lock().active().unwrap().action, act("apikey"));
 }
 
-// r[verify operation.lifecycle.param-change]
+// spec: OPS#parameter-changes
 #[test]
 fn a_handler_queued_in_the_hold_s_place_reports_its_id() {
     let s = shared();
@@ -753,7 +753,7 @@ fn a_handler_queued_in_the_hold_s_place_reports_its_id() {
     assert!(op.is_some());
 }
 
-// r[verify operation.lifecycle.param-change]
+// spec: OPS#parameter-changes
 #[test]
 fn an_app_with_an_operation_or_a_hold_cannot_be_held() {
     let s = shared();
@@ -772,7 +772,7 @@ fn an_app_with_an_operation_or_a_hold_cannot_be_held() {
     );
 }
 
-// r[verify operation.lifecycle.param-change]
+// spec: OPS#parameter-changes
 #[test]
 fn a_dropped_hold_frees_the_app() {
     let s = shared();
@@ -781,7 +781,7 @@ fn a_dropped_hold_frees_the_app() {
     assert_eq!(fire(&s, "app1"), ScheduleResult::Accepted);
 }
 
-// r[verify operation.lifecycle.param-change]
+// spec: OPS#parameter-changes
 #[test]
 fn a_refused_handler_frees_the_app() {
     let s = shared();

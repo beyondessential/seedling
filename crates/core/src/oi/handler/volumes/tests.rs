@@ -24,7 +24,7 @@ fn held_volumes(oi: &TestOi) -> Vec<Value> {
         .clone()
 }
 
-// r[verify volume.site.lifecycle]
+// spec: SITE#site-volumes
 #[test]
 fn managed_site_volume_create_list_delete_holds_data() {
     let oi = TestOi::new();
@@ -41,7 +41,7 @@ fn managed_site_volume_create_list_delete_holds_data() {
     assert_eq!(entry["name"], "app-data");
     assert_eq!(entry["kind"], "managed");
 
-    // r[verify actuate.volume.hold]
+    // spec: ACTU#held-volumes
     let deleted = oi
         .call("/volumes/site/delete", json!({ "name": "app-data" }))
         .unwrap();
@@ -54,7 +54,7 @@ fn managed_site_volume_create_list_delete_holds_data() {
     assert_eq!(held[0]["volume_name"], "app-data");
 }
 
-// r[verify volume.site.lifecycle]
+// spec: SITE#site-volumes
 #[test]
 fn bind_site_volume_deletion_skips_hold() {
     let oi = TestOi::new();
@@ -75,7 +75,7 @@ fn bind_site_volume_deletion_skips_hold() {
     assert!(held_volumes(&oi).is_empty());
 }
 
-// r[verify volume.site.lifecycle]
+// spec: SITE#site-volumes
 #[test]
 fn create_site_volume_rejects_invalid_params() {
     let oi = TestOi::new();
@@ -108,7 +108,7 @@ fn create_site_volume_rejects_invalid_params() {
     assert!(msg.contains("floating"), "{msg}");
 }
 
-// r[verify volume.site.lifecycle]
+// spec: SITE#site-volumes
 #[test]
 fn delete_missing_site_volume_is_rejected() {
     let oi = TestOi::new();
@@ -118,7 +118,7 @@ fn delete_missing_site_volume_is_rejected() {
     assert_eq!(code, "requirements_invalid");
 }
 
-// r[verify actuate.volume.hold.restore]
+// spec: ACTU#held-volumes
 #[test]
 fn held_site_volume_restores_to_managed_volume() {
     let oi = TestOi::new();
@@ -140,7 +140,7 @@ fn held_site_volume_restores_to_managed_volume() {
     assert_eq!(site_volume_names(&oi), vec!["keep-me"]);
 }
 
-// r[verify actuate.volume.hold.restore]
+// spec: ACTU#held-volumes
 #[test]
 fn restore_held_rejects_missing_id_and_name_collision() {
     let oi = TestOi::new();
@@ -174,7 +174,7 @@ fn restore_held_rejects_missing_id_and_name_collision() {
     assert!(msg.contains("already exists"), "{msg}");
 }
 
-// r[verify actuate.volume.hold.confirm]
+// spec: ACTU#held-volumes
 #[test]
 fn held_volume_delete_confirms_removal() {
     let oi = TestOi::new();
@@ -202,7 +202,7 @@ fn held_volume_delete_confirms_removal() {
     assert_eq!(code, "requirements_invalid");
 }
 
-// r[verify volume.site.snapshot]
+// spec: SITE#site-volume-snapshots
 #[test]
 fn snapshot_source_validation() {
     let oi = TestOi::new();
@@ -234,7 +234,7 @@ fn snapshot_source_validation() {
     assert!(msg.contains("ghost-app/data"), "{msg}");
 }
 
-// r[verify volume.site.promote]
+// spec: SITE#snapshot-promotion
 #[test]
 fn promote_requires_existing_snapshot_source() {
     let oi = TestOi::new();
@@ -305,7 +305,7 @@ fn app_and_exported_volume_lists_reflect_registered_apps() {
     assert_eq!(exported[0]["app"], "vol-app");
 }
 
-// r[verify volume.external.mapping.events]
+// spec: SITE#external-mappings
 #[test]
 fn external_volume_mapping_map_remap_unmap_flow() {
     let oi = TestOi::new();
@@ -416,7 +416,7 @@ fn declared_external_volumes_guard_unmap() {
     assert!(msg.contains("declared by app"), "{msg}");
 }
 
-// r[verify namespace.reserved]
+// spec: IDN#reserved-names
 // The daemon deletes every site volume under `backup-snap-` at startup, so an
 // operator volume created under that prefix was destroyed on the next restart.
 #[test]
@@ -443,7 +443,7 @@ fn reserved_prefix_is_rejected_at_creation() {
 /// refusing it, so the name must be refused before btrfs is reached. The
 /// error distinguishes the two: reaching btrfs on a non-btrfs test host
 /// would report an internal failure instead.
-// r[verify volume.site.name-taken]
+// spec: SITE#site-volume-names
 #[test]
 fn snapshotting_onto_a_name_already_taken_is_refused_before_any_btrfs_call() {
     let oi = TestOi::new();
@@ -465,7 +465,7 @@ fn snapshotting_onto_a_name_already_taken_is_refused_before_any_btrfs_call() {
     assert_eq!(site_volume_names(&oi), vec!["data"]);
 }
 
-// r[verify volume.site.name-taken]
+// spec: SITE#site-volume-names
 #[test]
 fn promoting_onto_a_name_already_taken_is_refused() {
     let oi = TestOi::new();
@@ -486,7 +486,7 @@ fn promoting_onto_a_name_already_taken_is_refused() {
     assert!(msg.contains("already exists"), "{msg}");
 }
 
-// r[verify volume.site.name-taken]
+// spec: SITE#site-volume-names
 #[test]
 fn creating_a_site_volume_under_a_name_already_taken_is_refused() {
     let oi = TestOi::new();
@@ -509,7 +509,7 @@ fn creating_a_site_volume_under_a_name_already_taken_is_refused() {
 
 /// Storage with no record could be a leftover or an operator's volume whose
 /// record was never written, and the runtime cannot tell which.
-// r[verify volume.site.name-taken]
+// spec: SITE#site-volume-names
 #[test]
 fn storage_standing_at_the_name_with_no_record_is_refused_rather_than_reused() {
     let oi = TestOi::new();
@@ -535,7 +535,7 @@ fn storage_standing_at_the_name_with_no_record_is_refused_rather_than_reused() {
 /// Storage removed by hand, by a disk recovery, or by the startup sweep of
 /// leftover snapshots leaves a row with nothing behind it. There is nothing
 /// to hold, so there is nothing stopping the deletion.
-// r[verify actuate.volume.hold]
+// spec: ACTU#held-volumes
 #[test]
 fn deleting_a_managed_site_volume_whose_storage_is_gone_removes_the_record() {
     let oi = TestOi::new();
@@ -560,7 +560,7 @@ fn deleting_a_managed_site_volume_whose_storage_is_gone_removes_the_record() {
 
 /// The data is real and would be orphaned, so a hold that could not be
 /// carried out must still stop the delete.
-// r[verify actuate.volume.hold]
+// spec: ACTU#held-volumes
 #[test]
 fn deleting_a_managed_site_volume_that_cannot_be_held_leaves_the_record_alone() {
     let oi = TestOi::new();
@@ -592,7 +592,7 @@ fn deleting_a_managed_site_volume_that_cannot_be_held_leaves_the_record_alone() 
 /// holds the claim and shows that a create cannot get past the check while
 /// it is held — the point at which, unguarded, it would have gone on to
 /// make storage under a name someone else was already taking.
-// r[verify volume.site.name-taken]
+// spec: SITE#site-volume-names
 #[test]
 fn taking_a_site_volume_name_excludes_another_request_taking_the_same_one() {
     let oi = TestOi::new();

@@ -42,9 +42,9 @@ const MANIFEST_MEDIA_TYPES: &[&str] = &[
 pub enum FetchError {
     /// The reference is not a complete OCI reference.
     BadReference(String),
-    // i[impl definition.fetch.access]
+    // spec: DEFN#registry-access
     NotAllowed(String),
-    // i[impl definition.fetch]
+    // spec: DEFN#fetching
     Failed(String),
     Bundle(BundleError),
 }
@@ -92,7 +92,7 @@ impl DefinitionRef {
     /// Parse a complete reference: an explicit registry host and a tag or
     /// digest. Registry defaulting and an implied `latest` would make the
     /// recorded provenance say something the operator did not.
-    // i[impl definition.source]
+    // spec: DEFN#definition-sources
     pub fn parse(raw: &str) -> Result<Self, FetchError> {
         let bad = |why: &str| FetchError::BadReference(format!("reference {raw:?} {why}"));
         let (name, has_digest) = match raw.split_once('@') {
@@ -122,7 +122,7 @@ impl DefinitionRef {
     }
 
     /// A repository, named as a reference without tag or digest.
-    // i[impl definition.tags]
+    // spec: DEFN#repository-tags
     pub fn parse_repository(raw: &str) -> Result<Self, FetchError> {
         if raw.contains('@')
             || raw
@@ -242,7 +242,7 @@ fn annotation_requirement(
 }
 
 /// Choose among an index's definition entries.
-// i[impl definition.fetch.select]
+// spec: DEFN#artefact-selection
 fn select_entry(entries: &[DescriptorDoc], running: &Version) -> Result<DescriptorDoc, FetchError> {
     let definitions: Vec<&DescriptorDoc> = entries
         .iter()
@@ -355,7 +355,7 @@ async fn resolve(
 
 /// Resolve a reference to the definition manifest digest it selects, reading
 /// only manifests.
-// r[impl definition.recheck]
+// spec: RCK#resolution
 pub async fn resolve_digest(
     registry: &dyn Registry,
     reference: &DefinitionRef,
@@ -367,7 +367,7 @@ pub async fn resolve_digest(
 }
 
 /// Fetch and decode the definition a reference selects.
-// i[impl definition.fetch]
+// spec: DEFN#fetching
 pub async fn fetch(
     registry: &dyn Registry,
     reference: &DefinitionRef,
@@ -434,7 +434,7 @@ fn sha256_digest(bytes: &[u8]) -> String {
 /// Digest pinning, the provenance a fetch records, and the re-check that
 /// notices a tag has moved all rest on this value, so it is never the digest
 /// the registry reports: that one only has to agree with it.
-// i[impl definition.fetch]
+// spec: DEFN#fetching
 fn manifest_digest(bytes: &[u8], reported: &str, what: &str) -> Result<String, FetchError> {
     let actual = sha256_digest(bytes);
     if reported != actual {
@@ -460,7 +460,7 @@ fn verify_digest(blob: &[u8], expected: &str) -> Result<(), FetchError> {
 }
 
 /// List a repository's tags.
-// i[impl definition.tags]
+// spec: DEFN#repository-tags
 pub async fn list_tags(
     registry: &dyn Registry,
     repository: &DefinitionRef,
@@ -474,7 +474,7 @@ pub async fn list_tags(
 }
 
 /// The registry allowlist gate, applied before any request.
-// i[impl definition.fetch.access]
+// spec: DEFN#registry-access
 pub fn check_allowed(allowed: &[String], reference: &DefinitionRef) -> Result<(), FetchError> {
     if allowed.iter().any(|r| r == reference.registry()) {
         Ok(())
@@ -511,7 +511,7 @@ impl OciRegistry {
         }
     }
 
-    // i[impl definition.fetch.access]
+    // spec: DEFN#registry-access
     fn auth(reference: &oci_client::Reference) -> oci_client::secrets::RegistryAuth {
         match auth::lookup(
             &auth::auth_file_candidates(),

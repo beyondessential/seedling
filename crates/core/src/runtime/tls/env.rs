@@ -170,7 +170,7 @@ impl LeafFactsCache {
 ///
 /// The proxy's own cache cannot answer the first: a certificate the runtime
 /// serves to the proxy is never written there.
-// r[impl tls.canopy.serve]
+// spec: TCAN#serving-and-observation
 pub fn runtime_holdings(db: &Db, hostnames: &[String], cache: &LeafFactsCache) -> RuntimeHoldings {
     let now = jiff::Timestamp::now().as_second();
 
@@ -265,7 +265,7 @@ mod tests {
         .unwrap();
     }
 
-    // r[verify tls.canopy.serve]
+    // spec: TCAN#serving-and-observation
     #[test]
     fn a_stored_certificate_in_its_window_is_a_certificate_the_hostname_has() {
         let db = Db::open_in_memory().unwrap();
@@ -292,7 +292,7 @@ mod tests {
         );
     }
 
-    // r[verify tls.canopy.serve]
+    // spec: TCAN#serving-and-observation
     #[test]
     fn an_open_order_is_seen_as_one() {
         let db = Db::open_in_memory().unwrap();
@@ -333,7 +333,7 @@ mod tests {
         );
     }
 
-    // r[verify tls.canopy.serve]
+    // spec: TCAN#serving-and-observation
     #[test]
     fn one_pass_answers_for_every_hostname_at_once() {
         let db = Db::open_in_memory().unwrap();
@@ -361,7 +361,7 @@ mod tests {
         );
     }
 
-    // r[verify tls.canopy.serve]
+    // spec: TCAN#serving-and-observation
     #[test]
     fn a_wildcard_certificate_serves_the_hostnames_it_covers() {
         let db = Db::open_in_memory().unwrap();
@@ -398,7 +398,7 @@ mod tests {
         );
     }
 
-    // r[verify tls.canopy.serve]
+    // spec: TCAN#serving-and-observation
     #[test]
     fn a_renewed_chain_under_the_same_id_is_read_again() {
         let cache = LeafFactsCache::default();
@@ -417,7 +417,7 @@ mod tests {
         assert!(cache.0.lock().is_empty());
     }
 
-    // r[verify tls.canopy.serve]
+    // spec: TCAN#serving-and-observation
     #[test]
     fn a_store_that_cannot_be_read_is_not_a_store_that_holds_nothing() {
         let db = Db::open_in_memory().unwrap();

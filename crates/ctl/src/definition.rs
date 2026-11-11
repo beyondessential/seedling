@@ -10,7 +10,7 @@ use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use serde_json::{Map, Value, json};
 
 /// Where a definition comes from.
-// i[impl ctl.definition.source]
+// spec: CLI#definition-sources
 #[derive(clap::Args, Debug, Clone, Default)]
 pub(super) struct DefinitionArgs {
     /// A script file, a definition folder, or a GitHub URL naming a folder
@@ -36,7 +36,7 @@ pub(super) enum Definition {
 ///
 /// Each request shape that takes a definition names one set, so the mapping
 /// is enumerated here rather than derived from another shape's keys.
-// i[impl ctl.definition.source]
+// spec: CLI#definition-sources
 #[derive(Clone, Copy)]
 pub(super) struct DefinitionKeys {
     pub script: &'static str,
@@ -135,7 +135,7 @@ pub(super) async fn resolve_or_exit(args: &DefinitionArgs) -> Option<Definition>
 /// Read a definition folder: every regular file, leaving out version-control
 /// metadata and what `.seedignore` excludes. Anything else that is not left
 /// out is an error, so nothing is sent.
-// i[impl ctl.definition.folder]
+// spec: CLI#definition-folders
 pub(super) fn read_folder(root: &Path) -> Result<BTreeMap<String, Vec<u8>>, String> {
     let walker = ignore::WalkBuilder::new(root)
         .standard_filters(false)
@@ -236,7 +236,7 @@ mod github {
 
     /// Resolve the URL's ref to a commit, download that commit, and read the
     /// folder out of it, recording the URL and commit as the origin.
-    // i[impl ctl.definition.source]
+    // spec: CLI#definition-sources
     pub(super) async fn download(url: &GithubUrl) -> Result<Definition, String> {
         let client = client()?;
         let mut resolved = None;
@@ -361,7 +361,7 @@ mod github {
 }
 
 /// The parameter change `ctl apps update` carries alongside a definition.
-// i[impl ctl.definition.param]
+// spec: CLI#parameter-change-on-update
 pub(super) fn param_change(
     set: Option<&str>,
     unset: Option<&str>,
@@ -380,7 +380,7 @@ pub(super) fn param_change(
 }
 
 /// Write a bundle from `/apps/bundle` into a new folder.
-// i[impl ctl.definition.export]
+// spec: CLI#definition-export
 pub(super) fn export(bundle: &Map<String, Value>, folder: &Path) -> Result<(), String> {
     if folder.exists() {
         let mut entries = std::fs::read_dir(folder)

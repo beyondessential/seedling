@@ -34,7 +34,7 @@ const IPV4ONLY_CANONICAL: [std::net::Ipv4Addr; 2] = [
 
 /// Whether an AAAA returned for `ipv4only.arpa` is a DNS64 synthesis.
 ///
-/// `r[infra.nat64.detection]` counts an AAAA as evidence of NAT64 only when
+/// `NAT64#detection` counts an AAAA as evidence of NAT64 only when
 /// it is *outside* the canonical addresses. A resolver stack that hands back
 /// the canonical A records in IPv4-mapped form (`::ffff:192.0.0.170`) has
 /// synthesised nothing, but any IPv6 result used to be taken as proof — so
@@ -101,7 +101,7 @@ mod detection_tests {
 
     use super::is_synthesised_aaaa;
 
-    // r[verify infra.nat64.detection]
+    // spec: NAT64#detection
     // A resolver handing back the canonical A records in IPv4-mapped form has
     // synthesised nothing. Taking any AAAA as proof made such a host decide
     // the network already provided NAT64 and decline to activate its own.
@@ -115,7 +115,7 @@ mod detection_tests {
         ));
     }
 
-    // r[verify infra.nat64.detection]
+    // spec: NAT64#detection
     // A real synthesis puts the canonical IPv4 under a NAT64 prefix — the
     // well-known 64:ff9b::/96 here — which is not a v4-mapped address.
     #[test]
@@ -128,7 +128,7 @@ mod detection_tests {
         ));
     }
 
-    // r[verify infra.nat64.detection]
+    // spec: NAT64#detection
     #[test]
     fn a_v4_mapped_address_that_is_not_canonical_still_counts() {
         assert!(is_synthesised_aaaa(

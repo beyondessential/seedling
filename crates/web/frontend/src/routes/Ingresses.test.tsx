@@ -108,7 +108,7 @@ describe("Ingresses", () => {
     expect(await screen.findAllByText("(none)")).toHaveLength(2);
   });
 
-  // w[verify routes.ingresses]
+  // spec: UI#operator-capabilities
   it("shows an error alert when the ingress list query fails", async () => {
     renderWithSession(<Ingresses />, {
       fixtures: {

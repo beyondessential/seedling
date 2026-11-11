@@ -15,7 +15,7 @@ Applies to the [Operator Interface](../overview.md#operator-interface) methods t
 
 ## Registry allowlist
 
-The registry allowlist is the set of registry hosts from which the runtime accepts images and [definition bundles](rule:i/definition.fetch.access).
+The registry allowlist is the set of registry hosts from which the runtime accepts images and [definition bundles](definitions.md#registry-access).
 An image's registry is the part of its reference before the first `/`.
 The runtime MUST compare a registry against the allowlist by exact string equality.
 
@@ -45,9 +45,9 @@ After either change, the runtime MUST re-evaluate every registered app, so that 
 | `manifest_digest` | string or null | the digest of the image's own manifest, where known |
 | `size_bytes` | integer | the image's size in bytes |
 | `created_at` | string | when the image was created, as an [RFC 3339](https://www.rfc-editor.org/rfc/rfc3339) timestamp |
-| `last_used_at` | string | the image's [last-used time](rule:r/image.track), or its first-recorded time where it has never been in use, as an RFC 3339 timestamp |
+| `last_used_at` | string | the image's [last-used time](../runtime/images.md#image-usage-tracking), or its first-recorded time where it has never been in use, as an RFC 3339 timestamp |
 | `in_use` | boolean | whether a running container uses the image |
-| `pinned_by` | array of strings | the apps holding a [pin](rule:r/image.pin) on a reference that resolves to the image |
+| `pinned_by` | array of strings | the apps holding a [pin](../runtime/images.md#pins) on a reference that resolves to the image |
 
 Each member of `digests` is:
 
@@ -110,7 +110,7 @@ The result is `{ "pins": [ ... ] }`.
 | `app` | string | the app holding the pin |
 | `reference` | string | the pinned image reference |
 | `pinned_at` | string | when the pin was made, as an [RFC 3339](https://www.rfc-editor.org/rfc/rfc3339) timestamp |
-| `expires_at` | string or null | when the pin [expires](rule:r/image.pin.expiry), as an RFC 3339 timestamp, or `null` where it does not |
+| `expires_at` | string or null | when the pin [expires](../runtime/images.md#pin-expiry), as an RFC 3339 timestamp, or `null` where it does not |
 
 `/images/pins/clear` clears pins.
 
@@ -126,7 +126,7 @@ On success the result is `{ "ok": true }`.
 
 ## Image discovery
 
-`/apps/images/discover` runs the [probe](rule:r/image.discover) over every handler an app declares, and reports the images each might pull.
+`/apps/images/discover` runs the [probe](../runtime/images.md#image-discovery) over every handler an app declares, and reports the images each might pull.
 The handlers are the install action, the start action, every other action, every shell and every `on_change` handler the app declares.
 
 | member | type | required | meaning |
@@ -140,7 +140,7 @@ The server MUST reject a request naming an app that is not registered with `not_
 Where `proposed_script` is given, the runtime MUST evaluate it with the app's other bundle files and stored parameter values, and probe the result.
 The server MUST reject a script that fails to compile or evaluate with `script_error`.
 
-A value in `action_params` MUST take precedence over the handler's stored and default values, as [probe parameters](rule:r/image.discover.params) specifies.
+A value in `action_params` MUST take precedence over the handler's stored and default values, as [probe parameters](../runtime/images.md#probe-parameters) specifies.
 A handler with a required parameter that resolves to no value MUST NOT be probed.
 When `lenient` is `true`, such a handler MUST be reported with a `skipped_reason`; when `lenient` is `false`, it MUST be reported with an `error`.
 The other handlers MUST be probed either way.

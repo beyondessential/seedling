@@ -24,9 +24,9 @@ Host state that the runtime rebuilds in full on each iteration and applies whole
 An app's [desired state](../overview.md#desired-state) is derived from its [resource graph](../overview.md#resource-graph) and, while a lifecycle operation is in progress for it, from that operation's progress.
 
 In steady state, an app's desired state MUST be its whole resource graph.
-The runtime MUST maintain that desired state without direction from an operator, as [autonomous reconciliation](rule:r/autonomous.restart) specifies.
+The runtime MUST maintain that desired state without direction from an operator, as [autonomous reconciliation](autonomous.md#restarts) specifies.
 
-While a lifecycle operation is in progress for an app, the app's desired state MUST consist of the resources the operation's [action closure](rule:r/operation.lifecycle) has [started](rule:l/rt.start) or [stopped](rule:l/rt.stop), each in the state the closure last put it in.
+While a lifecycle operation is in progress for an app, the app's desired state MUST consist of the resources the operation's [action closure](operations.md#operation) has [started](../language/rt.md#starting-resources) or [stopped](../language/rt.md#stopping-resources), each in the state the closure last put it in.
 The runtime MUST act only on resources in the desired state.
 A resource outside the desired state MUST be left as it is until the operation names it or completes.
 Its running instances MUST keep the specification they were last started with, and MUST NOT be rotated.
@@ -38,14 +38,14 @@ An install operation is a lifecycle operation, and the runtime MUST actuate the 
 The runtime MUST run a reconciliation loop for as long as it runs.
 Each iteration MUST perform these steps, in order:
 
-1. Observe the host, as [observation](rule:r/observe.facts) specifies.
-2. Record the observations in the [world observation history](rule:r/history.world).
+1. Observe the host, as [observation](observation.md#observations) specifies.
+2. Record the observations in the [world observation history](history.md#world-observation-history).
 3. Derive each resource instance's [lifecycle state](../overview.md#lifecycle-state) from its observation history.
-4. Where a lifecycle operation is suspended on a [barrier](rule:r/barrier.suspension) whose condition is now satisfied, resume the operation's action closure.
+4. Where a lifecycle operation is suspended on a [barrier](suspension.md#barriers) whose condition is now satisfied, resume the operation's action closure.
 5. Compute the operations needed to bring the derived lifecycle states to the desired state.
-6. For each such operation, decide from the [autonomous operations log](rule:r/history.operations) whether to perform it, back off, or file a [fault](../overview.md#fault).
+6. For each such operation, decide from the [autonomous operations log](history.md#autonomous-operations-log) whether to perform it, back off, or file a [fault](../overview.md#fault).
 7. Perform the operations decided on in step 6.
-8. Record each operation performed, with its [provenance](rule:r/history.operations.provenance), in the autonomous operations log.
+8. Record each operation performed, with its [provenance](history.md#provenance), in the autonomous operations log.
 
 Given a desired state that does not change and a host that functions, successive iterations MUST converge on the desired state.
 

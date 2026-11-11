@@ -34,7 +34,7 @@ Documentation is a bit sparse at the moment.
 - [App scripting language guide](./docs/bsl-scripting.md)
 - [Dynamic vs static resources](./docs/resource-context-rules.md)
 - [Low-level networking docs](./docs/networking.md)
-- [Comprehensive specifications](./docs/spec/)
+- [Comprehensive specifications](./.workhorse/specs/)
 
 ## Apps
 

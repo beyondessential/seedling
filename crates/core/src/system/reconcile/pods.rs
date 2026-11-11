@@ -38,11 +38,11 @@ pub(super) struct PodActuationUpdate {
     /// systemd has given up restarting and the runtime treats this as a
     /// hard fault rather than auto-recovering. The rate-derived crash loops
     /// are added to this list by the restart bookkeeping step.
-    // r[impl autonomous.restart.start-limit-hit]
+    // spec: AUTO#restart-pacing
     pub crash_loops: Vec<CrashLoop>,
     /// The supervisor's restart counter as observed this tick, per instance.
     /// Reconciled against the stored baseline to derive restart records.
-    // r[impl autonomous.restart.record]
+    // spec: AUTO#restart-record
     pub restart_counters: Vec<(ResourceInstance, RestartCounter)>,
     /// Instances whose declared healthcheck was observed as failing this tick.
     pub health_check_failures: Vec<ResourceInstance>,
@@ -64,24 +64,24 @@ pub(super) struct PodActuationUpdate {
     /// Instances successfully started this tick; their written_obs entries must
     /// be cleared so the new lifecycle observations can be recorded.
     pub started_instances: Vec<ResourceInstance>,
-    // r[impl autonomous.job-terminal.defense]
+    // spec: AUTO#job-completion
     /// Job instances detected as complete this tick, for the reconciler's
     /// completed-jobs set.
     pub completed_job_instances: Vec<InstanceId>,
 }
 
 /// Why an instance is considered to be crash-looping.
-// r[impl fault.crash-loop]
+// spec: FLT#workload-faults
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum CrashLoopCause {
     /// The recorded restart rate reached the configured threshold. The
     /// primary trigger: it catches flapping the supervisor's own start limit
     /// never notices.
-    // r[impl autonomous.restart.rate]
+    // spec: AUTO#crash-loop-detection
     RestartRate { count: i64, window_secs: i64 },
     /// systemd refused to restart the unit any further. Secondary: it fires
     /// even when the rate has not reached the threshold.
-    // r[impl autonomous.restart.start-limit-hit]
+    // spec: AUTO#restart-pacing
     StartLimitHit,
 }
 
@@ -92,7 +92,7 @@ pub(super) struct CrashLoop {
 }
 
 /// The supervisor's restart counter for an instance's unit, as read this tick.
-// r[impl autonomous.restart.record]
+// spec: AUTO#restart-record
 #[derive(Debug, Clone, Copy)]
 pub(super) struct RestartCounter {
     pub count: u32,
@@ -106,9 +106,9 @@ struct PodInstanceResult {
     image_pull_success: Option<(ResourceInstance, String)>,
     unit_failure: Option<ResourceInstance>,
     unit_healthy: Option<ResourceInstance>,
-    // r[impl autonomous.restart.start-limit-hit]
+    // spec: AUTO#restart-pacing
     crash_loop: Option<CrashLoop>,
-    // r[impl autonomous.restart.record]
+    // spec: AUTO#restart-record
     restart_counter: Option<(ResourceInstance, RestartCounter)>,
     health_check_failure: Option<ResourceInstance>,
     health_check_pass: Option<ResourceInstance>,
@@ -118,7 +118,7 @@ struct PodInstanceResult {
     stop_failure: Option<(ResourceInstance, String)>,
     observe_failure: Option<(ResourceInstance, String)>,
     started_instance: Option<ResourceInstance>,
-    // r[impl autonomous.job-terminal.defense]
+    // spec: AUTO#job-completion
     completed_job: Option<InstanceId>,
 }
 
@@ -131,9 +131,9 @@ struct ObservedInstance<'a> {
     unit_active: bool,
     /// The supervisor is bringing the unit up: its first start, or the pause
     /// before an automatic restart. Not a broken unit, and not ours to touch.
-    // r[impl autonomous.restart.backoff.undisturbed]
+    // spec: AUTO#restart-pacing
     unit_activating: bool,
-    // r[impl autonomous.restart.start-limit-hit]
+    // spec: AUTO#restart-pacing
     unit_start_limit_hit: bool,
     container_exists: bool,
     /// Container has exited but not yet been removed (ContainerExited fact present).
@@ -167,7 +167,7 @@ struct ObservedInstance<'a> {
 /// `Failed` somewhere explicit. Note that *absence* stays inside `Observed` —
 /// a `ContainerMissing` from a successful query is a real observation and must
 /// keep driving teardown and job-terminal detection.
-// r[impl observe.failure-not-absence]
+// spec: OBS#failed-observation
 enum PodObservation<'a> {
     /// Every probe succeeded; the flags are evidence.
     Observed(Box<ObservedInstance<'a>>),
@@ -179,7 +179,7 @@ enum PodObservation<'a> {
     },
 }
 
-// r[observe.deployment]
+// OBS#containers
 async fn observe_one_pod<'a>(
     observer: &Observer,
     actuator: &Actuator,
@@ -239,7 +239,7 @@ async fn observe_one_pod<'a>(
         .iter()
         .any(|(f, _)| matches!(f, ObservationFact::ContainerRunning { .. }));
 
-    // r[update.spec-hash]
+    // UPD#stale-instances
     let observed_spec_hash = facts.iter().find_map(|(f, _)| {
         if let ObservationFact::ContainerSpecHash(h) = f {
             Some(h.clone())
@@ -269,15 +269,15 @@ async fn observe_one_pod<'a>(
     let unit_active = facts
         .iter()
         .any(|(f, _)| matches!(f, ObservationFact::UnitActive));
-    // r[impl autonomous.restart.backoff.undisturbed]
+    // spec: AUTO#restart-pacing
     let unit_activating = facts
         .iter()
         .any(|(f, _)| matches!(f, ObservationFact::UnitActivating));
-    // r[impl autonomous.restart.start-limit-hit]
+    // spec: AUTO#restart-pacing
     let unit_start_limit_hit = facts
         .iter()
         .any(|(f, _)| matches!(f, ObservationFact::UnitStartLimitHit));
-    // r[impl fault.healthcheck]
+    // spec: FLT#workload-faults
     // `ContainerUnhealthy` is only ever emitted when podman's own healthcheck
     // state machine reports `Unhealthy`, i.e. after the container's configured
     // `retries` and grace window have been exhausted. Podman owns the grace
@@ -294,7 +294,7 @@ async fn observe_one_pod<'a>(
             ObservationFact::ContainerCreated
                 | ObservationFact::ContainerRunning { .. }
                 | ObservationFact::ContainerExited { .. }
-                // r[impl observe.failure-not-absence] — a draining container
+                // spec: OBS#failed-observation — a draining container
                 // is present. It still holds its volumes and its network.
                 | ObservationFact::ContainerPresentIndeterminate
         )
@@ -305,7 +305,7 @@ async fn observe_one_pod<'a>(
     let network_exists = facts
         .iter()
         .any(|(f, _)| matches!(f, ObservationFact::NetworkPresent));
-    // r[impl autonomous.restart.record]
+    // spec: AUTO#restart-record
     result.restart_counter = facts.iter().find_map(|(f, _)| {
         if let ObservationFact::UnitRestartCounter { count, exit } = f {
             Some((
@@ -330,7 +330,7 @@ async fn observe_one_pod<'a>(
             Ok(Some(state)) => {
                 if let Some(pod_ip) = state.pod_addr {
                     let pod_prefix = pod_network_prefix(node_prefix, &dr.instance);
-                    // r[impl lifecycle.service.routing-pool]
+                    // spec: LCY#routing-pool
                     // observed_unhealthy + observed_healthy are derived above
                     // from this tick's facts. A pod that's running but in
                     // start-period (no health fact yet) is reported as
@@ -373,11 +373,11 @@ async fn observe_one_pod<'a>(
     }))
 }
 
-// r[actuate.deployment.start]
-// r[actuate.deployment.stop]
-// r[fault.non-blocking]
-// r[fault.container-start]
-// r[impl autonomous.job-terminal]
+// ACTU#deployment-and-job-instances
+// ACTU#deployment-and-job-instances
+// FLT#filing-and-clearing
+// FLT#workload-faults
+// spec: AUTO#job-completion
 #[expect(
     clippy::too_many_arguments,
     reason = "per-instance actuation reads the same shared tick state as the phase"
@@ -396,8 +396,7 @@ async fn actuate_one_pod(
     let dr = obs.dr;
     let result = &mut obs.result;
 
-    // r[impl autonomous.job-terminal]
-    // r[impl autonomous.job-terminal.defense]
+    // spec: AUTO#job-completion
     // Jobs that have completed naturally are not restarted. Three detection paths:
     // 1. Primary: container was previously seen running (written_obs) but is now
     //    gone — works even when Podman's --rm removes it instantly on exit.
@@ -421,11 +420,11 @@ async fn actuate_one_pod(
             // stop_pod_instance tolerates missing containers; the network
             // removal is the critical side-effect here.
             let rule = if obs.has_exited {
-                "Job container exited; r[autonomous.job-terminal] requires no restart, only cleanup"
+                "Job container exited; AUTO#job-completion requires no restart, only cleanup"
             } else if previously_ran {
-                "Job container previously ran and is now gone; r[autonomous.job-terminal] requires cleanup of pod network"
+                "Job container previously ran and is now gone; AUTO#job-completion requires cleanup of pod network"
             } else {
-                "Job instance previously recorded as completed but found running; r[autonomous.job-terminal.defense] requires stop"
+                "Job instance previously recorded as completed but found running; AUTO#job-completion requires stop"
             };
             let op_kind = if already_completed {
                 "job_terminal_defense"
@@ -460,7 +459,7 @@ async fn actuate_one_pod(
         if obs.is_running && (!obs.spec_stale || inhibit_stop) {
             // Running and either current-spec or kept alive by rolling strategy.
             result.unit_healthy = Some(dr.instance.clone());
-            // r[fault.image-pull] A running container means its image is
+            // FLT#workload-faults A running container means its image is
             // present on the node. Report the image as successfully pulled so
             // the faults reconciler can clear any stale image_pull_failed
             // fault for the same reference — including ones filed against a
@@ -469,7 +468,7 @@ async fn actuate_one_pod(
                 result.image_pull_success = Some((dr.instance.clone(), img));
             }
         } else if obs.unit_start_limit_hit {
-            // r[impl autonomous.restart.start-limit-hit]
+            // spec: AUTO#restart-pacing
             // Surface as a hard fault separate from the routine
             // container_start_failed signal: the operator needs to know
             // that systemd has stopped trying.
@@ -478,7 +477,7 @@ async fn actuate_one_pod(
                 cause: CrashLoopCause::StartLimitHit,
             });
         } else if obs.unit_failed || (obs.unit_active && !obs.is_running) {
-            // r[impl autonomous.restart.backoff.undisturbed]
+            // spec: AUTO#restart-pacing
             // `unit_active` is now `active` alone. A unit still activating —
             // starting, or paused between automatic restarts — is between
             // attempts rather than faulty, so it files nothing: the fault for
@@ -488,7 +487,7 @@ async fn actuate_one_pod(
         }
     }
 
-    // r[impl autonomous.restart.start-limit-hit]
+    // spec: AUTO#restart-pacing
     // Once systemd has hit the start limit, do not auto-recover a Ready
     // instance. Tearing the unit down and starting a fresh transient unit
     // would just walk the same crash loop again on the operator's behalf,
@@ -499,7 +498,7 @@ async fn actuate_one_pod(
     // Skip the auto-recovery path but allow the desired=Unscheduled branch
     // below to run so a stuck unit can still be torn down on uninstall /
     // resource removal.
-    // r[impl fault.crash-loop]
+    // spec: FLT#workload-faults
     // The same suppression applies to a crash loop derived from the recorded
     // restart rate: an instance under an active crash_loop fault is not
     // auto-restarted, whichever trigger filed the fault.
@@ -509,7 +508,7 @@ async fn actuate_one_pod(
         return Some(obs.result);
     }
 
-    // r[impl fault.healthcheck]
+    // spec: FLT#workload-faults
     // Separate from unit health: the unit can be active with the container
     // running but the declared healthcheck failing. File/clear the
     // health_check_failed fault independently from container_start_failed.
@@ -519,7 +518,7 @@ async fn actuate_one_pod(
         result.health_check_pass = Some(dr.instance.clone());
     }
 
-    // r[impl autonomous.restart]
+    // spec: AUTO#restarts
     // When an instance in the desired state is not running (or is running a
     // stale spec), the reconciler starts a replacement. Combined with the
     // per-unit on_exit policy (applied by the actuator via `map_on_exit`),
@@ -532,7 +531,7 @@ async fn actuate_one_pod(
                 return Some(obs.result);
             }
 
-            // r[impl autonomous.restart.backoff.undisturbed]
+            // spec: AUTO#restart-pacing
             // The supervisor is bringing this unit up — its first start, or
             // the pause before an automatic restart. Both are its window, not
             // ours: tearing the unit down and starting a fresh transient one
@@ -545,7 +544,7 @@ async fn actuate_one_pod(
                 return Some(obs.result);
             }
 
-            // r[fault.container-start]
+            // FLT#workload-faults
             // If the unit is in a broken state (failed, or active but the
             // container is not running), or the running container has a
             // stale spec, tear it down so the next tick can start a fresh
@@ -578,9 +577,9 @@ async fn actuate_one_pod(
             }
 
             let image_ref = image_ref_for_instance(&dr.definition);
-            // r[impl autonomous.restart]
-            // r[impl autonomous.scale]
-            let rule = "instance in desired state but not running; r[autonomous.restart] / r[autonomous.scale] requires (re)start";
+            // spec: AUTO#restarts
+            // spec: AUTO#scale
+            let rule = "instance in desired state but not running; AUTO#restarts / AUTO#scale requires (re)start";
             let op = autonomous_ops::record(db, &dr.instance, "start", rule);
             let outcome = match actuator
                 .start(&dr.instance, &dr.definition, app_priority)
@@ -614,7 +613,7 @@ async fn actuate_one_pod(
                     result.registry_failure = Some(dr.instance.clone());
                     format!("error: registry_lookup {e}")
                 }
-                // r[impl fault.external-volume-unmapped]
+                // spec: FLT#workload-faults
                 Err(crate::system::actuator::ActuateError::ExternalVolumeNotMapped {
                     ref name,
                     ..
@@ -640,7 +639,7 @@ async fn actuate_one_pod(
             };
             op.complete(&outcome);
         }
-        // r[actuate.deployment.stop]
+        // ACTU#deployment-and-job-instances
         // A pod network can outlive its container: when podman --rm removes
         // the container on exit, the per-pod network stays behind until
         // explicitly removed. The previous guard only fired for
@@ -656,8 +655,8 @@ async fn actuate_one_pod(
             result
                 .observations
                 .push((dr.instance.clone(), "stop_sent", json!({})));
-            // r[impl autonomous.scale]
-            let rule = "instance has desired=Unscheduled but pod resources still present (running/container/network); r[autonomous.scale] / scale-down requires stop";
+            // spec: AUTO#scale
+            let rule = "instance has desired=Unscheduled but pod resources still present (running/container/network); AUTO#scale / scale-down requires stop";
             let op = autonomous_ops::record(db, &dr.instance, "scale_down_stop", rule);
             let outcome = match actuator.stop(&dr.instance, &dr.definition).await {
                 Ok(()) => "ok".to_owned(),
@@ -712,7 +711,7 @@ fn compute_stop_inhibitions(
     }
 
     match on_update {
-        // r[update.replace]
+        // UPD#replace-updates
         OnUpdate::Replace => {
             debug!(
                 deployment = deployment_name,
@@ -721,7 +720,7 @@ fn compute_stop_inhibitions(
             );
             (HashSet::new(), false)
         }
-        // r[update.rolling]
+        // UPD#rolling-updates
         OnUpdate::Rolling => {
             let current_ready: Vec<&ObservedInstance<'_>> = instances
                 .iter()
@@ -792,9 +791,8 @@ fn compute_stop_inhibitions(
     }
 }
 
-// r[impl reconciliation.liveness]
-// r[impl update.rolling.restart-resume]
-// r[impl update.rolling.reboot-resume]
+// spec: RCN#reconciliation-loop
+// spec: UPD#stale-instances
 #[expect(
     clippy::too_many_arguments,
     reason = "pod phase observes, decides, and actuates with shared tick state"
@@ -824,7 +822,7 @@ pub(super) async fn observe_and_actuate(
         .map(|dr| observe_one_pod(observer, actuator, driver, dr, node_prefix))
         .collect();
 
-    // r[impl observe.failure-not-absence] — instances whose observation
+    // spec: OBS#failed-observation — instances whose observation
     // failed are routed straight to the results, never into the actuation
     // phase: no start, no stop, no job-terminal detection. Their
     // `observe_failure` still reaches the fault path, and because they
@@ -851,7 +849,7 @@ pub(super) async fn observe_and_actuate(
 
     for (idx, obs) in observed.iter().enumerate() {
         match &obs.dr.definition {
-            // r[update.jobs]
+            // UPD#jobs
             Resource::Job(_) => job_indices.push(idx),
             Resource::Deployment(_) => {
                 let dep_name = obs
@@ -952,7 +950,7 @@ pub(super) async fn observe_and_actuate(
         if let Some(c) = result.crash_loop {
             update.crash_loops.push(c);
         }
-        // r[impl autonomous.restart.record]
+        // spec: AUTO#restart-record
         if let Some(rc) = result.restart_counter {
             update.restart_counters.push(rc);
         }
@@ -980,7 +978,7 @@ pub(super) async fn observe_and_actuate(
         if let Some(s) = result.started_instance {
             update.started_instances.push(s);
         }
-        // r[impl autonomous.job-terminal.defense]
+        // spec: AUTO#job-completion
         if let Some(id) = result.completed_job {
             update.completed_job_instances.push(id);
         }

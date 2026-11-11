@@ -18,7 +18,7 @@ The time after an instance of a Deployment with a health check starts, `start_pe
 
 ## Declaration
 
-A script declares a Deployment with `app.deployment(name: string)`, which returns a `Deployment` [builder](rule:l/bsl.builder).
+A script declares a Deployment with `app.deployment(name: string)`, which returns a `Deployment` [builder](overview.md#builders).
 A `Deployment` implements the [Pod](pod.md) interface, and so the [Container](container.md) interface.
 
 ## Scale
@@ -44,10 +44,10 @@ Until one does, the instance count MUST be `lower`.
 ## Update and termination strategies
 
 `deployment.on_update(strategy: OnUpdate)` sets the strategy the runtime follows when a change to the Deployment's definition is applied.
-The default is [`OnUpdate.Rolling`](rule:l/const.on-update.rolling).
+The default is [`OnUpdate.Rolling`](constants.md#onupdate).
 
 `deployment.on_terminate(strategy: OnTerminate)` sets the strategy the runtime follows when a Deployment's container terminates.
-The default is [`OnTerminate.Recreate`](rule:l/const.on-terminate.recreate).
+The default is [`OnTerminate.Recreate`](constants.md#onterminate).
 
 ## Health checks
 
@@ -94,16 +94,16 @@ Failures within `start_period` seconds of the container starting MUST NOT count 
 
 `on_failure` sets the runtime's response to an instance that is still unhealthy once its [grace window](#grace-window) has elapsed.
 
-With `"replace"`, the runtime MUST replace the instance, as [health check replacement](rule:r/autonomous.healthcheck-replace) specifies.
+With `"replace"`, the runtime MUST replace the instance, as [health check replacement](../runtime/autonomous.md#health-check-replacement) specifies.
 
 With `"monitor"`, the runtime MUST NOT replace the instance.
-The instance's health still governs its place in the [routing pool](rule:r/lifecycle.service.routing-pool), and its recovery is left to an operator.
+The instance's health still governs its place in the [routing pool](../runtime/lifecycle.md#routing-pool), and its recovery is left to an operator.
 
-`on_failure` does not affect whether an instance is [Ready](rule:r/lifecycle.container.unhealthy-transition).
+`on_failure` does not affect whether an instance is [Ready](../runtime/lifecycle.md#containers).
 
 ## Priority
 
-`deployment.priority(level: Priority)` declares the Deployment's [priority](rule:l/const.priority.enum), its claim on host resources relative to other workloads when the host is under pressure.
+`deployment.priority(level: Priority)` declares the Deployment's [priority](constants.md#priority), its claim on host resources relative to other workloads when the host is under pressure.
 The default is `Priority.Normal`.
 The method is defined on `Deployment` alone, and every workload that is not a Deployment MUST run at `Priority.Normal`.
 

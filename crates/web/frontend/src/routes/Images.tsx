@@ -62,7 +62,7 @@ function formatTimestamp(ts: string): string {
   }
 }
 
-// w[impl routes.images]
+// spec: UI#images
 export default function Images() {
   const { data, loading, error, refetch } = useOiQuery<ImagesResponse>(
     "/images/list",
@@ -114,7 +114,7 @@ export default function Images() {
     refreshAll();
   };
 
-  // w[impl routes.images]
+  // spec: UI#images
   // Bulk "clear unused": iterate prunable images, remove each by its primary
   // reference. Stop on the first error so the operator can investigate.
   const submitBulk = async () => {
@@ -343,7 +343,7 @@ export default function Images() {
         </TableContainer>
       )}
 
-      {/* w[impl routes.images.confirm] */}
+      {/* spec: UI#images */}
       <Dialog
         open={removing !== null}
         onClose={() => setRemoving(null)}

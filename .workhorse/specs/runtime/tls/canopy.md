@@ -23,11 +23,11 @@ The lowercase hexadecimal SHA-256 digest of a key's DER-encoded SPKI, by which C
 
 ## Applicability and availability
 
-Canopy applies to a hostname when the hostname is not an [internal name](certificates.md#internal-name) and at least one app declaring it has a [Canopy application type](rule:l/app.canopy-type).
-Canopy is available for a hostname it applies to while an [offer](rule:i/canopy.offer) is live.
+Canopy applies to a hostname when the hostname is not an [internal name](certificates.md#internal-name) and at least one app declaring it has a [Canopy application type](../../language/app.md#canopy-type).
+Canopy is available for a hostname it applies to while an [offer](../../interface/canopy-relay.md#offers) is live.
 
 Seedling holds the key and submits a CSR; Canopy proves control of the name, issues, and renews.
-Every request to Canopy MUST travel through the [relay](rule:i/canopy.relay), and the runtime MUST NOT open a connection to Canopy of its own.
+Every request to Canopy MUST travel through the [relay](../../interface/canopy-relay.md#relay-streams), and the runtime MUST NOT open a connection to Canopy of its own.
 
 The runtime MUST NOT withhold a request on the strength of what Canopy reports the server is entitled to.
 
@@ -38,7 +38,7 @@ The runtime MUST NOT withhold a request on the strength of what Canopy reports t
 ## Keys
 
 The runtime MUST generate the key pair for a Canopy certificate itself, and SHOULD generate an ECDSA key on curve P-256.
-It MUST store the private key encrypted at rest with the [secret key](rule:r/secret.key) before the first request that uses it, and MUST send Canopy only a CSR.
+It MUST store the private key encrypted at rest with the [secret key](../secrets.md#secret-key) before the first request that uses it, and MUST send Canopy only a CSR.
 
 The runtime MUST reuse a hostname's key for every request until Canopy reports the key condemned or its certificate revoked.
 Asking again with the same key returns the order Canopy already holds, and opens no new one.
@@ -144,7 +144,7 @@ The runtime MUST generate a new key, and MUST request a certificate for it, on t
 
 A Canopy certificate MUST be served like any other runtime-managed certificate, per [serving](certificates.md#serving), and ranked against other certificates covering the hostname per [certificate selection](certificates.md#certificate-selection).
 
-A Canopy certificate MUST count as the hostname's certificate for [ingress certificate observation](rule:r/observe.ingress.certs), so that it satisfies [`rt.warm_certs`](rule:l/rt.warm-certs) barriers and an ingress's `Ready` state.
+A Canopy certificate MUST count as the hostname's certificate for [ingress certificate observation](../observation.md#ingresses), so that it satisfies [`rt.warm_certs`](../../language/rt.md#certificate-warming) barriers and an ingress's `Ready` state.
 An open Canopy order MUST be observed as `pending`.
 
 ## Attempt log entries

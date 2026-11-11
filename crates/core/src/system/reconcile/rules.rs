@@ -49,19 +49,19 @@ pub(super) struct ServiceBackends {
     pub filtered: AppBackendMap,
     /// Service names that fell back to "all running" because no healthy
     /// backend was available — these warrant a `service_degraded` fault per
-    /// `r[fault.service-degraded]`.
+    /// `FLT#ingress-and-service-faults`.
     pub degraded_services: std::collections::BTreeSet<String>,
 }
 
 /// Collects backends from running pods' bindings, applying the
-/// [`r[lifecycle.service.routing-pool]`] rule: per service, prefer healthy
+/// [`LCY#routing-pool`] rule: per service, prefer healthy
 /// backends; if none are healthy, fall back to all running backends and flag
 /// the service as degraded.
 /// One tagged backend for a service: address + whether the source pod is
 /// currently healthy.
 type TaggedBackend = ((Ipv6Addr, u16), bool);
 
-// r[impl lifecycle.service.routing-pool]
+// spec: LCY#routing-pool
 pub(super) fn collect_service_backends(running_pods: &[RunningPod]) -> ServiceBackends {
     // Tag each backend tuple with the source pod's health so we can apply the
     // prefer-healthy rule per (service, port, proto) group.
@@ -140,8 +140,8 @@ pub(super) fn collect_service_backends(running_pods: &[RunningPod]) -> ServiceBa
 /// backend list. Returns `(pool, degraded)` where `pool` is the backends to
 /// route to and `degraded` is true when no healthy backend was available and
 /// we fell back to running-but-unhealthy.
-// r[impl lifecycle.service.routing-pool]
-// r[impl fault.service-degraded]
+// spec: LCY#routing-pool
+// spec: FLT#ingress-and-service-faults
 fn select_pool(entries: Vec<TaggedBackend>) -> (Vec<(Ipv6Addr, u16)>, bool) {
     let any_healthy = entries.iter().any(|(_, healthy)| *healthy);
     if any_healthy {
@@ -156,7 +156,7 @@ fn select_pool(entries: Vec<TaggedBackend>) -> (Vec<(Ipv6Addr, u16)>, bool) {
     }
 }
 
-// r[autonomous.ingress]
+// AUTO#ingress-and-network-repair
 pub(super) fn build_ingress_rules(
     snapshot: &AppDef,
     caddy_ip: Ipv6Addr,
@@ -175,7 +175,7 @@ pub(super) fn build_ingress_rules(
         let caddy_v6 = SocketAddr::new(IpAddr::V6(caddy_ip), def.port.get());
         let caddy_v4_addr = caddy_v4.map(|ip| SocketAddr::new(IpAddr::V4(ip), def.port.get()));
 
-        // r[impl actuate.ingress.plaintext]
+        // spec: ACTU#plaintext-ingresses
         // Forward only the transports the ingress actually serves. UDP is
         // needed for DTLS, and for HTTP/3 on an HTTPS ingress; a plaintext
         // HTTP ingress serves neither, so it forwards TCP only.
@@ -208,14 +208,14 @@ pub(super) fn build_ingress_rules(
 
 /// Result of computing DNAT rules: the rules themselves, plus the set of
 /// services that are running entirely on unhealthy backends per
-/// `r[lifecycle.service.routing-pool]`. Callers file a `service_degraded` fault
+/// `LCY#routing-pool`. Callers file a `service_degraded` fault
 /// for each name in the set.
 pub(super) struct ServiceDnatBuild {
     pub rules: Vec<ServiceDnatRule>,
     pub degraded_services: std::collections::BTreeSet<String>,
 }
 
-// r[impl infra.dataplane.service-dnat]
+// spec: INFRA#service-translation
 pub(super) fn build_service_dnat_rules(
     node_prefix: &Ipv6Net,
     registry: &dyn InstanceRegistry,
@@ -244,7 +244,7 @@ pub(super) fn build_service_dnat_rules(
         });
     }
 
-    // r[impl service.external.mapping.events] external-service bindings are
+    // spec: SITE#external-mappings external-service bindings are
     // resolved through the operator-configured mapping table: the slot gets
     // its own stable service IP, backends come from either the target app's
     // service or from the site service's endpoints.
@@ -354,7 +354,7 @@ fn collect_external_bindings(
 /// matches the requested `(service_port, protocol)`; the DNAT rule is still
 /// installed (the empty backend list blackholes traffic, surfacing the
 /// misconfiguration as a connection failure rather than a silent drop).
-// r[impl service.site.address]
+// spec: SITE#endpoint-addressing
 pub(super) fn resolve_external_backends(
     target: &ServiceRef,
     svc_port: u16,
@@ -409,7 +409,7 @@ fn protocols_match(site_proto: SiteServiceProtocol, fwd_proto: ForwardProto) -> 
     )
 }
 
-// r[impl infra.dataplane.mount-dnat]
+// spec: INFRA#mount-endpoint-addressing
 pub(super) fn build_mount_rules(running_pods: &[RunningPod]) -> Vec<MountRule> {
     let backend_map = collect_service_backends(running_pods).filtered;
     let mut rules = Vec::new();
@@ -602,7 +602,7 @@ mod tests {
 
     #[test]
     fn resolve_site_target_synthesises_nat64_for_ipv4_literal() {
-        // r[verify service.site.address]
+        // spec: SITE#endpoint-addressing
         // An IPv4 literal endpoint is routed via NAT64 when active. The
         // synthesised IPv6 address must match RFC 6052 (64:ff9b::a.b.c.d).
         let site = SiteServiceName::new("legacy-v4").unwrap();
@@ -658,7 +658,7 @@ mod tests {
         assert!(empty.is_empty());
     }
 
-    // r[verify lifecycle.service.routing-pool]
+    // spec: LCY#routing-pool
     #[test]
     fn select_pool_keeps_only_healthy_when_any_healthy() {
         let pool = super::select_pool(vec![
@@ -670,8 +670,8 @@ mod tests {
         assert!(!pool.1, "not degraded when any healthy backend exists");
     }
 
-    // r[verify lifecycle.service.routing-pool]
-    // r[verify fault.service-degraded]
+    // spec: LCY#routing-pool
+    // spec: FLT#ingress-and-service-faults
     #[test]
     fn select_pool_falls_back_to_all_when_none_healthy() {
         let pool = super::select_pool(vec![
@@ -684,7 +684,7 @@ mod tests {
         assert!(pool.1, "degraded when no healthy backend");
     }
 
-    // r[verify lifecycle.service.routing-pool]
+    // spec: LCY#routing-pool
     #[test]
     fn select_pool_keeps_all_when_all_healthy() {
         let pool = super::select_pool(vec![
@@ -738,7 +738,7 @@ mod tests {
             .collect()
     }
 
-    // r[verify actuate.ingress.plaintext]
+    // spec: ACTU#plaintext-ingresses
     #[test]
     fn tls_http_ingress_forwards_tcp_and_udp() {
         // HTTPS serves HTTP/3 over UDP, so both transports are forwarded.
@@ -751,7 +751,7 @@ mod tests {
         assert_eq!(ingress_protos(&def), vec![ForwardProto::Both]);
     }
 
-    // r[verify actuate.ingress.plaintext]
+    // spec: ACTU#plaintext-ingresses
     #[test]
     fn plaintext_http_ingress_forwards_tcp_only() {
         // BSL cannot express plaintext HTTP termination — only a site ingress

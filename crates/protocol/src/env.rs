@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 
 /// Environment variable names that are unsafe to set from BSL because they
 /// influence the loader or change the container's runtime search paths.
-// l[impl container.env.validation]
+// spec: CTR#environment
 pub const FORBIDDEN_ENV_NAMES: &[&str] = &[
     "PATH",
     "LD_PRELOAD",
@@ -45,7 +45,7 @@ impl fmt::Display for InvalidEnvName {
 
 impl std::error::Error for InvalidEnvName {}
 
-// l[impl container.env.validation]
+// spec: CTR#environment
 fn validate_env_name(s: &str) -> Result<(), InvalidEnvName> {
     if s.is_empty() {
         return Err(InvalidEnvName::Empty);
@@ -183,7 +183,7 @@ pub struct EnvVar {
 /// embedded NUL, which the type's own documentation says cannot happen — the
 /// name side has had a validating impl all along. This is the value side of
 /// that, so the invariant holds however the pair was built.
-// l[impl container.env.validation]
+// spec: CTR#environment
 impl<'de> Deserialize<'de> for EnvVar {
     fn deserialize<D>(d: D) -> Result<Self, D::Error>
     where
@@ -207,7 +207,7 @@ impl<'de> Deserialize<'de> for EnvVar {
 impl EnvVar {
     /// Construct a validated pair. The name is parsed through
     /// [`EnvironmentVarName::new`] and the value is checked for null bytes.
-    // l[impl container.env.validation]
+    // spec: CTR#environment
     pub fn new(name: impl AsRef<str>, value: impl Into<String>) -> Result<Self, InvalidEnvVar> {
         let name = EnvironmentVarName::new(name)?;
         let value = value.into();
@@ -298,7 +298,7 @@ mod tests {
         assert!(r.is_err());
     }
 
-    // l[verify container.env.validation]
+    // spec: CTR#environment
     // `EnvVar` is fuzzed as a wire decoder, and the value is the half that had
     // no validating impl: a NUL arrived intact and only failed later, at
     // whatever handed it to execve.
@@ -308,7 +308,7 @@ mod tests {
         assert!(r.is_err(), "a NUL in the value must not decode");
     }
 
-    // l[verify container.env.validation]
+    // spec: CTR#environment
     #[test]
     fn deserialize_accepts_an_ordinary_value() {
         let v: EnvVar = serde_json::from_str(r#"{"name":"OK","value":"hello"}"#).expect("decodes");

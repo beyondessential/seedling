@@ -31,7 +31,7 @@ const REQUIRED_MODULES_LIST: &str = include_str!(concat!(
 /// [`cert_observation`](super::cert_observation) reads it from here. Both use
 /// this constant, so the contract has one statement rather than two that can
 /// drift.
-// r[impl infra.proxy.image.cert-cache]
+// spec: PRX#proxy-image
 pub(crate) const CERT_CACHE_DIR: &str = "caddy";
 
 /// The module ids the proxy image must register.
@@ -43,7 +43,7 @@ pub(crate) const CERT_CACHE_DIR: &str = "caddy";
                   same file by the image workflow, not through this accessor"
     )
 )]
-// r[impl infra.proxy.image.modules]
+// spec: PRX#proxy-image
 pub(crate) fn required_modules() -> impl Iterator<Item = &'static str> {
     REQUIRED_MODULES_LIST
         .lines()
@@ -334,7 +334,7 @@ mod tests {
         }
     }
 
-    // r[verify infra.proxy.image.modules]
+    // spec: PRX#proxy-image
     #[test]
     fn every_emitted_module_is_declared_required() {
         let emitted = referenced_modules(&build_caddy_config(&everything_on()));
@@ -355,7 +355,7 @@ mod tests {
         );
     }
 
-    // r[impl infra.proxy.image.config]
+    // spec: PRX#proxy-image
     /// Run `caddy validate` in the image over `config`, returning its verdict
     /// and everything it said, prefixed with the image and runtime it ran in.
     ///
@@ -409,7 +409,7 @@ mod tests {
         }
     }
 
-    // r[verify infra.proxy.image.config]
+    // spec: PRX#proxy-image
     #[test]
     #[ignore = "needs a container runtime and the proxy image; run by the caddy-config workflow"]
     fn emitted_config_is_accepted_by_the_proxy_image() {
@@ -441,7 +441,7 @@ mod tests {
         }
     }
 
-    // r[verify infra.proxy.image.modules]
+    // spec: PRX#proxy-image
     #[test]
     fn required_modules_are_well_formed() {
         let required: Vec<&str> = required_modules().collect();
@@ -454,7 +454,7 @@ mod tests {
         }
     }
 
-    // r[verify infra.proxy.image.cert-cache]
+    // spec: PRX#proxy-image
     #[test]
     fn cert_observation_reads_the_declared_cache_dir() {
         let dir = tempfile::tempdir().expect("tempdir");

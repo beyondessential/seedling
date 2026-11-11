@@ -68,7 +68,7 @@ fn run_action_with_executor(
     )
 }
 
-// l[verify rt.exec]
+// spec: RT#command-execution
 #[test]
 fn rt_exec_named_deployment_scale_one_runs_command() {
     let exec = Arc::new(RecordingExecutor::default());
@@ -97,7 +97,7 @@ fn rt_exec_named_deployment_scale_one_runs_command() {
     );
 }
 
-// l[verify rt.exec]
+// spec: RT#command-execution
 #[test]
 fn rt_exec_via_started_runs_against_same_instance() {
     let exec = Arc::new(RecordingExecutor::default());
@@ -127,7 +127,7 @@ fn rt_exec_via_started_runs_against_same_instance() {
     );
 }
 
-// l[verify rt.exec]
+// spec: RT#command-execution
 #[test]
 fn rt_exec_rejects_scale_greater_than_one() {
     let exec = Arc::new(RecordingExecutor::default());
@@ -158,7 +158,7 @@ fn rt_exec_rejects_scale_greater_than_one() {
     assert!(exec.calls.lock().is_empty());
 }
 
-// l[verify rt.exec]
+// spec: RT#command-execution
 #[test]
 fn rt_exec_rejects_scale_range_with_upper_above_one() {
     let exec = Arc::new(RecordingExecutor::default());
@@ -188,7 +188,7 @@ fn rt_exec_rejects_scale_range_with_upper_above_one() {
     }
 }
 
-// l[verify rt.exec]
+// spec: RT#command-execution
 #[test]
 fn rt_exec_accepts_zero_to_one_range() {
     let exec = Arc::new(RecordingExecutor::default());
@@ -213,7 +213,7 @@ fn rt_exec_accepts_zero_to_one_range() {
     assert_eq!(exec.calls.lock().len(), 1);
 }
 
-// l[verify rt.exec]
+// spec: RT#command-execution
 #[test]
 fn rt_exec_anonymous_deployment_directly_is_error() {
     let exec = Arc::new(RecordingExecutor::default());
@@ -241,7 +241,7 @@ fn rt_exec_anonymous_deployment_directly_is_error() {
     }
 }
 
-// l[verify rt.exec]
+// spec: RT#command-execution
 #[test]
 fn rt_exec_outside_action_is_script_error() {
     let result = std::panic::catch_unwind(|| {
@@ -258,7 +258,7 @@ fn rt_exec_outside_action_is_script_error() {
     );
 }
 
-// l[verify rt.exec]
+// spec: RT#command-execution
 #[test]
 fn rt_exec_empty_argv_is_error() {
     let exec = Arc::new(RecordingExecutor::default());
@@ -285,7 +285,7 @@ fn rt_exec_empty_argv_is_error() {
     }
 }
 
-// l[verify rt.exec]
+// spec: RT#command-execution
 #[test]
 fn rt_exec_env_option_passes_through() {
     let exec = Arc::new(RecordingExecutor::default());
@@ -318,7 +318,7 @@ fn rt_exec_env_option_passes_through() {
     );
 }
 
-// l[verify rt.exec]
+// spec: RT#command-execution
 #[test]
 fn rt_exec_rejects_unknown_option() {
     let exec = Arc::new(RecordingExecutor::default());
@@ -345,7 +345,7 @@ fn rt_exec_rejects_unknown_option() {
     }
 }
 
-// l[verify rt.exec]
+// spec: RT#command-execution
 #[test]
 fn rt_exec_rejects_invalid_env_var_name() {
     let exec = Arc::new(RecordingExecutor::default());
@@ -374,7 +374,7 @@ fn rt_exec_rejects_invalid_env_var_name() {
     }
 }
 
-// l[verify rt.executed.type] l[verify rt.executed.exit-code] l[verify rt.executed.success]
+// spec: RT#executed
 #[test]
 fn executed_methods_reflect_exit_code() {
     let exec = Arc::new(RecordingExecutor::with_exits(vec![0, 7]));
@@ -401,7 +401,7 @@ fn executed_methods_reflect_exit_code() {
     );
 }
 
-// l[verify rt.executed.ensure-success]
+// spec: RT#executed
 #[test]
 fn executed_ensure_success_throws_on_nonzero() {
     let exec = Arc::new(RecordingExecutor::with_exits(vec![3]));
@@ -429,7 +429,7 @@ fn executed_ensure_success_throws_on_nonzero() {
     }
 }
 
-// l[verify rt.exec] r[verify rt.exec]
+// spec: RT#command-execution, SUSP#side-effecting-calls
 #[test]
 fn rt_exec_skipped_on_replay_recovers_exit_code() {
     let exec = Arc::new(RecordingExecutor::with_exits(vec![5]));

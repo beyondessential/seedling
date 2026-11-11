@@ -71,22 +71,22 @@ The runtime MAY change the array's contents between releases.
 
 ## OnUpdate
 
-`OnUpdate` is an enum naming how a [deployment](rule:l/deployment.type) is updated.
+`OnUpdate` is an enum naming how a [deployment](deployment.md#declaration) is updated.
 
 | variant | strategy |
 | --- | --- |
-| `Rolling` | the [rolling update](rule:r/update.rolling) |
-| `Replace` | the [replacing update](rule:r/update.replace) |
+| `Rolling` | the [rolling update](../runtime/update-strategies.md#rolling-updates) |
+| `Replace` | the [replacing update](../runtime/update-strategies.md#replace-updates) |
 
 ## OnTerminate
 
-`OnTerminate` is an enum naming what the runtime does when a container of a [deployment](rule:l/deployment.type) terminates.
+`OnTerminate` is an enum naming what the runtime does when a container of a [deployment](deployment.md#declaration) terminates.
 
 Under `OnTerminate.Recreate`, the runtime MUST recreate the container whenever it terminates.
 
 ## OnExit
 
-`OnExit` is an enum naming what the runtime does when the command of a [container](rule:l/container.interface) exits.
+`OnExit` is an enum naming what the runtime does when the command of a [container](container.md#container-interface) exits.
 
 Under `OnExit.Restart`, the runtime MUST restart the container whenever its command exits.
 Under `OnExit.Terminate`, the runtime MUST terminate the container whenever its command exits.
@@ -100,11 +100,11 @@ Under `OnExit.RestartOnFailure`, the runtime MUST restart the container when its
 
 > [!NOTE]
 > `ResourceType.Action` identifies actions in the action log.
-> An action is invoked through [`Action.invoke`](rule:l/action.call).
+> An action is invoked through [`Action.invoke`](action.md#action-invocation).
 
 ## Priority
 
-`Priority` is an enum naming how strongly a [deployment](rule:l/deployment.type)'s workloads claim host resources relative to other workloads when the host is under pressure.
+`Priority` is an enum naming how strongly a [deployment](deployment.md#declaration)'s workloads claim host resources relative to other workloads when the host is under pressure.
 Its variants, from strongest claim to weakest, are `Critical`, `Elevated`, `Normal` and `Low`.
 
 The runtime MUST order the variants `Critical` > `Elevated` > `Normal` > `Low`.

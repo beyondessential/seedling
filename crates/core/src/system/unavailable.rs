@@ -223,7 +223,7 @@ mod tests {
     use super::*;
     use crate::system::types::ContainerFilter;
 
-    // r[verify infra.node.degraded]
+    // spec: INFRA#unavailable-backends
     // The degraded-mode backends must fail loudly on every operation rather
     // than fake success — otherwise workloads would appear to run while nothing
     // is actually actuated, defeating the point of the operator-visible fault.

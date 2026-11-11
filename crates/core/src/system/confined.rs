@@ -80,7 +80,7 @@ pub fn write(root: &Path, rel_path: &str, contents: &[u8]) -> Result<(), Confine
         .into_error(std::io::Error::from(e))
     })?;
 
-    // r[impl storage.confinement] — create the parents one segment at a
+    // spec: ACTU#storage-confinement — create the parents one segment at a
     // time, each relative to a descriptor the kernel resolved beneath the
     // root for the prefix above it.
     let rel_obj = Path::new(rel);
@@ -180,7 +180,7 @@ fn resolve_error(e: rustix::io::Errno, path: PathBuf) -> ConfinedWriteError {
 /// somebody else's, so creating, moving or deleting through it would act
 /// outside the root that owns the name. So is any other kind of file,
 /// which is not storage the daemon wrote.
-// r[impl storage.confinement]
+// spec: ACTU#storage-confinement
 pub fn owned_dir(path: &Path) -> std::io::Result<bool> {
     let meta = match std::fs::symlink_metadata(path) {
         Ok(m) => m,
@@ -301,7 +301,7 @@ mod tests {
         ));
     }
 
-    // r[verify storage.confinement]
+    // spec: ACTU#storage-confinement
     #[test]
     fn a_symlinked_parent_creates_nothing_outside_the_root() {
         let dir = tempfile::tempdir().unwrap();
@@ -317,7 +317,7 @@ mod tests {
         );
     }
 
-    // r[verify storage.confinement]
+    // spec: ACTU#storage-confinement
     #[test]
     fn dotdot_inside_the_root_lands_where_the_open_would() {
         let dir = tempfile::tempdir().unwrap();
@@ -326,7 +326,7 @@ mod tests {
         assert_eq!(contents, "inside");
     }
 
-    // r[verify storage.confinement]
+    // spec: ACTU#storage-confinement
     #[test]
     fn owned_dir_refuses_a_symlink_and_reports_an_absent_path() {
         let dir = tempfile::tempdir().unwrap();

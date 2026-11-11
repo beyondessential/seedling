@@ -6,7 +6,7 @@ import Registries from "./Registries";
 const populated = { registries: ["docker.io", "registry.example.com:5000"] };
 
 describe("Registries", () => {
-  // w[verify routes.registries]
+  // spec: UI#operator-capabilities
   it("warns when the allowlist is empty", async () => {
     renderWithSession(<Registries />, {
       fixtures: { "/registries/list": { registries: [] } },
@@ -14,7 +14,7 @@ describe("Registries", () => {
     expect(await screen.findByText(/The allowlist is empty/)).toBeTruthy();
   });
 
-  // w[verify routes.registries]
+  // spec: UI#operator-capabilities
   it("renders registry rows", async () => {
     renderWithSession(<Registries />, {
       fixtures: { "/registries/list": populated },
@@ -35,7 +35,7 @@ describe("Registries", () => {
     expect(await screen.findByText(/db exploded/)).toBeTruthy();
   });
 
-  // w[verify routes.registries]
+  // spec: UI#operator-capabilities
   it("adds a registry via /registries/add in write mode", async () => {
     const { request } = renderWithSession(<Registries />, {
       fixtures: { "/registries/list": populated },
@@ -54,7 +54,7 @@ describe("Registries", () => {
     );
   });
 
-  // w[verify routes.registries]
+  // spec: UI#operator-capabilities
   it("removes a registry via /registries/remove after confirmation", async () => {
     const { request } = renderWithSession(<Registries />, {
       fixtures: { "/registries/list": populated },

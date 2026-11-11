@@ -25,7 +25,7 @@ pub(crate) struct InvokeInstallParams {
     pub params: Option<BTreeMap<String, String>>,
 }
 
-// i[action.invoke.install.validation]
+// ACI#install-parameters
 pub(in crate::oi) fn validate_requirements(
     schema: &BTreeMap<ParamName, ParamDef>,
     submitted: &BTreeMap<String, String>,
@@ -34,7 +34,7 @@ pub(in crate::oi) fn validate_requirements(
         .map_err(|e| OiError::new(ErrorCode::RequirementsInvalid, e.to_string()))
 }
 
-// i[action.invoke.install.validation]
+// ACI#install-parameters
 fn validate_install_params(
     state: &OiState,
     app_name: &AppName,
@@ -58,9 +58,9 @@ fn validate_install_params(
     }
 }
 
-// i[action.not-installed-gate]
-// i[action.invoke.install]
-// i[action.invoke.install.validation]
+// ACI#invoking-an-action
+// ACI#install
+// ACI#install-parameters
 pub(crate) fn invoke_install(
     state: &Arc<OiState>,
     params: InvokeInstallParams,
@@ -76,7 +76,7 @@ pub(crate) fn invoke_install(
             .get(app_name.as_str())
             .ok_or_else(|| OiError::not_found(format!("app not found: {app_name}")))?;
 
-        // i[action.invoke.install] - only NotInstalled apps may start an install.
+        // ACI#install - only NotInstalled apps may start an install.
         // Installing: an install for this app is already running — distinct error.
         // Installed / Uninstalling: install already happened (or is unwinding).
         match *entry.phase.lock() {
@@ -95,7 +95,7 @@ pub(crate) fn invoke_install(
             }
         }
 
-        // i[action.invoke.install] - reject if script_error fault is active
+        // ACI#install - reject if script_error fault is active
         if entry.script_error.is_some() {
             return Err(OiError::script_error(format!(
                 "app has a script error: {app_name}"
@@ -135,7 +135,7 @@ pub(crate) fn invoke_install(
                     .map_err(|e| OiError::new(ErrorCode::NotFound, format!("db persist: {e}")))?;
             }
         }
-        // i[impl event.types]
+        // spec: EVT#event-types
         state
             .event_tx
             .app_phase_changed(app_name, "installed", None);
@@ -163,7 +163,7 @@ pub(crate) fn invoke_install(
     let install_action = ActionName::new_unchecked("install");
     let (result, op_id_str) = {
         let mut sched = state.scheduler.lock();
-        // r[impl app.uninstall.exclusive]
+        // spec: TRD#uninstall-admission
         let result = sched.admit(
             app_name,
             &install_action,
@@ -217,7 +217,7 @@ pub(crate) fn invoke_install(
             ErrorCode::OperationInProgress,
             format!("a change to {app_name} is being applied; try again once it is applied"),
         )),
-        // r[impl app.uninstall.exclusive]
+        // spec: TRD#uninstall-admission
         ScheduleResult::Rejected(RejectReason::AppUninstalling) => Err(OiError::new(
             ErrorCode::NotInstalled,
             format!("app is being uninstalled: {app_name}"),

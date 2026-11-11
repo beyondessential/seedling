@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { isStrongPassword, passwordScore } from "./passwordStrength";
 
-// w[verify auth.password]
+// spec: WEB#password-login
 describe("passwordStrength", () => {
   it("rates obvious weak passwords below the accept threshold", () => {
     expect(passwordScore("password")).toBeLessThan(3);

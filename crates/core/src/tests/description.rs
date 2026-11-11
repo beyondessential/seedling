@@ -1,7 +1,7 @@
 use super::*;
 use defs::resource::{Resource, ResourceKind};
 
-// l[verify app.description]
+// spec: APP#app-description
 #[test]
 fn app_description_is_stored() {
     let app = run_test_script_app(r#"app.description("PostgreSQL database service");"#);
@@ -12,7 +12,7 @@ fn app_description_is_stored() {
     );
 }
 
-// l[verify app.description]
+// spec: APP#app-description
 #[test]
 fn app_description_is_chainable_and_returns_app() {
     run_test_script_app(
@@ -26,7 +26,7 @@ fn app_description_is_chainable_and_returns_app() {
     );
 }
 
-// l[verify app.description]
+// spec: APP#app-description
 #[test]
 fn app_description_replaces_on_repeat() {
     let app = run_test_script_app(
@@ -38,7 +38,7 @@ fn app_description_replaces_on_repeat() {
     assert_eq!(app.def.load().description.as_deref(), Some("second"));
 }
 
-// l[verify bsl.resource.description]
+// spec: BSL#descriptions
 #[test]
 fn description_is_stored_on_each_resource_kind() {
     let app = run_test_script_app(
@@ -109,7 +109,7 @@ fn description_is_stored_on_each_resource_kind() {
     );
 }
 
-// l[verify bsl.resource.description]
+// spec: BSL#descriptions
 #[test]
 fn description_defaults_to_none() {
     let app = run_test_script_app(r#"app.deployment("dep").image("docker.io/library/nginx:1");"#);
@@ -123,7 +123,7 @@ fn description_defaults_to_none() {
     assert!(resource.description().is_none());
 }
 
-// l[verify bsl.resource.description]
+// spec: BSL#descriptions
 #[test]
 fn description_replaces_on_repeat() {
     let app = run_test_script_app(
@@ -144,7 +144,7 @@ fn description_replaces_on_repeat() {
     assert_eq!(resource.description().as_deref(), Some("second"));
 }
 
-// l[verify bsl.resource.description]
+// spec: BSL#descriptions
 #[test]
 fn description_returns_self_for_chaining() {
     // Chaining: `.description("...")` must return the same resource type so
@@ -173,7 +173,7 @@ fn description_returns_self_for_chaining() {
     }
 }
 
-// l[verify bsl.resource.description]
+// spec: BSL#descriptions
 #[test]
 fn description_is_serialised_in_resource_summary() {
     use serde_json::Value;
@@ -198,7 +198,7 @@ fn description_is_serialised_in_resource_summary() {
     );
 }
 
-// l[verify app.canopy-type]
+// spec: APP#canopy-type
 #[test]
 fn canopy_type_is_stored() {
     let app = run_test_script_app(r#"app.canopy_type("tamanu-central");"#);
@@ -208,7 +208,7 @@ fn canopy_type_is_stored() {
     );
 }
 
-// l[verify app.canopy-type]
+// spec: APP#canopy-type
 #[test]
 fn canopy_type_last_call_wins_and_returns_app() {
     let app = run_test_script_app(
@@ -221,14 +221,14 @@ fn canopy_type_last_call_wins_and_returns_app() {
     assert_eq!(app.def.load().canopy_type.as_deref(), Some("second"));
 }
 
-// l[verify app.canopy-type]
+// spec: APP#canopy-type
 #[test]
 fn untyped_app_has_no_canopy_type() {
     let app = run_test_script_app(r#"app.description("plain");"#);
     assert_eq!(app.def.load().canopy_type, None);
 }
 
-// l[verify app.canopy-type]
+// spec: APP#canopy-type
 #[test]
 fn canopy_type_is_a_script_error_inside_an_action_closure() {
     let (engine, mut scope, app, _) = run_test_script(r#"app.description("x");"#);
@@ -244,7 +244,7 @@ fn canopy_type_is_a_script_error_inside_an_action_closure() {
     assert_eq!(app.def.load().canopy_type, None);
 }
 
-// l[verify app.canopy-type]
+// spec: APP#canopy-type
 #[test]
 fn malformed_canopy_types_throw() {
     for bad in [
@@ -265,7 +265,7 @@ fn malformed_canopy_types_throw() {
     assert!(err.to_string().contains("must be a string"), "{err}");
 }
 
-// l[verify app.canopy-type]
+// spec: APP#canopy-type
 #[test]
 fn well_formed_canopy_types_are_accepted() {
     for good in ["a", "tamanu", "tamanu-central", "a1", "tamanu2-v3-x"] {

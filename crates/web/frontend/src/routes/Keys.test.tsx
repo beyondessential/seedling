@@ -13,13 +13,13 @@ const key: AuthorizedKey = {
 };
 
 describe("Keys", () => {
-  // w[verify routes.keys]
+  // spec: UI#operator-capabilities
   it("warns when no keys are authorised", async () => {
     renderWithSession(<Keys />, { fixtures: { "/keys/list": [] } });
     expect(await screen.findByText(/No authorised keys/)).toBeTruthy();
   });
 
-  // w[verify routes.keys]
+  // spec: UI#operator-capabilities
   it("renders key rows with label and fingerprint", async () => {
     renderWithSession(<Keys />, { fixtures: { "/keys/list": [key] } });
     expect(await screen.findByText("felix")).toBeTruthy();
@@ -51,7 +51,7 @@ describe("Keys", () => {
     expect(await screen.findByText(/db exploded/)).toBeTruthy();
   });
 
-  // w[verify routes.keys]
+  // spec: UI#operator-capabilities
   it("authorises a key via /keys/authorise in dangerous mode", async () => {
     const fp = "a".repeat(64);
     const { request } = renderWithSession(<Keys />, {
@@ -70,7 +70,7 @@ describe("Keys", () => {
     );
   });
 
-  // w[verify routes.keys]
+  // spec: UI#operator-capabilities
   it("revokes a key via /keys/revoke after confirmation", async () => {
     const { request } = renderWithSession(<Keys />, {
       fixtures: { "/keys/list": [key] },

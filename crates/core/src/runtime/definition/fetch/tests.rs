@@ -23,7 +23,7 @@ fn meta(req: &str) -> Vec<u8> {
     format!("seedling = \"{req}\"").into_bytes()
 }
 
-// i[verify definition.source]
+// spec: DEFN#definition-sources
 #[test]
 fn references_must_be_complete() {
     for bad in ["app-def:1", "org/app-def:1", "ghcr.io/org/app-def"] {
@@ -38,8 +38,8 @@ fn references_must_be_complete() {
     r("localhost:5000/app@sha256:0000000000000000000000000000000000000000000000000000000000000000");
 }
 
-// i[verify definition.fetch]
-// i[verify definition.provenance]
+// spec: DEFN#fetching
+// spec: DEFN#provenance-reporting
 #[test]
 fn standalone_artefact_is_fetched_with_its_manifest_digest() {
     let reg = FakeRegistry::default();
@@ -54,7 +54,7 @@ fn standalone_artefact_is_fetched_with_its_manifest_digest() {
     assert!(got.bundle.file("pages/500.html").is_some());
 }
 
-// i[verify definition.fetch]
+// spec: DEFN#fetching
 #[test]
 fn index_entry_is_selected_and_its_digest_recorded() {
     let reg = FakeRegistry::default();
@@ -70,7 +70,7 @@ fn index_entry_is_selected_and_its_digest_recorded() {
     assert_ne!(got.digest, index);
 }
 
-// i[verify definition.fetch]
+// spec: DEFN#fetching
 #[test]
 fn a_reference_naming_no_definition_fails() {
     let reg = FakeRegistry::default();
@@ -87,7 +87,7 @@ fn a_reference_naming_no_definition_fails() {
     assert!(matches!(err, FetchError::Failed(ref m) if m.contains("connection refused")));
 }
 
-// i[verify definition.fetch]
+// spec: DEFN#fetching
 #[test]
 fn a_bundle_contradicting_its_annotation_is_invalid() {
     let reg = FakeRegistry::default();
@@ -129,7 +129,7 @@ fn index_of(reg: &FakeRegistry, annotations: &[Option<&str>]) -> Vec<String> {
     digests
 }
 
-// i[verify definition.fetch.select]
+// spec: DEFN#artefact-selection
 #[test]
 fn highest_minimum_candidate_is_selected() {
     let reg = FakeRegistry::default();
@@ -143,7 +143,7 @@ fn highest_minimum_candidate_is_selected() {
     assert_eq!(got, d[0]);
 }
 
-// i[verify definition.fetch.select]
+// spec: DEFN#artefact-selection
 #[test]
 fn unannotated_entry_is_the_last_resort() {
     let reg = FakeRegistry::default();
@@ -154,7 +154,7 @@ fn unannotated_entry_is_the_last_resort() {
     assert_eq!(got, d[0]);
 }
 
-// i[verify definition.fetch.select]
+// spec: DEFN#artefact-selection
 #[test]
 fn no_candidate_or_a_tie_refuses() {
     let reg = FakeRegistry::default();
@@ -174,7 +174,7 @@ fn no_candidate_or_a_tie_refuses() {
     }
 }
 
-// l[verify bsl.bundle.seedling-versions]
+// spec: BND#seedling-version-requirement
 #[test]
 fn alternatives_are_candidates_when_any_matches() {
     let reg = FakeRegistry::default();
@@ -187,7 +187,7 @@ fn alternatives_are_candidates_when_any_matches() {
     assert_eq!(got, d[0]);
 }
 
-// i[verify definition.fetch.access]
+// spec: DEFN#registry-access
 #[test]
 fn allowlist_gates_before_any_request() {
     let allowed = vec!["docker.io".to_owned()];
@@ -196,7 +196,7 @@ fn allowlist_gates_before_any_request() {
     check_allowed(&allowed, &r("docker.io/org/app-def:1")).unwrap();
 }
 
-// i[verify definition.tags]
+// spec: DEFN#repository-tags
 #[test]
 fn tags_are_listed_for_a_repository() {
     let reg = FakeRegistry::default();
@@ -208,7 +208,7 @@ fn tags_are_listed_for_a_repository() {
     assert!(DefinitionRef::parse_repository("ghcr.io/org/app-def:1").is_err());
 }
 
-// i[verify definition.fetch]
+// spec: DEFN#fetching
 #[test]
 fn a_manifest_that_does_not_hash_to_its_digest_is_refused() {
     let other = br#"{"schemaVersion":2,"artifactType":"other","layers":[]}"#;
@@ -240,8 +240,8 @@ fn a_manifest_that_does_not_hash_to_its_digest_is_refused() {
     assert!(e.to_string().contains("was served with digest"), "{e}");
 }
 
-// i[verify definition.fetch]
-// i[verify definition.provenance]
+// spec: DEFN#fetching
+// spec: DEFN#provenance-reporting
 #[test]
 fn the_recorded_digest_is_taken_over_the_manifest_bytes() {
     let reg = FakeRegistry::default();

@@ -114,7 +114,7 @@ fn journal_reader_thread(
         }
     }
 
-    // i[impl logs.tail]
+    // spec: LOG#entry-selection
     seek_tail_window(&mut journal, opts.tail)?;
 
     loop {
@@ -282,7 +282,7 @@ mod tests {
         journal.read_all()
     }
 
-    // i[verify logs.tail]
+    // spec: LOG#entry-selection
     #[test]
     fn tail_window_arithmetic() {
         assert!(fake_window(3, 0).is_empty());
@@ -321,7 +321,7 @@ mod tests {
         messages
     }
 
-    // i[verify logs.tail]
+    // spec: LOG#entry-selection
     #[test]
     #[ignore = "needs a running journald"]
     fn tail_window_holds_the_last_entries() {

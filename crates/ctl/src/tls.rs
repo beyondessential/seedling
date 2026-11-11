@@ -568,7 +568,7 @@ fn read_config_arg(s: &str) -> Result<Value, String> {
 #[cfg(test)]
 mod tests {
 
-    // r[verify tls.csr.flow]
+    // spec: TLS#certificate-signing-requests
     // `--cert - --key -` read everything on the first call and sent the
     // second an empty string, which reached the server as an empty key_pem
     // with nothing said about it.
@@ -582,7 +582,7 @@ mod tests {
         super::STDIN_CONSUMED.store(false, Ordering::SeqCst);
     }
 
-    // r[verify tls.csr.flow]
+    // spec: TLS#certificate-signing-requests
     #[test]
     fn a_missing_pem_path_is_reported_with_the_path() {
         let err = super::read_pem_arg("/nonexistent/cert.pem").expect_err("no such file");
@@ -598,7 +598,7 @@ mod tests {
         cmd: ConfigCommand,
     }
 
-    // r[verify tls.csr.renew]
+    // spec: TLS#certificate-signing-requests
     #[test]
     fn a_renewal_leaves_the_names_to_the_runtime_unless_given() {
         assert_eq!(

@@ -52,13 +52,13 @@ A script MAY change a setting only through the definition method the table names
 
 | setting | default | script adjustment |
 | --- | --- | --- |
-| Linux capabilities | all dropped | [`cap_add`](rule:l/container.cap-add) adds a named capability back |
+| Linux capabilities | all dropped | [`cap_add`](../language/container.md#privileges) adds a named capability back |
 | privilege escalation | disabled | none |
-| root filesystem | read-only, with a writable tmpfs mounted at `/tmp` | [`writable_rootfs`](rule:l/container.writable-rootfs) makes it writable, and no tmpfs is mounted at `/tmp` |
-| process limit | 256 processes | [`pids_limit`](rule:l/container.pids-limit) sets another limit |
+| root filesystem | read-only, with a writable tmpfs mounted at `/tmp` | [`writable_rootfs`](../language/container.md#privileges) makes it writable, and no tmpfs is mounted at `/tmp` |
+| process limit | 256 processes | [`pids_limit`](../language/container.md#resource-limits) sets another limit |
 | open file limit | 65536, soft and hard | none |
 
-A container whose definition [names a user](rule:l/container.user) MUST be started as that user.
+A container whose definition [names a user](../language/container.md#privileges) MUST be started as that user.
 
 > [!NOTE]
 > With privilege escalation disabled, a process that starts as root and drops to another user from inside the container cannot be relied on to work.
@@ -118,11 +118,11 @@ A TLS-terminating ingress on a hostname MUST NOT cause a plaintext ingress on th
 
 ### Certificate warming
 
-When an action closure calls [`rt.warm_certs`](rule:l/rt.warm-certs) with a selection containing TLS-terminating ingresses, the runtime MUST begin acquiring certificates for those ingresses' hostnames.
+When an action closure calls [`rt.warm_certs`](../language/rt.md#certificate-warming) with a selection containing TLS-terminating ingresses, the runtime MUST begin acquiring certificates for those ingresses' hostnames.
 The runtime MUST NOT route live traffic to those ingresses as a result of the call.
 A certificate acquired this way MUST be the one served when the same ingress is later started.
 
-The runtime MUST record each `rt.warm_certs` call in the [action execution log](rule:r/history.action-log).
+The runtime MUST record each `rt.warm_certs` call in the [action execution log](history.md#action-execution-log).
 A repeated call with the same selection MUST observe the existing certificate state and return at once when every certificate is valid, without beginning acquisition again.
 
 ## Volume storage
@@ -161,7 +161,7 @@ The runtime MUST apply a tmpfs volume's declared writes each time it creates the
 
 ## Exported volumes
 
-A listing of [exported volumes](rule:l/volume.exported) MUST report, for each volume, the host path at which its contents are stored.
+A listing of [exported volumes](../language/volume.md#export) MUST report, for each volume, the host path at which its contents are stored.
 
 ## Volume removal
 

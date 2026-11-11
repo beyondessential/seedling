@@ -35,7 +35,7 @@ If an operation is requested for an app while another app's operation is in prog
 The runtime MUST NOT hold more than one queued operation for an app, and MUST reject a request for an app that already has one queued.
 The runtime MUST start queued operations in the order they were requested, each once the operation in progress ends.
 
-Admission for an app that is being uninstalled is governed by [app teardown](rule:r/app.uninstall.exclusive).
+Admission for an app that is being uninstalled is governed by [app teardown](app-teardown.md#uninstall-admission).
 
 ## Initiating events
 
@@ -47,11 +47,11 @@ Admission for an app that is being uninstalled is governed by [app teardown](rul
 | an operator request | the named action, or `install` | `operator` | current | current |
 | a schedule falls due | the [scheduled action](scheduled-actions.md) | `schedule` | current | current |
 
-The runtime MUST initiate an operation for a parameter change only when the app is installed, a handler is registered for the parameter, and the change matches one of the handler's [transitions](rule:l/param.on-change.transitions).
+The runtime MUST initiate an operation for a parameter change only when the app is installed, a handler is registered for the parameter, and the change matches one of the handler's [transitions](../language/parameter.md#change-handlers).
 A parameter changed alongside a definition update is a parameter change.
 
 The runtime MUST record the source and target generations of every operation.
-For an operation that a [generation bump](rule:r/generation.bumps) initiated, the runtime MUST record as the source generation the generation current immediately before the bump, and as the target generation the generation the bump produced.
+For an operation that a [generation bump](generation.md#generation-numbers) initiated, the runtime MUST record as the source generation the generation current immediately before the bump, and as the target generation the generation the bump produced.
 For any other operation, the runtime MUST record the generation current when the operation is dispatched as both.
 
 The runtime MUST run an operation against the definition and parameter values of its target generation, and MUST pass an `on_change` handler `old` reconstructed from the source generation.
@@ -68,9 +68,9 @@ The runtime MUST NOT admit another operation for the app after the change is com
 
 ## Completion
 
-When an operation ends, the runtime MUST return the app's [desired state](rule:r/desired-state.steady) to the whole resource graph at the app's current generation, and maintain it without direction.
+When an operation ends, the runtime MUST return the app's [desired state](reconciliation.md#desired-state) to the whole resource graph at the app's current generation, and maintain it without direction.
 
-Where a generation bump initiated the operation, the runtime MUST record the operation's outcome on that generation's [history entry](rule:r/generation.history).
+Where a generation bump initiated the operation, the runtime MUST record the operation's outcome on that generation's [history entry](generation.md#history-entries).
 
 When an operation fails, the runtime MUST file a fault of kind `operation_failed` against the app.
 When an operation for an app completes successfully, the runtime MUST clear the app's `operation_failed` and `operation_cancelled` faults.
@@ -80,7 +80,7 @@ When an operation for an app completes successfully, the runtime MUST clear the 
 Before an operation's action closure first runs, the runtime MUST persist durably the operation's identifier, app, action, source and target generations, and parameters.
 If the runtime cannot persist them, it MUST NOT run the closure.
 
-The runtime MUST encrypt the persisted parameters with the cipher it uses for [stored secret parameters](rule:r/secret.storage).
+The runtime MUST encrypt the persisted parameters with the cipher it uses for [stored secret parameters](secrets.md#storage).
 On replay, the runtime MUST pass the action closure the persisted parameters.
 
 The runtime MUST clear the persisted operation when the operation ends.
@@ -112,13 +112,13 @@ The runtime MUST answer a cancel request for an app that is `Installing` with no
 
 ## Cancellation
 
-The runtime MUST let an operator [cancel](rule:i/action.cancel) the operation in progress for an app.
+The runtime MUST let an operator [cancel](../interface/actions.md#cancellation) the operation in progress for an app.
 
 When a cancel is requested, the runtime MUST wake the operation if it is suspended on a [barrier](suspension.md#barriers), including a barrier with no deadline, so the cancel takes effect without waiting for the barrier's next re-evaluation or deadline.
 The runtime MUST stop a cancelled operation at the next barrier or `rt.*` call it reaches.
 
 The runtime MUST end a cancelled operation in an outcome distinct from success and from failure.
-The runtime MUST clean up after a cancelled operation as after a failed one, tearing down its [dynamic resources](rule:l/app.resources.dynamic) and clearing its persisted record.
+The runtime MUST clean up after a cancelled operation as after a failed one, tearing down its [dynamic resources](../language/app.md#dynamic-resource-lifetime) and clearing its persisted record.
 The runtime MUST file a fault of kind `operation_cancelled` against the app, distinct from `operation_failed`.
 
 ### Cancel persistence
@@ -154,7 +154,7 @@ The runtime MUST insert reserved keys only as [operation-scoped volumes](#operat
 
 ## Action composition
 
-A script MAY run another action from within an action closure by calling [`Action.invoke(params?)`](rule:l/action.call) on a handle from [`app.action(name)`](rule:l/action.lookup), `app.on_action()` or `app.on_start()`.
+A script MAY run another action from within an action closure by calling [`Action.invoke(params?)`](../language/action.md#action-invocation) on a handle from [`app.action(name)`](../language/action.md#action-handles), `app.on_action()` or `app.on_start()`.
 
 The runtime MUST run the invoked action's closure inline, within the calling operation, sharing its `rt`, its operation identifier and its action log.
 A barrier in the invoked closure is a barrier of the calling operation.
@@ -168,10 +168,10 @@ The thrown error MUST name each action on the stack, in call order, followed by 
 
 ### Sub-action parameters
 
-Before the invoked closure runs, the runtime MUST validate the supplied parameters against the invoked action's declared schema by the rules for an [operator invocation](rule:i/action.invoke): rejecting reserved keys, enforcing required parameters, applying defaults, and resolving `volume` parameters.
+Before the invoked closure runs, the runtime MUST validate the supplied parameters against the invoked action's declared schema by the rules for an [operator invocation](../interface/actions.md#invoking-an-action): rejecting reserved keys, enforcing required parameters, applying defaults, and resolving `volume` parameters.
 The runtime MUST throw a validation failure before the invoked closure runs.
 
-On replay, the runtime MUST run a call already recorded in the [action log](rule:r/history.action-log.entries) with the parameters its entry holds, and MUST NOT validate them again.
+On replay, the runtime MUST run a call already recorded in the [action log](history.md#action-calls) with the parameters its entry holds, and MUST NOT validate them again.
 If the entry at the call's position records a different action than the one being invoked, the runtime MUST fail the replay as a [divergence](suspension.md#positional-replay).
 
 > [!NOTE]

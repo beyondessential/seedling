@@ -28,9 +28,9 @@ pub const DEFAULT_SCRIPT: &str = "app.seed.rhai";
 /// Why a bundle cannot be installed.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum BundleError {
-    // i[impl definition.bundle.limits]
+    // spec: DEFN#bundle-rules
     Invalid(String),
-    // i[impl definition.bundle.seedling-versions]
+    // spec: DEFN#seedling-version-support
     Unsupported {
         requirement: String,
         running: Version,
@@ -70,8 +70,8 @@ fn invalid(msg: impl Into<String>) -> BundleError {
 
 /// Normalise a bundle path: relative, `/`-separated, `.` and `..` resolved
 /// lexically, without touching any filesystem.
-// i[impl definition.bundle.limits]
-// l[impl app.file]
+// spec: DEFN#bundle-rules
+// spec: BND#bundle-files
 pub fn normalise_path(raw: &str) -> Result<String, String> {
     if raw.contains('\0') {
         return Err(format!("path {raw:?} contains a null byte"));
@@ -111,7 +111,7 @@ struct Segment {
 }
 
 impl Script {
-    // l[impl bsl.bundle]
+    // spec: BND#script-formation
     fn concatenate<'a>(files: impl IntoIterator<Item = (&'a str, &'a str)>) -> Self {
         let mut text = String::new();
         let mut segments = Vec::new();
@@ -159,7 +159,7 @@ impl Script {
     /// Rhai reports positions against the text it was given, and nests them
     /// for errors raised inside called functions, so the rewrite applies to
     /// each occurrence rather than only the outermost.
-    // l[impl bsl.bundle.script-errors]
+    // spec: BND#script-formation
     pub fn remap_error(&self, message: &str) -> String {
         const NEEDLE: &str = "line ";
         let mut out = String::with_capacity(message.len());
@@ -218,7 +218,7 @@ impl Bundle {
     /// and a `seedling` field that cannot be read. The rest of the metadata
     /// and the script files are checked by [`Self::script`], since a bundle
     /// for a newer Seedling may define fields this one does not know.
-    // i[impl definition.bundle.limits]
+    // spec: DEFN#bundle-rules
     pub fn from_files(
         files: impl IntoIterator<Item = (String, Vec<u8>)>,
     ) -> Result<Self, BundleError> {
@@ -285,7 +285,7 @@ impl Bundle {
     }
 
     /// A lone script, as a bundle holding only `app.seed.rhai`.
-    // l[impl bsl.bundle]
+    // spec: BND#script-formation
     pub fn from_script(text: &str) -> Result<Self, BundleError> {
         Self::from_files([(DEFAULT_SCRIPT.to_owned(), text.as_bytes().to_vec())])
     }
@@ -298,7 +298,7 @@ impl Bundle {
     }
 
     /// Decode the wire form: an object map of path to base64 contents.
-    // i[impl definition.source]
+    // spec: DEFN#definition-sources
     pub fn from_wire(
         map: &serde_json::Map<String, serde_json::Value>,
     ) -> Result<Self, BundleError> {
@@ -317,8 +317,8 @@ impl Bundle {
 
     /// Decode a definition artefact's layer: a gzip-compressed tar whose root
     /// is the bundle root. Only regular files and directories are accepted.
-    // i[impl definition.fetch]
-    // i[impl definition.bundle.limits]
+    // spec: DEFN#fetching
+    // spec: DEFN#bundle-rules
     pub fn from_tar_gz(data: &[u8]) -> Result<Self, BundleError> {
         let decoder = flate2::read::GzDecoder::new(data);
         let mut archive = tar::Archive::new(decoder);
@@ -435,7 +435,7 @@ impl Bundle {
     /// A generation history page reports the requirement of every definition
     /// it lists; rebuilding each bundle to read one field would hash
     /// megabytes per row for a value that is one file long.
-    // i[impl definition.provenance]
+    // spec: DEFN#provenance-reporting
     pub fn requirement_of_canonical(
         data: &[u8],
     ) -> Result<Option<VersionRequirement>, BundleError> {
@@ -455,7 +455,7 @@ impl Bundle {
         Ok(None)
     }
 
-    // i[impl definition.content-hash]
+    // spec: DEFN#content-hash-computation
     pub fn hash(&self) -> &str {
         &self.hash
     }
@@ -479,7 +479,7 @@ impl Bundle {
     }
 
     /// Refuse the bundle when `version` does not satisfy its requirement.
-    // i[impl definition.bundle.seedling-versions]
+    // spec: DEFN#seedling-version-support
     pub fn check_supported(&self, version: &Version) -> Result<(), BundleError> {
         match &self.seedling {
             Some(req) if !req.matches(version) => Err(BundleError::Unsupported {
@@ -527,7 +527,7 @@ fn overlapping<'a>(out: &'a BTreeMap<String, Bytes>, path: &str) -> Option<&'a S
     None
 }
 
-// l[impl bsl.bundle.metadata]
+// spec: BND#metadata-file
 fn read_requirement(file: Option<&[u8]>) -> Result<Option<VersionRequirement>, BundleError> {
     let Some(bytes) = file else {
         return Ok(None);
@@ -548,8 +548,8 @@ fn read_requirement(file: Option<&[u8]>) -> Result<Option<VersionRequirement>, B
     }
 }
 
-// l[impl bsl.bundle.metadata]
-// i[impl definition.bundle.limits]
+// spec: BND#metadata-file
+// spec: DEFN#bundle-rules
 fn read_script(files: &BTreeMap<String, Bytes>) -> Result<Script, BundleError> {
     let mut names = vec![DEFAULT_SCRIPT.to_owned()];
     if let Some(bytes) = files.get(METADATA_FILE) {
@@ -627,7 +627,7 @@ const CANONICAL_MAGIC: &[u8] = b"seedling-bundle-v1\0";
 /// big-endian `u64`. It depends only on the paths and bytes, never on the
 /// order or archive they arrived in, so a pushed folder and the same folder
 /// fetched as a tar hash identically and share one stored row.
-// i[impl definition.content-hash]
+// spec: DEFN#content-hash-computation
 fn canonical_encoding(files: &BTreeMap<String, Bytes>) -> Vec<u8> {
     let size: usize = files.iter().map(|(p, c)| p.len() + c.len() + 16).sum();
     let mut out = Vec::with_capacity(CANONICAL_MAGIC.len() + size);
@@ -653,7 +653,7 @@ fn take_chunk<'a>(rest: &mut &'a [u8]) -> Result<&'a [u8], BundleError> {
     Ok(chunk)
 }
 
-// i[impl definition.content-hash]
+// spec: DEFN#content-hash-computation
 fn content_hash(files: &BTreeMap<String, Bytes>) -> String {
     let digest = Sha256::digest(canonical_encoding(files));
     let mut s = String::with_capacity(71);

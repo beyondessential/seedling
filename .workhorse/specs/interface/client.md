@@ -59,7 +59,7 @@ A bare `key` MUST become the parameter `key` with the value `true`.
 Install parameters carry values typed by the app's parameter schema, so each argument MUST be a `key=value` pair.
 If an argument holds no `=`, the CLI MUST report an error naming that argument and send no request.
 
-`apps cancel-action <app>` MUST [cancel](rule:i/action.cancel) the app's lifecycle operation.
+`apps cancel-action <app>` MUST [cancel](actions.md#cancellation) the app's lifecycle operation.
 
 ## Definition sources
 
@@ -67,7 +67,7 @@ If an argument holds no `=`, the CLI MUST report an error naming that argument a
 `templates create <name> <source>` MUST take a definition, and `templates update <name> --source <source>` MAY take one, leaving the template's definition unchanged when none is given.
 In each, `--ref <reference>` MAY stand in place of the source, and the two MUST NOT be combined.
 
-The CLI MUST send a definition as [definition sources](rule:i/definition.source) define, by the form of the source.
+The CLI MUST send a definition as [definition sources](definitions.md#definition-sources) define, by the form of the source.
 
 | source | sent as |
 | --- | --- |
@@ -101,12 +101,12 @@ If a path in the bundle is absolute, or has an empty or `..` segment, the CLI MU
 
 ## Registry tags
 
-`registries tags <repository>` MUST list a repository's tags as [definition.tags](rule:i/definition.tags) does.
+`registries tags <repository>` MUST list a repository's tags as [definition.tags](definitions.md#repository-tags) does.
 
 ## Canopy access
 
-`canopy status` MUST show the [Canopy access status](rule:i/canopy.status).
-`canopy enable` and `canopy disable` MUST turn Canopy access on and off through the [Canopy settings](rule:i/canopy.settings).
+`canopy status` MUST show the [Canopy access status](canopy-relay.md#status).
+`canopy enable` and `canopy disable` MUST turn Canopy access on and off through the [Canopy settings](canopy-relay.md#settings).
 
 The CLI MUST NOT offer commands that register or withdraw a Canopy offer, or that relay a request to Canopy.
 

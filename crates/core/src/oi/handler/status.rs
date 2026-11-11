@@ -25,12 +25,12 @@ async fn component_status(state: &Arc<OiState>, containers: &[&str]) -> &'static
 /// responsive use this instead of /server/status — it never touches the
 /// container runtime, never allocates a registry read lock, and returns the
 /// same shape regardless of daemon state.
-// i[status.ping]
+// STS#liveness
 pub(crate) fn ping() -> HandlerResult {
     Ok(json!({}))
 }
 
-// i[status.infra]
+// STS#infrastructure-status
 pub(crate) async fn get_infra_status(state: &Arc<OiState>) -> HandlerResult {
     let proxy = component_status(state, &["seedling-caddy-blue", "seedling-caddy-green"]).await;
     let resolver = component_status(
@@ -41,7 +41,7 @@ pub(crate) async fn get_infra_status(state: &Arc<OiState>) -> HandlerResult {
     Ok(json!({ "proxy": proxy, "resolver": resolver }))
 }
 
-// i[status.get]
+// STS#server-status
 pub(crate) fn get_status(state: &OiState) -> HandlerResult {
     let uptime = state.start_time.elapsed().as_secs();
     let hostname = whoami::devicename()
@@ -60,7 +60,7 @@ pub(crate) fn get_status(state: &OiState) -> HandlerResult {
         "spki_fingerprint": state.spki_fingerprint.get().cloned().unwrap_or_default(),
         "apps_total": apps_total,
         "apps_by_status": apps_by_status,
-        // i[impl status.get] — the literal 0 here reported no operation in
+        // spec: STS#server-status — the literal 0 here reported no operation in
         // progress however busy the runtime was. One operation is active at a
         // time; queued ones are waiting, not in progress, so they are not
         // counted.

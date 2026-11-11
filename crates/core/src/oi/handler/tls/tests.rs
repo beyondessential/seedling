@@ -37,8 +37,7 @@ fn upsert_route53(oi: &TestOi, name: &str) {
     }
 }
 
-// i[verify tls.settings.get]
-// i[verify tls.settings.set]
+// spec: TLSM#settings
 #[test]
 fn settings_get_set_roundtrip() {
     let oi = TestOi::new();
@@ -63,9 +62,7 @@ fn settings_get_set_roundtrip() {
     assert_eq!(settings["cert_profile"], json!(null));
 }
 
-// i[verify tls.dns-provider.upsert]
-// i[verify tls.dns-provider.list]
-// i[verify tls.dns-provider.delete]
+// spec: TLSM#dns-providers
 #[test]
 fn dns_provider_upsert_list_delete_roundtrip() {
     let oi = TestOi::new();
@@ -74,7 +71,7 @@ fn dns_provider_upsert_list_delete_roundtrip() {
         json!([])
     );
 
-    // r[verify tls.policy.auto-default]
+    // spec: TLS#policies
     // The first provider auto-creates a catch-all `*` policy pointing at it.
     let outcome = oi
         .call(
@@ -135,9 +132,7 @@ fn dns_provider_upsert_list_delete_roundtrip() {
     assert_eq!(code, "not_found");
 }
 
-// i[verify tls.policy.set-acme-dns]
-// i[verify tls.policy.list]
-// i[verify tls.policy.clear]
+// spec: TLSM#policies
 #[test]
 fn policy_set_list_clear_roundtrip() {
     let oi = TestOi::new();
@@ -267,10 +262,10 @@ fn warnings(response: &serde_json::Value) -> Vec<String> {
         .collect()
 }
 
-// i[verify tls.cert.csr.upload-cert]
-// i[verify tls.cert.list]
-// r[verify tls.cert.validation.san-coverage]
-// r[verify tls.csr.flow]
+// spec: TLSM#certificate-signing-requests
+// spec: TLSM#certificates
+// spec: TLS#coverage
+// spec: TLS#certificate-signing-requests
 #[test]
 fn csr_upload_binds_to_the_issued_san_and_spares_the_requested_hostname() {
     let oi = TestOi::new();
@@ -321,10 +316,9 @@ fn csr_upload_binds_to_the_issued_san_and_spares_the_requested_hostname() {
 
 /// One CSR for several names, and a CA that signs only some of them: the
 /// certificate is stored for what it covers, and the missed names are said.
-// i[verify tls.cert.csr.begin]
-// i[verify tls.cert.csr.upload-cert]
-// i[verify tls.cert.list]
-// r[verify tls.csr.flow]
+// spec: TLSM#certificate-signing-requests
+// spec: TLSM#certificates
+// spec: TLS#certificate-signing-requests
 #[test]
 fn a_csr_requests_every_name_and_reports_each_one_missed() {
     let oi = TestOi::new();
@@ -387,7 +381,7 @@ fn a_csr_requests_every_name_and_reports_each_one_missed() {
     assert_eq!(cert_row(&oi, id)["requested_not_covered"], json!([]));
 }
 
-// r[verify tls.cert.validation.san-coverage]
+// spec: TLS#coverage
 #[test]
 fn csr_upload_accepts_a_wildcard_that_covers_the_request() {
     let oi = TestOi::new();
@@ -409,7 +403,7 @@ fn csr_upload_accepts_a_wildcard_that_covers_the_request() {
     assert_eq!(cert_row(&oi, id)["hostname"], "*.example.com");
 }
 
-// r[verify tls.cert.validation.san-coverage]
+// spec: TLS#coverage
 #[test]
 fn csr_upload_warns_when_a_wildcard_is_one_label_short() {
     let oi = TestOi::new();
@@ -431,7 +425,7 @@ fn csr_upload_warns_when_a_wildcard_is_one_label_short() {
     );
 }
 
-// r[verify tls.cert.validation.san-coverage]
+// spec: TLS#coverage
 #[test]
 fn csr_upload_supersedes_only_under_its_own_primary_san() {
     let oi = TestOi::new();
@@ -463,7 +457,7 @@ fn csr_upload_supersedes_only_under_its_own_primary_san() {
     assert_eq!(cert_row(&oi, new_id)["state"], "active");
 }
 
-// i[verify tls.cert.csr.upload-cert]
+// spec: TLSM#certificate-signing-requests
 #[test]
 fn csr_upload_rejections_leave_the_row_and_the_incumbent_untouched() {
     let oi = TestOi::new();
@@ -513,9 +507,7 @@ fn csr_upload_rejections_leave_the_row_and_the_incumbent_untouched() {
     assert_eq!(cert_row(&oi, incumbent_id)["state"], "active");
 }
 
-// i[verify tls.cert.upload-manual]
-// i[verify tls.cert.list]
-// i[verify tls.cert.delete]
+// spec: TLSM#certificates
 #[test]
 fn manual_certificate_upload_list_delete_roundtrip() {
     let oi = TestOi::new();
@@ -562,7 +554,7 @@ fn manual_certificate_upload_list_delete_roundtrip() {
     assert_eq!(code, "not_found");
 }
 
-// i[verify tls.cert.upload-manual]
+// spec: TLSM#certificates
 #[test]
 fn manual_certificate_upload_rejects_bad_input() {
     let oi = TestOi::new();
@@ -591,9 +583,7 @@ fn manual_certificate_upload_rejects_bad_input() {
     );
 }
 
-// i[verify tls.cert.csr.begin]
-// i[verify tls.cert.csr.get]
-// i[verify tls.cert.csr.cancel]
+// spec: TLSM#certificate-signing-requests
 #[test]
 fn csr_begin_get_cancel_roundtrip() {
     let oi = TestOi::new();
@@ -631,7 +621,7 @@ fn csr_begin_get_cancel_roundtrip() {
 
 /// A wildcard is a name a CA will sign, so a CSR may request one — alongside
 /// exact names in the same request.
-// i[verify tls.cert.csr.begin]
+// spec: TLSM#certificate-signing-requests
 #[test]
 fn a_csr_may_request_a_wildcard() {
     let oi = TestOi::new();
@@ -692,10 +682,10 @@ fn csr_certificate(oi: &TestOi, requested: &[&str], issued: &[&str]) -> i64 {
 
 /// A CSR the CA widened is renewed for what it issued, and the renewal retires
 /// it even though the CA labelled the two differently.
-// i[verify tls.cert.csr.begin]
-// i[verify tls.cert.list]
-// r[verify tls.csr.renew]
-// r[verify tls.cert.supersede]
+// spec: TLSM#certificate-signing-requests
+// spec: TLSM#certificates
+// spec: TLS#certificate-signing-requests
+// spec: TLS#supersession
 #[test]
 fn a_renewal_requests_what_the_ca_issued_and_retires_what_it_renews() {
     let oi = TestOi::new();
@@ -738,8 +728,8 @@ fn a_renewal_requests_what_the_ca_issued_and_retires_what_it_renews() {
 
 /// A manual upload is renewed the same way, and names the operator gives
 /// replace the seeded set.
-// i[verify tls.cert.csr.begin]
-// r[verify tls.csr.renew]
+// spec: TLSM#certificate-signing-requests
+// spec: TLS#certificate-signing-requests
 #[test]
 fn a_manual_certificate_is_renewed_for_the_names_given() {
     let oi = TestOi::new();
@@ -769,8 +759,8 @@ fn a_manual_certificate_is_renewed_for_the_names_given() {
     );
 }
 
-// i[verify tls.cert.csr.begin]
-// r[verify tls.csr.renew]
+// spec: TLSM#certificate-signing-requests
+// spec: TLS#certificate-signing-requests
 #[test]
 fn a_renewal_is_refused_for_what_cannot_be_renewed() {
     let oi = TestOi::new();
@@ -827,7 +817,7 @@ fn a_renewal_is_refused_for_what_cannot_be_renewed() {
 
 /// Deleting the certificate a renewal renews leaves the renewal to finish as
 /// an ordinary CSR.
-// r[verify tls.csr.renew]
+// spec: TLS#certificate-signing-requests
 #[test]
 fn a_renewal_outlives_the_certificate_it_renews() {
     let oi = TestOi::new();
@@ -846,10 +836,7 @@ fn a_renewal_outlives_the_certificate_it_renews() {
     assert_eq!(renewal["renews"], json!(null));
 }
 
-// i[verify tls.cert.csr.begin]
-// i[verify tls.cert.csr.get]
-// i[verify tls.cert.csr.upload-cert]
-// i[verify tls.cert.csr.cancel]
+// spec: TLSM#certificate-signing-requests
 #[test]
 fn csr_flow_validation_errors() {
     let oi = TestOi::new();
@@ -927,7 +914,7 @@ fn csr_flow_validation_errors() {
     }
 }
 
-// i[verify tls.cert.issue-acme-dns]
+// spec: TLSM#operator-driven-issuance
 #[test]
 fn issue_acme_dns_fails_without_policy() {
     let oi = TestOi::new();
@@ -941,9 +928,7 @@ fn issue_acme_dns_fails_without_policy() {
     assert!(msg.contains("issuance failed"), "{msg}");
 }
 
-// i[verify tls.retry-block.set]
-// i[verify tls.retry-block.list]
-// i[verify tls.retry-block.clear]
+// spec: TLSM#retry-blocks
 #[test]
 fn retry_block_set_list_clear_roundtrip() {
     let oi = TestOi::new();
@@ -980,8 +965,8 @@ fn retry_block_set_list_clear_roundtrip() {
     assert_eq!(cleared["cleared"], false);
 }
 
-// i[verify tls.hostname.list]
-// i[verify tls.cert.attempts.list]
+// spec: TLSM#hostname-view
+// spec: TLSM#issuance-attempts
 #[test]
 fn hostname_and_attempt_rollups_start_empty() {
     let oi = TestOi::new();
@@ -996,7 +981,7 @@ fn hostname_and_attempt_rollups_start_empty() {
     );
 }
 
-// i[verify tls.policy.set-acme-dns]
+// spec: TLSM#policies
 // The FK refusal arrived as `not_found: db error: FOREIGN KEY constraint
 // failed`, naming neither the provider nor the remedy, and handing a client
 // the wrong error code to key off.
@@ -1017,7 +1002,7 @@ fn set_acme_dns_names_an_unknown_provider() {
     );
 }
 
-// r[verify tls.policy.wildcard]
+// spec: TLS#policies
 // A pattern that matches nothing stored a policy row indistinguishable in the
 // list from one that works.
 #[test]
@@ -1035,7 +1020,7 @@ fn set_acme_dns_refuses_a_pattern_that_can_never_match() {
     }
 }
 
-// r[verify tls.policy.wildcard]
+// spec: TLS#policies
 #[test]
 fn set_acme_dns_accepts_the_shapes_the_spec_defines() {
     let oi = TestOi::new();
@@ -1083,9 +1068,7 @@ fn shop_hostname(oi: &TestOi) -> serde_json::Value {
         .expect("the hostname is in the view")
 }
 
-// i[verify tls.policy.set-canopy]
-// i[verify tls.policy.list]
-// i[verify tls.policy.clear]
+// spec: TLSM#policies
 #[test]
 fn canopy_policy_set_list_clear_roundtrip() {
     let oi = TestOi::new();
@@ -1128,7 +1111,7 @@ fn canopy_policy_set_list_clear_roundtrip() {
     );
 }
 
-// r[verify tls.policy.wildcard]
+// spec: TLS#policies
 #[test]
 fn canopy_policy_refuses_a_pattern_that_can_never_match() {
     let oi = TestOi::new();
@@ -1140,7 +1123,7 @@ fn canopy_policy_refuses_a_pattern_that_can_never_match() {
     }
 }
 
-// i[verify tls.policy.set-canopy]
+// spec: TLSM#policies
 #[test]
 fn canopy_policy_replaces_an_acme_dns_policy_for_the_same_pattern() {
     let oi = TestOi::new();
@@ -1167,8 +1150,8 @@ fn canopy_policy_replaces_an_acme_dns_policy_for_the_same_pattern() {
     );
 }
 
-// i[verify tls.hostname.list]
-// r[verify tls.strategy.default]
+// spec: TLSM#hostname-view
+// spec: CHAIN#default-chain
 #[test]
 fn an_app_with_no_canopy_type_follows_the_proxy_alone() {
     let oi = TestOi::new();
@@ -1179,8 +1162,8 @@ fn an_app_with_no_canopy_type_follows_the_proxy_alone() {
     assert!(host["chain"]["fall_through_at"].is_null());
 }
 
-// i[verify tls.hostname.list]
-// r[verify tls.chain.no-certificate]
+// spec: TLSM#hostname-view
+// spec: CHAIN#hostnames-with-no-certificate
 #[test]
 fn a_typed_app_with_no_live_offer_goes_straight_to_the_proxy() {
     let oi = TestOi::new();
@@ -1193,8 +1176,8 @@ fn a_typed_app_with_no_live_offer_goes_straight_to_the_proxy() {
     );
 }
 
-// i[verify tls.hostname.list]
-// r[verify tls.canopy-only.untyped]
+// spec: TLSM#hostname-view
+// spec: TCAN#canopy-only-policy
 #[test]
 fn a_hostname_nothing_can_ask_canopy_about_does_not_read_as_in_progress() {
     let oi = TestOi::new();
@@ -1215,8 +1198,8 @@ fn a_hostname_nothing_can_ask_canopy_about_does_not_read_as_in_progress() {
     );
 }
 
-// i[verify tls.hostname.list]
-// r[verify tls.chain.no-certificate]
+// spec: TLSM#hostname-view
+// spec: CHAIN#hostnames-with-no-certificate
 #[test]
 fn a_hostname_waiting_out_a_refusal_says_when_it_is_asked_again() {
     let oi = TestOi::new();
@@ -1248,8 +1231,8 @@ fn a_hostname_waiting_out_a_refusal_says_when_it_is_asked_again() {
     assert_eq!(host["next_issuance_at"], until);
 }
 
-// i[verify tls.hostname.list]
-// r[verify tls.strategy.canopy-only]
+// spec: TLSM#hostname-view
+// spec: TCAN#canopy-only-policy
 #[test]
 fn a_canopy_only_hostname_is_waiting_on_canopy_even_with_no_offer() {
     let oi = TestOi::new();
@@ -1266,8 +1249,8 @@ fn a_canopy_only_hostname_is_waiting_on_canopy_even_with_no_offer() {
     assert_eq!(host["next_issuance_source"], "immediate");
 }
 
-// i[verify tls.cert.upload-manual]
-// r[verify tls.chain.cycle]
+// spec: TLSM#certificates
+// spec: CHAIN#cycles
 #[test]
 fn a_certificate_an_operator_uploads_is_acted_on_at_once() {
     let oi = TestOi::new();
@@ -1310,8 +1293,8 @@ fn a_certificate_an_operator_uploads_is_acted_on_at_once() {
     );
 }
 
-// i[verify tls.cert.retry]
-// r[verify tls.cert.force-retry]
+// spec: TLSM#operator-driven-issuance
+// spec: TLS#retry-blocks-and-retries
 #[test]
 fn a_retry_for_a_hostname_canopy_is_not_part_of_does_not_linger() {
     let oi = TestOi::new();
@@ -1327,8 +1310,8 @@ fn a_retry_for_a_hostname_canopy_is_not_part_of_does_not_linger() {
     );
 }
 
-// i[verify tls.cert.retry]
-// r[verify tls.cert.force-retry]
+// spec: TLSM#operator-driven-issuance
+// spec: TLS#retry-blocks-and-retries
 #[test]
 fn a_retry_for_a_hostname_canopy_can_be_asked_about_waits_for_the_report_tick() {
     let oi = TestOi::new();
@@ -1348,8 +1331,8 @@ fn a_retry_for_a_hostname_canopy_can_be_asked_about_waits_for_the_report_tick() 
     assert!(!shop_hostname(&oi)["force_retry_at"].is_null());
 }
 
-// i[verify tls.cert.retry]
-// r[verify tls.cert.force-retry]
+// spec: TLSM#operator-driven-issuance
+// spec: TLS#retry-blocks-and-retries
 #[test]
 fn a_retry_is_not_left_queued_for_a_tick_that_would_skip_the_hostname() {
     let oi = TestOi::new();
@@ -1367,9 +1350,9 @@ fn a_retry_is_not_left_queued_for_a_tick_that_would_skip_the_hostname() {
     );
 }
 
-// i[verify tls.hostname.list]
-// r[verify tls.cert.metadata]
-// r[verify tls.canopy.serve]
+// spec: TLSM#hostname-view
+// spec: TLS#hostname-state
+// spec: TCAN#serving-and-observation
 #[test]
 fn a_canopy_certificate_is_in_the_hostname_view_like_any_other() {
     let oi = TestOi::new();
@@ -1430,7 +1413,7 @@ fn a_canopy_certificate_is_in_the_hostname_view_like_any_other() {
 
 /// Tailscale issuance logs attempts just as ACME-DNS does, so the kind of the
 /// last issuance is what the attempt produced, not ACME-DNS by assumption.
-// i[verify tls.hostname.list]
+// spec: TLSM#hostname-view
 #[test]
 fn the_last_issuance_is_kinded_by_the_certificate_it_produced() {
     use crate::runtime::tls::{AttemptOutcome, AttemptTrigger, state, store};
@@ -1499,7 +1482,7 @@ fn the_last_issuance_is_kinded_by_the_certificate_it_produced() {
     assert!(view(&oi)["last_issuance"].is_null());
 }
 
-// r[verify tls.cert.eager-issuance]
+// spec: TLS#issuance
 #[test]
 fn a_hostname_on_a_chain_is_not_driven_through_an_acme_dns_flow() {
     let oi = TestOi::new();
@@ -1514,8 +1497,8 @@ fn a_hostname_on_a_chain_is_not_driven_through_an_acme_dns_flow() {
     assert!(msg.contains("has no policy"), "{msg}");
 }
 
-// i[verify tls.hostname.list]
-// r[verify tls.cert.metadata]
+// spec: TLSM#hostname-view
+// spec: TLS#hostname-state
 #[test]
 fn the_hostname_view_shows_what_the_proxy_holds() {
     let oi = TestOi::new();
@@ -1568,9 +1551,8 @@ fn the_hostname_view_shows_what_the_proxy_holds() {
     assert_eq!(view["last_issuance"]["kind"], "caddy");
 }
 
-// i[verify tls.policy.set-canopy]
-// i[verify tls.policy.clear]
-// r[verify tls.policy.apply]
+// spec: TLSM#policies
+// spec: TLS#policies
 #[test]
 fn a_policy_change_ends_the_cycles_that_ran_under_the_one_before_it() {
     let oi = TestOi::new();
@@ -1629,8 +1611,8 @@ fn a_policy_change_ends_the_cycles_that_ran_under_the_one_before_it() {
     assert_eq!(recorded(&oi), vec!["other.example.org".to_owned()]);
 }
 
-// i[verify tls.hostname.list]
-// r[verify tls.cert.hostname-view]
+// spec: TLSM#hostname-view
+// spec: TLS#hostname-state
 #[test]
 fn the_rollup_does_not_walk_the_proxys_cache_itself() {
     let oi = TestOi::new();

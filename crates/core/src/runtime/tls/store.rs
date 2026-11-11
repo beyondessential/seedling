@@ -24,7 +24,7 @@ fn now_secs() -> i64 {
 // DNS providers
 // ---------------------------------------------------------------------------
 
-// r[impl tls.dns-provider.lifecycle]
+// spec: TLS#dns-providers
 pub fn list_dns_providers(db: &Db) -> rusqlite::Result<Vec<DnsProviderSummary>> {
     let mut stmt = db.conn.prepare(
         "SELECT name, kind, created_at, updated_at FROM tls_dns_providers ORDER BY name",
@@ -76,7 +76,7 @@ pub struct DnsProviderRaw {
     pub updated_at: i64,
 }
 
-// r[impl tls.dns-provider.lifecycle]
+// spec: TLS#dns-providers
 pub fn get_dns_provider(
     db: &Db,
     cipher: &Cipher,
@@ -117,8 +117,8 @@ pub struct UpsertProviderOutcome {
     pub auto_policy_created: bool,
 }
 
-// r[impl tls.dns-provider.lifecycle]
-// r[impl tls.policy.auto-default]
+// spec: TLS#dns-providers
+// spec: TLS#policies
 pub fn upsert_dns_provider(
     db: &Db,
     cipher: &Cipher,
@@ -159,7 +159,7 @@ pub fn upsert_dns_provider(
 
     let mut auto_policy_created = false;
     if providers_before == 0 && star_policy_exists == 0 {
-        // r[impl tls.policy.auto-default]
+        // spec: TLS#policies
         tx.execute(
             "INSERT INTO tls_policies (hostname, strategy, dns_provider, cert_id, updated_at)
              VALUES ('*', 'acme_dns', ?1, NULL, ?2)",
@@ -173,7 +173,7 @@ pub fn upsert_dns_provider(
     })
 }
 
-// r[impl tls.dns-provider.lifecycle]
+// spec: TLS#dns-providers
 /// Refused by FK if any policy references this provider.
 pub fn delete_dns_provider(db: &Db, name: &str) -> rusqlite::Result<bool> {
     let n = db
@@ -186,8 +186,8 @@ pub fn delete_dns_provider(db: &Db, name: &str) -> rusqlite::Result<bool> {
 // Policies
 // ---------------------------------------------------------------------------
 
-// r[impl tls.strategy.acme-dns]
-// r[impl tls.strategy.manual]
+// spec: TLS#acme-dns-01-issuance
+// spec: TLS#certificate-selection
 pub fn list_policies(db: &Db) -> rusqlite::Result<Vec<TlsPolicyRow>> {
     let mut stmt = db.conn.prepare(
         "SELECT hostname, strategy, dns_provider, cert_id, updated_at
@@ -209,9 +209,9 @@ pub fn list_policies(db: &Db) -> rusqlite::Result<Vec<TlsPolicyRow>> {
                 "acme_dns" => TlsPolicy::AcmeDns {
                     dns_provider: dns_provider.ok_or_else(|| rusqlite::Error::InvalidQuery)?,
                 },
-                // r[impl ingress.site.tailscale]
+                // spec: SITE#tailscale-discovery
                 "tailscale" => TlsPolicy::Tailscale,
-                // r[impl tls.strategy.canopy-only]
+                // spec: TCAN#canopy-only-policy
                 "canopy" => TlsPolicy::Canopy,
                 "manual" => return Ok(None),
                 _ => return Err(rusqlite::Error::InvalidQuery),
@@ -232,8 +232,8 @@ pub fn get_policy(db: &Db, hostname: &str) -> rusqlite::Result<Option<TlsPolicyR
     Ok(policies.into_iter().find(|p| p.hostname == hostname))
 }
 
-// r[impl tls.strategy.acme-dns]
-// r[impl tls.policy.apply]
+// spec: TLS#acme-dns-01-issuance
+// spec: TLS#policies
 pub fn set_policy_acme_dns(db: &Db, hostname: &str, dns_provider: &str) -> rusqlite::Result<()> {
     let now = now_secs();
     db.atomically(|db| {
@@ -252,8 +252,8 @@ pub fn set_policy_acme_dns(db: &Db, hostname: &str, dns_provider: &str) -> rusql
     })
 }
 
-// r[impl tls.strategy.canopy-only]
-// r[impl tls.policy.apply]
+// spec: TCAN#canopy-only-policy
+// spec: TLS#policies
 pub fn set_policy_canopy(db: &Db, hostname: &str) -> rusqlite::Result<()> {
     let now = now_secs();
     db.atomically(|db| {
@@ -280,7 +280,7 @@ pub fn set_policy_canopy(db: &Db, hostname: &str) -> rusqlite::Result<()> {
 /// pinned open that nothing will ever answer, which holds off the
 /// acquisition deadline for ever, and a refusal that would resurface the next
 /// time the hostname was on a chain.
-// r[impl tls.policy.apply]
+// spec: TLS#policies
 fn forget_chains_under(db: &Db, pattern: &str) -> rusqlite::Result<()> {
     let hostnames: Vec<String> = {
         let mut stmt = db.conn.prepare("SELECT hostname FROM tls_chain_state")?;
@@ -296,7 +296,7 @@ fn forget_chains_under(db: &Db, pattern: &str) -> rusqlite::Result<()> {
     Ok(())
 }
 
-// r[impl tls.policy.apply]
+// spec: TLS#policies
 pub fn clear_policy(db: &Db, hostname: &str) -> rusqlite::Result<bool> {
     db.atomically(|db| {
         let n = db
@@ -352,7 +352,7 @@ pub struct NewCertificate<'a> {
 ///
 /// A PEM whose SANs cannot be read is refused, as [`san_index::index_stored`]
 /// explains, and nothing is stored.
-// r[impl tls.cert.serve]
+// spec: TLS#serving
 pub fn insert_certificate(db: &Db, new: NewCertificate<'_>) -> rusqlite::Result<i64> {
     db.atomically(|db| {
         let id = insert_certificate_row(db, &new)?;
@@ -474,9 +474,9 @@ pub fn list_certificates(db: &Db) -> rusqlite::Result<Vec<TlsCertificate>> {
 /// Rows outside their validity window are excluded at either end, but a row
 /// with no recorded expiry is kept: unparsed and expired are not the same
 /// thing, and treating them alike would stop serving a usable cert.
-// r[impl tls.strategy.manual]
-// r[impl tls.cert.serve]
-// r[impl tls.cert.validation.san-coverage]
+// spec: TLS#certificate-selection
+// spec: TLS#serving
+// spec: TLS#coverage
 pub fn find_active_for_hostname(
     db: &Db,
     hostname: &str,
@@ -550,7 +550,7 @@ pub fn find_active_for_hostname(
 /// rather than merely retiring nothing — on the ACME path a spurious failure
 /// gets the attempt recorded failed and the coordinator re-issuing against the
 /// CA, which is a rate limit waiting to happen.
-// r[impl tls.cert.supersede]
+// spec: TLS#supersession
 pub fn insert_and_supersede(db: &Db, new: NewCertificate<'_>) -> rusqlite::Result<i64> {
     let tx = db.conn.unchecked_transaction()?;
     let id = insert_certificate(db, new)?;
@@ -575,8 +575,8 @@ pub fn insert_and_supersede(db: &Db, new: NewCertificate<'_>) -> rusqlite::Resul
 /// no certificate existed then, and resolution ranks certificates by when they
 /// came into being — a certificate that arrived today must not lose to one
 /// stored yesterday because its request predates it.
-// r[impl tls.csr.flow]
-// r[impl tls.cert.supersede]
+// spec: TLS#certificate-signing-requests
+// spec: TLS#supersession
 pub fn activate_pending_csr(
     db: &Db,
     id: i64,
@@ -637,7 +637,7 @@ pub enum CsrCancel {
 /// become in between — an upload activating it in that window would see its
 /// serving certificate deleted by a cancellation that had already been refused
 /// in all but name.
-// r[impl tls.csr.flow]
+// spec: TLS#certificate-signing-requests
 pub fn cancel_pending_csr(db: &Db, id: i64) -> rusqlite::Result<CsrCancel> {
     db.atomically(|db| {
         let state: Option<String> = db
@@ -676,7 +676,7 @@ pub enum RenewalTarget {
 ///
 /// Only an active manual upload or CSR-derived certificate is renewed this
 /// way; every other origin the runtime renews itself.
-// r[impl tls.csr.renew]
+// spec: TLS#certificate-signing-requests
 pub fn renewal_target(db: &Db, id: i64) -> rusqlite::Result<RenewalTarget> {
     let Some(cert) = get_certificate(db, id)? else {
         return Ok(RenewalTarget::NotFound);
@@ -692,7 +692,7 @@ pub fn renewal_target(db: &Db, id: i64) -> rusqlite::Result<RenewalTarget> {
 }
 
 /// The pending CSR row renewing certificate `id`, if there is one.
-// r[impl tls.csr.renew]
+// spec: TLS#certificate-signing-requests
 pub fn pending_renewal_of(db: &Db, id: i64) -> rusqlite::Result<Option<i64>> {
     db.conn
         .query_row(
@@ -764,7 +764,7 @@ struct ArrivingCert {
 /// serves is not the same as knowing the arriving certificate replaces it.
 ///
 /// Returns the number of rows retired.
-// r[impl tls.cert.supersede]
+// spec: TLS#supersession
 pub fn supersede_other_active_for_hostname(db: &Db, keep_id: i64) -> rusqlite::Result<usize> {
     // Read the arriving certificate back from the row rather than taking its
     // properties as arguments, so what is compared is what was actually
@@ -836,7 +836,7 @@ pub fn supersede_other_active_for_hostname(db: &Db, keep_id: i64) -> rusqlite::R
     // Only what the decision reads — not every candidate's encrypted key.
     // A renewal also names its predecessor outright, which the CA's choice of
     // primary SAN may have given a label other than its own.
-    // r[impl tls.csr.renew]
+    // spec: TLS#certificate-signing-requests
     let candidates: Vec<Candidate> = {
         let mut stmt = db.conn.prepare_cached(
             "SELECT id, self_signed, cert_pem, not_before, not_after
@@ -991,7 +991,7 @@ fn row_to_certificate(row: &rusqlite::Row<'_>) -> rusqlite::Result<TlsCertificat
 /// Update the ARI suggested-renewal window for a cert. `polled_at` is the
 /// time the data was fetched from the CA, which the renewal task uses to
 /// decide when to re-poll.
-// r[impl tls.cert.ari]
+// spec: TLS#renewal
 pub fn update_ari_window(
     db: &Db,
     id: i64,
@@ -1015,7 +1015,7 @@ pub fn update_ari_window(
 /// are evaluated under the rules defined in [`super::pattern_matches`]:
 /// exact > `*.suffix` (longest suffix wins) > `*`. Returns `None` when no
 /// policy matches, signalling the runtime default ACME-HTTP-01.
-// r[impl tls.policy.wildcard]
+// spec: TLS#policies
 pub fn resolve_policy(db: &Db, hostname: &str) -> rusqlite::Result<Option<TlsPolicyRow>> {
     let policies = list_policies(db)?;
     let mut best: Option<(u32, TlsPolicyRow)> = None;
@@ -1034,8 +1034,7 @@ pub fn resolve_policy(db: &Db, hostname: &str) -> rusqlite::Result<Option<TlsPol
 // Settings
 // ---------------------------------------------------------------------------
 
-// r[impl tls.settings.contact-email]
-// r[impl tls.settings.cert-profile]
+// spec: TLS#acme-accounts-and-settings
 pub fn get_settings(db: &Db) -> rusqlite::Result<TlsSettings> {
     db.conn.query_row(
         "SELECT contact_email, cert_profile, updated_at FROM tls_settings WHERE singleton = 1",
@@ -1054,7 +1053,7 @@ pub fn get_settings(db: &Db) -> rusqlite::Result<TlsSettings> {
     )
 }
 
-// r[impl tls.settings.contact-email]
+// spec: TLS#acme-accounts-and-settings
 pub fn set_contact_email(db: &Db, email: &str) -> rusqlite::Result<()> {
     let now = now_secs();
     db.conn.execute(
@@ -1064,7 +1063,7 @@ pub fn set_contact_email(db: &Db, email: &str) -> rusqlite::Result<()> {
     Ok(())
 }
 
-// r[impl tls.settings.cert-profile]
+// spec: TLS#acme-accounts-and-settings
 pub fn set_cert_profile(db: &Db, profile: Option<&str>) -> rusqlite::Result<()> {
     let now = now_secs();
     let stored = profile.map(str::trim).filter(|s| !s.is_empty());
@@ -1079,7 +1078,7 @@ pub fn set_cert_profile(db: &Db, profile: Option<&str>) -> rusqlite::Result<()> 
 // ACME accounts
 // ---------------------------------------------------------------------------
 
-// r[impl tls.acme.account.persist]
+// spec: TLS#acme-accounts-and-settings
 pub fn get_acme_account(
     db: &Db,
     directory_url: &str,
@@ -1097,7 +1096,7 @@ pub fn get_acme_account(
         .optional()
 }
 
-// r[impl tls.acme.account.persist]
+// spec: TLS#acme-accounts-and-settings
 /// Look up the persisted account for an ACME directory regardless of the
 /// stored contact email. Used by the load-or-create path so that a
 /// changed contact email reuses the same account (with a follow-up
@@ -1124,7 +1123,7 @@ pub fn get_acme_account_for_directory(
         .optional()
 }
 
-// r[impl tls.acme.account.contact-update]
+// spec: TLS#acme-accounts-and-settings
 /// Update the persisted contact email for an existing account row, after
 /// the directory has accepted a `update_contacts` call.
 pub fn set_acme_account_contact_email(
@@ -1154,7 +1153,7 @@ pub fn get_acme_account_by_id(db: &Db, id: i64) -> rusqlite::Result<Option<AcmeA
         .optional()
 }
 
-// r[impl tls.acme.account.persist]
+// spec: TLS#acme-accounts-and-settings
 pub fn insert_acme_account(
     db: &Db,
     cipher: &Cipher,
@@ -1218,7 +1217,7 @@ fn row_to_acme_account(row: &rusqlite::Row<'_>) -> rusqlite::Result<AcmeAccount>
 // Cert attempts log
 // ---------------------------------------------------------------------------
 
-// r[impl tls.cert.attempt-log]
+// spec: TLS#attempt-log
 pub fn insert_attempt(
     db: &Db,
     hostname: &str,
@@ -1233,7 +1232,7 @@ pub fn insert_attempt(
     Ok(db.conn.last_insert_rowid())
 }
 
-// r[impl tls.cert.attempt-log]
+// spec: TLS#attempt-log
 pub fn finalize_attempt(
     db: &Db,
     id: i64,
@@ -1319,7 +1318,7 @@ pub fn list_attempts(
 // Retry blocks
 // ---------------------------------------------------------------------------
 
-// r[impl tls.cert.retry-block]
+// spec: TLS#retry-blocks-and-retries
 pub fn set_retry_block(
     db: &Db,
     hostname: &str,
@@ -1339,7 +1338,7 @@ pub fn set_retry_block(
     Ok(())
 }
 
-// r[impl tls.cert.retry-block]
+// spec: TLS#retry-blocks-and-retries
 pub fn clear_retry_block(db: &Db, hostname: &str) -> rusqlite::Result<bool> {
     let n = db.conn.execute(
         "DELETE FROM tls_cert_retry_blocks WHERE hostname = ?1",
@@ -1381,7 +1380,7 @@ pub fn list_retry_blocks(db: &Db) -> rusqlite::Result<Vec<TlsCertRetryBlock>> {
 // Force-retry signal
 // ---------------------------------------------------------------------------
 
-// r[impl tls.cert.force-retry]
+// spec: TLS#retry-blocks-and-retries
 pub fn set_force_retry(db: &Db, hostname: &str) -> rusqlite::Result<()> {
     let now = now_secs();
     db.conn.execute(
@@ -1396,7 +1395,7 @@ pub fn set_force_retry(db: &Db, hostname: &str) -> rusqlite::Result<()> {
 /// Return whether `hostname` has a force-retry row, atomically deleting it.
 /// The reconciler calls this at the start of an issuance run so a single
 /// retry request is consumed exactly once even if multiple ticks race.
-// r[impl tls.cert.force-retry]
+// spec: TLS#retry-blocks-and-retries
 pub fn take_force_retry(db: &Db, hostname: &str) -> rusqlite::Result<bool> {
     let n = db.conn.execute(
         "DELETE FROM tls_cert_force_retry WHERE hostname = ?1",
@@ -1450,7 +1449,7 @@ fn row_to_chain(row: &rusqlite::Row<'_>) -> rusqlite::Result<TlsChainRow> {
 }
 
 /// Every hostname with a recorded chain position.
-// r[impl tls.chain.ladder]
+// spec: CHAIN#fall-through
 pub fn list_chain_rows(db: &Db) -> rusqlite::Result<Vec<TlsChainRow>> {
     let mut stmt = db.conn.prepare(&format!(
         "SELECT {CHAIN_COLUMNS} FROM tls_chain_state ORDER BY hostname"
@@ -1470,7 +1469,7 @@ pub fn get_chain_row(db: &Db, hostname: &str) -> rusqlite::Result<Option<TlsChai
 }
 
 /// Record a hostname's chain position, replacing whatever was recorded.
-// r[impl tls.chain.ladder]
+// spec: CHAIN#fall-through
 pub fn put_chain_row(
     db: &Db,
     hostname: &str,
@@ -1513,7 +1512,7 @@ pub fn put_chain_row(
 /// attempt is open is asked of the log and not of the row, so one left pending
 /// here would never be closed by anything, and the next order for the hostname
 /// would have its outcome booked against it.
-// r[impl tls.canopy.attempts]
+// spec: TCAN#attempt-log-entries
 pub fn clear_chain_row(db: &Db, hostname: &str) -> rusqlite::Result<bool> {
     db.atomically(|db| {
         if let Some(existing) = get_chain_row(db, hostname)?
@@ -1541,8 +1540,8 @@ pub fn clear_chain_row(db: &Db, hostname: &str) -> rusqlite::Result<bool> {
 ///
 /// Returns whether a retry was queued. `replacing` is what the cycle replaces,
 /// as [`chain::resolve`] will see it.
-// r[impl tls.cert.force-retry]
-// r[impl tls.chain.return]
+// spec: TLS#retry-blocks-and-retries
+// spec: CHAIN#return-to-the-first-strategy
 pub fn start_cycle_for_force_retry(
     db: &Db,
     hostname: &str,
@@ -1577,7 +1576,7 @@ pub fn start_cycle_for_force_retry(
 /// origin `canopy` that is waiting for its first certificate or holds one.
 ///
 /// A revoked row is never returned, since its key has been destroyed.
-// r[impl tls.canopy.key]
+// spec: TCAN#keys
 pub fn find_canopy_key(db: &Db, hostname: &str) -> rusqlite::Result<Option<TlsCertificate>> {
     db.conn
         .query_row(
@@ -1599,7 +1598,7 @@ pub fn find_canopy_key(db: &Db, hostname: &str) -> rusqlite::Result<Option<TlsCe
 /// Narrow on purpose: this runs on every report tick, and the whole certificate
 /// table grows without bound as superseded rows are kept, each carrying its
 /// chain, its signing request and its encrypted key.
-// r[impl tls.canopy.revoked]
+// spec: TCAN#revocation
 pub fn list_active_canopy_certificates(db: &Db) -> rusqlite::Result<Vec<(i64, String, String)>> {
     let mut stmt = db.conn.prepare_cached(
         "SELECT id, hostname, cert_pem FROM tls_certificates
@@ -1677,8 +1676,8 @@ pub fn get_chain_rows(
 ///
 /// `Ok(false)` means the row was neither pending nor active any more, because a
 /// revocation or a cancellation got there first, and nothing was written.
-// r[impl tls.canopy.collect]
-// r[impl tls.cert.supersede]
+// spec: TCAN#collection
+// spec: TLS#supersession
 pub fn activate_canopy_chain(
     db: &Db,
     id: i64,
@@ -1726,7 +1725,7 @@ pub fn activate_canopy_chain(
 /// served nor usable again.
 ///
 /// Returns whether a row was changed; a certificate already revoked is not.
-// r[impl tls.canopy.revoked]
+// spec: TCAN#revocation
 pub fn revoke_canopy_certificate(db: &Db, id: i64) -> rusqlite::Result<bool> {
     let n = db.conn.execute(
         "UPDATE tls_certificates SET
@@ -2004,7 +2003,7 @@ mod tests {
     /// certificates become supersession candidates is outside the operator's
     /// control. A certificate staged ahead of its validity window is accepted
     /// deliberately, and must not retire one clients accept today.
-    // r[verify tls.cert.supersede]
+    // spec: TLS#supersession
     #[test]
     fn supersede_spares_an_incumbent_when_the_new_cert_is_not_yet_valid() {
         let (db, _) = fresh_db();
@@ -2023,7 +2022,7 @@ mod tests {
 
     /// Nor may a self-signed certificate retire one a CA issued: clients accept
     /// the incumbent and would reject the replacement.
-    // r[verify tls.cert.supersede]
+    // spec: TLS#supersession
     #[test]
     fn supersede_spares_a_ca_issued_incumbent_when_the_new_cert_is_self_signed() {
         let (db, _) = fresh_db();
@@ -2049,7 +2048,7 @@ mod tests {
 
     /// A certificate staged ahead of its `notBefore` is stored deliberately, so
     /// it must wait rather than be served and rejected by clients.
-    // r[verify tls.cert.serve]
+    // spec: TLS#serving
     #[test]
     fn a_not_yet_valid_cert_is_not_served() {
         let (db, _) = fresh_db();
@@ -2071,8 +2070,8 @@ mod tests {
     /// `example.com`. Serving it for the name on the label would be a TLS name
     /// mismatch, so the lookup must not prefer it to the certificate that does
     /// cover that name — nor return it when no other does.
-    // r[verify tls.cert.validation.san-coverage]
-    // r[verify tls.cert.serve]
+    // spec: TLS#coverage
+    // spec: TLS#serving
     #[test]
     fn find_active_for_hostname_does_not_hand_out_a_non_covering_cert() {
         let (db, _) = fresh_db();
@@ -2100,7 +2099,7 @@ mod tests {
     /// else. A candidate sharing its label may still carry names it does not
     /// cover; retiring that candidate would leave those names with no active
     /// certificate at all.
-    // r[verify tls.cert.supersede]
+    // spec: TLS#supersession
     #[test]
     fn supersede_spares_a_cert_serving_a_name_the_new_one_does_not_cover() {
         let (db, _) = fresh_db();
@@ -2130,7 +2129,7 @@ mod tests {
     /// old answer — a self-signed leaf with any second PEM block was recorded
     /// as not self-issued. Reading the column would let exactly that row clear
     /// the guard and retire the CA-issued certificate it covers.
-    // r[verify tls.cert.supersede]
+    // spec: TLS#supersession
     #[test]
     fn supersede_reads_self_issuance_from_the_certificate_not_the_column() {
         let (db, _) = fresh_db();
@@ -2161,7 +2160,7 @@ mod tests {
 
     /// Resolution reads it from the certificate for the same reason: a legacy
     /// row must not outrank the CA-issued certificate covering the hostname.
-    // r[verify tls.strategy.manual]
+    // spec: TLS#certificate-selection
     #[test]
     fn resolution_reads_self_issuance_from_the_certificate_not_the_column() {
         let (db, _) = fresh_db();
@@ -2190,7 +2189,7 @@ mod tests {
 
     /// A certificate staged for a cutover was put there deliberately. Retiring
     /// it means the cutover never happens and nothing is left to take over.
-    // r[verify tls.cert.supersede]
+    // spec: TLS#supersession
     #[test]
     fn supersede_spares_a_candidate_staged_for_a_cutover() {
         let (db, _) = fresh_db();
@@ -2213,7 +2212,7 @@ mod tests {
     /// Nor does a shorter-lived certificate replace a longer-lived one: the
     /// hostname would lose TLS at the arrival's expiry while the certificate
     /// that would have covered it sat superseded.
-    // r[verify tls.cert.supersede]
+    // spec: TLS#supersession
     #[test]
     fn supersede_spares_a_candidate_that_outlives_the_arrival() {
         let (db, _) = fresh_db();
@@ -2236,7 +2235,7 @@ mod tests {
 
     /// The renewal case the supersession exists for: the arriving certificate
     /// covers everything the incumbent did, so the incumbent moves to history.
-    // r[verify tls.cert.supersede]
+    // spec: TLS#supersession
     #[test]
     fn supersede_retires_a_cert_the_new_one_fully_covers() {
         let (db, _) = fresh_db();
@@ -2276,7 +2275,7 @@ mod tests {
 
     /// The database holds the one-pending-renewal rule itself, so two begins
     /// that each checked first cannot both be stored.
-    // r[verify tls.csr.renew]
+    // spec: TLS#certificate-signing-requests
     #[test]
     fn a_certificate_holds_one_pending_renewal_at_a_time() {
         let (db, _) = fresh_db();
@@ -2300,8 +2299,8 @@ mod tests {
 
     /// A renewal retires the certificate it renews whatever either is labelled,
     /// and still only when it replaces it in full.
-    // r[verify tls.csr.renew]
-    // r[verify tls.cert.supersede]
+    // spec: TLS#certificate-signing-requests
+    // spec: TLS#supersession
     #[test]
     fn a_renewal_retires_what_it_renews_only_when_it_replaces_it() {
         let (db, _) = fresh_db();
@@ -2333,7 +2332,7 @@ mod tests {
         );
     }
 
-    // r[verify tls.cert.serve]
+    // spec: TLS#serving
     #[test]
     fn find_active_for_hostname_skips_an_expired_cert() {
         let (db, _) = fresh_db();
@@ -2347,7 +2346,7 @@ mod tests {
         );
     }
 
-    // r[verify tls.cert.serve]
+    // spec: TLS#serving
     // The exact-hostname path takes the highest id, so a newer expired row
     // shadowed an older one that was still valid — and the proxy served the
     // expired cert with nothing on the path noticing.
@@ -2364,7 +2363,7 @@ mod tests {
         assert_eq!(found.id, valid);
     }
 
-    // r[verify tls.cert.serve]
+    // spec: TLS#serving
     // Unparsed and expired are different things; refusing to serve a row whose
     // expiry was never recorded would withhold a usable cert.
     #[test]
@@ -2472,7 +2471,7 @@ mod tests {
     /// A cancellation landing between the handler's read and its write must
     /// leave the incumbents alone: without the precondition the update matches
     /// no rows while the supersession still runs, stranding their hostnames.
-    // r[verify tls.csr.flow]
+    // spec: TLS#certificate-signing-requests
     #[test]
     fn activating_a_cancelled_csr_retires_nothing() {
         let (db, _) = fresh_db();
@@ -2524,7 +2523,7 @@ mod tests {
     /// The other side of the race: an upload activating the row before the
     /// cancellation reaches it. The cancellation must be refused rather than
     /// delete the certificate now serving.
-    // r[verify tls.csr.flow]
+    // spec: TLS#certificate-signing-requests
     #[test]
     fn cancelling_an_activated_csr_leaves_it_serving() {
         let (db, _) = fresh_db();
@@ -2654,8 +2653,7 @@ mod tests {
         assert!(decrypted.expose_secret().contains("BEGIN PRIVATE KEY"));
     }
 
-    // r[verify tls.acme.account.persist]
-    // r[verify tls.acme.account.contact-update]
+    // spec: TLS#acme-accounts-and-settings
     #[test]
     fn acme_account_lookup_by_directory_and_contact_update() {
         let (db, cipher) = fresh_db();
@@ -2687,7 +2685,7 @@ mod tests {
         assert_eq!(after.id, id, "row id is preserved across email updates");
     }
 
-    // r[verify tls.policy.auto-default]
+    // spec: TLS#policies
     #[test]
     fn first_provider_upsert_auto_creates_star_policy() {
         let (db, cipher) = fresh_db();
@@ -2781,7 +2779,7 @@ mod tests {
         assert!(!outcome.auto_policy_created);
     }
 
-    // r[verify tls.policy.wildcard]
+    // spec: TLS#policies
     #[test]
     fn resolve_policy_prefers_exact_over_wildcard() {
         let (db, cipher) = fresh_db();
@@ -2821,7 +2819,7 @@ mod tests {
         );
     }
 
-    // r[verify tls.cert.attempt-log]
+    // spec: TLS#attempt-log
     #[test]
     fn attempt_lifecycle_round_trips() {
         let (db, _) = fresh_db();
@@ -2862,7 +2860,7 @@ mod tests {
         assert_eq!(rows[2].id, ids[2]);
     }
 
-    // r[verify tls.cert.retry-block]
+    // spec: TLS#retry-blocks-and-retries
     #[test]
     fn retry_block_set_check_clear() {
         let (db, _) = fresh_db();
@@ -2900,7 +2898,7 @@ mod tests {
         assert!(!clear_retry_block(&db, "host.example.com").unwrap());
     }
 
-    // r[verify tls.settings.contact-email]
+    // spec: TLS#acme-accounts-and-settings
     #[test]
     fn settings_default_is_empty_then_persists() {
         let (db, _cipher) = fresh_db();
@@ -2913,7 +2911,7 @@ mod tests {
         assert!(s.updated_at > 0);
     }
 
-    // r[verify tls.canopy.attempts]
+    // spec: TCAN#attempt-log-entries
     #[test]
     fn a_hostname_that_leaves_its_chain_does_not_strand_its_open_order() {
         let (db, _) = fresh_db();
@@ -2944,7 +2942,7 @@ mod tests {
         assert_eq!(closed.outcome, AttemptOutcome::Failure);
     }
 
-    // r[verify tls.canopy.attempts]
+    // spec: TCAN#attempt-log-entries
     #[test]
     fn deleting_the_certificate_a_cycle_replaces_closes_its_order_too() {
         let (db, _) = fresh_db();
@@ -2979,7 +2977,7 @@ mod tests {
     /// Both run on a timer and name no hostname, so the one index on
     /// `(hostname, state)` cannot serve them. Without an index of their own
     /// they scan every superseded row the instance has ever kept.
-    // r[verify tls.cert.serve]
+    // spec: TLS#serving
     #[test]
     fn the_certificate_queries_asked_on_a_timer_do_not_scan_the_table() {
         let (db, _) = fresh_db();

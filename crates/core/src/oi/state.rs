@@ -28,7 +28,7 @@ pub struct OiState {
     pub shells: Arc<crate::oi::shells::ShellRegistry>,
     pub forwards: Arc<parking_lot::Mutex<ForwardRegistry>>,
     /// Live offers to carry Canopy requests, and the settings governing them.
-    // i[impl canopy.offer]
+    // spec: RLY#offers
     pub canopy: Arc<crate::oi::canopy::CanopyState>,
     pub container_runtime: Arc<dyn crate::system::ContainerRuntime>,
     pub driver: Arc<crate::system::System>,
@@ -39,30 +39,30 @@ pub struct OiState {
     pub script_limits: crate::ScriptLimits,
     /// DNS servers injected into workload containers' /etc/resolv.conf.
     pub dns_servers: Vec<std::net::Ipv6Addr>,
-    // r[impl secret.key]
+    // spec: SEC#secret-key
     pub cipher: Arc<crate::runtime::secrets::Cipher>,
     /// TLS issuance coordinator. The OI uses it to run operator-driven
     /// `issue-acme-dns` calls and to enqueue retries with the persistent
     /// force-retry signal.
-    // r[impl tls.cert.eager-issuance]
+    // spec: TLS#issuance
     pub tls_coordinator: Arc<crate::runtime::tls::issuance::Coordinator>,
     /// Host-filesystem path of the Caddy data volume. Resolved lazily on
     /// the first OI request that needs to inspect Caddy's certificate
     /// cache (i.e. the TLS hostname rollup).
-    // r[impl tls.cert.hostname-view]
+    // spec: TLS#hostname-state
     pub caddy_data_path: tokio::sync::OnceCell<PathBuf>,
     /// Tailscale discovery provider. `None` when Tailscale is not in use
     /// at all (e.g. in test harnesses); the discovery handler returns an
     /// empty status in that case.
-    // r[impl ingress.site.tailscale]
+    // spec: SITE#tailscale-discovery
     pub tailscale_provider: Option<Arc<crate::runtime::tailscale::TailscaleProvider>>,
     /// Background resolver for site-service DNS endpoints. Surfaced through
     /// the OI so handlers can refresh on add/remove and serve cache
     /// snapshots to operators. `None` in test harnesses.
-    // r[impl service.site.address]
+    // spec: SITE#endpoint-addressing
     pub site_resolver: Option<Arc<crate::runtime::site_services::resolver::SiteServiceResolver>>,
     /// The OCI registry client definitions are fetched through.
-    // i[impl definition.fetch]
+    // spec: DEFN#fetching
     pub definition_registry: crate::runtime::definition::fetch::SharedRegistry,
 }
 

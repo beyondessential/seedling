@@ -10,7 +10,7 @@ Applies to how the [runtime](../overview.md#runtime) protects secret values at r
 
 ### Secret parameter
 
-A parameter whose effective [`secret` flag](rule:l/param.schema.secret) is `true` in the app's current [resource graph](../overview.md#resource-graph).
+A parameter whose effective [`secret` flag](../language/parameter.md#secret-parameters) is `true` in the app's current [resource graph](../overview.md#resource-graph).
 
 ## Secret key
 
@@ -23,11 +23,11 @@ If no key file exists when the runtime starts, the runtime MUST create one holdi
 The runtime MUST store the values of secret parameters apart from the values of other parameters.
 It MUST protect them at rest with authenticated encryption under the secret key.
 
-A script reading a parameter's [value](rule:l/param.value) MUST receive the value in plain form whether or not the parameter is secret.
+A script reading a parameter's [value](../language/parameter.md#values) MUST receive the value in plain form whether or not the parameter is secret.
 
 ## Generation history
 
-An entry in the [generation history](rule:r/generation.history) recording a previous or new value of a parameter MUST protect each value under the secret key according to how that value was held:
+An entry in the [generation history](generation.md#history-entries) recording a previous or new value of a parameter MUST protect each value under the secret key according to how that value was held:
 
 - the value being replaced MUST be protected if it was read from secret storage;
 - the value replacing it MUST be protected if it is written to secret storage.
@@ -43,7 +43,7 @@ The runtime MUST decrypt protected history values before giving them to a caller
 
 The runtime MUST NOT return the value of a secret parameter to a caller of the [Operator Interface](../overview.md#operator-interface).
 It MUST NOT return a value recorded in the generation history if the parameter is secret now, or if the value was protected when it was recorded.
-A response withholding a value MUST say so with a machine-readable marker, so that a client can tell an unset value from a withheld one, as [describing an app](rule:i/app.describe.param-secret) and the [generation history](rule:i/generation.history) define.
+A response withholding a value MUST say so with a machine-readable marker, so that a client can tell an unset value from a withheld one, as [describing an app](../interface/apps.md#parameters) and the [generation history](../interface/apps.md#generation-history) define.
 
 ## Migration
 

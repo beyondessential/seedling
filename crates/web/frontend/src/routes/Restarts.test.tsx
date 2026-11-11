@@ -40,7 +40,7 @@ describe("Restarts", () => {
     expect(await screen.findByText("No restarts recorded.")).toBeTruthy();
   });
 
-  // w[verify routes.restarts]
+  // spec: UI#restart-history
   it("lists records with their exit status and app link", async () => {
     renderWithSession(<Restarts />, {
       fixtures: {
@@ -56,7 +56,7 @@ describe("Restarts", () => {
     expect(screen.getByText("unknown")).toBeTruthy();
   });
 
-  // w[verify routes.restarts]
+  // spec: UI#restart-history
   it("distinguishes deliberate restarts from recovery ones", async () => {
     renderWithSession(<Restarts />, {
       fixtures: {
@@ -68,7 +68,7 @@ describe("Restarts", () => {
     expect(screen.getByText("deliberate")).toBeTruthy();
   });
 
-  // w[verify routes.restarts]
+  // spec: UI#restart-history
   it("shows the crash-loop threshold and window", async () => {
     renderWithSession(<Restarts />, {
       fixtures: { "/restarts/list": [], "/restarts/settings/get": settings },
@@ -80,7 +80,7 @@ describe("Restarts", () => {
     ).toBeTruthy();
   });
 
-  // w[verify routes.restarts]
+  // spec: UI#restart-history
   it("sends the window in seconds when the operator saves it in minutes", async () => {
     const setSettings = vi.fn(() => settings);
     renderWithSession(<Restarts />, {
@@ -108,7 +108,7 @@ describe("Restarts", () => {
     );
   });
 
-  // w[verify routes.restarts]
+  // spec: UI#restart-history
   it("filters by app", async () => {
     const list = vi.fn(() => []);
     renderWithSession(<Restarts />, {

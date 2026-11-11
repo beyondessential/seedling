@@ -12,7 +12,7 @@ use super::{
     resource::{Resource, ResourceKind, ResourceName},
 };
 
-// l[impl volume.write.validation]
+// spec: VOL#write-paths
 pub(crate) fn validate_volume_write_path(path: &str) -> Result<(), Box<EvalAltResult>> {
     if volume_path_depth(path)? == 0 {
         return Err("volume write path must not resolve to '/'".into());
@@ -22,7 +22,7 @@ pub(crate) fn validate_volume_write_path(path: &str) -> Result<(), Box<EvalAltRe
 
 /// Validate the target of `write_dir`: as for a single write, except that
 /// the volume root itself is a valid place to write a directory into.
-// l[impl volume.write-dir]
+// spec: VOL#declared-file-writes
 pub(crate) fn validate_volume_dir_path(path: &str) -> Result<(), Box<EvalAltResult>> {
     volume_path_depth(path).map(|_| ())
 }
@@ -76,11 +76,11 @@ pub struct VolumeDef {
     /// Declared file writes, in declaration order, as the bytes to write.
     pub writes: Vec<(String, Bytes)>,
     pub exported: Option<ExportOptions>,
-    // l[impl bsl.resource.description]
+    // spec: BSL#descriptions
     pub description: Option<String>,
 }
 
-// l[impl volume.type]
+// spec: VOL#declaration
 #[derive(Debug, Clone)]
 pub struct Volume {
     pub name: Option<ResourceName>,
@@ -128,7 +128,7 @@ impl Volume {
 }
 
 impl super::Freezable for Volume {
-    // l[impl app.resources.context.immutable]
+    // spec: APP#static-resource-immutability
     fn is_frozen(&self) -> bool {
         // The action-context check catches static volumes captured from outer scope,
         // which keep `frozen=false` because only the in-action re-fetch stamps the flag.
@@ -140,7 +140,7 @@ impl CustomType for Volume {
     fn build(mut builder: TypeBuilder<Self>) {
         builder
             .with_name("Volume")
-            // l[impl volume.readonly]
+            // spec: VOL#storage-options
             .with_fn(
                 "readonly",
                 |this: &mut Self| -> Result<Volume, Box<EvalAltResult>> {
@@ -149,7 +149,7 @@ impl CustomType for Volume {
                     Ok(this.clone())
                 },
             )
-            // l[impl volume.tmpfs]
+            // spec: VOL#storage-options
             .with_fn(
                 "tmpfs",
                 |this: &mut Self| -> Result<Volume, Box<EvalAltResult>> {
@@ -158,7 +158,7 @@ impl CustomType for Volume {
                     Ok(this.clone())
                 },
             )
-            // l[impl volume.write]
+            // spec: VOL#declared-file-writes
             .with_fn(
                 "write",
                 |this: &mut Self,
@@ -174,7 +174,7 @@ impl CustomType for Volume {
                     Ok(this.clone())
                 },
             )
-            // l[impl volume.write]
+            // spec: VOL#declared-file-writes
             .with_fn(
                 "write",
                 |this: &mut Self, path: &str, file: File| -> Result<Volume, Box<EvalAltResult>> {
@@ -184,7 +184,7 @@ impl CustomType for Volume {
                     Ok(this.clone())
                 },
             )
-            // l[impl volume.write-dir]
+            // spec: VOL#declared-file-writes
             .with_fn(
                 "write_dir",
                 |this: &mut Self,
@@ -201,7 +201,7 @@ impl CustomType for Volume {
                     Ok(this.clone())
                 },
             )
-            // l[impl volume.exported]
+            // spec: VOL#export
             .with_fn(
                 "exported",
                 |this: &mut Self| -> Result<Volume, Box<EvalAltResult>> {
@@ -213,7 +213,7 @@ impl CustomType for Volume {
                     Ok(this.clone())
                 },
             )
-            // l[impl volume.exported]
+            // spec: VOL#export
             .with_fn(
                 "exported",
                 |this: &mut Self, options: Map| -> Result<Volume, Box<EvalAltResult>> {
@@ -225,7 +225,7 @@ impl CustomType for Volume {
                     Ok(this.clone())
                 },
             )
-            // l[impl bsl.resource.description]
+            // spec: BSL#descriptions
             .with_fn(
                 "description",
                 |this: &mut Self, desc: &str| -> Result<Volume, Box<EvalAltResult>> {
@@ -254,14 +254,14 @@ pub struct OperationVolumeBinding {
 ///  - a `param` object map populated with `<key>_volume` (and optionally
 ///    `<key>_filename`) entries that the action closure uses to look up the
 ///    binding via `app.external_volume(param["<key>_volume"])`.
-// r[impl operation.volume-param]
+// spec: OPS#operation-scoped-volumes
 #[derive(Debug, Clone)]
 pub struct VolumeParamSpec {
     pub host_path: std::path::PathBuf,
     pub read_only: bool,
     /// Optional filename the action must use within the volume. When set, the
     /// runtime also injects `<key>_filename` into the action's param map.
-    // r[impl operation.volume-param.filename]
+    // spec: OPS#operation-scoped-volumes
     pub filename: Option<String>,
 }
 
@@ -278,7 +278,7 @@ pub struct VolumeParamSpec {
 /// two invocations of the helper with the same operation id and keys produce
 /// the same names (useful for replay safety and debuggability) while still
 /// being unique across operations.
-// r[impl operation.volume-param]
+// spec: OPS#operation-scoped-volumes
 pub fn build_operation_volume_params<I, K>(
     operation_id: &str,
     bindings: I,
@@ -308,7 +308,7 @@ where
             serde_json::Value::String(volume_name),
         );
         if let Some(filename) = spec.filename {
-            // r[impl operation.volume-param.filename]
+            // spec: OPS#operation-scoped-volumes
             out_params.insert(
                 format!("{key}_filename"),
                 serde_json::Value::String(filename),
@@ -318,20 +318,20 @@ where
     (out_bindings, out_params)
 }
 
-// l[impl volume.external]
+// spec: VOL#external-volumes
 #[derive(Debug, Default, Clone)]
 pub struct ExternalVolumeDef {
-    // l[impl bsl.resource.description]
+    // spec: BSL#descriptions
     pub description: Option<String>,
 }
 
-// l[impl volume.external]
+// spec: VOL#external-volumes
 #[derive(Debug, Clone)]
 pub struct ExternalVolume {
     pub name: ResourceName,
     /// Set when this external volume resolves to an operation-scoped binding rather
     /// than a static external volume mapping.
-    // l[impl volume.external.dynamic]
+    // spec: VOL#external-volumes
     pub operation_binding: Option<OperationVolumeBinding>,
     pub def: Holder<ExternalVolumeDef>,
 }
@@ -340,7 +340,7 @@ impl CustomType for ExternalVolume {
     fn build(mut builder: TypeBuilder<Self>) {
         builder
             .with_name("ExternalVolume")
-            // l[impl bsl.resource.description]
+            // spec: BSL#descriptions
             .with_fn("description", |this: &mut Self, desc: &str| -> Self {
                 this.def.lock().description = Some(desc.to_owned());
                 this.clone()
@@ -351,7 +351,7 @@ impl CustomType for ExternalVolume {
 #[cfg(test)]
 mod tests {
 
-    // l[verify volume.write.validation]
+    // spec: VOL#write-paths
     // The rule is "must not escape the root after canonicalisation", not
     // "must not mention `..`" — the stricter reading refused paths that
     // resolve safely inside the volume.
@@ -368,7 +368,7 @@ mod tests {
         }
     }
 
-    // l[verify volume.write.validation]
+    // spec: VOL#write-paths
     #[test]
     fn a_dotdot_that_escapes_the_volume_is_refused() {
         for path in ["/../etc/passwd", "/a/../../etc/passwd", "/a/b/../../.."] {
@@ -380,7 +380,7 @@ mod tests {
         }
     }
 
-    // l[verify volume.write.validation]
+    // spec: VOL#write-paths
     #[test]
     fn a_path_resolving_to_the_root_is_refused() {
         for path in ["/", "/.", "/a/.."] {
@@ -388,7 +388,7 @@ mod tests {
         }
     }
 
-    // l[verify volume.write.validation]
+    // spec: VOL#write-paths
     #[test]
     fn the_other_rules_still_hold() {
         let _ = validate_volume_write_path("relative/path").expect_err("must be absolute");
@@ -397,7 +397,7 @@ mod tests {
     }
     use super::*;
 
-    // r[impl operation.volume-param] r[impl operation.volume-param.filename]
+    // spec: OPS#operation-scoped-volumes
     #[test]
     fn build_operation_volume_params_injects_volume_and_filename() {
         let (bindings, params) = build_operation_volume_params(
@@ -443,7 +443,7 @@ mod tests {
         assert!(!out.read_only);
     }
 
-    // r[impl operation.volume-param]
+    // spec: OPS#operation-scoped-volumes
     #[test]
     fn build_operation_volume_params_unique_per_operation() {
         let (_, params_a) = build_operation_volume_params(

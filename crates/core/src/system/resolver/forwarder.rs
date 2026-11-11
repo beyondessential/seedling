@@ -45,7 +45,7 @@ const BIND_RETRY_DELAY: Duration = Duration::from_secs(1);
 /// host-side resolver (typically `127.0.0.54:53`, the systemd-resolved
 /// extra stub which, unlike `127.0.0.53`, accepts queries whose source
 /// address is not in `127.0.0.0/8`).
-// r[impl infra.resolver.upstreams]
+// spec: DNS#upstreams
 pub fn spawn_dns_forwarder(listen: SocketAddr, upstream: SocketAddr) -> JoinHandle<()> {
     tokio::spawn(async move {
         let udp = bind_udp_with_retry(listen).await;
@@ -173,7 +173,7 @@ mod tests {
         (addr, handle)
     }
 
-    // r[verify infra.resolver.upstreams]
+    // spec: DNS#upstreams
     #[tokio::test]
     async fn forwards_udp_query_and_returns_reply() {
         let (upstream_addr, _up) = echo_upstream(b"\xaa\xbb\xcc".to_vec()).await;

@@ -27,7 +27,7 @@ After the host restarts with no containers surviving, every instance is missing 
 
 ## Rolling updates
 
-When a Deployment's [update strategy](rule:l/deployment.on-update) is rolling and it has stale instances, the runtime MUST replace them one at a time:
+When a Deployment's [update strategy](../language/deployment.md#update-and-termination-strategies) is rolling and it has stale instances, the runtime MUST replace them one at a time:
 
 1. Raise the Deployment's effective instance count by one above its current scale.
 2. Start an instance with the current definition in the added slot.
@@ -36,7 +36,7 @@ When a Deployment's [update strategy](rule:l/deployment.on-update) is rolling an
 5. Repeat from step 2 until no stale instance remains.
 6. Return the effective instance count to the Deployment's scale.
 
-An instance without a [healthcheck](rule:l/deployment.healthcheck) is healthy once it is running.
+An instance without a [healthcheck](../language/deployment.md#health-checks) is healthy once it is running.
 
 The added instance MUST be part of the [desired state](../overview.md#desired-state), so that scaling does not treat it as excess.
 

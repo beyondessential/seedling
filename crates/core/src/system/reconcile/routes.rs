@@ -22,8 +22,8 @@ use crate::{
     system::{translate::proxy::instance_ipv6, types::ServiceRoute},
 };
 
-// r[autonomous.network]
-// r[fault.non-blocking]
+// AUTO#ingress-and-network-repair
+// FLT#filing-and-clearing
 #[expect(
     clippy::type_complexity,
     reason = "flattening the tuple would hurt readability"
@@ -91,7 +91,7 @@ pub(super) fn build(
         }
     }
 
-    // r[impl service.external.mapping.events] External-service slots get
+    // spec: SITE#external-mappings External-service slots get
     // their own stable /128 route: resolve through the operator-configured
     // mapping table, then for each matching backend install the same
     // routing-table entry pattern we use for native services. Site targets

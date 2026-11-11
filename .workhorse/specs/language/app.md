@@ -14,7 +14,7 @@ Evaluation of a script outside every closure the runtime runs as a [lifecycle op
 
 ### Action context
 
-Evaluation of a script inside a closure the runtime runs as a lifecycle operation, such as an [action closure](rule:l/action.type) or a [parameter change handler](parameter.md#change-handlers).
+Evaluation of a script inside a closure the runtime runs as a lifecycle operation, such as an [action closure](action.md#action-declaration) or a [parameter change handler](parameter.md#change-handlers).
 
 ### Static resource
 
@@ -41,7 +41,7 @@ A resource of one type MAY share its name with a resource of another type.
 
 In the action context, the same method MUST return a reference to the static resource of that resource type and name, and MUST NOT declare a resource.
 It MUST throw if no static resource of that resource type and name exists.
-[`app.external_volume`](rule:l/volume.external.dynamic) behaves differently in the action context.
+[`app.external_volume`](volume.md#external-volumes) behaves differently in the action context.
 
 ## Static resource immutability
 

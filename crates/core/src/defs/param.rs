@@ -4,7 +4,7 @@ use seedling_protocol::names::ParamName;
 use super::app::App;
 use super::install::ParamKind;
 
-// l[impl param.type]
+// spec: PARAM#declaration
 #[derive(Debug, Clone)]
 pub struct Param {
     pub name: ParamName,
@@ -18,10 +18,10 @@ impl CustomType for Param {
     fn build(mut builder: TypeBuilder<Self>) {
         builder.with_name("Param");
 
-        // l[impl param.is-set]
+        // spec: PARAM#values
         builder.with_fn("is_set", |this: &mut Self| -> bool { this.value.is_some() });
 
-        // l[impl param.value]
+        // spec: PARAM#values
         builder.with_fn(
             "value",
             |this: &mut Self| -> Result<String, Box<EvalAltResult>> {
@@ -42,8 +42,7 @@ impl CustomType for Param {
             },
         );
 
-        // l[impl param.on-change]
-        // l[impl param.on-change.constraints]
+        // spec: PARAM#change-handlers
         builder.with_fn(
             "on_change",
             |this: &mut Self, closure: FnPtr| -> Result<(), Box<EvalAltResult>> {
@@ -75,8 +74,7 @@ impl CustomType for Param {
             },
         );
 
-        // l[impl param.validate]
-        // l[impl param.validate.constraints]
+        // spec: PARAM#validators
         builder.with_fn(
             "validate",
             |this: &mut Self, closure: FnPtr| -> Result<Self, Box<EvalAltResult>> {
@@ -105,7 +103,7 @@ impl CustomType for Param {
             },
         );
 
-        // l[impl param.schema.kind]
+        // spec: PARAM#schema
         builder.with_fn(
             "kind",
             |this: &mut Self, kind_str: &str| -> Result<Self, Box<EvalAltResult>> {
@@ -140,7 +138,7 @@ impl CustomType for Param {
             },
         );
 
-        // l[impl param.schema.required]
+        // spec: PARAM#schema
         builder.with_fn("required", |this: &mut Self, required: bool| -> Self {
             let name_clone = this.name.clone();
             this.app.def.rcu(|d| {
@@ -153,7 +151,7 @@ impl CustomType for Param {
             this.clone()
         });
 
-        // l[impl param.schema.default-value]
+        // spec: PARAM#schema
         builder.with_fn("default_value", |this: &mut Self, value: &str| -> Self {
             let name_clone = this.name.clone();
             let value_owned = value.to_owned();
@@ -167,7 +165,7 @@ impl CustomType for Param {
             this.clone()
         });
 
-        // l[impl param.schema.description]
+        // spec: PARAM#schema
         builder.with_fn("description", |this: &mut Self, desc: &str| -> Self {
             let name_clone = this.name.clone();
             let desc_owned = desc.to_owned();
@@ -181,7 +179,7 @@ impl CustomType for Param {
             this.clone()
         });
 
-        // l[impl param.schema.secret]
+        // spec: PARAM#secret-parameters
         builder.with_fn("secret", |this: &mut Self, secret: bool| -> Self {
             let name_clone = this.name.clone();
             this.app.def.rcu(|d| {

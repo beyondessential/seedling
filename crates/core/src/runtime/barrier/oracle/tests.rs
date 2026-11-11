@@ -48,8 +48,8 @@ fn obs_at(obs_kind: &str, recorded_at: i64) -> WorldObservation {
 // Container derivation
 // -----------------------------------------------------------------------
 
-// r[verify lifecycle.derivation]
-// r[verify lifecycle.states]
+// spec: LCY#derivation
+// spec: LCY#lifecycle-states
 #[test]
 fn empty_observations_gives_pending() {
     let resource = dep("app", "web");
@@ -57,8 +57,8 @@ fn empty_observations_gives_pending() {
     assert_eq!(state, LifecycleState::Pending);
 }
 
-// r[verify lifecycle.container]
-// r[verify lifecycle.derivation]
+// spec: LCY#containers
+// spec: LCY#derivation
 #[test]
 fn container_created_gives_scheduled() {
     let resource = dep("app", "web");
@@ -66,7 +66,7 @@ fn container_created_gives_scheduled() {
     assert_eq!(state, LifecycleState::Scheduled);
 }
 
-// r[verify lifecycle.container]
+// spec: LCY#containers
 #[test]
 fn image_pull_started_gives_scheduled() {
     let resource = dep("app", "web");
@@ -74,8 +74,8 @@ fn image_pull_started_gives_scheduled() {
     assert_eq!(state, LifecycleState::Scheduled);
 }
 
-// r[verify lifecycle.container]
-// r[verify lifecycle.derivation]
+// spec: LCY#containers
+// spec: LCY#derivation
 #[test]
 fn container_running_gives_running() {
     let resource = dep("app", "web");
@@ -83,7 +83,7 @@ fn container_running_gives_running() {
     assert_eq!(state, LifecycleState::Running);
 }
 
-// r[verify lifecycle.container]
+// spec: LCY#containers
 #[test]
 fn health_check_pass_gives_ready() {
     let resource = dep("app", "web");
@@ -94,7 +94,7 @@ fn health_check_pass_gives_ready() {
     assert_eq!(state, LifecycleState::Ready);
 }
 
-// r[verify lifecycle.container.unhealthy-transition]
+// spec: LCY#containers
 #[test]
 fn health_check_fail_demotes_ready_to_running() {
     let resource = dep("app", "web");
@@ -109,7 +109,7 @@ fn health_check_fail_demotes_ready_to_running() {
     assert_eq!(state, LifecycleState::Running);
 }
 
-// r[verify lifecycle.container.unhealthy-transition]
+// spec: LCY#containers
 #[test]
 fn health_check_pass_after_fail_returns_to_ready() {
     let resource = dep("app", "web");
@@ -125,7 +125,7 @@ fn health_check_pass_after_fail_returns_to_ready() {
     assert_eq!(state, LifecycleState::Ready);
 }
 
-// r[verify lifecycle.container.unhealthy-transition]
+// spec: LCY#containers
 #[test]
 fn health_check_fail_on_running_is_noop() {
     let resource = dep("app", "web");
@@ -136,8 +136,8 @@ fn health_check_fail_on_running_is_noop() {
     assert_eq!(state, LifecycleState::Running);
 }
 
-// r[verify lifecycle.container]
-// r[verify lifecycle.transitions]
+// spec: LCY#containers
+// spec: LCY#transitions
 #[test]
 fn container_exited_gives_terminated_skipping_terminating() {
     let resource = dep("app", "web");
@@ -148,8 +148,8 @@ fn container_exited_gives_terminated_skipping_terminating() {
     assert_eq!(state, LifecycleState::Terminated);
 }
 
-// r[verify lifecycle.container]
-// r[verify lifecycle.transitions]
+// spec: LCY#containers
+// spec: LCY#transitions
 #[test]
 fn stop_sent_then_exited_gives_terminated_via_terminating() {
     let resource = dep("app", "web");
@@ -164,8 +164,8 @@ fn stop_sent_then_exited_gives_terminated_via_terminating() {
     assert_eq!(state, LifecycleState::Terminated);
 }
 
-// r[verify lifecycle.container]
-// r[verify lifecycle.transitions]
+// spec: LCY#containers
+// spec: LCY#transitions
 #[test]
 fn container_removed_gives_unscheduled() {
     let resource = dep("app", "web");
@@ -180,8 +180,8 @@ fn container_removed_gives_unscheduled() {
     assert_eq!(state, LifecycleState::Unscheduled);
 }
 
-// r[verify lifecycle.derivation]
-// r[verify reconciliation.idempotency]
+// spec: LCY#derivation
+// spec: RCN#reconciliation-loop
 #[test]
 fn duplicate_running_observations_do_not_regress() {
     let resource = dep("app", "web");
@@ -213,7 +213,7 @@ fn auto_removed_short_lived_job_reaches_unscheduled() {
     assert_eq!(state, LifecycleState::Unscheduled);
 }
 
-// r[verify lifecycle.derivation]
+// spec: LCY#derivation
 #[test]
 fn unknown_obs_kind_is_ignored() {
     let resource = dep("app", "web");
@@ -228,7 +228,7 @@ fn unknown_obs_kind_is_ignored() {
 // Service derivation
 // -----------------------------------------------------------------------
 
-// r[verify lifecycle.service]
+// spec: LCY#services
 #[test]
 fn service_no_observations_gives_pending() {
     assert_eq!(
@@ -237,7 +237,7 @@ fn service_no_observations_gives_pending() {
     );
 }
 
-// r[verify lifecycle.service]
+// spec: LCY#services
 #[test]
 fn service_network_created_gives_scheduled() {
     assert_eq!(
@@ -246,7 +246,7 @@ fn service_network_created_gives_scheduled() {
     );
 }
 
-// r[verify lifecycle.service]
+// spec: LCY#services
 #[test]
 fn service_backend_healthy_gives_ready() {
     assert_eq!(
@@ -258,8 +258,8 @@ fn service_backend_healthy_gives_ready() {
     );
 }
 
-// r[verify lifecycle.service]
-// r[verify lifecycle.transitions]
+// spec: LCY#services
+// spec: LCY#transitions
 #[test]
 fn service_backend_healthy_without_network_created_skips_to_ready() {
     assert_eq!(
@@ -268,8 +268,8 @@ fn service_backend_healthy_without_network_created_skips_to_ready() {
     );
 }
 
-// r[verify lifecycle.service]
-// r[verify lifecycle.transitions]
+// spec: LCY#services
+// spec: LCY#transitions
 #[test]
 fn service_stop_then_network_removed_gives_terminated() {
     assert_eq!(
@@ -286,8 +286,8 @@ fn service_stop_then_network_removed_gives_terminated() {
     );
 }
 
-// r[verify lifecycle.service]
-// r[verify lifecycle.transitions]
+// spec: LCY#services
+// spec: LCY#transitions
 #[test]
 fn service_network_removed_without_stop_skips_terminating() {
     assert_eq!(
@@ -303,7 +303,7 @@ fn service_network_removed_without_stop_skips_terminating() {
     );
 }
 
-// r[verify lifecycle.service]
+// spec: LCY#services
 #[test]
 fn service_network_cleaned_up_gives_unscheduled() {
     assert_eq!(
@@ -319,7 +319,7 @@ fn service_network_cleaned_up_gives_unscheduled() {
     );
 }
 
-// r[verify lifecycle.service]
+// spec: LCY#services
 #[test]
 fn service_container_obs_kinds_are_ignored() {
     assert_eq!(
@@ -332,7 +332,7 @@ fn service_container_obs_kinds_are_ignored() {
 // Ingress derivation
 // -----------------------------------------------------------------------
 
-// r[verify lifecycle.ingress]
+// spec: LCY#ingresses
 #[test]
 fn ingress_no_observations_gives_pending() {
     assert_eq!(
@@ -341,7 +341,7 @@ fn ingress_no_observations_gives_pending() {
     );
 }
 
-// r[verify lifecycle.ingress]
+// spec: LCY#ingresses
 #[test]
 fn ingress_configured_gives_scheduled() {
     assert_eq!(
@@ -350,7 +350,7 @@ fn ingress_configured_gives_scheduled() {
     );
 }
 
-// r[verify lifecycle.ingress]
+// spec: LCY#ingresses
 #[test]
 fn ingress_ready_gives_ready() {
     assert_eq!(
@@ -362,8 +362,8 @@ fn ingress_ready_gives_ready() {
     );
 }
 
-// r[verify lifecycle.ingress]
-// r[verify lifecycle.transitions]
+// spec: LCY#ingresses
+// spec: LCY#transitions
 #[test]
 fn ingress_stop_then_removed_gives_terminated() {
     assert_eq!(
@@ -380,8 +380,8 @@ fn ingress_stop_then_removed_gives_terminated() {
     );
 }
 
-// r[verify lifecycle.ingress]
-// r[verify lifecycle.transitions]
+// spec: LCY#ingresses
+// spec: LCY#transitions
 #[test]
 fn ingress_removed_without_stop_skips_terminating() {
     assert_eq!(
@@ -397,7 +397,7 @@ fn ingress_removed_without_stop_skips_terminating() {
     );
 }
 
-// r[verify lifecycle.ingress]
+// spec: LCY#ingresses
 #[test]
 fn ingress_cleaned_up_gives_unscheduled() {
     assert_eq!(
@@ -417,7 +417,7 @@ fn ingress_cleaned_up_gives_unscheduled() {
 // Volume derivation
 // -----------------------------------------------------------------------
 
-// r[verify lifecycle.volume]
+// spec: LCY#volumes
 #[test]
 fn volume_no_observations_gives_pending() {
     assert_eq!(
@@ -426,7 +426,7 @@ fn volume_no_observations_gives_pending() {
     );
 }
 
-// r[verify lifecycle.volume]
+// spec: LCY#volumes
 #[test]
 fn volume_created_gives_scheduled() {
     assert_eq!(
@@ -435,7 +435,7 @@ fn volume_created_gives_scheduled() {
     );
 }
 
-// r[verify lifecycle.volume]
+// spec: LCY#volumes
 #[test]
 fn volume_ready_gives_ready() {
     assert_eq!(
@@ -444,8 +444,8 @@ fn volume_ready_gives_ready() {
     );
 }
 
-// r[verify lifecycle.volume]
-// r[verify lifecycle.transitions]
+// spec: LCY#volumes
+// spec: LCY#transitions
 #[test]
 fn volume_stop_then_removed_gives_terminated() {
     assert_eq!(
@@ -462,8 +462,8 @@ fn volume_stop_then_removed_gives_terminated() {
     );
 }
 
-// r[verify lifecycle.volume]
-// r[verify lifecycle.transitions]
+// spec: LCY#volumes
+// spec: LCY#transitions
 #[test]
 fn volume_removed_without_stop_skips_terminating() {
     assert_eq!(
@@ -479,7 +479,7 @@ fn volume_removed_without_stop_skips_terminating() {
     );
 }
 
-// r[verify lifecycle.volume]
+// spec: LCY#volumes
 #[test]
 fn volume_cleaned_up_gives_unscheduled() {
     assert_eq!(
@@ -499,7 +499,7 @@ fn volume_cleaned_up_gives_unscheduled() {
 // derive_state_with_transition_time
 // -----------------------------------------------------------------------
 
-// r[verify lifecycle.derivation]
+// spec: LCY#derivation
 #[test]
 fn transition_time_is_none_when_pending() {
     let resource = dep("app", "web");
@@ -508,7 +508,7 @@ fn transition_time_is_none_when_pending() {
     assert!(time.is_none());
 }
 
-// r[verify lifecycle.derivation]
+// spec: LCY#derivation
 #[test]
 fn transition_time_matches_observation_recorded_at() {
     let resource = dep("app", "web");
@@ -520,7 +520,7 @@ fn transition_time_matches_observation_recorded_at() {
     assert_eq!(time, Some(expected));
 }
 
-// r[verify lifecycle.derivation]
+// spec: LCY#derivation
 #[test]
 fn transition_time_reflects_last_transition() {
     let resource = dep("app", "web");
@@ -536,8 +536,8 @@ fn transition_time_reflects_last_transition() {
     assert_eq!(time, Some(expected));
 }
 
-// r[verify lifecycle.derivation]
-// r[verify reconciliation.idempotency]
+// spec: LCY#derivation
+// spec: RCN#reconciliation-loop
 #[test]
 fn transition_time_not_updated_by_duplicate_observation() {
     let resource = dep("app", "web");
@@ -553,8 +553,8 @@ fn transition_time_not_updated_by_duplicate_observation() {
     assert_eq!(time, Some(expected));
 }
 
-// r[verify lifecycle.service]
-// r[verify lifecycle.derivation]
+// spec: LCY#services
+// spec: LCY#derivation
 #[test]
 fn transition_time_works_for_service() {
     let ts_ms: i64 = 9_999_000;
@@ -569,7 +569,7 @@ fn transition_time_works_for_service() {
 // DbWorldOracle (DB-backed)
 // -----------------------------------------------------------------------
 
-// r[verify history.world.state-derivation]
+// spec: LCY#derivation
 #[test]
 fn db_oracle_empty_gives_pending() {
     let db = Db::open_in_memory().expect("open");
@@ -578,8 +578,7 @@ fn db_oracle_empty_gives_pending() {
     assert_eq!(oracle.lifecycle_state(&resource), LifecycleState::Pending);
 }
 
-// r[verify history.world.state-derivation]
-// r[verify lifecycle.derivation]
+// spec: LCY#derivation
 #[test]
 fn db_oracle_derives_from_observations() {
     let db = Db::open_in_memory().expect("open");
@@ -594,9 +593,9 @@ fn db_oracle_derives_from_observations() {
     assert_eq!(oracle.lifecycle_state(&resource), LifecycleState::Running);
 }
 
-// r[verify history.world.state-derivation]
-// r[verify lifecycle.container]
-// r[verify lifecycle.transitions]
+// spec: LCY#derivation
+// spec: LCY#containers
+// spec: LCY#transitions
 #[test]
 fn db_oracle_full_sequence_to_terminated() {
     let db = Db::open_in_memory().expect("open");
@@ -613,8 +612,7 @@ fn db_oracle_full_sequence_to_terminated() {
     );
 }
 
-// r[verify history.world.state-derivation]
-// r[verify lifecycle.derivation]
+// spec: LCY#derivation
 #[test]
 fn db_oracle_uses_query_observations_from_history() {
     let db = Db::open_in_memory().expect("open");
@@ -637,7 +635,7 @@ fn db_oracle_uses_query_observations_from_history() {
 // termination_success
 // -----------------------------------------------------------------------
 
-// l[verify rt.termination.ensure-success]
+// spec: RT#termination
 #[test]
 fn db_oracle_termination_success_none_before_exit() {
     let db = Db::open_in_memory().expect("open");
@@ -648,7 +646,7 @@ fn db_oracle_termination_success_none_before_exit() {
     assert_eq!(oracle.termination_success(&resource), None);
 }
 
-// l[verify rt.termination.ensure-success]
+// spec: RT#termination
 #[test]
 fn db_oracle_termination_success_true_on_exit_zero() {
     let db = Db::open_in_memory().expect("open");
@@ -664,7 +662,7 @@ fn db_oracle_termination_success_true_on_exit_zero() {
     assert_eq!(oracle.termination_success(&resource), Some(true));
 }
 
-// l[verify rt.termination.ensure-success]
+// spec: RT#termination
 #[test]
 fn db_oracle_termination_success_false_on_nonzero_exit() {
     let db = Db::open_in_memory().expect("open");
@@ -680,7 +678,7 @@ fn db_oracle_termination_success_false_on_nonzero_exit() {
     assert_eq!(oracle.termination_success(&resource), Some(false));
 }
 
-// l[verify rt.termination.ensure-success]
+// spec: RT#termination
 #[test]
 fn db_oracle_termination_success_uses_latest_exit() {
     let db = Db::open_in_memory().expect("open");
@@ -706,7 +704,7 @@ fn db_oracle_termination_success_uses_latest_exit() {
     assert_eq!(oracle.termination_success(&resource), Some(true));
 }
 
-// l[verify rt.termination.ensure-success]
+// spec: RT#termination
 #[test]
 fn db_oracle_termination_success_services_terminate_successfully() {
     let db = Db::open_in_memory().expect("open");
@@ -717,7 +715,7 @@ fn db_oracle_termination_success_services_terminate_successfully() {
     assert_eq!(oracle.termination_success(&resource), Some(true));
 }
 
-// l[verify rt.termination.ensure-success]
+// spec: RT#termination
 #[test]
 fn db_oracle_termination_success_non_terminal_service_returns_none() {
     let db = Db::open_in_memory().expect("open");
@@ -728,7 +726,7 @@ fn db_oracle_termination_success_non_terminal_service_returns_none() {
     assert_eq!(oracle.termination_success(&resource), None);
 }
 
-// l[verify rt.termination.ensure-success]
+// spec: RT#termination
 #[test]
 fn db_oracle_termination_success_volume_terminated_is_success() {
     let db = Db::open_in_memory().expect("open");
@@ -739,7 +737,7 @@ fn db_oracle_termination_success_volume_terminated_is_success() {
     assert_eq!(oracle.termination_success(&resource), Some(true));
 }
 
-// l[verify rt.termination.ensure-success]
+// spec: RT#termination
 // Jobs run with `podman --rm` auto-remove on exit. The observer then sees
 // ContainerMissing rather than ContainerExited, so no container_exited
 // observation is ever written. A healthy unit exit must still report
@@ -756,7 +754,7 @@ fn db_oracle_termination_success_rm_clean_exit_is_success() {
     assert_eq!(oracle.termination_success(&resource), Some(true));
 }
 
-// l[verify rt.termination.ensure-success]
+// spec: RT#termination
 // If systemd reports the unit failed, treat as failure even when the
 // container's exit code was unobservable (podman --rm raced the
 // inspect).
@@ -773,7 +771,7 @@ fn db_oracle_termination_success_unit_failed_is_failure() {
     assert_eq!(oracle.termination_success(&resource), Some(false));
 }
 
-// l[verify rt.termination.ensure-success]
+// spec: RT#termination
 // When we DO capture a known exit code, trust it over the fallback —
 // a healthy unit exit with a non-zero container exit must still be
 // reported as a failure.
@@ -796,7 +794,7 @@ fn db_oracle_termination_success_exit_code_wins_over_unit_success() {
     assert_eq!(oracle.termination_success(&resource), Some(false));
 }
 
-// l[verify rt.termination.ensure-success]
+// spec: RT#termination
 // A container_exited with exit_code = -1 (podman didn't tell us) is an
 // unknown outcome. If no unit_failed is observed, fall through to the
 // terminal-seen fallback and succeed.

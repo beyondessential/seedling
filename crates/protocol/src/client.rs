@@ -282,7 +282,7 @@ pub struct OiClient {
 }
 
 impl OiClient {
-    // i[wire.actor]
+    // WIRE#actor-attribution
     pub async fn connect(
         addr: SocketAddr,
         auth: ClientAuth,
@@ -315,7 +315,7 @@ impl OiClient {
             .with_custom_certificate_verifier(verifier)
             .with_client_cert_resolver(build_client_cert_resolver(identity)?);
         tls_config.key_log = Arc::new(rustls::KeyLogFile::new());
-        // i[transport.alpn]
+        // TRN#connection
         tls_config.alpn_protocols = vec![OI_ALPN.to_vec()];
 
         let quic_config = quinn::crypto::rustls::QuicClientConfig::try_from(tls_config)
@@ -361,7 +361,7 @@ impl OiClient {
             .map_err(|e| ClientError::Transport(Box::new(e)))
     }
 
-    // i[stream.dispatch.server]
+    // WIRE#stream-dispatch
     /// Accept an incoming server-initiated bidirectional stream.
     ///
     /// The server opens these to push work to a client that has offered to do
@@ -395,7 +395,7 @@ impl OiClient {
     /// read to FIN and classified before the unidirectional stream is awaited,
     /// so an error response surfaces as [`ClientError::Api`] instead of
     /// parking the caller on a stream the server will never open.
-    // i[impl stream.subscribe]
+    // spec: WIRE#subscription-requests
     pub async fn open_subscription(
         &self,
         method: &str,
@@ -415,7 +415,7 @@ impl OiClient {
     ///
     /// Only for callers that must preserve an envelope built elsewhere — the
     /// web gateway relays the browser session's actor rather than its own.
-    // i[impl stream.subscribe]
+    // spec: WIRE#subscription-requests
     pub async fn open_subscription_raw(&self, request: &[u8]) -> Result<RecvStream, ClientError> {
         self.open_subscription_within(request, SUBSCRIBE_HANDSHAKE_TIMEOUT)
             .await
@@ -442,7 +442,7 @@ impl OiClient {
         send.finish()
             .map_err(|e| ClientError::Transport(Box::new(e)))?;
 
-        // i[stream.control] — the FIN is the message boundary, so the envelope
+        // WIRE#control-requests — the FIN is the message boundary, so the envelope
         // is read to end rather than to a newline it does not carry.
         let body = recv
             .read_to_end(RESPONSE_LIMIT)
@@ -480,7 +480,7 @@ impl OiClient {
     /// `TooLarge` — which concerns one datagram — from `ConnectionLost`,
     /// which concerns the forward. Flattening them into one opaque error is
     /// what let a single oversized datagram terminate a forward.
-    // i[impl forward.mtu]
+    // spec: FWD#udp-tunnelling
     pub fn send_datagram(&self, data: Vec<u8>) -> Result<(), quinn::SendDatagramError> {
         self.conn.send_datagram(data.into())
     }
@@ -498,7 +498,7 @@ impl OiClient {
     }
 
     /// Send a single JSON request and return the parsed result value.
-    // i[wire.actor]
+    // WIRE#actor-attribution
     pub async fn request(&self, method: &str, params: Value) -> Result<Value, ClientError> {
         let req_bytes = serde_json::to_vec(&serde_json::json!({
             "method": method,
@@ -579,14 +579,14 @@ impl OiClient {
             cell: Arc::clone(&cell),
         });
 
-        // i[transport.fingerprint-probe]
+        // TRN#fingerprint-probe
         let ephemeral = super::keys::ClientIdentity::ephemeral();
         let mut tls_config = TlsClientConfig::builder()
             .dangerous()
             .with_custom_certificate_verifier(verifier)
             .with_client_cert_resolver(build_client_cert_resolver(&ephemeral)?);
         tls_config.key_log = Arc::new(rustls::KeyLogFile::new());
-        // i[transport.alpn] — probe must be indistinguishable from a real connection.
+        // TRN#connection — probe must be indistinguishable from a real connection.
         tls_config.alpn_protocols = vec![OI_ALPN.to_vec()];
 
         let quic_config = quinn::crypto::rustls::QuicClientConfig::try_from(tls_config)
@@ -647,7 +647,7 @@ mod tests {
 
     use super::{FingerprintVerifier, hex_digest, normalise_fingerprint};
 
-    // i[verify transport.fingerprint-probe]
+    // spec: TRN#fingerprint-probe
     // A pin is operator input, and SHA-256 fingerprints are commonly displayed
     // in uppercase; a correct pin in the wrong case failed closed with a
     // misleading certificate error.
@@ -660,14 +660,14 @@ mod tests {
         assert_eq!(verifier.expected, digest);
     }
 
-    // i[verify transport.fingerprint-probe]
+    // spec: TRN#fingerprint-probe
     #[test]
     fn surrounding_whitespace_in_a_pin_is_ignored() {
         let digest = hex_digest(b"some-spki-bytes");
         assert_eq!(normalise_fingerprint(&format!("  {digest}\n")), digest);
     }
 
-    // i[verify transport.fingerprint-probe]
+    // spec: TRN#fingerprint-probe
     #[test]
     fn a_wrong_pin_still_does_not_match() {
         let digest = hex_digest(b"some-spki-bytes");
@@ -835,7 +835,7 @@ mod tests {
         .expect("subscribe must not block indefinitely")
     }
 
-    // i[verify stream.subscribe]
+    // spec: WIRE#subscription-requests
     // An error response terminates the request: the client must surface the
     // server's code and message rather than waiting for a stream that the
     // server has already decided not to open.
@@ -850,7 +850,7 @@ mod tests {
         }
     }
 
-    // i[verify stream.subscribe]
+    // spec: WIRE#subscription-requests
     // The server drops malformed requests by finishing the bidi stream with no
     // response at all; that is an error, not a successful handshake.
     #[tokio::test]
@@ -863,7 +863,7 @@ mod tests {
         }
     }
 
-    // i[verify stream.subscribe]
+    // spec: WIRE#subscription-requests
     // The server's `open_uni` failure path only logs, so a client that waits
     // unbounded on a confirmed-OK handshake still hangs forever.
     #[tokio::test]
@@ -876,7 +876,7 @@ mod tests {
         }
     }
 
-    // i[verify stream.subscribe]
+    // spec: WIRE#subscription-requests
     #[tokio::test]
     async fn successful_handshake_returns_the_data_stream() {
         let mut stream = subscribe_against(StubBehaviour::OkThenUni)

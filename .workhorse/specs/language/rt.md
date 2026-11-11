@@ -33,7 +33,7 @@ A selection is one of these values, holding the resources listed:
 | value | resources |
 | --- | --- |
 | an `App` | the app's named resources |
-| a [Collection](rule:l/collection.interface) | the Collection's resources |
+| a [Collection](collection.md#collection) | the Collection's resources |
 | a `Started` | the resources the `Started` holds |
 | a resource handle, named or anonymous | that resource |
 | an array of selections | every resource of every element |
@@ -52,7 +52,7 @@ A selection that is an `Action`, or any value not in the table, MUST make the me
 `rt.stop(selection)` and `rt.stop(selection, deadline: number)` MUST remove every resource of the selection from the app's desired state, then wait until all of them have reached Terminated, and return no value.
 `deadline` is read as for [barriers](#barriers), with the default given there for `rt.stop`.
 If the deadline passes first, `rt.stop` MUST throw.
-While it waits, the action closure is suspended as [suspension](rule:r/barrier.replay.rt-stop) specifies.
+While it waits, the action closure is suspended as [suspension](../runtime/suspension.md#rtstop) specifies.
 
 ### Querying resources
 
@@ -60,15 +60,15 @@ While it waits, the action closure is suspended as [suspension](rule:r/barrier.r
 
 ### Deployment restart
 
-`rt.restart(deployment: Deployment)` MUST restart every running instance of the named deployment, following its [update strategy](rule:l/deployment.on-update), and returns no value.
+`rt.restart(deployment: Deployment)` MUST restart every running instance of the named deployment, following its [update strategy](deployment.md#update-and-termination-strategies), and returns no value.
 It MUST NOT change the deployment's definition or the app's [generation](../overview.md#generation).
 An anonymous deployment, or any value other than a Deployment, MUST make `rt.restart` throw.
-Each call MUST restart the deployment at most once, including when the action closure is [replayed](rule:r/barrier.replay).
-Restart semantics are specified by [deployment restart](rule:i/deployment.restart).
+Each call MUST restart the deployment at most once, including when the action closure is [replayed](../runtime/suspension.md#replay).
+Restart semantics are specified by [deployment restart](../interface/app-control.md#deployment-restart).
 
 ### Certificate warming
 
-`rt.warm_certs(selection)` MUST start provisioning a certificate for every TLS-terminating [ingress](rule:l/ingress.type) of the selection, and returns a `Started` over those ingresses.
+`rt.warm_certs(selection)` MUST start provisioning a certificate for every TLS-terminating [ingress](ingress.md#declaration) of the selection, and returns a `Started` over those ingresses.
 It MUST ignore every other resource of the selection.
 It MUST NOT route traffic to an ingress.
 
@@ -76,13 +76,13 @@ On a `Started` returned by `rt.warm_certs`, `ready()` and `ready_eventually()` M
 Such a `Started` holding no ingress MUST satisfy them at once.
 
 > [!NOTE]
-> In a [change handler](rule:l/param.on-change), `app` is the app at the new generation, so `rt.warm_certs(app)` warms the ingresses of the new generation and none that only the previous one declared.
+> In a [change handler](parameter.md#change-handlers), `app` is the app at the new generation, so `rt.warm_certs(app)` warms the ingresses of the new generation and none that only the previous one declared.
 
 ### Image warming
 
-`rt.warm_images(selection)` MUST make present in the host's local image storage the image of every [deployment](rule:l/deployment.type) and [job](rule:l/job.type) of the selection that declares one, without starting any container, and returns a `Started` over those resources.
+`rt.warm_images(selection)` MUST make present in the host's local image storage the image of every [deployment](deployment.md#declaration) and [job](job.md#instances) of the selection that declares one, without starting any container, and returns a `Started` over those resources.
 It MUST ignore every other resource of the selection.
-The runtime MUST [pin](rule:r/image.pin) each distinct image reference warmed to the app.
+The runtime MUST [pin](../runtime/images.md#pins) each distinct image reference warmed to the app.
 
 On a `Started` returned by `rt.warm_images`, `ready()` and `ready_eventually()` MUST wait until every image it covers is present locally, instead of waiting for the Ready state.
 Such a `Started` covering no image MUST satisfy them at once.
@@ -93,7 +93,7 @@ Such a `Started` covering no image MUST satisfy them at once.
 ### Signal delivery
 
 `rt.signal(selection, signal: string)` MUST deliver the named signal to the main process of every running container instance of every deployment and job of the selection, including every replica, and returns no value.
-`signal` MUST be accepted in the forms a [stop signal](rule:l/container.stop-signal) accepts, and an unrecognised name MUST make `rt.signal` throw.
+`signal` MUST be accepted in the forms a [stop signal](container.md#stopping) accepts, and an unrecognised name MUST make `rt.signal` throw.
 The runtime MUST skip container instances that are not running.
 A selection holding no deployment or job MUST make `rt.signal` throw.
 If delivery to a running instance fails, `rt.signal` MUST throw.
@@ -128,16 +128,16 @@ Each call MUST run its command at most once, including when the action closure i
 ### Volume writes
 
 `rt.write(target, path: string, contents: string)` and `rt.write(target, path: string, contents: File)` write a file into a volume, and return no value.
-A string `contents` MUST be written as its UTF-8 bytes, and a [`File`](rule:l/file.type) byte for byte as the bundle holds it.
+A string `contents` MUST be written as its UTF-8 bytes, and a [`File`](bundle.md#bundle-files) byte for byte as the bundle holds it.
 
 `target` is one of:
 
 - a named Volume;
 - an anonymous Volume created in the running operation;
-- an ExternalVolume bound for the running operation, as [operation-scoped external volumes](rule:l/volume.external.dynamic) specify.
+- an ExternalVolume bound for the running operation, as [operation-scoped external volumes](volume.md#external-volumes) specify.
 
 Any other `target`, including an ExternalVolume with no binding for the operation, MUST make `rt.write` throw.
-`path` MUST be validated as a [volume write path](rule:l/volume.write.validation) is, and an invalid `path` MUST make `rt.write` throw.
+`path` MUST be validated as a [volume write path](volume.md#write-paths) is, and an invalid `path` MUST make `rt.write` throw.
 
 The runtime MUST NOT write the file again when a container using the volume restarts.
 Each call MUST write at most once, including when the action closure is replayed.
@@ -151,13 +151,13 @@ Each call MUST write at most once, including when the action closure is replayed
 ### Started
 
 A `Started` is an opaque value standing for a group of resources a runtime handle method returned.
-A `Started` MUST offer the [Collection](rule:l/collection.interface) methods `one`, `only`, `except` and `select`, each returning a `Started` over the resources it selects instead of the resources themselves.
+A `Started` MUST offer the [Collection](collection.md#collection) methods `one`, `only`, `except` and `select`, each returning a `Started` over the resources it selects instead of the resources themselves.
 `one()` on a `Started` holding no resources MUST return unit.
 A `Started` returned by a Collection method MUST keep the barriers of the `Started` it came from.
 
 ### Barriers
 
-`Started` has these barriers, each waiting until every resource it holds has reached the lifecycle state named, or a [later one](rule:r/lifecycle.transitions):
+`Started` has these barriers, each waiting until every resource it holds has reached the lifecycle state named, or a [later one](../runtime/lifecycle.md#transitions):
 
 | barrier | state | default deadline in seconds | returns |
 | --- | --- | --- | --- |
@@ -176,8 +176,8 @@ A positive `deadline` MUST be used as given, zero MUST select the default, and a
 A barrier on a `Started` holding no resources MUST return at once.
 A barrier whose condition holds MUST return, even if its deadline has passed.
 If the deadline passes while the condition does not hold, the barrier MUST throw.
-A barrier with no deadline MUST wait until its condition holds or the operation is [cancelled](rule:r/operation.cancel).
-While a barrier waits, the action closure is suspended as [suspension](rule:r/barrier.suspension) specifies.
+A barrier with no deadline MUST wait until its condition holds or the operation is [cancelled](../runtime/operations.md#cancellation).
+While a barrier waits, the action closure is suspended as [suspension](../runtime/suspension.md#barriers) specifies.
 
 ### Termination
 

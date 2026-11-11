@@ -18,12 +18,12 @@ use crate::{
 /// been live for [`ABSENT_AFTER_SECS`].
 pub const FAULT_KIND: &str = "canopy_offer_absent";
 
-// r[impl canopy.offer.absent]
+// spec: CNR#missing-offers
 /// How long no offer may have been live before apps relying on Canopy are
 /// faulted.
 pub const ABSENT_AFTER_SECS: i64 = 15 * 60;
 
-// r[impl canopy.offer.absent]
+// spec: CNR#missing-offers
 /// Record the type an app's definition declares, or that it declares none.
 ///
 /// An app that stops relying on Canopy loses its fault with its row.
@@ -35,7 +35,7 @@ pub fn sync_app_type(db: &Db, app: &AppName, canopy_type: Option<&str>) -> rusql
     Ok(())
 }
 
-// r[impl canopy.offer.absent]
+// spec: CNR#missing-offers
 /// Clear the fault from every app.
 pub fn clear_all(db: &Db) -> rusqlite::Result<()> {
     // Through a scope, so the sweep this runs on every tick asks only for this
@@ -44,7 +44,7 @@ pub fn clear_all(db: &Db) -> rusqlite::Result<()> {
     Ok(())
 }
 
-// r[impl canopy.offer.absent]
+// spec: CNR#missing-offers
 /// File the fault against each app whose period has run out.
 ///
 /// This only files. It is retained rather than a condition: at startup the

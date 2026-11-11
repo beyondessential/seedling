@@ -33,7 +33,7 @@ pub(super) struct SiteProxyData {
     /// L4 (tcp/udp) forward attachments, resolved to a Caddy L4 route.
     /// Listener port comes from the attachment; upstream is the same
     /// IPv6 service address the HTTP path uses.
-    // r[impl ingress.site.attachment]
+    // spec: SITE#attachments
     pub l4_routes: Vec<SiteL4Entry>,
     /// `(site_ingress, port, protocol, reason)` for entries that couldn't
     /// be resolved this tick. Used for fault filing.
@@ -53,7 +53,7 @@ pub(super) struct UnresolvedAttachment {
 /// detector can attribute collisions and the reconciler can drop both
 /// sides from the proxy config when an app ingress claims the same
 /// `(hostname, port)`.
-// r[impl ingress.site.attachment]
+// spec: SITE#attachments
 #[derive(Debug, Clone)]
 pub(super) struct SiteL4Entry {
     pub site_ingress: SiteIngressName,
@@ -70,7 +70,7 @@ pub(super) struct SiteIngressSnapshot {
     pub attachments: Vec<SiteIngressAttachment>,
 }
 
-// r[impl ingress.site] r[impl ingress.site.attachment]
+// spec: SITE#site-ingresses, SITE#attachments
 pub(super) fn load(db: &crate::runtime::db::Db) -> SiteIngressSnapshot {
     let ingresses = site_ingresses::list(db).unwrap_or_else(|e| {
         tracing::warn!(error = %e, "site_proxy: failed to list site ingresses; using empty");
@@ -86,7 +86,7 @@ pub(super) fn load(db: &crate::runtime::db::Db) -> SiteIngressSnapshot {
     }
 }
 
-// r[impl ingress.site] r[impl ingress.site.attachment]
+// spec: SITE#site-ingresses, SITE#attachments
 pub(super) fn collect(
     snapshot: &SiteIngressSnapshot,
     apps: &[AppSnapshot],
@@ -102,7 +102,7 @@ pub(super) fn collect(
     };
 
     for ingress in &snapshot.ingresses {
-        // r[impl ingress.site.lifecycle] discovered ingresses that have lost
+        // spec: SITE#sources discovered ingresses that have lost
         // their source (e.g. tailscaled is offline) skip serving but stay in
         // the DB so attachments survive the outage.
         if ingress.stale {
@@ -144,7 +144,7 @@ fn resolve_attachment(
         att.protocol,
         AttachmentProtocol::Tcp | AttachmentProtocol::Udp
     ) {
-        // r[impl ingress.site.attachment]
+        // spec: SITE#attachments
         match &att.target {
             AttachmentTarget::Forward { app, service } => {
                 match resolve_forward_upstream(
@@ -307,7 +307,7 @@ fn resolve_forward_upstream(
     let upstream_port = scan_apps_for_service_port(snapshot, svc_name_str)
         .ok_or_else(|| format!("no pod binding found for {target_app}/{svc_name_str}"))?;
 
-    // r[impl service.http.route.routing]
+    // spec: PRX#route-emission
     // Routing is a property of the *service*, not of the ingress that
     // attaches to it. A site-ingress attachment to a service with HTTP
     // route bindings must use the same per-prefix routing as an app
@@ -329,7 +329,7 @@ fn resolve_forward_upstream(
         target_running,
         &service_def,
     );
-    // r[impl service.http.route.redirect]
+    // spec: PRX#redirect-routes
     // A redirect route is a property of the service by the same argument the
     // comment above makes for prefix routing: a path that redirects when
     // reached through the app's own ingress redirects when reached through a
@@ -388,7 +388,7 @@ fn pod_first_port(pod: &crate::defs::pod::PodDef, service_name: &str) -> Option<
 /// each conflict are dropped from the proxy config; the reconciler files
 /// faults for each party and clears them on the first tick where the
 /// conflict no longer appears.
-// r[impl ingress.site.conflict]
+// spec: SITE#ingress-conflicts
 #[derive(Debug, Default, Clone)]
 pub(super) struct ConflictReport {
     /// Conflict tuples observed this tick.
@@ -411,7 +411,7 @@ pub(super) struct ConflictParties {
 /// site-ingress attachment. Caller is responsible for removing the matching
 /// entries from `app_pairs`, `site_data.forwards`, and `site_data.redirects`
 /// before passing them to `build_proxy_config`.
-// r[impl ingress.site.conflict]
+// spec: SITE#ingress-conflicts
 pub(super) fn detect_conflicts(
     app_pairs: &[(AppName, IngressDef, ServiceUpstream)],
     site_data: &SiteProxyData,

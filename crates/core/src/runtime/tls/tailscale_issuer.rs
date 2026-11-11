@@ -7,7 +7,7 @@
 //! This module is the building block; the wire-up that makes the issuance
 //! Coordinator dispatch tailnet hostnames through here lands separately.
 //
-// r[impl ingress.site.tailscale]
+// spec: SITE#tailscale-discovery
 
 use std::{path::PathBuf, sync::Arc};
 

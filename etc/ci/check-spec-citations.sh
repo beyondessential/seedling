@@ -25,7 +25,7 @@ while IFS= read -r hit; do
     done < <(grep -oE 'spec: [A-Z][A-Z0-9]+(#[a-z0-9_-]+)?(, [A-Z][A-Z0-9]+(#[a-z0-9_-]+)?)*' <<<"$text" |
         sed -E 's/^spec: //' | tr ',' '\n' | sed -E 's/^ +//')
 done < <(grep -rnE --include='*.rs' --include='*.ts' --include='*.tsx' --include='*.sh' \
-    --exclude-dir=target --exclude-dir=node_modules --exclude-dir=dist \
+    --exclude-dir=target --exclude-dir=node_modules --exclude-dir=dist --exclude=check-spec-citations.sh \
     'spec: [A-Z][A-Z0-9]+' crates/ etc/ || true)
 
 if ((${#violations[@]})); then

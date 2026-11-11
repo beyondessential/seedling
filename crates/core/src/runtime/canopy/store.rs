@@ -36,7 +36,7 @@ pub(super) fn now_secs() -> i64 {
         .as_secs() as i64
 }
 
-// r[impl canopy.settings.enabled]
+// spec: CNR#canopy-access
 pub fn get_settings(db: &Db) -> rusqlite::Result<CanopySettings> {
     db.conn.query_row(
         "SELECT enabled, server_id, updated_at, last_offer_live_at, enabled_at \
@@ -57,12 +57,12 @@ pub fn get_settings(db: &Db) -> rusqlite::Result<CanopySettings> {
     )
 }
 
-// r[impl canopy.settings.enabled]
+// spec: CNR#canopy-access
 pub fn set_enabled(db: &Db, enabled: bool) -> rusqlite::Result<()> {
     set_enabled_at(db, enabled, now_secs())
 }
 
-// r[impl canopy.offer.absent]
+// spec: CNR#missing-offers
 /// [`set_enabled`] at a given time. `enabled_at` is stamped only when access
 /// goes from off to on, so enabling an already-enabled instance does not
 /// restart the missing-offer period.
@@ -77,7 +77,7 @@ pub fn set_enabled_at(db: &Db, enabled: bool, at: i64) -> rusqlite::Result<()> {
     Ok(())
 }
 
-// r[impl canopy.offer.absent]
+// spec: CNR#missing-offers
 /// Record that an offer was live at `at`.
 pub fn mark_offer_live(db: &Db, at: i64) -> rusqlite::Result<()> {
     db.conn.execute(
@@ -87,7 +87,7 @@ pub fn mark_offer_live(db: &Db, at: i64) -> rusqlite::Result<()> {
     Ok(())
 }
 
-// r[impl canopy.app.key]
+// spec: CNR#applications
 /// Record the Canopy type an app's definition declares, or that it declares
 /// none. `since` is stamped only when the row is new or the type changes.
 pub fn sync_app_type(db: &Db, app: &str, canopy_type: Option<&str>) -> rusqlite::Result<()> {
@@ -124,7 +124,7 @@ pub fn delete_app(db: &Db, app: &str) -> rusqlite::Result<()> {
     Ok(())
 }
 
-// r[impl canopy.app.health]
+// spec: CNR#application-health
 /// Hold `grade` against `app` for an operation that follows, or `None` to
 /// drop the one held.
 pub fn set_last_grade(db: &Db, app: &str, grade: Option<&str>) -> rusqlite::Result<()> {
@@ -151,7 +151,7 @@ pub fn list_apps(db: &Db) -> rusqlite::Result<Vec<CanopyApp>> {
     .collect()
 }
 
-// r[impl canopy.report.identity]
+// spec: CNR#server-identity
 /// Cache the server identifier Canopy resolved, so the resolution is not
 /// repeated on every report.
 ///
@@ -177,7 +177,7 @@ mod tests {
         Db::open_in_memory().expect("in-memory db")
     }
 
-    // r[verify canopy.settings.enabled]
+    // spec: CNR#canopy-access
     #[test]
     fn a_fresh_instance_has_canopy_access_on() {
         let settings = get_settings(&db()).expect("the singleton row exists");
@@ -188,7 +188,7 @@ mod tests {
         assert!(settings.server_id.is_none());
     }
 
-    // r[verify canopy.settings.enabled]
+    // spec: CNR#canopy-access
     #[test]
     fn the_setting_survives_being_turned_off_and_on() {
         let db = db();
@@ -198,7 +198,7 @@ mod tests {
         assert!(get_settings(&db).unwrap().enabled);
     }
 
-    // r[verify canopy.settings.enabled]
+    // spec: CNR#canopy-access
     #[test]
     fn changing_the_setting_stamps_when_it_changed() {
         let db = db();
@@ -207,7 +207,7 @@ mod tests {
         assert!(get_settings(&db).unwrap().updated_at > 0);
     }
 
-    // r[verify canopy.report.identity]
+    // spec: CNR#server-identity
     #[test]
     fn a_resolved_server_id_round_trips_and_can_be_cleared() {
         let db = db();
@@ -224,7 +224,7 @@ mod tests {
         );
     }
 
-    // r[verify canopy.report.identity]
+    // spec: CNR#server-identity
     #[test]
     fn a_blank_server_id_reads_as_unresolved() {
         let db = db();
@@ -235,7 +235,7 @@ mod tests {
         );
     }
 
-    // r[verify canopy.report.identity]
+    // spec: CNR#server-identity
     #[test]
     fn caching_a_server_id_is_not_a_settings_change() {
         // `updated_at` says when an operator last changed the setting. The
@@ -254,7 +254,7 @@ mod tests {
         );
     }
 
-    // r[verify canopy.settings.enabled]
+    // spec: CNR#canopy-access
     #[test]
     fn the_server_id_and_the_setting_do_not_disturb_each_other() {
         let db = db();
@@ -269,7 +269,7 @@ mod tests {
         );
     }
 
-    // r[verify canopy.app.key]
+    // spec: CNR#applications
     #[test]
     fn since_survives_reapplying_the_same_type_and_a_change_restamps_it() {
         let db = db();
@@ -291,7 +291,7 @@ mod tests {
         );
     }
 
-    // r[verify canopy.app.key]
+    // spec: CNR#applications
     #[test]
     fn no_type_removes_the_row() {
         let db = db();
@@ -306,7 +306,7 @@ mod tests {
         sync_app_type_at(&db, "never-there", None, 2).unwrap();
     }
 
-    // r[verify canopy.offer.absent]
+    // spec: CNR#missing-offers
     #[test]
     fn enabled_at_is_stamped_only_when_access_goes_from_off_to_on() {
         let db = db();
@@ -325,7 +325,7 @@ mod tests {
         assert_eq!(get_settings(&db).unwrap().enabled_at, Some(300));
     }
 
-    // r[verify canopy.offer.absent]
+    // spec: CNR#missing-offers
     #[test]
     fn the_last_live_offer_is_recorded() {
         let db = db();

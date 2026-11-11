@@ -27,9 +27,9 @@ An externally reachable endpoint of an app, identified by a hostname and a port,
 
 ## Declaration
 
-A script declares an ingress with `service.ingress(hostname: string, port: number)`, which returns an `Ingress` [builder](rule:l/bsl.builder).
+A script declares an ingress with `service.ingress(hostname: string, port: number)`, which returns an `Ingress` [builder](overview.md#builders).
 `httpService.ingress(hostname, port)` is equivalent, as [HTTP services](http-service.md#declaration) specifies.
-A `port` MUST be validated as a [port number](rule:l/bsl.port).
+A `port` MUST be validated as a [port number](overview.md#ports).
 
 `ingress` called on an anonymous Service MUST throw, and MUST declare no ingress.
 A Service MAY have any number of ingresses.
@@ -44,7 +44,7 @@ An ingress is identified within its app by its hostname and port.
 Declaring an ingress whose hostname and port match an ingress already declared in the same app MUST throw, and MUST leave the earlier ingress as it was.
 
 > [!NOTE]
-> A script may catch the error with `try..catch`, as [errors](rule:l/bsl.errors) allows.
+> A script may catch the error with `try..catch`, as [errors](overview.md#evaluation) allows.
 
 ## Hostnames
 
@@ -83,7 +83,7 @@ An ingress on which `tls()` is never called MUST forward TCP connections to its 
 
 ### Terminate
 
-`Terminate` is an [enum](rule:l/bsl.enums) of what an ingress terminates.
+`Terminate` is an [enum](overview.md#enums) of what an ingress terminates.
 
 | variant | terminates |
 | --- | --- |
@@ -93,7 +93,7 @@ An ingress on which `tls()` is never called MUST forward TCP connections to its 
 
 ### Output
 
-`Output` is an [enum](rule:l/bsl.enums) of the protocol an ingress hands to its Service.
+`Output` is an [enum](overview.md#enums) of the protocol an ingress hands to its Service.
 
 | variant | protocol |
 | --- | --- |
@@ -105,7 +105,7 @@ An ingress on which `tls()` is never called MUST forward TCP connections to its 
 ## Redirect to HTTPS
 
 `ingress.redirect()`, `ingress.redirect(port: number)` and `ingress.redirect(port: number, code: number)` declare that plaintext HTTP on `port` is redirected to the ingress.
-The `port` defaults to 80, and MUST be validated as a [port number](rule:l/bsl.port).
+The `port` defaults to 80, and MUST be validated as a [port number](overview.md#ports).
 The `code` defaults to 307, and MUST be a [redirection status code](#borrowed-terms) from 300 to 399.
 A `code` outside that range MUST throw.
 

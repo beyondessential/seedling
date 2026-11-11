@@ -65,7 +65,7 @@ describe("useEventRefresh", () => {
     expect(screen.getByTestId("count").textContent).toBe("0");
   });
 
-  // w[verify routes.events.gap]
+  // spec: WEB#event-relay
   it("refetches on a gap marker even when nothing else matches", () => {
     const { setEvents } = renderWithEvents(isFault);
     setEvents([ev("EventsDropped", "e1")]);

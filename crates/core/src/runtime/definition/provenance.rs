@@ -6,7 +6,7 @@ use super::bundle::Bundle;
 
 /// Where the client says it obtained a pushed bundle. Recorded as reported,
 /// never verified.
-// i[impl definition.source]
+// spec: DEFN#definition-sources
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Origin {
@@ -16,7 +16,7 @@ pub struct Origin {
 
 /// How a definition reached the runtime: the part of its provenance that is
 /// not derived from the bundle itself.
-// i[impl definition.provenance]
+// spec: DEFN#provenance-reporting
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum Source {
@@ -50,7 +50,7 @@ impl Source {
 
     /// The tag-bearing reference a re-check should resolve, if this
     /// definition has one.
-    // r[impl definition.recheck]
+    // spec: RCK#resolution
     pub fn recheckable_reference(&self) -> Option<&str> {
         match self {
             Self::Fetched { reference, .. } if !reference.contains('@') => Some(reference),
@@ -59,7 +59,7 @@ impl Source {
     }
 
     /// The full provenance object for a definition with this source.
-    // i[impl definition.provenance]
+    // spec: DEFN#provenance-reporting
     pub fn to_json(&self, bundle: &Bundle) -> Value {
         self.to_json_with(
             bundle.hash(),
@@ -71,7 +71,7 @@ impl Source {
     /// the bundle: a history page already has the content hash in the row it
     /// is listing, and reads the requirement on its own rather than
     /// materialising every definition it names.
-    // i[impl definition.provenance]
+    // spec: DEFN#provenance-reporting
     pub fn to_json_with(&self, content_hash: &str, seedling_versions: Option<&str>) -> Value {
         let mut obj = match serde_json::to_value(self).expect("provenance serialises") {
             Value::Object(map) => map,
@@ -87,7 +87,7 @@ impl Source {
 mod tests {
     use super::*;
 
-    // i[verify definition.provenance]
+    // spec: DEFN#provenance-reporting
     #[test]
     fn pushed_provenance_carries_actor_origin_and_hash() {
         let bundle = Bundle::from_files([
@@ -119,7 +119,7 @@ mod tests {
         assert_eq!(Source::from_db(&source.to_db()).unwrap(), source);
     }
 
-    // i[verify definition.provenance]
+    // spec: DEFN#provenance-reporting
     #[test]
     fn fetched_provenance_carries_reference_and_digest() {
         let bundle = Bundle::from_script("app;").unwrap();
@@ -134,7 +134,7 @@ mod tests {
         assert_eq!(v["seedling_versions"], Value::Null);
     }
 
-    // r[verify definition.recheck]
+    // spec: RCK#resolution
     #[test]
     fn only_tagged_fetches_are_rechecked() {
         let tagged = Source::Fetched {

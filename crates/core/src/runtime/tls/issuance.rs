@@ -196,8 +196,8 @@ impl Coordinator {
     ///
     /// Does nothing for a hostname on no chain: an ACME-DNS or Tailscale
     /// hostname's retry is the issuance coordinator's to take.
-    // r[impl tls.cert.force-retry]
-    // r[impl tls.chain.return]
+    // spec: TLS#retry-blocks-and-retries
+    // spec: CHAIN#return-to-the-first-strategy
     pub fn settle_retry(&self, hostname: &str) {
         let Some(state) = self.chain_state() else {
             // Not knowing where the hostname stands is not knowing whether
@@ -253,7 +253,7 @@ impl Coordinator {
     ///
     /// `None` when there is nothing to read it with, which is not the proxy
     /// holding nothing.
-    // r[impl tls.chain.proxy-gate]
+    // spec: CHAIN#proxy-strategies
     pub fn proxy_holding_now(&self, hostname: &str) -> Option<state::ProxyHolding> {
         Some(self.environment.get()?.holding(hostname))
     }
@@ -270,7 +270,7 @@ impl Coordinator {
     ///
     /// `None` when the decisions could not be made, which is not an empty map:
     /// an empty one tells the proxy it may renew whenever it likes.
-    // r[impl tls.chain.proxy-gate]
+    // spec: CHAIN#proxy-strategies
     pub fn proxy_renewal_ratios(&self) -> Option<BTreeMap<String, f64>> {
         Some(
             self.chain_decisions(None)?
@@ -286,7 +286,7 @@ impl Coordinator {
     /// `None` when the decisions could not be made, which is not the same as
     /// no hostname being on a chain: a caller that withholds anything on the
     /// strength of a decision must withhold nothing on `None`.
-    // r[impl tls.chain.cycle]
+    // spec: CHAIN#cycles
     pub fn chain_decisions(&self, only: Option<&str>) -> Option<BTreeMap<String, ChainDecision>> {
         let state = self.chain_state()?;
         let mut out = BTreeMap::new();
@@ -354,7 +354,7 @@ impl Coordinator {
     ///
     /// [force-retry]: super::store::set_force_retry
     pub fn ensure(self: &Arc<Self>, hostname: &str) {
-        // r[impl tls.cert.eager-issuance]
+        // spec: TLS#issuance
         let Some(claim) = self.in_flight.claim_if_idle(hostname) else {
             return;
         };
@@ -395,7 +395,7 @@ impl Coordinator {
     /// Tailscale site ingress whose `tls_provider` is `Tailscale`. The
     /// Coordinator dispatches these hostnames to the Tailscale issuer
     /// instead of the ACME pipeline.
-    // r[impl ingress.site.tailscale]
+    // spec: SITE#tailscale-discovery
     fn dispatch_to_tailscale(&self, hostname: &str) -> Result<bool> {
         let host = hostname.to_owned();
         let matched = self
@@ -429,7 +429,7 @@ impl Coordinator {
     /// call `tailscale_issuer::issue`, and finalise + emit faults the
     /// same way the ACME path does so the operator-visible cert state
     /// is consistent across origins.
-    // r[impl ingress.site.tailscale]
+    // spec: SITE#tailscale-discovery
     async fn run_tailscale(
         self: &Arc<Self>,
         hostname: &str,
@@ -527,7 +527,7 @@ impl Coordinator {
         // operator asked for this one and waits on its result. The two are
         // serialised by the issue lock, and the hostname stays in flight until
         // both have finished.
-        // r[impl tls.cert.eager-issuance]
+        // spec: TLS#issuance
         let _claim = self.in_flight.claim(hostname);
         self.run(hostname, AttemptTrigger::Manual).await
     }
@@ -568,14 +568,14 @@ impl Coordinator {
             );
         }
 
-        // r[impl ingress.site.tailscale]
+        // spec: SITE#tailscale-discovery
         // Tailscale-discovered hostnames bypass the ACME state machine
         // entirely: there's no operator policy to read, no CA to talk to, and
         // no ARI window. tailscale_issuer fetches a fresh cert+key pair from
         // the local tailscaled API, and the rest of the runtime serves it via
         // the same get_certificate path ACME certs flow through.
         //
-        // r[impl tls.cert.retry-block] — but the dispatch happens *after* the
+        // spec: TLS#retry-blocks-and-retries — but the dispatch happens *after* the
         // decision, not before it. Dispatching first routed around the only
         // thing that paces issuance: while tailscaled was down, every
         // reconciler tick opened and finalised a failed attempt row, and the
@@ -723,7 +723,7 @@ enum ProceedKind {
 /// any issuer. The remaining decisions are about ACME policy — which DNS
 /// provider, whether a current cert already covers the hostname — and mean
 /// nothing to an issuer that fetches from a local API.
-// r[impl tls.cert.retry-block]
+// spec: TLS#retry-blocks-and-retries
 fn check_retry_gate(hostname: &str, trigger: AttemptTrigger, owned: &OwnedState) -> Result<()> {
     match &owned.decision {
         Decision::Blocked { reason } => Err(CoordinatorError::Paused {
@@ -861,7 +861,7 @@ mod tests {
 
     /// An operator issuance overlapping a background one, finishing first or
     /// last, must leave the hostname in flight until both are done.
-    // r[verify tls.cert.eager-issuance]
+    // spec: TLS#issuance
     #[test]
     fn a_hostname_stays_in_flight_until_every_issuance_for_it_finishes() {
         let in_flight = Arc::<InFlight>::default();

@@ -7,7 +7,7 @@ use semver::{Comparator, Op, Version, VersionReq};
 ///
 /// `semver::VersionReq` parses a single comma-joined set, so the alternatives
 /// are split here and each is parsed on its own.
-// l[impl bsl.bundle.seedling-versions]
+// spec: BND#seedling-version-requirement
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct VersionRequirement {
     source: String,
@@ -44,7 +44,7 @@ impl VersionRequirement {
 
     /// The lowest version satisfying the requirement, or `None` when no
     /// alternative can be satisfied at all.
-    // i[impl definition.fetch.select]
+    // spec: DEFN#artefact-selection
     pub fn minimum(&self) -> Option<Version> {
         self.sets.iter().filter_map(set_minimum).min()
     }
@@ -105,7 +105,7 @@ mod tests {
         Version::parse(s).unwrap()
     }
 
-    // l[verify bsl.bundle.seedling-versions]
+    // spec: BND#seedling-version-requirement
     #[test]
     fn alternatives_match_when_any_set_does() {
         let req = VersionRequirement::parse(">=0.13, <0.15 || ^1.2").unwrap();
@@ -117,7 +117,7 @@ mod tests {
         assert!(!req.matches(&v("2.0.0")));
     }
 
-    // l[verify bsl.bundle.seedling-versions]
+    // spec: BND#seedling-version-requirement
     #[test]
     fn malformed_requirements_are_rejected() {
         assert!(VersionRequirement::parse("").is_err());
@@ -125,8 +125,8 @@ mod tests {
         assert!(VersionRequirement::parse("not a version").is_err());
     }
 
-    // i[verify definition.fetch.select]
-    // l[verify bsl.bundle.seedling-versions]
+    // spec: DEFN#artefact-selection
+    // spec: BND#seedling-version-requirement
     #[test]
     fn minimum_is_lowest_across_alternatives() {
         let req = VersionRequirement::parse(">=0.14 || >=0.12, <0.13").unwrap();

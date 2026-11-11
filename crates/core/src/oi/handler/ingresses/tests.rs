@@ -7,7 +7,7 @@ fn show(oi: &TestOi, name: &str) -> serde_json::Value {
         .unwrap()
 }
 
-// r[verify ingress.site.lifecycle]
+// spec: SITE#sources
 #[test]
 fn site_ingress_create_show_list_delete_roundtrip() {
     let oi = TestOi::new();
@@ -53,7 +53,7 @@ fn site_ingress_create_show_list_delete_roundtrip() {
     assert_eq!(code, "not_found");
 }
 
-// r[verify ingress.site.lifecycle]
+// spec: SITE#sources
 #[test]
 fn site_ingress_create_rejects_invalid_hostname_and_tailscale_tls() {
     let oi = TestOi::new();
@@ -97,7 +97,7 @@ fn site_ingress_create_rejects_invalid_hostname_and_tailscale_tls() {
     assert!(msg.contains("tailscale"), "{msg}");
 }
 
-// r[verify ingress.site.lifecycle]
+// spec: SITE#sources
 #[test]
 fn site_ingress_update_description_and_tls_provider() {
     let oi = TestOi::new();
@@ -155,7 +155,7 @@ fn site_ingress_update_description_and_tls_provider() {
     assert_eq!(code, "not_found");
 }
 
-// r[verify ingress.site.attachment]
+// spec: SITE#attachments
 #[test]
 fn forward_attachment_attach_and_detach() {
     let oi = TestOi::new();
@@ -220,7 +220,7 @@ fn forward_attachment_attach_and_detach() {
     assert_eq!(code, "not_found");
 }
 
-// r[verify ingress.site.attachment]
+// spec: SITE#attachments
 #[test]
 fn redirect_attachment_defaults_and_validation() {
     let oi = TestOi::new();
@@ -291,7 +291,7 @@ fn redirect_attachment_defaults_and_validation() {
     assert!(msg.contains("protocol"), "{msg}");
 }
 
-// r[verify ingress.site.tailscale]
+// spec: SITE#tailscale-discovery
 #[test]
 fn discovery_status_and_refresh_without_tailscale() {
     let oi = TestOi::new();
@@ -317,7 +317,7 @@ fn discovery_status_and_refresh_without_tailscale() {
     assert!(msg.contains("not configured"), "{msg}");
 }
 
-// r[verify namespace.reserved]
+// spec: IDN#reserved-names
 // The Tailscale provider disables whatever row holds this name, so a manual
 // ingress created under it was permanently stale.
 #[test]
@@ -333,7 +333,7 @@ fn reserved_site_ingress_name_is_rejected_at_creation() {
     assert!(message.contains("reserved"), "message: {message}");
 }
 
-// r[verify ingress.site.lifecycle]
+// spec: SITE#sources
 // An attachment on port 0 is not routable; it used to be stored and then
 // reach the proxy config rather than being refused with the field named.
 #[test]

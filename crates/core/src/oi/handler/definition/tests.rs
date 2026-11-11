@@ -57,8 +57,8 @@ const DEF_A: &str = r#"
     app.deployment("web").image("docker.io/library/nginx:1.29");
 "#;
 
-// i[verify definition.fetch]
-// i[verify definition.provenance]
+// spec: DEFN#fetching
+// spec: DEFN#provenance-reporting
 #[test]
 fn a_fetched_definition_registers_with_its_reference_and_digest() {
     let oi = TestOi::new();
@@ -75,7 +75,7 @@ fn a_fetched_definition_registers_with_its_reference_and_digest() {
     assert!(def["content_hash"].as_str().unwrap().starts_with("sha256:"));
 }
 
-// i[verify definition.fetch]
+// spec: DEFN#fetching
 #[test]
 fn a_definition_from_an_index_entry_records_the_entry_digest() {
     let oi = TestOi::new();
@@ -103,7 +103,7 @@ fn a_definition_from_an_index_entry_records_the_entry_digest() {
     assert_eq!(show(&oi, "web")["definition"]["digest"], def);
 }
 
-// i[verify definition.fetch]
+// spec: DEFN#fetching
 #[test]
 fn a_reference_naming_no_definition_registers_nothing() {
     let oi = TestOi::new();
@@ -123,7 +123,7 @@ fn a_reference_naming_no_definition_registers_nothing() {
     );
 }
 
-// i[verify definition.fetch.access]
+// spec: DEFN#registry-access
 #[test]
 fn a_registry_off_the_allowlist_is_never_contacted() {
     let oi = TestOi::new();
@@ -135,7 +135,7 @@ fn a_registry_off_the_allowlist_is_never_contacted() {
     assert_eq!(oi.registry.requests.load(Ordering::SeqCst), 0);
 }
 
-// i[verify definition.source]
+// spec: DEFN#definition-sources
 #[test]
 fn exactly_one_definition_source_is_accepted() {
     let oi = TestOi::new();
@@ -152,7 +152,7 @@ fn exactly_one_definition_source_is_accepted() {
     }
 }
 
-// i[verify app.update]
+// spec: APPS#update
 #[test]
 fn an_update_whose_fetch_fails_changes_nothing() {
     let oi = TestOi::with_app("web");
@@ -169,7 +169,7 @@ fn an_update_whose_fetch_fails_changes_nothing() {
     assert!(faults_of(&oi, "web").is_empty());
 }
 
-// i[verify definition.tags]
+// spec: DEFN#repository-tags
 #[test]
 fn tags_are_listed_for_allowed_repositories_only() {
     let oi = TestOi::new();
@@ -186,7 +186,7 @@ fn tags_are_listed_for_allowed_repositories_only() {
     assert_eq!(code, "registry_not_allowed");
 }
 
-// i[verify definition.bundle.limits]
+// spec: DEFN#bundle-rules
 #[test]
 fn a_pushed_bundle_breaking_the_rules_is_refused() {
     let oi = TestOi::new();
@@ -202,7 +202,7 @@ fn a_pushed_bundle_breaking_the_rules_is_refused() {
     assert_eq!(code, "bundle_invalid");
 }
 
-// i[verify definition.bundle.seedling-versions]
+// spec: DEFN#seedling-version-support
 #[test]
 fn a_definition_for_another_seedling_is_refused() {
     let oi = TestOi::new();
@@ -225,8 +225,7 @@ fn a_definition_for_another_seedling_is_refused() {
     assert_eq!(code, "unsupported_seedling");
 }
 
-// l[verify bsl.bundle]
-// l[verify bsl.bundle.script-errors]
+// spec: BND#script-formation
 #[test]
 fn several_script_files_evaluate_as_one_and_report_errors_by_file() {
     let oi = TestOi::new();
@@ -256,8 +255,8 @@ fn several_script_files_evaluate_as_one_and_report_errors_by_file() {
     assert!(message.contains("app.seed.rhai line 2"), "{message}");
 }
 
-// i[verify definition.content-hash]
-// r[verify generation.script-storage]
+// spec: DEFN#content-hash-computation
+// spec: GEN#bundle-storage
 #[test]
 fn pushed_and_fetched_copies_of_one_folder_share_a_hash_and_a_row() {
     let oi = TestOi::new();
@@ -291,7 +290,7 @@ fn pushed_and_fetched_copies_of_one_folder_share_a_hash_and_a_row() {
     assert_eq!(rows, 1);
 }
 
-// i[verify app.update]
+// spec: APPS#update
 #[test]
 fn a_refused_update_stores_nothing_and_leaves_faults_alone() {
     let oi = TestOi::with_app("web");
@@ -354,9 +353,9 @@ fn a_refused_update_stores_nothing_and_leaves_faults_alone() {
     assert!(faults_of(&oi, "web").is_empty());
 }
 
-// i[verify param.set]
-// l[verify param.validate]
-// i[verify param.validation]
+// spec: PRM#parameter-set
+// spec: PARAM#validators
+// spec: PRM#validation
 #[test]
 fn a_param_set_the_validator_rejects_is_refused() {
     let oi = TestOi::new();
@@ -392,7 +391,7 @@ fn a_param_set_the_validator_rejects_is_refused() {
     .unwrap();
 }
 
-// l[verify param.validate]
+// spec: PARAM#validators
 #[test]
 fn a_validator_that_errors_by_accident_rejects() {
     let oi = TestOi::new();
@@ -410,8 +409,8 @@ fn a_validator_that_errors_by_accident_rejects() {
     assert_eq!(code, "validation_failed");
 }
 
-// l[verify param.validate.unset]
-// i[verify param.validation]
+// spec: PARAM#validators
+// spec: PRM#validation
 #[test]
 fn an_unset_param_passes_and_registration_runs_no_validators() {
     let oi = TestOi::new();
@@ -419,8 +418,8 @@ fn an_unset_param_passes_and_registration_runs_no_validators() {
         .expect("registration with `version` unset succeeds");
 }
 
-// i[verify param.unset]
-// i[verify param.validation]
+// spec: PRM#parameter-unset
+// spec: PRM#validation
 #[test]
 fn an_unset_another_validator_rejects_is_refused() {
     let oi = TestOi::new();
@@ -454,8 +453,8 @@ const FALLBACK_SCRIPT: &str = r#"
     if mode.is_set() && mode.value() != "ok" { throw "unsupported mode"; }
 "#;
 
-// i[verify param.validation]
-// i[verify param.set]
+// spec: PRM#validation
+// spec: PRM#parameter-set
 #[test]
 fn a_failing_evaluation_falls_back_to_the_last_good_validators() {
     let oi = TestOi::new();
@@ -481,7 +480,7 @@ fn a_failing_evaluation_falls_back_to_the_last_good_validators() {
     assert_eq!(code, "validation_failed");
 }
 
-// i[verify param.validation]
+// spec: PRM#validation
 #[test]
 fn a_conditional_validator_is_found_under_the_proposed_values() {
     let oi = TestOi::new();
@@ -508,7 +507,7 @@ fn a_conditional_validator_is_found_under_the_proposed_values() {
     assert_eq!(code, "validation_failed");
 }
 
-// l[verify param.validate.pure]
+// spec: PARAM#validators
 #[test]
 fn a_validator_defining_a_resource_rejects() {
     let oi = TestOi::new();
@@ -529,10 +528,10 @@ fn a_validator_defining_a_resource_rejects() {
     assert!(message.contains("must not define resources"), "{message}");
 }
 
-// i[verify app.update]
-// l[verify param.on-change.old]
-// r[verify generation.reconstruction]
-// r[verify operation.lifecycle.generations]
+// spec: APPS#update
+// spec: PARAM#change-handlers
+// spec: GEN#reconstruction
+// spec: OPS#initiating-events
 #[test]
 fn a_regime_change_is_one_atomic_definition_and_param_update() {
     let oi = TestOi::new();
@@ -597,7 +596,7 @@ fn a_regime_change_is_one_atomic_definition_and_param_update() {
     assert_eq!(entry["definition"]["kind"], "pushed");
 }
 
-// i[verify param.validation]
+// spec: PRM#validation
 #[test]
 fn another_validator_sees_the_proposed_values_during_an_atomic_update() {
     let oi = TestOi::new();
@@ -626,7 +625,7 @@ fn another_validator_sees_the_proposed_values_during_an_atomic_update() {
     .expect("the database validator sees the proposed v2.12");
 }
 
-// i[verify app.update]
+// spec: APPS#update
 #[test]
 fn a_definition_update_without_a_param_change_schedules_nothing() {
     let oi = TestOi::new();
@@ -639,9 +638,9 @@ fn a_definition_update_without_a_param_change_schedules_nothing() {
     assert_eq!(result["schedule"], "not_scheduled");
 }
 
-// i[verify definition.provenance]
-// i[verify definition.source]
-// i[verify generation.history]
+// spec: DEFN#provenance-reporting
+// spec: DEFN#definition-sources
+// spec: APPS#generation-history
 #[test]
 fn a_push_records_the_actor_and_the_reported_origin() {
     let oi = TestOi::new();
@@ -664,8 +663,7 @@ fn a_push_records_the_actor_and_the_reported_origin() {
     assert_eq!(history[0]["definition"], *def);
 }
 
-// i[verify app.bundle]
-// i[verify app.script]
+// spec: APPS#definition-retrieval
 #[test]
 fn every_generation_bundle_is_retrievable() {
     let oi = TestOi::new();
@@ -701,7 +699,7 @@ fn every_generation_bundle_is_retrievable() {
     assert_eq!(script["files"], json!(["app.seed.rhai"]));
 }
 
-// r[verify generation.deregister]
+// spec: GEN#lineage
 #[test]
 fn deregistering_deletes_bundles_only_that_app_referenced() {
     let oi = TestOi::new();
@@ -731,8 +729,8 @@ fn deregistering_deletes_bundles_only_that_app_referenced() {
     assert_eq!(count(&oi), 1, "MINIMAL_SCRIPT is still referenced by `two`");
 }
 
-// i[verify plan.dry-run]
-// i[verify param.validation]
+// spec: PRM#change-planning
+// spec: PRM#validation
 #[test]
 fn the_plan_reports_validator_rejections_for_a_proposed_definition() {
     let oi = TestOi::new();
@@ -770,7 +768,7 @@ fn the_plan_reports_validator_rejections_for_a_proposed_definition() {
     assert_eq!(code, "registry_not_allowed");
 }
 
-// r[verify fault.definition-unsupported]
+// spec: FLT#app-faults
 #[test]
 fn an_unsupported_stored_definition_faults_until_replaced() {
     let oi = TestOi::new();
@@ -827,8 +825,8 @@ fn an_unsupported_stored_definition_faults_until_replaced() {
     assert!(faults_of(&oi, "web").is_empty());
 }
 
-// i[verify generation.history]
-// r[verify generation.history]
+// spec: APPS#generation-history
+// spec: GEN#history-entries
 #[test]
 fn a_secret_changed_alongside_a_definition_is_redacted_in_history() {
     let oi = TestOi::new();
@@ -850,8 +848,8 @@ fn a_secret_changed_alongside_a_definition_is_redacted_in_history() {
     assert!(!history.to_string().contains("hunter22"));
 }
 
-// i[verify template.definition]
-// i[verify template.instantiate]
+// spec: TPL#template-definitions
+// spec: TPL#instantiation
 #[test]
 fn a_template_from_a_reference_passes_its_provenance_and_files_on() {
     let oi = TestOi::new();
@@ -887,9 +885,9 @@ fn a_template_from_a_reference_passes_its_provenance_and_files_on() {
     assert_eq!(def["digest"], digest);
 }
 
-// i[verify template.create]
-// i[verify template.list]
-// i[verify template.instantiate]
+// spec: TPL#creation
+// spec: TPL#listing
+// spec: TPL#instantiation
 #[test]
 fn an_unsupported_template_is_stored_but_not_instantiated() {
     let oi = TestOi::new();
@@ -910,7 +908,7 @@ fn an_unsupported_template_is_stored_but_not_instantiated() {
     assert_eq!(code, "unsupported_seedling");
 }
 
-// i[verify event.types]
+// spec: EVT#event-types
 #[test]
 fn app_updated_carries_the_provenance_and_the_param_change() {
     let oi = TestOi::new();

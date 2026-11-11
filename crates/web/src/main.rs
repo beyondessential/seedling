@@ -44,7 +44,7 @@ struct Args {
     #[arg(long)]
     config: Option<PathBuf>,
 
-    // w[bind]
+    // WEB#listen-addresses
     /// Network interface(s) to bind on (comma-separated names).
     #[arg(long, value_delimiter = ',')]
     interface: Vec<String>,
@@ -53,7 +53,7 @@ struct Args {
     #[arg(long)]
     listen: Vec<SocketAddr>,
 
-    // w[bind]
+    // WEB#listen-addresses
     /// Interface(s) to bind the WebTransport listener on, overriding
     /// `--interface`/`--listen` for WebTransport only (comma-separated names).
     /// WebTransport cannot be carried by an HTTP reverse proxy, so this exposes
@@ -62,7 +62,7 @@ struct Args {
     #[arg(long, value_delimiter = ',')]
     wt_interface: Vec<String>,
 
-    // w[bind]
+    // WEB#listen-addresses
     /// Explicit WebTransport listen address(es), overriding
     /// `--interface`/`--listen` for WebTransport only. May be repeated.
     #[arg(long)]
@@ -76,12 +76,12 @@ struct Args {
     #[arg(long, default_value_t = DEFAULT_WT_PORT, conflicts_with = "listen")]
     wt_port: u16,
 
-    // w[auth.tailscale]
+    // WEB#tailscale-identity
     /// Trust Tailscale identity headers for authentication.
     #[arg(long)]
     trust_tailscale_headers: bool,
 
-    // w[auth.dev]
+    // WEB#development-bypass
     /// Bypass all authentication. Only allowed on loopback addresses.
     #[arg(long)]
     dev_no_auth: bool,
@@ -99,7 +99,7 @@ struct Args {
     #[cfg_attr(debug_assertions, arg(conflicts_with = "daemon_trust_any"))]
     daemon_fingerprint: Option<String>,
 
-    // w[daemon.pin]
+    // WEB#daemon-connection
     /// Path to a file containing the daemon's SHA-256 SPKI fingerprint (hex) to
     /// pin. Re-read on each connection attempt, so the daemon may publish it
     /// after this process starts (see the daemon's `oi.fingerprint` file).
@@ -142,7 +142,7 @@ impl DaemonPin {
     }
 }
 
-// w[daemon.connect-retry]
+// WEB#daemon-connection
 async fn connect_daemon_with_retry(
     addr: std::net::SocketAddr,
     pin: &DaemonPin,
@@ -150,7 +150,7 @@ async fn connect_daemon_with_retry(
 ) -> DaemonConn {
     let mut backoff = Duration::from_secs(1);
     loop {
-        // w[daemon.pin] — resolve the pinned fingerprint per attempt so a
+        // WEB#daemon-connection — resolve the pinned fingerprint per attempt so a
         // daemon that has not yet published its fingerprint file does not make
         // startup fail; we retry until the file appears.
         match pin.resolve() {
@@ -185,7 +185,7 @@ async fn connect_daemon_with_retry(
     }
 }
 
-// w[impl bind]
+// spec: WEB#listen-addresses
 /// Choose the bind sources for the WebTransport listener: its own
 /// interfaces/addresses when either is configured, otherwise the shared HTTP
 /// set. Lets a deployment bind WebTransport somewhere an HTTP reverse proxy
@@ -200,7 +200,7 @@ async fn connect_daemon_with_retry(
 ///
 /// One port is advertised, so addresses that disagree on it are rejected
 /// rather than having one of them silently picked.
-// w[impl auth.connect]
+// spec: WEB#authentication
 fn advertised_wt_port(addrs: &[SocketAddr]) -> Result<u16, String> {
     let mut ports = addrs.iter().map(SocketAddr::port);
     let first = ports
@@ -276,7 +276,7 @@ async fn main() {
             std::process::exit(1);
         });
 
-    // w[impl bind] — resolve WT bind addresses. WebTransport can't be carried
+    // spec: WEB#listen-addresses — resolve WT bind addresses. WebTransport can't be carried
     // by an HTTP-terminating proxy, so it may need to bind a different set of
     // addresses than HTTP (e.g. HTTP on loopback behind `tailscale serve`, WT
     // directly on the tailnet). Use the WT-specific interfaces/addresses when
@@ -303,7 +303,7 @@ async fn main() {
         std::process::exit(1);
     });
 
-    // w[auth.dev] — dev-no-auth must not be used with non-loopback addresses.
+    // WEB#development-bypass — dev-no-auth must not be used with non-loopback addresses.
     if args.dev_no_auth {
         for addr in http_addrs.iter().chain(wt_addrs.iter()) {
             if !interfaces::is_loopback(addr) {
@@ -321,7 +321,7 @@ async fn main() {
     #[cfg(not(debug_assertions))]
     let trust_any = false;
 
-    // w[daemon.pin] — a fingerprint file takes precedence and is resolved per
+    // WEB#daemon-connection — a fingerprint file takes precedence and is resolved per
     // attempt; otherwise the pin is fixed at startup.
     let daemon_pin = if let Some(path) = args.daemon_fingerprint_file {
         DaemonPin::File(path)
@@ -340,7 +340,7 @@ async fn main() {
 
     let key_file = args.key_file.unwrap_or_else(DaemonConn::default_key_path);
 
-    // w[daemon.connect-retry]
+    // WEB#daemon-connection
     let daemon =
         Arc::new(connect_daemon_with_retry(args.daemon_addr, &daemon_pin, &key_file).await);
 
@@ -370,7 +370,7 @@ async fn main() {
     // Spawn cert rotation background task.
     tokio::spawn(wt::run_cert_rotation(Arc::clone(&cert_store), rotation_tx));
 
-    // w[impl sessions.stale-cutoff]
+    // spec: WEB#session-tracking
     // Spawn the stale-session reaper.
     tokio::spawn(wt::run_session_reaper(
         Arc::clone(&state.web_sessions),
@@ -400,7 +400,7 @@ async fn main() {
 
     // Spawn WT servers.
     for addr in wt_addrs {
-        // w[impl bind]
+        // spec: WEB#listen-addresses
         let endpoint = wt::bind_wt_endpoint(addr, &state).unwrap_or_else(|e| {
             eprintln!("error: WebTransport bind {addr}: {e}");
             std::process::exit(1);
@@ -421,7 +421,7 @@ async fn main() {
 mod bind_tests {
     use super::*;
 
-    // w[verify bind]
+    // spec: WEB#listen-addresses
     // WebTransport falls back to the shared HTTP interfaces/addresses only when
     // no WT-specific ones are given; either WT override takes precedence so it
     // can be exposed where an HTTP proxy can't reach.
@@ -455,7 +455,7 @@ mod bind_tests {
 mod daemon_pin_tests {
     use super::*;
 
-    // w[verify daemon.pin]
+    // spec: WEB#daemon-connection
     // A fingerprint file is resolved per attempt: absent or empty means "not
     // yet available" (retry), and a real value is trimmed to the exact
     // fingerprint the daemon published.
@@ -480,14 +480,14 @@ mod daemon_pin_tests {
         }
     }
 
-    // w[verify daemon.pin]
+    // spec: WEB#daemon-connection
     #[test]
     fn fixed_pin_returns_its_auth() {
         let pin = DaemonPin::Fixed(ClientAuth::TrustAny);
         assert!(matches!(pin.resolve(), Some(ClientAuth::TrustAny)));
     }
 
-    // w[verify auth.connect]
+    // spec: WEB#authentication
     // With explicit listen addresses the `--wt-port` argument is not the port
     // anything is bound to; advertising the default in its place made every
     // documented explicit-address combination hand clients an unusable URL.
@@ -497,7 +497,7 @@ mod daemon_pin_tests {
         assert_eq!(advertised_wt_port(&addrs), Ok(9999));
     }
 
-    // w[verify auth.connect]
+    // spec: WEB#authentication
     #[test]
     fn matching_ports_across_several_addresses_are_advertised_once() {
         let addrs: Vec<SocketAddr> = vec![
@@ -507,7 +507,7 @@ mod daemon_pin_tests {
         assert_eq!(advertised_wt_port(&addrs), Ok(9999));
     }
 
-    // w[verify auth.connect]
+    // spec: WEB#authentication
     // Only one port reaches the client, so picking one of several would leave
     // the rest advertised as something they are not.
     #[test]
@@ -520,7 +520,7 @@ mod daemon_pin_tests {
         assert!(err.contains("9999") && err.contains("8888"), "{err}");
     }
 
-    // w[verify auth.connect]
+    // spec: WEB#authentication
     #[test]
     fn an_empty_address_set_has_no_port_to_advertise() {
         advertised_wt_port(&[]).expect_err("nothing bound means nothing to advertise");

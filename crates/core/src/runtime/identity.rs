@@ -8,8 +8,7 @@ use crate::defs::resource::ResourceKind;
 ///
 /// Internally a randomly-generated 128-bit value; `Copy` because it is just
 /// 16 bytes and never needs heap allocation.
-// r[impl identity.stable]
-// r[impl identity.components]
+// spec: IDN#instance-identity
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct InstanceId(pub Uuid);
 
@@ -38,7 +37,7 @@ impl InstanceId {
 
 /// Whether this instance is the sole instance of its resource, or one of many
 /// concurrent instances of the same scaled resource.
-// r[impl identity.scaled]
+// spec: IDN#scaled-instances
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum InstanceVariant {
     /// At most one instance of this resource exists at any time.
@@ -52,8 +51,7 @@ pub enum InstanceVariant {
 /// The `id` field is the true primary key; all other fields are queryable
 /// metadata.  `display_name` is derived at creation time and stored in the
 /// instance registry so it never changes even if the derivation logic does.
-// r[impl identity.stable]
-// r[impl identity.components]
+// spec: IDN#instance-identity
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct ResourceInstance {
     pub id: InstanceId,
@@ -68,8 +66,8 @@ pub struct ResourceInstance {
 }
 
 impl ResourceInstance {
-    // r[impl identity.components]
-    // r[impl identity.job]
+    // spec: IDN#instance-identity
+    // spec: IDN#job-instances
     pub fn new_singleton(app: AppName, kind: ResourceKind, name: impl Into<String>) -> Self {
         let name = name.into();
         // Jobs use a fixed all-zero instance ID so that their identity is
@@ -106,7 +104,7 @@ impl ResourceInstance {
         }
     }
 
-    // r[impl identity.scaled]
+    // spec: IDN#scaled-instances
     pub fn new_scaled(app: AppName, kind: ResourceKind, name: impl Into<String>) -> Self {
         let id = InstanceId::generate();
         let name = name.into();
@@ -121,7 +119,7 @@ impl ResourceInstance {
         }
     }
 
-    // r[impl identity.anonymous]
+    // spec: IDN#anonymous-instances
     pub fn new_anonymous(app: AppName, kind: ResourceKind) -> Self {
         let id = InstanceId::generate();
         let display_name = format!("{}-{}", app, kind_slug(kind));
@@ -200,7 +198,7 @@ mod tests {
         AppName::new(s).unwrap()
     }
 
-    // r[verify identity.stable]
+    // spec: IDN#instance-identity
     #[test]
     fn clone_equals_original() {
         let a = ResourceInstance::new_singleton(name("app"), ResourceKind::Deployment, "web");
@@ -209,7 +207,7 @@ mod tests {
         assert_eq!(a.id, b.id);
     }
 
-    // r[verify identity.components]
+    // spec: IDN#instance-identity
     #[test]
     fn separately_constructed_instances_differ() {
         let a = ResourceInstance::new_singleton(name("app"), ResourceKind::Deployment, "web");
@@ -218,7 +216,7 @@ mod tests {
         assert_ne!(a, b);
     }
 
-    // r[verify identity.scaled]
+    // spec: IDN#scaled-instances
     #[test]
     fn scaled_display_name_includes_suffix() {
         let a = ResourceInstance::new_scaled(name("myapp"), ResourceKind::Deployment, "web");
@@ -233,7 +231,7 @@ mod tests {
         assert!(suffix.chars().all(|c| c.is_ascii_hexdigit()));
     }
 
-    // r[verify identity.scaled]
+    // spec: IDN#scaled-instances
     #[test]
     fn two_scaled_instances_have_different_ids_and_display_names() {
         let a = ResourceInstance::new_scaled(name("myapp"), ResourceKind::Deployment, "web");
@@ -242,14 +240,14 @@ mod tests {
         assert_ne!(a.display_name, b.display_name);
     }
 
-    // r[verify identity.components]
+    // spec: IDN#instance-identity
     #[test]
     fn singleton_display_name_has_no_suffix() {
         let a = ResourceInstance::new_singleton(name("myapp"), ResourceKind::Deployment, "web");
         assert_eq!(a.display_name, "myapp-web");
     }
 
-    // r[verify identity.job]
+    // spec: IDN#job-instances
     #[test]
     fn static_job_has_all_zero_instance_id() {
         let j = ResourceInstance::new_singleton(name("myapp"), ResourceKind::Job, "worker");
@@ -257,7 +255,7 @@ mod tests {
         assert_eq!(j.display_name, "myapp-worker-00000000");
     }
 
-    // r[verify identity.job]
+    // spec: IDN#job-instances
     #[test]
     fn static_job_display_name_is_deterministic_across_constructions() {
         let a = ResourceInstance::new_singleton(name("myapp"), ResourceKind::Job, "worker");
@@ -266,7 +264,7 @@ mod tests {
         assert_eq!(a.display_name, b.display_name);
     }
 
-    // r[verify identity.anonymous]
+    // spec: IDN#anonymous-instances
     #[test]
     fn anonymous_has_no_name() {
         let a = ResourceInstance::new_anonymous(name("myapp"), ResourceKind::Deployment);
@@ -274,7 +272,7 @@ mod tests {
         assert_eq!(a.display_name, "myapp-deployment");
     }
 
-    // r[verify identity.stable]
+    // spec: IDN#instance-identity
     #[test]
     fn serde_roundtrip_preserves_id() {
         let r = ResourceInstance::new_singleton(name("app"), ResourceKind::Deployment, "web");

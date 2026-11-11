@@ -12,7 +12,7 @@ use crate::{
 // param.value — string coercions
 // -----------------------------------------------------------------------
 
-// l[verify param.value]
+// spec: PARAM#values
 #[test]
 fn param_value_used_in_string_interpolation() {
     let app = run_test_script_app(
@@ -28,7 +28,7 @@ fn param_value_used_in_string_interpolation() {
     let _ = dep;
 }
 
-// l[verify param.is-set]
+// spec: PARAM#values
 #[test]
 fn unset_param_is_not_set() {
     let app = run_test_script_app(r#"let _host = app.param("host");"#);
@@ -47,7 +47,7 @@ fn unset_param_is_not_set() {
 // param.on-change — registration
 // -----------------------------------------------------------------------
 
-// l[verify param.on-change]
+// spec: PARAM#change-handlers
 #[test]
 fn on_change_registers_handler_in_app_def() {
     let app = run_test_script_app(
@@ -63,8 +63,7 @@ fn on_change_registers_handler_in_app_def() {
     );
 }
 
-// l[verify param.on-change]
-// l[verify param.on-change.old]
+// spec: PARAM#change-handlers
 #[test]
 fn on_change_two_arg_closure_registers() {
     let app = run_test_script_app(
@@ -77,7 +76,7 @@ fn on_change_two_arg_closure_registers() {
     assert!(def.param_changes.contains("domain"));
 }
 
-// l[verify param.on-change]
+// spec: PARAM#change-handlers
 #[test]
 fn on_change_different_params_each_register() {
     let app = run_test_script_app(
@@ -95,8 +94,7 @@ fn on_change_different_params_each_register() {
 // param.on-change — error cases
 // -----------------------------------------------------------------------
 
-// l[verify param.on-change]
-// l[verify param.on-change.constraints]
+// spec: PARAM#change-handlers
 #[test]
 fn on_change_twice_on_same_param_throws() {
     let err = run_test_script_err(
@@ -117,7 +115,7 @@ fn on_change_twice_on_same_param_throws() {
 // param.store — stored value accessible via is_set() / value()
 // -----------------------------------------------------------------------
 
-// i[verify param.store]
+// spec: PRM#parameter-storage
 #[test]
 fn stored_param_is_set_returns_true() {
     use std::collections::BTreeMap;
@@ -147,7 +145,7 @@ fn stored_param_is_set_returns_true() {
     );
 }
 
-// l[verify param.value]
+// spec: PARAM#values
 #[test]
 fn unset_param_value_falls_back_to_default_value() {
     let (engine, mut scope, app) =
@@ -168,7 +166,7 @@ fn unset_param_value_falls_back_to_default_value() {
     assert_eq!(schema.default_value.as_deref(), Some("100"));
 }
 
-// l[verify param.value]
+// spec: PARAM#values
 #[test]
 fn stored_value_overrides_default_value() {
     use std::collections::BTreeMap;
@@ -191,7 +189,7 @@ fn stored_value_overrides_default_value() {
     .expect("script should evaluate without error");
 }
 
-// l[verify param.value]
+// spec: PARAM#values
 #[test]
 fn unset_param_without_default_still_throws() {
     let (engine, mut scope, _app) =
@@ -210,7 +208,7 @@ fn unset_param_without_default_still_throws() {
     );
 }
 
-// i[verify param.store]
+// spec: PRM#parameter-storage
 #[test]
 fn unset_param_is_set_returns_false() {
     let (engine, mut scope, app) =
@@ -233,7 +231,7 @@ fn unset_param_is_set_returns_false() {
     );
 }
 
-// i[verify param.store]
+// spec: PRM#parameter-storage
 #[test]
 fn value_throws_when_param_not_set() {
     let err = crate::tests::run_test_script_err(
@@ -249,7 +247,7 @@ fn value_throws_when_param_not_set() {
     );
 }
 
-// i[verify param.store]
+// spec: PRM#parameter-storage
 #[test]
 fn param_used_in_closure_captures_injected_value() {
     use std::collections::BTreeMap;
@@ -305,8 +303,7 @@ fn param_used_in_closure_captures_injected_value() {
     );
 }
 
-// l[verify param.on-change]
-// l[verify param.on-change.constraints]
+// spec: PARAM#change-handlers
 #[test]
 fn on_change_inside_action_closure_throws() {
     let (engine, mut scope, app, ast) = run_test_script(
@@ -349,11 +346,7 @@ fn on_change_inside_action_closure_throws() {
 // param.schema — builder methods
 // -----------------------------------------------------------------------
 
-// l[verify param.schema]
-// l[verify param.schema.kind]
-// l[verify param.schema.required]
-// l[verify param.schema.default-value]
-// l[verify param.schema.description]
+// spec: PARAM#schema
 #[test]
 fn param_schema_builder_methods_set_fields() {
     let app = run_test_script_app(
@@ -379,7 +372,7 @@ fn param_schema_builder_methods_set_fields() {
     assert_eq!(schema.description.as_deref(), Some("Admin email address"));
 }
 
-// l[verify param.schema]
+// spec: PARAM#schema
 #[test]
 fn param_schema_defaults_when_no_builder_methods() {
     let app = run_test_script_app(r#"app.param("host");"#);
@@ -391,7 +384,7 @@ fn param_schema_defaults_when_no_builder_methods() {
     assert!(schema.description.is_none());
 }
 
-// l[verify param.schema.kind]
+// spec: PARAM#schema
 #[test]
 fn param_schema_kind_password() {
     let app = run_test_script_app(r#"app.param("secret").kind("password");"#);
@@ -403,7 +396,7 @@ fn param_schema_kind_password() {
     ));
 }
 
-// l[verify param.schema.kind]
+// spec: PARAM#schema
 #[test]
 fn param_schema_kind_multiline() {
     let app = run_test_script_app(r#"app.param("motd").kind("multiline");"#);
@@ -415,20 +408,20 @@ fn param_schema_kind_multiline() {
     ));
 }
 
-// l[verify param.schema.kind]
+// spec: PARAM#schema
 #[test]
 fn param_schema_kind_unknown_throws() {
     let _ = run_test_script_err(r#"app.param("field").kind("banana");"#);
 }
 
-// l[verify param.schema.kind]
-// l[verify action.params.volume]
+// spec: PARAM#schema
+// spec: ACN#volume-params
 #[test]
 fn param_schema_kind_volume_rejected_on_static_param() {
     let _ = run_test_script_err(r#"app.param("dst").kind("volume");"#);
 }
 
-// l[verify action.params.volume]
+// spec: ACN#volume-params
 #[test]
 fn install_param_kind_volume_rejected() {
     let _ = run_test_script_err(
@@ -442,7 +435,7 @@ fn install_param_kind_volume_rejected() {
     );
 }
 
-// l[verify action.params.volume]
+// spec: ACN#volume-params
 #[test]
 fn action_param_kind_volume_accepted() {
     let app = run_test_script_app(
@@ -465,7 +458,7 @@ fn action_param_kind_volume_accepted() {
     assert_eq!(param.kind, crate::defs::install::ParamKind::Volume);
 }
 
-// l[verify action.params.volume]
+// spec: ACN#volume-params
 #[test]
 fn shell_param_kind_volume_accepted() {
     let app = run_test_script_app(
@@ -488,7 +481,7 @@ fn shell_param_kind_volume_accepted() {
     assert_eq!(param.kind, crate::defs::install::ParamKind::Volume);
 }
 
-// l[verify param.schema]
+// spec: PARAM#schema
 #[test]
 fn param_schema_builder_methods_return_same_param_for_chaining() {
     let app = run_test_script_app(
@@ -505,7 +498,7 @@ fn param_schema_builder_methods_return_same_param_for_chaining() {
     assert!(schema.required);
 }
 
-// l[verify param.schema.secret]
+// spec: PARAM#secret-parameters
 #[test]
 fn param_schema_secret_flag_sets_true() {
     let app = run_test_script_app(r#"app.param("token").secret(true);"#);
@@ -515,7 +508,7 @@ fn param_schema_secret_flag_sets_true() {
     assert!(schema.is_secret());
 }
 
-// l[verify param.schema.secret]
+// spec: PARAM#secret-parameters
 #[test]
 fn param_schema_secret_defaults_false_for_plain_text() {
     let app = run_test_script_app(r#"app.param("hostname");"#);
@@ -525,7 +518,7 @@ fn param_schema_secret_defaults_false_for_plain_text() {
     assert!(!schema.is_secret());
 }
 
-// l[verify param.schema.secret-from-kind]
+// spec: PARAM#secret-parameters
 #[test]
 fn param_schema_password_kind_implicitly_secret() {
     let app = run_test_script_app(r#"app.param("password").kind("password");"#);
@@ -537,7 +530,7 @@ fn param_schema_password_kind_implicitly_secret() {
     assert!(schema.is_secret());
 }
 
-// l[verify param.schema.secret-from-kind]
+// spec: PARAM#secret-parameters
 #[test]
 fn param_schema_weak_password_kind_implicitly_secret() {
     let app = run_test_script_app(r#"app.param("apikey").kind("weak-password");"#);
@@ -546,7 +539,7 @@ fn param_schema_weak_password_kind_implicitly_secret() {
     assert!(schema.is_secret());
 }
 
-// l[verify param.schema.secret]
+// spec: PARAM#secret-parameters
 #[test]
 fn param_schema_text_kind_with_secret_true_is_secret() {
     let app = run_test_script_app(r#"app.param("token").kind("text").secret(true);"#);
@@ -556,7 +549,7 @@ fn param_schema_text_kind_with_secret_true_is_secret() {
     assert!(schema.is_secret());
 }
 
-// l[verify param.schema.secret-from-kind]
+// spec: PARAM#secret-parameters
 // An explicit `false` used to be indistinguishable from never having been set,
 // so a password kind stayed secret however the script opted out.
 #[test]
@@ -575,7 +568,7 @@ fn param_schema_explicit_secret_false_overrides_password_kind() {
     }
 }
 
-// l[verify param.schema.secret-from-kind]
+// spec: PARAM#secret-parameters
 #[test]
 fn param_schema_explicit_secret_true_still_secret_on_password_kind() {
     let app = run_test_script_app(r#"app.param("pass").kind("password").secret(true);"#);
@@ -583,7 +576,7 @@ fn param_schema_explicit_secret_true_still_secret_on_password_kind() {
     assert!(def.params.get("pass").expect("param declared").is_secret());
 }
 
-// l[verify action.install.requirements.kind-random]
+// spec: ACN#param-kinds
 #[test]
 fn param_schema_kind_random() {
     let app = run_test_script_app(r#"app.param("nonce").kind("random");"#);
@@ -595,8 +588,8 @@ fn param_schema_kind_random() {
     ));
 }
 
-// l[verify action.install.requirements.kind-random]
-// l[verify param.schema.secret-from-kind]
+// spec: ACN#param-kinds
+// spec: PARAM#secret-parameters
 #[test]
 fn param_schema_random_kind_not_implicitly_secret() {
     let app = run_test_script_app(r#"app.param("nonce").kind("random");"#);
@@ -606,8 +599,8 @@ fn param_schema_random_kind_not_implicitly_secret() {
     assert!(!schema.is_secret());
 }
 
-// l[verify action.install.requirements.kind-random]
-// l[verify param.schema.secret]
+// spec: ACN#param-kinds
+// spec: PARAM#secret-parameters
 #[test]
 fn param_schema_random_kind_with_secret_true_is_secret() {
     let app = run_test_script_app(r#"app.param("auth-secret").kind("random").secret(true);"#);

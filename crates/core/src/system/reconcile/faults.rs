@@ -11,8 +11,8 @@ impl Reconciler {
     /// File a fault scoped to a specific resource instance, if no active fault
     /// of the same kind already exists for that instance. Used by callers that
     /// don't have a typed update struct (e.g. cert observation).
-    // r[impl fault.detection]
-    // r[impl fault.surfacing]
+    // spec: FLT#filing-and-clearing
+    // spec: FLT#fault-records
     pub(super) fn file_resource_fault(
         &self,
         instance: &ResourceInstance,
@@ -65,7 +65,7 @@ impl Reconciler {
         });
     }
 
-    // r[fault.image-pull]
+    // FLT#workload-faults
     // An image_pull_failed fault is scoped to an IMAGE reference, not to a
     // specific instance — the fault's meaning is "this image is unavailable",
     // and anyone observing that image present on the system resolves it. We
@@ -125,7 +125,7 @@ impl Reconciler {
         });
     }
 
-    // r[impl fault.healthcheck-replace-failed]
+    // spec: FLT#workload-faults
     pub(super) fn file_replace_failed_fault(
         &self,
         app: &AppName,
@@ -172,7 +172,7 @@ impl Reconciler {
         });
     }
 
-    // r[impl autonomous.healthcheck-replace.guard]
+    // spec: AUTO#replacement-guard
     /// Clear all `health_check_replace_failed` faults for the named app. Called
     /// when the AppDef generation advances so a freshly-shipped script gets a
     /// clean slate.
@@ -190,7 +190,7 @@ impl Reconciler {
         });
     }
 
-    // r[impl fault.service-degraded]
+    // spec: FLT#ingress-and-service-faults
     /// File a `service_degraded` fault per service whose routing pool has
     /// fallen back to "anything running" because no healthy backend exists,
     /// and clear the fault for any service that isn't in the degraded set
@@ -252,7 +252,7 @@ impl Reconciler {
         });
     }
 
-    // r[impl fault.healthcheck]
+    // spec: FLT#workload-faults
     pub(super) fn file_health_check_faults(
         &self,
         app: &AppName,
@@ -309,7 +309,7 @@ impl Reconciler {
         });
     }
 
-    // r[fault.container-start]
+    // FLT#workload-faults
     pub(super) fn file_unit_failure_faults(
         &self,
         app: &AppName,
@@ -374,7 +374,7 @@ impl Reconciler {
         });
     }
 
-    // r[impl fault.crash-loop]
+    // spec: FLT#workload-faults
     /// File a `crash_loop` fault for each instance the restart bookkeeping or
     /// the start-limit observation has flagged. This is a hard fault: the
     /// runtime stops auto-recovering until the operator clears it (typically
@@ -388,7 +388,7 @@ impl Reconciler {
             .call(move |db| apply_crash_loop_faults(db, &app, &crash_loops, &unit_healthy));
     }
 
-    // r[impl fault.external-volume-unmapped]
+    // spec: FLT#workload-faults
     pub(super) fn file_external_volume_faults(
         &self,
         app: &AppName,
@@ -454,12 +454,12 @@ impl Reconciler {
     /// and minting a fault for it trains operators to ignore the fault list.
     /// The failure is logged on the first tick regardless; the threshold gates
     /// only the fault.
-    // r[impl observe.failure-not-absence]
+    // spec: OBS#failed-observation
     const OBSERVE_FAULT_AFTER_FAILURES: u32 = 3;
 
     /// Advance the consecutive-observation-failure counters and return the
     /// instances that have now failed often enough to fault.
-    // r[impl observe.failure-not-absence]
+    // spec: OBS#failed-observation
     fn escalate_observe_failures(
         &mut self,
         failures: &[(ResourceInstance, String)],
@@ -499,7 +499,7 @@ impl Reconciler {
             .map(|(i, s)| (i.clone(), s.clone()))
             .collect();
         let observe_failures = self.escalate_observe_failures(&update.observe_failures);
-        // r[impl fault.lifecycle] — the file set and the clear set must be
+        // spec: FLT#filing-and-clearing — the file set and the clear set must be
         // disjoint per instance. `stop_sent` is recorded before the stop is
         // attempted, so an instance whose stop just failed appears in both:
         // its `stop_failed` fault was filed and then cleared in the same tick,
@@ -613,8 +613,8 @@ impl Reconciler {
     /// conflict fault filed before a restart could never clear, however long
     /// the conflict had been resolved. Comparing against the persisted active
     /// set instead needs no warm-up state and is restart-safe by construction.
-    // r[impl ingress.site.conflict]
-    // r[impl fault.lifecycle]
+    // spec: SITE#ingress-conflicts
+    // spec: FLT#filing-and-clearing
     pub(super) fn reconcile_ingress_conflicts(
         &mut self,
         report: &super::site_proxy::ConflictReport,
@@ -678,7 +678,7 @@ impl Reconciler {
     /// File a `site_ingress_target_missing` fault for each unresolved
     /// site-ingress attachment. We dedup on (site_ingress, port, protocol)
     /// so a stable misconfiguration doesn't fan out into duplicate faults.
-    // r[impl ingress.site.attachment]
+    // spec: SITE#attachments
     pub(super) fn reconcile_unresolved_site_attachments(
         &self,
         unresolved: &[super::site_proxy::UnresolvedAttachment],
@@ -764,8 +764,8 @@ impl Reconciler {
     /// Like the ingress-conflict sweep, this used to clear only
     /// `prior \\ current` from an in-memory field that empties on restart, so
     /// a fault outlived the condition across a daemon restart.
-    // r[impl service.site.address]
-    // r[impl fault.lifecycle]
+    // spec: SITE#endpoint-addressing
+    // spec: FLT#filing-and-clearing
     pub(super) fn reconcile_site_service_faults(
         &mut self,
         set: super::phases::SiteServiceFaultSet,
@@ -867,7 +867,7 @@ impl Reconciler {
     /// `ingress_conflict` and `site_ingress_target_missing`. Filing is
     /// idempotent — an existing matching fault is left in place rather
     /// than re-filed each tick.
-    // r[impl fault.proxy-apply-failed]
+    // spec: FLT#ingress-and-service-faults
     pub(super) fn file_proxy_apply_failed_faults(
         &self,
         app_ingresses: Vec<(AppName, String)>,
@@ -932,7 +932,7 @@ impl Reconciler {
     /// app or site ingress it was filed against. Called when a proxy apply
     /// succeeds: at that point every ingress in the just-applied config is
     /// healthy, so any lingering fault from a prior failed tick is stale.
-    // r[impl fault.proxy-apply-failed]
+    // spec: FLT#ingress-and-service-faults
     pub(super) fn clear_proxy_apply_failed_faults(&self) {
         self.db.call(|db| {
             let active = faults::list_active_faults(db, None).unwrap_or_default();
@@ -1041,7 +1041,7 @@ impl Reconciler {
     }
 }
 
-// r[impl fault.crash-loop]
+// spec: FLT#workload-faults
 /// The database side of [`Reconciler::file_crash_loop_faults`], split out so
 /// the filing and clearing policy can be exercised against a database without
 /// standing up a reconciliation tick.

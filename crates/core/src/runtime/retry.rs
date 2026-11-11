@@ -12,7 +12,7 @@
 //!
 //! The semantics here are the ones `scheduler::should_back_off` already
 //! implements and tests against the persisted operations log
-//! (`r[history.operations.rate-limiting]`): capped exponential from a base
+//! (`HIST#autonomous-operations`): capped exponential from a base
 //! delay, with a gap longer than the cap resetting the count entirely. This is
 //! the same shape for callers whose retry cadence is the reconciler tick
 //! rather than a row in that log, so the two do not drift apart.
@@ -159,7 +159,7 @@ mod tests {
         RetryGate::new(BASE, CAP)
     }
 
-    // r[verify actuate.image.retry]
+    // spec: IMG#image-pulls
     #[test]
     fn delay_doubles_per_failure_and_caps() {
         let now = Instant::now();
@@ -179,7 +179,7 @@ mod tests {
         assert_eq!(gate.delay(), CAP, "delay is capped");
     }
 
-    // r[verify actuate.image.retry]
+    // spec: IMG#image-pulls
     // The failure count is a u32 and a stuck key can accumulate for a long
     // time; 2^n must not wrap into a short delay.
     #[test]
@@ -192,7 +192,7 @@ mod tests {
         assert_eq!(gate.delay(), CAP);
     }
 
-    // r[verify actuate.image.retry]
+    // spec: IMG#image-pulls
     #[test]
     fn attempts_are_withheld_until_the_delay_elapses() {
         let now = Instant::now();
@@ -205,7 +205,7 @@ mod tests {
         assert!(gate.should_attempt(now + Duration::from_secs(11)));
     }
 
-    // r[verify actuate.image.retry]
+    // spec: IMG#image-pulls
     // Past the cap the streak resets, so a key that failed long ago and has
     // been quiet since does not inherit its old back-off.
     #[test]
@@ -219,7 +219,7 @@ mod tests {
         assert!(gate.should_attempt(now + CAP + Duration::from_secs(1)));
     }
 
-    // r[verify actuate.image.retry]
+    // spec: IMG#image-pulls
     // The point of the type: there is no state from which a key can never be
     // attempted again.
     #[test]
@@ -235,7 +235,7 @@ mod tests {
         );
     }
 
-    // r[verify actuate.image.retry]
+    // spec: IMG#image-pulls
     // A quiet period past the cap ends the episode: the next failure is the
     // first of a new one, not the twenty-first of the old one. Without this
     // `should_attempt` and `record_failure` disagree about what the history
@@ -255,7 +255,7 @@ mod tests {
         assert_eq!(gate.delay(), BASE);
     }
 
-    // r[verify actuate.image.retry]
+    // spec: IMG#image-pulls
     #[test]
     fn success_resets_fully() {
         let now = Instant::now();
@@ -268,7 +268,7 @@ mod tests {
         assert!(gate.should_attempt(now));
     }
 
-    // r[verify actuate.image.retry]
+    // spec: IMG#image-pulls
     #[test]
     fn keys_are_paced_independently() {
         let now = Instant::now();

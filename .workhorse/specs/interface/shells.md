@@ -34,7 +34,7 @@ A JSON object naming one volume on the host by its `kind`.
 
 ## Opening an app shell
 
-A client opens a [shell session](#shell-session) on one of an app's [shells](rule:l/action.shell) by sending `/shells/start` on a new [session stream](#session-stream), framed as [shell stream framing](rule:i/stream.shell.framing) specifies.
+A client opens a [shell session](#shell-session) on one of an app's [shells](../language/action.md#shells) by sending `/shells/start` on a new [session stream](#session-stream), framed as [shell stream framing](wire.md#shell-sessions) specifies.
 
 | member | type | required | meaning |
 | --- | --- | --- | --- |
@@ -47,7 +47,7 @@ A client opens a [shell session](#shell-session) on one of an app's [shells](rul
 The server MUST reject a request naming an app that is not registered with `not_found`.
 The server MUST reject the request with `not_installed` unless the app is `Installed`.
 The server MUST reject a request naming a shell the app does not declare with `not_found`.
-A `params` key ending in `_volume` or `_filename` is [reserved](rule:r/operation.volume-param.reserved), and the server MUST reject a request carrying one with `requirements_invalid`.
+A `params` key ending in `_volume` or `_filename` is [reserved](../runtime/operations.md#reserved-parameter-keys), and the server MUST reject a request carrying one with `requirements_invalid`.
 Where the shell declares parameters, the server MUST validate `params` and fill in defaults as for [install parameters](actions.md#install-parameters).
 
 On success the handshake response's result is:
@@ -100,7 +100,7 @@ Where the job exited with a status, `exit_code` MUST be that status.
 Where the job was terminated by a signal, `exit_code` MUST be negative.
 
 However the session ends, the server MUST terminate the session's job and remove the network created for it, including when the stdin sent with the request could not be delivered to the job.
-The runtime MUST clean up resources created within the session as [shell resources](rule:r/operation.shell.resources) specifies.
+The runtime MUST clean up resources created within the session as [shell resources](../runtime/operations.md#shell-sessions) specifies.
 
 ## Session events
 
@@ -138,7 +138,7 @@ Without `app` the server MUST list every registered session on the host.
 | `app` | string | the app the session belongs to, or `"_volumes"` for a [volume shell](#volume-shells) |
 | `name` | string | the shell's name, or for a volume shell its mounts' display names |
 | `opened_at` | string | when the session was opened, as an [RFC 3339](https://www.rfc-editor.org/rfc/rfc3339) timestamp |
-| `actor` | object or null | the [actor](rule:i/wire.actor) the opening request carried |
+| `actor` | object or null | the [actor](wire.md#actor-attribution) the opening request carried |
 
 ## Stopping a session
 

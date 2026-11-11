@@ -10,7 +10,7 @@ use crate::runtime::db::Db;
 /// Each entry is `(kind, name)`.
 pub type StoppedSet = HashSet<(ResourceKind, String)>;
 
-// i[impl resource.stop]
+// spec: CTL#resource-stop
 pub fn load_stopped(db: &Db, app: &AppName) -> rusqlite::Result<StoppedSet> {
     let mut stmt = db
         .conn
@@ -30,7 +30,7 @@ pub fn load_stopped(db: &Db, app: &AppName) -> rusqlite::Result<StoppedSet> {
     Ok(set)
 }
 
-// i[impl resource.stop]
+// spec: CTL#resource-stop
 pub fn stop_resource(
     db: &Db,
     app: &AppName,
@@ -44,7 +44,7 @@ pub fn stop_resource(
     Ok(())
 }
 
-// i[impl resource.unstop]
+// spec: CTL#resource-stop
 pub fn unstop_resource(
     db: &Db,
     app: &AppName,
@@ -58,7 +58,7 @@ pub fn unstop_resource(
     Ok(())
 }
 
-// i[impl resource.unstop-all]
+// spec: CTL#resource-stop
 pub fn unstop_all(db: &Db, app: &AppName) -> rusqlite::Result<()> {
     db.conn
         .execute("DELETE FROM stopped_resources WHERE app = ?1", params![app])?;

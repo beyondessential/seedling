@@ -1,36 +1,36 @@
 use serde::Serialize;
 
-// i[wire.error-codes]
+// WIRE#error-codes
 #[derive(Debug, Clone, Copy, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ErrorCode {
     NotFound,
     NotInstalled,
     AlreadyInstalled,
-    // i[wire.error-codes] InstallInProgress distinguishes "install is running
+    // WIRE#error-codes InstallInProgress distinguishes "install is running
     // right now" from "install already succeeded (or uninstall is in flight)".
     InstallInProgress,
     OperationInProgress,
     AlreadyQueued,
     RequirementsInvalid,
     ScriptError,
-    // i[impl param.validation]
+    // spec: PRM#validation
     ValidationFailed,
-    // i[impl definition.bundle.limits]
+    // spec: DEFN#bundle-rules
     BundleInvalid,
-    // i[impl definition.bundle.seedling-versions]
+    // spec: DEFN#seedling-version-support
     UnsupportedSeedling,
-    // i[impl definition.fetch]
+    // spec: DEFN#fetching
     FetchFailed,
-    // i[impl definition.fetch.access]
+    // spec: DEFN#registry-access
     RegistryNotAllowed,
     Deregistering,
     ServerBusy,
     Internal,
-    // i[impl canopy.offer.disabled]
-    // i[impl canopy.unavailable]
+    // spec: RLY#disabled-access
+    // spec: RLY#unavailability
     CanopyDisabled,
-    // i[impl canopy.unavailable]
+    // spec: RLY#unavailability
     CanopyUnavailable,
 }
 
@@ -65,7 +65,7 @@ mod tests {
 
     use super::*;
 
-    // i[verify wire.error-codes]
+    // spec: WIRE#error-codes
     #[test]
     fn error_codes_serialise_as_snake_case_strings() {
         let cases = [

@@ -125,7 +125,7 @@ pub(crate) fn capture_validator(name: ParamName, fnptr: FnPtr) {
 
 /// Marks the thread as running a validator for as long as the guard lives,
 /// so that resource definitions throw.
-// l[impl param.validate.pure]
+// spec: PARAM#validators
 pub(crate) struct ValidatorFrame(());
 
 impl ValidatorFrame {
@@ -142,7 +142,7 @@ impl Drop for ValidatorFrame {
 }
 
 /// Refuse a resource definition made from within a validator.
-// l[impl param.validate.pure]
+// spec: PARAM#validators
 pub(crate) fn ensure_not_validating() -> Result<(), Box<rhai::EvalAltResult>> {
     if IN_VALIDATOR.with(|v| v.get()) {
         return Err("a validator must not define resources".into());
@@ -168,7 +168,7 @@ pub(crate) trait StaticResource: Clone {
 
     /// Mark the handle frozen, which every static reference in the action
     /// context is.
-    // l[impl app.resources.context.immutable]
+    // spec: APP#static-resource-immutability
     fn freeze(&mut self);
 }
 
@@ -177,7 +177,7 @@ pub(crate) trait StaticResource: Clone {
 /// Every named-resource method resolves the same way in the action context, so
 /// the lookup lives here rather than in each of them: one diagnosis for a name
 /// that is not there, and nothing for the next resource type to copy.
-// l[impl app.resources.context.named]
+// spec: APP#named-resources
 pub(crate) fn static_ref<T: StaticResource>(name: &str) -> Result<T, Box<rhai::EvalAltResult>> {
     let adef = action_def().ok_or_else(|| -> Box<rhai::EvalAltResult> {
         "internal: action context but no action AppDef set".into()
@@ -249,9 +249,9 @@ fn noun(kind: ResourceKind) -> &'static str {
 // Thread-local action-call table
 // ---------------------------------------------------------------------------
 
-// l[impl action.lookup]
-// l[impl action.call]
-// r[impl operation.composition]
+// spec: ACN#action-handles
+// spec: ACN#action-invocation
+// spec: OPS#action-composition
 /// Per-operation lookup table for `Action.call`. Populated by `replay.rs`
 /// around the call to `engine.eval_ast_with_scope(...)` so that
 /// `app.action(name)` and `Action.call(...)` can find the captured FnPtrs
@@ -349,7 +349,7 @@ pub(crate) fn clear_appdef_holder() {
     APPDEF_HOLDER.with(|h| *h.borrow_mut() = None);
 }
 
-// l[impl action.schedule]
+// spec: ACN#scheduled-actions
 pub(crate) fn append_action_schedule(action_name: &ActionName, expr: &str) {
     APPDEF_HOLDER.with(|h| {
         if let Some(ref holder) = *h.borrow() {
@@ -368,13 +368,12 @@ pub(crate) fn append_action_schedule(action_name: &ActionName, expr: &str) {
 // AppDef — Send, shared with the Reconciler
 // ---------------------------------------------------------------------------
 
-// l[impl app.resources]
-// l[impl app.resources.names]
+// spec: APP#named-resources
 #[derive(Debug, Default, Clone)]
 pub struct AppDef {
     pub name: AppName,
     /// Free-form description of the application, set via `app.description()`.
-    // l[impl app.description]
+    // spec: APP#app-description
     pub description: Option<String>,
     /// Canopy application type, set via `app.canopy_type()`.
     pub canopy_type: Option<String>,
@@ -389,7 +388,7 @@ pub struct AppDef {
     /// Names of parameters that have an `on_change` handler registered.
     pub param_changes: BTreeSet<ParamName>,
     /// Names of parameters that have a validator attached.
-    // l[impl param.validate]
+    // spec: PARAM#validators
     pub validators: BTreeSet<ParamName>,
 }
 
@@ -416,8 +415,7 @@ fn is_valid_canopy_type(value: &str) -> bool {
 // App — the BSL-facing handle; !Send (Rc inside), stays on the BSL thread
 // ---------------------------------------------------------------------------
 
-// l[impl app.type]
-// l[impl app.constructor]
+// spec: APP#the-app-variable
 #[derive(Clone)]
 pub struct App {
     pub def: Arc<arc_swap::ArcSwap<AppDef>>,
@@ -426,7 +424,7 @@ pub struct App {
     pub stored: Holder<BTreeMap<String, String>>,
     /// The definition bundle this app was evaluated from, read by
     /// `app.file` and `app.dir`.
-    // l[impl app.bundle.context]
+    // spec: BND#bundle-files
     pub bundle: Arc<Bundle>,
 }
 
@@ -456,12 +454,12 @@ impl std::fmt::Debug for App {
     }
 }
 
-// l[impl app.methods]
+// spec: APP#the-app-variable
 impl CustomType for App {
     fn build(mut builder: TypeBuilder<Self>) {
         builder.with_name("App");
 
-        // l[impl app.description]
+        // spec: APP#app-description
         builder.with_fn("description", |this: &mut App, desc: &str| -> App {
             let desc_owned = desc.to_owned();
             this.def.rcu(|d| {
@@ -472,7 +470,7 @@ impl CustomType for App {
             this.clone()
         });
 
-        // l[impl app.canopy-type]
+        // spec: APP#canopy-type
         builder.with_fn(
             "canopy_type",
             |this: &mut App, canopy_type: Dynamic| -> Result<App, Box<rhai::EvalAltResult>> {

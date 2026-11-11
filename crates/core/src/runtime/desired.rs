@@ -19,7 +19,7 @@ use crate::runtime::{InstanceRegistry, RegistryError};
 /// decision exists).
 pub type EffectiveScales = HashMap<String, (u16, u16, u16)>;
 
-// r[impl desired-state.definition]
+// spec: RCN#desired-state
 #[derive(Debug)]
 pub struct DesiredResource {
     pub instance: ResourceInstance,
@@ -33,7 +33,7 @@ pub struct DesiredResource {
     pub demoted: bool,
 }
 
-// r[impl desired-state.definition]
+// spec: RCN#desired-state
 #[derive(Debug, Default)]
 pub struct DesiredState {
     pub resources: Vec<DesiredResource>,
@@ -59,7 +59,7 @@ pub struct OperationProgress {
     /// routing traffic to them. Read by the proxy reconciler to emit
     /// `tls.certificates.automate` entries; not part of the standard desired
     /// state. Stored by ingress resource name.
-    // r[impl actuate.ingress.warm-certs]
+    // spec: ACTU#certificate-warming
     pub warm_cert_hostnames: BTreeSet<String>,
 }
 
@@ -119,7 +119,7 @@ impl OperationProgress {
                     }
                 }
                 CallKind::Query => {}
-                // r[impl actuate.ingress.warm-certs]
+                // spec: ACTU#certificate-warming
                 // WarmCerts records intent in a separate map; it does not put
                 // resources into the standard desired state, so the reconciler
                 // will not actuate them as fully Ready (which would route
@@ -132,25 +132,25 @@ impl OperationProgress {
                         }
                     }
                 }
-                // r[impl actuate.image.warm]
+                // spec: IMG#image-warming
                 // WarmImages has no effect on computed desired state. The
                 // pin rows written at call time drive pull reconciliation;
                 // no resources need to be marked Ready for it.
                 CallKind::WarmImages => {}
-                // l[impl rt.signal]
+                // spec: RT#signal-delivery
                 // Signal is a transient side-effect; it does not affect the
                 // computed desired state.
                 CallKind::Signal => {}
-                // l[impl rt.write]
+                // spec: RT#volume-writes
                 // Write is a transient side-effect on a volume's contents; it
                 // does not affect any resource's lifecycle, so it does not
                 // contribute to the computed desired state.
                 CallKind::Write => {}
-                // l[impl rt.exec]
+                // spec: RT#command-execution
                 // Exec is a transient side-effect inside a running container;
                 // it does not affect the computed desired state.
                 CallKind::Exec => {}
-                // r[impl operation.composition]
+                // spec: OPS#action-composition
                 // SubAction is a frame marker for a nested Action.call.
                 // The actual rt.* calls inside the called closure follow as
                 // their own log entries and contribute to desired state via
@@ -169,7 +169,7 @@ impl OperationProgress {
 ///
 /// When an operation is in progress, only resources the action closure has
 /// explicitly placed into the desired state are included.
-// r[impl desired-state.definition]
+// spec: RCN#desired-state
 pub fn compute(
     app_name: &AppName,
     app_def: &AppDef,
@@ -212,7 +212,7 @@ pub fn compute_uninstalling(
     Ok(DesiredState { resources })
 }
 
-// r[impl desired-state.steady]
+// spec: RCN#desired-state
 fn compute_steady(
     app_name: &AppName,
     app_def: &AppDef,
@@ -228,8 +228,8 @@ fn compute_steady(
         if id.kind == ResourceKind::Deployment
             && let Some(&(_low, _high, effective)) = effective_scales.get(id.name.as_str())
         {
-            // i[impl resource.stop]
-            // r[impl autonomous.scale]
+            // spec: CTL#resource-stop
+            // spec: AUTO#scale
             let scale = if is_stopped { 0 } else { effective };
             // Steady-state desired state keeps an instance whatever its
             // containers have done: re-identifying it would lose the restart
@@ -262,7 +262,7 @@ fn compute_steady(
 
         // Non-deployment resources: singleton.
         let inst = registry.get_or_create_singleton(app_name, id.kind, Some(id.name.as_str()))?;
-        // i[impl resource.stop]
+        // spec: CTL#resource-stop
         let desired = if is_stopped {
             LifecycleState::Unscheduled
         } else {
@@ -279,7 +279,7 @@ fn compute_steady(
     Ok(DesiredState { resources })
 }
 
-// r[impl desired-state.during-operation]
+// spec: RCN#desired-state
 fn compute_during_operation(app_def: &AppDef, progress: &OperationProgress) -> DesiredState {
     let resources = progress
         .resources
@@ -318,7 +318,7 @@ pub struct DynamicResourceRecord {
     /// BSL-level resource name; `None` for anonymous resources.
     pub resource_name: Option<String>,
     /// Free-form description set via `resource.description()`.
-    // l[impl bsl.resource.description]
+    // spec: BSL#descriptions
     pub description: Option<String>,
 }
 
@@ -330,7 +330,7 @@ pub fn insert_dynamic_resource(
     description: Option<&str>,
 ) -> rusqlite::Result<()> {
     db.conn.execute(
-        // r[impl history.persist.partial-update]
+        // spec: HIST#durability
         "INSERT INTO dynamic_resources
              (instance_id, app, operation_id, kind, display_name, resource_name, description)
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
@@ -394,7 +394,7 @@ pub fn list_dynamic_resources_for_app(
 }
 
 /// Load the dynamic resource records recorded against one operation.
-// r[impl barrier.replay.abandoned]
+// spec: SUSP#abandoned-replay
 pub fn list_dynamic_resources_for_operation(
     db: &Db,
     operation_id: &str,

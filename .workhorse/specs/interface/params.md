@@ -24,7 +24,7 @@ A parameter with no stored value is unset.
 
 Every evaluation of an app's definition MUST be given the app's stored parameter values.
 
-The runtime MUST store the value of a parameter whose effective [secret flag](rule:l/param.schema.secret) is true in [protected storage](rule:r/secret.storage), whether `/apps/params/set`, `/apps/params/unset` or [`/apps/update`](apps.md#update) writes it.
+The runtime MUST store the value of a parameter whose effective [secret flag](../language/parameter.md#secret-parameters) is true in [protected storage](../runtime/secrets.md#storage), whether `/apps/params/set`, `/apps/params/unset` or [`/apps/update`](apps.md#update) writes it.
 An event a change causes MUST NOT carry the plaintext of a value that is secret after the change, nor of one that was secret before it.
 
 A client MAY set a value for an unknown parameter.
@@ -34,7 +34,7 @@ The runtime MUST store it, and it takes effect once the app's definition declare
 
 The server MUST validate a definition update, a parameter set and a parameter unset before it persists any part of the change.
 
-Validation runs the [validator](rule:l/param.validate) of every parameter that is set in the proposed values, against the proposed values.
+Validation runs the [validator](../language/parameter.md#validators) of every parameter that is set in the proposed values, against the proposed values.
 The validators are those the proposed definition declares when evaluated with the proposed values.
 For a parameter set or unset whose proposed values fail to evaluate, the validators are those of the app's most recent successful evaluation.
 If that evaluation fails too, no validator runs.
@@ -69,7 +69,7 @@ It MUST then store the value and bump the app's generation, with a `param_set` [
 The server MUST then evaluate the app's definition with its new values.
 If the evaluation fails, the server MUST file a `script_error` fault against the app, and the request still succeeds.
 
-If the app is installed and its definition registers an `on_change` handler for the parameter that the change's [transition](rule:l/param.on-change.transitions) triggers, the server MUST schedule the handler as a [lifecycle operation](../overview.md#lifecycle-operation) and return `accepted`.
+If the app is installed and its definition registers an `on_change` handler for the parameter that the change's [transition](../language/parameter.md#change-handlers) triggers, the server MUST schedule the handler as a [lifecycle operation](../overview.md#lifecycle-operation) and return `accepted`.
 A handler queued behind another app's operation is accepted.
 Otherwise the server MUST return `not_scheduled`.
 

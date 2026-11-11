@@ -11,8 +11,8 @@ use crate::defs::{
 /// The service-side ports an app's pods serve, as `(service, port, proto)`.
 pub type DeclaredPorts = HashSet<(String, u16, ForwardProto)>;
 
-// i[impl forward.request]
-// i[impl forward.script-update]
+// spec: FWD#requesting-a-forward
+// spec: FWD#forward-lifetime
 /// Collect the service-side ports an app's pods attach to: the only ports a
 /// service's address routes anywhere.
 ///
@@ -81,7 +81,7 @@ mod tests {
         app.def.load_full()
     }
 
-    // i[verify forward.request]
+    // spec: FWD#requesting-a-forward
     #[test]
     fn ports_are_declared_per_proto_by_pod_bindings() {
         let def = appdef_from(

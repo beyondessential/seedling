@@ -1,6 +1,6 @@
 use super::*;
 
-// l[verify collection.interface]
+// spec: COL#collection
 #[test]
 fn collection_is_abstract_interface() {
     run_test_script_app(
@@ -12,7 +12,7 @@ fn collection_is_abstract_interface() {
     );
 }
 
-// l[verify collection.one]
+// spec: COL#query-methods
 #[test]
 fn collection_one_on_app() {
     run_test_script_app(
@@ -23,7 +23,7 @@ fn collection_one_on_app() {
     );
 }
 
-// l[verify collection.only]
+// spec: COL#query-methods
 #[test]
 fn collection_only_returns_collection() {
     run_test_script_app(
@@ -35,7 +35,7 @@ fn collection_only_returns_collection() {
     );
 }
 
-// l[verify collection.except]
+// spec: COL#query-methods
 #[test]
 fn collection_except_returns_collection() {
     run_test_script_app(
@@ -47,8 +47,7 @@ fn collection_except_returns_collection() {
     );
 }
 
-// l[verify collection.select]
-// l[verify collection.select.types]
+// spec: COL#selection
 #[test]
 fn collection_select_by_types() {
     run_test_script_app(
@@ -62,8 +61,7 @@ fn collection_select_by_types() {
     );
 }
 
-// l[verify collection.select]
-// l[verify collection.select.names]
+// spec: COL#selection
 #[test]
 fn collection_select_by_names() {
     run_test_script_app(
@@ -77,8 +75,7 @@ fn collection_select_by_names() {
     );
 }
 
-// l[verify collection.select]
-// l[verify collection.select.name-patterns]
+// spec: COL#selection
 #[test]
 fn collection_select_by_name_patterns() {
     run_test_script_app(
@@ -93,7 +90,7 @@ fn collection_select_by_name_patterns() {
     );
 }
 
-// l[verify collection.select]
+// spec: COL#selection
 #[test]
 fn collection_select_multiple_criteria() {
     run_test_script_app(
@@ -108,7 +105,7 @@ fn collection_select_multiple_criteria() {
     );
 }
 
-// l[verify collection.col]
+// spec: COL#coercion
 #[test]
 fn col_from_collection_is_identity() {
     run_test_script_app(
@@ -120,7 +117,7 @@ fn col_from_collection_is_identity() {
     );
 }
 
-// l[verify collection.col]
+// spec: COL#coercion
 #[test]
 fn col_from_app_yields_all_resources() {
     run_test_script_app(
@@ -133,7 +130,7 @@ fn col_from_app_yields_all_resources() {
     );
 }
 
-// l[verify collection.col]
+// spec: COL#coercion
 #[test]
 fn col_from_resource_yields_single_item() {
     run_test_script_app(
@@ -145,7 +142,7 @@ fn col_from_resource_yields_single_item() {
     );
 }
 
-// l[verify collection.col]
+// spec: COL#coercion
 #[test]
 fn col_from_array_yields_union() {
     run_test_script_app(
@@ -158,7 +155,7 @@ fn col_from_array_yields_union() {
     );
 }
 
-// l[verify collection.col]
+// spec: COL#coercion
 #[test]
 fn col_from_unknown_yields_empty() {
     run_test_script_app(
@@ -169,7 +166,7 @@ fn col_from_unknown_yields_empty() {
     );
 }
 
-// l[verify collection.col]
+// spec: COL#coercion
 // An Action is invoked, never scheduled: `col` must not wrap it into a
 // Collection that could reach `rt.start` and friends.
 #[test]
@@ -187,8 +184,8 @@ fn col_from_action_yields_empty() {
     );
 }
 
-// l[verify bsl.args.strict]
-// l[verify collection.select.types]
+// spec: BSL#arguments
+// spec: COL#selection
 // A `types` value that is not an array used to drop the criterion, and a
 // select with no surviving criteria matches every resource in the app — so a
 // following rt.stop stopped every workload instead of the services.
@@ -205,8 +202,8 @@ fn select_types_must_be_an_array() {
     assert!(message.contains("must be an array"), "{message}");
 }
 
-// l[verify bsl.args.strict]
-// l[verify collection.select.types]
+// spec: BSL#arguments
+// spec: COL#selection
 #[test]
 fn select_types_elements_must_be_resource_types() {
     let err = run_test_script_err(
@@ -219,8 +216,8 @@ fn select_types_elements_must_be_resource_types() {
     assert!(message.contains("element 1"), "{message}");
 }
 
-// l[verify bsl.args.strict]
-// l[verify collection.select.names]
+// spec: BSL#arguments
+// spec: COL#selection
 #[test]
 fn select_names_elements_must_be_strings() {
     let err = run_test_script_err(
@@ -234,8 +231,8 @@ fn select_names_elements_must_be_strings() {
     assert!(message.contains("element 1"), "{message}");
 }
 
-// l[verify bsl.args.strict]
-// l[verify collection.select]
+// spec: BSL#arguments
+// spec: COL#selection
 // The spec says all possible keys are defined in it, so a typo'd key is a
 // criterion that silently constrains nothing.
 #[test]

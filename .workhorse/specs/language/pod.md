@@ -12,16 +12,16 @@ Applies to the BSL `Pod` interface: the builder methods and semantics every work
 A pod has its own network namespace and holds one container.
 Every type that implements `Pod` also implements [`Container`](container.md).
 [Deployments](deployment.md) and [Jobs](job.md) implement `Pod`.
-Every method in this spec is a [builder method](rule:l/bsl.builder) available on each type that implements `Pod`.
+Every method in this spec is a [builder method](overview.md#builders) available on each type that implements `Pod`.
 
 ## Service mounts
 
-`pod.mount(svc: ServicePort)` makes the [Service Port](rule:l/service.port) `svc` reachable from inside the pod.
-The runtime MUST make a mounted Service Port reachable at the hostname `localmount`, on the Service Port's port number, as [pod service mounts](rule:r/infra.pod.mount) specifies.
+`pod.mount(svc: ServicePort)` makes the [Service Port](service.md#service-ports) `svc` reachable from inside the pod.
+The runtime MUST make a mounted Service Port reachable at the hostname `localmount`, on the Service Port's port number, as [pod service mounts](../runtime/infrastructure.md#mount-endpoint-addressing) specifies.
 
 ## Port bindings
 
-A script binds a port of the pod to a service with these methods, where `port` is a [port number](rule:l/bsl.port) inside the pod:
+A script binds a port of the pod to a service with these methods, where `port` is a [port number](overview.md#ports) inside the pod:
 
 | method | binds `port` to | equivalent to |
 | --- | --- | --- |

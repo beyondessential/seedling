@@ -58,7 +58,7 @@ When an operator deletes a managed site volume, the runtime MUST [hold](actuatio
 When an operator deletes a snapshot site volume, the runtime MUST delete its storage.
 When an operator deletes a bind site volume, the runtime MUST forget the volume and MUST leave the host path untouched.
 
-The runtime MUST emit an [event](../interface/events.md) and record an [audit log](rule:r/audit.log) entry when a site volume is created or deleted.
+The runtime MUST emit an [event](../interface/events.md) and record an [audit log](audit-log.md#storage) entry when a site volume is created or deleted.
 A deletion event MUST identify the site volume's kind, and the held volume created when the deletion held the volume's data.
 
 ### Site volume names
@@ -118,7 +118,7 @@ Each endpoint has these members:
 | `remote_port` | the port traffic is forwarded to |
 
 The `(service_port, protocol)` pairs across a site service's endpoints are the ports the site service exposes.
-The runtime MUST distribute traffic for a site service's `(service_port, protocol)` across the `(remote_host, remote_port)` of every endpoint with that pair, as for any [service with several backends](rule:l/service.routing).
+The runtime MUST distribute traffic for a site service's `(service_port, protocol)` across the `(remote_host, remote_port)` of every endpoint with that pair, as for any [service with several backends](../language/service.md#routing).
 
 ### Endpoint addressing
 
@@ -194,7 +194,7 @@ An attachment is keyed by `(port, protocol)` within its site ingress, and its ta
 | forward | traffic for the attachment's port and protocol is routed to a named service of a named app |
 | redirect | requests for the attachment's port and protocol are answered with a redirect to a configured URL, with a configured status code, optionally keeping the request path |
 
-An attachment's protocols are those an app's [ingress](rule:l/ingress.termination) may declare.
+An attachment's protocols are those an app's [ingress](../language/ingress.md#termination) may declare.
 An attachment takes its hostname and TLS provisioning mode from its site ingress.
 A site ingress MAY carry several attachments that differ in `(port, protocol)`.
 

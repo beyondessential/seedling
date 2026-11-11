@@ -33,7 +33,7 @@ pub mod store;
 
 pub use store::{CanopySettings, get_settings, set_enabled, set_server_id};
 
-// r[impl canopy.report.schedule]
+// spec: CNR#report-schedule
 /// How often a report is sent.
 ///
 /// Matches the cadence Canopy already receives from the other agent on a host,
@@ -71,7 +71,7 @@ enum Outcome {
     Failed(String),
 }
 
-// r[impl canopy.report.schedule]
+// spec: CNR#report-schedule
 /// Run the reporting loop until the process ends.
 pub fn spawn(state: Arc<OiState>) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
@@ -84,8 +84,8 @@ pub fn spawn(state: Arc<OiState>) -> tokio::task::JoinHandle<()> {
     })
 }
 
-// r[impl canopy.report.schedule]
-// r[impl canopy.report.fault]
+// spec: CNR#report-schedule
+// spec: CNR#report-failure-fault
 /// Attempt one report, filing or clearing the fault to match.
 ///
 /// Reporting is driven by the schedule alone — there is no interface for forcing
@@ -157,7 +157,7 @@ async fn report_once(state: &Arc<OiState>) -> Outcome {
         Err(e) => return Outcome::Failed(e),
     };
     match client.status(&server_id, &payload).await {
-        // r[impl canopy.report.backup-prompt] — the response carries return-path
+        // spec: CNR#report-response — the response carries return-path
         // instructions, including backups to run now. That list is addressed to
         // whichever source owns backups on a host, which is never this one, so it
         // arrives empty and is discarded rather than being read as "nothing to
@@ -175,7 +175,7 @@ async fn report_once(state: &Arc<OiState>) -> Outcome {
     }
 }
 
-// r[impl canopy.report.identity]
+// spec: CNR#server-identity
 /// The server identifier Canopy knows this instance by, from cache or resolved.
 async fn server_id(
     state: &Arc<OiState>,
@@ -249,9 +249,9 @@ fn check(name: &str, result: Result_, extra: Value) -> Value {
     entry
 }
 
-// r[impl canopy.report.checks]
-// r[impl canopy.report.extra]
-// r[impl canopy.app.key]
+// spec: CNR#machine-checks
+// spec: CNR#machine-detail
+// spec: CNR#applications
 async fn build_payload(state: &Arc<OiState>) -> Result<Value, String> {
     // One sweep serves the health check, the totals and the applications.
     let statuses = status::all(&state.registry, &state.scheduler, &state.db);
@@ -290,7 +290,7 @@ async fn build_payload(state: &Arc<OiState>) -> Result<Value, String> {
         // The `machine` section is what makes Canopy read `applications`.
         "machine": {
             "health": health,
-            // r[impl canopy.report.extra] — what describes Seedling, and nothing
+            // spec: CNR#machine-detail — what describes Seedling, and nothing
             // that describes the host: the hostname, the host's uptime, and any
             // managed application's version belong to the agent that owns them.
             "detail": {
@@ -306,7 +306,7 @@ async fn build_payload(state: &Arc<OiState>) -> Result<Value, String> {
     }))
 }
 
-// r[impl canopy.report.checks]
+// spec: CNR#machine-checks
 /// `health/apps`, plus the app totals the free-form payload also carries.
 fn apps_check(apps: &[(AppName, AppStatus)]) -> (Value, usize, HashMap<&'static str, usize>) {
     let total = apps.len();
@@ -319,8 +319,8 @@ fn apps_check(apps: &[(AppName, AppStatus)]) -> (Value, usize, HashMap<&'static 
     (grade_apps(apps), total, by_status)
 }
 
-// r[impl canopy.report.extra]
-// r[impl canopy.report.checks.undeterminable]
+// spec: CNR#machine-detail
+// spec: CNR#machine-checks
 /// The overall self-reported health, from the per-check results.
 ///
 /// Recorded for display; Canopy grades incidents from the per-check results
@@ -336,7 +336,7 @@ fn overall_healthy(health: &[Value]) -> bool {
     })
 }
 
-// r[impl canopy.report.checks]
+// spec: CNR#machine-checks
 /// Grade the app set into the `health/apps` entry.
 ///
 /// Split out from reading the registry so the rule itself is testable without
@@ -371,7 +371,7 @@ fn grade_apps(apps: &[(AppName, AppStatus)]) -> Value {
     )
 }
 
-// r[impl canopy.report.checks]
+// spec: CNR#machine-checks
 fn faults_check(state: &Arc<OiState>) -> Value {
     let active = state
         .db
@@ -390,8 +390,7 @@ fn faults_check(state: &Arc<OiState>) -> Value {
     )
 }
 
-// r[impl canopy.report.checks]
-// r[impl canopy.report.checks.undeterminable]
+// spec: CNR#machine-checks
 /// Whether one of an infrastructure component's container slots is running.
 ///
 /// A slot the runtime could not ask about is distinguished from one it asked
@@ -447,7 +446,7 @@ fn clear_fault(state: &Arc<OiState>) {
     });
 }
 
-// r[impl canopy.report.fault]
+// spec: CNR#report-failure-fault
 /// Clear the report fault if reporting is no longer expected of this instance.
 ///
 /// Called wherever the last offer can end — a withdrawal, a lost connection, or
@@ -482,7 +481,7 @@ mod tests {
             .unwrap_or_else(|| panic!("no {name} check in the report"))
     }
 
-    // r[verify canopy.report.checks]
+    // spec: CNR#machine-checks
     #[test]
     fn no_apps_at_all_is_a_pass() {
         let entry = grade_apps(&[]);
@@ -490,7 +489,7 @@ mod tests {
         assert_eq!(entry["total"], 0);
     }
 
-    // r[verify canopy.report.checks]
+    // spec: CNR#machine-checks
     #[test]
     fn every_app_running_is_a_pass() {
         let entry = grade_apps(&[
@@ -501,7 +500,7 @@ mod tests {
         assert_eq!(entry["total"], 2);
     }
 
-    // r[verify canopy.report.checks]
+    // spec: CNR#machine-checks
     #[test]
     fn a_degraded_app_warns_and_is_named() {
         let entry = grade_apps(&[
@@ -513,7 +512,7 @@ mod tests {
         assert_eq!(entry["faulted"], json!([]));
     }
 
-    // r[verify canopy.report.checks]
+    // spec: CNR#machine-checks
     #[test]
     fn a_faulted_app_fails_and_outranks_a_degraded_one() {
         let entry = grade_apps(&[
@@ -529,7 +528,7 @@ mod tests {
         assert_eq!(entry["faulted"], json!(["postgres"]));
     }
 
-    // r[verify canopy.report.checks]
+    // spec: CNR#machine-checks
     #[test]
     fn transitional_apps_are_not_a_health_signal() {
         // An app mid-install or mid-operation is not yet meant to be running, so
@@ -549,7 +548,7 @@ mod tests {
         assert_eq!(entry["total"], 4);
     }
 
-    // r[verify canopy.report.extra]
+    // spec: CNR#machine-detail
     #[test]
     fn the_report_names_seedling_as_its_source_and_describes_only_seedling() {
         let oi = TestOi::new();
@@ -573,7 +572,7 @@ mod tests {
         );
     }
 
-    // r[verify canopy.report.checks]
+    // spec: CNR#machine-checks
     // The report graded a status that stops short of the health rollup, so
     // an installed app whose deployment is not running passed.
     #[test]
@@ -587,7 +586,7 @@ mod tests {
         assert_eq!(apps["degraded"], serde_json::json!(["demo"]));
     }
 
-    // r[verify canopy.report.checks]
+    // spec: CNR#machine-checks
     #[test]
     fn the_report_carries_the_fixed_check_set() {
         let oi = TestOi::new();
@@ -611,7 +610,7 @@ mod tests {
         );
     }
 
-    // r[verify canopy.app.key]
+    // spec: CNR#applications
     #[test]
     fn the_report_has_a_machine_section_and_an_applications_section() {
         let oi = TestOi::with_app("central");
@@ -632,7 +631,7 @@ mod tests {
         );
     }
 
-    // r[verify canopy.app.key]
+    // spec: CNR#applications
     #[test]
     fn a_host_with_no_typed_apps_reports_an_empty_applications_section() {
         let oi = TestOi::with_app("plain");
@@ -640,7 +639,7 @@ mod tests {
         assert_eq!(payload["applications"], json!({}));
     }
 
-    // r[verify canopy.report.checks]
+    // spec: CNR#machine-checks
     #[test]
     fn no_faults_passes_the_faults_check() {
         let oi = TestOi::new();
@@ -650,7 +649,7 @@ mod tests {
         assert_eq!(entry["count"], 0);
     }
 
-    // r[verify canopy.report.checks]
+    // spec: CNR#machine-checks
     #[test]
     fn an_active_fault_fails_the_faults_check_and_names_its_kind() {
         let oi = TestOi::new();
@@ -679,7 +678,7 @@ mod tests {
         );
     }
 
-    // r[verify canopy.report.checks]
+    // spec: CNR#machine-checks
     #[test]
     fn the_faults_check_lists_each_kind_once() {
         let oi = TestOi::new();
@@ -715,7 +714,7 @@ mod tests {
         );
     }
 
-    // r[verify canopy.report.checks.undeterminable]
+    // spec: CNR#machine-checks
     #[test]
     fn a_component_the_runtime_cannot_ask_about_is_broken_not_failed() {
         // The stub runtime answers "no such container" rather than erroring, so
@@ -731,7 +730,7 @@ mod tests {
         assert!(entry["reason"].is_string());
     }
 
-    // r[verify canopy.report.checks]
+    // spec: CNR#machine-checks
     #[test]
     fn a_component_asked_about_and_absent_fails() {
         let oi = TestOi::new();
@@ -744,7 +743,7 @@ mod tests {
         assert_eq!(entry["running"], false);
     }
 
-    // r[verify canopy.report.checks.undeterminable]
+    // spec: CNR#machine-checks
     #[test]
     fn a_broken_check_does_not_by_itself_make_the_instance_unhealthy() {
         // "The runtime could not ask" is not "the system is bad".
@@ -768,7 +767,7 @@ mod tests {
         );
     }
 
-    // r[verify canopy.report.extra]
+    // spec: CNR#machine-detail
     #[test]
     fn everything_passing_is_healthy() {
         assert!(overall_healthy(&[
@@ -777,7 +776,7 @@ mod tests {
         ]));
     }
 
-    // r[verify canopy.report.fault]
+    // spec: CNR#report-failure-fault
     #[test]
     fn a_skipped_report_files_no_fault() {
         let oi = TestOi::new();
@@ -794,7 +793,7 @@ mod tests {
         );
     }
 
-    // r[verify canopy.report.fault]
+    // spec: CNR#report-failure-fault
     #[test]
     fn a_failing_report_files_a_fault_that_a_lost_provider_then_clears() {
         let oi = TestOi::new();
@@ -838,7 +837,7 @@ mod tests {
         assert!(after.is_empty(), "the fault clears with the expectation");
     }
 
-    // r[verify canopy.report.fault]
+    // spec: CNR#report-failure-fault
     #[test]
     fn repeated_failures_do_not_accumulate_faults() {
         let oi = TestOi::new();

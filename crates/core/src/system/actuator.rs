@@ -96,7 +96,7 @@ pub enum ActuateError {
         source: crate::runtime::registry::RegistryError,
         backtrace: snafu::Backtrace,
     },
-    // r[fault.external-volume-unmapped]
+    // FLT#workload-faults
     #[snafu(display("external volume '{name}' is not mapped"))]
     ExternalVolumeNotMapped {
         name: String,
@@ -104,7 +104,7 @@ pub enum ActuateError {
     },
 }
 
-// l[impl volume.write.validation]
+// spec: VOL#write-paths
 /// Write a file into a volume using kernel-confined `openat2(RESOLVE_BENEATH)`.
 pub(crate) async fn safe_volume_write(
     mountpoint: &Path,
@@ -141,7 +141,7 @@ pub(crate) async fn safe_volume_write(
 /// volume absent at the same moment, so asking first and creating second
 /// would only narrow the window; `create` reports which call made the
 /// storage, and that answer is what settles who owes the writes.
-// r[impl actuate.volume.start]
+// spec: ACTU#volume-creation-and-seeding
 pub(crate) async fn ensure_named_volume(
     vol_store: &crate::system::volume_store::VolumeStore,
     name: &VolumeName,
@@ -217,14 +217,14 @@ impl Actuator {
         resolve_external_volumes(&self.db, &self.driver.volume_store, app)
     }
 
-    // r[impl actuate.deployment.start]
+    // spec: ACTU#deployment-and-job-instances
     /// Ensure all primitives for this instance exist and are running.
     #[tracing::instrument(skip_all, fields(instance = %instance.display_name))]
     /// `app_priority` is the standing the reconciler resolved for this app on
     /// this tick. Passed in rather than read here so the weights the slices were
     /// given and the kill preference baked into the unit come from one read, and
     /// so a failed read is decided once per tick instead of once per instance.
-    // r[impl priority.kill-order]
+    // spec: PRIO#kill-order
     pub async fn start(
         &self,
         instance: &ResourceInstance,
@@ -239,7 +239,7 @@ impl Actuator {
                     let container = pod.container.lock();
                     let image = container.image.clone().unwrap_or_default();
                     let raw_mounts = pod.service_mounts.clone();
-                    // l[impl container.on-exit]
+                    // spec: CTR#exit-strategy
                     let restart = map_on_exit(container.on_exit.unwrap_or(OnExit::Restart));
                     let required_ext_vols: Vec<String> = container
                         .volume_mounts
@@ -260,7 +260,7 @@ impl Actuator {
                     (image, raw_mounts, restart, vols, required_ext_vols)
                 };
                 let external_vols = self.resolve_external_volumes(&instance.app);
-                // r[impl fault.external-volume-unmapped]
+                // spec: FLT#workload-faults
                 for name in &required_ext_vols {
                     if !external_vols.contains_key(name.as_str()) {
                         tracing::warn!(
@@ -272,7 +272,7 @@ impl Actuator {
                         return Err(ExternalVolumeNotMappedSnafu { name: name.clone() }.build());
                     }
                 }
-                // i[impl deployment.restart]
+                // spec: CTL#deployment-restart
                 let restart_gen = {
                     let app_name = instance.app.clone();
                     let dep_name = instance.name.as_deref().unwrap_or("").to_owned();
@@ -322,7 +322,7 @@ impl Actuator {
                     let container = pod.container.lock();
                     let image = container.image.clone().unwrap_or_default();
                     let raw_mounts = pod.service_mounts.clone();
-                    // l[impl container.on-exit]
+                    // spec: CTR#exit-strategy
                     // Jobs default to Terminate so systemd does not restart them on completion.
                     let restart = map_on_exit(container.on_exit.unwrap_or(OnExit::Terminate));
                     let required_ext_vols: Vec<String> = container
@@ -344,7 +344,7 @@ impl Actuator {
                     (image, raw_mounts, restart, vols, required_ext_vols)
                 };
                 let external_vols = self.resolve_external_volumes(&instance.app);
-                // r[impl fault.external-volume-unmapped]
+                // spec: FLT#workload-faults
                 for name in &required_ext_vols {
                     if !external_vols.contains_key(name.as_str()) {
                         tracing::warn!(
@@ -362,7 +362,7 @@ impl Actuator {
                     let c = pod.container.lock();
                     (c.stop_signal.clone(), c.stop_timeout_secs)
                 };
-                // l[impl deployment.priority]
+                // spec: DEP#priority
                 // Priority is declared on Deployments only; every other
                 // workload stands at Normal within its app.
                 let standing = WorkloadStanding::new(app_priority, Priority::Normal);
@@ -407,20 +407,20 @@ impl Actuator {
         resource: &Resource,
     ) -> Result<Option<String>, ActuateError> {
         match resource {
-            // r[impl actuate.volume.start]
+            // spec: ACTU#volume-creation-and-seeding
             Resource::Volume(vol) => {
                 let (tmpfs, writes) = {
                     let def = vol.def.lock();
                     (def.tmpfs, def.writes.clone())
                 };
                 if tmpfs {
-                    // r[impl actuate.volume.tmpfs]
+                    // spec: ACTU#volume-storage
                     // The directory containers bind-mount *is* the volume, so
                     // it is what gets created and seeded here. Routing this
                     // through the container runtime's tmpfs driver instead
                     // would seed a mountpoint nothing ever mounts.
                     let host_path = tmpfs_volume_path(&instance.display_name);
-                    // r[impl storage.confinement] — classify the path before
+                    // spec: ACTU#storage-confinement — classify the path before
                     // making anything at it. `create_dir_all` succeeds
                     // straight through a symlink standing at the name, and
                     // the declared writes would then land wherever it points.
@@ -439,7 +439,7 @@ impl Actuator {
                         safe_volume_write(&host_path, path, contents).await?;
                     }
                 } else {
-                    // r[impl actuate.volume.storage]
+                    // spec: ACTU#volume-storage
                     let vol_store = &self.driver.volume_store;
                     let name = VolumeName::of_instance(instance);
                     if let Some(bsl_name) = instance.name.as_deref() {
@@ -470,7 +470,7 @@ impl Actuator {
         }
     }
 
-    // l[impl rt.signal]
+    // spec: RT#signal-delivery
     /// Send a POSIX signal to the running container's PID 1. Used to wire
     /// `rt.signal` in the BSL runtime to the underlying container runtime.
     /// Non-fatal if the container is already gone — caller can decide whether
@@ -488,8 +488,8 @@ impl Actuator {
             .map_err(|e| ContainerSnafu.into_error(e))
     }
 
-    // r[impl actuate.deployment.stop]
-    // r[impl actuate.volume.stop]
+    // spec: ACTU#deployment-and-job-instances
+    // spec: ACTU#volume-removal
     /// Stop and remove all primitives for this instance.
     #[tracing::instrument(skip_all, fields(instance = %instance.display_name))]
     pub async fn stop(
@@ -531,12 +531,12 @@ impl Actuator {
             Resource::Volume(vol) => {
                 let tmpfs = vol.def.lock().tmpfs;
                 if tmpfs {
-                    // r[impl actuate.volume.tmpfs]
+                    // spec: ACTU#volume-storage
                     // Remove the directory holding the data, not a stand-in
                     // for it: the tmpfs backing under /run is reclaimed once
                     // the directory is gone.
                     let host_path = tmpfs_volume_path(&instance.display_name);
-                    // r[impl storage.confinement] — a symlink wearing the
+                    // spec: ACTU#storage-confinement — a symlink wearing the
                     // name is refused rather than unlinked, so a stop never
                     // reports a cleanup that removed only a link.
                     if crate::system::confined::owned_dir_async(&host_path)
@@ -567,7 +567,7 @@ impl Actuator {
                             .context(ContainerSnafu)?;
                     }
                 } else {
-                    // r[impl actuate.volume.hold]
+                    // spec: ACTU#held-volumes
                     let vol_store = &self.driver.volume_store;
                     let name = VolumeName::of_instance(instance);
                     let held = vol_store
@@ -580,7 +580,7 @@ impl Actuator {
                             .into_error(e)
                         })?;
                     if let Some(meta) = held {
-                        // r[impl actuate.volume.hold.events]
+                        // spec: ACTU#held-volumes
                         self.event_tx.held_volume_created(
                             meta.id,
                             &instance.app,
@@ -602,7 +602,7 @@ impl Actuator {
     ///
     /// Used when a volume's storage backend needs migration: the old data is
     /// held and a fresh volume will be created by a subsequent `start` call.
-    // r[impl actuate.volume.hold]
+    // spec: ACTU#held-volumes
     #[tracing::instrument(skip_all, fields(instance = %instance.display_name))]
     pub async fn hold_volume(
         &self,
@@ -625,7 +625,7 @@ impl Actuator {
                         .into_error(e)
                     })?;
                 if let Some(meta) = held {
-                    // r[impl actuate.volume.hold.events]
+                    // spec: ACTU#held-volumes
                     self.event_tx.held_volume_created(
                         meta.id,
                         &instance.app,
@@ -663,7 +663,7 @@ impl Actuator {
                         return None;
                     }
                 };
-                // i[impl deployment.restart]
+                // spec: CTL#deployment-restart
                 let dep_name = instance.name.as_deref().unwrap_or("").to_owned();
                 let restart_gen = {
                     let app_name = instance.app.clone();
@@ -717,7 +717,7 @@ impl Actuator {
 ///
 /// Shared with the shell session path so an operator-opened shell mounts the
 /// same bind sources the reconciler would use for a Job or Deployment.
-// l[impl action.shell]
+// spec: ACN#shells
 pub fn resolve_external_volumes(
     db: &DbHandle,
     vol_store: &crate::system::volume_store::VolumeStore,
@@ -753,7 +753,7 @@ pub fn resolve_external_volumes(
                                 vol_store.site_path(sv.name.as_str())
                             }
                         };
-                        // r[impl volume.site.snapshot]
+                        // spec: SITE#site-volume-snapshots
                         // Snapshot volumes are inherently read-only at the filesystem level.
                         let effective_read_only = mapping.read_only || sv.is_read_only();
                         ResolvedExternalMount {
@@ -800,7 +800,7 @@ mod tests {
         (data, store)
     }
 
-    // r[verify actuate.volume.start]
+    // spec: ACTU#volume-creation-and-seeding
     #[tokio::test]
     async fn creating_a_named_volume_seeds_it_in_the_same_step() {
         let (_data, store) = store();
@@ -815,7 +815,7 @@ mod tests {
 
     /// Whichever phase reaches the volume second must leave its contents
     /// alone: the declared writes seed the volume, they do not own it.
-    // r[verify actuate.volume.start]
+    // spec: ACTU#volume-creation-and-seeding
     #[tokio::test]
     async fn a_volume_that_is_already_there_is_not_seeded_again() {
         let (_data, store) = store();
@@ -837,7 +837,7 @@ mod tests {
 
     /// A volume only ever receives its writes at creation, so storage left
     /// behind by a failed seed would stay unseeded for good.
-    // r[verify actuate.volume.start]
+    // spec: ACTU#volume-creation-and-seeding
     #[tokio::test]
     async fn a_failed_write_takes_the_storage_it_created_back_out() {
         let (_data, store) = store();
@@ -865,7 +865,7 @@ mod tests {
     /// did not take effect owes the volume nothing — it must not report the
     /// name as an error, and above all must not take the winner's storage
     /// back out on a write it was never responsible for.
-    // r[verify actuate.volume.start]
+    // spec: ACTU#volume-creation-and-seeding
     #[tokio::test]
     async fn losing_the_race_to_create_is_not_a_failure_and_undoes_nothing() {
         let (_data, store) = store();
@@ -888,7 +888,7 @@ mod tests {
 
     /// `create` is the decision about who owns seeding, so it has to answer
     /// that question rather than fail on a name already in use.
-    // r[verify actuate.volume.start]
+    // spec: ACTU#volume-creation-and-seeding
     #[tokio::test]
     async fn creating_a_volume_that_is_already_there_reports_no_creation() {
         let (_data, store) = store();

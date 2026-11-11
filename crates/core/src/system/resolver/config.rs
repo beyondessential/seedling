@@ -16,7 +16,7 @@ use crate::runtime::nat64_prefix::NAT64_PREFIX_STR;
 /// `translate_all` directive is emitted so that names with real AAAA
 /// records are also translated — required when seedling is providing
 /// NAT64 on a host that cannot route native IPv6 to the wider internet.
-// r[impl infra.resolver.config]
+// spec: DNS#resolver-configuration
 pub(crate) fn generate_corefile(
     upstreams: &[SocketAddr],
     nat64_active: bool,
@@ -30,11 +30,11 @@ pub(crate) fn generate_corefile(
     }
     config.push('\n');
     config.push_str("    cache 30\n");
-    // r[impl infra.nat64.dns64]
+    // spec: NAT64#dns64
     if nat64_active {
         config.push_str("    dns64 {\n");
         config.push_str(&format!("        prefix {NAT64_PREFIX_STR}\n"));
-        // r[impl infra.nat64.dns64.force-translation]
+        // spec: NAT64#dns64
         if force_dns64_translation {
             config.push_str("        translate_all\n");
         }
@@ -91,7 +91,7 @@ mod tests {
         assert!(!cf.contains("translate_all"));
     }
 
-    // r[verify infra.nat64.dns64.force-translation]
+    // spec: NAT64#dns64
     #[test]
     fn corefile_with_forced_dns64_translation() {
         let cf = generate_corefile(&sample_upstreams(), true, true);

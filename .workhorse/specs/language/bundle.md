@@ -79,4 +79,4 @@ Within a [parameter change handler](parameter.md#change-handlers), `old.file` an
 A `File` is an immutable sequence of bytes.
 `file.text()` MUST return the file's contents as a string, and MUST throw if they are not valid UTF-8.
 
-A `Directory` is consumed by [`volume.write_dir`](rule:l/volume.write-dir).
+A `Directory` is consumed by [`volume.write_dir`](volume.md#declared-file-writes).

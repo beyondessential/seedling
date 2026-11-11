@@ -24,7 +24,7 @@ The IPv6 bridge network, with its own /64 prefix within the host prefix, to whic
 
 ### Mount endpoint
 
-The address at which a pod reaches the services it [mounts](rule:l/pod.mount-serviceport).
+The address at which a pod reaches the services it [mounts](../language/pod.md#service-mounts).
 
 ## Unavailable backends
 

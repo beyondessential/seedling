@@ -22,7 +22,7 @@ use super::{
 
 /// Remove containers of unregistered apps, then the pod networks that nothing
 /// live is using.
-// r[impl infra.pod.network.cleanup]
+// spec: INFRA#pod-network-cleanup
 pub async fn sweep_orphaned_workloads(
     container: &dyn ContainerRuntime,
     known_apps: &HashSet<AppName>,
@@ -172,7 +172,7 @@ mod tests {
         names
     }
 
-    // r[verify infra.pod.network.cleanup]
+    // spec: INFRA#pod-network-cleanup
     // The network scan used to run before the container scan, so a deregistered
     // app's container still existed when its network was judged, and the
     // network was kept for good.
@@ -199,7 +199,7 @@ mod tests {
         assert_eq!(left[0].name, "kept-web");
     }
 
-    // r[verify infra.pod.network.cleanup]
+    // spec: INFRA#pod-network-cleanup
     #[tokio::test]
     async fn a_live_operator_session_keeps_its_network() {
         let rt = runtime();
@@ -212,7 +212,7 @@ mod tests {
         assert_eq!(network_names(&rt).await, ["seedling-shell-1"]);
     }
 
-    // r[verify infra.pod.network.cleanup]
+    // spec: INFRA#pod-network-cleanup
     #[tokio::test]
     async fn infra_networks_are_never_orphans() {
         let rt = runtime();

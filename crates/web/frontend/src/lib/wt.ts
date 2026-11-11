@@ -94,7 +94,7 @@ export class WtClient {
     return { ok: true, value: body.result ?? body };
   }
 
-  // w[routes.logs]
+  // UI#operator-capabilities
   async streamLogs(
     params: LogStreamParams,
     onEntry: (entry: LogEntry) => void,
@@ -105,7 +105,7 @@ export class WtClient {
     });
   }
 
-  // w[routes.events]
+  // UI#event-feed
   async subscribeEvents(
     onEvent: (event: SeedlingEvent) => void,
     signal: AbortSignal,
@@ -115,8 +115,8 @@ export class WtClient {
     });
   }
 
-  // w[shells.wire]
-  // w[shells.ui]
+  // WEB#shell-relay
+  // UI#shells
   async openShell(
     params: OpenShellParams,
     uniRouter: UniRouter,
@@ -150,7 +150,7 @@ export class WtClient {
     ]);
 
     // The exit frame arrives as the last line on the bidi recv side.
-    // w[impl shells.exit]
+    // spec: WEB#shell-relay
     const exitCode = new Promise<number>((resolve) => {
       void (async () => {
         try {
@@ -168,7 +168,7 @@ export class WtClient {
     return { sessionId, writer, exitCode, stdout, stderr };
   }
 
-  // w[volumes.shell-ui]
+  // UI#shells
   async openVolumeShell(
     params: OpenVolumeShellParams,
     uniRouter: UniRouter,

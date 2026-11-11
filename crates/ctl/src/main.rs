@@ -48,7 +48,7 @@ struct Cli {
     #[arg(long, conflicts_with = "fingerprint")]
     trust_any: bool,
 
-    // i[key.client.path]
+    // KEY#client-identity-key
     /// Path to the client identity key file. Defaults to a per-user state
     /// directory. Override to use a distinct identity, or to pre-generate a
     /// key at a chosen path (e.g. with `client fingerprint`) so it can be
@@ -213,7 +213,7 @@ async fn main() {
 
     // Load (or generate) the client identity early; `client fingerprint` needs it
     // before any server connection is attempted.
-    // i[impl key.client.path]
+    // spec: KEY#client-identity-key
     let key_path = cli
         .key_file
         .clone()
@@ -246,7 +246,7 @@ async fn main() {
         return;
     }
 
-    // i[wire.actor]
+    // WIRE#actor-attribution
     let actor = {
         let username = whoami::username().unwrap_or_else(|_| String::from("unknown"));
         let hostname = whoami::devicename().unwrap_or_else(|_| String::from("unknown"));

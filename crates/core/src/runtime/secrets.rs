@@ -6,8 +6,8 @@ use std::{
 use orion::aead;
 use secrecy::{ExposeSecret, SecretString};
 
-// r[impl secret.key]
-// r[impl secret.storage]
+// spec: SEC#secret-key
+// spec: SEC#storage
 pub struct Cipher {
     key: aead::SecretKey,
 }
@@ -51,7 +51,7 @@ impl From<orion::errors::UnknownCryptoError> for Error {
 }
 
 impl Cipher {
-    // r[impl secret.key]
+    // spec: SEC#secret-key
     pub fn load_or_create(path: &Path) -> Result<Self, Error> {
         if path.exists() {
             let mode = path.metadata()?.permissions().mode() & 0o777;
@@ -72,7 +72,7 @@ impl Cipher {
         Ok(Self { key })
     }
 
-    // r[impl secret.storage]
+    // spec: SEC#storage
     pub fn encrypt(&self, plaintext: &SecretString) -> Result<Vec<u8>, Error> {
         Ok(aead::seal(&self.key, plaintext.expose_secret().as_bytes())?)
     }
@@ -94,7 +94,7 @@ impl Cipher {
 mod tests {
     use super::*;
 
-    // r[verify secret.storage]
+    // spec: SEC#storage
     #[test]
     fn round_trip() {
         let cipher = Cipher::for_tests();
@@ -127,7 +127,7 @@ mod tests {
         assert!(other.decrypt(&ct).is_err());
     }
 
-    // r[verify secret.key]
+    // spec: SEC#secret-key
     #[test]
     fn keyfile_created_with_secure_perms() {
         let dir = tempfile::tempdir().expect("tempdir");

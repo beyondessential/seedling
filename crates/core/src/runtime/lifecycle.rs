@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 
-// l[impl rt.lifecyle]
-// r[impl lifecycle.states]
+// spec: RT#barriers
+// spec: LCY#lifecycle-states
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub enum LifecycleState {
     Pending,
@@ -14,7 +14,7 @@ pub enum LifecycleState {
 }
 
 impl LifecycleState {
-    // r[impl lifecycle.transitions]
+    // spec: LCY#transitions
     pub fn can_transition_to(self, next: LifecycleState) -> bool {
         use LifecycleState::*;
         matches!(
@@ -33,7 +33,7 @@ impl LifecycleState {
         )
     }
 
-    // r[impl lifecycle.derivation]
+    // spec: LCY#derivation
     /// Returns true if self has reached or passed `required` in the lifecycle order.
     pub fn has_reached(self, required: LifecycleState) -> bool {
         fn ordinal(s: LifecycleState) -> u8 {
@@ -55,7 +55,7 @@ impl LifecycleState {
 mod tests {
     use super::LifecycleState::*;
 
-    // r[verify lifecycle.transitions]
+    // spec: LCY#transitions
     #[test]
     fn valid_transitions() {
         assert!(Pending.can_transition_to(Scheduled));
@@ -66,7 +66,7 @@ mod tests {
         assert!(Terminated.can_transition_to(Unscheduled));
     }
 
-    // r[verify lifecycle.transitions]
+    // spec: LCY#transitions
     #[test]
     fn skip_transitions() {
         assert!(Running.can_transition_to(Terminated));
@@ -76,7 +76,7 @@ mod tests {
         assert!(Terminating.can_transition_to(Unscheduled));
     }
 
-    // r[verify lifecycle.transitions]
+    // spec: LCY#transitions
     #[test]
     fn invalid_transitions() {
         assert!(!Unscheduled.can_transition_to(Running));
@@ -86,8 +86,8 @@ mod tests {
         assert!(!Running.can_transition_to(Pending));
     }
 
-    // r[verify lifecycle.derivation]
-    // r[verify lifecycle.states]
+    // spec: LCY#derivation
+    // spec: LCY#lifecycle-states
     #[test]
     fn has_reached() {
         assert!(!Pending.has_reached(Running));

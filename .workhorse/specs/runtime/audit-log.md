@@ -24,7 +24,7 @@ The runtime MUST create the file readable and writable by its owner only.
 
 ## Entries
 
-The runtime MUST write to the audit log every event it publishes on the [event feed](rule:i/event.types).
+The runtime MUST write to the audit log every event it publishes on the [event feed](../interface/events.md#event-types).
 The audit log MUST be in JSON Lines, each entry being one event in the event feed's JSON representation, with its `type` and `timestamp` members.
 
 ## Generations
@@ -45,4 +45,4 @@ The runtime MUST report each failure to write an entry in its own log.
 
 If events are lost to the audit log because the runtime fell behind in writing them, the runtime MUST hold a [fault](../overview.md#fault) of kind `audit_lag` against the app name `seedling`, giving the number of events lost.
 At most one such fault MUST be active at a time.
-The fault MUST stay active until an operator [clears](rule:i/fault.clear-app) it.
+The fault MUST stay active until an operator [clears](../interface/faults.md#clearing-faults) it.

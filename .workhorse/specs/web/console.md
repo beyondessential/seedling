@@ -53,15 +53,15 @@ On receiving an `EventsDropped` event, the console MUST read afresh every view i
 
 ## App definitions
 
-The app detail view MUST show the source of the app's current definition, from its [provenance](rule:i/definition.provenance).
+The app detail view MUST show the source of the app's current definition, from its [provenance](../interface/definitions.md#provenance-reporting).
 For a fetched definition, it MUST show the reference and digest.
 For a pushed definition, it MUST show the content hash and the actor who pushed it, with any origin the client reported, marked as reported by the client.
 
 The console MUST let the operator update an app's definition from a registry.
-For an app whose definition was fetched, it MUST offer the [tags](rule:i/definition.tags) of the recorded reference's repository to pick from, and the operator MAY instead enter a complete reference.
+For an app whose definition was fetched, it MUST offer the [tags](../interface/definitions.md#repository-tags) of the recorded reference's repository to pick from, and the operator MAY instead enter a complete reference.
 The operator MAY change one parameter alongside the new definition.
-Before the update is applied, the console MUST show the [planned change](rule:i/plan.dry-run), including any validator rejections, and MUST NOT apply a change that is rejected.
-The console MUST issue the update as a single [`/apps/update`](rule:i/app.update) request.
+Before the update is applied, the console MUST show the [planned change](../interface/params.md#change-planning), including any validator rejections, and MUST NOT apply a change that is rejected.
+The console MUST issue the update as a single [`/apps/update`](../interface/apps.md#update) request.
 While the app has an active `definition_source_moved` fault, the console MUST show beside the provenance that the recorded tag has moved, and offer that tag to update to.
 
 The console MUST let the operator edit a definition whose bundle has exactly one script file.
@@ -73,32 +73,32 @@ The console MUST NOT apply an edit until it has read the definition's files, and
 
 The apps list MUST show, for each app with active faults, how many there are.
 
-The app detail view MUST show the app's [Canopy application type](rule:l/app.canopy-type) when its definition declares one.
+The app detail view MUST show the app's [Canopy application type](../language/app.md#canopy-type) when its definition declares one.
 
-For each container resource with a declared [healthcheck](rule:l/deployment.healthcheck), the app detail view MUST show its `on_failure` response and its current check state: passing, failing, or within its start period.
+For each container resource with a declared [healthcheck](../language/deployment.md#health-checks), the app detail view MUST show its `on_failure` response and its current check state: passing, failing, or within its start period.
 It SHOULD reveal the healthcheck's `kind` and, for a command healthcheck, its command, on hover or focus.
 
 ## Priority
 
-The app detail view MUST show the app's [priority](rule:i/app.priority.set) and let the operator set it to any level the Operator Interface accepts.
+The app detail view MUST show the app's [priority](../interface/app-control.md#app-priority) and let the operator set it to any level the Operator Interface accepts.
 The apps list MUST mark each app whose priority is not `normal`, distinguishing a raised priority from a lowered one.
 A change of priority MUST appear in both views without a reload.
 
-For each Deployment declaring a [priority](rule:l/deployment.priority) other than `normal`, the app detail view MUST show the declared level as configuration, not as a control.
+For each Deployment declaring a [priority](../language/deployment.md#priority) other than `normal`, the app detail view MUST show the declared level as configuration, not as a control.
 That indicator MUST read as standing within the app, not across apps.
 
 > [!NOTE]
-> [Kill order](rule:r/priority.kill-order) is app-major, so a `Critical` Deployment in a `low`-priority app is shed before any workload of a `high`-priority app.
+> [Kill order](../runtime/priority.md#kill-order) is app-major, so a `Critical` Deployment in a `low`-priority app is shed before any workload of a `high`-priority app.
 
 ## Shells
 
-The console MUST offer each shell an app defines, as an action of kind `shell` in its [description](rule:i/app.describe), and MUST collect values for the shell's declared parameters before opening it.
-It MUST offer a [volume shell](rule:i/volumes.shell) over a single volume from each site volume and each app volume resource it lists, and SHOULD label the shell with the volume's display name.
+The console MUST offer each shell an app defines, as an action of kind `shell` in its [description](../interface/apps.md#description), and MUST collect values for the shell's declared parameters before opening it.
+It MUST offer a [volume shell](../interface/shells.md#volume-shells) over a single volume from each site volume and each app volume resource it lists, and SHOULD label the shell with the volume's display name.
 
 The console MUST let several shells be open at once.
-It MUST fit each terminal to the space it has and send [`/shells/resize`](rule:i/shell.resize) when that space changes, with at most one resize request in flight for a shell at a time.
+It MUST fit each terminal to the space it has and send [`/shells/resize`](../interface/shells.md#resizing-a-terminal) when that space changes, with at most one resize request in flight for a shell at a time.
 When a shell exits, the console MUST show its exit code and offer to reopen it.
-When the operator closes a shell that has not exited, the console MUST stop it with [`/shells/stop`](rule:i/shell.stop).
+When the operator closes a shell that has not exited, the console MUST stop it with [`/shells/stop`](../interface/shells.md#stopping-a-session).
 
 Volume shells MUST be available in every safety mode.
 In the `read` mode the console MUST open a volume shell with `read_only: true`, and SHOULD mark it as read-only.
@@ -111,7 +111,7 @@ It MUST show the host's image pins, with the pinning app, reference and time pin
 It MUST let the operator remove every image that is not backing a running container in one action.
 
 The app detail view MUST show the images the app's running containers use and the images the app has pinned, let the operator remove each, and clear all of the app's pins in one action.
-It MUST offer to [discover](rule:i/image.discover) the app's images from its handlers in lenient mode, and show each discovered reference as potentially used, distinct from in use and pinned.
+It MUST offer to [discover](../interface/images.md#image-discovery) the app's images from its handlers in lenient mode, and show each discovered reference as potentially used, distinct from in use and pinned.
 When a handler's probe reports an error or is skipped, the console MUST show it beside the results.
 The console MUST let the operator pull and pin, for the app, every discovered reference not already present or pinned.
 
@@ -133,21 +133,21 @@ The console MUST show the number of held volumes on every view, and keep it curr
 
 ## Restart history
 
-The console MUST list [restart records](rule:i/restart.record), most recent first, with their app, instance, time, initiator and exit status, and let the operator filter them by app.
+The console MUST list [restart records](../interface/faults.md#restart-records), most recent first, with their app, instance, time, initiator and exit status, and let the operator filter them by app.
 It MUST distinguish deliberate restarts from recovery restarts.
 It MUST show the crash-loop rate threshold and window, and let the operator change them.
 
 ## Certificates
 
 The console MUST let the operator manage per-hostname certificate policies, the ACME contact email and certificate profile, stored certificates, and DNS providers.
-For each hostname, it MUST show the strategy responsible for it and when that strategy falls through to the next, as [hostname listing](rule:i/tls.hostname.list) reports, with Canopy certificates among the others.
+For each hostname, it MUST show the strategy responsible for it and when that strategy falls through to the next, as [hostname listing](../interface/tls.md#hostname-view) reports, with Canopy certificates among the others.
 
 The console MUST group stored certificates by label and show each one's state, origin, issuer, expiry and serial.
 It MUST flag a self-signed certificate, and one that expires within fourteen days.
 For a certificate obtained through a certificate signing request, the console MUST show the hostnames requested where they differ from the certificate's primary subject alternative name, and MUST flag the certificate, naming the missed hostnames, when it does not cover them all.
 
-A certificate signing request the console begins MUST take one or more hostnames, each a hostname or a `*.<suffix>` wildcard, as [beginning a request](rule:i/tls.cert.csr.begin) accepts.
-For an active manual or request-derived certificate that expires within fourteen days or has expired, the console MUST offer to [renew](rule:r/tls.csr.renew) it.
+A certificate signing request the console begins MUST take one or more hostnames, each a hostname or a `*.<suffix>` wildcard, as [beginning a request](../interface/tls.md#certificate-signing-requests) accepts.
+For an active manual or request-derived certificate that expires within fourteen days or has expired, the console MUST offer to [renew](../runtime/tls/certificates.md#certificate-signing-requests) it.
 Renewing begins a certificate signing request pre-filled, editably, with the certificate's DNS subject alternative names and the hostnames it currently serves.
 Where the certificate already has a pending renewal, the console MUST lead to that renewal instead, and MUST name the certificate a pending renewal renews.
 

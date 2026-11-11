@@ -25,7 +25,7 @@ pub(crate) struct RevokeKeyParams {
     pub fingerprint: String,
 }
 
-// i[key.list]
+// KEY#listing-keys
 pub(crate) fn list_keys(state: &OiState) -> HandlerResult {
     let rows = state
         .db
@@ -40,7 +40,7 @@ pub(crate) fn list_keys(state: &OiState) -> HandlerResult {
     Ok(json!(result))
 }
 
-// i[key.authorize]
+// KEY#authorising-a-key
 pub(crate) fn authorize_key(state: &OiState, params: AuthorizeKeyParams) -> HandlerResult {
     // The verifier compares byte-for-byte against a lowercase-hex SHA-256, so
     // an uppercase, whitespace-padded, `sha256:`-prefixed or wrong-length
@@ -61,7 +61,7 @@ pub(crate) fn authorize_key(state: &OiState, params: AuthorizeKeyParams) -> Hand
     Ok(json!({}))
 }
 
-// i[key.revoke]
+// KEY#revoking-a-key
 pub(crate) fn revoke_key(state: &OiState, params: RevokeKeyParams) -> HandlerResult {
     // Normalised the same way as on the way in, so a key authorised from a
     // `sha256:`-prefixed or uppercase paste can be revoked with the string

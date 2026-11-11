@@ -9,9 +9,9 @@
 // doesn't emit any. That'd need a write action, which we can't run
 // without first installing a real app.
 //
-// w[verify routes.sessions]
-// w[verify transport.webtransport]
-// w[verify wt.actor]
+// spec: WEB#connected-clients
+// spec: WEB#request-relay
+// spec: WEB#session-establishment
 
 import { expect, test } from "../test-fixtures";
 

@@ -39,7 +39,7 @@ A client requests a [port forward](#port-forward) by sending `/forwards/start` o
 | `port` | integer, 0 to 65535 | yes | a port of that service, as `service.port()` names it |
 | `proto` | string | yes | `"tcp"` or `"udp"` |
 
-A service port is declared for `tcp` when a pod in the app attaches to it with [`pod.tcp()`](rule:l/pod.tcp) or [`pod.http()`](rule:l/pod.http), and for `udp` when a pod attaches to it with [`pod.udp()`](rule:l/pod.udp).
+A service port is declared for `tcp` when a pod in the app attaches to it with [`pod.tcp()`](../language/pod.md#port-bindings) or [`pod.http()`](../language/pod.md#port-bindings), and for `udp` when a pod attaches to it with [`pod.udp()`](../language/pod.md#port-bindings).
 
 The server MUST reject a `proto` other than `"tcp"` or `"udp"` with `requirements_invalid`.
 The server MUST reject a request naming an app that is not registered with `not_found`.
@@ -89,7 +89,7 @@ The server MUST report each of the following by a status message:
 
 ## TCP tunnelling
 
-A client carries each TCP connection through a TCP forward on its own [forward data stream](rule:i/stream.forward).
+A client carries each TCP connection through a TCP forward on its own [forward data stream](wire.md#port-forward-data).
 When the server accepts a forward data stream, it MUST open a TCP connection to the service's address at the forward's port and relay bytes between the two.
 The server MUST deliver to the service any bytes that followed the stream's header line in the same read.
 The client MUST relay each local connection it accepts to its own forward data stream in the same way, so that both ends of the tunnel behave alike.
@@ -106,7 +106,7 @@ If either side fails, including the server failing to connect to the service or 
 
 ## UDP tunnelling
 
-A client carries each UDP datagram through a UDP forward as a [forward datagram](rule:i/datagram.forward), prefixed with the forward's key.
+A client carries each UDP datagram through a UDP forward as a [forward datagram](wire.md#port-forward-data), prefixed with the forward's key.
 The server MUST forward each datagram's payload to the service's address at the forward's port, and MUST send each datagram the service returns to the client with the same key prefix.
 The server MUST discard a datagram shorter than two bytes, and a datagram whose key no UDP forward on the connection holds.
 
@@ -166,7 +166,7 @@ Without `app` the server MUST list every active forward on the host.
 | `port` | integer | the service port the forward reaches |
 | `proto` | string | `"tcp"` or `"udp"` |
 | `opened_at` | string | when the forward was established, as an [RFC 3339](https://www.rfc-editor.org/rfc/rfc3339) timestamp |
-| `actor` | object or null | the [actor](rule:i/wire.actor) the opening request carried |
+| `actor` | object or null | the [actor](wire.md#actor-attribution) the opening request carried |
 
 ## Stopping a forward
 

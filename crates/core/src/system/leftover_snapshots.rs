@@ -29,7 +29,7 @@ enum Keep {
 
 /// Remove every snapshot-prefixed site-volume path that no site volume is
 /// recorded for.
-// r[impl volume.site.leftover-snapshots]
+// spec: SITE#leftover-backup-snapshots
 pub async fn sweep(db: &DbHandle, store: &VolumeStore) {
     let candidates = match store.list_sites_with_prefix(SNAPSHOT_NAME_PREFIX) {
         Ok(candidates) => candidates,
@@ -42,7 +42,7 @@ pub async fn sweep(db: &DbHandle, store: &VolumeStore) {
         return;
     }
 
-    // r[impl namespace.reserved] — a site-volume record is what says an
+    // spec: IDN#reserved-names — a site-volume record is what says an
     // operator owns this name. Creation rejects the prefix, but that cannot
     // help a volume created before the check existed.
     let lookup = candidates.clone();
@@ -106,8 +106,8 @@ mod tests {
     use super::*;
     use crate::runtime::site_volumes::{SiteVolumeDef, SiteVolumeKind};
 
-    // r[verify volume.site.leftover-snapshots]
-    // r[verify namespace.reserved]
+    // spec: SITE#leftover-backup-snapshots
+    // spec: IDN#reserved-names
     #[tokio::test]
     async fn removes_only_unrecorded_snapshot_storage() {
         let dir = tempfile::tempdir().unwrap();

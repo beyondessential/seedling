@@ -17,7 +17,7 @@ use super::state::OiState;
 /// `listen :0` / dial `:0` semantics instead of being refused at the
 /// interface, where the operator could still be told which field was wrong.
 /// The BSL side has rejected it all along, via `Port::new`.
-// r[impl service.site.address]
+// spec: SITE#endpoint-addressing
 pub(super) fn validate_port(field: &str, port: u16) -> Result<(), OiError> {
     if port == 0 {
         return Err(OiError::new(
@@ -113,9 +113,9 @@ where
 /// Wrap a handler outcome in the response envelope and serialise it.
 fn envelope(result: HandlerResult) -> Vec<u8> {
     let response = match result {
-        // i[impl wire.response.ok]
+        // spec: WIRE#control-requests
         Ok(result) => json!({ "result": result }),
-        // i[impl wire.response.error]
+        // spec: WIRE#control-requests
         Err(e) => json!({
             "error": {
                 "code": e.code,
@@ -160,9 +160,9 @@ pub fn dispatch_connection_bound(
     }
 
     let result = (|| match req.method.as_str() {
-        // i[canopy.offer]
+        // RLY#offers
         "/canopy/offer" => canopy::offer(state, conn, parse_params(req.params)?, ctx),
-        // i[canopy.withdraw]
+        // RLY#offer-lifetime
         "/canopy/withdraw" => canopy::withdraw(state, conn, parse_params(req.params)?, ctx),
         other => Err(OiError::new(
             ErrorCode::NotFound,
@@ -173,7 +173,7 @@ pub fn dispatch_connection_bound(
 }
 
 fn parse_and_dispatch(state: &Arc<OiState>, buf: &[u8], ctx: &RequestCtx) -> HandlerResult {
-    // i[impl wire.request]
+    // spec: WIRE#control-requests
     #[derive(serde::Deserialize)]
     struct Request {
         method: String,
@@ -184,105 +184,105 @@ fn parse_and_dispatch(state: &Arc<OiState>, buf: &[u8], ctx: &RequestCtx) -> Han
         .map_err(|e| OiError::new(ErrorCode::NotFound, format!("invalid request: {e}")))?;
 
     let result = match req.method.as_str() {
-        // i[status.ping]
+        // STS#liveness
         "/server/ping" => status::ping(),
-        // i[status.get]
+        // STS#server-status
         "/server/status" => status::get_status(state),
-        // i[app.list]
+        // APPS#listing
         "/apps/list" => apps::list_apps(state),
-        // i[app.describe]
+        // APPS#description
         "/apps/show" => apps::describe_app(state, parse_params(req.params)?),
         "/apps/create" => apps::register_app(state, parse_params(req.params)?, ctx),
         "/apps/remove" => apps::deregister_app(state, parse_params(req.params)?, ctx),
         "/apps/uninstall" => apps::uninstall_app(state, parse_params(req.params)?),
         "/apps/update" => apps::update_app(state, parse_params(req.params)?, ctx),
-        // i[scale.set]
+        // CTL#scaling
         "/apps/scale" => apps::scale_app(state, parse_params(req.params)?, ctx),
-        // i[app.priority.set]
+        // CTL#app-priority
         "/apps/priority" => apps::set_priority(state, parse_params(req.params)?, ctx),
-        // i[deployment.restart]
+        // CTL#deployment-restart
         "/apps/restart" => apps::restart_deployment(state, parse_params(req.params)?, ctx),
-        // i[resource.stop]
+        // CTL#resource-stop
         "/apps/resource/stop" => apps::stop_resource(state, parse_params(req.params)?, ctx),
-        // i[resource.unstop]
+        // CTL#resource-stop
         "/apps/resource/unstop" => apps::unstop_resource(state, parse_params(req.params)?, ctx),
-        // i[resource.unstop-all]
+        // CTL#resource-stop
         "/apps/unstop" => apps::unstop_all_resources(state, parse_params(req.params)?, ctx),
-        // i[app.script]
+        // APPS#definition-retrieval
         "/apps/script" => apps::get_app_script(state, parse_params(req.params)?),
-        // i[app.bundle]
+        // APPS#definition-retrieval
         "/apps/bundle" => apps::get_app_bundle(state, parse_params(req.params)?),
-        // i[generation.history]
+        // APPS#generation-history
         "/apps/generations" => apps::list_generations(state, parse_params(req.params)?),
-        // i[plan.dry-run]
+        // PRM#change-planning
         "/apps/plan" => apps::dry_run_plan(state, parse_params(req.params)?, ctx),
-        // i[param.set]
+        // PRM#parameter-set
         "/apps/params/set" => params::set_param(state, parse_params(req.params)?, ctx),
-        // i[param.unset]
+        // PRM#parameter-unset
         "/apps/params/unset" => params::unset_param(state, parse_params(req.params)?, ctx),
-        // i[action.invoke]
+        // ACI#invoking-an-action
         "/apps/action/invoke" => actions::invoke_action(state, parse_params(req.params)?, ctx),
-        // i[action.cancel]
+        // ACI#cancellation
         "/apps/action/cancel" => actions::cancel_action(state, parse_params(req.params)?),
-        // i[action.invoke.install]
+        // ACI#install
         "/apps/install/invoke" => {
             actions::install::invoke_install(state, parse_params(req.params)?, ctx)
         }
-        // i[key.list]
+        // KEY#listing-keys
         "/keys/list" => key_mgmt::list_keys(state),
-        // i[key.authorize]
+        // KEY#authorising-a-key
         "/keys/authorise" => key_mgmt::authorize_key(state, parse_params(req.params)?),
-        // i[key.revoke]
+        // KEY#revoking-a-key
         "/keys/revoke" => key_mgmt::revoke_key(state, parse_params(req.params)?),
-        // i[shell.resize]
+        // SHL#resizing-a-terminal
         "/shells/resize" => super::shells::resize_shell(state, parse_params(req.params)?),
-        // i[shell.list]
+        // SHL#listing-sessions
         "/shells/list" => super::shells::list_shells(state, parse_params(req.params)?),
-        // i[shell.stop]
+        // SHL#stopping-a-session
         "/shells/stop" => super::shells::stop_shell(state, parse_params(req.params)?),
-        // i[forward.list]
+        // FWD#listing-forwards
         "/forwards/list" => {
             super::forwards::handler::list_forwards(state, parse_params(req.params)?)
         }
-        // i[forward.stop]
+        // FWD#stopping-a-forward
         "/forwards/stop" => {
             super::forwards::handler::stop_forward(state, parse_params(req.params)?)
         }
-        // i[fault.list]
+        // FLTS#listing-faults
         "/faults/list" => faults::list_faults(state, parse_params(req.params)?),
-        // i[fault.clear-app]
+        // FLTS#clearing-faults
         "/faults/clear" => faults::clear_app_faults(state, parse_params(req.params)?),
-        // i[restart.list]
+        // FLTS#listing-restarts
         "/restarts/list" => restarts::list_restarts(state, parse_params(req.params)?),
-        // i[restart.settings]
+        // FLTS#crash-loop-settings
         "/restarts/settings/get" => restarts::get_settings(state),
-        // i[restart.settings]
+        // FLTS#crash-loop-settings
         "/restarts/settings/set" => restarts::set_settings(state, parse_params(req.params)?),
-        // i[canopy.status]
+        // RLY#status
         "/canopy/status" => canopy::status(state),
-        // i[canopy.settings]
+        // RLY#settings
         "/canopy/settings/get" => canopy::get_settings(state),
-        // i[canopy.settings]
+        // RLY#settings
         "/canopy/settings/set" => canopy::set_settings(state, parse_params(req.params)?, ctx),
-        // i[registry.list]
+        // IMGM#registry-allowlist
         "/registries/list" => registries::list_registries(state),
-        // i[registry.add]
+        // IMGM#registry-allowlist
         "/registries/add" => registries::add_registry(state, parse_params(req.params)?),
-        // i[registry.remove]
+        // IMGM#registry-allowlist
         "/registries/remove" => registries::remove_registry(state, parse_params(req.params)?),
-        // i[definition.tags]
+        // DEFN#repository-tags
         "/registries/tags" => registries::list_tags(state, parse_params(req.params)?),
-        // i[image.list]
+        // IMGM#listing-images
         "/images/list" => images::list_images(state),
-        // i[image.pull]
+        // IMGM#pulling-an-image
         "/images/pull" => images::pull_image(state, parse_params(req.params)?),
-        // i[image.remove]
+        // IMGM#removing-an-image
         "/images/remove" => images::remove_image(state, parse_params(req.params)?),
-        // i[image.pin.list]
+        // IMGM#image-pins
         "/images/pins/list" => images::list_pins(state, parse_params(req.params)?),
-        // i[image.pin.clear]
+        // IMGM#image-pins
         "/images/pins/clear" => images::clear_pins(state, parse_params(req.params)?),
-        // i[image.discover]
+        // IMGM#image-discovery
         "/apps/images/discover" => images::discover_images(state, parse_params(req.params)?),
         "/volumes/held/list" => volumes::list_held(state),
         "/volumes/held/delete" => volumes::delete_held(state, parse_params(req.params)?, ctx),
@@ -344,97 +344,97 @@ fn parse_and_dispatch(state: &Arc<OiState>, buf: &[u8], ctx: &RequestCtx) -> Han
             services::list_external_mappings(state, parse_params(req.params)?)
         }
         "/services/external/declared" => services::list_declared_external_services(state),
-        // r[impl ingress.site]
+        // spec: SITE#site-ingresses
         "/ingresses/site/list" => ingresses::list_site_ingresses(state),
         "/ingresses/site/show" => ingresses::get_site_ingress(state, parse_params(req.params)?),
-        // r[impl ingress.site.lifecycle]
+        // spec: SITE#sources
         "/ingresses/site/create" => {
             ingresses::create_site_ingress(state, parse_params(req.params)?, ctx)
         }
-        // r[impl ingress.site.lifecycle]
+        // spec: SITE#sources
         "/ingresses/site/delete" => {
             ingresses::delete_site_ingress(state, parse_params(req.params)?, ctx)
         }
-        // r[impl ingress.site.lifecycle]
+        // spec: SITE#sources
         "/ingresses/site/update" => {
             ingresses::update_site_ingress(state, parse_params(req.params)?, ctx)
         }
-        // r[impl ingress.site.attachment]
+        // spec: SITE#attachments
         "/ingresses/site/attach/forward" => {
             ingresses::attach_forward(state, parse_params(req.params)?, ctx)
         }
-        // r[impl ingress.site.attachment]
+        // spec: SITE#attachments
         "/ingresses/site/attach/redirect" => {
             ingresses::attach_redirect(state, parse_params(req.params)?, ctx)
         }
-        // r[impl ingress.site.attachment]
+        // spec: SITE#attachments
         "/ingresses/site/detach" => ingresses::detach(state, parse_params(req.params)?, ctx),
         "/ingresses/site/discovery/status" => ingresses::discovery_status(state),
-        // r[impl ingress.site.tailscale]
+        // spec: SITE#tailscale-discovery
         "/ingresses/site/discovery/refresh" => ingresses::discovery_refresh(state),
-        // i[template.create]
+        // TPL#creation
         "/templates/create" => templates::create_template(state, parse_params(req.params)?, ctx),
-        // i[template.list]
+        // TPL#listing
         "/templates/list" => templates::list_templates(state),
-        // i[template.show]
+        // TPL#inspection
         "/templates/show" => templates::show_template(state, parse_params(req.params)?),
-        // i[template.update]
+        // TPL#update
         "/templates/update" => templates::update_template(state, parse_params(req.params)?, ctx),
-        // i[template.remove]
+        // TPL#removal
         "/templates/remove" => templates::remove_template(state, parse_params(req.params)?, ctx),
-        // i[template.preview]
+        // TPL#preview
         "/templates/preview" => templates::preview_template(state, parse_params(req.params)?, ctx),
-        // i[template.instantiate]
+        // TPL#instantiation
         "/templates/instantiate" => {
             templates::instantiate_template(state, parse_params(req.params)?, ctx)
         }
-        // i[tls.dns-provider.list]
+        // TLSM#dns-providers
         "/tls/dns-providers/list" => tls::list_dns_providers(state),
-        // i[tls.dns-provider.upsert]
+        // TLSM#dns-providers
         "/tls/dns-providers/upsert" => tls::upsert_dns_provider(state, parse_params(req.params)?),
-        // i[tls.dns-provider.delete]
+        // TLSM#dns-providers
         "/tls/dns-providers/delete" => tls::delete_dns_provider(state, parse_params(req.params)?),
-        // i[tls.policy.list]
+        // TLSM#policies
         "/tls/policies/list" => tls::list_policies(state),
-        // i[tls.policy.set-acme-dns]
+        // TLSM#policies
         "/tls/policies/set-acme-dns" => tls::set_policy_acme_dns(state, parse_params(req.params)?),
-        // i[tls.policy.set-canopy]
+        // TLSM#policies
         "/tls/policies/set-canopy" => tls::set_policy_canopy(state, parse_params(req.params)?),
-        // i[tls.policy.clear]
+        // TLSM#policies
         "/tls/policies/clear" => tls::clear_policy(state, parse_params(req.params)?),
-        // i[tls.cert.list]
+        // TLSM#certificates
         "/tls/certificates/list" => tls::list_certificates(state),
-        // i[tls.cert.upload-manual]
+        // TLSM#certificates
         "/tls/certificates/upload-manual" => tls::upload_manual(state, parse_params(req.params)?),
-        // i[tls.cert.delete]
+        // TLSM#certificates
         "/tls/certificates/delete" => tls::delete_certificate(state, parse_params(req.params)?),
-        // i[tls.cert.csr.begin]
+        // TLSM#certificate-signing-requests
         "/tls/certificates/csr/begin" => tls::csr_begin(state, parse_params(req.params)?),
-        // i[tls.cert.csr.get]
+        // TLSM#certificate-signing-requests
         "/tls/certificates/csr/get" => tls::csr_get(state, parse_params(req.params)?),
-        // i[tls.cert.csr.upload-cert]
+        // TLSM#certificate-signing-requests
         "/tls/certificates/csr/upload-cert" => {
             tls::csr_upload_cert(state, parse_params(req.params)?)
         }
-        // i[tls.cert.csr.cancel]
+        // TLSM#certificate-signing-requests
         "/tls/certificates/csr/cancel" => tls::csr_cancel(state, parse_params(req.params)?),
-        // i[tls.cert.issue-acme-dns]
+        // TLSM#operator-driven-issuance
         "/tls/certificates/issue-acme-dns" => tls::issue_acme_dns(state, parse_params(req.params)?),
-        // i[tls.cert.retry]
+        // TLSM#operator-driven-issuance
         "/tls/certificates/retry" => tls::retry(state, parse_params(req.params)?),
-        // i[tls.settings.get]
+        // TLSM#settings
         "/tls/settings/get" => tls::get_settings(state),
-        // i[tls.settings.set]
+        // TLSM#settings
         "/tls/settings/set" => tls::set_settings(state, parse_params(req.params)?),
-        // i[tls.hostname.list]
+        // TLSM#hostname-view
         "/tls/hostnames/list" => tls::list_hostnames(state, parse_params(req.params)?),
-        // i[tls.cert.attempts.list]
+        // TLSM#issuance-attempts
         "/tls/certificates/attempts/list" => tls::list_attempts(state, parse_params(req.params)?),
-        // i[tls.retry-block.list]
+        // TLSM#retry-blocks
         "/tls/retry-blocks/list" => tls::list_retry_blocks(state),
-        // i[tls.retry-block.set]
+        // TLSM#retry-blocks
         "/tls/retry-blocks/set" => tls::set_retry_block(state, parse_params(req.params)?),
-        // i[tls.retry-block.clear]
+        // TLSM#retry-blocks
         "/tls/retry-blocks/clear" => tls::clear_retry_block(state, parse_params(req.params)?),
         other => Err(OiError::not_found(format!("unknown method: {other}"))),
     };

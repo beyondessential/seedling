@@ -39,7 +39,7 @@ export function referenceFor(input: string, repository: string | null): string |
   return repository ? `${repository}:${trimmed}` : null;
 }
 
-// w[impl routes.apps.definition.fetch]
+// spec: UI#app-definitions
 export function UpdateDefinitionDialog({
   appName,
   recordedReference,

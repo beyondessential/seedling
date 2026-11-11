@@ -61,7 +61,7 @@ const STAGED_COVER_LEAD_SECS: i64 = AUTO_RETRY_DEBOUNCE_SECS;
 /// ARI advice. Renew when remaining lifetime drops below this fraction
 /// of the total lifetime — copes equally with 90-day and 6-day
 /// certificate profiles.
-// r[impl tls.cert.ari]
+// spec: TLS#renewal
 pub const RENEW_AT_FRACTION_NUM: i64 = 1;
 pub const RENEW_AT_FRACTION_DEN: i64 = 3;
 
@@ -89,7 +89,7 @@ pub struct ManagedIngress {
 /// All three call sites consume the *same* function so the set of
 /// in-scope hostnames is structurally identical, not coincidentally
 /// matched.
-// r[impl tls.cert.hostname-view]
+// spec: TLS#hostname-state
 pub fn managed_ingresses(registry: &AppRegistry) -> Vec<ManagedIngress> {
     let mut out = Vec::new();
     for entry in registry.iter() {
@@ -383,7 +383,7 @@ pub enum Decision {
 
 /// Where a hostname on a strategy chain stands, and what the runtime does about
 /// it.
-// r[impl tls.chain.cycle]
+// spec: CHAIN#cycles
 #[derive(Debug, Clone)]
 pub struct ChainDecision {
     pub strategies: Vec<Strategy>,
@@ -392,7 +392,7 @@ pub struct ChainDecision {
     /// Canopy is to be asked whichever strategy is responsible: an order is
     /// open, or a Canopy certificate has reached its renewal point and Canopy
     /// carries the renewal out itself.
-    // r[impl tls.canopy.collect]
+    // spec: TCAN#collection
     pub collect_canopy: bool,
     /// When the proxy may start ordering a certificate of its own.
     pub proxy_from: chain::ProxyFrom,
@@ -419,7 +419,7 @@ impl ChainDecision {
     /// silent: a cycle recorded against an identity that is not the one serving
     /// the hostname is read as belonging to an earlier cycle and ignored, and
     /// the ladder is then measured from the wrong expiry.
-    // r[impl tls.chain.cycle]
+    // spec: CHAIN#cycles
     pub fn replacing(&self) -> chain::Identity {
         match &self.cycle {
             // A cycle already running is replacing something, and that is what
@@ -438,7 +438,7 @@ impl ChainDecision {
     /// or it may order whenever it likes. The ratio is the fraction left at the
     /// moment the strategies ahead of the proxy run out of theirs, so the proxy
     /// renews over HTTP-01 from that point and not before.
-    // r[impl tls.chain.proxy-gate]
+    // spec: CHAIN#proxy-strategies
     pub fn proxy_renewal_ratio(&self) -> Option<f64> {
         let Some(ProxyHolding::Holds(cert)) = &self.proxy else {
             return None;
@@ -483,7 +483,7 @@ pub enum ChainAct {
 }
 
 /// Whether Canopy can be asked about a hostname at all.
-// r[impl tls.strategy.canopy]
+// spec: TCAN#applicability-and-availability
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CanopyStanding {
     /// `app_type` is the application type to send: the one the typed apps
@@ -525,10 +525,10 @@ pub enum IssueReason {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NextSource {
     /// CA's RFC 9773 ARI suggested-window start.
-    // r[impl tls.cert.ari]
+    // spec: TLS#renewal
     Ari,
     /// Runtime's lifetime-fraction fallback when ARI isn't available.
-    // r[impl tls.cert.ari]
+    // spec: TLS#renewal
     Fallback,
 }
 
@@ -545,7 +545,7 @@ impl NextSource {
 ///
 /// Pure function: no DB access, no clocks (the snapshot carries `now`),
 /// no side effects. Same inputs always yield the same `Decision`.
-// r[impl tls.cert.hostname-view]
+// spec: TLS#hostname-state
 pub fn compute_state<'a>(snap: &'a Snapshot, hostname: &str) -> HostnameState<'a> {
     let policy = resolve_policy(&snap.policies, hostname);
 
@@ -560,7 +560,7 @@ pub fn compute_state<'a>(snap: &'a Snapshot, hostname: &str) -> HostnameState<'a
     // reached leaves the expiring incumbent active and still due, which reissues
     // just as hard. Only an imminent start counts, since a certificate staged
     // weeks out leaves the hostname with no TLS in the meantime.
-    // r[impl tls.cert.serve]
+    // spec: TLS#serving
     let staged_from = staged_start_for_hostname(snap, hostname, snap.now)
         .filter(|from| *from - snap.now <= STAGED_COVER_LEAD_SECS);
 
@@ -687,9 +687,9 @@ pub fn is_caddy_internal(hostname: &str) -> bool {
 /// lookup: the renewal scheduler has to see an expiring cert in order to renew
 /// it. That difference is the only one, and it lives in this pre-filter rather
 /// than in the ranking.
-// r[impl tls.strategy.manual]
-// r[impl tls.cert.validation.san-coverage]
-// r[impl tls.cert.serve]
+// spec: TLS#certificate-selection
+// spec: TLS#coverage
+// spec: TLS#serving
 fn find_active_for_hostname<'a>(
     snap: &'a Snapshot,
     hostname: &str,
@@ -751,7 +751,7 @@ fn find_active_for_hostname<'a>(
 /// The earliest rather than the best-ranked: the question is when the hostname
 /// starts being served at all, and a later-starting certificate that would
 /// outrank it once both are valid does not change that answer.
-// r[impl tls.cert.serve]
+// spec: TLS#serving
 fn staged_start_for_hostname(snap: &Snapshot, hostname: &str, now: i64) -> Option<i64> {
     let mut staged: Vec<(i64, &TlsCertificate)> = snap
         .index
@@ -806,7 +806,7 @@ fn decide(
             chain_ctx,
             chain::default_chain(chain_ctx.internal_name, chain_ctx.canopy.applies()),
         ),
-        // r[impl tls.strategy.canopy-only]
+        // spec: TCAN#canopy-only-policy
         Some(TlsPolicy::Canopy) => decide_chain(chain_ctx, chain::CANOPY_ONLY.to_vec()),
         Some(TlsPolicy::AcmeDns { .. }) => decide_acme_dns(
             now,
@@ -817,7 +817,7 @@ fn decide(
             force_retry,
             settings,
         ),
-        // r[impl ingress.site.tailscale]
+        // spec: SITE#tailscale-discovery
         // Tailscale-issued certs are managed by the local Tailscale
         // facility; the runtime fetches a fresh pair on demand and
         // doesn't run the ACME state machine for them. The Coordinator
@@ -937,8 +937,8 @@ impl ChainContext {
     }
 }
 
-// r[impl tls.chain.cycle]
-// r[impl tls.chain.ladder]
+// spec: CHAIN#cycles
+// spec: CHAIN#fall-through
 fn decide_chain(ctx: &ChainContext, strategies: Vec<Strategy>) -> Decision {
     let cycle = match (&ctx.serving, ctx.staged_from) {
         // A certificate about to start serving is not absent, and asking for
@@ -946,7 +946,7 @@ fn decide_chain(ctx: &ChainContext, strategies: Vec<Strategy>) -> Decision {
         (None, Some(from)) if !ctx.force => chain::Cycle::Idle {
             next_cycle_at: from,
         },
-        // r[impl tls.chain.cycle]
+        // spec: CHAIN#cycles
         // The proxy holds something for the hostname that could not be read.
         // That is not an absence: starting a cycle on it would have Canopy
         // asked to replace a certificate the proxy may be serving perfectly
@@ -975,7 +975,7 @@ fn decide_chain(ctx: &ChainContext, strategies: Vec<Strategy>) -> Decision {
             } else if !ctx.canopy.applies() {
                 ChainAct::CannotAskCanopy
             } else {
-                // r[impl tls.chain.no-certificate]
+                // spec: CHAIN#hostnames-with-no-certificate
                 // A refusal is asked again at the after-failure cadence, not on
                 // every tick. An open order is collected on every tick, and an
                 // operator retry asks at once.
@@ -995,7 +995,7 @@ fn decide_chain(ctx: &ChainContext, strategies: Vec<Strategy>) -> Decision {
         _ => ChainAct::Wait,
     };
 
-    // r[impl tls.canopy.collect]
+    // spec: TCAN#collection
     // A refusal recorded for this cycle moved the hostname on, and it stays
     // with the later strategy until the next cycle: collecting a renewal Canopy
     // has refused would ask it again on every tick for nothing.
@@ -1022,7 +1022,7 @@ fn decide_chain(ctx: &ChainContext, strategies: Vec<Strategy>) -> Decision {
             // revoked certificate goes on being asked for while the proxy serves
             // the hostname. One fact, recorded in one place: a refusal clears it,
             // and the hostname then stays where it is until the next cycle.
-            // r[impl tls.canopy.revoked]
+            // spec: TCAN#revocation
             chain::Cycle::Running(r) => {
                 r.open_order
                     || (!refused
@@ -1047,7 +1047,7 @@ fn decide_chain(ctx: &ChainContext, strategies: Vec<Strategy>) -> Decision {
         // nothing at all until the staged certificate started: the endpoint
         // must not serve that certificate early, so the proxy is all the
         // hostname has meanwhile.
-        // r[impl tls.chain.proxy-gate]
+        // spec: CHAIN#proxy-strategies
         (chain::Cycle::Idle { .. }, Some(_)) if ctx.serving.is_none() => chain::ProxyFrom::Always,
         _ => chain::proxy_from(&strategies, ctx.serving.map(|(s, _)| s), &cycle),
     };
@@ -1139,7 +1139,7 @@ fn decide_acme_dns(
 
 /// Compute the renewal trigger time for `cert`. Prefer the CA's ARI
 /// suggested-window start; fall back to the 1/3-of-lifetime mark.
-// r[impl tls.cert.ari]
+// spec: TLS#renewal
 pub fn next_renewal_at(cert: &TlsCertificate) -> (i64, NextSource) {
     if let Some(start) = cert.ari_window_start {
         return (start, NextSource::Ari);
@@ -1155,7 +1155,7 @@ pub fn next_renewal_at(cert: &TlsCertificate) -> (i64, NextSource) {
 /// whose validity is unrecorded or empty is never due: the caller filters the
 /// case, and a far-future time keeps the decision logic from accidentally
 /// firing.
-// r[impl tls.chain.cycle]
+// spec: CHAIN#cycles
 pub fn renewal_point_for(not_before: Option<i64>, not_after: Option<i64>) -> i64 {
     let (Some(nb), Some(na)) = (not_before, not_after) else {
         return i64::MAX;
@@ -1287,7 +1287,7 @@ mod tests {
     /// hostname's active certificate either — otherwise the rollup calls the
     /// hostname covered, the scheduler concludes there is nothing to do, and
     /// handshakes fail with no signal anywhere.
-    // r[verify tls.cert.serve]
+    // spec: TLS#serving
     #[test]
     fn a_not_yet_valid_cert_is_not_the_active_cert() {
         let now = 1_000;
@@ -1316,7 +1316,7 @@ mod tests {
     /// exact-label fast path. A row written before the label was made to follow
     /// the certificate claims a name its certificate does not carry, and must
     /// not be served for it.
-    // r[verify tls.cert.validation.san-coverage]
+    // spec: TLS#coverage
     #[test]
     fn find_active_for_hostname_does_not_hand_out_a_non_covering_cert() {
         fn labelled(id: i64, label: &str, sans: &[&str], created_at: i64) -> TlsCertificate {
@@ -1355,7 +1355,7 @@ mod tests {
         }
     }
 
-    // r[verify tls.strategy.default]
+    // spec: CHAIN#default-chain
     #[test]
     fn no_policy_yields_the_default_chain() {
         let s = snap(vec![], vec![], vec![], vec![], vec![], "ops@x", 1000);
@@ -1369,7 +1369,7 @@ mod tests {
         assert_eq!(c.act, ChainAct::Wait, "the proxy carries out HTTP-01");
     }
 
-    // r[verify tls.cert.hostname-view]
+    // spec: TLS#hostname-state
     #[test]
     fn manual_cert_auto_binds_without_policy() {
         // No policy bound, but a manual cert exists for this hostname.
@@ -1396,7 +1396,7 @@ mod tests {
         }
     }
 
-    // r[verify tls.strategy.canopy]
+    // spec: TCAN#applicability-and-availability
     #[test]
     fn a_typed_app_puts_canopy_first_in_the_chain() {
         let mut s = snap(vec![], vec![], vec![], vec![], vec![], "ops@x", 1000);
@@ -1413,7 +1413,7 @@ mod tests {
         );
     }
 
-    // r[verify tls.canopy.request]
+    // spec: TCAN#requests
     #[test]
     fn apps_of_different_types_on_one_hostname_send_no_type() {
         let mut s = snap(vec![], vec![], vec![], vec![], vec![], "ops@x", 1000);
@@ -1425,7 +1425,7 @@ mod tests {
         );
     }
 
-    // r[verify tls.chain.no-certificate]
+    // spec: CHAIN#hostnames-with-no-certificate
     #[test]
     fn a_new_hostname_without_a_live_offer_goes_straight_to_the_proxy() {
         let mut s = snap(vec![], vec![], vec![], vec![], vec![], "ops@x", 1000);
@@ -1436,7 +1436,7 @@ mod tests {
         assert!(matches!(&c.cycle, chain::Cycle::Running(r) if r.responsible == Strategy::Http01));
     }
 
-    // r[verify tls.chain.cycle]
+    // spec: CHAIN#cycles
     #[test]
     fn a_proxy_held_certificate_is_left_alone_until_its_renewal_point() {
         let mut s = snap(vec![], vec![], vec![], vec![], vec![], "ops@x", 100);
@@ -1461,7 +1461,7 @@ mod tests {
         assert_eq!(c.act, ChainAct::Wait);
     }
 
-    // r[verify tls.chain.ladder]
+    // spec: CHAIN#fall-through
     #[test]
     fn a_proxy_held_certificate_past_its_renewal_point_starts_with_canopy() {
         let mut s = snap(vec![], vec![], vec![], vec![], vec![], "ops@x", 200);
@@ -1485,7 +1485,7 @@ mod tests {
         }
     }
 
-    // r[verify tls.chain.cycle]
+    // spec: CHAIN#cycles
     #[test]
     fn an_unreadable_proxy_cache_is_not_a_certificate_and_not_an_absence() {
         let mut s = snap(vec![], vec![], vec![], vec![], vec![], "ops@x", 100);
@@ -1522,7 +1522,7 @@ mod tests {
         );
     }
 
-    // r[verify tls.cert.force-retry]
+    // spec: TLS#retry-blocks-and-retries
     #[test]
     fn an_operator_retry_starts_a_cycle_the_unreadable_cache_was_deferring() {
         let mut s = snap(
@@ -1547,7 +1547,7 @@ mod tests {
         );
     }
 
-    // r[verify tls.strategy.canopy-only]
+    // spec: TCAN#canopy-only-policy
     #[test]
     fn a_canopy_only_policy_never_leaves_canopy() {
         let mut s = snap(
@@ -1570,7 +1570,7 @@ mod tests {
         assert_eq!(c.act, ChainAct::AskCanopy);
     }
 
-    // r[verify tls.canopy-only.untyped]
+    // spec: TCAN#canopy-only-policy
     #[test]
     fn a_canopy_only_hostname_with_no_typed_app_cannot_be_asked() {
         let s = snap(
@@ -1592,7 +1592,7 @@ mod tests {
         assert_eq!(c.canopy, CanopyStanding::NoTypedApp);
     }
 
-    // r[verify tls.cert.retry-block]
+    // spec: TLS#retry-blocks-and-retries
     #[test]
     fn a_retry_block_pauses_asking_canopy() {
         let mut s = snap(
@@ -1634,7 +1634,7 @@ mod tests {
         }
     }
 
-    // r[verify tls.chain.no-certificate]
+    // spec: CHAIN#hostnames-with-no-certificate
     #[test]
     fn a_refused_hostname_is_asked_again_at_the_after_failure_cadence() {
         let mut s = snap(vec![], vec![], vec![], vec![], vec![], "ops@x", 1000);
@@ -1648,7 +1648,7 @@ mod tests {
         assert_eq!(chain_of(&st).act, ChainAct::AskCanopy);
     }
 
-    // r[verify tls.canopy.collect]
+    // spec: TCAN#collection
     #[test]
     fn an_open_order_is_asked_about_whatever_the_cadence() {
         let mut s = snap(vec![], vec![], vec![], vec![], vec![], "ops@x", 1000);
@@ -1658,7 +1658,7 @@ mod tests {
         assert_eq!(chain_of(&st).act, ChainAct::AskCanopy);
     }
 
-    // r[verify tls.cert.force-retry]
+    // spec: TLS#retry-blocks-and-retries
     #[test]
     fn an_operator_retry_bypasses_the_cadence() {
         let mut s = snap(
@@ -1679,7 +1679,7 @@ mod tests {
         assert_eq!(chain_of(&st).act, ChainAct::AskCanopy);
     }
 
-    // r[verify tls.cert.force-retry]
+    // spec: TLS#retry-blocks-and-retries
     #[test]
     fn a_queued_retry_starts_a_cycle_for_a_working_certificate() {
         let mut cert = fake_cert("host.example.com", 7, 0, 300);
@@ -1701,7 +1701,7 @@ mod tests {
         assert_eq!(chain_of(&st).act, ChainAct::AskCanopy);
     }
 
-    // r[verify tls.chain.cycle]
+    // spec: CHAIN#cycles
     #[test]
     fn a_stored_certificate_outranks_one_the_proxy_holds() {
         let mut cert = fake_cert("host.example.com", 7, 0, 3000);
@@ -1823,7 +1823,7 @@ mod tests {
     /// have the coordinator issue another every tick — a successful issuance
     /// is never debounced — burning CA rate limits against a certificate that
     /// already exists.
-    // r[verify tls.cert.serve]
+    // spec: TLS#serving
     #[test]
     fn a_staged_cert_is_scheduled_not_reissued() {
         let now = 1_000_000;
@@ -1856,7 +1856,7 @@ mod tests {
     /// A certificate staged weeks out is not cover: the hostname has no TLS in
     /// the meantime, so suppressing issuance for the whole staging period
     /// would be worse than the duplicate the short-circuit guards against.
-    // r[verify tls.cert.serve]
+    // spec: TLS#serving
     #[test]
     fn a_distantly_staged_cert_does_not_suppress_issuance() {
         let now = 1_000_000;
@@ -1881,7 +1881,7 @@ mod tests {
     /// `notBefore` the local clock has not reached leaves the expiring
     /// incumbent active and still due, so gating the staged short-circuit on
     /// the hostname being uncovered misses it entirely.
-    // r[verify tls.cert.serve]
+    // spec: TLS#serving
     #[test]
     fn a_staged_renewal_suppresses_reissuance_while_the_incumbent_is_due() {
         let now = 1_000_000;
@@ -2105,8 +2105,8 @@ mod tests {
     /// The endpoint must not serve a staged certificate before it starts, so
     /// holding the proxy back as well would leave the hostname with nothing at
     /// all for the whole staging window.
-    // r[verify tls.chain.proxy-gate]
-    // r[verify tls.cert.serve]
+    // spec: CHAIN#proxy-strategies
+    // spec: TLS#serving
     #[test]
     fn a_hostname_waiting_for_a_staged_certificate_is_not_held_back() {
         let now = 1_000_000;
@@ -2132,7 +2132,7 @@ mod tests {
         );
     }
 
-    // r[verify tls.chain.proxy-gate]
+    // spec: CHAIN#proxy-strategies
     #[test]
     fn the_proxy_is_held_to_the_point_canopy_falls_through() {
         let mut s = snap(vec![], vec![], vec![], vec![], vec![], "ops@x", 100);
@@ -2146,7 +2146,7 @@ mod tests {
         assert!((ratio - 100.0 / 600.0).abs() < 1e-9);
     }
 
-    // r[verify tls.chain.proxy-gate]
+    // spec: CHAIN#proxy-strategies
     #[test]
     fn a_proxy_that_may_order_keeps_its_own_schedule() {
         let mut s = snap(vec![], vec![], vec![], vec![], vec![], "ops@x", 100);
@@ -2158,7 +2158,7 @@ mod tests {
         assert_eq!(chain_of(&st).proxy_renewal_ratio(), None);
     }
 
-    // r[verify tls.strategy.canopy-only]
+    // spec: TCAN#canopy-only-policy
     #[test]
     fn a_canopy_only_hostname_holds_the_proxy_to_the_last_moment() {
         let mut s = snap(
@@ -2182,8 +2182,8 @@ mod tests {
         assert_eq!(chain_of(&st).proxy_renewal_ratio(), Some(MIN_RENEWAL_RATIO));
     }
 
-    // r[verify tls.canopy.collect]
-    // r[verify tls.chain.refusal]
+    // spec: TCAN#collection
+    // spec: CHAIN#refusal-handling
     #[test]
     fn a_renewal_canopy_refused_is_not_collected_on_every_tick() {
         let mut cert = fake_cert("host.example.com", 7, 0, 300);
@@ -2218,8 +2218,8 @@ mod tests {
         assert_eq!(c.act, ChainAct::Wait, "the proxy is responsible now");
     }
 
-    // r[verify tls.canopy.revoked]
-    // r[verify tls.chain.return]
+    // spec: TCAN#revocation
+    // spec: CHAIN#return-to-the-first-strategy
     #[test]
     fn a_replacement_canopy_has_not_answered_for_is_asked_about_again() {
         // What a revocation leaves behind: the revoked certificate recorded as
@@ -2263,8 +2263,8 @@ mod tests {
         );
     }
 
-    // r[verify tls.chain.cycle]
-    // r[verify tls.cert.force-retry]
+    // spec: CHAIN#cycles
+    // spec: TLS#retry-blocks-and-retries
     #[test]
     fn what_a_cycle_starting_now_replaces_is_one_answer() {
         let mut cert = fake_cert("host.example.com", 7, 0, 300);
@@ -2291,7 +2291,7 @@ mod tests {
         );
     }
 
-    // r[verify tls.chain.cycle]
+    // spec: CHAIN#cycles
     #[test]
     fn a_snapshot_without_the_chains_facts_decides_no_chain() {
         let mut s = snap(vec![], vec![], vec![], vec![], vec![], "ops@x", 1000);
@@ -2349,7 +2349,7 @@ mod tests {
 
     /// The snapshot reads every active certificate row anyway, so one missing from
     /// the index is parsed there rather than going unseen until the sweep.
-    // r[verify tls.cert.serve]
+    // spec: TLS#serving
     #[test]
     fn a_snapshot_finds_an_active_certificate_missing_from_the_index() {
         let db = Db::open_in_memory().unwrap();
@@ -2367,8 +2367,8 @@ mod tests {
 
     /// The snapshot confirms the index's choice against the certificate, as
     /// the serving lookup does, and passes over one its PEM contradicts.
-    // r[verify tls.cert.serve]
-    // r[verify tls.cert.validation.san-coverage]
+    // spec: TLS#serving
+    // spec: TLS#coverage
     #[test]
     fn a_snapshot_passes_over_an_index_entry_the_pem_contradicts() {
         let db = Db::open_in_memory().unwrap();
@@ -2392,7 +2392,7 @@ mod tests {
     /// rows written before its derivation was corrected hold wrongly. The
     /// serving lookup already read it from the certificate; the two matchers
     /// have to agree.
-    // r[verify tls.strategy.manual]
+    // spec: TLS#certificate-selection
     #[test]
     fn a_snapshot_ranks_by_the_certificates_own_self_issuance() {
         let db = Db::open_in_memory().unwrap();

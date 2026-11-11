@@ -29,7 +29,7 @@ pub(super) enum CanopyCommand {
     Disable,
 }
 
-// i[impl ctl.canopy]
+// spec: CLI#canopy-access
 pub(super) async fn dispatch(client: &OiClient, cmd: CanopyCommand) {
     match cmd {
         CanopyCommand::Status => {

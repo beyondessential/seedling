@@ -38,7 +38,7 @@ fn app() -> AppName {
     AppName::new("web").unwrap()
 }
 
-// i[verify event.types]
+// spec: EVT#event-types
 #[test]
 fn events_carry_rfc3339_timestamp() {
     let v = capture(|tx| tx.server_busy("draining"));
@@ -53,8 +53,8 @@ fn emit_without_subscribers_is_dropped_silently() {
     tx.server_busy("nobody listening");
 }
 
-// i[verify event.types]
-// r[verify audit.log.generations]
+// spec: EVT#event-types
+// spec: AUD#generations
 #[test]
 fn app_lifecycle_events_wire_shape() {
     let app = app();
@@ -133,9 +133,9 @@ fn app_lifecycle_events_wire_shape() {
     );
 }
 
-// i[verify event.types]
-// i[verify param.store.secret]
-// r[verify audit.log.generations]
+// spec: EVT#event-types
+// spec: PRM#parameter-storage
+// spec: AUD#generations
 #[test]
 fn param_events_wire_shape() {
     let app = app();
@@ -209,8 +209,8 @@ fn param_events_wire_shape() {
     );
 }
 
-// i[verify event.types]
-// r[verify operation.lifecycle.generations]
+// spec: EVT#event-types
+// spec: OPS#initiating-events
 #[test]
 fn operation_lifecycle_events_wire_shape() {
     let app = app();
@@ -261,7 +261,7 @@ fn operation_lifecycle_events_wire_shape() {
     );
 }
 
-// i[verify event.types]
+// spec: EVT#event-types
 #[test]
 fn fault_and_resource_events_wire_shape() {
     let app = app();
@@ -325,8 +325,8 @@ fn fault_and_resource_events_wire_shape() {
     );
 }
 
-// i[verify shell.start]
-// i[verify shell.exit]
+// spec: SHL#session-events
+// spec: SHL#session-end
 #[test]
 fn shell_events_wire_shape() {
     let app = app();
@@ -353,7 +353,7 @@ fn shell_events_wire_shape() {
     );
 }
 
-// i[verify forward.start]
+// spec: FWD#forward-events
 #[test]
 fn forward_events_wire_shape() {
     let app = app();
@@ -376,7 +376,7 @@ fn forward_events_wire_shape() {
     );
 }
 
-// i[verify event.types]
+// spec: EVT#event-types
 #[test]
 fn scale_and_server_busy_events_wire_shape() {
     let app = app();
@@ -400,9 +400,8 @@ fn scale_and_server_busy_events_wire_shape() {
     );
 }
 
-// i[verify deployment.restart]
-// i[verify resource.stop]
-// i[verify resource.unstop]
+// spec: CTL#deployment-restart
+// spec: CTL#resource-stop
 #[test]
 fn deployment_restart_and_resource_stop_events_wire_shape() {
     let app = app();
@@ -438,7 +437,7 @@ fn deployment_restart_and_resource_stop_events_wire_shape() {
     );
 }
 
-// r[verify actuate.volume.hold.events]
+// spec: ACTU#held-volumes
 #[test]
 fn held_volume_events_wire_shape() {
     let app = app();
@@ -470,7 +469,7 @@ fn held_volume_events_wire_shape() {
     );
 }
 
-// r[verify volume.site.lifecycle.events]
+// spec: SITE#site-volumes
 #[test]
 fn site_volume_lifecycle_events_wire_shape() {
     let held = HeldVolumeId::generate();
@@ -506,8 +505,8 @@ fn site_volume_lifecycle_events_wire_shape() {
     );
 }
 
-// r[verify volume.site.snapshot.events]
-// r[verify volume.site.promote.events]
+// spec: SITE#site-volume-snapshots
+// spec: SITE#snapshot-promotion
 #[test]
 fn site_volume_snapshot_and_promote_events_wire_shape() {
     let source = VolumeRef::App {
@@ -534,7 +533,7 @@ fn site_volume_snapshot_and_promote_events_wire_shape() {
     );
 }
 
-// r[verify volume.external.mapping.events]
+// spec: SITE#external-mappings
 #[test]
 fn external_volume_mapping_events_wire_shape() {
     let app = app();
@@ -592,7 +591,7 @@ fn external_volume_mapping_events_wire_shape() {
     );
 }
 
-// r[verify service.site.lifecycle.events]
+// spec: SITE#site-service-lifecycle
 #[test]
 fn site_service_events_wire_shape() {
     assert_eq!(
@@ -641,7 +640,7 @@ fn site_service_events_wire_shape() {
     );
 }
 
-// r[verify service.external.mapping.events]
+// spec: SITE#external-mappings
 #[test]
 fn external_service_mapping_events_wire_shape() {
     let app = app();
@@ -691,7 +690,7 @@ fn external_service_mapping_events_wire_shape() {
     );
 }
 
-// r[verify ingress.site.lifecycle.events]
+// spec: SITE#attachments
 #[test]
 fn site_ingress_events_wire_shape() {
     let app = app();
@@ -810,7 +809,7 @@ fn site_ingress_events_wire_shape() {
     );
 }
 
-// r[verify audit.log.events]
+// spec: AUD#entries
 #[test]
 fn template_events_wire_shape() {
     let app = app();
@@ -841,7 +840,7 @@ fn template_events_wire_shape() {
     );
 }
 
-// i[verify wire.actor]
+// spec: WIRE#actor-attribution
 #[test]
 fn event_sender_with_actor_attaches_actor_to_every_event() {
     let tx = new_event_channel();

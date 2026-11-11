@@ -21,8 +21,8 @@ fn seed(oi: &TestOi, app: &str, instance: &str, cause: Cause, exit: Option<ExitS
         .expect("record");
 }
 
-// i[verify restart.list]
-// i[verify restart.record]
+// spec: FLTS#listing-restarts
+// spec: FLTS#restart-records
 #[test]
 fn list_returns_records_with_their_exit_and_cause() {
     let oi = TestOi::new();
@@ -51,7 +51,7 @@ fn list_returns_records_with_their_exit_and_cause() {
     assert!(!rows[0]["timestamp"].as_str().unwrap().is_empty());
 }
 
-// i[verify restart.record]
+// spec: FLTS#restart-records
 #[test]
 fn an_unknown_exit_is_reported_as_null_rather_than_invented() {
     let oi = TestOi::new();
@@ -64,7 +64,7 @@ fn an_unknown_exit_is_reported_as_null_rather_than_invented() {
     assert!(rows[0]["exit_kind"].is_null());
 }
 
-// i[verify restart.list]
+// spec: FLTS#listing-restarts
 #[test]
 fn list_filters_by_app_and_instance_and_honours_limit() {
     let oi = TestOi::new();
@@ -91,7 +91,7 @@ fn list_filters_by_app_and_instance_and_honours_limit() {
     assert_eq!(limited.as_array().unwrap().len(), 1);
 }
 
-// i[verify restart.settings]
+// spec: FLTS#crash-loop-settings
 #[test]
 fn settings_round_trip_and_reject_out_of_bounds() {
     let oi = TestOi::new();

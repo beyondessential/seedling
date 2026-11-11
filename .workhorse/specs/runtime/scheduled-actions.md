@@ -4,7 +4,7 @@ id: SCHED
 
 # Scheduled actions
 
-Applies to the firing of the actions an [app](../overview.md#app) declares with [`on_schedule`](rule:l/action.schedule).
+Applies to the firing of the actions an [app](../overview.md#app) declares with [`on_schedule`](../language/action.md#scheduled-actions).
 
 ## Schedule records
 
@@ -16,7 +16,7 @@ The runtime MUST NOT change the app's records on the strength of a definition th
 
 ## Firing
 
-The runtime MUST check for due schedules at least once a minute, as part of the [reconciliation loop](rule:r/reconciliation.loop).
+The runtime MUST check for due schedules at least once a minute, as part of the [reconciliation loop](reconciliation.md#reconciliation-loop).
 
 A schedule is due when the first boundary of its cron expression after its last fire time is at or before the time of the check.
 The runtime SHOULD treat a schedule with no recorded fire time as having last fired five minutes before the check.

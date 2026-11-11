@@ -42,7 +42,7 @@ fn active_registry_faults(db: &Db, name: &str) -> Vec<crate::runtime::faults::Fa
         .collect()
 }
 
-// l[verify container.image.registry-allowlist]
+// spec: CTR#registry-allowlist
 #[test]
 fn disallowed_registry_files_fault_naming_the_registry() {
     let db = Db::open_in_memory().expect("open");
@@ -62,7 +62,7 @@ fn disallowed_registry_files_fault_naming_the_registry() {
     );
 }
 
-// l[verify container.image.registry-allowlist]
+// spec: CTR#registry-allowlist
 #[test]
 fn allowed_registry_files_no_fault() {
     let db = Db::open_in_memory().expect("open");
@@ -77,7 +77,7 @@ fn allowed_registry_files_no_fault() {
     assert!(active_registry_faults(&db, "myapp").is_empty());
 }
 
-// l[verify container.image.registry-allowlist]
+// spec: CTR#registry-allowlist
 #[test]
 fn sync_is_idempotent_for_unchanged_disallowed_set() {
     let db = Db::open_in_memory().expect("open");
@@ -96,7 +96,7 @@ fn sync_is_idempotent_for_unchanged_disallowed_set() {
     assert_eq!(second[0].id, first[0].id, "same fault must be kept");
 }
 
-// l[verify container.image.registry-allowlist]
+// spec: CTR#registry-allowlist
 #[test]
 fn fault_clears_once_registry_becomes_allowed() {
     let db = Db::open_in_memory().expect("open");
@@ -114,7 +114,7 @@ fn fault_clears_once_registry_becomes_allowed() {
     assert!(active_registry_faults(&db, "myapp").is_empty());
 }
 
-// l[verify container.image.registry-allowlist]
+// spec: CTR#registry-allowlist
 #[test]
 fn changed_disallowed_set_replaces_the_fault() {
     let db = Db::open_in_memory().expect("open");

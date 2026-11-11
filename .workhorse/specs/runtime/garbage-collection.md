@@ -31,7 +31,7 @@ The runtime MUST delete each [fault](../overview.md#fault) record cleared longer
 
 The runtime MUST delete each [autonomous operations log](history.md#autonomous-operations-log) entry completed longer ago than the completed autonomous operation retention.
 
-The runtime MUST delete every observation, autonomous operations log entry and [restart record](rule:r/autonomous.restart.record) of a resource instance for which it no longer holds an instance record.
+The runtime MUST delete every observation, autonomous operations log entry and [restart record](autonomous.md#restart-record) of a resource instance for which it no longer holds an instance record.
 
 ## Restart records
 
@@ -53,7 +53,7 @@ The runtime MUST retire each resource instance that has been `Unscheduled` for l
 The runtime SHOULD look for such instances once per collection interval.
 
 An app's active desired state is the [desired state](reconciliation.md#desired-state) the runtime computed from the app's definition in [steady state](reconciliation.md#steady-state): each singleton instance, and each instance a scaled group keeps.
-A [stopped](rule:i/resource.stop) singleton MUST count as part of its app's active desired state.
+A [stopped](../interface/app-control.md#resource-stop) singleton MUST count as part of its app's active desired state.
 The active desired state of an app that is not installed, and has no lifecycle operation in progress, is empty.
 
 The runtime MUST NOT retire an instance of an app whose active desired state it does not know.

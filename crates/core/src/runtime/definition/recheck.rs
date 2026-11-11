@@ -27,13 +27,13 @@ use crate::runtime::{apps::AppRegistry, db::DbHandle, retry::RetryGates};
 
 /// How long a successful re-check stands before the tag is resolved again.
 /// A tag moves rarely, and acting on a move is the operator's decision.
-// r[impl definition.recheck.cadence]
+// spec: RCK#schedule
 pub const RECHECK_INTERVAL: Duration = Duration::from_secs(6 * 60 * 60);
 /// How often the task looks for apps that are due.
 pub const TICK: Duration = Duration::from_secs(5 * 60);
-// r[impl definition.recheck.backoff]
+// spec: RCK#back-off
 pub const RETRY_BASE: Duration = Duration::from_secs(15 * 60);
-// r[impl definition.recheck.backoff]
+// spec: RCK#back-off
 pub const RETRY_CAP: Duration = Duration::from_secs(24 * 60 * 60);
 /// How many apps a pass asks about at once. A registry that is down answers
 /// only when its connect and read timeouts expire, and a pass that waited
@@ -42,7 +42,7 @@ const PASS_CONCURRENCY: usize = 8;
 
 /// A spread of up to a tenth of the interval, so a fleet started together
 /// does not re-resolve against a registry at the same moment.
-// r[impl definition.recheck.cadence]
+// spec: RCK#schedule
 fn jitter(interval: Duration) -> Duration {
     use rand::Rng;
     let max = interval.as_secs() / 10;
@@ -95,9 +95,9 @@ impl Rechecker {
     /// The due apps are asked concurrently and each app's schedule and
     /// back-off are its own: one registry that hangs until its timeouts
     /// expire never pushes back another app's re-check.
-    // r[impl definition.recheck]
-    // r[impl definition.recheck.backoff]
-    // r[impl fault.definition-source-moved]
+    // spec: RCK#resolution
+    // spec: RCK#back-off
+    // spec: FLT#app-faults
     pub async fn pass(
         &mut self,
         apps: &RwLock<AppRegistry>,
@@ -142,7 +142,7 @@ impl Rechecker {
         let allowed = match db.call(crate::runtime::registries::list_allowed_registries) {
             Ok(a) => a,
             Err(e) => {
-                // r[impl fault.definition-source-moved] — with no allowlist
+                // spec: FLT#app-faults — with no allowlist
                 // there is no re-check, and so nothing to file or clear.
                 tracing::warn!(
                     "definition re-check pass skipped: could not read the allowlist: {e}"
@@ -191,7 +191,7 @@ impl Rechecker {
                     db.call(move |db| faults::sync_source_moved(db, &app_owned, moved));
                 }
                 Err(e) => {
-                    // r[impl fault.definition-source-moved] — a failed
+                    // spec: FLT#app-faults — a failed
                     // re-check neither files nor clears the fault.
                     let failures = self.gates.record_failure(app.clone(), now);
                     tracing::warn!(
@@ -219,7 +219,7 @@ async fn check(
 }
 
 /// Run re-checks for the life of the daemon.
-// r[impl definition.recheck]
+// spec: RCK#resolution
 pub fn spawn(
     apps: Arc<RwLock<AppRegistry>>,
     db: DbHandle,

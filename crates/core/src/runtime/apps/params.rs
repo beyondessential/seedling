@@ -8,7 +8,7 @@ use crate::runtime::db::Db;
 /// Read only the plaintext `params` table. Prefer `load_all_params_for_app`
 /// in any reload path — secret params live in a separate table and this
 /// function silently ignores them.
-// i[param.store]
+// PRM#parameter-storage
 pub(super) fn load_params_for_app(
     db: &Db,
     app_name: &AppName,
@@ -24,8 +24,8 @@ pub(super) fn load_params_for_app(
     Ok(rows.into_iter().collect())
 }
 
-// i[param.store]
-// i[param.set]
+// PRM#parameter-storage
+// PRM#parameter-set
 pub fn upsert_param(
     db: &Db,
     app_name: &AppName,
@@ -33,7 +33,7 @@ pub fn upsert_param(
     value: &str,
 ) -> rusqlite::Result<()> {
     db.conn.execute(
-        // r[impl history.persist.partial-update]
+        // spec: HIST#durability
         "INSERT INTO params (app_name, param_name, value) VALUES (?1, ?2, ?3) \
          ON CONFLICT(app_name, param_name) DO UPDATE SET value = excluded.value",
         rusqlite::params![app_name, param_name, value],
@@ -47,7 +47,7 @@ pub fn delete_app_params(db: &Db, app_name: &AppName) -> rusqlite::Result<()> {
     Ok(())
 }
 
-// i[param.unset]
+// PRM#parameter-unset
 pub fn delete_one_param(
     db: &Db,
     app_name: &AppName,

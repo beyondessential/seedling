@@ -69,7 +69,7 @@ impl ReloadOutcome {
 
 /// The installation phase of an app. Stored in `registered_apps` and shared
 /// with the reconciler via Arc so the reconciler can transition it on cleanup.
-// i[impl app.status]
+// spec: APPS#status-derivation
 #[derive(Debug, Clone, PartialEq)]
 pub enum AppPhase {
     NotInstalled,
@@ -78,7 +78,7 @@ pub enum AppPhase {
     Uninstalling,
 }
 
-// i[app.status]
+// APPS#status-derivation
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum AppStatus {
@@ -110,7 +110,7 @@ pub struct AppEntry {
     /// The definition installed at the current generation.
     pub bundle: Arc<Bundle>,
     /// How that definition reached the runtime.
-    // i[impl definition.provenance]
+    // spec: DEFN#provenance-reporting
     pub source: Source,
     /// The most recent successful evaluation: the definition this app runs.
     /// Its `stored` map and `bundle` are the values and definition it was
@@ -127,7 +127,7 @@ pub struct AppEntry {
     /// Cleared on the next successful evaluation.
     pub script_error: Option<(String, Timestamp)>,
     /// Current app generation (0 if not yet bumped).
-    // i[impl app.generation]
+    // spec: APPS#generations
     pub current_generation: generations::Generation,
 }
 
@@ -154,7 +154,7 @@ impl AppRegistry {
         self.entries.contains_key(name)
     }
 
-    // i[app.register]
+    // APPS#registration
     pub fn register(
         &mut self,
         name: AppName,
@@ -168,7 +168,7 @@ impl AppRegistry {
         Ok(())
     }
 
-    // i[impl app.register]
+    // spec: APPS#registration
     /// Make an already-evaluated app observable at `generation`.
     ///
     /// Separate from [`Self::register`] so a caller can commit the app's rows
@@ -213,9 +213,9 @@ impl AppRegistry {
         self.entries.remove(name).is_some()
     }
 
-    // i[app.update]
-    // i[param.set]
-    // i[param.unset]
+    // APPS#update
+    // PRM#parameter-set
+    // PRM#parameter-unset
     /// Re-evaluate the app's current definition with updated stored params.
     ///
     /// On success the entry's app is updated and any active script-error
@@ -257,7 +257,7 @@ impl AppRegistry {
                 entry.script_error = None;
                 ReloadOutcome::Applied
             }
-            // i[impl app.update] — `app` here is a partial evaluation: the
+            // spec: APPS#update — `app` here is a partial evaluation: the
             // builders that ran before the script threw, and none after. It is
             // dropped rather than published, so the previous good definition
             // keeps running and nothing downstream can diff against it.
@@ -270,7 +270,7 @@ impl AppRegistry {
 
     /// Install an already-evaluated, already-validated definition, whose
     /// generation has been committed, as the one the app runs.
-    // i[impl app.update]
+    // spec: APPS#update
     pub fn replace_definition(
         &mut self,
         name: &AppName,
@@ -303,14 +303,14 @@ impl AppRegistry {
     }
 
     /// Every registered app's name, sorted.
-    // i[app.list]
+    // APPS#listing
     pub fn names(&self) -> Vec<AppName> {
         let mut names: Vec<_> = self.entries.values().map(|e| e.name.clone()).collect();
         names.sort();
         names
     }
 
-    // i[app.persist]
+    // APPS#persistence
     pub fn load_from_db(
         db: &Db,
         cipher: &Cipher,
@@ -357,10 +357,10 @@ impl AppRegistry {
                 }
             };
             let stored = load_all_params_for_app(db, cipher, &name);
-            // i[impl app.persist] — reload runs no validators: the stored
+            // spec: APPS#persistence — reload runs no validators: the stored
             // combination was validated when it was written.
             let (app, raw_error) = evaluate(&name, &bundle, &stored, limits);
-            // r[impl secret.migration] — after the script declares which params are secret,
+            // spec: SEC#migration — after the script declares which params are secret,
             // migrate any plaintext rows that should now be encrypted.
             migrate_newly_secret_params(db, cipher, &name, &app);
             let script_error = raw_error.map(|e| {
@@ -386,11 +386,11 @@ impl AppRegistry {
         Ok(registry)
     }
 
-    // i[app.persist]
+    // APPS#persistence
     pub fn persist_app(db: &Db, entry: &AppEntry) -> rusqlite::Result<()> {
         let (installed, uninstalling, installing) = encode_phase(&entry.phase.lock());
         db.conn.execute(
-            // r[impl history.persist.partial-update]
+            // spec: HIST#durability
             "INSERT INTO registered_apps \
                  (name, installed, uninstalling, installing, current_generation) \
              VALUES (?1, ?2, ?3, ?4, ?5) \
@@ -419,8 +419,7 @@ impl AppRegistry {
 
 /// Retrieve the definition active at a specific generation — its bundle and
 /// provenance — or `None` when the app has no such generation.
-// i[impl app.script]
-// i[impl app.bundle]
+// spec: APPS#definition-retrieval
 pub fn definition_at_generation(
     db: &Db,
     app: &AppName,
@@ -523,7 +522,7 @@ pub fn load_all_params_for_app(
 /// Every path that writes a parameter goes through here: two tables hold
 /// them, and a value that landed in both, or in neither, is what disagreeing
 /// call sites produce.
-// r[impl secret.storage]
+// spec: SEC#storage
 pub fn store_param_value(
     db: &Db,
     cipher: &Cipher,
@@ -554,7 +553,7 @@ pub fn store_param_value(
 ///
 /// Migration follows only a definition that was applied: a reload that keeps
 /// the previous one changes no param's `secret` flag.
-// r[impl secret.migration]
+// spec: SEC#migration
 #[must_use = "a KeptPrevious reload must not be followed by state derived from the new values"]
 pub fn reload(
     registry: &RwLock<AppRegistry>,
@@ -576,7 +575,7 @@ pub fn reload(
     outcome
 }
 
-// r[impl secret.migration]
+// spec: SEC#migration
 pub(crate) fn migrate_newly_secret_params(db: &Db, cipher: &Cipher, app_name: &AppName, app: &App) {
     let def = app.def.load();
     for (param_name, param_def) in &def.params {
@@ -593,7 +592,7 @@ pub(crate) fn migrate_newly_secret_params(db: &Db, cipher: &Cipher, app_name: &A
 }
 
 /// A parameter whose validator rejected the proposed values.
-// i[impl param.validation]
+// spec: PRM#validation
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Rejection {
     pub name: String,
@@ -620,7 +619,7 @@ pub fn evaluate(
 ///
 /// `params` and `proposed` are the same map except when validators are taken
 /// from an earlier evaluation because the proposed values fail to evaluate.
-// i[impl param.validation]
+// spec: PRM#validation
 pub fn evaluate_validated(
     name: &AppName,
     bundle: &Arc<Bundle>,
@@ -661,7 +660,7 @@ fn run_definition(
         // for a bundle written for another Seedling) evaluates to nothing.
         Err(e) => return (app, Err(ScriptError(e.to_string()))),
     };
-    // i[param.store] — pre-populate stored values so is_set()/value() work
+    // PRM#parameter-storage — pre-populate stored values so is_set()/value() work
     // during script evaluation. AppDef.params (the BSL-declared set) is
     // populated by the script itself via app.param() calls.
     *app.stored.lock() = params.clone();
@@ -674,12 +673,12 @@ fn run_definition(
     if validate.is_some() {
         crate::defs::app::begin_validator_capture();
     }
-    // l[impl bsl.errors]
+    // spec: BSL#evaluation
     // Unhandled Rhai exceptions bubble up from `run_ast_with_scope` and stop
     // further execution of this script evaluation. Rhai's native try/catch
     // is available to BSL authors for recovery; anything that escapes it
     // becomes a ScriptError and is surfaced as a fault by the caller.
-    // l[impl bsl.bundle.script-errors]
+    // spec: BND#script-formation
     let remap = |e: Box<rhai::EvalAltResult>| ScriptError(script.remap_error(&e.to_string()));
     let ran = engine
         .compile(script.text())
@@ -703,9 +702,7 @@ fn run_definition(
     (app, Ok(rejections))
 }
 
-// l[impl param.validate]
-// l[impl param.validate.unset]
-// l[impl param.validate.pure]
+// spec: PARAM#validators
 fn run_validators(
     engine: &rhai::Engine,
     ast: &rhai::AST,

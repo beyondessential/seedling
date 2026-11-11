@@ -1,4 +1,4 @@
-// i[impl plan.dry-run]
+// spec: PRM#change-planning
 //
 // `ResourceSummary` is a serialisable, comparable view of a `Resource` used by
 // the dry-run RPC to compute field-level diffs between the current and
@@ -49,15 +49,15 @@ pub struct ServiceSummary {
     pub export_description: Option<String>,
     pub description: Option<String>,
     /// How the proxy picks among this service's backends, resolved.
-    // i[impl app.describe.proxy-settings]
+    // spec: APPS#proxy-settings
     pub balance: BalanceSummary,
     /// One entry per HTTP route the service is served through, sorted by
     /// prefix for stable diffing. `None` for a service with no HTTP surface.
-    // i[impl app.describe.proxy-settings]
+    // spec: APPS#proxy-settings
     pub routes: Option<Vec<RouteSummary>>,
 }
 
-// i[impl app.describe.proxy-settings]
+// spec: APPS#proxy-settings
 #[derive(Serialize, Debug, PartialEq)]
 pub struct RouteSummary {
     pub prefix: String,
@@ -77,13 +77,13 @@ pub struct RouteSummary {
     pub headers: HeadersSummary,
     /// The redirect this route answers with, or `null` when it is proxied to
     /// a pod.
-    // i[impl app.describe.proxy-settings]
-    // r[impl service.http.route.redirect]
+    // spec: APPS#proxy-settings
+    // spec: PRX#redirect-routes
     pub redirect: Option<RouteRedirectSummary>,
 }
 
 /// What a redirect route answers with.
-// i[impl app.describe.proxy-settings]
+// spec: APPS#proxy-settings
 #[derive(Serialize, Debug, PartialEq)]
 pub struct RouteRedirectSummary {
     /// The target as the app declared it, with the parts of the request that
@@ -181,7 +181,7 @@ pub struct DeploymentSummary {
     pub scale: ScaleSummary,
     pub on_update: &'static str,
     pub on_terminate: &'static str,
-    // l[impl deployment.priority]
+    // spec: DEP#priority
     pub priority: &'static str,
     pub description: Option<String>,
 }
@@ -357,8 +357,8 @@ fn bound_prefixes(app: &AppDef, service_name: &str) -> std::collections::BTreeSe
     bound
 }
 
-// i[impl app.describe.proxy-settings]
-// r[impl service.http.route.proxy-settings.visibility]
+// spec: APPS#proxy-settings
+// spec: PRX#settings-inspection
 /// One entry per route the service is served through, each fully resolved so
 /// a reader never has to know the defaults to interpret the answer.
 fn route_summaries(
@@ -389,7 +389,7 @@ fn route_summaries(
                 // one, which is the case exactly when nothing was bound.
                 served: redirect.is_some() || fallback_serves || bound.contains(prefix),
                 prefix: prefix.to_owned(),
-                // r[impl service.http.route.redirect]
+                // spec: PRX#redirect-routes
                 // Reported as nothing on a redirect route rather than as what
                 // the service declared: a redirect reaches no pod, so a limit
                 // inherited from the service is ignored on it, and reporting
@@ -411,7 +411,7 @@ fn route_summaries(
                         shared: rl.scope == RateLimitScope::Service,
                     }),
                 headers: HeadersSummary {
-                    // r[impl service.http.route.redirect]
+                    // spec: PRX#redirect-routes
                     // A redirect sends no request onward, so a request
                     // operation it inherited from the service applies to
                     // nothing and is reported as applying to nothing.
@@ -420,7 +420,7 @@ fn route_summaries(
                     } else {
                         resolved.headers.request.into_grouped().into()
                     },
-                    // r[impl service.http.route.redirect]
+                    // spec: PRX#redirect-routes
                     // `Location` is dropped on a redirect route for the same
                     // reason the runtime drops it: the redirect computes that
                     // header, so an operation the service declared for its
@@ -501,7 +501,7 @@ impl Deployment {
             on_terminate: match def.on_terminate {
                 OnTerminate::Recreate => "recreate",
             },
-            // l[impl deployment.priority]
+            // spec: DEP#priority
             priority: def.priority.as_str(),
             description: def.description.clone(),
         }

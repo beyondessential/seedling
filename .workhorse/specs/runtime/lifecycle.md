@@ -50,7 +50,7 @@ The lifecycle states of a deployment or job instance have these meanings.
 | --- | --- |
 | `Scheduled` | The container's image pull has started, or the container has been created. |
 | `Running` | The container's process is executing. |
-| `Ready` | The container is running and, if it declares a [healthcheck](rule:l/deployment.healthcheck), the healthcheck is passing. |
+| `Ready` | The container is running and, if it declares a [healthcheck](../language/deployment.md#health-checks), the healthcheck is passing. |
 | `Terminated` | The container's process has exited, with an exit code. |
 | `Unscheduled` | The container has been removed. |
 
@@ -79,7 +79,7 @@ A service's routing pool for one of its ports is the set of running backends tha
 
 The runtime MUST compose each pool from the backends running at the time, as follows.
 If at least one running backend is currently observed healthy, the pool MUST hold exactly the running backends currently observed healthy.
-Otherwise, the pool MUST hold every running backend, and the runtime MUST file the [service degraded fault](rule:r/fault.service-degraded).
+Otherwise, the pool MUST hold every running backend, and the runtime MUST file the [service degraded fault](faults.md#ingress-and-service-faults).
 
 A backend with no declared healthcheck MUST count as healthy while it is running.
 A backend whose declared healthcheck has not yet passed, such as one in its start period, MUST count as not healthy.
@@ -116,4 +116,4 @@ An external volume MUST be `Ready` as soon as the desired state holds it `Ready`
 An external volume's lifecycle state MUST NOT depend on whether a mapping exists for it.
 
 > [!NOTE]
-> A missing mapping is reported by the [external volume unmapped fault](rule:r/fault.external-volume-unmapped).
+> A missing mapping is reported by the [external volume unmapped fault](faults.md#workload-faults).

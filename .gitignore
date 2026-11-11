@@ -1,5 +1,4 @@
 /target
-.tracey/
 # release-plz writes these to populate the release PR body; never committed.
 CHANGELOG.md
 TODO.txt

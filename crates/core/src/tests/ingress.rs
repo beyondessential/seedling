@@ -1,11 +1,11 @@
 use super::*;
 use defs::resource::ResourceKind;
 
-// l[verify ingress.type]
-// l[verify ingress.termination]
-// l[verify ingress.service]
-// l[verify const.terminate.https]
-// l[verify const.output.http1]
+// spec: ING#declaration
+// spec: ING#termination
+// spec: ING#declaration
+// spec: ING#terminate
+// spec: ING#output
 #[test]
 fn ingress_builder_chain() {
     let app = run_test_script_app(
@@ -25,9 +25,9 @@ fn ingress_builder_chain() {
     );
 }
 
-// l[verify ingress.termination]
-// l[verify const.terminate.tls]
-// l[verify const.output.tcp]
+// spec: ING#termination
+// spec: ING#terminate
+// spec: ING#output
 #[test]
 fn ingress_terminate_tls_to_tcp() {
     run_test_script_app(
@@ -37,9 +37,9 @@ fn ingress_terminate_tls_to_tcp() {
     );
 }
 
-// l[verify ingress.termination]
-// l[verify const.terminate.dtls]
-// l[verify const.output.udp]
+// spec: ING#termination
+// spec: ING#terminate
+// spec: ING#output
 #[test]
 fn ingress_terminate_dtls_to_udp() {
     run_test_script_app(
@@ -49,8 +49,8 @@ fn ingress_terminate_dtls_to_udp() {
     );
 }
 
-// l[verify ingress.termination]
-// l[verify const.output.http2]
+// spec: ING#termination
+// spec: ING#output
 #[test]
 fn ingress_terminate_https_to_http2() {
     run_test_script_app(
@@ -60,7 +60,7 @@ fn ingress_terminate_https_to_http2() {
     );
 }
 
-// l[verify ingress.termination]
+// spec: ING#termination
 #[test]
 fn invalid_termination_combo_throws() {
     // Terminate.Https + Output.Tcp is nonsense — HTTPS termination
@@ -78,7 +78,7 @@ fn invalid_termination_combo_throws() {
     );
 }
 
-// l[verify ingress.redirect]
+// spec: ING#redirect-to-https
 #[test]
 fn ingress_redirect_defaults() {
     run_test_script_app(
@@ -88,7 +88,7 @@ fn ingress_redirect_defaults() {
     );
 }
 
-// l[verify ingress.redirect]
+// spec: ING#redirect-to-https
 #[test]
 fn ingress_redirect_custom_port_and_code() {
     run_test_script_app(
@@ -98,7 +98,7 @@ fn ingress_redirect_custom_port_and_code() {
     );
 }
 
-// l[verify ingress.redirect]
+// spec: ING#redirect-to-https
 #[test]
 fn ingress_redirect_without_https_throws() {
     let _ = run_test_script_err(
@@ -108,7 +108,7 @@ fn ingress_redirect_without_https_throws() {
     );
 }
 
-// l[verify ingress.certificates]
+// spec: ING#certificates
 #[test]
 fn ingress_certificates_implied_by_https() {
     let _ = run_test_script_app(
@@ -118,7 +118,7 @@ fn ingress_certificates_implied_by_https() {
     );
 }
 
-// l[verify ingress.hostname]
+// spec: ING#hostnames
 #[test]
 fn a_hostname_is_held_in_one_form_whatever_case_it_is_written_in() {
     let app = run_test_script_app(
@@ -147,7 +147,7 @@ fn a_hostname_is_held_in_one_form_whatever_case_it_is_written_in() {
     );
 }
 
-// l[verify ingress.hostname]
+// spec: ING#hostnames
 #[test]
 fn hostname_rejects_wildcard() {
     let _ = run_test_script_err(
@@ -157,7 +157,7 @@ fn hostname_rejects_wildcard() {
     );
 }
 
-// l[verify ingress.hostname]
+// spec: ING#hostnames
 #[test]
 fn hostname_rejects_leading_hyphen_label() {
     let _ = run_test_script_err(
@@ -167,7 +167,7 @@ fn hostname_rejects_leading_hyphen_label() {
     );
 }
 
-// l[verify ingress.hostname]
+// spec: ING#hostnames
 #[test]
 fn hostname_rejects_trailing_hyphen_label() {
     let _ = run_test_script_err(
@@ -177,7 +177,7 @@ fn hostname_rejects_trailing_hyphen_label() {
     );
 }
 
-// l[verify ingress.hostname]
+// spec: ING#hostnames
 #[test]
 fn hostname_rejects_empty_label() {
     let _ = run_test_script_err(
@@ -187,7 +187,7 @@ fn hostname_rejects_empty_label() {
     );
 }
 
-// l[verify ingress.hostname]
+// spec: ING#hostnames
 #[test]
 fn hostname_rejects_invalid_characters() {
     let _ = run_test_script_err(
@@ -197,7 +197,7 @@ fn hostname_rejects_invalid_characters() {
     );
 }
 
-// l[verify ingress.hostname]
+// spec: ING#hostnames
 #[test]
 fn hostname_rejects_empty_string() {
     let _ = run_test_script_err(
@@ -207,7 +207,7 @@ fn hostname_rejects_empty_string() {
     );
 }
 
-// l[verify ingress.hostname]
+// spec: ING#hostnames
 #[test]
 fn hostname_accepts_valid_domains() {
     run_test_script_app(
@@ -221,7 +221,7 @@ fn hostname_accepts_valid_domains() {
     );
 }
 
-// l[verify ingress.type]
+// spec: ING#declaration
 #[test]
 fn multiple_ingresses_on_same_service_coexist() {
     let app = run_test_script_app(
@@ -245,7 +245,7 @@ fn multiple_ingresses_on_same_service_coexist() {
     assert!(ingress_names.contains(&"test2.localhost:80".to_owned()));
 }
 
-// l[verify ingress.conflicts]
+// spec: ING#identity-within-an-app
 #[test]
 fn ingress_conflict_within_app_throws() {
     // Same (hostname, port) must throw on the second declaration so
@@ -263,7 +263,7 @@ fn ingress_conflict_within_app_throws() {
     );
 }
 
-// l[verify ingress.conflicts]
+// spec: ING#identity-within-an-app
 #[test]
 fn ingress_conflict_within_app_is_catchable() {
     // The throw is from the host function, so a try/catch can recover.
@@ -287,7 +287,7 @@ fn ingress_conflict_within_app_is_catchable() {
     assert_eq!(ingresses.len(), 1, "exactly one ingress should remain");
 }
 
-// l[verify ingress.type]
+// spec: ING#declaration
 #[test]
 fn http_service_can_declare_ingress() {
     // ingress() called on an HttpService delegates to the underlying
@@ -313,7 +313,7 @@ fn http_service_can_declare_ingress() {
     assert!(names.contains(&"api.localhost:443".to_owned()));
 }
 
-// l[verify ingress.type]
+// spec: ING#declaration
 #[test]
 fn http_service_ingress_conflicts_with_service_ingress() {
     // The ingress declared via HttpService and the one declared via
@@ -332,7 +332,7 @@ fn http_service_ingress_conflicts_with_service_ingress() {
     );
 }
 
-// l[verify ingress.conflicts]
+// spec: ING#identity-within-an-app
 #[test]
 fn ingress_same_hostname_different_port_does_not_conflict() {
     // Same hostname, different ports — distinct ingresses, no error.
@@ -352,8 +352,8 @@ fn ingress_same_hostname_different_port_does_not_conflict() {
     assert_eq!(count, 2);
 }
 
-// l[verify bsl.args.strict]
-// l[verify ingress.redirect]
+// spec: BSL#arguments
+// spec: ING#redirect-to-https
 // The unchecked `as u16` wrapped, so 65843 became 307 — a redirect to a
 // status code that is not a redirect at all.
 #[test]
@@ -370,8 +370,8 @@ fn redirect_code_must_be_a_redirection_status() {
     assert!(message.contains("300"), "{message}");
 }
 
-// l[verify ingress.type]
-// l[verify app.resources.context.anonymous]
+// spec: ING#declaration
+// spec: APP#anonymous-resources
 // An anonymous service belongs to no app, so an ingress declared on it used to
 // succeed without registering anything and hand back a handle nothing routes to.
 #[test]
@@ -388,7 +388,7 @@ fn ingress_on_anonymous_service_throws() {
     assert!(msg.contains("anonymous service"), "got: {msg}");
 }
 
-// l[verify ingress.type]
+// spec: ING#declaration
 #[test]
 fn ingress_on_anonymous_http_service_throws() {
     let msg = run_action_err(

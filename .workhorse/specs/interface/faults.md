@@ -17,7 +17,7 @@ A fault record is a JSON object.
 | `resource_type` | string or null | the kind of thing the fault is about, where it is about less than the whole app |
 | `resource_name` | string or null | the name of that thing |
 | `instance_id` | string or null | the resource instance the fault is about, where it is about one instance |
-| `kind` | string | the fault's [kind](rule:r/fault.definition) |
+| `kind` | string | the fault's [kind](../runtime/faults.md#fault-records) |
 | `timestamp` | string | when the fault was filed, as an [RFC 3339](https://www.rfc-editor.org/rfc/rfc3339) timestamp |
 | `description` | string | text for the operator |
 
@@ -42,7 +42,7 @@ Without `app` the server MUST list every active fault on the host.
 
 The result is `{ "app": <string>, "cleared": <integer> }`, where `cleared` is the number of faults that went from active to cleared.
 The server MUST emit a `FaultCleared` event for each fault it clears.
-Clearing a fault MUST NOT stop the runtime filing it again while its [filing condition](rule:r/fault.lifecycle) holds.
+Clearing a fault MUST NOT stop the runtime filing it again while its [filing condition](../runtime/faults.md#filing-and-clearing) holds.
 
 ## Restart records
 
@@ -57,7 +57,7 @@ A restart record is a JSON object describing one restart of a resource instance'
 | `resource_name` | string or null | the instance's resource name |
 | `generation` | integer or null | the app's [generation](../overview.md#generation) at the time, or `null` where the app had none |
 | `timestamp` | string | when the restart happened, as an [RFC 3339](https://www.rfc-editor.org/rfc/rfc3339) timestamp |
-| `cause` | string | `"recovery"` or `"deliberate"`, as [restart records](rule:r/autonomous.restart.record) define them |
+| `cause` | string | `"recovery"` or `"deliberate"`, as [restart records](../runtime/autonomous.md#restart-record) define them |
 | `exit_code` | integer or null | how the previous run ended, as `exit_kind` qualifies it, or `null` where unknown |
 | `exit_kind` | string or null | `"exited"`, `"signalled"` or `"dumped"`, or `null` where unknown |
 
@@ -79,7 +79,7 @@ The server MUST treat a `limit` below 1 as 1, and a `limit` above 1000 as 1000.
 
 ## Crash-loop settings
 
-`/restarts/settings/get` reads, and `/restarts/settings/set` changes, the [crash-loop rate](rule:r/autonomous.restart.rate) settings.
+`/restarts/settings/get` reads, and `/restarts/settings/set` changes, the [crash-loop rate](../runtime/autonomous.md#crash-loop-detection) settings.
 
 | member | type | meaning |
 | --- | --- | --- |

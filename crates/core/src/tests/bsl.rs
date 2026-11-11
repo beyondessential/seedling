@@ -1,7 +1,6 @@
 use super::*;
 
-// l[verify bsl.script]
-// l[verify bsl.syntax]
+// spec: BSL#evaluation
 #[test]
 fn bsl_is_rhai() {
     run_test_script_app(
@@ -14,7 +13,7 @@ fn bsl_is_rhai() {
     );
 }
 
-// l[verify bsl.scope]
+// spec: BSL#evaluation
 #[test]
 fn distinct_scope_per_script() {
     let (engine1, mut scope1, _app1) = setup(&crate::ScriptLimits::default());
@@ -28,7 +27,7 @@ fn distinct_scope_per_script() {
     );
 }
 
-// l[verify bsl.enums]
+// spec: BSL#enums
 #[test]
 fn enums_are_constant_object_maps() {
     run_test_script_app(
@@ -45,7 +44,7 @@ fn enums_are_constant_object_maps() {
     );
 }
 
-// l[verify bsl.errors]
+// spec: BSL#evaluation
 #[test]
 fn errors_can_be_caught_with_try_catch() {
     run_test_script_app(
@@ -61,13 +60,13 @@ fn errors_can_be_caught_with_try_catch() {
     );
 }
 
-// l[verify bsl.errors]
+// spec: BSL#evaluation
 #[test]
 fn uncaught_error_fails_script() {
     let _ = run_test_script_err(r#"throw "deliberate failure";"#);
 }
 
-// l[verify bsl.name]
+// spec: BSL#names
 #[test]
 fn name_rules_accepted() {
     run_test_script_app(
@@ -79,67 +78,67 @@ fn name_rules_accepted() {
     );
 }
 
-// l[verify bsl.name]
+// spec: BSL#names
 #[test]
 fn name_rejects_slashes() {
     let _ = run_test_script_err(r#"app.service("web/server");"#);
 }
 
-// l[verify bsl.name]
+// spec: BSL#names
 #[test]
 fn name_rejects_newlines() {
     let _ = run_test_script_err(r#"app.service("web\nserver");"#);
 }
 
-// l[verify bsl.name]
+// spec: BSL#names
 #[test]
 fn name_rejects_null_bytes() {
     let _ = run_test_script_err(r#"app.service("web\0server");"#);
 }
 
-// l[verify bsl.name]
+// spec: BSL#names
 #[test]
 fn name_rejects_too_short() {
     let _ = run_test_script_err(r#"app.service("ab");"#);
 }
 
-// l[verify bsl.name]
+// spec: BSL#names
 #[test]
 fn name_rejects_leading_hyphen() {
     let _ = run_test_script_err(r#"app.service("-web");"#);
 }
 
-// l[verify bsl.name]
+// spec: BSL#names
 #[test]
 fn name_rejects_trailing_hyphen() {
     let _ = run_test_script_err(r#"app.service("web-");"#);
 }
 
-// l[verify bsl.name]
+// spec: BSL#names
 #[test]
 fn name_rejects_leading_digit() {
     let _ = run_test_script_err(r#"app.service("1web");"#);
 }
 
-// l[verify bsl.port]
+// spec: BSL#ports
 #[test]
 fn port_validation_rejects_zero() {
     let _ = run_test_script_err(r#"app.service("web").port(0);"#);
 }
 
-// l[verify bsl.port]
+// spec: BSL#ports
 #[test]
 fn port_validation_rejects_upper_bound() {
     let _ = run_test_script_err(r#"app.service("web").port(65536);"#);
 }
 
-// l[verify bsl.port]
+// spec: BSL#ports
 #[test]
 fn port_validation_rejects_negative() {
     let _ = run_test_script_err(r#"app.service("web").port(-1);"#);
 }
 
-// l[verify bsl.port]
+// spec: BSL#ports
 #[test]
 fn port_validation_accepts_valid() {
     run_test_script_app(
@@ -152,7 +151,7 @@ fn port_validation_accepts_valid() {
     );
 }
 
-// l[verify bsl.resource]
+// spec: BSL#resource
 #[test]
 fn resource_types_exist() {
     use defs::resource::ResourceKind;
@@ -184,7 +183,7 @@ fn resource_types_exist() {
     );
 }
 
-// l[verify bsl.builder]
+// spec: BSL#builders
 #[test]
 fn builder_methods_chain() {
     run_test_script_app(

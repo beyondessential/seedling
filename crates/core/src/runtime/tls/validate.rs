@@ -1,8 +1,8 @@
 //! Validation rules for operator-supplied certificates.
 //!
 //! Used by the manual-upload (`tls.cert.upload-manual`) and CSR-cert-upload
-//! (`tls.cert.csr.upload-cert`) flows. The rules come from the spec block
-//! `tls.cert.validation.*` in `docs/spec/runtime.md`:
+//! (`tls.cert.csr.upload-cert`) flows. The rules come from
+//! `spec: TLS#operator-supplied-certificates` and `spec: TLS#coverage`:
 //!
 //! - **SAN list non-empty**: the cert must carry at least one DNS SAN,
 //!   otherwise it cannot ever auto-bind to a hostname.
@@ -71,8 +71,7 @@ pub struct Validated {
 /// whatever hostnames its SANs cover at resolution time, so validation
 /// does not take a hostname parameter; instead it asserts that the SAN
 /// list is non-empty (otherwise the cert can never bind to anything).
-// r[impl tls.cert.validation.self-signed]
-// r[impl tls.cert.validation.expired]
+// spec: TLS#operator-supplied-certificates
 pub fn validate_upload(cert_pem: &str, key_pem: &SecretString) -> Result<Validated> {
     let parsed = parse::parse_chain(cert_pem).context(ParseCertSnafu)?;
 
@@ -166,7 +165,7 @@ mod tests {
 
     /// A certificate with no DNS SANs covers nothing, so there is no hostname
     /// it could ever be served for.
-    // r[verify tls.cert.validation.san-coverage]
+    // spec: TLS#coverage
     #[test]
     fn rejects_a_cert_with_no_dns_sans() {
         let key = KeyPair::generate_for(&PKCS_ECDSA_P256_SHA256).expect("keypair");

@@ -11,20 +11,20 @@ pub mod system;
 mod tests;
 
 /// Configurable limits for the Rhai script engine.
-// r[impl engine.limits]
+// spec: LIM#limits
 #[derive(Debug, Clone)]
 pub struct ScriptLimits {
-    // r[impl engine.limits.operations]
+    // spec: LIM#limits
     pub max_operations: u64,
-    // r[impl engine.limits.call-depth]
+    // spec: LIM#limits
     pub max_call_levels: usize,
-    // r[impl engine.limits.expr-depth]
+    // spec: LIM#limits
     pub max_expr_depth: usize,
-    // r[impl engine.limits.string-size]
+    // spec: LIM#limits
     pub max_string_size: usize,
-    // r[impl engine.limits.array-size]
+    // spec: LIM#limits
     pub max_array_size: usize,
-    // r[impl engine.limits.map-size]
+    // spec: LIM#limits
     pub max_map_size: usize,
 }
 
@@ -69,8 +69,7 @@ mod engine_limits_tests {
         engine.run_ast_with_scope(&mut scope, &ast)
     }
 
-    // r[verify engine.limits]
-    // r[verify engine.limits.operations]
+    // spec: LIM#limits
     #[test]
     fn operations_limit_aborts_long_loops() {
         let limits = ScriptLimits {
@@ -91,7 +90,7 @@ mod engine_limits_tests {
         );
     }
 
-    // r[verify engine.limits.call-depth]
+    // spec: LIM#limits
     #[test]
     fn call_depth_limit_rejects_deep_recursion() {
         let limits = ScriptLimits {
@@ -112,7 +111,7 @@ mod engine_limits_tests {
         );
     }
 
-    // r[verify engine.limits.expr-depth]
+    // spec: LIM#limits
     #[test]
     fn expr_depth_limit_rejects_deeply_nested_expressions() {
         let limits = ScriptLimits {
@@ -131,7 +130,7 @@ mod engine_limits_tests {
         );
     }
 
-    // r[verify engine.limits.string-size]
+    // spec: LIM#limits
     #[test]
     fn string_size_limit_rejects_oversized_strings() {
         let limits = ScriptLimits {
@@ -152,7 +151,7 @@ mod engine_limits_tests {
         );
     }
 
-    // r[verify engine.limits.array-size]
+    // spec: LIM#limits
     #[test]
     fn array_size_limit_rejects_growth_past_cap() {
         let limits = ScriptLimits {
@@ -173,7 +172,7 @@ mod engine_limits_tests {
         );
     }
 
-    // r[verify engine.limits.map-size]
+    // spec: LIM#limits
     #[test]
     fn map_size_limit_rejects_oversized_literal() {
         let limits = ScriptLimits {
@@ -191,7 +190,7 @@ mod engine_limits_tests {
         );
     }
 
-    // r[verify engine.limits]
+    // spec: LIM#limits
     #[test]
     fn default_limits_allow_normal_scripts() {
         eval(

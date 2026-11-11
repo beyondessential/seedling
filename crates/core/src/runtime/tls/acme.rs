@@ -91,14 +91,14 @@ pub struct IssueParams<'a> {
     /// is a renewal. Used to populate the order's `replaces` field per
     /// RFC 9773 § 5 so the CA can skip rate-limiting on the renewal and
     /// invalidate any pending ARI advice for the old cert.
-    // r[impl tls.cert.ari]
+    // spec: TLS#renewal
     pub previous_cert_pem: Option<&'a str>,
     /// ACME profile name forwarded to the CA via the profiles
     /// extension. `None` means "let the CA pick its default". Let's
     /// Encrypt's `shortlived` profile yields ~6-day certs; absent a
     /// profile they issue ~90-day certs. The order fails with a clear
     /// CA-side error if the directory does not advertise the profile.
-    // r[impl tls.settings.cert-profile]
+    // spec: TLS#acme-accounts-and-settings
     pub cert_profile: Option<&'a str>,
 }
 
@@ -119,7 +119,7 @@ const DNS_PROPAGATION_DELAY: Duration = Duration::from_secs(30);
 /// it without lifetime ceremony. DB access is sliced into short, sync
 /// closures via `DbHandle::call`; network I/O happens between calls so the
 /// DB worker thread never blocks on remote services.
-// r[impl tls.strategy.acme-dns]
+// spec: TLS#acme-dns-01-issuance
 pub async fn issue(
     db: &DbHandle,
     cipher: &Cipher,
@@ -152,7 +152,7 @@ pub async fn issue(
 
     let identifiers = vec![Identifier::Dns(params.hostname.to_owned())];
     let mut new_order = NewOrder::new(&identifiers);
-    // r[impl tls.cert.ari]
+    // spec: TLS#renewal
     // If we know the previous cert, hand its CertificateIdentifier
     // to the CA via the order's `replaces` field. Saves us a rate-limit
     // round-trip on Let's Encrypt and lets ARI advice for the old cert
@@ -165,7 +165,7 @@ pub async fn issue(
     if let Some(ref ident) = replaces_owned {
         new_order = new_order.replaces(ident.clone());
     }
-    // r[impl tls.settings.cert-profile]
+    // spec: TLS#acme-accounts-and-settings
     if let Some(profile) = params.cert_profile {
         new_order = new_order.profile(profile);
     }
@@ -184,7 +184,7 @@ pub async fn issue(
     // Whatever way the challenge phase ended, the records it published are
     // retracted here, outside it, so no early return inside it can leave one
     // in the operator's zone.
-    // r[impl tls.strategy.acme-dns]
+    // spec: TLS#acme-dns-01-issuance
     cleanup_txt(provider.as_ref(), &challenge_name, &planted).await;
     let (cert_chain_pem, key) = obtained?;
 
@@ -219,7 +219,7 @@ pub async fn issue(
         })
         .context(StorageSnafu)?;
 
-    // r[impl tls.cert.ari]
+    // spec: TLS#renewal
     // Pull the renewal window from the CA for the cert we just issued
     // and stamp it onto the row. The renewal task uses this in
     // preference to the fixed 1/3-lifetime threshold. Failure here is
@@ -349,8 +349,7 @@ fn build_cert_identifier(parsed: &parse::ParsedChain) -> Option<CertificateIdent
 /// 8555 §7.3.2) and only then is the persisted email rotated. A failed
 /// update logs and proceeds with the existing email so issuance is
 /// never blocked on a contact-only change.
-// r[impl tls.acme.account.persist]
-// r[impl tls.acme.account.contact-update]
+// spec: TLS#acme-accounts-and-settings
 async fn load_or_create_account(
     db: &DbHandle,
     cipher: &Cipher,

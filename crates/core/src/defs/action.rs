@@ -7,12 +7,12 @@ use siphasher::sip::SipHasher13;
 
 use super::install::ParamDef;
 
-// l[impl action.option-params]
+// spec: ACN#param-schemas
 #[derive(Debug, Clone)]
 pub struct ActionDef {
     pub name: ActionName,
     pub description: Option<String>,
-    // l[impl action.schedule]
+    // spec: ACN#scheduled-actions
     pub schedules: Vec<String>,
     pub params: BTreeMap<ParamName, ParamDef>,
 }
@@ -24,7 +24,7 @@ pub struct ActionDef {
 /// Both the algorithm and the byte stream are fixed here rather than left to
 /// `std::hash`, whose `DefaultHasher` makes no promise across releases: a
 /// toolchain change must never move an `H` schedule.
-// l[impl action.schedule]
+// spec: ACN#scheduled-actions
 pub fn schedule_hash(app_name: &AppName, action_name: &ActionName) -> u64 {
     let mut hasher = SipHasher13::new();
     for name in [app_name.as_str(), action_name.as_str()] {
@@ -66,7 +66,7 @@ fn cron_parse_options(app_name: &AppName, action_name: &ActionName) -> cronexpr:
     opts
 }
 
-// l[impl action.type]
+// spec: ACN#action-declaration
 #[derive(Debug, Clone)]
 pub struct Action {
     pub name: ActionName,
@@ -83,8 +83,8 @@ impl CustomType for Action {
     fn build(mut builder: TypeBuilder<Self>) {
         builder
             .with_name("Action")
-            // l[impl action.schedule]
-            // r[impl schedule.start-reject]
+            // spec: ACN#scheduled-actions
+            // spec: SCHED#start-action
             .with_fn(
                 "on_schedule",
                 |this: &mut Self, expr: &str| -> Result<Self, Box<EvalAltResult>> {
@@ -97,7 +97,7 @@ impl CustomType for Action {
                     Ok(this.clone())
                 },
             )
-            // l[impl action.call]
+            // spec: ACN#action-invocation
             // The Rhai engine special-cases `.call(...)` for function-pointer
             // dispatch and intercepts it before user-registered methods are
             // looked up (see make_method_call in rhai/src/func/call.rs), so

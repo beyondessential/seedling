@@ -7,7 +7,7 @@ use super::super::action::ShellDef;
 use super::App;
 
 pub(super) fn on_app(builder: &mut TypeBuilder<App>) {
-    // l[impl action.shell]
+    // spec: ACN#shells
     builder
         .with_fn(
             "on_shell",
@@ -41,7 +41,7 @@ pub(super) fn on_app(builder: &mut TypeBuilder<App>) {
                 let shell_name = ShellName::new(name)
                     .map_err(|e| -> Box<EvalAltResult> { e.to_string().into() })?;
                 let desc = super::extract_description(&options)?;
-                // l[impl action.option-params]
+                // spec: ACN#param-schemas
                 let params = parse_shell_params(&options)?;
                 let name_for_insert = shell_name.clone();
                 this.def.rcu(|d| {

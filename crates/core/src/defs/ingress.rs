@@ -20,7 +20,7 @@ pub struct IngressDef {
     pub dtls: bool,
     pub http_terminate: Option<HttpTermination>,
     pub redirect: Option<RedirectDef>,
-    // l[impl bsl.resource.description]
+    // spec: BSL#descriptions
     pub description: Option<String>,
 }
 
@@ -36,7 +36,7 @@ pub struct RedirectDef {
     pub code: u16,
 }
 
-// l[impl ingress.type]
+// spec: ING#declaration
 #[derive(Debug, Clone)]
 pub struct Ingress {
     pub name: ResourceName,
@@ -46,7 +46,7 @@ pub struct Ingress {
 }
 
 impl super::Freezable for Ingress {
-    // l[impl app.resources.context.immutable]
+    // spec: APP#static-resource-immutability
     fn is_frozen(&self) -> bool {
         self.frozen || is_in_action_closure()
     }
@@ -60,14 +60,14 @@ impl Ingress {
         // another case, the hostname would be one no handshake ever names, and
         // every decision made for it would be made for a name nothing asks
         // about.
-        // l[impl ingress.hostname]
+        // spec: ING#hostnames
         let hostname = hostname.to_ascii_lowercase();
         // The ingress's resource name is its (hostname, port) tuple,
         // not the underlying service's name: a single service is
         // allowed multiple ingresses (different hostnames, redirect
         // settings, ports), and they need distinct identities so the
         // app's resource map doesn't collapse them.
-        // l[impl ingress.type]
+        // spec: ING#declaration
         let name: ResourceName = Arc::new(ingress_resource_name(&hostname, port));
         Self {
             name,
@@ -113,7 +113,7 @@ fn require_https(def: &IngressDef) -> Result<(), Box<EvalAltResult>> {
 /// accepted; everything else throws so a script that asks for, say,
 /// `Terminate.Https` with `Output.Tcp` doesn't silently produce a
 /// nonsensical ingress.
-// l[impl ingress.termination]
+// spec: ING#termination
 fn apply_termination(
     def: &mut IngressDef,
     terminate: Terminate,
@@ -159,7 +159,7 @@ impl CustomType for Ingress {
     fn build(mut builder: TypeBuilder<Self>) {
         builder
             .with_name("Ingress")
-            // l[impl ingress.termination]
+            // spec: ING#termination
             .with_fn(
                 "tls",
                 |this: &mut Self,
@@ -173,7 +173,7 @@ impl CustomType for Ingress {
                     Ok(this.clone())
                 },
             )
-            // l[impl ingress.redirect]
+            // spec: ING#redirect-to-https
             .with_fn(
                 "redirect",
                 |this: &mut Self| -> Result<Ingress, Box<EvalAltResult>> {
@@ -202,7 +202,7 @@ impl CustomType for Ingress {
                     this.ensure_unfrozen()?;
                     let port = Port::new(port)?;
                     require_https(&this.def.lock())?;
-                    // l[impl ingress.redirect] — a redirect to a non-3xx code
+                    // spec: ING#redirect-to-https — a redirect to a non-3xx code
                     // is not a redirect, and the unchecked cast turned 65843
                     // into a 307 rather than an error.
                     let code = take_int_in_range::<u16>("redirect code", code, 300..=399)?;
@@ -210,9 +210,9 @@ impl CustomType for Ingress {
                     Ok(this.clone())
                 },
             )
-            // l[impl ingress.service]
+            // spec: ING#declaration
             .with_fn("service", |this: &mut Self| this.service.clone())
-            // l[impl bsl.resource.description]
+            // spec: BSL#descriptions
             .with_fn(
                 "description",
                 |this: &mut Self, desc: &str| -> Result<Ingress, Box<EvalAltResult>> {

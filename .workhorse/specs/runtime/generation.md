@@ -43,15 +43,15 @@ The runtime MUST keep a generation history for each app, holding one entry for e
 | generation | every entry | the generation number |
 | created | every entry | when the generation was created |
 | kind | every entry | `register`, `script_update`, `param_set` or `param_unset` |
-| bundle | every entry | the [content hash](rule:i/definition.content-hash) of the definition bundle current at this generation |
-| provenance | `register` and `script_update` | the [provenance](rule:i/definition.provenance) of the definition this generation installed |
+| bundle | every entry | the [content hash](../interface/definitions.md#content-hash-computation) of the definition bundle current at this generation |
+| provenance | `register` and `script_update` | the [provenance](../interface/definitions.md#provenance-reporting) of the definition this generation installed |
 | parameter | `param_set`, `param_unset`, and a `script_update` that changed a parameter alongside its definition | the name of the parameter changed |
 | previous value | every entry with a parameter | the parameter's value before the change, or none if it was unset |
 | new value | every entry with a parameter | the parameter's value after the change, or none if the change unset it |
 | operation | an entry whose change triggered a lifecycle operation | the operation's identity |
 | outcome | an entry with an operation | `pending` while the operation runs or waits, then `succeeded`, or `failed` with details |
 
-Values of a secret parameter are protected in history entries as [secret history](rule:r/secret.history) specifies.
+Values of a secret parameter are protected in history entries as [secret history](secrets.md#generation-history) specifies.
 
 ## Bundle storage
 
@@ -70,7 +70,7 @@ The runtime MUST be able to reconstruct an app's resource graph as it was at any
 If any recorded value needed for step 2 cannot be read, reconstruction MUST fail.
 The runtime MUST NOT treat an unreadable value as unset.
 
-The runtime MUST reconstruct the previous generation to supply the `old` argument of an [`on_change` handler](rule:l/param.on-change.old).
+The runtime MUST reconstruct the previous generation to supply the `old` argument of an [`on_change` handler](../language/parameter.md#change-handlers).
 
 ## Lineage
 

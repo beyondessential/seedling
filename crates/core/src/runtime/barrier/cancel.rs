@@ -13,7 +13,7 @@ use parking_lot::{Condvar, Mutex};
 /// Uses a `parking_lot::Condvar` rather than `tokio::sync::Notify` so that
 /// the blocking lifecycle loop (which runs on a `spawn_blocking` thread) can
 /// wait on it without bouncing through an async runtime.
-// r[impl operation.cancel]
+// spec: OPS#cancellation
 #[derive(Debug)]
 pub struct CancelToken {
     requested: AtomicBool,

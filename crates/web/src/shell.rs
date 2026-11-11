@@ -84,8 +84,8 @@ impl Drop for ShellSessionGuard {
     }
 }
 
-// w[routes.shells]
-// w[shells.wire]
+// UI#shells
+// WEB#shell-relay
 /// Handle a `/shells/start` request from the browser.
 ///
 /// Opens the shell session on the daemon using the shared connection, wires up
@@ -227,7 +227,7 @@ pub async fn handle_shell_start(
     };
 
     // Task D: daemon bidi recv → accumulate exit frame → forward to browser bidi.
-    // w[impl shells.exit]
+    // spec: WEB#shell-relay
     let exit_relay = async {
         let mut exit_buf = Vec::with_capacity(64);
         let mut byte = [0u8; 1];
@@ -261,13 +261,13 @@ pub async fn handle_shell_start(
 mod tests {
     use super::is_complete_exit_frame;
 
-    // w[verify shells.exit]
+    // spec: WEB#shell-relay
     #[test]
     fn a_newline_terminated_frame_counts_as_an_exit() {
         assert!(is_complete_exit_frame(b"{\"exit_code\":0}\n"));
     }
 
-    // w[verify shells.exit]
+    // spec: WEB#shell-relay
     // This is the case the cleanup guard exists for: the relay reported a
     // constant true, so it never fired.
     #[test]
@@ -275,7 +275,7 @@ mod tests {
         assert!(!is_complete_exit_frame(b""));
     }
 
-    // w[verify shells.exit]
+    // spec: WEB#shell-relay
     #[test]
     fn a_truncated_frame_does_not_count_as_an_exit() {
         assert!(!is_complete_exit_frame(b"{\"exit_code\":0}"));

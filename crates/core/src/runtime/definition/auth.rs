@@ -27,7 +27,7 @@ struct AuthEntry {
 
 /// The files searched for credentials, in the order the container engine
 /// searches them (see containers-auth.json(5)).
-// i[impl definition.fetch.access]
+// spec: DEFN#registry-access
 pub fn auth_file_candidates() -> Vec<PathBuf> {
     if let Some(explicit) = std::env::var_os("REGISTRY_AUTH_FILE") {
         return vec![PathBuf::from(explicit)];
@@ -55,7 +55,7 @@ pub fn auth_file_candidates() -> Vec<PathBuf> {
 /// Credentials for `registry`/`repository` from the first file holding an
 /// entry for it. Entries keyed by a repository path take precedence over
 /// the registry's own entry, most specific first.
-// i[impl definition.fetch.access]
+// spec: DEFN#registry-access
 pub fn lookup(files: &[PathBuf], registry: &str, repository: &str) -> Credentials {
     for file in files {
         if let Some(creds) = lookup_in(file, registry, repository) {
@@ -120,7 +120,7 @@ mod tests {
         path
     }
 
-    // i[verify definition.fetch.access]
+    // spec: DEFN#registry-access
     #[test]
     fn most_specific_entry_in_the_first_file_wins() {
         let dir = tempfile::tempdir().unwrap();

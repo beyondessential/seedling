@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::runtime::db::Db;
 
-// r[impl ingress.site.attachment]
+// spec: SITE#attachments
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SiteIngressAttachment {
     pub site_ingress: SiteIngressName,
@@ -201,7 +201,7 @@ fn target_from_columns(
     }
 }
 
-// r[impl ingress.site.attachment]
+// spec: SITE#attachments
 pub fn attach(db: &Db, att: &SiteIngressAttachment) -> rusqlite::Result<()> {
     let cols = target_columns(&att.target);
     db.conn.execute(

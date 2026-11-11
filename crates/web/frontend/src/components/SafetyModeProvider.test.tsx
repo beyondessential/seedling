@@ -122,7 +122,7 @@ describe("SafetyModeProvider", () => {
     expect(sessionStorage.getItem(STORAGE_KEY)).toBeNull();
   });
 
-  // w[verify sessions.safety-mode]
+  // spec: UI#guarded-controls
   it("auto-reverts to read when the elevation window expires", () => {
     vi.useFakeTimers();
     renderProbe();

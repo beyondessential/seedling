@@ -179,7 +179,7 @@ export default function Apps() {
                         color={statusColor(app.status)}
                         size="small"
                       />
-                      {/* w[impl routes.apps.fault-count] */}
+                      {/* spec: UI#app-status */}
                       {app.fault_count !== undefined && app.fault_count > 0 && (
                         <Chip
                           label={`${app.fault_count} fault${app.fault_count === 1 ? "" : "s"}`}
@@ -188,7 +188,7 @@ export default function Apps() {
                           variant="outlined"
                         />
                       )}
-                      {/* w[impl routes.apps.priority] */}
+                      {/* spec: UI#priority */}
                       {/* Only a deliberately changed standing draws the eye;
                           an app at normal shows nothing. */}
                       {app.priority !== undefined && app.priority !== "normal" && (
@@ -240,7 +240,7 @@ export default function Apps() {
           </Box>
           {clientsError && <OiErrorAlert error={clientsError} />}
           <Stack spacing={3}>
-            {/* w[impl routes.sessions] */}
+            {/* spec: WEB#connected-clients */}
             {webSessions.length > 0 && (
               <Box>
                 <Typography variant="subtitle1" sx={{ mb: 1, fontWeight: 600 }}>
@@ -251,7 +251,7 @@ export default function Apps() {
                     <TableHead>
                       <TableRow>
                         <TableCell>User</TableCell>
-                        {/* w[impl sessions.safety-mode] */}
+                        {/* spec: UI#guarded-controls */}
                         <TableCell>Mode</TableCell>
                         <TableCell>Connected</TableCell>
                         <TableCell>Last seen</TableCell>
@@ -295,7 +295,7 @@ export default function Apps() {
               </Box>
             )}
 
-            {/* w[impl sessions.actor-activity] */}
+            {/* spec: WEB#connected-clients */}
             {actors.length > 0 && (
               <Box>
                 <Typography variant="subtitle1" sx={{ mb: 1, fontWeight: 600 }}>

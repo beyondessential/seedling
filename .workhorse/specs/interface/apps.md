@@ -23,10 +23,10 @@ The single summary state the server reports for a registered app.
 `/apps/create` registers an app.
 Its parameters are `app`, the app's name, and the members of a [definition source](definitions.md#definition-sources).
 
-The server MUST refuse the request with `requirements_invalid` if `app` breaks the [naming rules](../language/overview.md#names), is a [reserved name](rule:r/namespace.reserved), or names an app already registered.
+The server MUST refuse the request with `requirements_invalid` if `app` breaks the [naming rules](../language/overview.md#names), is a [reserved name](../runtime/identity.md#reserved-names), or names an app already registered.
 The server MUST refuse a definition that cannot be fetched, breaks the bundle rules, or does not support the running Seedling version, with the error [definitions](definitions.md) gives for it.
 
-Otherwise the server MUST register the app with the status `not_installed` and the [generation](../overview.md#generation) 1, recorded with a `register` [history entry](#generation-history), and MUST emit an `AppRegistered` [event](rule:i/event.types).
+Otherwise the server MUST register the app with the status `not_installed` and the [generation](../overview.md#generation) 1, recorded with a `register` [history entry](#generation-history), and MUST emit an `AppRegistered` [event](events.md#event-types).
 The result is `{ "generation": 1 }`.
 
 The server MUST register an app whose definition fails to parse or evaluate, and MUST file a `script_error` fault against it.
@@ -44,7 +44,7 @@ If a stored definition fails to evaluate when it is loaded, the runtime MUST fil
 
 Every registered app has a current generation.
 The runtime MUST bump it on each successful `/apps/update`, and on each [parameter set](params.md#parameter-set) or [unset](params.md#parameter-unset) that is not a no-op.
-The runtime MUST keep each generation's definition and parameter change durably for as long as the app is registered, as [generation history](rule:r/generation.history) specifies.
+The runtime MUST keep each generation's definition and parameter change durably for as long as the app is registered, as [generation history](../runtime/generation.md#history-entries) specifies.
 
 ## Update
 
@@ -73,7 +73,7 @@ Every piece of state derived from the definition MUST stay as it was, so that a 
 
 On success the server MUST clear any active `script_error` fault for the app, and MUST record the new definition and the parameter change together in a single generation bump, with a `script_update` history entry.
 
-If the update changes a parameter, the app is installed, and the new definition registers an `on_change` handler for the parameter that the change's [transition](rule:l/param.on-change.transitions) triggers, the server MUST schedule the handler as a [lifecycle operation](../overview.md#lifecycle-operation).
+If the update changes a parameter, the app is installed, and the new definition registers an `on_change` handler for the parameter that the change's [transition](../language/parameter.md#change-handlers) triggers, the server MUST schedule the handler as a [lifecycle operation](../overview.md#lifecycle-operation).
 The handler MUST run under the new definition, with `old` being the previous generation.
 An update that changes no parameter MUST NOT schedule a handler.
 
@@ -97,7 +97,7 @@ The server MUST refuse the request with `not_found` if the app is not registered
 It MUST refuse it with `operation_in_progress` if a lifecycle operation is running or queued for the app, an install of it is in progress, or a change to it is being applied.
 It MUST refuse it with `requirements_invalid` if the app is installed or uninstalling, with a `message` saying which.
 
-On success the server MUST discard the app's state as [deregistration](rule:r/deregister.purge) requires, MUST remove the app, and MUST emit an `AppDeregistered` event.
+On success the server MUST discard the app's state as [deregistration](../runtime/app-teardown.md#deregistration) requires, MUST remove the app, and MUST emit an `AppDeregistered` event.
 The result is `{}`.
 
 ## Listing
@@ -112,7 +112,7 @@ The result is `{}`.
 | `fault_count` | integer | the number of active faults filed against the app |
 | `priority` | string | the app's [app priority](app-control.md#app-priority) |
 | `has_stopped_resources` | boolean | whether any of the app's resources is [stopped](app-control.md#resource-stop) |
-| `description` | string or null | the [app description](rule:l/app.description) its definition declares |
+| `description` | string or null | the [app description](../language/app.md#app-description) its definition declares |
 
 If the server cannot read the state any member reports, it MUST refuse the request with `internal`.
 
@@ -132,7 +132,7 @@ A resource's desired lifecycle state is `Ready`, except that a [stopped](app-con
 
 A resource desired at `Ready` is at its desired state when at least one of its instances is `Ready` and none is `Pending`, `Scheduled` or `Running`.
 A resource desired at `Unscheduled` is at its desired state when none of its instances is `Pending`, `Scheduled`, `Running` or `Ready`.
-A job is at its desired state when none of its instances is `Pending`, `Scheduled` or `Running`, none has run and failed, and at least one is `Ready` or has run and succeeded, success being judged as [ensured termination](rule:l/rt.termination.ensure-success) judges it.
+A job is at its desired state when none of its instances is `Pending`, `Scheduled` or `Running`, none has run and failed, and at least one is `Ready` or has run and succeeded, success being judged as [ensured termination](../language/rt.md#termination) judges it.
 An instance that is `Terminating`, `Terminated` or `Unscheduled` otherwise counts neither for nor against its resource.
 A resource kind without a lifecycle state, such as an external service, is always at its desired state.
 
@@ -149,9 +149,9 @@ The server MUST refuse it with `not_found` if the app is not registered.
 | `generation` | integer | the app's current generation |
 | `definition` | object | the [provenance](definitions.md#provenance-reporting) of the current definition |
 | `description` | string or null | the app description its definition declares |
-| `canopy_type` | string or null | the [Canopy application type](rule:l/app.canopy-type) its definition declares |
+| `canopy_type` | string or null | the [Canopy application type](../language/app.md#canopy-type) its definition declares |
 | `priority` | string | the app's [app priority](app-control.md#app-priority) |
-| `faults` | array | the [fault records](rule:i/fault.record) of the app's active faults that concern no resource, such as a script error |
+| `faults` | array | the [fault records](faults.md#fault-records) of the app's active faults that concern no resource, such as a script error |
 | `resources` | array | the app's declared [resources](#resources) |
 | `dynamic_resources` | array | the [dynamic resources](#dynamic-resources) its lifecycle operations created |
 | `stopped_resources` | array | the app's stopped resources, as [resource stop](app-control.md#resource-stop) specifies |
@@ -188,9 +188,9 @@ Each instance has these members.
 | `display_name` | string | the instance's name, for a person to read |
 | `lifecycle` | string | its lifecycle state: `Pending`, `Scheduled`, `Running`, `Ready`, `Terminating`, `Terminated` or `Unscheduled` |
 | `transition_time` | string or null | the timestamp at which it entered that state |
-| `restarts` | object or null | a summary of its [restart history](rule:i/restart.record), or `null` where it has none or has no container |
+| `restarts` | object or null | a summary of its [restart history](faults.md#restart-records), or `null` where it has none or has no container |
 
-`restarts` has the members `recent`, the number of recovery restarts within the current [rate window](rule:i/restart.settings); `window_secs`, that window's length in seconds; `total`, the number of retained restart records; and `last_at`, `last_exit_code` and `last_exit_kind`, describing the most recent record.
+`restarts` has the members `recent`, the number of recovery restarts within the current [rate window](faults.md#crash-loop-settings); `window_secs`, that window's length in seconds; `total`, the number of retained restart records; and `last_at`, `last_exit_code` and `last_exit_kind`, describing the most recent record.
 
 `def` has a `kind` member, and the other members its kind gives.
 
@@ -228,7 +228,7 @@ Each is an array of strings in ascending order.
 
 ### Proxy settings
 
-A service's `balance` and `routes` report the proxy settings in force on it, after the [resolution](rule:l/service.http.proxy-settings.resolution) of route-level settings against service-level ones.
+A service's `balance` and `routes` report the proxy settings in force on it, after the [resolution](../language/http-service.md#resolution) of route-level settings against service-level ones.
 The server MUST report every setting resolved, so that a setting the app declared at neither level is reported at its default rather than as `null` or absent.
 
 `balance` reports the service-wide balancing policy, which governs every backend pool the service is served through.
@@ -246,7 +246,7 @@ A service that declares no route MUST report one route with the prefix `/`, so t
 | `balance` | object | as the service's `balance` |
 | `rate_limit` | object or null | `null` when the route is not rate limited; otherwise `max_events` (integer), `window` (seconds) and `shared` (boolean) |
 | `headers` | object | `request` and `response`, each with `replace` and `add` (objects of header name to array of values) and `remove` (array of header names) |
-| `redirect` | object or null | `null` for a route proxied to a pod; otherwise `to` (string) and `code` (integer), describing a [route redirect](rule:l/service.http.route.redirect) |
+| `redirect` | object or null | `null` for a route proxied to a pod; otherwise `to` (string) and `code` (integer), describing a [route redirect](../language/http-service.md#route-redirects) |
 
 A route is `served` when a pod binds its prefix, when it is a redirect, or when no pod binds any prefix of the service.
 
@@ -291,7 +291,7 @@ Each entry of `params` has these members.
 | `required` | boolean | whether the parameter is required |
 | `description` | string or null | its description |
 | `default_value` | string or null | its default value |
-| `secret` | boolean | its effective [secret flag](rule:l/param.schema.secret) |
+| `secret` | boolean | its effective [secret flag](../language/parameter.md#secret-parameters) |
 | `is_set` | boolean | whether it has a stored value |
 | `value` | string or null | its stored value, or `null` where it is unset or secret |
 
@@ -312,7 +312,7 @@ Each entry of `actions` has these members.
 | `description` | string or null | its description |
 | `kind` | string | `action`, `lifecycle`, `shell` or `install` |
 | `params` | object | for each parameter its schema declares, `{ "kind", "required", "description", "default_value", "secret" }` as in `params` above |
-| `schedules` | array | one `{ "cronexpr", "last_fired_at", "next_fire_at" }` for each [schedule](rule:l/action.schedule) attached to the action |
+| `schedules` | array | one `{ "cronexpr", "last_fired_at", "next_fire_at" }` for each [schedule](../language/action.md#scheduled-actions) attached to the action |
 
 The start action has the kind `lifecycle`, since the runtime drives it and an operator cannot invoke it.
 A definition's install action is reported with the name `install`, the kind `install`, a `null` description, and its install requirements as `params`.
@@ -341,7 +341,7 @@ It MUST be `null` while the closure runs between barriers.
 | --- | --- | --- |
 | `resources` | array of strings | the display names of the resources the barrier awaits |
 | `required_state` | string | the lifecycle state it awaits, such as `Ready` or `Terminated` |
-| `deadline_secs` | integer or null | its deadline in seconds, or `null` for a barrier [without one](rule:l/rt.started.ready-eventually) |
+| `deadline_secs` | integer or null | its deadline in seconds, or `null` for a barrier [without one](../language/rt.md#barriers) |
 | `elapsed_secs` | integer | the seconds since the barrier first suspended the operation |
 
 `elapsed_secs` MUST be measured from the time the barrier record holds, so that it counts across daemon restarts.

@@ -9,7 +9,7 @@ file none of these examples touch.
 
 Each entry gives the rule, the concrete failure that motivated it, and what to look for
 while writing or reviewing. Where a rule is mechanically checkable there is a script under
-`etc/ci/` and a spec item under `docs/spec/`.
+`etc/ci/` and a requirement under `.workhorse/specs/`.
 
 Add to this document when a mistake turns out to be a class rather than a one-off — when
 the same shape shows up in a second unrelated subsystem, or when a fix for one instance
@@ -45,7 +45,7 @@ If failure and a definite negative produce the same value, the type is wrong —
 Absence *confirmed by a successful query* is real evidence and must keep working; it is only
 the unknown case that must not masquerade as it.
 
-Spec: `r[observe.failure-not-absence]`, `r[reconciliation.absolute-state]`.
+Spec: [OBS#failed-observation](../.workhorse/specs/runtime/observation.md#failed-observation), [RCN#applying-absolute-state](../.workhorse/specs/runtime/reconciliation.md#applying-absolute-state).
 
 ## 2. On failure, observable state is unchanged
 
@@ -68,7 +68,7 @@ scaling decisions wiped, forwards torn down, schedules pruned. One `throw`.
   must not be applied when a contributor is missing from it. Absent is indistinguishable from
   deleted, and the containers are still running.
 
-Spec: `i[app.update]`, `i[app.register]`, `r[reconciliation.absolute-state]`.
+Spec: [APPS#update](../.workhorse/specs/interface/apps.md#update), [APPS#registration](../.workhorse/specs/interface/apps.md#registration), [RCN#applying-absolute-state](../.workhorse/specs/runtime/reconciliation.md#applying-absolute-state).
 
 ## 3. Match identities against the record, not the shape of a name
 
@@ -93,7 +93,7 @@ Derivation is not allocation. Deriving a pod subnet from eight bits of an instan
 every static Job the same one, because their ids are nil. If uniqueness matters, allocate and
 record the allocation.
 
-Spec: `r[app.uninstall.scope]`, `r[namespace.reserved]`, `r[infra.pod.subnet]`.
+Spec: [TRD#uninstall-scope](../.workhorse/specs/runtime/app-teardown.md#uninstall-scope), [IDN#reserved-names](../.workhorse/specs/runtime/identity.md#reserved-names), [INFRA#pod-networks](../.workhorse/specs/runtime/infrastructure.md#pod-networks).
 
 ## 4. Every fault names both halves of its lifecycle
 
@@ -116,7 +116,7 @@ was in memory; and a success for one volume clearing every *other* volume's fail
   trigger — name the lifecycle event that clears it).
 - The file set and the clear set for one tick must be disjoint per key.
 
-Spec: `r[fault.lifecycle]`.
+Spec: [FLT#filing-and-clearing](../.workhorse/specs/runtime/faults.md#filing-and-clearing).
 
 ## 5. Every retry needs a back-off and a way back
 
@@ -144,7 +144,7 @@ with nothing behind it.
   debounce state.
 
 Use `runtime::retry::RetryGate` for tick-driven pacing rather than hand-rolling counters.
-Spec: `r[actuate.image.retry]`, `i[forward.relay.resilience]`.
+Spec: [IMG#image-pulls](../.workhorse/specs/runtime/images.md#image-pulls), [FWD#relay-resilience](../.workhorse/specs/interface/port-forwards.md#relay-resilience).
 
 ## 6. Throw at the boundary; never coerce
 
@@ -158,7 +158,7 @@ and a `select` with no surviving criteria matches every resource in the app, so 
 
 Genuine type *dispatch* that ends in a throw is fine; silent defaulting is not.
 
-Enforced by `etc/ci/check-defs-coercion.sh`. Spec: `l[bsl.args.strict]`.
+Enforced by `etc/ci/check-defs-coercion.sh`. Spec: [BSL#arguments](../.workhorse/specs/language/overview.md#arguments).
 
 ## 7. Anything persisted for crash recovery answers four questions
 
@@ -182,8 +182,8 @@ write path and a read path that were each tested alone.
   recorded as fired while it existed only in an in-memory queue, so a restart lost it and the
   catch-up guarantee had nothing to catch up on.
 
-Enforced by `etc/ci/check-insert-or-replace.sh`. Spec: `r[barrier.replay.positional]`,
-`r[history.persist.partial-update]`.
+Enforced by `etc/ci/check-insert-or-replace.sh`. Spec: [SUSP#positional-replay](../.workhorse/specs/runtime/suspension.md#positional-replay),
+[HIST#durability](../.workhorse/specs/runtime/history.md#durability).
 
 ## 8. A wire contract belongs in one place
 
@@ -197,4 +197,4 @@ long-lived consumer.
 The per-caller variation is what happens *after* — retry policy, exit code, how the error is
 rendered. The handshake itself is not per-caller.
 
-Enforced by `etc/ci/check-accept-uni.sh`. Spec: `i[stream.subscribe]`.
+Enforced by `etc/ci/check-accept-uni.sh`. Spec: [WIRE#subscription-requests](../.workhorse/specs/interface/wire.md#subscription-requests).

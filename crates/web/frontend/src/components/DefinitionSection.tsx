@@ -38,7 +38,7 @@ function Row({ label, children }: { label: string; children: React.ReactNode }) 
 
 /** Where the app's current definition came from, and the way to replace it
  *  from a registry. */
-// w[impl routes.apps.definition]
+// spec: UI#app-definitions
 export function DefinitionSection({
   appName,
   definition,
@@ -125,7 +125,7 @@ export function DefinitionSection({
                 </Box>
               </Row>
             )}
-            {/* w[impl routes.apps.canopy-type] */}
+            {/* spec: UI#app-status */}
             {canopyType && (
               <Row label="Canopy type">
                 <Box component="span" sx={mono}>
@@ -136,7 +136,7 @@ export function DefinitionSection({
           </TableBody>
         </Table>
       </TableContainer>
-      {/* w[impl routes.apps.definition.fetch] */}
+      {/* spec: UI#app-definitions */}
       {moved && (
         <Alert
           severity="warning"

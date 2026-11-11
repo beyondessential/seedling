@@ -12,12 +12,12 @@ use crate::{
 
 /// Run autonomous image GC at most once per this interval. Matches the
 /// background GC cadence (see `runtime::gc::GcConfig::interval`).
-// r[impl image.gc]
+// spec: IMG#image-garbage-collection
 const GC_INTERVAL: Duration = Duration::from_secs(60 * 60);
 
 /// Retain images for this long without observed use before autonomous GC
 /// is allowed to remove them.
-// r[impl image.gc]
+// spec: IMG#image-garbage-collection
 const GC_UNUSED_RETAIN: Duration = Duration::from_secs(30 * 24 * 60 * 60);
 
 /// Per-reconciler scratch state for the image phase. Held in a tokio
@@ -37,9 +37,9 @@ impl ImagePhaseState {
 impl Reconciler {
     /// Refresh image bookkeeping and drive warm-image pulls. Called every
     /// tick after `ingest_pod_results`.
-    // r[impl actuate.image.warm]
-    // r[impl image.pin]
-    // r[impl image.track]
+    // spec: IMG#image-warming
+    // spec: IMG#pins
+    // spec: IMG#image-usage-tracking
     pub(super) async fn reconcile_images(&self, running_pods: impl Iterator<Item = &RunningPod>) {
         let driver = Arc::clone(&self.driver);
         let db = self.db.clone();
@@ -96,7 +96,7 @@ impl Reconciler {
             if let Err(e) = images::prune_tracking_except(db, &live_for_db) {
                 warn!(error = %e, "images: prune_tracking_except failed");
             }
-            // r[impl image.pin.expiry]
+            // spec: IMG#pin-expiry
             if let Err(e) = images::drop_expired_pins(db) {
                 warn!(error = %e, "images: drop_expired_pins failed");
             }
@@ -107,7 +107,7 @@ impl Reconciler {
             }
             // Mark-used and pin eviction: touching last_used_at and
             // clearing matching pins whenever we see an image actively used.
-            // r[impl image.pin]
+            // spec: IMG#pins
             for id in &observed_ids_for_db {
                 if let Err(e) = images::mark_used(db, id) {
                     warn!(image_id = %id, error = %e, "images: mark_used failed");
@@ -133,7 +133,7 @@ impl Reconciler {
         });
 
         // Drive pulls for every outstanding pin.
-        // r[impl actuate.image.warm]
+        // spec: IMG#image-warming
         self.drive_warm_pulls().await;
 
         // Autonomous GC, rate-limited.
@@ -179,7 +179,7 @@ impl Reconciler {
         }
     }
 
-    // r[impl image.gc]
+    // spec: IMG#image-garbage-collection
     async fn maybe_run_image_gc(&self, driver: &Arc<System>, db: &DbHandle) {
         let now = std::time::Instant::now();
         {

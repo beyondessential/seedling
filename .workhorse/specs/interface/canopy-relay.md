@@ -84,7 +84,7 @@ Relayed requests already in flight MUST be left to finish or reach their [deadli
 
 ## Relay streams
 
-To relay a request, the runtime opens a bidirectional stream, as [stream.canopy](rule:i/stream.canopy) specifies, on the connection holding the selected offer.
+To relay a request, the runtime opens a bidirectional stream, as [stream.canopy](wire.md#canopy-relay-streams) specifies, on the connection holding the selected offer.
 It writes a header line, then the request body as raw bytes, then finishes its side of the stream.
 
 | member | type | meaning |
@@ -137,7 +137,7 @@ An offering client SHOULD time out its own request to Canopy sooner, so that it 
 
 The runtime MUST have at most 8 relayed requests in flight at once.
 A further request MUST wait for one of them to finish before its stream is opened.
-Relay streams MUST NOT count against the [stream concurrency limit](rule:i/stream.concurrency-limit).
+Relay streams MUST NOT count against the [stream concurrency limit](wire.md#stream-limit).
 
 ## Unavailability
 
@@ -148,7 +148,7 @@ The runtime MUST NOT hold such a request for an offer that might appear later.
 
 `/canopy/settings/get` takes no parameters.
 Its result is `{ enabled, updated_at }`.
-`enabled` is the stored [Canopy access setting](rule:r/canopy.settings.enabled).
+`enabled` is the stored [Canopy access setting](../runtime/canopy-reporting.md#canopy-access).
 `updated_at` is when the setting was last written, as an integer count of seconds since 1970-01-01T00:00:00Z, or `0` if it never has been.
 
 `/canopy/settings/set` takes `enabled`, a boolean, and turns Canopy access on or off.
@@ -165,7 +165,7 @@ The result is `{}`.
 | `offers` | integer | the number of live offers |
 | `server_id` | string or null | the Canopy server identifier last resolved for the host, `null` if none has been |
 | `last_report` | object or null | the outcome of the latest status report, `null` if none has been attempted |
-| `applications` | array | one object per app [reported as a Canopy application](rule:r/canopy.app.key), ordered by app name |
+| `applications` | array | one object per app [reported as a Canopy application](../runtime/canopy-reporting.md#applications), ordered by app name |
 
 `offer` carries these members.
 

@@ -8,7 +8,7 @@ Applies to how the [runtime](../overview.md#runtime) inspects the [host](../over
 
 ## Observations
 
-On each iteration of the [reconciliation loop](rule:r/reconciliation.loop), the runtime MUST observe each resource instance by inspecting the host, and MUST timestamp each fact it observes.
+On each iteration of the [reconciliation loop](reconciliation.md#reconciliation-loop), the runtime MUST observe each resource instance by inspecting the host, and MUST timestamp each fact it observes.
 
 ## Failed observation
 
@@ -61,14 +61,14 @@ For each hostname of a TLS-terminating ingress, the runtime MUST observe the sta
 | `valid` | an unexpired certificate is held and usable, and its expiry is observable |
 | `failed` | acquisition has failed, and the most recent error is observable |
 
-Certificate status determines whether an ingress is [`Ready`](rule:r/lifecycle.ingress) and whether an [`rt.warm_certs`](rule:l/rt.warm-certs) barrier is satisfied.
+Certificate status determines whether an ingress is [`Ready`](lifecycle.md#ingresses) and whether an [`rt.warm_certs`](../language/rt.md#certificate-warming) barrier is satisfied.
 
 ## Recording
 
-After each observation pass, the runtime MUST record the facts it observed in the [world observation history](rule:r/history.world), from which lifecycle states are derived and barriers decided.
+After each observation pass, the runtime MUST record the facts it observed in the [world observation history](history.md#world-observation-history), from which lifecycle states are derived and barriers decided.
 The runtime MUST NOT treat a fact as recorded unless recording it succeeded.
 The runtime SHOULD NOT record a fact again for an instance while it is unchanged since it was last recorded.
 
 The runtime MUST record a Service's network as created, and a backend as healthy, from the backends running when the Service's routes are built.
-The runtime MUST record an ingress as configured and ready only after a proxy configuration that includes it has been [applied](rule:r/reconciliation.absolute-state) successfully.
+The runtime MUST record an ingress as configured and ready only after a proxy configuration that includes it has been [applied](reconciliation.md#applying-absolute-state) successfully.
 For a resource whose desired state is `Unscheduled`, the runtime MUST record that it was sent the stop, and the removal and cleanup of its network or ingress.

@@ -37,10 +37,10 @@ The outcome of a superseded pull MUST NOT change the pacing of the pull that sup
 
 ## Image warming
 
-When an action closure calls [`rt.warm_images`](rule:l/rt.warm-images) with a selection containing container resources, the runtime MUST collect the distinct image references of those resources' containers and begin a pull for each one not present on the host.
+When an action closure calls [`rt.warm_images`](../language/rt.md#image-warming) with a selection containing container resources, the runtime MUST collect the distinct image references of those resources' containers and begin a pull for each one not present on the host.
 For each reference collected, the runtime MUST record a [pin](#pin) for the calling app, creating it if absent.
 
-The runtime MUST record each `rt.warm_images` call in the [action execution log](rule:r/history.action-log).
+The runtime MUST record each `rt.warm_images` call in the [action execution log](history.md#action-execution-log).
 A repeated call with the same selection MUST observe the images on the host and return at once when every selected image is present.
 
 ## Pins
@@ -102,7 +102,7 @@ Operators remove images sooner through the Operator Interface.
 ## Image discovery
 
 The runtime MUST provide a probe that evaluates an app's install handler, start handler, action handlers, shell handlers and parameter-change handlers, each with the app's current resource graph and a resolved parameter map.
-A probe MUST NOT change the host, the app's persisted state, the [action execution log](rule:r/history.action-log), the [autonomous operations log](rule:r/history.operations), the [world observation history](rule:r/history.world), or any pin.
+A probe MUST NOT change the host, the app's persisted state, the [action execution log](history.md#action-execution-log), the [autonomous operations log](history.md#autonomous-operations-log), the [world observation history](history.md#world-observation-history), or any pin.
 
 During a probe, the runtime MUST handle `rt.*` calls as follows:
 

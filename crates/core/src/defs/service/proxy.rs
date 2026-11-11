@@ -3,7 +3,7 @@
 //!
 //! Declared settings keep every field optional so that resolution can tell
 //! "the app asked for this value" from "the app said nothing", which is what
-//! [`l[service.http.proxy-settings.resolution]`] needs to fall back field by
+//! [`HTTP#resolution`] needs to fall back field by
 //! field. Resolved settings have no optionality left except compression being
 //! switched off entirely.
 
@@ -270,7 +270,7 @@ pub struct ResolvedRateLimit {
 /// names are. Keeping that in the type is what stops a route's
 /// `cache-control` from being treated as a different header than a service's
 /// `Cache-Control` and silently failing to override it.
-// l[impl service.http.headers.fields]
+// spec: HTTP#header-operations
 #[derive(Debug, Clone)]
 pub struct HeaderName(String);
 
@@ -331,7 +331,7 @@ impl HeaderName {
 ///
 /// Setting one corrupts the exchange rather than shaping it. Keep-alive, the
 /// one an app would otherwise legitimately reach for, is served without being
-/// asked for — see `r[ingress.persistent-connections]`.
+/// asked for — see `PRX#persistent-connections`.
 fn proxy_owned(name: &str) -> Option<&'static str> {
     const CONNECTION: &[&str] = &[
         "connection",
@@ -389,7 +389,7 @@ impl Ord for HeaderName {
 /// A name carries exactly one of these per direction once resolved, which is
 /// why declaring a second for the same name is refused rather than resolved by
 /// some order of application.
-// l[impl service.http.headers.fields]
+// spec: HTTP#header-operations
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum HeaderOp {
     /// Set the header to these values, discarding whatever the message carried.
@@ -437,7 +437,7 @@ impl HeaderRules {
     /// declared on one is refused, but an operation it inherited from the
     /// service is ignored rather than refused, and ignoring it means taking
     /// it back out here.
-    // l[impl service.http.route.redirect]
+    // spec: HTTP#route-redirects
     pub fn without(mut self, name: &str) -> Self {
         self.0.retain(|n, _| !n.as_str().eq_ignore_ascii_case(name));
         self
@@ -457,7 +457,7 @@ impl HeaderRules {
     /// A name takes one operation per direction. Two contradict each other and
     /// resolution has no order to settle them by, so the declaration is
     /// refused rather than one of them silently winning.
-    // l[impl service.http.headers.fields]
+    // spec: HTTP#header-operations
     fn set_unique(
         &mut self,
         name: HeaderName,
@@ -529,7 +529,7 @@ pub struct GroupedHeaderOps {
 }
 
 /// Header operations at one level, in both directions.
-// l[impl service.http.headers]
+// spec: HTTP#header-operations
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct HeaderSettings {
     pub request: HeaderRules,
@@ -544,7 +544,7 @@ impl HeaderSettings {
     /// map-shaped surface reads as a collection being added to rather than
     /// replaced. Per name, the later call wins — the same rule that settles a
     /// route against its service.
-    // l[impl service.http.headers]
+    // spec: HTTP#header-operations
     pub fn layer_over(&mut self, later: HeaderSettings) {
         self.request = layer_headers(&self.request, &later.request);
         self.response = layer_headers(&self.response, &later.response);
@@ -575,7 +575,7 @@ pub fn service_settings(
     }
 }
 
-// l[impl service.http.proxy-settings.resolution]
+// spec: HTTP#resolution
 /// Resolve one route's settings.
 ///
 /// Compression and balancing resolve field by field: each is taken from the
@@ -727,7 +727,7 @@ fn resolve_balance(service: &BalanceSettings, route: Option<&BalanceSettings>) -
 // BSL map parsing
 // ---------------------------------------------------------------------------
 
-// l[impl service.http.compress.fields]
+// spec: HTTP#compression
 pub(super) fn parse_compress(mut map: Map) -> Result<CompressSettings, Box<EvalAltResult>> {
     let encodings = match map.remove("encodings") {
         None => None,
@@ -797,7 +797,7 @@ pub(super) fn parse_compress(mut map: Map) -> Result<CompressSettings, Box<EvalA
     })
 }
 
-// l[impl service.balance]
+// spec: HTTP#balancing
 pub(super) fn parse_balance(mut map: Map) -> Result<BalanceSettings, Box<EvalAltResult>> {
     let policy = match map.remove("policy") {
         None => None,
@@ -831,7 +831,7 @@ pub(super) fn parse_balance(mut map: Map) -> Result<BalanceSettings, Box<EvalAlt
     })
 }
 
-// l[impl service.http.rate-limit.fields]
+// spec: HTTP#rate-limiting
 pub(super) fn parse_rate_limit(mut map: Map) -> Result<RateLimitSettings, Box<EvalAltResult>> {
     let max_events = map.remove("max_events");
     let window = map.remove("window");
@@ -887,7 +887,7 @@ pub(super) fn parse_rate_limit(mut map: Map) -> Result<RateLimitSettings, Box<Ev
     })
 }
 
-// l[impl service.http.headers]
+// spec: HTTP#header-operations
 pub(super) fn parse_headers(mut map: Map) -> Result<HeaderSettings, Box<EvalAltResult>> {
     let request = map.remove("request");
     let response = map.remove("response");
@@ -971,7 +971,7 @@ fn collect_valued(
 /// A value is a string, or an array of strings where the header is to carry
 /// several. `Set-Cookie` is the case that requires the array form, since
 /// several cookies cannot be folded into one header.
-// l[impl service.http.headers.fields]
+// spec: HTTP#header-operations
 fn parse_values(
     value: Dynamic,
     direction: &str,
@@ -1035,7 +1035,7 @@ fn parse_values(
 /// `Location` — and the names it answers to include its own environment. A
 /// value carrying one would reach the other side as something other than what
 /// the app declared, which is the opposite of applying it as declared.
-// l[impl service.http.headers.fields]
+// spec: HTTP#header-operations
 fn header_value(value: String, at: &str) -> Result<String, Box<EvalAltResult>> {
     if let Some(c) = value.chars().find(|c| c.is_ascii_control() && *c != '\t') {
         let named = match c {
@@ -1146,7 +1146,7 @@ const REDIRECT_CODES: [i64; 4] = [301, 302, 307, 308];
 
 /// One piece of a redirect target: text the app wrote, or a part of the
 /// request that carries over into it.
-// l[impl service.http.route.redirect]
+// spec: HTTP#route-redirects
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RedirectSegment {
     Literal(String),
@@ -1163,7 +1163,7 @@ pub enum RedirectSegment {
 /// The target is held parsed rather than as the string the app wrote, so a
 /// token that names nothing is settled where the error still names the line
 /// that wrote it instead of reaching a client as literal text.
-// l[impl service.http.route.redirect]
+// spec: HTTP#route-redirects
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RouteRedirect {
     pub target: Vec<RedirectSegment>,
@@ -1175,7 +1175,7 @@ impl RouteRedirect {
     ///
     /// What a token expands to is a property of each request, so the
     /// declaration is what there is to report.
-    // l[impl service.http.route.redirect]
+    // spec: HTTP#route-redirects
     pub fn target_text(&self) -> String {
         self.target
             .iter()
@@ -1188,7 +1188,7 @@ impl RouteRedirect {
     }
 }
 
-// l[impl service.http.route.redirect]
+// spec: HTTP#route-redirects
 fn redirect_code(code: i64) -> Result<u16, Box<EvalAltResult>> {
     if !REDIRECT_CODES.contains(&code) {
         return Err(
@@ -1204,7 +1204,7 @@ fn redirect_code(code: i64) -> Result<u16, Box<EvalAltResult>> {
 /// Moving a prefix and keeping everything under it is the common case, and
 /// spelling the tokens out on every such call would be ceremony around the
 /// thing almost every redirect means.
-// l[impl service.http.route.redirect]
+// spec: HTTP#route-redirects
 pub(super) fn parse_redirect_positional(
     to: &str,
     code: Option<i64>,
@@ -1226,7 +1226,7 @@ pub(super) fn parse_redirect_positional(
     build_redirect(&format!("{to}{TAIL_TOKEN}{QUERY_TOKEN}"), to, code)
 }
 
-// l[impl service.http.route.redirect]
+// spec: HTTP#route-redirects
 pub(super) fn parse_redirect_map(mut map: Map) -> Result<RouteRedirect, Box<EvalAltResult>> {
     let to = map.remove("to");
     let code = map.remove("code");
@@ -1260,7 +1260,7 @@ pub(super) fn parse_redirect_map(mut map: Map) -> Result<RouteRedirect, Box<Eval
 /// `written` is the target as the app wrote it, which the positional forms
 /// append to before parsing: an error naming the appended tokens would report
 /// text the script never contained.
-// l[impl service.http.route.redirect]
+// spec: HTTP#route-redirects
 fn build_redirect(to: &str, written: &str, code: u16) -> Result<RouteRedirect, Box<EvalAltResult>> {
     // Checked ahead of `header_value`'s own refusal so the error names the
     // tokens that do carry a request part over, rather than leaving a script
@@ -1349,7 +1349,7 @@ fn build_redirect(to: &str, written: &str, code: u16) -> Result<RouteRedirect, B
 }
 
 /// Split a target into literal text and the request parts named in it.
-// l[impl service.http.route.redirect]
+// spec: HTTP#route-redirects
 fn parse_redirect_target(
     to: &str,
     written: &str,
@@ -1404,7 +1404,7 @@ fn parse_redirect_target(
 /// the reconciler takes an inherited one back out, and the emitter writes the
 /// redirect's own value under it. Two of those agreeing by coincidence is how
 /// a service-level operation ends up displacing a redirect target.
-// l[impl service.http.route.redirect]
+// spec: HTTP#route-redirects
 pub const REDIRECT_OWNED_HEADER: &str = "Location";
 
 /// Refuse a setting declared on a route that is about to become a redirect.
@@ -1412,7 +1412,7 @@ pub const REDIRECT_OWNED_HEADER: &str = "Location";
 /// The mirror of [`refuse_on_redirect`], for the declaration order that puts
 /// the setting first. Both directions refuse, so a route reads the same
 /// whichever end of the chain the redirect sits at.
-// l[impl service.http.route.redirect]
+// spec: HTTP#route-redirects
 pub(super) fn refuse_settings_for_redirect(
     prefix: &str,
     settings: &ProxySettings,
@@ -1442,7 +1442,7 @@ pub(super) fn refuse_settings_for_redirect(
 /// redirect routes; written on the redirect itself it is a mistake worth
 /// naming, and naming it here is what keeps the line that wrote it in the
 /// error.
-// l[impl service.http.route.redirect]
+// spec: HTTP#route-redirects
 pub(super) fn refuse_on_redirect(prefix: &str, setting: &str) -> Box<EvalAltResult> {
     format!(
         "`{setting}` has nothing to act on at `{prefix}`, which is declared as a redirect \
@@ -1451,7 +1451,7 @@ pub(super) fn refuse_on_redirect(prefix: &str, setting: &str) -> Box<EvalAltResu
     .into()
 }
 
-// l[impl service.http.route.redirect]
+// spec: HTTP#route-redirects
 pub(super) fn refuse_request_headers_on_redirect(prefix: &str) -> Box<EvalAltResult> {
     format!(
         "headers `request` has nothing to shape at `{prefix}`, which is declared as a \
@@ -1460,7 +1460,7 @@ pub(super) fn refuse_request_headers_on_redirect(prefix: &str) -> Box<EvalAltRes
     .into()
 }
 
-// l[impl service.http.route.redirect]
+// spec: HTTP#route-redirects
 pub(super) fn refuse_location_on_redirect(prefix: &str) -> Box<EvalAltResult> {
     format!(
         "headers `response` operates on `{REDIRECT_OWNED_HEADER}` at `{prefix}`, which is declared as a \

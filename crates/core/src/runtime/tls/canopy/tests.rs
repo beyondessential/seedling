@@ -23,7 +23,7 @@ fn response(state: &str, usable: bool) -> CertificateResponse {
         .build()
 }
 
-// r[verify tls.canopy.outcomes]
+// spec: TCAN#answers
 #[test]
 fn a_usable_chain_is_issued() {
     let mut r = response("issued", true);
@@ -36,7 +36,7 @@ fn a_usable_chain_is_issued() {
     );
 }
 
-// r[verify tls.canopy.outcomes]
+// spec: TCAN#answers
 #[test]
 fn a_renewal_under_way_still_delivers_the_chain_in_hand() {
     let mut r = response("pending", true);
@@ -44,7 +44,7 @@ fn a_renewal_under_way_still_delivers_the_chain_in_hand() {
     assert!(matches!(classify_response(&r), Answer::Issued { .. }));
 }
 
-// r[verify tls.canopy.outcomes]
+// spec: TCAN#answers
 #[test]
 fn a_pending_order_is_pending() {
     assert_eq!(
@@ -53,7 +53,7 @@ fn a_pending_order_is_pending() {
     );
 }
 
-// r[verify tls.canopy.outcomes]
+// spec: TCAN#answers
 #[test]
 fn a_failed_order_carries_cannopys_reason_and_is_not_a_refusal() {
     let mut r = response("failed", false);
@@ -66,8 +66,8 @@ fn a_failed_order_carries_cannopys_reason_and_is_not_a_refusal() {
     );
 }
 
-// r[verify tls.canopy.outcomes]
-// r[verify tls.chain.refusal]
+// spec: TCAN#answers
+// spec: CHAIN#refusal-handling
 #[test]
 fn a_state_the_runtime_does_not_know_is_neither_pending_nor_a_refusal() {
     match classify_response(&response("quarantined", false)) {
@@ -83,7 +83,7 @@ fn a_state_the_runtime_does_not_know_is_neither_pending_nor_a_refusal() {
     }
 }
 
-// r[verify tls.canopy.revoked]
+// spec: TCAN#revocation
 #[test]
 fn revoked_and_condemned_keys_call_for_a_new_key() {
     let mut revoked = response("revoked", false);
@@ -123,8 +123,8 @@ fn from_elsewhere(status: u16, slug: &str) -> RelayFailure {
     }
 }
 
-// r[verify tls.canopy.outcomes]
-// r[verify tls.chain.refusal]
+// spec: TCAN#answers
+// spec: CHAIN#refusal-handling
 #[test]
 fn only_the_authoritys_own_no_is_a_refusal() {
     for failure in [
@@ -148,8 +148,8 @@ fn only_the_authoritys_own_no_is_a_refusal() {
     );
 }
 
-// r[verify tls.canopy.outcomes]
-// r[verify tls.chain.refusal]
+// spec: TCAN#answers
+// spec: CHAIN#refusal-handling
 #[test]
 fn trouble_that_may_pass_is_not_a_refusal() {
     for failure in [
@@ -179,8 +179,8 @@ fn trouble_that_may_pass_is_not_a_refusal() {
     }
 }
 
-// r[verify tls.canopy.outcomes]
-// r[verify tls.chain.refusal]
+// spec: TCAN#answers
+// spec: CHAIN#refusal-handling
 #[test]
 fn only_canopy_can_name_the_cause_of_a_refusal() {
     for slug in [
@@ -205,7 +205,7 @@ fn only_canopy_can_name_the_cause_of_a_refusal() {
     );
 }
 
-// r[verify tls.canopy.outcomes]
+// spec: TCAN#answers
 #[test]
 fn a_rejected_signing_request_is_the_runtimes_own_fault() {
     assert!(matches!(
@@ -214,7 +214,7 @@ fn a_rejected_signing_request_is_the_runtimes_own_fault() {
     ));
 }
 
-// r[verify tls.canopy.revoked]
+// spec: TCAN#revocation
 #[test]
 fn a_condemned_key_calls_for_a_new_one() {
     assert!(matches!(
@@ -392,9 +392,9 @@ fn attempts(db: &DbHandle) -> Vec<(AttemptOutcome, Option<i64>, Option<String>)>
     })
 }
 
-// r[verify tls.canopy.key]
-// r[verify tls.canopy.request]
-// r[verify tls.canopy.attempts]
+// spec: TCAN#keys
+// spec: TCAN#requests
+// spec: TCAN#attempt-log-entries
 #[tokio::test]
 async fn the_first_request_stores_a_key_and_opens_one_order() {
     let fake = Fake::new([Reply::Pending, Reply::Pending]);
@@ -430,9 +430,9 @@ async fn the_first_request_stores_a_key_and_opens_one_order() {
     assert_eq!(seen[0].app_type.as_deref(), Some("tamanu"));
 }
 
-// r[verify tls.canopy.collect]
-// r[verify tls.canopy.serve]
-// r[verify tls.canopy.attempts]
+// spec: TCAN#collection
+// spec: TCAN#serving-and-observation
+// spec: TCAN#attempt-log-entries
 #[tokio::test]
 async fn a_collected_chain_is_stored_and_served() {
     let n = now();
@@ -470,7 +470,7 @@ async fn a_collected_chain_is_stored_and_served() {
     assert!(chain_row(&db).is_none(), "the cycle is over");
 }
 
-// r[verify tls.canopy.attempts]
+// spec: TCAN#attempt-log-entries
 #[tokio::test]
 async fn a_chain_on_the_first_request_is_still_one_logged_attempt() {
     let n = now();
@@ -496,7 +496,7 @@ fn renewing(db: &DbHandle) -> Ask {
     }
 }
 
-// r[verify tls.canopy.collect]
+// spec: TCAN#collection
 #[tokio::test]
 async fn a_renewal_replaces_the_chain_under_the_same_key_once_it_lands() {
     let n = now();
@@ -537,7 +537,7 @@ async fn a_renewal_replaces_the_chain_under_the_same_key_once_it_lands() {
     assert_eq!(attempts(&db)[0].0, AttemptOutcome::Success);
 }
 
-// r[verify tls.canopy.key]
+// spec: TCAN#keys
 #[tokio::test]
 async fn a_chain_for_some_other_key_is_not_stored() {
     let fake = Fake::new([Reply::IssueForOtherKey]);
@@ -550,8 +550,8 @@ async fn a_chain_for_some_other_key_is_not_stored() {
     assert_eq!(canopy_rows(&db)[0].state, TlsCertState::CsrPending);
 }
 
-// r[verify tls.chain.refusal]
-// r[verify tls.canopy.attempts]
+// spec: CHAIN#refusal-handling
+// spec: TCAN#attempt-log-entries
 #[tokio::test]
 async fn a_refusal_moves_a_hostname_with_a_certificate_on_at_once() {
     let n = now();
@@ -576,7 +576,7 @@ async fn a_refusal_moves_a_hostname_with_a_certificate_on_at_once() {
     assert_eq!(log[0].0, AttemptOutcome::Failure, "the refusal is logged");
 }
 
-// r[verify tls.chain.no-certificate]
+// spec: CHAIN#hostnames-with-no-certificate
 #[tokio::test]
 async fn a_refusal_does_not_move_a_hostname_with_nothing_to_replace() {
     let fake = Fake::new([Reply::Fail(status(403, "name-not-entitled"))]);
@@ -591,7 +591,7 @@ async fn a_refusal_does_not_move_a_hostname_with_nothing_to_replace() {
     );
 }
 
-// r[verify tls.chain.refusal]
+// spec: CHAIN#refusal-handling
 #[tokio::test]
 async fn trouble_reaching_canopy_is_retried_and_leaves_no_attempt() {
     let fake = Fake::new([Reply::Fail(RelayFailure::Unreachable(
@@ -613,7 +613,7 @@ async fn trouble_reaching_canopy_is_retried_and_leaves_no_attempt() {
     );
 }
 
-// r[verify tls.canopy.outcomes]
+// spec: TCAN#answers
 #[tokio::test]
 async fn a_rejected_signing_request_is_not_asked_again_at_once() {
     let fake = Fake::new([Reply::Fail(status(400, "bad-request"))]);
@@ -623,7 +623,7 @@ async fn a_rejected_signing_request_is_not_asked_again_at_once() {
     assert!(chain_row(&db).unwrap().row.retry_not_before.is_some());
 }
 
-// r[verify tls.canopy.revoked]
+// spec: TCAN#revocation
 #[tokio::test]
 async fn a_revocation_replaces_the_key_and_opens_a_new_order() {
     let n = now();
@@ -668,7 +668,7 @@ async fn a_revocation_replaces_the_key_and_opens_a_new_order() {
     assert_ne!(seen[0].csr_der, seen[2].csr_der);
 }
 
-// r[verify tls.canopy.revoked]
+// spec: TCAN#revocation
 #[tokio::test]
 async fn a_revocation_learnt_from_a_report_replaces_the_key_without_a_collection() {
     let n = now();
@@ -734,8 +734,8 @@ async fn a_revocation_learnt_from_a_report_replaces_the_key_without_a_collection
     );
 }
 
-// r[verify tls.canopy.key]
-// r[verify tls.chain.ladder]
+// spec: TCAN#keys
+// spec: CHAIN#fall-through
 #[tokio::test]
 async fn a_restart_between_the_request_and_the_collection_finds_the_same_key_and_position() {
     let fake = Fake::new([
@@ -769,7 +769,7 @@ async fn a_restart_between_the_request_and_the_collection_finds_the_same_key_and
     assert_eq!(canopy_rows(&db).len(), 1);
 }
 
-// r[verify tls.cert.validation.san-coverage]
+// spec: TLS#coverage
 #[tokio::test]
 async fn a_chain_naming_more_than_was_asked_for_is_not_stored() {
     struct Wide(Fake);
@@ -819,7 +819,7 @@ async fn a_chain_naming_more_than_was_asked_for_is_not_stored() {
     );
 }
 
-// r[verify tls.canopy.attempts]
+// spec: TCAN#attempt-log-entries
 #[tokio::test]
 async fn an_order_is_one_attempt_even_when_its_position_is_rewritten_under_it() {
     let fake = Fake::new([Reply::Pending, Reply::Pending]);
@@ -851,7 +851,7 @@ async fn an_order_is_one_attempt_even_when_its_position_is_rewritten_under_it() 
     );
 }
 
-// r[verify tls.canopy.collect]
+// spec: TCAN#collection
 #[tokio::test]
 async fn a_chain_whose_validity_has_not_begun_is_not_stored() {
     let n = now();
@@ -868,7 +868,7 @@ async fn a_chain_whose_validity_has_not_begun_is_not_stored() {
     assert_eq!(canopy_rows(&db)[0].state, TlsCertState::CsrPending);
 }
 
-// r[verify tls.chain.no-certificate]
+// spec: CHAIN#hostnames-with-no-certificate
 #[tokio::test]
 async fn a_failed_order_waits_out_the_same_cadence_a_refusal_does() {
     let fake = Fake::new([Reply::OrderFailed("dns challenge timed out".to_owned())]);
@@ -883,7 +883,7 @@ async fn a_failed_order_waits_out_the_same_cadence_a_refusal_does() {
     assert_eq!(row.last_error.as_deref(), Some("dns challenge timed out"));
 }
 
-// r[verify tls.canopy.outcomes]
+// spec: TCAN#answers
 #[test]
 fn what_canopy_says_cannot_forge_a_log_line_or_run_off_the_screen() {
     let forged = RelayFailure::Status {
@@ -915,8 +915,8 @@ fn what_canopy_says_cannot_forge_a_log_line_or_run_off_the_screen() {
     assert!(!reason.chars().any(char::is_control), "{reason:?}");
 }
 
-// r[verify tls.canopy.attempts]
-// r[verify tls.cert.force-retry]
+// spec: TCAN#attempt-log-entries
+// spec: TLS#retry-blocks-and-retries
 #[tokio::test]
 async fn a_retry_while_an_order_is_open_does_not_strand_its_attempt() {
     let fake = Fake::new([Reply::Pending]);
@@ -947,7 +947,7 @@ async fn a_retry_while_an_order_is_open_does_not_strand_its_attempt() {
     );
 }
 
-// r[verify tls.canopy.revoked]
+// spec: TCAN#revocation
 #[tokio::test]
 async fn a_revocation_leaves_its_replacement_outstanding() {
     let n = now();
@@ -976,7 +976,7 @@ async fn a_revocation_leaves_its_replacement_outstanding() {
     );
 }
 
-// r[verify tls.cert.validation.san-coverage]
+// spec: TLS#coverage
 #[tokio::test]
 async fn the_names_of_a_certificate_that_was_not_asked_for_are_tidied_too() {
     struct Forging(Fake);
