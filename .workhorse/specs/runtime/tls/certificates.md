@@ -4,178 +4,356 @@ id: TLS
 
 # TLS certificates
 
-## TLS Certificate Strategy
+Applies to how the [runtime](../../overview.md#runtime) obtains, stores, selects and serves certificates for the hostnames of TLS-terminating ingresses.
 
-<!-- from runtime: TLS Certificate Strategy -->
+## Borrowed terms
 
-The runtime obtains and serves TLS certificates for hostnames declared by [TLS-terminating ingresses](rule:l/ingress.tls).
-Operators may, via the operator interface, override how a given hostname's certificate is obtained on a per-hostname basis.
-This section defines the available strategies and their contracts.
-The BSL surface is intentionally strategy-agnostic: scripts declare only that an ingress wants TLS for a hostname, never how the certificate is acquired.
+| term | meaning |
+| --- | --- |
+| ACME, ACME account, directory, order | as defined by [RFC 8555](https://www.rfc-editor.org/rfc/rfc8555) |
+| DNS-01, HTTP-01 | the ACME challenge types of RFC 8555 §8.4 and §8.3 |
+| renewal information, suggested window, certificate identifier | as defined by [RFC 9773](https://www.rfc-editor.org/rfc/rfc9773) §4.1 and §4.2 |
+| ACME profile | a named set of issuance parameters a CA offers, selected by an order's `profile` field, as defined by [draft-ietf-acme-profiles](https://datatracker.ietf.org/doc/draft-ietf-acme-profiles/) |
+| subject alternative name (SAN), validity window, `notBefore`, `notAfter` | as defined by [RFC 5280](https://www.rfc-editor.org/rfc/rfc5280) §4.2.1.6 and §4.1.2.5 |
+| self-issued | a certificate whose subject and issuer fields carry the same distinguished name, per RFC 5280 §6.1 |
+| certificate signing request (CSR) | a PKCS #10 certification request, per [RFC 2986](https://www.rfc-editor.org/rfc/rfc2986) |
+| PEM | the textual encoding of [RFC 7468](https://www.rfc-editor.org/rfc/rfc7468) |
+| SNI | the TLS Server Name Indication extension, per [RFC 6066](https://www.rfc-editor.org/rfc/rfc6066) §3 |
 
-> r[tls.strategy.default]
-> When no operator-defined strategy applies to a hostname declared by a TLS-terminating ingress, its certificate comes from the first strategy in the default chain that is available for it.
-> The chain is [Canopy](rule:r/tls.strategy.canopy), then a public ACME certificate using the HTTP-01 challenge.
-> Canopy is in the chain only for a hostname it [applies to](rule:r/tls.strategy.canopy); for any other public hostname the chain is HTTP-01 alone.
-> This is the default and applies to any hostname not bound to a different strategy.
-> For hostnames that no public CA can issue for — IP literals, single-label hostnames, and the `.localhost`, `.local`, `.internal` TLDs (the same set excluded from wildcard auto-binding in [tls.policy.wildcard](rule:r/tls.policy.wildcard)) — the chain is the proxy's internal CA alone, producing a self-signed certificate that the proxy serves directly without contacting any external authority.
-> Canopy is never asked for such a hostname.
-> A stored certificate that covers the hostname is not a step in the chain: it serves for as long as it ranks first under [tls.strategy.manual](rule:r/tls.strategy.manual), and the chain runs when it needs replacing, per [tls.chain.cycle](rule:r/tls.chain.cycle).
+## Terminology
 
-> r[tls.strategy.acme-dns]
-> Operators may bind a hostname or wildcard pattern to a [DNS provider](rule:r/tls.dns-provider.lifecycle); the runtime must drive ACME for any matching hostname using the DNS-01 challenge against the bound provider.
-> The runtime must perform the ACME flow itself rather than configuring the proxy to do so, so that DNS-provider credentials are not exposed to the proxy or its persistent configuration.
-> Every challenge record the runtime publishes for an issuance must be removed once the CA no longer needs it, whether the issuance succeeded or failed at any step, so that no record is left behind in the operator's zone.
+### Managed hostname
 
-> r[tls.policy.wildcard]
-> Policies may name a hostname pattern instead of an exact hostname.
-> Two pattern shapes must be supported: the catch-all `*`, and a left-anchored shell-glob-style subdomain wildcard `*.<suffix>` matching any hostname that ends in `.<suffix>` (and is not equal to `<suffix>` itself).
-> The wildcard covers multiple subdomain levels: `*.example.com` matches both `foo.example.com` and `a.b.example.com`. This is *not* the RFC 6125 DNS-wildcard semantic (which would match exactly one extra label); the runtime is matching operator policy, not a certificate's SAN, so the broader semantic lets a single rule cover an entire zone.
-> When several patterns match a hostname, the most-specific match wins: an exact pattern beats any wildcard, a longer `*.<suffix>` beats a shorter one, and `*` is least specific.
-> Operators that want to override a sub-zone may add a more-specific pattern (e.g. `*.internal.example.com` or `host.example.com`) alongside.
-> Wildcard patterns must not auto-bind hostnames that the proxy itself manages with an internal CA — IP literals, single-label hostnames, and the `.localhost`, `.local`, `.internal` TLDs — because no public CA can issue for them and DNS-01 has nowhere to put the challenge record.
-> An exact (non-wildcard) policy still applies to such hostnames so an operator can deliberately override.
+A hostname declared by a TLS-terminating ingress, per [ingress termination](rule:l/ingress.termination), of an [app](../../overview.md#app) whose status is anything other than `NotInstalled`.
 
-> r[tls.policy.auto-default]
-> When the operator configures the first DNS provider on a node and no `*` policy already exists, the runtime must automatically create a catch-all `*` policy bound to that provider with the `acme_dns` strategy.
-> The auto-policy is operator-mutable: it may be cleared, re-bound, or replaced like any other policy, and it must not be re-created on subsequent provider additions.
+### Internal name
 
-> r[tls.settings.contact-email]
-> The runtime must persist a single global operator contact email used whenever it registers an ACME account on the operator's behalf.
-> The setting must be readable and writable through the operator interface, take effect on the next renewal pass without restart, and default to empty.
-> Issuance and renewal that need to register a new ACME account must fail with a clear error when no contact email is configured.
+A hostname that is an IP address literal, has a single label, or is `localhost`, `local` or `internal` or ends in one of those labels.
+No public CA issues certificates for an internal name.
 
-> r[tls.settings.cert-profile]
-> The runtime must persist an optional global ACME profile name and forward it on every issuance order via the ACME profiles extension.
-> When unset, the runtime must omit the profile field so the CA selects its default profile (typically a ~90-day certificate at Let's Encrypt).
-> When set, every subsequent ACME-DNS order — first issuance, renewal, and operator-driven retry — must include that profile name; the CA chooses validity and any other profile-defined attributes accordingly. Let's Encrypt's `shortlived` profile, for example, yields ~6-day certificates, and the runtime's existing renewal threshold (1/3 of remaining lifetime, or RFC 9773 ARI when supplied) handles the resulting shorter renewal cadence without further configuration.
-> The setting must be readable and writable through the operator interface and take effect on the next renewal pass without restart.
+### Strategy
 
-> r[tls.cert.attempt-log]
-> The runtime must record every certificate-issuance attempt — successful or failed — in a durable log, scoped per hostname.
-> Each entry must capture the hostname, the trigger (`on_demand`, `manual`, or `renewal`), start and finish timestamps, the outcome (`pending`, `success`, or `failure`), the resulting certificate id (on success), and the error string (on failure).
-> The operator interface must expose this log so that an unsuccessful issuance is visible without having to inspect daemon logs.
+One way of obtaining a certificate for a hostname.
+The strategies are Canopy, defined in [TCAN](canopy.md); ACME HTTP-01 and the proxy's internal CA, both carried out by the ingress proxy; and ACME DNS-01, carried out by the runtime.
 
-> r[tls.cert.retry-block]
-> Operators may set a per-hostname retry block to pause runtime-driven issuance.
-> While a block is set, the issuance coordinator must skip the hostname.
-> The block persists across restarts and is removed only by explicit operator action (clear or operator-driven retry).
+### Policy
 
-> r[tls.cert.eager-issuance]
-> The runtime — not the proxy — must drive every certificate-issuance attempt for runtime-managed strategies.
-> The reconciler must hand each TLS-terminating ingress hostname to the issuance coordinator on every tick.
-> The coordinator must dedup in-flight requests, skip hostnames whose policy is neither `acme_dns` nor `canopy` and that are not on the default chain, skip hostnames that already have an active certificate and are not due under [tls.chain.cycle](rule:r/tls.chain.cycle), debounce after a recent failure, and run the rest in the background.
-> A hostname counts as in flight until every issuance running for it has finished, whether the reconciler or an operator started it, so an operator-triggered issuance finishing never lets the reconciler start a duplicate alongside a background one still running.
-> The cert-serving endpoint must remain a pure lookup: it must never trigger an issuance flow itself (see [tls.cert.serve](rule:r/tls.cert.serve)).
+An [operator](../../overview.md#operator)'s binding of a hostname or hostname pattern to a strategy.
 
-> r[tls.cert.force-retry]
-> Operator-driven retry must be expressible as a persistent state row keyed by hostname, so the request survives a daemon restart between the operator clicking retry and the reconciler picking it up.
-> The issuance coordinator must consume the row atomically at the start of an issuance run, bypassing the recent-failure debounce.
-> A successful issuance must remove the row; subsequent operator-driven retries write a fresh one.
+### Runtime-managed certificate
 
-> r[tls.acme.account.persist]
-> The runtime must persist ACME account state — at minimum the account private key and the URL returned by the directory's newAccount endpoint — for each ACME directory the runtime issues against, encrypted at rest using the [secret key](rule:r/secret.key).
-> All issuance against a given directory must reuse a single persisted account rather than creating a new one per strategy, hostname, or contact-email change.
+A certificate, with its private key, that the runtime stores and serves to the ingress proxy.
 
-> r[tls.acme.account.contact-update]
-> When the operator changes [tls.settings.contact-email](rule:r/tls.settings.contact-email) and a persisted account already exists for the directory, the runtime must update the contact information on the existing account (RFC 8555 §7.3.2) rather than registering a new account.
-> The persisted contact email must be updated to match only after the directory accepts the change; if the directory rejects the update, the runtime must continue using the existing account, log the failure, and leave the persisted email unchanged so a later attempt can retry.
+### Proxy-held certificate
 
-> r[tls.acme.renewal.auto]
-> The runtime must autonomously renew certificates it has issued via ACME (DNS-01 strategy) before they expire.
-> Renewal must be attempted while the certificate is still valid, with sufficient lead time that a transient failure does not cause expiry.
-> Successful renewal must replace the prior certificate atomically so that in-flight TLS handshakes are unaffected.
+A certificate the ingress proxy obtained itself through ACME HTTP-01 or its internal CA.
 
-> r[tls.cert.ari]
-> When the issuing CA advertises ACME Renewal Information (RFC 9773), the runtime should use the CA's suggested renewal window to schedule renewal in preference to its own fixed-fraction-of-lifetime heuristic.
-> The runtime must persist the suggested window alongside the certificate (start, end, and the timestamp at which it was last polled) and treat the certificate as due for renewal once the current time has reached the window's start.
-> When submitting a renewal order for a certificate whose predecessor's RFC 9773 identifier (authority key identifier plus serial) is available, the runtime must include that identifier in the order's `replaces` field so the CA can correlate the renewal.
-> If the CA does not support ARI or the lookup fails, the runtime must fall back to its fixed-fraction-of-lifetime renewal heuristic without surfacing the absence as an error.
+### Certificate label
 
-> r[tls.strategy.manual]
-> Operators may upload a PEM-encoded certificate chain and matching private key.
-> The runtime must auto-bind the uploaded cert to every hostname its SubjectAlternativeName list covers — literally for exact entries, and per RFC 6125 single-label rules for wildcard SANs — and cause the proxy to serve that exact pair for TLS handshakes whose SNI matches a covered hostname.
-> Auto-binding requires no per-hostname operator action: a `*.example.com` cert covers `foo.example.com` and `bar.example.com` as soon as it is uploaded; further hostnames added later are picked up automatically.
-> When more than one stored cert covers the same hostname, precedence goes first to a certificate inside its validity window, then to one that is not self-issued over one that is, then to one whose SAN list names the hostname exactly over one that only covers it by wildcard (RFC 6125 §6.4.4), and only then to the most recently created.
-> Self-issuance ranks above specificity because a certificate clients reject is no use for the hostname however precisely it names it: a wildcard they accept must be able to take over from a dedicated certificate they do not.
-> Self-issued means the leaf's issuer and subject are the same; the runtime builds no chain and consults no trust store, so this distinguishes a certificate an operator self-signed from one some CA issued, and says nothing about whether that CA is one any client trusts.
-> A wildcard accordingly serves every name it covers that has no better certificate of its own, so a wildcard obtained for one hostname is picked up by the others it covers without further operator action.
-> Were trust not ranked here at all, resolution would serve a certificate that [supersession](rule:r/tls.cert.supersede) had just refused to let retire anything, and the refusal would buy nothing.
-> The runtime does not auto-renew manual certs on its own; however, if an `acme_dns` policy applies to a covered hostname and the manual cert is past its renewal threshold, the runtime must initiate the normal ACME-DNS issuance flow so a renewable cert can take over before the manual cert expires.
+The hostname a runtime-managed certificate is stored under: for an operator upload, the first DNS name in its SAN set; for any other certificate, the hostname it was obtained for.
 
-> r[tls.csr.flow]
-> Operators may instruct the runtime to generate a keypair and a Certificate Signing Request for one or more hostnames, so that a single certificate can be requested for several names.
-> The runtime must:
->
-> - Generate the keypair on the server, store the private key encrypted at rest using the [secret key](rule:r/secret.key), and never expose it via any operator interface.
-> - Produce a PEM-encoded CSR whose Subject Alternative Name set is exactly the requested hostnames, and make the CSR retrievable via the operator interface for as long as the request is pending.
-> - Record the hostnames the request was made for and retain them once a certificate arrives, so an operator can see what was asked for alongside what was issued.
-> - Accept a signed certificate uploaded later, provided it matches the stored private key and passes the same validation as a manual upload.
-> - Bind that certificate to the hostnames its own SAN set covers, per [SAN coverage](rule:r/tls.cert.validation.san-coverage). A CA is free to sign a name set other than the one requested, so the requested hostnames do not determine what the accepted certificate serves or what it supersedes.
-> - Report an unmet request name by name: when the issued certificate does not cover one or more of the requested hostnames, the upload must warn that the request was not met and say which hostnames were missed, and each missed hostname must go on appearing in the [per-hostname rollup](rule:r/tls.cert.hostname-view) as having no active certificate for as long as an ingress declares it.
-> - Permit cancellation of a pending CSR by the operator, which must destroy the stored private key.
+### Renewal point
 
-> r[tls.csr.renew]
-> Operators may begin a CSR as the renewal of an active certificate the runtime cannot renew by itself, which is a manual upload or a CSR-derived certificate; a certificate of any other origin or state cannot be renewed this way.
-> Unless the operator names the hostnames, the renewal requests exactly the DNS names in the renewed certificate's own SAN set, wildcards included, and not the hostnames that certificate's own CSR requested.
-> A CA may sign a name set other than the one requested, typically widening a single name to a wildcard; the issued set is one that CA has already signed, and a wildcard in it goes on covering hostnames added after the renewal. An operator renewing through a CA that will not sign the wildcard again names the hostnames instead.
-> The renewal records the certificate it renews.
-> A certificate has at most one pending renewal: beginning another while one is pending is refused, and uploading or cancelling the pending one ends it.
-> When the renewal's certificate is uploaded, it retires the certificate it renews if it replaces it in full per [tls.cert.supersede](rule:r/tls.cert.supersede), whichever names the two certificates are labelled by.
-> Deleting the renewed certificate while its renewal is pending leaves the renewal pending, with nothing recorded for it to retire.
+The moment a certificate becomes due for replacement: the start of the suggested window its CA supplied through renewal information, or otherwise the moment one third of its validity window remains.
 
-> r[tls.dns-provider.lifecycle]
-> The runtime must provide named, separately addressable DNS-provider entries that hold the credentials needed for DNS-01 challenges.
-> Provider credentials must be stored encrypted at rest using the [secret key](rule:r/secret.key).
-> Multiple hostnames may reference the same provider entry.
-> Deletion of a provider entry must be refused while any hostname's strategy references it.
+### After-failure interval
 
-> r[tls.cert.metadata]
-> For every hostname declared by a TLS-terminating ingress, the runtime must surface to the operator interface: the active strategy, the certificate's issuer (when known), `notBefore`, `notAfter`, and the acquisition status as defined in [observe.ingress.certs](rule:r/observe.ingress.certs).
-> Metadata for certificates the proxy obtained itself (ACME HTTP-01 and its internal CA) is derived from the proxy's certificate cache; metadata for runtime-managed certificates (Canopy, ACME DNS-01, manual, CSR) is derived from the runtime's own certificate store.
+One hour, the least time the runtime waits after a failed or refused attempt before trying the same strategy for the same hostname again.
 
-> r[tls.cert.hostname-view]
-> The runtime must expose a per-hostname rollup, keyed by the set of TLS-terminating ingress hostnames currently declared by apps the runtime is actively managing — i.e. apps in any phase except `NotInstalled` — combining for each hostname the originating app(s), the resolved policy, the active certificate (if any), the latest issuance attempt's outcome and error, any operator retry block or queued operator retry, and an expected next-issuance time.
-> The set of in-scope hostnames must be computed from a single shared enumeration over the app registry; the issuance coordinator (driven by the reconciler), the expiring-cert fault sweep, and the operator interface rollup must all consult the same function so they cannot disagree about which hostnames the runtime owns. A hostname declared only by a `NotInstalled` app must not appear in any of them.
-> The rollup must be a *projection* of the same per-hostname decision the issuance coordinator and renewal scheduler use to decide what to act on; the operator interface, the reconciler-driven coordinator, and the renewal task must all consult one decision function over one DB snapshot, so what the operator sees and what the runtime does are structurally identical rather than separately maintained.
-> The next-issuance time accordingly follows the ARI suggested window when present (see [tls.cert.ari](rule:r/tls.cert.ari)), otherwise the same lifetime-fraction fallback the coordinator applies.
-> The rollup must support filtering to a single app so the same view can be embedded on per-app surfaces without re-implementing the rollup logic.
+## Origins
 
-> r[tls.cert.serve]
-> For runtime-managed certificates (ACME DNS-01, manual, and CSR-derived), the runtime must deliver certificate and key material to the ingress proxy through a mechanism that does not require including private key material in the proxy's persistent configuration or its restart-replay cache.
-> The proxy must be able to obtain the appropriate certificate by SNI hostname at TLS handshake time.
-> The serving endpoint must be a pure lookup: a stored cert returns 200 with PEM, an unknown hostname returns 204 (no content), and the runtime must never trigger an issuance flow from this path.
-> The cost of a lookup must grow with the stored certificates that could cover the requested hostname rather than with every certificate stored, and a hostname no stored certificate could cover must be answered without examining any certificate's contents.
-> Lookups share the one thread all of the runtime's database work runs on, and certificate history is kept indefinitely, so a lookup whose cost tracked the whole store would slow reconcile, the operator interface and issuance along with it.
-> A hostname whose stored certificate cannot be read, because the store could not be queried or the key it holds cannot be decrypted, returns 204 as well: the proxy reads anything else as the handshake failing, so an error answer would stop the hostname serving altogether for as long as the condition held. Issuance is the issuance coordinator's job (see [tls.cert.eager-issuance](rule:r/tls.cert.eager-issuance)).
-> A certificate outside its validity window must not be served: neither one whose `notAfter` has passed, nor one whose `notBefore` has not yet arrived, and neither may take precedence over a stored certificate that is currently valid and covers the hostname.
-> Storing a certificate ahead of its `notBefore` is how an operator stages a cutover (see [tls.cert.validation.expired](rule:r/tls.cert.validation.expired)), so serving it early would defeat the reason it was accepted.
-> A stored certificate whose expiry is unrecorded is not treated as expired, since that cannot be distinguished from one that has not been parsed.
+Every runtime-managed certificate records its origin.
 
-> r[tls.cert.validation.san-coverage]
-> A certificate covers a hostname when the leaf certificate's Subject Alternative Name DNS entries either contain that hostname literally or contain a wildcard entry that covers it under RFC 6125.
-> A wildcard SAN `*.example.com` covers exactly one additional left-most label (it covers `foo.example.com` but not `example.com` and not `a.b.example.com`).
-> Coverage is the only thing that binds a certificate to a hostname.
-> However a certificate reached the runtime — operator upload, externally-signed CSR, or ACME issuance — it must be served for exactly the hostnames its own SAN set covers.
-> The name an operator asked for is a record of the request, never a binding: a certificate whose SAN set omits it does not acquire that hostname by having been requested under it.
-> A certificate carrying no DNS SANs covers nothing and must be rejected on operator upload.
+| origin | meaning |
+| --- | --- |
+| `manual` | uploaded by an operator with its private key |
+| `csr` | signed externally against a CSR the runtime generated |
+| `acme_dns` | issued to the runtime through ACME DNS-01 |
+| `canopy` | issued by Canopy against a key the runtime holds |
+| `tailscale` | obtained from the host's Tailscale facility, per [Tailscale site ingresses](rule:r/ingress.site.tailscale) |
 
-> r[tls.cert.supersede]
-> A certificate supersedes another only when it replaces it in full: it [covers](rule:r/tls.cert.validation.san-coverage) every hostname the other serves, it is within its own validity window and lasts at least as long as the other, and it is not self-issued unless the one it replaces already was.
-> A certificate staged ahead of its own validity window is not replaced at all: it was stored for a cutover, and retiring it would mean the cutover never happens with nothing left to take over.
-> The self-issuance test is the leaf's issuer against its subject, not a chain built to a trust store, so it stops an operator's self-signed upload retiring a CA-issued certificate and does not stop a certificate from an untrusted CA doing so.
-> A certificate that does not meet the bar retires nothing, and whatever is serving a hostname goes on serving it.
-> This matters most on the CSR path, where the SAN set is chosen by the issuing CA rather than by the operator, so which certificates a new one is even a candidate to replace is outside the operator's control.
-> Where the runtime cannot read back the certificate it has just stored, it must report the failure rather than a count of nothing retired: the two are not the same outcome, and treating them alike leaves a replaced certificate active alongside its replacement with nothing said.
+The runtime cannot renew a `manual` or `csr` certificate by itself.
 
-> r[tls.cert.validation.self-signed]
-> The runtime must accept a self-signed leaf certificate (issuer DN equal to subject DN, no chain) on operator upload, but must annotate the stored certificate so that the operator interface can flag it.
+## Policies
 
-> r[tls.cert.validation.expired]
-> The runtime must reject an operator-supplied certificate whose `notAfter` is already in the past at upload time, and must accept (with annotation) a certificate whose `notBefore` is in the future.
+A managed hostname that no policy matches MUST obtain its certificate through the [default chain](chains.md#default-chain).
+A definition declares only that an ingress terminates TLS for a hostname, never which strategy obtains its certificate.
 
-> r[tls.fault.expiring]
-> For certificates that the runtime cannot autonomously renew (manual uploads and CSR-derived certificates), if `notAfter` is within fourteen days, the runtime must file a fault of kind `cert_expiring_soon` against each ingress that uses the affected hostname, identifying the hostname, the strategy, the expiry timestamp, and the certificate, and directing the operator to [renew it](rule:r/tls.csr.renew).
-> ACME-issued certificates are exempt — the proxy is responsible for autonomous renewal.
-> Canopy-issued certificates are exempt too: renewal is the chain's job, and a chain that cannot replace one is reported by [tls.canopy.fault](rule:r/tls.canopy.fault).
-> The fault is cleared automatically when a non-expiring certificate replaces the expiring one, or when no ingress references the hostname.
+The policies an operator can bind are ACME DNS-01 through a named DNS provider, and the [Canopy-only policy](canopy.md#canopy-only-policy).
+
+A policy names an exact hostname, the catch-all pattern `*`, or a subdomain pattern `*.<suffix>`.
+The runtime MUST refuse a policy whose name is none of these, or whose hostname or suffix is not a valid DNS name.
+An exact pattern MUST match a hostname equal to it, ignoring ASCII case.
+The pattern `*` MUST match every hostname.
+The pattern `*.<suffix>` MUST match every hostname that ends in `.<suffix>` and is longer than it, at any depth: `*.example.com` matches `foo.example.com` and `a.b.example.com`, and not `example.com`.
+
+> [!NOTE]
+> Policy patterns deliberately differ from certificate wildcards, which cover one label only (see [coverage](#coverage)).
+> A policy is operator configuration, and one pattern is meant to cover a whole zone.
+
+Where several policies match a hostname, the runtime MUST apply the most specific: an exact pattern before any wildcard, a longer `*.<suffix>` before a shorter one, and `*` last.
+A wildcard pattern MUST NOT match an internal name.
+An exact policy for an internal name MUST apply.
+
+When an operator adds a DNS provider while none exists and no `*` policy exists, the runtime MUST create a `*` policy binding ACME DNS-01 through that provider, in the same transaction as the provider.
+The runtime MUST NOT create that policy on any later addition of a provider.
+An operator MAY change or remove the created policy as any other.
+
+A policy change MUST take effect within the reconciliation that follows it, without any further operator step.
+The runtime MUST rebuild the proxy configuration to match.
+
+## DNS providers
+
+A DNS provider entry is a named set of credentials the runtime uses to publish DNS-01 challenge records.
+The runtime MUST store provider credentials encrypted at rest with the [secret key](rule:r/secret.key), and MUST NOT return them through any interface.
+Several policies MAY name the same provider.
+The runtime MUST refuse to delete a provider that any policy names.
+
+The provider kinds and their credentials are listed in [TLSM](../../interface/tls.md).
+
+## ACME accounts and settings
+
+The runtime issues ACME DNS-01 certificates against the Let's Encrypt production directory, `https://acme-v02.api.letsencrypt.org/directory`.
+
+The runtime MUST persist, for each directory it issues against, one ACME account: the account's private key and the account URL the directory returned.
+It MUST store the account private key encrypted at rest with the secret key.
+All issuance against a directory MUST use that one account, whatever the strategy, hostname or contact email.
+
+The runtime MUST persist one contact email for the host, empty until an operator sets it.
+While the contact email is empty, the runtime MUST NOT start an ACME DNS-01 issuance, and MUST report each issuance it declines for that reason as the `cert_issue_failed` fault of [ACME DNS-01 issuance](#acme-dns-01-issuance).
+The runtime MUST register a new account with the contact email as a `mailto:` contact.
+
+If the contact email differs from the one recorded for an existing account, the runtime MUST update the account's contacts at the directory, per RFC 8555 §7.3.2, before its next issuance against that directory.
+The runtime MUST record the new email against the account only once the directory has accepted the update.
+If the directory rejects the update, the runtime MUST go on using the account, MUST log the failure, and MUST leave the recorded email unchanged so that the next issuance tries again.
+
+The runtime MUST persist an optional ACME profile name for the host.
+While a profile name is set, every ACME DNS-01 order the runtime places MUST name it in the order's `profile` field.
+While none is set, the runtime MUST omit the field.
+
+> [!NOTE]
+> Let's Encrypt's `shortlived` profile issues certificates valid for about six days.
+> The renewal point is a fraction of each certificate's own validity window, so a shorter profile renews proportionally sooner without further configuration.
+
+A change to the contact email or the profile MUST take effect for the next issuance, without a restart.
+The operator surface for these settings is specified in [TLSM](../../interface/tls.md).
+
+## ACME DNS-01 issuance
+
+For a hostname bound to an ACME DNS-01 policy, the runtime MUST carry out the ACME flow itself, publishing challenge records through the policy's DNS provider.
+The runtime MUST NOT give DNS provider credentials to the ingress proxy or write them into its configuration.
+
+The runtime MUST publish each challenge record at the name RFC 8555 §8.4 specifies, which for a hostname `*.<base>` is the record name of `<base>`.
+The runtime MUST remove every challenge record it published for an issuance once the CA no longer needs it, whether the issuance succeeded or failed at any step.
+
+The runtime MUST generate a new key pair for each issuance, and SHOULD generate an ECDSA key on curve P-256.
+
+The runtime MUST NOT run two ACME orders at once.
+
+If an issuance fails, the runtime MUST file a fault of kind `cert_issue_failed` against the hostname, carrying the failure, and MUST log it.
+The runtime MUST NOT file a second such fault for a hostname that already has one.
+It MUST clear the fault when an issuance for the hostname succeeds.
+
+## Renewal
+
+The runtime MUST renew a certificate it holds an ACME DNS-01 policy for, once the certificate reaches its renewal point.
+A renewal MUST replace the earlier certificate without interrupting service: until the new certificate is stored, the earlier one MUST go on being served, and handshakes in progress MUST NOT fail because of the replacement.
+
+When a hostname under an ACME DNS-01 policy is served a certificate of any other origin, including a `manual` or `csr` certificate, the runtime MUST start ACME DNS-01 issuance for it once that certificate reaches its renewal point.
+
+After issuing a certificate, the runtime SHOULD fetch its renewal information if the directory offers it.
+While the runtime uses renewal information for a certificate, it MUST fetch it again on the schedule of RFC 9773 §4.3.
+The runtime MUST persist, with the certificate, the start and end of the suggested window and the time it last fetched the information.
+A certificate MUST become due at the start of its suggested window.
+If the directory offers no renewal information, or fetching it fails, the runtime MUST fall back to the one-third rule of the renewal point, and MUST NOT report the absence as a fault.
+
+When the certificate being replaced was issued through the same ACME account and the directory offers renewal information, the order MUST name that certificate's identifier in its `replaces` field, per RFC 9773 §5.
+Otherwise the order MUST omit the field.
+
+## Issuance
+
+The runtime, and never the ingress proxy, MUST decide when a runtime-managed certificate is obtained.
+On every reconciliation, the runtime MUST consider each managed hostname for issuance.
+
+The runtime MUST NOT start an issuance for a hostname while another for it is running, whether reconciliation or an operator started either.
+A hostname MUST count as having an issuance running until every issuance started for it has finished.
+
+The runtime MUST NOT start an issuance for a hostname that has a certificate before that certificate reaches its renewal point, unless an operator asks for one.
+A covering certificate staged to begin within the after-failure interval MUST count as the hostname's certificate for this purpose.
+A certificate staged to begin further ahead MUST NOT.
+
+After a failed attempt, the runtime MUST NOT start another for the same hostname until the after-failure interval has passed, unless an operator asks for one.
+
+The decision for each managed hostname, covering whether to issue now, when it is next due, and which strategy is responsible, MUST be made once, from one reading of the stored state.
+The issuance driven by reconciliation, the renewal of due certificates, the [operator's view](#hostname-state) and the [expiring-certificate fault](#expiring-certificates) MUST all act on that decision.
+The set of managed hostnames MUST likewise be computed once and shared by all of them.
+
+## Retry blocks and retries
+
+An operator MAY set a retry block on a hostname.
+While a block is set, the runtime MUST NOT start runtime-driven issuance for the hostname, whether by ACME DNS-01 or Canopy, and MUST refuse an operator's direct ACME DNS-01 issuance for it.
+A block MUST persist across restarts.
+The runtime MUST remove a block only when an operator clears it or asks for a retry of the hostname.
+
+An operator retry of a hostname MUST be recorded durably before the request that asked for it returns, so that it survives a restart.
+The runtime MUST consume a recorded retry exactly once, in the same transaction as the issuance or [cycle](chains.md#cycle) it starts.
+A retry MUST bypass the after-failure interval.
+
+## Attempt log
+
+The runtime MUST record every issuance attempt it makes, successful or not, in a durable log, one entry per attempt.
+
+| field | meaning |
+| --- | --- |
+| hostname | the hostname the attempt was for |
+| trigger | `on_demand` for issuance the runtime started itself, `manual` for an operator's direct issuance, `renewal` for a renewal |
+| started, finished | when the attempt began, and when it ended |
+| outcome | `pending` while it runs, then `success` or `failure` |
+| certificate | the certificate stored, on success |
+| error | the failure, on failure |
+
+The log is exposed through the operator interface, per [TLSM](../../interface/tls.md).
+
+## Coverage
+
+A certificate covers a hostname when a DNS name in its SAN set equals the hostname, ignoring ASCII case, or is a wildcard that matches it under [RFC 9525](https://www.rfc-editor.org/rfc/rfc9525) §6.3.
+A wildcard `*.example.com` covers exactly one further label: it covers `foo.example.com`, and covers neither `example.com` nor `a.b.example.com`.
+
+Coverage alone MUST decide which hostnames a certificate is served for.
+The runtime MUST serve a certificate for exactly the hostnames its own SAN set covers, however it obtained the certificate.
+A hostname that was requested for a certificate, or that the certificate is labelled with, MUST NOT be served the certificate unless the certificate covers it.
+
+## Certificate selection
+
+Where several active runtime-managed certificates cover a hostname, the runtime MUST select one by these criteria, each deciding only between certificates equal on every earlier one:
+
+1. one inside its validity window, over one outside it;
+2. one that is not self-issued, over one that is;
+3. one whose SAN set names the hostname exactly, over one that covers it only by a wildcard;
+4. the one most recently stored.
+
+> [!NOTE]
+> Self-issuance ranks above an exact name because a certificate clients reject is of no use however precisely it names the hostname.
+> A wildcard clients accept takes over from a dedicated certificate they would reject.
+> It also keeps selection in line with [supersession](#supersession), which never lets a self-issued certificate retire one that is not.
+
+The self-issued test MUST compare the leaf certificate's issuer and subject, and nothing else.
+The runtime MUST NOT build a chain or consult a trust store to rank certificates.
+
+A runtime-managed certificate needs no policy to be served: every hostname it covers MUST be able to select it from the moment it is stored, including hostnames declared later.
+
+## Supersession
+
+When the runtime stores a certificate, it MUST retire each other active certificate that the new one replaces in full, in the same transaction as storing it.
+The candidates are the active certificates with the same certificate label as the new one, and, for a [renewal CSR](#certificate-signing-requests), the certificate it renews.
+
+The new certificate replaces a candidate in full only when all of these hold:
+
+- the new certificate covers every DNS name in the candidate's SAN set;
+- the new certificate is inside its validity window;
+- the candidate is not staged ahead of its own validity window;
+- both expiries are recorded, and the new certificate's is no earlier than the candidate's;
+- the new certificate is not self-issued, or the candidate is self-issued too.
+
+A candidate that does not meet the bar MUST stay active.
+A candidate whose certificate the runtime cannot read MUST stay active.
+
+> [!NOTE]
+> On the CSR path the issuing CA chooses the SAN set, so which certificates a new one may replace is outside the operator's control.
+> The bar keeps such a certificate from retiring one that still serves names the new one does not.
+
+If the runtime cannot read back the certificate it has just stored, it MUST fail the store rather than report that nothing was retired.
+
+## Operator-supplied certificates
+
+An operator MAY upload a certificate chain in PEM with its private key.
+The runtime MUST reject an upload whose leaf certificate carries no DNS name in its SAN set.
+It MUST reject an upload whose private key does not match the leaf certificate's public key.
+It MUST reject an upload whose leaf `notAfter` has passed.
+It MUST accept a leaf whose `notBefore` is in the future, and MUST annotate it as not yet valid.
+It MUST accept a self-issued leaf, and MUST annotate it so that the operator interface can flag it.
+
+The runtime MUST store the private key encrypted at rest with the secret key, and MUST NOT return it through any interface.
+
+> [!NOTE]
+> Storing a certificate ahead of its `notBefore` is how an operator stages a cutover.
+
+## Certificate signing requests
+
+An operator MAY ask the runtime to generate a key pair and a CSR for one or more hostnames.
+The runtime MUST generate the key pair itself, MUST store the private key encrypted at rest with the secret key, and MUST NOT expose the private key through any interface.
+The CSR's SAN set MUST be exactly the requested hostnames.
+The runtime MUST make the CSR retrievable through the operator interface while the request is pending.
+It MUST record the requested hostnames, and keep them after a certificate arrives.
+
+The runtime MUST accept a certificate later uploaded for a pending request, provided its public key matches the stored key and it passes the checks on [operator-supplied certificates](#operator-supplied-certificates).
+It MUST serve that certificate for the hostnames it covers, which need not be the hostnames requested.
+If the certificate does not cover every requested hostname, the upload MUST warn that the request was not met and name each hostname missed.
+A missed hostname MUST go on showing as having no active certificate for as long as an ingress declares it and nothing else covers it.
+
+An operator MAY cancel a pending request.
+Cancelling MUST destroy the stored private key.
+The runtime MUST check the request is still pending in the same step as deleting it, so that a cancellation racing an upload either deletes a request that never activates or is refused.
+
+An operator MAY begin a request as the renewal of an active `manual` or `csr` certificate.
+The runtime MUST refuse a renewal of a certificate of any other origin or state.
+Unless the operator names hostnames, the renewal MUST request exactly the DNS names in the renewed certificate's SAN set, wildcards included.
+A renewal MUST record the certificate it renews.
+A certificate MUST have at most one pending renewal, and the runtime MUST refuse to begin another while one is pending.
+Uploading or cancelling the pending renewal ends it.
+
+When a renewal's certificate is uploaded, it MUST retire the renewed certificate if it replaces it in full under [supersession](#supersession), whatever labels the two carry.
+Deleting the renewed certificate while its renewal is pending MUST leave the renewal pending, with no certificate recorded for it to retire.
+
+> [!NOTE]
+> A CA may sign a different name set from the one requested, often widening a single name to a wildcard.
+> Renewing from the issued SAN set asks for a set the CA has already signed, and a wildcard in it goes on covering hostnames added later.
+> An operator renewing through a CA that will not sign the wildcard again names the hostnames instead.
+
+## Serving
+
+The runtime MUST deliver runtime-managed certificates and their keys to the ingress proxy on request, at handshake time, selected by the SNI hostname.
+The runtime MUST NOT write private key material into the proxy's persistent configuration or any state the proxy replays on restart.
+The runtime MUST compare the SNI hostname to managed hostnames ignoring ASCII case and any trailing dot.
+
+A lookup MUST only read stored state, and MUST NOT start an issuance.
+A lookup MUST answer with the [selected](#certificate-selection) certificate when one covers the hostname, and otherwise that it has none.
+A lookup MUST NOT answer with a certificate outside its validity window.
+A certificate whose expiry is unrecorded MUST NOT be treated as expired.
+
+If the stored certificate for a hostname cannot be read, because the store cannot be queried or the key cannot be decrypted, the lookup MUST answer that it has none, and MUST log the failure.
+
+> [!NOTE]
+> The proxy treats any answer other than a certificate or "none" as a failed handshake, so an error answer would stop a hostname being served for as long as the condition lasted.
+
+The cost of a lookup SHOULD grow with the number of stored certificates that could cover the hostname, not with the number stored.
+A lookup for a hostname that no stored certificate could cover SHOULD be answered without parsing any certificate.
+
+> [!NOTE]
+> Retired certificates are kept, so the store grows without bound over the life of a host.
+
+## Expiring certificates
+
+While the certificate selected for a managed hostname is a `manual` or `csr` certificate whose `notAfter` is within fourteen days, the runtime MUST hold a fault of kind `cert_expiring_soon` against each ingress declaring the hostname.
+The fault MUST name the hostname, the certificate's origin, its expiry and its identifier, and MUST direct the operator to [renew it](#certificate-signing-requests) or upload a replacement.
+The runtime MUST clear the fault when the certificate selected for the hostname is no longer such a certificate, or when the ingress no longer exists.
+
+Certificates of other origins are renewed by the runtime or by a strategy chain, and MUST NOT raise this fault.
+
+## Hostname state
+
+For each managed hostname, the runtime MUST make available to the [Operator Interface](../../overview.md#operator-interface):
+
+- the apps declaring it;
+- the policy that applies, and the pattern it matched;
+- the selected or proxy-held certificate, with its origin, issuer, `notBefore` and `notAfter`;
+- its acquisition status, per [ingress certificate observation](rule:r/observe.ingress.certs);
+- the outcome and error of its latest issuance attempt;
+- any retry block, and any recorded retry not yet consumed;
+- the time of its next expected issuance, and whether that time comes from a suggested window, the one-third rule, the after-failure interval, or an issuance due now.
+
+These values MUST be derived from the decision of [issuance](#issuance), so that the operator sees what the runtime will do.
+The view MUST be available filtered to the hostnames one app declares.
+A hostname declared only by an app whose status is `NotInstalled` MUST NOT appear.
+
+The wire form of the view is specified in [TLSM](../../interface/tls.md).
