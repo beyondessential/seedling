@@ -8,11 +8,11 @@
 //! dispatch before user-registered methods are consulted.
 //!
 //! # Spec
-//! - l[impl action.call]
-//! - r[impl operation.composition]
-//! - r[impl operation.composition.cycles]
-//! - r[impl operation.composition.params]
-//! - r[impl history.action-log.entries]
+//! - spec: ACN#action-invocation
+//! - spec: OPS#action-composition
+//! - spec: OPS#cycles
+//! - spec: OPS#sub-action-parameters
+//! - spec: HIST#action-calls
 
 use std::collections::BTreeMap;
 
@@ -26,8 +26,8 @@ use crate::runtime::action_params::{self, ParamValidationError, VolumeLookup};
 use crate::runtime::barrier::runtime::{RuntimeInstance, active_rt, is_in_action_closure};
 use crate::runtime::barrier::{ActionLogEntry, CallKind, ReplayMismatch};
 
-// l[impl action.call]
-// r[impl operation.composition]
+// spec: ACN#action-invocation
+// spec: OPS#action-composition
 /// Entry point for the Rhai-registered `Action.call(...)` function.
 ///
 /// Validates the supplied params against the action's declared schema,
@@ -40,7 +40,7 @@ pub fn call_action(
     action_name: &ActionName,
     params: Map,
 ) -> Result<(), Box<EvalAltResult>> {
-    // l[impl action.call]
+    // spec: ACN#action-invocation
     if !is_in_action_closure() {
         return Err(
             "Action.invoke() may only be called inside an action closure"
@@ -49,7 +49,7 @@ pub fn call_action(
         );
     }
 
-    // r[impl operation.composition.cycles]
+    // spec: OPS#cycles
     if let Some(stack) = action_call_stack()
         && stack.iter().any(|n| n == action_name)
     {
@@ -70,8 +70,8 @@ pub fn call_action(
             .into()
     })?;
 
-    // r[impl operation.composition.params]
-    // r[impl history.action-log.entries]
+    // spec: OPS#sub-action-parameters
+    // spec: HIST#action-calls
     let call_params = resolve_call_params(&rt, action_name, params)?;
 
     let _frame = SubActionFrame::enter(action_name.clone());
@@ -83,7 +83,7 @@ pub fn call_action(
     Ok(())
 }
 
-// r[impl operation.composition.params]
+// spec: OPS#sub-action-parameters
 /// Run the same validation pipeline the OI invocation path uses, then
 /// convert the result into a JSON map suitable for the log entry.
 fn validate_call_params(
@@ -125,8 +125,8 @@ fn action_schema(
         .map(|a| a.params.clone()))
 }
 
-// r[impl operation.composition.params]
-// r[impl history.action-log.entries]
+// spec: OPS#sub-action-parameters
+// spec: HIST#action-calls
 /// The params the called closure runs with, and the log entry recording the
 /// call.
 ///
@@ -138,7 +138,7 @@ fn action_schema(
 /// sub-action's schema, makes it fail on the next pass. The call was
 /// already committed with valid params by then, and the payload exists so
 /// that it can replay with the params it was committed with — which is also
-/// what `r[operation.composition.params]` requires the closure to observe.
+/// what `OPS#sub-action-parameters` requires the closure to observe.
 fn resolve_call_params(
     rt: &RuntimeInstance,
     action_name: &ActionName,
@@ -151,8 +151,8 @@ fn resolve_call_params(
         return validate_call_params(rt, action_name, params);
     };
 
-    // r[impl operation.composition.params.replay]
-    // r[impl barrier.replay.positional]
+    // spec: OPS#sub-action-parameters
+    // spec: SUSP#positional-replay
     // The recorded action name is a literal in the script, so unlike the
     // params it must match the log: a script edit that changes which
     // sub-action is called at this position is a divergence, not a replay.
@@ -200,7 +200,7 @@ fn resolve_call_params(
     Ok(validated)
 }
 
-// r[impl operation.composition.params.replay]
+// spec: OPS#sub-action-parameters
 /// Read the called action's name and its post-validation params back out of
 /// a committed `SubAction` entry.
 fn recover_recorded_params(
@@ -334,7 +334,7 @@ fn json_to_rhai_map(map: &JsonMap<String, JsonValue>) -> Map {
         .collect()
 }
 
-// l[impl action.params.volume]
+// spec: ACN#volume-params
 /// `RuntimeInstance`-backed `VolumeLookup` so script-side validation
 /// resolves volume references against the same site-volume registry
 /// the OI path uses.

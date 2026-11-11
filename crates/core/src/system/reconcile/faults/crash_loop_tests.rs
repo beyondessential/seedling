@@ -37,8 +37,8 @@ fn start_limit_loop(inst: &ResourceInstance) -> CrashLoop {
     }
 }
 
-// r[verify fault.crash-loop]
-// r[verify autonomous.restart.rate]
+// spec: FLT#workload-faults
+// spec: AUTO#crash-loop-detection
 #[test]
 fn the_rate_trigger_files_the_fault_and_observed_healthy_clears_it() {
     let db = Db::open_in_memory().expect("open");
@@ -64,8 +64,8 @@ fn the_rate_trigger_files_the_fault_and_observed_healthy_clears_it() {
     assert!(active(&db).is_empty());
 }
 
-// r[verify fault.crash-loop]
-// r[verify autonomous.restart.start-limit-hit]
+// spec: FLT#workload-faults
+// spec: AUTO#restart-pacing
 #[test]
 fn start_limit_hit_files_the_fault_below_the_rate_threshold() {
     let db = Db::open_in_memory().expect("open");
@@ -84,7 +84,7 @@ fn start_limit_hit_files_the_fault_below_the_rate_threshold() {
     );
 }
 
-// r[verify fault.crash-loop]
+// spec: FLT#workload-faults
 #[test]
 fn a_persisting_crash_loop_is_not_filed_twice() {
     let db = Db::open_in_memory().expect("open");
@@ -97,7 +97,7 @@ fn a_persisting_crash_loop_is_not_filed_twice() {
     assert_eq!(active(&db).len(), 1);
 }
 
-// r[verify fault.crash-loop]
+// spec: FLT#workload-faults
 #[test]
 fn clearing_is_scoped_to_the_instance_that_recovered() {
     let db = Db::open_in_memory().expect("open");

@@ -2,13 +2,13 @@ use std::collections::BTreeMap;
 
 use seedling_protocol::names::ParamName;
 
-// l[impl action.install]
+// spec: ACN#install-action
 #[derive(Debug, Clone)]
 pub struct InstallDef {
     pub requirements: BTreeMap<ParamName, ParamDef>,
 }
 
-// l[impl action.install.requirements]
+// spec: ACN#param-schemas
 #[derive(Debug, Clone, PartialEq)]
 pub struct ParamDef {
     pub kind: ParamKind,
@@ -18,12 +18,12 @@ pub struct ParamDef {
     /// What the script declared for `secret`, or `None` when it said nothing,
     /// in which case the kind decides. An explicit `false` is a declaration, so
     /// it is not the same as unset: it is how a password kind opts out.
-    // l[impl param.schema.secret]
+    // spec: PARAM#secret-parameters
     pub secret: Option<bool>,
 }
 
 impl ParamDef {
-    // l[impl param.schema.secret-from-kind]
+    // spec: PARAM#secret-parameters
     pub fn is_secret(&self) -> bool {
         self.secret.unwrap_or(matches!(
             self.kind,
@@ -34,23 +34,23 @@ impl ParamDef {
 
 #[derive(Debug, Default, Clone, Copy, PartialEq)]
 pub enum ParamKind {
-    // l[impl action.install.requirements.kind-text]
+    // spec: ACN#param-kinds
     #[default]
     Text,
-    // l[impl action.install.requirements.kind-multiline]
+    // spec: ACN#param-kinds
     Multiline,
-    // l[impl action.install.requirements.kind-email]
+    // spec: ACN#param-kinds
     Email,
-    // l[impl action.install.requirements.kind-password]
+    // spec: ACN#param-kinds
     Password,
-    // l[impl action.install.requirements.kind-weak-password]
+    // spec: ACN#param-kinds
     WeakPassword,
-    // l[impl action.install.requirements.kind-random]
+    // spec: ACN#param-kinds
     Random,
     /// A reference to a site volume; only valid in action and shell param
     /// schemas. The runtime resolves the operator-supplied volume reference
     /// to an operation-scoped binding before invoking the closure.
-    // l[impl action.params.volume]
+    // spec: ACN#volume-params
     Volume,
 }
 

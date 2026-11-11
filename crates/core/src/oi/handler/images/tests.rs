@@ -4,8 +4,8 @@ use crate::oi::test_support::TestOi;
 
 const REF: &str = "docker.io/library/nginx:1.29";
 
-// i[verify image.pull]
-// i[verify image.list]
+// spec: IMGM#pulling-an-image
+// spec: IMGM#listing-images
 #[test]
 fn pull_then_list_shows_image() {
     let oi = TestOi::new();
@@ -21,7 +21,7 @@ fn pull_then_list_shows_image() {
     assert!(images[0]["pinned_by"].as_array().unwrap().is_empty());
 }
 
-// i[verify image.pull]
+// spec: IMGM#pulling-an-image
 #[test]
 fn pull_rejects_empty_reference_and_unknown_app() {
     let oi = TestOi::new();
@@ -36,8 +36,8 @@ fn pull_rejects_empty_reference_and_unknown_app() {
     assert_eq!(code, "not_found");
 }
 
-// i[verify image.pull]
-// i[verify image.pin.list]
+// spec: IMGM#pulling-an-image
+// spec: IMGM#image-pins
 #[test]
 fn pull_for_app_creates_pin() {
     let oi = TestOi::with_app("demo");
@@ -57,7 +57,7 @@ fn pull_for_app_creates_pin() {
     assert_eq!(pinned_by[0], "demo");
 }
 
-// i[verify image.pin.list]
+// spec: IMGM#image-pins
 #[test]
 fn pins_list_filters_by_app_and_validates_name() {
     let oi = TestOi::with_app("demo");
@@ -75,7 +75,7 @@ fn pins_list_filters_by_app_and_validates_name() {
     assert_eq!(code, "requirements_invalid");
 }
 
-// i[verify image.pin.clear]
+// spec: IMGM#image-pins
 #[test]
 fn pins_clear_removes_pins_for_app() {
     let oi = TestOi::with_app("demo");
@@ -88,7 +88,7 @@ fn pins_clear_removes_pins_for_app() {
     assert!(result["pins"].as_array().unwrap().is_empty());
 }
 
-// i[verify image.remove]
+// spec: IMGM#removing-an-image
 #[test]
 fn remove_deletes_pulled_image() {
     let oi = TestOi::new();
@@ -101,7 +101,7 @@ fn remove_deletes_pulled_image() {
     assert!(result["images"].as_array().unwrap().is_empty());
 }
 
-// i[verify image.remove]
+// spec: IMGM#removing-an-image
 #[test]
 fn remove_unknown_image_is_not_found() {
     let oi = TestOi::new();
@@ -115,7 +115,7 @@ fn remove_unknown_image_is_not_found() {
     assert!(message.contains("not found locally"), "message: {message}");
 }
 
-// i[verify image.discover]
+// spec: IMGM#image-discovery
 #[test]
 fn discover_returns_empty_probe_for_handlerless_app() {
     let oi = TestOi::with_app("demo");

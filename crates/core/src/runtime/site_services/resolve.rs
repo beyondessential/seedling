@@ -9,7 +9,7 @@ use crate::runtime::nat64_prefix::synth_v4;
 /// upstream — but we still treat unparseable input as `Dns` of one final
 /// failed lookup, because the DB column carries no shape constraint and a
 /// migrated-in row could otherwise crash reconcile.
-// r[impl service.site.address]
+// spec: SITE#endpoint-addressing
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum HostKind {
     Ipv6(Ipv6Addr),
@@ -105,8 +105,8 @@ pub enum UnresolvedReason {
 }
 
 /// Resolve a single `remote_host` string into the data-plane address list (or
-/// a structured failure). See `r[service.site.address]`.
-// r[impl service.site.address]
+/// a structured failure). See `SITE#endpoint-addressing`.
+// spec: SITE#endpoint-addressing
 pub fn resolve_endpoint(host: &str, ctx: &ResolveCtx<'_>) -> ResolveOutcome {
     match HostKind::classify(host) {
         HostKind::Ipv6(v6) => ResolveOutcome::Routable(vec![v6]),
@@ -347,7 +347,7 @@ mod tests {
         ));
     }
 
-    // r[verify service.site.address]
+    // spec: SITE#endpoint-addressing
     // NAT64 is active in this case and cannot help: it translates v6 to v4,
     // and what is missing is v6 egress. Reporting `NeedsNat64ButDisabled`
     // told the operator to check a setting that was already on.

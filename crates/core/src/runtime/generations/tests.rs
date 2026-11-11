@@ -73,9 +73,7 @@ fn test_cipher() -> crate::runtime::secrets::Cipher {
     crate::runtime::secrets::Cipher::for_tests()
 }
 
-// r[verify generation.definition]
-// r[verify generation.bumps]
-// r[verify generation.monotonic]
+// spec: GEN#generation-numbers
 #[test]
 fn register_bumps_to_one() {
     let db = test_db();
@@ -100,7 +98,7 @@ fn generation_rows(db: &Db) -> i64 {
         .unwrap()
 }
 
-// r[verify generation.bumps]
+// spec: GEN#generation-numbers
 #[test]
 fn failed_script_update_leaves_no_generation_behind() {
     let db = test_db();
@@ -114,7 +112,7 @@ fn failed_script_update_leaves_no_generation_behind() {
     assert!(db.conn.is_autocommit(), "savepoint left open");
 }
 
-// r[verify generation.bumps]
+// spec: GEN#generation-numbers
 #[test]
 fn failed_param_bump_leaves_no_generation_behind() {
     let db = test_db();
@@ -130,7 +128,7 @@ fn failed_param_bump_leaves_no_generation_behind() {
     assert!(db.conn.is_autocommit(), "savepoint left open");
 }
 
-// r[verify generation.bumps]
+// spec: GEN#generation-numbers
 #[test]
 fn bump_inside_a_transaction_commits_with_it() {
     let db = test_db();
@@ -144,9 +142,8 @@ fn bump_inside_a_transaction_commits_with_it() {
     assert_eq!(current(&db, &app()).unwrap(), Some(1));
 }
 
-// r[verify generation.bumps]
-// r[verify generation.monotonic]
-// r[verify generation.script-storage]
+// spec: GEN#generation-numbers
+// spec: GEN#bundle-storage
 #[test]
 fn script_update_increments_generation_and_dedups_bodies() {
     let db = test_db();
@@ -162,7 +159,7 @@ fn script_update_increments_generation_and_dedups_bodies() {
     assert_eq!(count, 2, "identical script content should dedupe");
 }
 
-// r[verify generation.bumps]
+// spec: GEN#generation-numbers
 #[test]
 fn param_set_records_previous_value() {
     let db = test_db();
@@ -211,7 +208,7 @@ fn param_unset_records_previous_value_and_no_new() {
     assert!(!entry.previous_value_redacted);
 }
 
-// r[verify generation.reconstruction]
+// spec: GEN#reconstruction
 #[test]
 fn param_map_at_walks_history() {
     let db = test_db();
@@ -245,8 +242,7 @@ fn param_map_at_walks_history() {
     assert_eq!(m_now.get("other").map(|s| s.as_str()), Some("x"));
 }
 
-// r[verify generation.reconstruction]
-// r[verify generation.previous]
+// spec: GEN#reconstruction
 #[test]
 fn reconstruct_at_prior_generation_uses_old_script_and_params() {
     let db = test_db();
@@ -292,7 +288,7 @@ fn reconstruct_at_prior_generation_uses_old_script_and_params() {
     assert!(new_image.unwrap().contains("2.0"));
 }
 
-// r[verify generation.history]
+// spec: GEN#history-entries
 #[test]
 fn list_returns_descending_with_limit_and_before() {
     let db = test_db();
@@ -322,8 +318,8 @@ fn list_returns_descending_with_limit_and_before() {
     assert!(before_3.iter().all(|e| e.generation < 3));
 }
 
-// r[verify generation.deregister]
-// r[verify generation.script-storage]
+// spec: GEN#lineage
+// spec: GEN#bundle-storage
 #[test]
 fn delete_for_app_wipes_history_and_orphan_bodies() {
     let db = test_db();
@@ -375,7 +371,7 @@ fn attach_operation_and_record_outcome() {
     assert_eq!(entry.outcome_error.as_deref(), Some("boom"));
 }
 
-// r[verify generation.reconstruction]
+// spec: GEN#reconstruction
 #[test]
 fn reconstruct_unknown_generation_returns_not_found() {
     let db = test_db();
@@ -387,7 +383,7 @@ fn reconstruct_unknown_generation_returns_not_found() {
     let _ = BTreeMap::<String, String>::new();
 }
 
-// r[verify secret.history]
+// spec: SEC#generation-history
 #[test]
 fn secret_param_set_stores_ciphertext_not_plaintext() {
     let db = test_db();
@@ -413,7 +409,7 @@ fn secret_param_set_stores_ciphertext_not_plaintext() {
     assert!(!entry.previous_value_redacted);
 }
 
-// r[verify secret.history]
+// spec: SEC#generation-history
 #[test]
 fn secret_param_unset_stores_ciphertext_not_plaintext() {
     let db = test_db();
@@ -449,7 +445,7 @@ fn secret_param_unset_stores_ciphertext_not_plaintext() {
     );
 }
 
-// r[verify secret.history]
+// spec: SEC#generation-history
 #[test]
 fn param_map_at_decrypts_secret_history() {
     let db = test_db();
@@ -471,7 +467,7 @@ fn param_map_at_decrypts_secret_history() {
     assert_eq!(map.get("api_key").map(String::as_str), Some("secret-value"));
 }
 
-// r[verify secret.history]
+// spec: SEC#generation-history
 #[test]
 fn a_value_that_was_secret_stays_protected_when_the_flag_is_dropped() {
     let db = test_db();

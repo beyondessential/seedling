@@ -186,7 +186,7 @@ fn legacy_exported_kind_decodes_as_app_target() {
     assert_eq!(mapping.target, app_target("producer", "data"));
 }
 
-// r[verify deregister.purge]
+// spec: TRD#deregistration
 #[test]
 fn deleting_for_an_app_leaves_other_apps_mappings_alone() {
     let db = Db::open_in_memory().expect("open");

@@ -24,7 +24,7 @@ impl Selector {
     /// resource in the app, so `select(#{ types: ResourceType.Service })` —
     /// array brackets forgotten — turns a following `rt.stop` into a stop of
     /// every workload. Failing at the `select` call names the line instead.
-    // l[impl collection.select]
+    // spec: COL#selection
     pub fn from_map(map: &Map) -> Result<Self, Box<EvalAltResult>> {
         // The spec says all possible keys are defined in it, so an unknown
         // key is a typo — and a typo'd criterion is a criterion that does not
@@ -39,13 +39,13 @@ impl Selector {
             }
         }
 
-        // l[impl collection.select.types]
+        // spec: COL#selection
         let types = map
             .get("types")
             .map(|v| take_array_of::<ResourceKind>("select types", v.clone()))
             .transpose()?;
 
-        // l[impl collection.select.names]
+        // spec: COL#selection
         let names = map
             .get("names")
             .map(|v| {
@@ -54,7 +54,7 @@ impl Selector {
             })
             .transpose()?;
 
-        // l[impl collection.select.name-patterns]
+        // spec: COL#selection
         let name_patterns = map
             .get("name_patterns")
             .map(|v| take_string_array("select name_patterns", v.clone()))
@@ -78,21 +78,21 @@ impl Selector {
     /// resolved instances rather than handles into a bag, selects by the
     /// same rules rather than a second copy of them.
     pub fn matches_resource(&self, kind: ResourceKind, name: &str) -> bool {
-        // l[impl collection.select.types]
+        // spec: COL#selection
         if let Some(types) = &self.types
             && !types.contains(&kind)
         {
             return false;
         }
 
-        // l[impl collection.select.names]
+        // spec: COL#selection
         if let Some(names) = &self.names
             && !names.contains(name)
         {
             return false;
         }
 
-        // l[impl collection.select.name-patterns]
+        // spec: COL#selection
         if let Some(patterns) = &self.name_patterns
             && !patterns.iter().any(|p| WildMatch::new(p).matches(name))
         {

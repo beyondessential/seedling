@@ -100,7 +100,7 @@ pub(super) enum SiteCommand {
 
 /// Parse one of the volume spec strings accepted by `volumes shell` into the
 /// JSON object the OI endpoint expects.
-// i[impl volumes.shell]
+// spec: SHL#volume-shells
 fn parse_volume_spec(spec: &str) -> Result<serde_json::Value, String> {
     if let Some(id) = spec.strip_prefix("held:") {
         if id.is_empty() {

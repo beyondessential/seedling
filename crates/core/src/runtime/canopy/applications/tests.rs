@@ -21,7 +21,7 @@ fn result_of(entry: &Value) -> &str {
     entry["health"][0]["result"].as_str().unwrap()
 }
 
-// r[verify canopy.app.key]
+// spec: CNR#applications
 #[test]
 fn several_apps_of_one_type_are_each_an_application_keyed_by_name() {
     let db = db();
@@ -40,7 +40,7 @@ fn several_apps_of_one_type_are_each_an_application_keyed_by_name() {
     assert_eq!(report["tamanu-a"]["health"][0]["check"], "health/app");
 }
 
-// r[verify canopy.app.key]
+// spec: CNR#applications
 #[test]
 fn an_untyped_app_is_not_reported() {
     let db = db();
@@ -54,7 +54,7 @@ fn an_untyped_app_is_not_reported() {
     assert!(report.get("typed").is_some());
 }
 
-// r[verify canopy.app.key]
+// spec: CNR#applications
 #[test]
 fn a_type_with_no_registered_app_is_not_reported() {
     let db = db();
@@ -63,7 +63,7 @@ fn a_type_with_no_registered_app_is_not_reported() {
     assert!(report.as_object().unwrap().is_empty());
 }
 
-// r[verify canopy.app.health]
+// spec: CNR#application-health
 #[test]
 fn each_status_grades_as_specified() {
     let cases = [
@@ -85,7 +85,7 @@ fn each_status_grades_as_specified() {
     }
 }
 
-// r[verify canopy.app.health]
+// spec: CNR#application-health
 #[test]
 fn an_operating_app_resends_the_grade_from_before_the_operation() {
     for (before, expected) in [
@@ -108,7 +108,7 @@ fn an_operating_app_resends_the_grade_from_before_the_operation() {
     }
 }
 
-// r[verify canopy.app.health]
+// spec: CNR#application-health
 #[test]
 fn the_grade_before_an_operation_is_in_the_database_not_in_memory() {
     // Nothing in memory carries the grade: the report reads it from the
@@ -125,7 +125,7 @@ fn the_grade_before_an_operation_is_in_the_database_not_in_memory() {
     assert_eq!(result_of(&after_restart["app"]), "failed");
 }
 
-// r[verify canopy.app.health]
+// spec: CNR#application-health
 #[test]
 fn an_operating_app_with_no_earlier_grade_is_skipped() {
     let db = db();
@@ -134,7 +134,7 @@ fn an_operating_app_with_no_earlier_grade_is_skipped() {
     assert_eq!(result_of(&report["app"]), "skipped");
 }
 
-// r[verify canopy.app.health]
+// spec: CNR#application-health
 #[test]
 fn the_check_lists_each_active_fault_with_kind_resource_and_description() {
     let db = db();
@@ -169,7 +169,7 @@ fn held_grade(db: &Db) -> Option<String> {
     store::list_apps(db).unwrap().remove(0).last_grade
 }
 
-// r[verify canopy.app.health]
+// spec: CNR#application-health
 #[test]
 fn an_uninstalled_app_does_not_carry_its_grade_into_the_next_install() {
     let db = db();
@@ -193,7 +193,7 @@ fn an_uninstalled_app_does_not_carry_its_grade_into_the_next_install() {
     assert_eq!(result_of(&during["app"]), "skipped");
 }
 
-// r[verify canopy.app.health]
+// spec: CNR#application-health
 #[test]
 fn a_grade_that_has_not_changed_is_not_written_again() {
     let db = db();
@@ -212,7 +212,7 @@ fn a_grade_that_has_not_changed_is_not_written_again() {
     assert_eq!(held_grade(&db).as_deref(), Some("warning"));
 }
 
-// r[verify canopy.app.health]
+// spec: CNR#application-health
 #[test]
 fn a_fault_with_a_type_and_no_name_still_says_what_it_is_against() {
     let db = db();

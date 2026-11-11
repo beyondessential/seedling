@@ -134,7 +134,7 @@ afterEach(() => {
 });
 
 describe("Certificates", () => {
-  // w[verify routes.certificates]
+  // spec: UI#certificates
   it("renders settings, policies, stored certificates, and providers", async () => {
     renderWithSession(<Certificates />, { fixtures: baseFixtures() });
 
@@ -171,7 +171,7 @@ describe("Certificates", () => {
     expect(within(providerRow).getByText("route53")).toBeTruthy();
   });
 
-  // w[verify routes.certificates]
+  // spec: UI#certificates
   it("flags certificates near or past expiry and groups by hostname", async () => {
     const expiring: TlsCertificate = {
       ...manualCert,
@@ -206,7 +206,7 @@ describe("Certificates", () => {
     expect(within(healthy).queryByText(/expire/)).toBeNull();
   });
 
-  // w[verify routes.certificates]
+  // spec: UI#certificates
   it("shows what a CSR asked for when the CA signed something else", async () => {
     const rewritten: TlsCertificate = {
       ...manualCert,
@@ -246,7 +246,7 @@ describe("Certificates", () => {
     expect(within(metRow).queryByText(/^not covered/)).toBeNull();
   });
 
-  // w[verify routes.certificates]
+  // spec: UI#certificates
   it("names every requested hostname and each one the CA missed", async () => {
     const partial: TlsCertificate = {
       ...manualCert,
@@ -356,7 +356,7 @@ describe("Certificates", () => {
     });
   });
 
-  // w[verify routes.certificates]
+  // spec: UI#certificates
   it("binds a domain to ACME-DNS via the policy dialog", async () => {
     const { request } = renderWithSession(<Certificates />, {
       fixtures: baseFixtures(),
@@ -376,7 +376,7 @@ describe("Certificates", () => {
     });
   });
 
-  // w[verify routes.certificates]
+  // spec: UI#certificates
   it("binds a domain to the Canopy-only policy without a DNS provider", async () => {
     const { request } = renderWithSession(<Certificates />, {
       fixtures: baseFixtures(),
@@ -399,7 +399,7 @@ describe("Certificates", () => {
     });
   });
 
-  // w[verify routes.certificates]
+  // spec: UI#certificates
   it("offers the Canopy-only policy when there is no DNS provider to bind", async () => {
     const { request } = renderWithSession(<Certificates />, {
       fixtures: baseFixtures({
@@ -426,7 +426,7 @@ describe("Certificates", () => {
     });
   });
 
-  // w[verify routes.certificates]
+  // spec: UI#certificates
   it("lists a Canopy-only policy without a provider", async () => {
     renderWithSession(<Certificates />, {
       fixtures: baseFixtures({
@@ -442,7 +442,7 @@ describe("Certificates", () => {
     expect(row.queryByText(/provider:/)).toBeNull();
   });
 
-  // w[verify routes.certificates]
+  // spec: UI#certificates
   it("clears a policy after confirmation", async () => {
     const { request } = renderWithSession(<Certificates />, {
       fixtures: baseFixtures(),
@@ -463,7 +463,7 @@ describe("Certificates", () => {
     });
   });
 
-  // w[verify routes.certificates]
+  // spec: UI#certificates
   it("adds a Route 53 DNS provider", async () => {
     const { request } = renderWithSession(<Certificates />, {
       fixtures: baseFixtures(),
@@ -495,7 +495,7 @@ describe("Certificates", () => {
     });
   });
 
-  // w[verify routes.certificates]
+  // spec: UI#certificates
   it("deletes a DNS provider after confirmation in dangerous mode", async () => {
     const { request } = renderWithSession(<Certificates />, {
       fixtures: baseFixtures(),
@@ -643,7 +643,7 @@ describe("Certificates", () => {
     expect(revokeObjectURL).toHaveBeenCalledWith("blob:test");
   });
 
-  // w[verify routes.certificates]
+  // spec: UI#certificates
   it("sends a wildcard CSR request through to the runtime", async () => {
     const { request } = renderWithSession(<Certificates />, {
       fixtures: baseFixtures({
@@ -666,7 +666,7 @@ describe("Certificates", () => {
     });
   });
 
-  // w[verify routes.certificates]
+  // spec: UI#certificates
   it("offers to renew an expiring certificate from what its CA issued", async () => {
     // Requested one name, issued as a wildcard plus the apex.
     const widened: TlsCertificate = {
@@ -742,7 +742,7 @@ describe("Certificates", () => {
     });
   });
 
-  // w[verify routes.certificates]
+  // spec: UI#certificates
   it("leads to a pending renewal rather than offering another", async () => {
     const expiring: TlsCertificate = {
       ...manualCert,

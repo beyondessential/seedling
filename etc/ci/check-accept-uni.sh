@@ -2,7 +2,7 @@
 # Fail if a subscription-style request drives the handshake by hand.
 #
 # Reading the response envelope, classifying it, and only then awaiting the
-# server-initiated data stream is one contract (i[stream.subscribe]) that four
+# server-initiated data stream is one contract (WIRE#subscription-requests) that four
 # call sites used to re-implement, each getting a different part wrong: two
 # blocked forever on an error response, one exited 0 on a rejection. It lives
 # in OiClient::open_subscription now, and a fifth copy should not appear.
@@ -15,7 +15,7 @@ set -euo pipefail
 
 allowed=(
     'crates/protocol/src/client.rs'   # the shared helper itself
-    'crates/ctl/src/shell.rs'         # i[stream.shell] — different framing
+    'crates/ctl/src/shell.rs'         # WIRE#shell-sessions — different framing
     'crates/web/src/daemon.rs'        # the shell uni-stream dispatcher
 )
 

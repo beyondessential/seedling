@@ -2,7 +2,7 @@
 
 /// Resolve when the process is asked to stop.
 ///
-/// `i[ctl.graceful-shutdown]` and `i[ctl.logs.follow-interrupt]` require a
+/// `CLI#shutdown` and `CLI#shutdown` require a
 /// clean exit on SIGINT *or* SIGTERM. Every long-running command selected on
 /// `ctrl_c()` alone, which is SIGINT only, so SIGTERM took its default
 /// disposition and killed the process outright — no forward teardown, no
@@ -12,8 +12,7 @@
 ///
 /// Four commands needed this, so it lives here rather than being spelt out
 /// four times with four chances to diverge.
-// i[impl ctl.graceful-shutdown]
-// i[impl ctl.logs.follow-interrupt]
+// spec: CLI#shutdown
 pub(crate) async fn shutdown_requested() {
     #[cfg(unix)]
     {
@@ -46,7 +45,7 @@ mod tests {
 
     use super::shutdown_requested;
 
-    // i[verify ctl.graceful-shutdown]
+    // spec: CLI#shutdown
     // Raising a real SIGTERM here would risk killing the test binary if the
     // handler were not yet installed, so this pins the part that can regress
     // silently: that the wait actually waits. A helper that returned

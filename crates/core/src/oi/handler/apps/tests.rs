@@ -2,8 +2,8 @@ use serde_json::json;
 
 use crate::oi::test_support::{MINIMAL_SCRIPT, TestOi};
 
-// i[verify app.register]
-// i[verify app.list]
+// spec: APPS#registration
+// spec: APPS#listing
 #[test]
 fn register_creates_generation_one_and_lists_app() {
     let oi = TestOi::new();
@@ -24,7 +24,7 @@ fn register_creates_generation_one_and_lists_app() {
     assert_eq!(apps[0]["has_stopped_resources"], false);
 }
 
-// i[verify app.register]
+// spec: APPS#registration
 #[test]
 fn register_rejects_invalid_names() {
     let oi = TestOi::new();
@@ -39,7 +39,7 @@ fn register_rejects_invalid_names() {
     }
 }
 
-// i[verify app.register]
+// spec: APPS#registration
 #[test]
 fn register_rejects_duplicate_app() {
     let oi = TestOi::with_app("demo");
@@ -53,8 +53,8 @@ fn register_rejects_duplicate_app() {
     assert!(message.contains("already registered"), "message: {message}");
 }
 
-// i[verify app.register]
-// i[verify fault.record]
+// spec: APPS#registration
+// spec: FLTS#fault-records
 #[test]
 fn register_with_failing_script_files_script_error_fault() {
     let oi = TestOi::new();
@@ -76,7 +76,7 @@ fn register_with_failing_script_files_script_error_fault() {
     assert_eq!(code, "script_error");
 }
 
-// i[verify app.describe]
+// spec: APPS#description
 #[test]
 fn describe_returns_resources_and_status() {
     let oi = TestOi::with_app("demo");
@@ -87,7 +87,7 @@ fn describe_returns_resources_and_status() {
     assert_eq!(resources.len(), 1);
     assert_eq!(resources[0]["name"], "web");
     assert_eq!(resources[0]["stopped"], false);
-    // i[verify scale.describe]
+    // spec: CTL#scaling
     assert_eq!(resources[0]["scale"]["low"], 1);
     assert_eq!(resources[0]["scale"]["high"], 4);
     assert_eq!(resources[0]["scale"]["current"], 1);
@@ -95,7 +95,7 @@ fn describe_returns_resources_and_status() {
     assert!(desc["params"].as_array().unwrap().is_empty());
 }
 
-// i[verify app.describe]
+// spec: APPS#description
 #[test]
 fn describe_unknown_app_is_not_found() {
     let oi = TestOi::new();
@@ -105,8 +105,8 @@ fn describe_unknown_app_is_not_found() {
     assert_eq!(code, "not_found");
 }
 
-// i[verify app.update]
-// i[verify generation.history]
+// spec: APPS#update
+// spec: APPS#generation-history
 #[test]
 fn update_bumps_generation_and_records_history() {
     let oi = TestOi::with_app("demo");
@@ -136,7 +136,7 @@ fn update_bumps_generation_and_records_history() {
     assert!(kinds.contains(&"script_update"));
 }
 
-// i[verify app.update]
+// spec: APPS#update
 #[test]
 fn update_unknown_app_is_not_found() {
     let oi = TestOi::new();
@@ -149,7 +149,7 @@ fn update_unknown_app_is_not_found() {
     assert_eq!(code, "not_found");
 }
 
-// i[verify app.deregister]
+// spec: APPS#removal
 #[test]
 fn remove_deletes_registered_app() {
     let oi = TestOi::with_app("demo");
@@ -163,7 +163,7 @@ fn remove_deletes_registered_app() {
     assert_eq!(code, "not_found");
 }
 
-// i[verify app.deregister]
+// spec: APPS#removal
 #[test]
 fn remove_rejects_installed_app() {
     let oi = TestOi::with_app("demo");
@@ -189,7 +189,7 @@ fn uninstall_requires_installed_phase() {
     assert_eq!(code, "not_found");
 }
 
-// r[verify app.uninstall.exclusive]
+// spec: TRD#uninstall-admission
 // The app stays in `Installed` for the whole of an action, so the phase gate
 // let an uninstall through mid-action and the reconciler began tearing down
 // what the closure was still driving. Only the scheduler knows.
@@ -233,7 +233,7 @@ fn uninstall_is_refused_while_an_action_holds_the_app() {
     assert_eq!(desc["status"], "uninstalling");
 }
 
-// r[verify app.uninstall.exclusive]
+// spec: TRD#uninstall-admission
 // A queued action came back as the anonymous "an action is queued", which
 // tells an operator nothing they can cancel. The spec asks for the action to
 // be named whether it is running or waiting.
@@ -281,7 +281,7 @@ fn the_refusal_names_a_queued_action_as_well_as_a_running_one() {
     assert!(message.contains("queued"), "says it is waiting: {message}");
 }
 
-// i[verify scale.reset-on-uninstall]
+// spec: CTL#scaling
 #[test]
 fn uninstall_transitions_phase_and_resets_scaling() {
     let oi = TestOi::with_app("demo");
@@ -300,7 +300,7 @@ fn uninstall_transitions_phase_and_resets_scaling() {
     assert_eq!(desc["resources"][0]["scale"]["current"], 1);
 }
 
-// i[verify app.script]
+// spec: APPS#definition-retrieval
 #[test]
 fn script_returns_current_and_historic_generations() {
     let oi = TestOi::with_app("demo");
@@ -326,7 +326,7 @@ fn script_returns_current_and_historic_generations() {
     assert_eq!(code, "not_found");
 }
 
-// i[verify app.script]
+// spec: APPS#definition-retrieval
 #[test]
 fn script_at_nonexistent_generation_is_not_found() {
     let oi = TestOi::with_app("demo");
@@ -337,7 +337,7 @@ fn script_at_nonexistent_generation_is_not_found() {
     assert!(message.contains("generation 42"), "message: {message}");
 }
 
-// i[verify generation.history]
+// spec: APPS#generation-history
 #[test]
 fn generations_unknown_app_is_not_found() {
     let oi = TestOi::new();
@@ -347,7 +347,7 @@ fn generations_unknown_app_is_not_found() {
     assert_eq!(code, "not_found");
 }
 
-// i[verify plan.dry-run]
+// spec: PRM#change-planning
 #[test]
 fn plan_with_no_proposals_returns_empty_diff() {
     let oi = TestOi::with_app("demo");
@@ -356,7 +356,7 @@ fn plan_with_no_proposals_returns_empty_diff() {
     assert!(plan["on_change_would_fire"].as_array().unwrap().is_empty());
 }
 
-// i[verify plan.dry-run]
+// spec: PRM#change-planning
 #[test]
 fn plan_reports_added_removed_and_modified_resources() {
     let oi = TestOi::with_app("demo");
@@ -399,7 +399,7 @@ fn plan_reports_added_removed_and_modified_resources() {
     );
 }
 
-// i[verify plan.dry-run]
+// spec: PRM#change-planning
 #[test]
 fn plan_with_failing_proposed_script_reports_errors() {
     let oi = TestOi::with_app("demo");
@@ -412,8 +412,7 @@ fn plan_with_failing_proposed_script_reports_errors() {
     assert_eq!(plan["errors"].as_array().unwrap().len(), 1);
 }
 
-// i[verify scale.set]
-// i[verify scale.decision-persistence]
+// spec: CTL#scaling
 #[test]
 fn scale_persists_decision_within_bounds() {
     let oi = TestOi::with_app("demo");
@@ -431,7 +430,7 @@ fn scale_persists_decision_within_bounds() {
     assert_eq!(desc["resources"][0]["scale"]["current"], 3);
 }
 
-// i[verify scale.set]
+// spec: CTL#scaling
 #[test]
 fn scale_clamps_to_bounds_and_validates_targets() {
     let oi = TestOi::with_app("demo");
@@ -460,7 +459,7 @@ fn scale_clamps_to_bounds_and_validates_targets() {
     assert_eq!(code, "not_found");
 }
 
-// i[verify deployment.restart]
+// spec: CTL#deployment-restart
 #[test]
 fn restart_returns_operation_id_for_known_deployment() {
     let oi = TestOi::with_app("demo");
@@ -481,8 +480,7 @@ fn restart_returns_operation_id_for_known_deployment() {
     assert_eq!(code, "not_found");
 }
 
-// i[verify resource.stop]
-// i[verify resource.stop.status]
+// spec: CTL#resource-stop
 #[test]
 fn stop_resource_marks_it_stopped_everywhere() {
     let oi = TestOi::with_app("demo");
@@ -503,7 +501,7 @@ fn stop_resource_marks_it_stopped_everywhere() {
     assert_eq!(list[0]["has_stopped_resources"], true);
 }
 
-// i[verify resource.stop]
+// spec: CTL#resource-stop
 #[test]
 fn stop_resource_rejects_unstoppable_kind_and_unknown_resource() {
     let oi = TestOi::with_app("demo");
@@ -535,7 +533,7 @@ fn stop_resource_rejects_unstoppable_kind_and_unknown_resource() {
     assert_eq!(code, "not_found");
 }
 
-// i[verify resource.unstop]
+// spec: CTL#resource-stop
 #[test]
 fn unstop_resource_clears_stopped_flag() {
     let oi = TestOi::with_app("demo");
@@ -563,7 +561,7 @@ fn unstop_resource_clears_stopped_flag() {
     assert_eq!(code, "requirements_invalid");
 }
 
-// i[verify resource.unstop-all]
+// spec: CTL#resource-stop
 #[test]
 fn unstop_all_clears_every_stopped_resource() {
     let oi = TestOi::with_app("demo");
@@ -583,7 +581,7 @@ fn unstop_all_clears_every_stopped_resource() {
     assert_eq!(code, "not_found");
 }
 
-// i[verify resource.stop.no-active-op]
+// spec: CTL#resource-stop
 // A change being committed holds the app with no operation behind it, and the
 // refusal told the operator to cancel an operation that did not exist.
 #[test]
@@ -621,7 +619,7 @@ const DERIVED_STATE_SCRIPT: &str = r#"
     }).on_schedule("H 3 * * *");
 "#;
 
-// i[verify app.update]
+// spec: APPS#update
 // A script that throws part-way through evaluation must not have its partial
 // result swapped into the registry, or every post-update diff reads the
 // resources declared below the throw as deleted — holding live volume data,
@@ -664,7 +662,7 @@ fn failed_update_leaves_derived_state_untouched() {
     "#;
     let generation_before =
         oi.call("/apps/show", json!({ "app": "demo" })).unwrap()["generation"].clone();
-    // i[verify app.update] — the request is refused.
+    // spec: APPS#update — the request is refused.
     let (code, message) = oi
         .call("/apps/update", json!({ "app": "demo", "script": broken }))
         .unwrap_err();
@@ -718,7 +716,7 @@ fn failed_update_leaves_derived_state_untouched() {
     );
 }
 
-// i[verify app.register]
+// spec: APPS#registration
 // A registration that could not be persisted must not be observable: the
 // in-memory entry used to survive the failed DB write, so `/apps/list` showed
 // an app that a restart silently dropped (load_from_db skips generation-0
@@ -767,8 +765,7 @@ fn failed_registration_leaves_nothing_behind() {
     assert_eq!(result["generation"], 1);
 }
 
-// i[verify app.priority.set]
-// i[verify app.priority.describe]
+// spec: CTL#app-priority
 #[test]
 fn priority_persists_and_is_described() {
     let oi = TestOi::with_app("demo");
@@ -787,7 +784,7 @@ fn priority_persists_and_is_described() {
     assert_eq!(list[0]["priority"], "high");
 }
 
-// i[verify app.priority.describe]
+// spec: CTL#app-priority
 #[test]
 fn an_app_that_was_never_set_describes_as_normal() {
     let oi = TestOi::with_app("demo");
@@ -797,7 +794,7 @@ fn an_app_that_was_never_set_describes_as_normal() {
     assert_eq!(list[0]["priority"], "normal");
 }
 
-// i[verify app.priority.describe]
+// spec: CTL#app-priority
 // The per-Deployment field carries the level the definition declares, which is
 // a different thing from the app's operator-set priority.
 #[test]
@@ -834,7 +831,7 @@ fn show_carries_the_declared_deployment_priority() {
     assert_eq!(by_name["batch"], "normal");
 }
 
-// i[verify app.priority.set]
+// spec: CTL#app-priority
 #[test]
 fn priority_rejects_an_unknown_level_and_leaves_the_stored_value() {
     let oi = TestOi::with_app("demo");
@@ -856,7 +853,7 @@ fn priority_rejects_an_unknown_level_and_leaves_the_stored_value() {
     assert_eq!(desc["priority"], "low");
 }
 
-// i[verify app.priority.set]
+// spec: CTL#app-priority
 #[test]
 fn priority_on_an_unregistered_app_is_not_found() {
     let oi = TestOi::new();
@@ -869,7 +866,7 @@ fn priority_on_an_unregistered_app_is_not_found() {
     assert_eq!(code, "not_found");
 }
 
-// i[verify app.priority.set]
+// spec: CTL#app-priority
 #[test]
 fn every_accepted_level_round_trips() {
     let oi = TestOi::with_app("demo");
@@ -886,7 +883,7 @@ fn every_accepted_level_round_trips() {
     }
 }
 
-// i[verify app.priority.reset-on-uninstall]
+// spec: CTL#app-priority
 #[test]
 fn uninstall_discards_the_stored_priority() {
     let oi = TestOi::with_app("demo");
@@ -904,7 +901,7 @@ fn uninstall_discards_the_stored_priority() {
     assert_eq!(desc["priority"], "normal");
 }
 
-// r[verify priority.groups-owned]
+// spec: PRIO#resource-control-groups
 // An app named for the infrastructure slice component would have its workloads
 // share the group holding the proxy and the resolver.
 #[test]
@@ -942,7 +939,7 @@ fn stored_canopy_types(oi: &TestOi) -> Vec<(String, String)> {
         .collect()
 }
 
-// i[verify app.canopy.describe]
+// spec: APPS#description
 #[test]
 fn show_carries_the_declared_canopy_type_or_null() {
     let oi = TestOi::new();
@@ -963,7 +960,7 @@ fn show_carries_the_declared_canopy_type_or_null() {
     assert_eq!(plain["canopy_type"], serde_json::Value::Null);
 }
 
-// r[verify canopy.app.key]
+// spec: CNR#applications
 #[test]
 fn applying_a_definition_records_changes_and_drops_the_canopy_type() {
     let oi = TestOi::new();
@@ -995,7 +992,7 @@ fn applying_a_definition_records_changes_and_drops_the_canopy_type() {
     assert!(stored_canopy_types(&oi).is_empty());
 }
 
-// r[verify canopy.app.key]
+// spec: CNR#applications
 #[test]
 fn a_refused_update_leaves_the_recorded_type_alone() {
     let oi = TestOi::new();
@@ -1016,7 +1013,7 @@ fn a_refused_update_leaves_the_recorded_type_alone() {
     );
 }
 
-// r[verify canopy.app.key]
+// spec: CNR#applications
 #[test]
 fn deregistering_forgets_the_canopy_type() {
     let oi = TestOi::new();
@@ -1033,7 +1030,7 @@ fn deregistering_forgets_the_canopy_type() {
 /// the app it was made for is inherited by the next app of that name rather
 /// than belonging to nobody — and a volume mapping carries a target and a
 /// read-only flag, so the inheritance is access, not clutter.
-// r[verify deregister.purge]
+// spec: TRD#deregistration
 #[test]
 fn deregistering_discards_the_external_mappings_made_for_the_app() {
     let oi = TestOi::with_app("demo");
@@ -1088,7 +1085,7 @@ fn admit(oi: &TestOi, app: &str, action: &str) {
     );
 }
 
-// i[verify app.status] i[verify app.list] i[verify app.describe]
+// spec: APPS#status-derivation, APPS#listing, APPS#description
 // The list reported an operating app's action as "", a placeholder the
 // status was built with because only the scheduler knows the action.
 #[test]
@@ -1106,7 +1103,7 @@ fn an_operating_app_is_reported_with_the_action_it_runs() {
     assert_eq!(desc["current_operation"]["action_name"], "backup");
 }
 
-// i[verify app.describe]
+// spec: APPS#description
 // An uninstall is reconciler-driven and has no operation, and an operation
 // running for another app is not this one's.
 #[test]
@@ -1133,7 +1130,7 @@ fn no_operation_is_reported_for_an_app_the_scheduler_is_not_running() {
     assert!(desc.get("current_operation").is_none(), "{desc}");
 }
 
-// i[verify status.get]
+// spec: STS#server-status
 // The summary counted apps by a status that stops short of the health
 // rollup, so an installed app whose deployment is not running was counted
 // as running.
@@ -1150,7 +1147,7 @@ fn the_server_summary_counts_apps_by_their_reported_status() {
     assert_eq!(summary["apps_by_status"][&status], 1, "{summary}");
 }
 
-// i[verify app.status] i[verify resource.stop]
+// spec: APPS#status-derivation, CTL#resource-stop
 // The rollup wanted a Ready instance of every resource, so stopping one, as
 // asked, left the app degraded until it was unstopped.
 #[test]
@@ -1169,7 +1166,7 @@ fn a_stopped_resource_does_not_degrade_the_app() {
     assert_eq!(status(&oi), "running");
 }
 
-// i[verify app.status]
+// spec: APPS#status-derivation
 // A deployment scaled to zero wants nothing Ready, and an external service is
 // never observed, so neither can hold the app back from running.
 #[test]
@@ -1194,7 +1191,7 @@ fn resources_meant_to_have_nothing_ready_do_not_degrade_the_app() {
     assert_eq!(desc["status"], "running", "{desc}");
 }
 
-// i[verify app.status]
+// spec: APPS#status-derivation
 // A Job runs once and is not restarted, so after a successful run it rests
 // terminated or removed. The rollup wanted it Ready, and an app with one read
 // as degraded whenever its job was not running.

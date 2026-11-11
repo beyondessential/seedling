@@ -28,7 +28,7 @@ impl OiCanopyTransport {
 
 #[async_trait]
 impl CanopyTransport for OiCanopyTransport {
-    // i[canopy.unavailable]
+    // spec: RLY#unavailability
     async fn call(&self, request: CanopyRequest) -> Result<CanopyResponse> {
         if !self.canopy.is_enabled() {
             return Err(miette!("Canopy access is turned off for this instance"));
@@ -40,7 +40,7 @@ impl CanopyTransport for OiCanopyTransport {
             .current()
             .ok_or_else(|| miette!("no client is currently offering to reach Canopy"))?;
 
-        // i[canopy.relay.limits]
+        // spec: RLY#relay-limits
         let _slot = self.canopy.acquire_slot().await;
 
         let (parts, body) = request.into_parts();
@@ -154,7 +154,7 @@ mod tests {
         (OiCanopyTransport::new(Arc::clone(&state)), state, rx)
     }
 
-    // i[verify canopy.relay]
+    // spec: RLY#relay-streams
     #[tokio::test]
     async fn a_typed_call_crosses_the_relay_and_comes_back() {
         let (transport, _state, rx) = transport_answering(200, br#"{"ok":true}"#);
@@ -182,7 +182,7 @@ mod tests {
         assert_eq!(body, b"gzipped");
     }
 
-    // i[verify canopy.relay]
+    // spec: RLY#relay-streams
     #[tokio::test]
     async fn a_non_success_status_reaches_the_caller_rather_than_erroring() {
         // The client gives specific codes meaning — a backup-target 412 means a
@@ -199,7 +199,7 @@ mod tests {
         assert_eq!(response.body().as_ref(), b"dormant");
     }
 
-    // i[verify canopy.unavailable]
+    // spec: RLY#unavailability
     #[tokio::test]
     async fn a_call_with_no_offer_fails_at_once() {
         let state = Arc::new(CanopyState::new());
@@ -219,7 +219,7 @@ mod tests {
         );
     }
 
-    // i[verify canopy.unavailable]
+    // spec: RLY#unavailability
     #[tokio::test]
     async fn a_call_while_disabled_says_so_rather_than_blaming_the_client() {
         let (transport, state, _rx) = transport_answering(200, b"{}");
@@ -233,7 +233,7 @@ mod tests {
         assert!(err.to_string().contains("turned off"), "{err}");
     }
 
-    // i[verify canopy.relay]
+    // spec: RLY#relay-streams
     #[test]
     fn repeated_headers_are_combined_in_order() {
         let mut map = http::HeaderMap::new();
@@ -253,7 +253,7 @@ mod tests {
         );
     }
 
-    // i[verify canopy.relay]
+    // spec: RLY#relay-streams
     #[test]
     fn a_header_value_that_is_not_text_is_refused_rather_than_mangled() {
         let mut map = http::HeaderMap::new();

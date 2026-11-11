@@ -12,7 +12,7 @@ use crate::runtime::db::Db;
 pub mod resolve;
 pub mod resolver;
 
-// r[impl service.site]
+// spec: SITE#site-services
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SiteServiceDef {
     pub name: SiteServiceName,
@@ -80,7 +80,7 @@ impl FromSql for SiteServiceProtocol {
     }
 }
 
-// r[impl service.site.lifecycle]
+// spec: SITE#site-service-lifecycle
 pub fn create(db: &Db, def: &SiteServiceDef) -> rusqlite::Result<()> {
     let tx = db.conn.unchecked_transaction()?;
     tx.execute(

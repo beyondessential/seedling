@@ -179,7 +179,7 @@ impl TestOi {
 mod tests {
     use super::*;
 
-    // i[verify status.ping]
+    // spec: STS#liveness
     #[test]
     fn ping_round_trips_through_dispatch() {
         let oi = TestOi::new();
@@ -187,7 +187,7 @@ mod tests {
         assert_eq!(result.unwrap(), json!({}));
     }
 
-    // i[verify status.get]
+    // spec: STS#server-status
     #[test]
     fn status_reports_empty_registry() {
         let oi = TestOi::new();
@@ -197,7 +197,7 @@ mod tests {
         assert_eq!(status["version"], env!("CARGO_PKG_VERSION"));
     }
 
-    // i[verify status.get]
+    // spec: STS#server-status
     // The field was the literal 0, so the summary reported no operation in
     // progress however busy the runtime was. Driving one through the
     // scheduler is what distinguishes a derived count from a constant.
@@ -225,7 +225,7 @@ mod tests {
         assert_eq!(busy["active_operations"], 1, "one operation active");
     }
 
-    // i[verify wire.request]
+    // spec: WIRE#control-requests
     #[test]
     fn unknown_method_returns_not_found() {
         let oi = TestOi::new();
@@ -234,8 +234,7 @@ mod tests {
         assert!(message.contains("/no/such/method"), "message: {message}");
     }
 
-    // i[verify wire.request]
-    // i[verify wire.response.error]
+    // spec: WIRE#control-requests
     #[test]
     fn malformed_request_returns_error_envelope() {
         let oi = TestOi::new();
@@ -244,7 +243,7 @@ mod tests {
         assert!(message.contains("invalid request"), "message: {message}");
     }
 
-    // i[verify wire.request]
+    // spec: WIRE#control-requests
     #[test]
     fn invalid_params_shape_is_rejected() {
         let oi = TestOi::new();

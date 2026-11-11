@@ -1,7 +1,6 @@
 //! Certificate-serving module.
 //!
-//! Implements the runtime side of [`tls.cert.serve`](
-//! ../../../../../docs/spec/runtime.md): on-demand lookup of a stored
+//! Implements the runtime side of `spec: TLS#serving`: on-demand lookup of a stored
 //! certificate by SNI hostname, with the private key decrypted only at
 //! request time and never written into the proxy's persistent
 //! configuration.
@@ -68,7 +67,7 @@ pub struct CertBundle {
 /// Returns `Ok(None)` when there is no runtime-managed cert for the
 /// hostname — the caller should respond 404 to Caddy, which falls back to
 /// the default automation policy (ACME HTTP-01).
-// r[impl tls.cert.serve]
+// spec: TLS#serving
 pub async fn lookup(db: &DbHandle, cipher: &Cipher, hostname: &str) -> Result<Option<CertBundle>> {
     let hostname_owned = hostname.to_owned();
     let row_opt = db
@@ -161,7 +160,7 @@ async fn handle(
             .into_response();
     };
 
-    // r[impl tls.cert.serve]
+    // spec: TLS#serving
     // Pure lookup: have a cert? return it. No? 204 to let Caddy fall
     // through to its own ACME chain. All issuance lives in the
     // reconciler-driven coordinator; this endpoint never triggers a
@@ -204,7 +203,7 @@ async fn handle(
 
 /// Whether the proxy may go on to its own issuer for a hostname the runtime
 /// holds no certificate for.
-// r[impl tls.chain.proxy-gate]
+// spec: CHAIN#proxy-strategies
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FallThrough {
     Allow,
@@ -220,7 +219,7 @@ pub enum FallThrough {
 /// takes that certificate out of service, so it is only withheld from a
 /// hostname the proxy holds nothing for. Where the proxy holds one, its own
 /// renewal is held back by the schedule in its configuration instead.
-// r[impl tls.chain.proxy-gate]
+// spec: CHAIN#proxy-strategies
 pub fn endpoint_gate(c: &ChainDecision) -> FallThrough {
     match (c.proxy_from, &c.proxy) {
         (ProxyFrom::Always, _) => FallThrough::Allow,
@@ -239,7 +238,7 @@ pub fn endpoint_gate(c: &ChainDecision) -> FallThrough {
 /// chooses what it sends, so a name that differed only in case would resolve as
 /// one no app declares, and the gate would let the proxy order for a hostname
 /// another strategy is responsible for.
-// r[impl tls.chain.proxy-gate]
+// spec: CHAIN#proxy-strategies
 fn normalise_sni(name: &str) -> String {
     name.trim_end_matches('.').to_ascii_lowercase()
 }
@@ -387,7 +386,7 @@ pub fn caddy_url(bind_addr: SocketAddr, token: &str) -> String {
 ///
 /// `token` is the path component a caller must include in the URL; see
 /// [`load_or_create_token`].
-// r[impl tls.cert.serve]
+// spec: TLS#serving
 pub async fn spawn_server(
     db: DbHandle,
     cipher: Arc<Cipher>,
@@ -711,7 +710,7 @@ mod tests {
         }
     }
 
-    // r[verify tls.chain.proxy-gate]
+    // spec: CHAIN#proxy-strategies
     #[tokio::test(flavor = "multi_thread")]
     async fn the_proxy_is_kept_from_ordering_while_canopy_is_responsible() {
         assert_eq!(
@@ -721,7 +720,7 @@ mod tests {
         );
     }
 
-    // r[verify tls.chain.proxy-gate]
+    // spec: CHAIN#proxy-strategies
     #[tokio::test(flavor = "multi_thread")]
     async fn a_certificate_the_proxy_took_since_the_facts_were_gathered_is_not_taken_down() {
         let held = ProxyHolding::Holds(ProxyCert {
@@ -740,8 +739,8 @@ mod tests {
         );
     }
 
-    // r[verify tls.cert.serve]
-    // r[verify tls.chain.proxy-gate]
+    // spec: TLS#serving
+    // spec: CHAIN#proxy-strategies
     #[tokio::test(flavor = "multi_thread")]
     async fn a_certificate_that_cannot_be_read_falls_through_rather_than_failing_the_handshake() {
         let (db, cipher) = fresh().await;
@@ -796,7 +795,7 @@ mod tests {
         );
     }
 
-    // r[verify tls.chain.proxy-gate]
+    // spec: CHAIN#proxy-strategies
     #[tokio::test(flavor = "multi_thread")]
     async fn a_certificate_the_proxy_holds_is_never_taken_down_to_hold_it_back() {
         let held = ProxyHolding::Holds(ProxyCert {
@@ -819,8 +818,8 @@ mod tests {
         );
     }
 
-    // r[verify tls.chain.proxy-gate]
-    // r[verify tls.chain.no-certificate]
+    // spec: CHAIN#proxy-strategies
+    // spec: CHAIN#hostnames-with-no-certificate
     #[tokio::test(flavor = "multi_thread")]
     async fn the_proxy_is_let_order_once_it_is_responsible() {
         let mut facts = typed(Some(ProxyHolding::Nothing));
@@ -835,7 +834,7 @@ mod tests {
         assert_eq!(status_for(Some(untyped)).await, 204);
     }
 
-    // r[verify tls.chain.proxy-gate]
+    // spec: CHAIN#proxy-strategies
     #[tokio::test(flavor = "multi_thread")]
     async fn not_knowing_is_never_a_reason_to_withhold() {
         assert_eq!(status_for(None).await, 204, "no environment yet");
@@ -848,7 +847,7 @@ mod tests {
         );
     }
 
-    // r[verify tls.chain.proxy-gate]
+    // spec: CHAIN#proxy-strategies
     #[tokio::test(flavor = "multi_thread")]
     async fn handshakes_for_many_hostnames_read_the_world_once() {
         struct Counting(std::sync::atomic::AtomicUsize, Facts);
@@ -906,7 +905,7 @@ mod tests {
         );
     }
 
-    // r[verify tls.chain.proxy-gate]
+    // spec: CHAIN#proxy-strategies
     #[tokio::test(flavor = "multi_thread")]
     async fn a_burst_of_handshakes_decides_once() {
         // Count how often the facts are gathered.
@@ -949,7 +948,7 @@ mod tests {
         );
     }
 
-    // r[verify tls.chain.proxy-gate]
+    // spec: CHAIN#proxy-strategies
     #[test]
     fn a_name_is_taken_as_the_runtime_holds_it_however_a_client_sent_it() {
         assert_eq!(normalise_sni("SHOP.Example.COM"), "shop.example.com");
@@ -958,7 +957,7 @@ mod tests {
         assert_eq!(normalise_sni(""), "");
     }
 
-    // r[verify tls.chain.proxy-gate]
+    // spec: CHAIN#proxy-strategies
     #[tokio::test(flavor = "multi_thread")]
     async fn the_gate_is_not_evaded_by_the_case_a_client_sends() {
         let (db, cipher) = fresh().await;

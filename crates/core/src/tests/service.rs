@@ -1,7 +1,7 @@
 use super::*;
 use defs::resource::ResourceKind;
 
-// l[verify service.type]
+// spec: SVC#declaration
 #[test]
 fn service_creates_resource() {
     let app = run_test_script_app(r#"let s = app.service("web");"#);
@@ -13,7 +13,7 @@ fn service_creates_resource() {
     );
 }
 
-// l[verify service.port]
+// spec: SVC#service-ports
 #[test]
 fn service_port_creates_service_port() {
     run_test_script_app(
@@ -24,14 +24,14 @@ fn service_port_creates_service_port() {
     );
 }
 
-// l[verify service.port]
+// spec: SVC#service-ports
 #[test]
 fn service_port_rejects_invalid() {
     let _ = run_test_script_err(r#"app.service("web").port(0);"#);
     let _ = run_test_script_err(r#"app.service("web").port(65536);"#);
 }
 
-// l[verify service.routing]
+// spec: SVC#routing
 #[test]
 fn service_accepts_tcp_and_udp_routing() {
     run_test_script_app(
@@ -44,7 +44,7 @@ fn service_accepts_tcp_and_udp_routing() {
     );
 }
 
-// l[verify service.http]
+// spec: HTTP#declaration
 #[test]
 fn service_http_specialisation() {
     let app = run_test_script_app(
@@ -65,7 +65,7 @@ fn service_http_specialisation() {
     }
 }
 
-// l[verify service.http]
+// spec: HTTP#declaration
 #[test]
 fn service_http_default_port_80() {
     run_test_script_app(
@@ -75,7 +75,7 @@ fn service_http_default_port_80() {
     );
 }
 
-// l[verify service.http.route]
+// spec: HTTP#routes
 #[test]
 fn http_service_route() {
     run_test_script_app(
@@ -86,7 +86,7 @@ fn http_service_route() {
     );
 }
 
-// l[verify service.http.route]
+// spec: HTTP#routes
 #[test]
 fn http_service_route_rejects_empty() {
     let _ = run_test_script_err(
@@ -97,7 +97,7 @@ fn http_service_route_rejects_empty() {
     );
 }
 
-// l[verify service.http.route]
+// spec: HTTP#routes
 #[test]
 fn http_service_route_rejects_no_slash() {
     let _ = run_test_script_err(
@@ -108,7 +108,7 @@ fn http_service_route_rejects_no_slash() {
     );
 }
 
-// l[verify service.exported]
+// spec: SVC#export
 #[test]
 fn service_exported_marks_service() {
     let app = run_test_script_app(r#"app.service("web").exported();"#);
@@ -129,7 +129,7 @@ fn service_exported_marks_service() {
     assert!(opts.description.is_none());
 }
 
-// l[verify service.exported]
+// spec: SVC#export
 #[test]
 fn service_exported_with_description() {
     let app =
@@ -152,7 +152,7 @@ fn service_exported_with_description() {
     assert_eq!(desc, "main HTTP API");
 }
 
-// l[verify service.external]
+// spec: SVC#external-services
 #[test]
 fn external_service_creates_resource() {
     let app = run_test_script_app(r#"let s = app.external_service("api");"#);
@@ -164,15 +164,15 @@ fn external_service_creates_resource() {
     );
 }
 
-// l[verify service.external]
+// spec: SVC#external-services
 #[test]
 fn external_service_rejects_invalid_name() {
     let _ = run_test_script_err(r#"app.external_service("_bad");"#);
     let _ = run_test_script_err(r#"app.external_service("a");"#);
 }
 
-// l[verify service.http.compress]
-// l[verify service.balance]
+// spec: HTTP#compression
+// spec: HTTP#balancing
 #[test]
 fn http_service_accepts_compress_and_balance() {
     let app = run_test_script_app(
@@ -225,26 +225,26 @@ fn http_service_accepts_compress_and_balance() {
     assert_eq!(v1.balance.policy, defs::service::LbPolicy::LeastConn);
 }
 
-// l[verify service.http.compress.fields]
+// spec: HTTP#compression
 #[test]
 fn compress_rejects_unknown_encoding() {
     let _ = run_test_script_err(r#"app.service("web").http(80).compress(#{ encodings: ["br"] });"#);
 }
 
-// l[verify service.balance]
+// spec: HTTP#balancing
 #[test]
 fn balance_rejects_unknown_policy() {
     let _ = run_test_script_err(r#"app.service("web").http(80).balance(#{ policy: "sticky" });"#);
 }
 
-// l[verify service.balance]
+// spec: HTTP#balancing
 #[test]
 fn balance_rejects_spinning_interval() {
     let _ = run_test_script_err(r#"app.service("web").http(80).balance(#{ interval: 0 });"#);
 }
 
-// i[verify app.describe.proxy-settings]
-// r[verify service.http.route.proxy-settings.visibility]
+// spec: APPS#proxy-settings
+// spec: PRX#settings-inspection
 #[test]
 fn service_summary_reports_resolved_routes() {
     let app = run_test_script_app(
@@ -293,7 +293,7 @@ fn service_summary_reports_resolved_routes() {
     assert_eq!(routes[2].balance.policy, "least_conn");
 }
 
-// i[verify app.describe.proxy-settings]
+// spec: APPS#proxy-settings
 #[test]
 fn http_service_without_bindings_reports_a_single_root_route() {
     let app = run_test_script_app(r#"app.service("web").http(80);"#);
@@ -311,7 +311,7 @@ fn http_service_without_bindings_reports_a_single_root_route() {
     assert_eq!(routes[0].prefix, "/");
 }
 
-// i[verify app.describe.proxy-settings]
+// spec: APPS#proxy-settings
 #[test]
 fn non_http_service_reports_no_routes_but_still_reports_balance() {
     let app = run_test_script_app(r#"app.service("postgres").balance(#{ policy: "least_conn" });"#);
@@ -330,8 +330,7 @@ fn non_http_service_reports_no_routes_but_still_reports_balance() {
     assert!(summary.routes.is_none());
 }
 
-// l[verify service.http.rate-limit]
-// l[verify service.http.rate-limit.fields]
+// spec: HTTP#rate-limiting
 #[test]
 fn http_service_and_routes_accept_rate_limit() {
     // The chained form the app definitions use: a limit declared on the route
@@ -375,7 +374,7 @@ fn http_service_and_routes_accept_rate_limit() {
     assert_eq!(health.rate_limit, None);
 }
 
-// l[verify service.http.rate-limit]
+// spec: HTTP#rate-limiting
 #[test]
 fn rate_limit_is_off_unless_declared() {
     let app = run_test_script_app(r#"app.service("web").http(80).route("/api");"#);
@@ -394,7 +393,7 @@ fn rate_limit_is_off_unless_declared() {
     assert_eq!(resolved.rate_limit, None);
 }
 
-// l[verify service.http.rate-limit.fields]
+// spec: HTTP#rate-limiting
 #[test]
 fn rate_limit_rejects_incomplete_and_invalid_declarations() {
     let _ = run_test_script_err(r#"app.service("web").http(80).rate_limit(#{ max_events: 10 });"#);
@@ -409,8 +408,8 @@ fn rate_limit_rejects_incomplete_and_invalid_declarations() {
     let _ = run_test_script_err(r#"app.service("web").http(80).rate_limit(true);"#);
 }
 
-// i[verify app.describe.proxy-settings]
-// r[verify service.http.route.proxy-settings.visibility]
+// spec: APPS#proxy-settings
+// spec: PRX#settings-inspection
 #[test]
 fn service_summary_reports_resolved_rate_limits() {
     let app = run_test_script_app(
@@ -455,7 +454,7 @@ fn service_summary_reports_resolved_rate_limits() {
     assert!(routes[2].rate_limit.is_none());
 }
 
-// i[verify app.describe.proxy-settings]
+// spec: APPS#proxy-settings
 #[test]
 fn a_route_no_pod_binds_reports_that_it_is_not_served() {
     let app = run_test_script_app(
@@ -495,8 +494,8 @@ fn a_route_no_pod_binds_reports_that_it_is_not_served() {
     );
 }
 
-// l[verify service.http.headers]
-// l[verify service.http.proxy-settings.resolution]
+// spec: HTTP#header-operations
+// spec: HTTP#resolution
 #[test]
 fn http_service_and_route_accept_headers() {
     // The three requirements this surface exists for, as an app would write
@@ -558,7 +557,7 @@ fn http_service_and_route_accept_headers() {
     assert!(response.replace.is_empty());
 }
 
-// l[verify service.http.headers.fields]
+// spec: HTTP#header-operations
 #[test]
 fn http_service_headers_rejects_a_proxy_owned_header() {
     // Keep-alive is a platform guarantee, so an app asking for it is refused
@@ -576,8 +575,8 @@ fn http_service_headers_rejects_a_proxy_owned_header() {
     );
 }
 
-// i[verify app.describe.proxy-settings]
-// r[verify service.http.route.proxy-settings.visibility]
+// spec: APPS#proxy-settings
+// spec: PRX#settings-inspection
 #[test]
 fn service_summary_reports_resolved_headers() {
     let app = run_test_script_app(
@@ -637,7 +636,7 @@ fn service_summary_reports_resolved_headers() {
     );
 }
 
-// l[verify service.http.headers]
+// spec: HTTP#header-operations
 #[test]
 fn a_second_headers_call_layers_over_the_first() {
     let app = run_test_script_app(
@@ -690,7 +689,7 @@ fn redirect_of(app: &defs::app::App, service: &str, prefix: &str) -> defs::servi
         .unwrap_or_else(|| panic!("`{prefix}` is declared as a redirect"))
 }
 
-// l[verify service.http.route.redirect]
+// spec: HTTP#route-redirects
 // The card's own case: one path inside a vhost that otherwise proxies.
 #[test]
 fn the_positional_forms_carry_the_tail_and_query_and_default_to_307() {
@@ -714,7 +713,7 @@ fn the_positional_forms_carry_the_tail_and_query_and_default_to_307() {
     assert_eq!(redirect_of(&app, "web", "/v1/legacy").code, 307);
 }
 
-// l[verify service.http.route.redirect]
+// spec: HTTP#route-redirects
 #[test]
 fn the_map_form_is_served_exactly_as_it_was_written() {
     let app = run_test_script_app(
@@ -738,7 +737,7 @@ fn the_map_form_is_served_exactly_as_it_was_written() {
     assert_eq!(search.target, vec![Literal("/find".into()), Tail, Query]);
 }
 
-// l[verify service.http.route.redirect]
+// spec: HTTP#route-redirects
 #[test]
 fn a_redirect_is_declarable_on_an_external_services_routes() {
     let app = run_test_script_app(
@@ -750,7 +749,7 @@ fn a_redirect_is_declarable_on_an_external_services_routes() {
     assert_eq!(redirect_of(&app, "upstream", "/v1/login").code, 308);
 }
 
-// l[verify service.http.route.redirect]
+// spec: HTTP#route-redirects
 #[test]
 fn a_second_redirect_replaces_the_first() {
     let app = run_test_script_app(
@@ -764,7 +763,7 @@ fn a_second_redirect_replaces_the_first() {
     assert_eq!(redirect_of(&app, "web", "/v1/login").code, 308);
 }
 
-// l[verify service.http.route.redirect]
+// spec: HTTP#route-redirects
 #[test]
 fn a_target_that_is_neither_a_path_nor_an_absolute_url_is_refused() {
     for target in ["api/login", "", "example.com/login"] {
@@ -784,7 +783,7 @@ fn a_target_that_is_neither_a_path_nor_an_absolute_url_is_refused() {
     assert!(e.contains("names another host"), "{e}");
 }
 
-// l[verify service.http.route.redirect]
+// spec: HTTP#route-redirects
 // The proxy substitutes a braced word from its own state, its environment
 // among it, and the target is served as a `Location`. A header value is
 // refused a brace for that same reason.
@@ -801,7 +800,7 @@ fn a_target_written_in_the_proxys_placeholder_syntax_is_refused() {
     );
 }
 
-// l[verify service.http.route.redirect]
+// spec: HTTP#route-redirects
 #[test]
 fn a_token_naming_nothing_is_refused_rather_than_served_to_a_client() {
     let e = run_test_script_err(
@@ -820,7 +819,7 @@ fn a_token_naming_nothing_is_refused_rather_than_served_to_a_client() {
     assert!(e.contains("%3C"), "{e}");
 }
 
-// l[verify service.http.route.redirect]
+// spec: HTTP#route-redirects
 #[test]
 fn a_code_that_is_not_a_redirect_a_browser_follows_is_refused() {
     for code in ["200", "303", "404"] {
@@ -832,7 +831,7 @@ fn a_code_that_is_not_a_redirect_a_browser_follows_is_refused() {
     }
 }
 
-// l[verify service.http.route.redirect]
+// spec: HTTP#route-redirects
 #[test]
 fn the_map_form_refuses_a_field_it_does_not_carry() {
     let e = run_test_script_err(
@@ -846,7 +845,7 @@ fn the_map_form_refuses_a_field_it_does_not_carry() {
     assert!(e.contains("requires `to`"), "{e}");
 }
 
-// l[verify service.http.route.redirect]
+// spec: HTTP#route-redirects
 // Retiring a hostname is a site ingress redirect attachment, an operator's to
 // make rather than an app's.
 #[test]
@@ -856,7 +855,7 @@ fn a_redirect_on_the_root_prefix_is_refused() {
     assert!(e.contains("whole hostname"), "{e}");
 }
 
-// l[verify service.http.route.redirect]
+// spec: HTTP#route-redirects
 // A prefix is either redirected or proxied, and which of the two was written
 // first must not decide whether the clash is caught.
 #[test]
@@ -888,7 +887,7 @@ fn a_prefix_cannot_be_both_redirected_and_bound_by_a_pod() {
     );
 }
 
-// l[verify service.http.route.redirect]
+// spec: HTTP#route-redirects
 #[test]
 fn a_setting_a_redirect_leaves_nothing_to_act_on_is_refused_either_way_round() {
     for setting in [
@@ -918,7 +917,7 @@ fn a_setting_a_redirect_leaves_nothing_to_act_on_is_refused_either_way_round() {
     }
 }
 
-// l[verify service.http.route.redirect]
+// spec: HTTP#route-redirects
 // The same setting declared on the Service is ignored rather than refused, so
 // a service-wide declaration need not be written around the redirect routes.
 #[test]
@@ -935,7 +934,7 @@ fn a_service_wide_setting_is_ignored_on_a_redirect_route_rather_than_refused() {
     assert_eq!(redirect_of(&app, "web", "/v1/login").code, 308);
 }
 
-// l[verify service.http.route.redirect]
+// spec: HTTP#route-redirects
 #[test]
 fn a_redirect_route_takes_response_header_operations_and_no_others() {
     let app = run_test_script_app(
@@ -980,8 +979,8 @@ fn a_redirect_route_takes_response_header_operations_and_no_others() {
     }
 }
 
-// i[verify app.describe.proxy-settings]
-// r[verify service.http.route.redirect]
+// spec: APPS#proxy-settings
+// spec: PRX#redirect-routes
 #[test]
 fn a_redirect_route_reports_its_target_and_carries_no_settings() {
     let app = run_test_script_app(
@@ -1023,7 +1022,7 @@ fn a_redirect_route_reports_its_target_and_carries_no_settings() {
     assert!(root.rate_limit.is_some());
 }
 
-// l[verify service.http.route.redirect]
+// spec: HTTP#route-redirects
 // The `/` a path target opens with says "within the hostname the request
 // arrived on". A second slash after it says the opposite, and a browser reads
 // a backslash there as a slash.
@@ -1047,7 +1046,7 @@ fn a_target_composing_into_another_host_is_refused() {
     assert!(e.contains("tab"), "{e}");
 }
 
-// l[verify service.http.route.redirect]
+// spec: HTTP#route-redirects
 // Each token brings its own separator. `/` followed by the tail composes into
 // `//` plus whatever the request carried — the same protocol-relative URL,
 // assembled where no declaration check can see it.
@@ -1072,7 +1071,7 @@ fn a_literal_running_into_a_tokens_own_separator_is_refused() {
     assert!(query.contains("doubled `?`"), "{query}");
 }
 
-// l[verify service.http.route.redirect]
+// spec: HTTP#route-redirects
 // The positional forms append the tail and query for themselves, so a target
 // naming one would carry it twice without saying so.
 #[test]
@@ -1085,8 +1084,8 @@ fn the_positional_form_refuses_a_target_that_names_a_request_part() {
     assert!(e.contains("to:"), "the error points at the map form: {e}");
 }
 
-// l[verify service.http.route]
-// l[verify service.http.route.redirect]
+// spec: HTTP#routes
+// spec: HTTP#route-redirects
 // A trailing slash carries no meaning in a prefix, so two spellings of one
 // prefix must not pass the either-redirected-or-proxied check as two prefixes
 // and then emit two routes claiming the same requests.
@@ -1111,7 +1110,7 @@ fn a_prefix_is_the_same_prefix_however_its_trailing_slash_is_written() {
     assert!(clash.contains("either redirected or proxied"), "{clash}");
 }
 
-// l[verify service.http.route.redirect]
+// spec: HTTP#route-redirects
 // `//` trims to nothing, which as a matcher answers every request on the
 // hostname — the whole-hostname redirect this rule reserves for an operator.
 #[test]
@@ -1125,7 +1124,7 @@ fn every_spelling_of_the_root_is_refused_a_redirect() {
     }
 }
 
-// r[verify service.http.route.redirect]
+// spec: PRX#redirect-routes
 // A service may declare a `Location` operation for its proxied routes. Layered
 // over a redirect it would displace the target the redirect computed, so it is
 // ignored there rather than refused on the service.
@@ -1164,8 +1163,8 @@ fn a_service_level_location_operation_does_not_reach_a_redirect_route() {
     assert!(root.headers.response.replace.contains_key("Location"));
 }
 
-// l[verify service.external.action-context]
-// l[verify app.resources.context.named]
+// spec: SVC#external-services
+// spec: APP#named-resources
 // A typo in an action closure used to register a fresh, unmapped slot instead
 // of failing at the line that caused it.
 #[test]
@@ -1182,7 +1181,7 @@ fn external_service_unknown_in_action_throws() {
     assert!(msg.contains("no static external service"), "got: {msg}");
 }
 
-// l[verify service.external.action-context]
+// spec: SVC#external-services
 #[test]
 fn external_service_static_resolves_in_action() {
     let result = run_action(
@@ -1204,8 +1203,8 @@ fn external_service_static_resolves_in_action() {
     );
 }
 
-// l[verify service.external.action-context]
-// l[verify app.resources.context.immutable]
+// spec: SVC#external-services
+// spec: APP#static-resource-immutability
 #[test]
 fn external_service_static_is_immutable_in_action() {
     for body in [
@@ -1229,7 +1228,7 @@ fn external_service_static_is_immutable_in_action() {
     }
 }
 
-// l[verify app.resources.context.named]
+// spec: APP#named-resources
 // `resources` is keyed by kind and name together, so a name held by another
 // kind misses the lookup exactly as an undeclared one does. The error says
 // which kind has it rather than sending the author after a typo.
@@ -1251,7 +1250,7 @@ fn static_ref_names_the_kind_that_holds_the_name() {
     );
 }
 
-// l[verify app.resources.context.named]
+// spec: APP#named-resources
 #[test]
 fn static_ref_reports_an_undeclared_name_as_missing() {
     let msg = run_action_err(

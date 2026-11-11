@@ -7,9 +7,9 @@ const TEMPLATE_BODY: &str = r#"
     app.volume("data");
 "#;
 
-// i[verify template.create]
-// i[verify template.list]
-// i[verify template.show]
+// spec: TPL#creation
+// spec: TPL#listing
+// spec: TPL#inspection
 #[test]
 fn template_create_list_show_roundtrip() {
     let oi = TestOi::new();
@@ -42,8 +42,8 @@ fn template_create_list_show_roundtrip() {
     assert_eq!(code, "not_found");
 }
 
-// i[verify template.create]
-// i[verify template.name]
+// spec: TPL#creation
+// spec: TPL#template-names
 #[test]
 fn template_create_rejects_duplicates_and_bad_names() {
     let oi = TestOi::new();
@@ -65,7 +65,7 @@ fn template_create_rejects_duplicates_and_bad_names() {
     assert_eq!(code, "requirements_invalid");
 }
 
-// i[verify template.update]
+// spec: TPL#update
 #[test]
 fn template_update_body_and_description() {
     let oi = TestOi::new();
@@ -106,7 +106,7 @@ fn template_update_body_and_description() {
     assert_eq!(code, "not_found");
 }
 
-// i[verify template.remove]
+// spec: TPL#removal
 #[test]
 fn template_remove_deletes_once() {
     let oi = TestOi::new();
@@ -126,7 +126,7 @@ fn template_remove_deletes_once() {
     assert_eq!(code, "not_found");
 }
 
-// i[verify template.preview]
+// spec: TPL#preview
 #[test]
 fn template_preview_from_body_and_name() {
     let oi = TestOi::new();
@@ -177,7 +177,7 @@ fn template_preview_from_body_and_name() {
     assert_eq!(code, "not_found");
 }
 
-// i[verify template.instantiate]
+// spec: TPL#instantiation
 #[test]
 fn template_instantiate_registers_app() {
     let oi = TestOi::new();

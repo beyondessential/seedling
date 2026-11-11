@@ -33,7 +33,7 @@ fn open_operation_dbs(db_path: &Path, app_name: &AppName) -> Option<DbHandle> {
     }
 }
 
-// l[impl rt.signal]
+// spec: RT#signal-delivery
 /// Adapter from the system actuator's async `signal_container` to the
 /// synchronous `ContainerSignaler` trait expected by the BSL runtime. The
 /// adapter is constructed in the OI layer so that language-only tests don't
@@ -66,7 +66,7 @@ fn make_container_signaler(
     }))
 }
 
-// l[impl rt.write]
+// spec: RT#volume-writes
 /// Adapter from the system actuator's async `safe_volume_write` to the
 /// synchronous `VolumeWriter` trait expected by the BSL runtime, mirroring
 /// `OperationSignaler`. Resolves the BSL-side volume identity to a host path
@@ -99,7 +99,7 @@ impl crate::runtime::barrier::VolumeWriter for OperationVolumeWriter {
                     VolumeWriteTarget::NamedVolume { name, tmpfs } => {
                         let vol_name = VolumeName::for_app(&app, &name);
                         if tmpfs {
-                            // r[impl actuate.volume.tmpfs]
+                            // spec: ACTU#volume-storage
                             tmpfs_volume_path(vol_name.as_str())
                         } else {
                             driver.volume_store.path(&vol_name)
@@ -107,7 +107,7 @@ impl crate::runtime::barrier::VolumeWriter for OperationVolumeWriter {
                     }
                     VolumeWriteTarget::AnonymousVolume { anon_id, tmpfs } => {
                         if tmpfs {
-                            // r[impl actuate.volume.tmpfs]
+                            // spec: ACTU#volume-storage
                             tmpfs_volume_path(&anon_id)
                         } else {
                             driver
@@ -133,7 +133,7 @@ fn make_volume_writer(state: &OiState) -> Option<Arc<dyn crate::runtime::barrier
     }))
 }
 
-// l[impl rt.exec]
+// spec: RT#command-execution
 /// Adapter from the system actuator's async `exec_command` to the
 /// synchronous `Executor` trait expected by the BSL runtime.
 struct OperationExecutor {
@@ -165,7 +165,7 @@ fn make_executor(state: &OiState) -> Option<Arc<dyn crate::runtime::barrier::Exe
     }))
 }
 
-// l[impl action.params.volume]
+// spec: ACN#volume-params
 /// For every `kind: "volume"` param in the action's schema, look up the
 /// operator-supplied site volume name, build an
 /// [`OperationVolumeBinding`] keyed by a generated per-operation name, and
@@ -293,7 +293,7 @@ fn run_operation_loop(
     let operation_id = OperationId(op_ctx.operation_id.clone());
 
     let (engine, mut scope, _) = crate::setup_language(script_limits, Arc::clone(&app.bundle));
-    // l[impl bsl.bundle.script-errors]
+    // spec: BND#script-formation
     let compiled = app
         .bundle
         .script()
@@ -333,7 +333,7 @@ fn run_operation_loop(
     let world = Arc::new(DbWorldOracle::new(db.clone()));
     let registry: Arc<dyn InstanceRegistry> = Arc::new(DbInstanceRegistry::new(db.clone()));
 
-    // r[impl operation.lifecycle.events] r[impl barrier.replay] r[impl operation.params]
+    // spec: OPS#initiating-events, SUSP#replay, OPS#persistence
     // Persist the current operation so a runtime restart can resume it.
     // Params are encrypted because they may carry secret values.
     let record = CurrentOperation {
@@ -422,7 +422,7 @@ fn run_operation_loop(
                 op_ctx.failed(&e.to_string());
                 return false;
             }
-            // r[impl operation.cancel]
+            // spec: OPS#cancellation
             OperationResult::Cancelled => {
                 tracing::warn!(app = %app_name, action = %action_name, "operation cancelled");
                 let app_name_owned = app_name.clone();
@@ -469,7 +469,7 @@ fn run_operation_loop(
 /// Cadence is dynamic: short while freshly suspended (so short barriers feel
 /// responsive) and long for protracted waits (so an hours-long wait doesn't
 /// replay tens of thousands of times).
-// r[impl barrier.suspension.poll-backoff]
+// spec: SUSP#re-evaluation-cadence
 fn wait_next_tick(cancel_token: &CancelToken, waited_on_barrier_secs: u64) {
     let interval = dynamic_poll_interval(waited_on_barrier_secs);
     // The cancel token's condvar wakes the sleep so an operator-initiated
@@ -502,7 +502,7 @@ fn now_secs() -> u64 {
 
 /// Piecewise backoff: 2s while waited < 2 min, then ramp to 30s at 1 hour,
 /// then ramp to 300s at 6 hours, then cap at 300s.
-// r[impl barrier.suspension.poll-backoff]
+// spec: SUSP#re-evaluation-cadence
 pub(crate) fn dynamic_poll_interval(waited_secs: u64) -> Duration {
     const LOW: u64 = 2;
     const MID: u64 = 30;
@@ -665,7 +665,7 @@ async fn cleanup_dynamic_resources(
         }
     }
 
-    // r[fault.image-pull] r[fault.container-start]
+    // spec: FLT#workload-faults
     // Clear per-instance faults for every dynamic resource that we just
     // tore down. Without this, faults filed against short-lived Job
     // instances (image_pull_failed, container_start_failed, …) persist
@@ -698,7 +698,7 @@ async fn cleanup_dynamic_resources(
 /// registry write lock across the db call: the schedule ticker holds db then
 /// acquires registry.read(), so registry.write() + db.lock() in either order
 /// deadlocks with it.
-// i[impl event.types]
+// spec: EVT#event-types
 pub fn set_phase_and_persist(state: &OiState, app_name: &AppName, new_phase: AppPhase) {
     use crate::oi::handler::apps::{extract_persist_fields, persist_app_fields};
     let phase_str = phase_event_name(&new_phase);
@@ -740,19 +740,19 @@ fn phase_event_name(phase: &AppPhase) -> &'static str {
     }
 }
 
-// i[impl action.invoke.install]
+// spec: ACI#install
 fn enter_installing_phase(state: &OiState, app_name: &AppName) {
     set_phase_and_persist(state, app_name, AppPhase::Installing);
     tracing::info!(app = %app_name, "install started; entering Installing phase");
 }
 
-// i[impl action.invoke.install.completion]
+// spec: ACI#install-completion
 fn finalize_install(state: &OiState, app_name: &AppName) {
     set_phase_and_persist(state, app_name, AppPhase::Installed);
     tracing::info!(app = %app_name, "install completed; app is now installed");
 }
 
-// i[impl action.invoke.install.completion]
+// spec: ACI#install-completion
 fn revert_install_phase(state: &OiState, app_name: &AppName) {
     set_phase_and_persist(state, app_name, AppPhase::NotInstalled);
     tracing::info!(app = %app_name, "install failed; reverted to NotInstalled");
@@ -794,7 +794,7 @@ pub fn spawn_accepted_operation(
     let is_install = action_name == "install";
 
     tokio::spawn(async move {
-        // i[wire.actor]
+        // spec: WIRE#actor-attribution
         let op_ctx = event_tx.operation(
             app_name.clone(),
             action_name.clone(),
@@ -805,7 +805,7 @@ pub fn spawn_accepted_operation(
         );
         op_ctx.started(&trigger);
 
-        // i[impl action.invoke.install]
+        // spec: ACI#install
         // Flip to Installing as soon as the install operation actually starts
         // (covers both directly-accepted and later-dequeued installs because
         // both paths funnel through spawn_accepted_operation).
@@ -815,7 +815,7 @@ pub fn spawn_accepted_operation(
 
         let operation_id_str = operation_id.0.clone();
 
-        // r[impl operation.cancel]
+        // spec: OPS#cancellation
         // Take the cancel token from the active scheduler record so a
         // subsequent cancel endpoint call wakes this operation.
         let cancel_token = state
@@ -826,7 +826,7 @@ pub fn spawn_accepted_operation(
             .map(|a| Arc::clone(&a.cancel_token))
             .unwrap_or_else(|| Arc::new(CancelToken::new()));
 
-        // l[impl action.params.volume]
+        // spec: ACN#volume-params
         // Resolve volume params: replace each `kind: "volume"` param with the
         // operator-supplied volume reference, looked up to a host path and
         // exposed to the action closure as a per-operation external volume
@@ -876,7 +876,7 @@ pub fn spawn_accepted_operation(
         *active_progress.write() = None;
         tick_notify.notify_one();
 
-        // i[impl action.invoke.install.completion]
+        // spec: ACI#install-completion
         if is_install {
             if success {
                 finalize_install(&state, &app_name);

@@ -9,8 +9,8 @@ use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 /// tunneled connection fails.
 pub const FORWARD_ABORTED: quinn::VarInt = quinn::VarInt::from_u32(0);
 
-// i[impl forward.tunnel.tcp]
-// i[impl stream.forward]
+// spec: FWD#tcp-tunnelling
+// spec: WIRE#port-forward-data
 /// Relay a forward data stream (past its header) and a TCP connection until
 /// both directions have finished.
 ///
@@ -112,7 +112,7 @@ mod tests {
         (client, service, task)
     }
 
-    // i[verify forward.tunnel.tcp]
+    // spec: FWD#tcp-tunnelling
     #[tokio::test]
     async fn half_closed_client_still_receives_the_response() {
         let (mut client, mut service, task) = relayed();
@@ -143,7 +143,7 @@ mod tests {
         task.await.unwrap().unwrap();
     }
 
-    // i[verify forward.tunnel.tcp]
+    // spec: FWD#tcp-tunnelling
     #[tokio::test]
     async fn a_stalled_direction_does_not_hold_up_the_other() {
         let (mut client, mut service, task) = relayed();

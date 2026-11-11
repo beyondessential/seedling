@@ -8,11 +8,10 @@
 // the expected path; the spec items below cover broader management
 // surfaces too, of which routing is one slice.
 //
-// w[verify routes.keys]
-// w[verify routes.registries]
-// w[verify routes.images]
-// w[verify routes.certificates]
-// w[verify routes.volumes]
+// spec: UI#operator-capabilities
+// spec: UI#images
+// spec: UI#certificates
+// spec: UI#volumes
 
 import { expect, test } from "../test-fixtures";
 

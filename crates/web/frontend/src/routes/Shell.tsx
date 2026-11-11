@@ -6,8 +6,7 @@ import "@xterm/xterm/css/xterm.css";
 import { Box, Button, Typography } from "@mui/material";
 import { useSessionContext } from "../components/SessionProvider";
 
-// w[shells.ui]
-// w[shells.resize]
+// spec: UI#shells
 export default function Shell() {
   const { name, shellName } = useParams<{ name: string; shellName: string }>();
   const navigate = useNavigate();

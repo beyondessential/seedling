@@ -253,33 +253,33 @@ pub struct TransientUnitSpec {
     /// which is dangerously aggressive for crash-looping containers — five
     /// failures inside the default 10-second `StartLimitIntervalSec` trips
     /// `start-limit-hit` and the unit refuses to restart at all.
-    // r[impl autonomous.restart.backoff]
+    // spec: AUTO#restart-pacing
     pub restart_sec: Option<u32>,
     /// Width of the start-limit window in seconds. Maps to
     /// `StartLimitIntervalSec`. `None` leaves systemd's default (10s).
     /// Set to 0 to disable the start limit entirely.
-    // r[impl autonomous.restart.backoff]
+    // spec: AUTO#restart-pacing
     pub start_limit_interval_sec: Option<u32>,
     /// Number of starts permitted within `start_limit_interval_sec` before
     /// systemd refuses to restart the unit. Maps to `StartLimitBurst`. `None`
     /// leaves systemd's default (5).
-    // r[impl autonomous.restart.backoff]
+    // spec: AUTO#restart-pacing
     pub start_limit_burst: Option<u32>,
     /// Resource-control slice the unit joins. Maps to `Slice=`. `None` leaves
     /// the unit in the supervisor's default slice.
-    // r[impl priority.actuation]
+    // spec: PRIO#resource-control-groups
     pub slice: Option<String>,
     /// How strongly the kernel should prefer this unit's processes as
     /// out-of-memory victims. Maps to `OOMScoreAdjust=`. `None` inherits.
     ///
     /// Applied when the unit's processes are spawned: unlike the slice weights,
     /// the supervisor cannot change it on a process that is already running.
-    // r[impl priority.kill-order]
+    // spec: PRIO#kill-order
     pub oom_score_adjust: Option<i32>,
 }
 
 /// A resource-control slice the runtime owns, with the weights it should carry.
-// r[impl priority.actuation]
+// spec: PRIO#resource-control-groups
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SliceSpec {
     /// Full unit name, e.g. `seedling-myapp-critical.slice`.
@@ -315,11 +315,11 @@ pub struct UnitState {
     ///
     /// `None` when the supervisor does not report one (a non-service unit, or
     /// a listing that does not carry per-unit properties).
-    // r[impl autonomous.restart.record]
+    // spec: AUTO#restart-record
     pub restarts: Option<u32>,
     /// How the unit's main process last exited, where the supervisor reports
     /// it. This is what makes a restart record diagnostic rather than a tally.
-    // r[impl autonomous.restart.record]
+    // spec: AUTO#restart-record
     pub last_exit: Option<UnitExit>,
 }
 
@@ -387,7 +387,7 @@ pub struct IngressRule {
 /// DNAT6 rule translating a mount endpoint to a backing pod's address and
 /// pod-side port. Scoped to traffic from a specific pod's /64 destined for
 /// that pod's mount endpoint address (::1000).
-// r[impl infra.dataplane.mount-dnat]
+// spec: INFRA#mount-endpoint-addressing
 #[derive(Debug, Clone)]
 pub struct MountRule {
     /// The mounting pod's /64 prefix.
@@ -406,7 +406,7 @@ pub struct MountRule {
 /// distributed round-robin via nftables `numgen`.
 ///
 /// Applied in the nftables prerouting chain.
-// r[impl infra.dataplane.service-dnat]
+// spec: INFRA#service-translation
 #[derive(Debug, Clone)]
 pub struct ServiceDnatRule {
     /// The service's stable IPv6 address.
@@ -453,7 +453,7 @@ pub struct ProxyConfig {
     /// adding routes (`rt.warm_certs`). Translated to
     /// `tls.certificates.automate` plus matching policy subjects so that Caddy
     /// acquires the certs eagerly, not lazily on first request.
-    // r[impl actuate.ingress.warm-certs]
+    // spec: RT#certificate-warming
     pub warm_cert_hostnames: std::collections::BTreeSet<String>,
     /// URL of the daemon's `get_certificate` endpoint. When set,
     /// emitted into the Caddy config as a `tls.certificates.get_certificate`
@@ -461,7 +461,7 @@ pub struct ProxyConfig {
     /// CSR-derived) by SNI at handshake time. The daemon's endpoint
     /// returns 404 for hostnames without a stored cert, causing Caddy
     /// to fall back to its default ACME-HTTP-01 automation.
-    // r[impl tls.cert.serve]
+    // spec: TLS#serving
     pub cert_endpoint_url: Option<String>,
     /// For a hostname the proxy already holds a certificate for, the fraction of
     /// that certificate's lifetime that is left when the proxy may renew it.
@@ -470,7 +470,7 @@ pub struct ProxyConfig {
     /// of the lifetime from the end. A hostname whose chain puts a strategy ahead
     /// of the proxy's is given a later point, so the proxy does not renew over
     /// HTTP-01 at the moment the strategy ahead of it begins its own attempt.
-    // r[impl tls.chain.proxy-gate]
+    // spec: CHAIN#proxy-strategies
     #[serde(default)]
     pub renewal_ratios: std::collections::BTreeMap<String, f64>,
 }
@@ -513,7 +513,7 @@ pub struct VirtualHost {
     /// The listener port the ingress behind this vhost was declared on. Two
     /// vhosts of one hostname on different ports are independent: a request is
     /// routed by the port it arrived on as well as the name it asked for.
-    // r[impl actuate.ingress.port-scope]
+    // spec: PRX#port-scope
     pub port: u16,
     pub tls_acme: bool,
     /// If present, add an HTTP→HTTPS redirect server block.
@@ -541,7 +541,7 @@ pub struct RouteProxy {
     pub balance: RouteBalance,
     /// `None` when this route is not rate limited, which is the default: a
     /// limit exists only where an app declared one.
-    // r[impl service.http.route.rate-limiting]
+    // spec: PRX#rate-limiting
     pub rate_limit: Option<RouteRateLimit>,
     /// Header operations in force on this route, already resolved against the
     /// service's. Empty for the routes that declare none, which is most.
@@ -549,7 +549,7 @@ pub struct RouteProxy {
     /// Defaulted on the wire: the config is cached as JSON and read back on
     /// startup, so a document written before header manipulation existed must
     /// still load rather than stranding the cache.
-    // r[impl service.http.route.headers]
+    // spec: PRX#header-operations
     #[serde(default, skip_serializing_if = "RouteHeaders::is_empty")]
     pub headers: RouteHeaders,
 }
@@ -725,8 +725,8 @@ pub enum ProxyRouteHandler {
         // every route in a config pays the enum's size whichever variant it
         // is. Serde treats a box transparently, so the cached document is
         // unchanged by it.
-        // r[impl service.http.route.compression]
-        // r[impl service.http.route.balancing]
+        // spec: PRX#compression
+        // spec: PRX#balancing
         proxy: Box<RouteProxy>,
     },
     /// Answer with a redirect built from the request, as one route of a
@@ -736,7 +736,7 @@ pub enum ProxyRouteHandler {
     /// whole hostname with a URL fixed at declaration: this one is bound to a
     /// prefix, builds its target out of the request that arrived, and carries
     /// the response header operations of the route it belongs to.
-    // r[impl service.http.route.redirect]
+    // spec: PRX#redirect-routes
     RouteRedirect {
         /// The target, already settled into literal text and the parts of the
         /// request that carry over into it.
@@ -749,14 +749,14 @@ pub enum ProxyRouteHandler {
         ///
         /// Defaulted on the wire like the rest of the route settings: the
         /// config is cached as JSON and read back on startup.
-        // r[impl service.http.route.headers]
+        // spec: PRX#header-operations
         #[serde(default, skip_serializing_if = "RouteHeaderOps::is_empty")]
         headers: RouteHeaderOps,
     },
     /// Answer with a static HTTP redirect to a fixed URL. Used by
     /// site-ingress redirect attachments to migrate hostnames without
     /// shipping an app.
-    // r[impl ingress.site.attachment]
+    // spec: SITE#attachments
     Redirect {
         /// Target URL. Must include scheme + host (e.g.
         /// `"https://new.example.com"`).
@@ -778,7 +778,7 @@ pub enum ProxyRouteHandler {
 /// cached document has to deserialise as.
 ///
 /// [`RedirectSegment`]: crate::defs::service::RedirectSegment
-// r[impl service.http.route.redirect]
+// spec: PRX#redirect-routes
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum RedirectSegment {
     Literal(String),
@@ -827,7 +827,7 @@ pub enum ObservationFact {
     /// In-tick only: it maps to no persisted observation, so the lifecycle
     /// oracle keeps the last state it did derive rather than being told the
     /// container went away.
-    // r[impl observe.failure-not-absence]
+    // spec: OBS#failed-observation
     ContainerPresentIndeterminate,
     /// The spec hash label read from the running container.
     ContainerSpecHash(String),
@@ -847,7 +847,7 @@ pub enum ObservationFact {
     /// pause before an automatic restart. Distinct from [`UnitActive`]
     /// because a unit that is not up *yet* is not a unit that is up with
     /// nothing running under it, and only the latter is broken.
-    // r[impl autonomous.restart.backoff.undisturbed]
+    // spec: AUTO#restart-pacing
     UnitActivating,
     UnitInactive,
     UnitFailed,
@@ -857,7 +857,7 @@ pub enum ObservationFact {
     /// Treated as a hard fault by the reconciler — it does not auto-recover
     /// from this state until the operator clears the resulting crash_loop
     /// fault (typically by redeploying the app or fixing the root cause).
-    // r[impl autonomous.restart.start-limit-hit]
+    // spec: AUTO#restart-pacing
     UnitStartLimitHit,
     /// The unit is not loaded by systemd at all (unit_state returned None).
     UnitGone,
@@ -866,7 +866,7 @@ pub enum ObservationFact {
     /// baseline it recorded on the previous tick, so a restart that completed
     /// between two observations is still counted — polling container state
     /// alone would miss it entirely.
-    // r[impl autonomous.restart.record]
+    // spec: AUTO#restart-record
     UnitRestartCounter {
         count: u32,
         exit: Option<UnitExit>,
@@ -884,7 +884,7 @@ pub enum ObservationFact {
 }
 
 impl ObservationFact {
-    // r[impl observe.persist]
+    // spec: OBS#recording
     /// Maps this observation to the `(obs_kind, payload)` pairs written to
     /// `world_observations`. Returns multiple entries when one fact advances
     /// several oracle states simultaneously (e.g. VolumePresent → created +
@@ -900,7 +900,7 @@ impl ObservationFact {
                 vec![("container_exited", json!({ "exit_code": exit_code }))]
             }
             ObservationFact::ContainerHealthy => vec![("health_check_pass", json!({}))],
-            // r[impl lifecycle.container.unhealthy-transition]
+            // spec: LCY#containers
             ObservationFact::ContainerUnhealthy => vec![("health_check_fail", json!({}))],
             ObservationFact::ContainerMissing => vec![("container_removed", json!({}))],
             // A present volume is both created and ready.
@@ -911,7 +911,7 @@ impl ObservationFact {
             ObservationFact::VolumeBackendMismatch => {
                 vec![("volume_backend_mismatch", json!({}))]
             }
-            // l[impl rt.termination.ensure-success]
+            // spec: RT#termination
             // UnitFailed is persisted because termination_success needs to
             // distinguish "container exited but we didn't capture the exit
             // code (e.g. --rm removed it before we inspected)" from "the
@@ -920,7 +920,7 @@ impl ObservationFact {
             // secondary signal from systemd for crashes/OOMs/signals that
             // podman --rm cleans up before we can observe them.
             ObservationFact::UnitFailed => vec![("unit_failed", json!({}))],
-            // r[impl autonomous.restart.start-limit-hit]
+            // spec: AUTO#restart-pacing
             // Persisted so the per-instance crash_loop fault path can identify
             // the cause distinctly from a one-off unit failure.
             ObservationFact::UnitStartLimitHit => {
@@ -953,7 +953,7 @@ impl ObservationFact {
 mod observation_fact_tests {
     use super::*;
 
-    // r[verify observe.failure-not-absence]
+    // spec: OBS#failed-observation
     // Present-but-indeterminate is in-tick only: it must map to no persisted
     // observation, so the lifecycle oracle keeps the state it last derived
     // rather than being told the container went away. Recording it as
@@ -968,7 +968,7 @@ mod observation_fact_tests {
         );
     }
 
-    // r[verify observe.failure-not-absence]
+    // spec: OBS#failed-observation
     // By contrast, a container confirmed absent by a successful query is a
     // real observation and must keep driving teardown.
     #[test]
@@ -978,7 +978,7 @@ mod observation_fact_tests {
         assert_eq!(kinds[0].0, "container_removed");
     }
 
-    // r[verify lifecycle.container.unhealthy-transition]
+    // spec: LCY#containers
     #[test]
     fn container_unhealthy_maps_to_health_check_fail() {
         let kinds = ObservationFact::ContainerUnhealthy.to_obs_kinds();
@@ -986,7 +986,7 @@ mod observation_fact_tests {
         assert_eq!(kinds[0].0, "health_check_fail");
     }
 
-    // r[verify lifecycle.container]
+    // spec: LCY#containers
     #[test]
     fn container_healthy_maps_to_health_check_pass() {
         let kinds = ObservationFact::ContainerHealthy.to_obs_kinds();

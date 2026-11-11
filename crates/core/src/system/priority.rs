@@ -26,7 +26,8 @@ use crate::runtime::priority::AppPriority;
 pub const ROOT_SLICE: &str = "seedling.slice";
 
 /// Slice the runtime's own infrastructure (proxy, resolver) sits under.
-// r[impl priority.groups-owned]
+// spec: PRIO#resource-control-groups
+// spec: LINUX#resource-control-groups
 pub const INFRA_SLICE: &str = "seedling-infra.slice";
 
 /// The slice-name component reserved for [`INFRA_SLICE`]. An app whose name
@@ -39,7 +40,8 @@ pub const INFRA_WEIGHT: u64 = 500;
 
 /// Kill preference carried by each infrastructure unit. Below every value
 /// [`oom_score_adjust`] can produce, so infra is the last thing shed.
-// r[impl priority.kill-order]
+// spec: PRIO#kill-order
+// spec: LINUX#kill-order
 pub const INFRA_OOM_SCORE_ADJUST: i32 = -900;
 
 /// The app-name component of a slice name.
@@ -53,13 +55,15 @@ pub fn slice_component(app: &AppName) -> String {
     app.as_str().replace('-', "_")
 }
 
-// r[impl priority.actuation]
+// spec: PRIO#resource-control-groups
+// spec: LINUX#resource-control-groups
 /// The per-app slice, carrying the weight derived from the app priority.
 pub fn app_slice(app: &AppName) -> String {
     format!("seedling-{}.slice", slice_component(app))
 }
 
-// r[impl priority.actuation]
+// spec: PRIO#resource-control-groups
+// spec: LINUX#resource-control-groups
 /// The per-tier slice a Deployment's units join, nested under [`app_slice`] and
 /// carrying the weight derived from the Deployment priority.
 pub fn tier_slice(app: &AppName, deployment: Priority) -> String {
@@ -70,7 +74,8 @@ pub fn tier_slice(app: &AppName, deployment: Priority) -> String {
     )
 }
 
-// r[impl priority.scheduling]
+// spec: PRIO#contended-capacity
+// spec: LINUX#resource-control-groups
 /// Share of contended CPU and I/O an app claims relative to other apps.
 pub fn app_weight(priority: AppPriority) -> u64 {
     match priority {
@@ -80,7 +85,8 @@ pub fn app_weight(priority: AppPriority) -> u64 {
     }
 }
 
-// r[impl priority.scheduling]
+// spec: PRIO#contended-capacity
+// spec: LINUX#resource-control-groups
 /// Share of its app's contended capacity a Deployment claims relative to the
 /// app's other Deployments.
 pub fn deployment_weight(priority: Priority) -> u64 {
@@ -101,7 +107,8 @@ const APP_OOM_STEP: i32 = 500;
 /// How far a Deployment level moves a workload within its app's band.
 const TIER_OOM_STEP: i32 = 100;
 
-// r[impl priority.kill-order]
+// spec: PRIO#kill-order
+// spec: LINUX#kill-order
 /// The kill preference for a workload of `deployment` priority in an app of
 /// `app` priority. Higher means the kernel prefers it as a victim.
 ///
@@ -134,7 +141,8 @@ pub fn oom_score_adjust(app: AppPriority, deployment: Priority) -> i32 {
 /// Where one workload stands against every other on the host: its app's
 /// priority and its own declared level. Every workload that is not a Deployment
 /// stands at [`Priority::Normal`].
-// r[impl priority.kill-order]
+// spec: PRIO#kill-order
+// spec: LINUX#kill-order
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct WorkloadStanding {
     pub app: AppPriority,
@@ -169,7 +177,7 @@ mod tests {
         Priority::Low,
     ];
 
-    // l[verify const.priority.enum]
+    // spec: CONST#priority
     // The order is derived from the declaration order, so a reorder that looks
     // cosmetic would silently invert it. The spec states this order explicitly.
     #[test]
@@ -180,7 +188,8 @@ mod tests {
         assert_eq!(Priority::default(), Priority::Normal);
     }
 
-    // r[verify priority.kill-order]
+    // spec: PRIO#kill-order
+    // spec: LINUX#kill-order
     // The property the whole ordering rests on: the app comparison decides
     // first. Every workload of a higher-priority app must be shed after every
     // workload of a lower-priority one, whatever either Deployment declares.
@@ -209,7 +218,8 @@ mod tests {
         }
     }
 
-    // r[verify priority.kill-order]
+    // spec: PRIO#kill-order
+    // spec: LINUX#kill-order
     #[test]
     fn critical_in_a_low_app_is_shed_before_normal_in_a_high_app() {
         let critical_low = oom_score_adjust(AppPriority::Low, Priority::Critical);
@@ -217,7 +227,8 @@ mod tests {
         assert!(critical_low > normal_high);
     }
 
-    // r[verify priority.kill-order]
+    // spec: PRIO#kill-order
+    // spec: LINUX#kill-order
     // Within one app the declared level orders the workloads, lower level shed
     // first.
     #[test]
@@ -234,7 +245,8 @@ mod tests {
         }
     }
 
-    // r[verify priority.kill-order]
+    // spec: PRIO#kill-order
+    // spec: LINUX#kill-order
     #[test]
     fn infra_outranks_every_app_workload() {
         for app in ALL_APP {
@@ -244,7 +256,8 @@ mod tests {
         }
     }
 
-    // r[verify priority.kill-order]
+    // spec: PRIO#kill-order
+    // spec: LINUX#kill-order
     #[test]
     fn every_kill_preference_is_within_the_kernel_range() {
         for app in ALL_APP {
@@ -256,7 +269,8 @@ mod tests {
         assert!((-1000..=1000).contains(&INFRA_OOM_SCORE_ADJUST));
     }
 
-    // r[verify priority.scheduling]
+    // spec: PRIO#contended-capacity
+    // spec: LINUX#resource-control-groups
     #[test]
     fn weights_increase_with_priority_and_stay_in_the_supervisor_range() {
         assert!(app_weight(AppPriority::High) > app_weight(AppPriority::Normal));
@@ -274,7 +288,8 @@ mod tests {
         assert!(INFRA_WEIGHT > app_weight(AppPriority::High));
     }
 
-    // r[verify priority.groups-owned]
+    // spec: PRIO#resource-control-groups
+    // spec: LINUX#resource-control-groups
     // A hyphen in an app name is the slice hierarchy separator, so it must not
     // survive into the component: `a-b` would otherwise nest inside `a`'s slice.
     #[test]
@@ -289,7 +304,8 @@ mod tests {
         assert_ne!(app_slice(&hyphened), app_slice(&plain));
     }
 
-    // r[verify priority.actuation]
+    // spec: PRIO#resource-control-groups
+    // spec: LINUX#resource-control-groups
     #[test]
     fn tier_slice_nests_under_its_app_slice() {
         let app = AppName::new("app-two").unwrap();
@@ -303,7 +319,8 @@ mod tests {
         assert_eq!(parent, app_slice(&app));
     }
 
-    // r[verify priority.groups-owned]
+    // spec: PRIO#resource-control-groups
+    // spec: LINUX#resource-control-groups
     #[test]
     fn an_app_cannot_be_named_into_the_infra_slice_component() {
         // The guard for this lives in `reserved`; here we pin the collision it

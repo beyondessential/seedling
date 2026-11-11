@@ -1,7 +1,6 @@
 use super::*;
 
-// l[verify action.type]
-// l[verify action.option-description]
+// spec: ACN#action-declaration
 #[test]
 fn on_action_registers_and_returns_action() {
     let app = run_test_script_app(
@@ -16,7 +15,7 @@ fn on_action_registers_and_returns_action() {
     assert_eq!(action.description.as_deref(), Some("Run migrations"));
 }
 
-// l[verify action.type]
+// spec: ACN#action-declaration
 #[test]
 fn on_action_without_options() {
     let app = run_test_script_app(
@@ -29,7 +28,7 @@ fn on_action_without_options() {
     assert!(action.description.is_none());
 }
 
-// l[verify action.start]
+// spec: ACN#start-action
 #[test]
 fn on_start_registers_start_action() {
     let app = run_test_script_app(
@@ -41,7 +40,7 @@ fn on_start_registers_start_action() {
     assert!(def.actions.contains_key("start"));
 }
 
-// l[verify action.start]
+// spec: ACN#start-action
 #[test]
 fn on_start_with_options() {
     let app = run_test_script_app(
@@ -56,9 +55,8 @@ fn on_start_with_options() {
     assert_eq!(action.description.as_deref(), Some("Start the application"));
 }
 
-// l[verify action.shell]
-// l[verify action.shell.attach]
-// l[verify action.shell.control]
+// spec: ACN#shells
+// spec: ACN#shell-control
 #[test]
 fn on_shell_registers_shell() {
     let app = run_test_script_app(
@@ -75,7 +73,7 @@ fn on_shell_registers_shell() {
     assert_eq!(shell.description.as_deref(), Some("Node REPL"));
 }
 
-// l[verify action.shell]
+// spec: ACN#shells
 #[test]
 fn on_shell_without_options() {
     let app = run_test_script_app(
@@ -90,7 +88,7 @@ fn on_shell_without_options() {
     assert!(shell.description.is_none());
 }
 
-// l[verify action.shell]
+// spec: ACN#shells
 #[test]
 fn shells_in_separate_namespace_from_actions() {
     let app = run_test_script_app(
@@ -106,7 +104,7 @@ fn shells_in_separate_namespace_from_actions() {
     assert!(def.shells.contains_key("debug"));
 }
 
-// l[verify action.shell]
+// spec: ACN#shells
 #[test]
 fn exercise_shell_return_job() {
     exercise(
@@ -118,10 +116,9 @@ fn exercise_shell_return_job() {
     );
 }
 
-// l[verify action.install]
-// l[verify action.install.requirements]
-// l[verify action.install.requirements.kind-email]
-// l[verify action.install.requirements.kind-password]
+// spec: ACN#install-action
+// spec: ACN#param-schemas
+// spec: ACN#param-kinds
 #[test]
 fn on_install_with_requirements() {
     let app = run_test_script_app(
@@ -155,7 +152,7 @@ fn on_install_with_requirements() {
     assert!(pw_req.default_value.is_none());
 }
 
-// l[verify action.install.requirements]
+// spec: ACN#param-schemas
 // A `secret` the schema states wins over the kind's implication, in either
 // direction, and one it leaves out defers to the kind.
 #[test]
@@ -186,7 +183,7 @@ fn on_install_requirement_secret_overrides_kind() {
     assert!(!reqs["text"].is_secret());
 }
 
-// l[verify action.install]
+// spec: ACN#install-action
 #[test]
 fn on_install_without_requirements() {
     let app = run_test_script_app(
@@ -199,7 +196,7 @@ fn on_install_without_requirements() {
     assert!(install.requirements.is_empty());
 }
 
-// l[verify action.install.requirements.kind-text]
+// spec: ACN#param-kinds
 #[test]
 fn install_requirement_kind_text() {
     let app = run_test_script_app(
@@ -220,7 +217,7 @@ fn install_requirement_kind_text() {
     assert!(matches!(req.kind, defs::install::ParamKind::Text));
 }
 
-// l[verify action.install.requirements.kind-text]
+// spec: ACN#param-kinds
 #[test]
 fn install_requirement_kind_defaults_to_text() {
     let app = run_test_script_app(
@@ -240,7 +237,7 @@ fn install_requirement_kind_defaults_to_text() {
     assert!(matches!(req.kind, defs::install::ParamKind::Text));
 }
 
-// l[verify action.install.requirements.kind-multiline]
+// spec: ACN#param-kinds
 #[test]
 fn install_requirement_kind_multiline() {
     let app = run_test_script_app(
@@ -261,7 +258,7 @@ fn install_requirement_kind_multiline() {
     assert!(matches!(req.kind, defs::install::ParamKind::Multiline));
 }
 
-// l[verify action.install.requirements.kind-weak-password]
+// spec: ACN#param-kinds
 #[test]
 fn install_requirement_kind_weak_password() {
     let app = run_test_script_app(
@@ -282,7 +279,7 @@ fn install_requirement_kind_weak_password() {
     assert!(matches!(req.kind, defs::install::ParamKind::WeakPassword));
 }
 
-// l[verify action.install]
+// spec: ACN#install-action
 #[test]
 fn exercise_install_action() {
     exercise(
@@ -301,7 +298,7 @@ fn exercise_install_action() {
     );
 }
 
-// l[verify action.install.requirements.kind-unknown]
+// spec: ACN#param-kinds
 #[test]
 fn install_requirement_unknown_kind_throws() {
     let _ = run_test_script_err(
@@ -317,7 +314,7 @@ fn install_requirement_unknown_kind_throws() {
     );
 }
 
-// l[verify action.option-params]
+// spec: ACN#param-schemas
 #[test]
 fn on_action_with_params() {
     let app = run_test_script_app(
@@ -341,7 +338,7 @@ fn on_action_with_params() {
     assert_eq!(p.default_value.as_deref(), Some("admin@example.com"));
 }
 
-// l[verify action.option-params]
+// spec: ACN#param-schemas
 #[test]
 fn on_action_unknown_param_kind_throws() {
     let _ = run_test_script_err(
@@ -357,7 +354,7 @@ fn on_action_unknown_param_kind_throws() {
     );
 }
 
-// l[verify action.params]
+// spec: ACN#param-delivery
 #[test]
 fn on_action_closure_accepts_two_args() {
     run_test_script_app(
@@ -367,7 +364,7 @@ fn on_action_closure_accepts_two_args() {
     );
 }
 
-// l[verify action.schedule]
+// spec: ACN#scheduled-actions
 #[test]
 fn on_schedule_registers_cron_on_action() {
     let (engine, mut scope, app) =
@@ -386,7 +383,7 @@ fn on_schedule_registers_cron_on_action() {
     assert_eq!(action.schedules, vec!["H 2 * * *".to_owned()]);
 }
 
-// l[verify action.schedule]
+// spec: ACN#scheduled-actions
 #[test]
 fn schedule_hash_is_pinned() {
     use crate::defs::action::schedule_hash;
@@ -406,7 +403,7 @@ fn schedule_hash_is_pinned() {
     assert_ne!(hash("ab", "c"), hash("a", "bc"));
 }
 
-// l[verify action.schedule]
+// spec: ACN#scheduled-actions
 #[test]
 fn on_schedule_chains_multiple_exprs() {
     let (engine, mut scope, app) =
@@ -432,7 +429,7 @@ fn on_schedule_chains_multiple_exprs() {
     );
 }
 
-// l[verify action.schedule]
+// spec: ACN#scheduled-actions
 #[test]
 fn on_schedule_rejects_start_action() {
     let err = run_test_script_err(
@@ -447,7 +444,7 @@ fn on_schedule_rejects_start_action() {
     );
 }
 
-// l[verify action.schedule]
+// spec: ACN#scheduled-actions
 #[test]
 fn on_schedule_rejects_invalid_cron() {
     let _ = run_test_script_err(

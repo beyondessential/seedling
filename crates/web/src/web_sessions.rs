@@ -5,7 +5,7 @@ use parking_lot::Mutex;
 use seedling_protocol::actor::Actor;
 use uuid::Uuid;
 
-// w[sessions.stale-cutoff]
+// spec: WEB#session-tracking
 /// A session is considered stale when its `last_seen` is older than this. The
 /// reaper task drops stale sessions and emits `WebSessionStopped` events.
 pub const STALE_CUTOFF: SignedDuration = SignedDuration::from_secs(600);
@@ -13,7 +13,7 @@ pub const STALE_CUTOFF: SignedDuration = SignedDuration::from_secs(600);
 /// How often the reaper task runs.
 pub const REAPER_TICK: Duration = Duration::from_secs(60);
 
-// w[sessions.safety-mode]
+// spec: UI#guarded-controls
 /// The advisory safety tier reported by a browser session. The server records
 /// and broadcasts whatever the client reports without enforcing it on any OI
 /// request.
@@ -57,7 +57,7 @@ pub struct WebSessionEntry {
     pub connected_at: Timestamp,
     pub last_seen: Timestamp,
     pub actor: Arc<Actor>,
-    // w[impl sessions.safety-mode]
+    // spec: UI#guarded-controls
     pub safety_mode: SafetyMode,
 }
 
@@ -85,7 +85,7 @@ impl WebSessionRegistry {
         self.sessions.lock().remove(id).is_some()
     }
 
-    // w[impl sessions.heartbeat]
+    // spec: WEB#session-tracking
     /// Update `last_seen` to `now` for a session, and apply the reported
     /// safety mode if one was supplied. Returns the heartbeat outcome so the
     /// caller can decide whether to publish a `WebSessionModeChanged` event.
@@ -95,7 +95,7 @@ impl WebSessionRegistry {
             return HeartbeatOutcome::Missing;
         };
         entry.last_seen = now;
-        // w[impl sessions.safety-mode]
+        // spec: UI#guarded-controls
         let mode_change = mode.and_then(|new_mode| {
             (entry.safety_mode != new_mode).then(|| {
                 entry.safety_mode = new_mode;
@@ -105,7 +105,7 @@ impl WebSessionRegistry {
         HeartbeatOutcome::Alive { mode_change }
     }
 
-    // w[impl sessions.stale-cutoff]
+    // spec: WEB#session-tracking
     /// Remove and return every session whose `last_seen` is older than `now -
     /// STALE_CUTOFF`. The caller is expected to publish a `WebSessionStopped`
     /// event for each returned id.
@@ -123,7 +123,7 @@ impl WebSessionRegistry {
         stale
     }
 
-    // w[impl routes.sessions]
+    // spec: WEB#connected-clients
     pub fn list(&self) -> Vec<serde_json::Value> {
         self.sessions
             .lock()
@@ -136,7 +136,7 @@ impl WebSessionRegistry {
                     "actor_kind": e.actor.kind,
                     "actor_id": e.actor.id,
                     "actor_display": e.actor.display,
-                    // w[impl sessions.safety-mode]
+                    // spec: UI#guarded-controls
                     "safety_mode": e.safety_mode.as_str(),
                 })
             })
@@ -182,7 +182,7 @@ mod tests {
         }
     }
 
-    // w[verify sessions.events]
+    // spec: WEB#session-tracking
     // The reaper and the connection-close path both run for a session the
     // reaper got to first, so the caller has to be able to tell which removal
     // was the real one — publishing on both sent two closes for one session.
@@ -197,14 +197,14 @@ mod tests {
         assert!(!reg.remove(&id), "a second removal has nothing to announce");
     }
 
-    // w[verify sessions.events]
+    // spec: WEB#session-tracking
     #[test]
     fn removing_an_unknown_session_reports_nothing_removed() {
         let reg = WebSessionRegistry::default();
         assert!(!reg.remove(&Uuid::new_v4()));
     }
 
-    // w[verify sessions.safety-mode]
+    // spec: UI#guarded-controls
     #[test]
     fn safety_mode_parse_falls_back_to_read() {
         assert_eq!(SafetyMode::parse(Some("write")), SafetyMode::Write);
@@ -216,7 +216,7 @@ mod tests {
         assert_eq!(SafetyMode::parse(None), SafetyMode::Read);
     }
 
-    // w[verify sessions.safety-mode]
+    // spec: UI#guarded-controls
     #[test]
     fn touch_returns_mode_change_only_when_different() {
         let registry = WebSessionRegistry::new();
@@ -244,7 +244,7 @@ mod tests {
         assert_eq!(listed[0]["safety_mode"], "write");
     }
 
-    // w[verify sessions.heartbeat]
+    // spec: WEB#session-tracking
     #[test]
     fn touch_on_missing_session_returns_missing() {
         let registry = WebSessionRegistry::new();

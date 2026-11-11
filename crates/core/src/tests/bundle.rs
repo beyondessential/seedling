@@ -23,8 +23,8 @@ fn volume_writes(app: &defs::app::App, name: &str) -> Vec<(String, Vec<u8>)> {
 
 const PNG: &[u8] = &[0x89, b'P', b'N', b'G', 0x00, 0xff];
 
-// l[verify volume.write-dir]
-// l[verify app.dir]
+// spec: VOL#declared-file-writes
+// spec: BND#bundle-files
 #[test]
 fn write_dir_copies_a_folder_byte_for_byte() {
     let (_, _, app, _) = run_test_script_in(
@@ -45,7 +45,7 @@ fn write_dir_copies_a_folder_byte_for_byte() {
     );
 }
 
-// l[verify volume.write-dir]
+// spec: VOL#declared-file-writes
 #[test]
 fn write_dir_may_target_the_volume_root() {
     let (_, _, app, _) = run_test_script_in(
@@ -66,9 +66,8 @@ fn write_dir_may_target_the_volume_root() {
     assert!(err.to_string().contains("escape"), "{err}");
 }
 
-// l[verify volume.write]
-// l[verify app.file]
-// l[verify file.type]
+// spec: VOL#declared-file-writes
+// spec: BND#bundle-files
 #[test]
 fn volume_write_with_a_file_writes_its_bytes() {
     let (_, _, app, _) = run_test_script_in(
@@ -82,7 +81,7 @@ fn volume_write_with_a_file_writes_its_bytes() {
     );
 }
 
-// l[verify file.text]
+// spec: BND#bundle-files
 #[test]
 fn file_text_reads_utf8_and_throws_otherwise() {
     run_test_script_in(
@@ -97,8 +96,7 @@ fn file_text_reads_utf8_and_throws_otherwise() {
     assert!(err.to_string().contains("not valid UTF-8"), "{err}");
 }
 
-// l[verify app.file]
-// l[verify app.dir]
+// spec: BND#bundle-files
 #[test]
 fn bundle_paths_are_confined_and_must_exist() {
     for (script, needle) in [
@@ -114,7 +112,7 @@ fn bundle_paths_are_confined_and_must_exist() {
     }
 }
 
-// l[verify app.bundle.context]
+// spec: BND#bundle-files
 #[test]
 fn old_reads_the_previous_generations_bundle() {
     use crate::runtime::definition::{Bundle, Source};
@@ -149,7 +147,7 @@ fn old_reads_the_previous_generations_bundle() {
     assert_eq!(new.bundle.file("page.html").unwrap().as_ref(), b"new");
 }
 
-// l[verify param.validate.constraints]
+// spec: PARAM#validators
 #[test]
 fn validate_is_top_level_only_and_once_per_param() {
     let err = run_test_script_err(
@@ -173,7 +171,7 @@ fn validate_is_top_level_only_and_once_per_param() {
     assert!(err.to_string().contains("action closure"), "{err}");
 }
 
-// l[verify rt.write]
+// spec: RT#volume-writes
 #[test]
 fn rt_write_with_a_file_writes_its_bytes() {
     use crate::runtime::barrier::replay::{InMemoryActionLog, OperationResult};

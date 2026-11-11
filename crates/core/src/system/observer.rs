@@ -67,7 +67,7 @@ impl Observer {
         Self { driver }
     }
 
-    // r[impl observe.facts]
+    // spec: OBS#observations
     /// Inspect all system primitives backing one resource instance.
     ///
     /// Returns timestamped facts; the reconciler loop persists them to
@@ -85,11 +85,11 @@ impl Observer {
                 self.observe_pod_instance(instance, now, &mut facts).await?;
             }
             Resource::Volume(vol) => {
-                // r[impl observe.volume]
+                // spec: OBS#volumes
                 let name = &instance.display_name;
                 let tmpfs = vol.def.lock().tmpfs;
                 if tmpfs {
-                    // r[impl actuate.volume.tmpfs]
+                    // spec: ACTU#volume-storage
                     // Presence is the directory containers mount, not a
                     // container-runtime volume standing in for it.
                     let exists = crate::system::actuator::tmpfs_volume_path(name).exists();
@@ -105,7 +105,7 @@ impl Observer {
                     let vol_store = &self.driver.volume_store;
                     let vol_name = crate::runtime::identity::VolumeName::of_instance(instance);
                     if vol_store.exists(&vol_name) {
-                        // r[impl observe.volume.backend-mismatch]
+                        // spec: OBS#volumes
                         if vol_store.is_backend_match(&vol_name).await {
                             facts.push((ObservationFact::VolumePresent, now));
                         } else {
@@ -117,7 +117,7 @@ impl Observer {
                 }
             }
             Resource::Ingress(_) => {
-                // r[impl observe.ingress]
+                // spec: OBS#ingresses
                 let healthy = self.driver.proxy.is_healthy().await.context(ProxySnafu)?;
                 facts.push((
                     if healthy {
@@ -136,7 +136,7 @@ impl Observer {
         Ok(facts)
     }
 
-    // r[impl observe.deployment]
+    // spec: OBS#containers
     async fn observe_pod_instance(
         &self,
         instance: &ResourceInstance,
@@ -191,7 +191,7 @@ impl Observer {
                     ContainerStatus::Exited => ObservationFact::ContainerExited {
                         exit_code: s.exit_code.unwrap_or(-1),
                     },
-                    // r[impl observe.failure-not-absence] — this arm has
+                    // spec: OBS#failed-observation — this arm has
                     // already proven the container exists: the inspect
                     // returned it. Mapping either of these to
                     // ContainerMissing recorded `container_removed`, which
@@ -230,7 +230,7 @@ impl Observer {
 
         facts.push((unit_fact(unit_state.as_ref()), now));
 
-        // r[impl autonomous.restart.record]
+        // spec: AUTO#restart-record
         // The counter is reported separately from the unit's state because it
         // is the only signal that survives a restart the observer never saw:
         // a unit that went down and came back inside one observe interval
@@ -256,7 +256,7 @@ impl Observer {
 /// Named and separated from the observation pass so the distinction it draws
 /// is one decision in one place: the rest of the runtime reads the fact, not
 /// the supervisor's vocabulary.
-// r[impl autonomous.restart.start-limit-hit]
+// spec: AUTO#restart-pacing
 // `start-limit-hit` is systemd's "I gave up" signal — the unit has burned
 // through `StartLimitBurst` restarts within `StartLimitIntervalSec`. It is
 // reported alongside `failed` and is distinct from a transient failure
@@ -270,7 +270,7 @@ fn unit_fact(unit_state: Option<&UnitState>) -> ObservationFact {
         Some(s) => match s.active {
             ActiveState::Inactive | ActiveState::Deactivating => ObservationFact::UnitInactive,
             ActiveState::Active => ObservationFact::UnitActive,
-            // r[impl autonomous.restart.backoff.undisturbed]
+            // spec: AUTO#restart-pacing
             // `activating` covers both the unit's first start and the
             // `auto-restart` pause between restarts. Reported apart from
             // `active` so the reconciler can tell a unit that is not up yet
@@ -305,7 +305,7 @@ mod tests {
         }
     }
 
-    // r[verify autonomous.restart.backoff.undisturbed]
+    // spec: AUTO#restart-pacing
     // A unit in `Restart=` backoff sits in `activating (auto-restart)` with
     // no container under it. Folded into `active`, it read to the reconciler
     // as a unit that was up with nothing running — a broken unit — so the
@@ -336,7 +336,7 @@ mod tests {
         );
     }
 
-    // r[verify autonomous.restart.start-limit-hit]
+    // spec: AUTO#restart-pacing
     // The sub-state carries the distinction: `failed` alone is a transient
     // failure the supervisor will retry, `start-limit-hit` is the one it
     // will not.
@@ -409,7 +409,7 @@ mod tests {
         })
     }
 
-    // r[verify autonomous.restart.record]
+    // spec: AUTO#restart-record
     #[tokio::test]
     async fn observes_the_restart_counter_and_last_exit() {
         let (system, process, _dir) = stubbed();

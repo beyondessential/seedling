@@ -64,12 +64,12 @@ pub fn proxy_bridge_gateway(node_prefix: &Ipv6Net) -> std::net::Ipv6Addr {
 ///
 /// Follows from the prefix rather than from where an allocator happens to put
 /// the host part. `None` for a prefix too small to hold a gateway and a host.
-// r[impl infra.pod.network]
+// spec: INFRA#pod-networks
 pub(crate) fn first_host_v6(prefix: &Ipv6Net) -> Option<std::net::Ipv6Addr> {
     (prefix.prefix_len() <= 126).then(|| std::net::Ipv6Addr::from(u128::from(prefix.network()) + 1))
 }
 
-// r[impl infra.pod.network]
+// spec: INFRA#pod-networks
 pub(crate) fn first_host_v4(prefix: &ipnet::Ipv4Net) -> Option<std::net::Ipv4Addr> {
     (prefix.prefix_len() <= 30).then(|| std::net::Ipv4Addr::from(u32::from(prefix.network()) + 1))
 }
@@ -173,7 +173,7 @@ pub trait ContainerRuntime: Send + Sync + 'static {
     // Interactive shell sessions — runs a fresh ephemeral container with a PTY.
     fn exec<'a>(&'a self, spec: ContainerSpec) -> BoxFuture<'a, Result<ExecHandle, BoxError>>;
 
-    // l[impl rt.signal]
+    // spec: RT#signal-delivery
     /// Send a POSIX signal to the running container's PID 1.
     /// Returns `Ok(true)` when the signal was delivered, `Ok(false)` when the
     /// container did not exist (already terminated). Other errors propagate.
@@ -183,7 +183,7 @@ pub trait ContainerRuntime: Send + Sync + 'static {
         signal: &'a str,
     ) -> BoxFuture<'a, Result<bool, BoxError>>;
 
-    // l[impl rt.exec]
+    // spec: RT#command-execution
     /// Run a command (`argv`) inside the running container `name` and wait
     /// for it to exit. `extra_env` is layered on top of the container's
     /// environment. Stdout and stderr are forwarded to the container's log
@@ -228,7 +228,7 @@ pub trait ProcessManager: Send + Sync + 'static {
     ///
     /// `prune` is false when the caller could not account for every app this
     /// tick, so a short `desired` set never forgets a live app's slice.
-    // r[impl priority.actuation]
+    // spec: PRIO#resource-control-groups
     fn sync_slices<'a>(
         &'a self,
         desired: Vec<SliceSpec>,
@@ -294,7 +294,7 @@ impl System {
     }
 }
 
-// r[infra.node.prefix]
+// spec: INFRA#host-prefix-derivation
 /// Derive the node's /48 ULA prefix from `/etc/machine-id`.
 ///
 /// The raw machine-id content (whitespace-trimmed) is hashed with SHA-256;
@@ -336,7 +336,7 @@ pub fn node_prefix_from_machine_id() -> std::io::Result<Ipv6Net> {
 pub type SystemSetup = (Arc<System>, Arc<tokio::sync::RwLock<reqwest::Client>>);
 
 impl System {
-    // r[infra.proxy.startup]
+    // spec: PRX#proxy-lifecycle
     /// Initialize all system backends, ensure Caddy is running, and return the
     /// assembled `System` handle alongside the Caddy admin client handle.
     ///
@@ -347,7 +347,7 @@ impl System {
         data_dir: &Path,
         use_btrfs: bool,
     ) -> Result<SystemSetup, BoxError> {
-        // r[impl infra.node.degraded] — bring up the container runtime (podman)
+        // spec: INFRA#unavailable-backends — bring up the container runtime (podman)
         // and process manager (systemd) best-effort. If either connection fails
         // the daemon must NOT crash-loop: podman/systemd being down is a
         // recoverable host-configuration problem, and a crash-loop hides it
@@ -384,7 +384,7 @@ impl System {
         let data_plane_arc: Arc<dyn DataPlane> =
             Arc::new(data_plane::NftablesDataPlane::new(node_prefix)?);
 
-        // r[impl infra.proxy.startup] — bring Caddy up best-effort. A failure
+        // spec: PRX#proxy-lifecycle — bring Caddy up best-effort. A failure
         // here (image build, container start, health check) must NOT take down
         // the daemon: Caddy is workload-ingress infrastructure, and the
         // reconciler re-runs ensure_caddy_running every tick — filing a
@@ -494,7 +494,7 @@ impl System {
 mod gateway_tests {
     use super::{first_host_v4, first_host_v6};
 
-    // r[verify infra.pod.network]
+    // spec: INFRA#pod-networks
     #[test]
     fn the_gateway_is_the_first_host_address_of_the_prefix() {
         let gw = |p: &str| first_host_v6(&p.parse().unwrap());
@@ -517,7 +517,7 @@ mod gateway_tests {
         );
     }
 
-    // r[verify infra.pod.network]
+    // spec: INFRA#pod-networks
     #[test]
     fn a_prefix_with_no_room_for_a_gateway_is_refused() {
         assert_eq!(first_host_v6(&"fd5e::1/128".parse().unwrap()), None);

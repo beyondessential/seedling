@@ -19,7 +19,7 @@ pub(crate) struct TagsParams {
     pub repository: String,
 }
 
-// i[impl definition.tags]
+// spec: DEFN#repository-tags
 pub(crate) fn list_tags(state: &OiState, params: TagsParams) -> HandlerResult {
     let repository =
         crate::runtime::definition::fetch::DefinitionRef::parse_repository(&params.repository)?;
@@ -35,7 +35,7 @@ pub(crate) fn list_tags(state: &OiState, params: TagsParams) -> HandlerResult {
     Ok(json!({ "tags": tags }))
 }
 
-// i[registry.list]
+// spec: IMGM#registry-allowlist
 pub(crate) fn list_registries(state: &OiState) -> HandlerResult {
     let registries = state
         .db
@@ -44,7 +44,7 @@ pub(crate) fn list_registries(state: &OiState) -> HandlerResult {
     Ok(json!({ "registries": registries }))
 }
 
-// i[registry.add]
+// spec: IMGM#registry-allowlist
 pub(crate) fn add_registry(state: &OiState, params: RegistryParams) -> HandlerResult {
     let registry = params.registry.clone();
     state
@@ -52,7 +52,7 @@ pub(crate) fn add_registry(state: &OiState, params: RegistryParams) -> HandlerRe
         .call(move |db| registries::add_allowed_registry(db, &registry))
         .map_err(|e| OiError::new(ErrorCode::NotFound, format!("db error: {e}")))?;
 
-    // r[impl fault.lifecycle] — `disallowed_registry` is a condition fault:
+    // spec: FLT#filing-and-clearing — `disallowed_registry` is a condition fault:
     // true exactly while an app's images reference a registry outside the
     // allowlist. Adding the registry is the natural remediation, so it has to
     // re-evaluate for the same reason removing one does — otherwise the fault
@@ -63,7 +63,7 @@ pub(crate) fn add_registry(state: &OiState, params: RegistryParams) -> HandlerRe
     Ok(json!({ "ok": true }))
 }
 
-// i[registry.remove]
+// spec: IMGM#registry-allowlist
 pub(crate) fn remove_registry(state: &OiState, params: RegistryParams) -> HandlerResult {
     let registry = params.registry.clone();
     let removed = state

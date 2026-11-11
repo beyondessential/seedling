@@ -14,7 +14,7 @@ pub trait WorldStateOracle: Send + Sync {
     /// ingress resource. Used by `rt.warm_certs(...).ready()` to wait on cert
     /// validity without coupling to the standard ingress `Ready` lifecycle
     /// (which also requires routing).
-    // r[impl observe.ingress.certs]
+    // spec: OBS#ingresses
     fn cert_valid_for(&self, resource: &ResourceInstance) -> bool {
         let _ = resource;
         false
@@ -22,7 +22,7 @@ pub trait WorldStateOracle: Send + Sync {
 
     /// Returns true if a container image matching `reference` is currently
     /// present in local storage. Used by `rt.warm_images(...).ready()`.
-    // r[impl actuate.image.warm]
+    // spec: IMG#image-warming
     fn image_present(&self, reference: &str) -> bool {
         let _ = reference;
         false
@@ -37,7 +37,7 @@ pub trait WorldStateOracle: Send + Sync {
     /// last `container_exited` observation recorded `exit_code == 0`. For
     /// Service/Ingress/Volume, termination is always success (the resource
     /// has no process exit code to inspect).
-    // l[impl rt.termination.ensure-success]
+    // spec: RT#termination
     fn termination_success(&self, resource: &ResourceInstance) -> Option<bool> {
         let _ = resource;
         None
@@ -118,7 +118,7 @@ impl WorldStateOracle for TestWorldOracle {
         self.present_images.lock().contains(reference)
     }
 
-    // l[impl rt.termination.ensure-success]
+    // spec: RT#termination
     fn termination_success(&self, resource: &ResourceInstance) -> Option<bool> {
         match resource.kind {
             ResourceKind::Deployment | ResourceKind::Job => self
@@ -171,7 +171,7 @@ impl WorldStateOracle for DbWorldOracle {
         })
     }
 
-    // r[impl actuate.image.warm]
+    // spec: IMG#image-warming
     fn image_present(&self, reference: &str) -> bool {
         let reference = reference.to_owned();
         self.db.call(move |db| {
@@ -204,7 +204,7 @@ impl WorldStateOracle for DbWorldOracle {
         })
     }
 
-    // l[impl rt.termination.ensure-success]
+    // spec: RT#termination
     fn termination_success(&self, resource: &ResourceInstance) -> Option<bool> {
         let kind = resource.kind;
         let resource_clone = resource.clone();
@@ -290,7 +290,7 @@ fn drive_observations(
 
 /// How a container's latest run ended: `Some(true)` when it succeeded,
 /// `Some(false)` when it failed, and `None` while it has not ended.
-// l[impl rt.termination.ensure-success]
+// spec: RT#termination
 pub fn container_run_succeeded(observations: &[WorldObservation]) -> Option<bool> {
     // Find the terminal marker for the current run: the most
     // recent container_exited or container_removed. Anything
@@ -354,7 +354,7 @@ pub fn has_lifecycle(kind: ResourceKind) -> bool {
     }
 }
 
-// r[impl lifecycle.derivation]
+// spec: LCY#derivation
 /// Derive the current lifecycle state for a resource from its observation history.
 ///
 /// Observations must be provided in chronological order (ascending `recorded_at`).
@@ -387,9 +387,9 @@ fn derive_lifecycle_with_ms(
         ResourceKind::Deployment | ResourceKind::Job => derive_container_lifecycle(observations),
         ResourceKind::Service => derive_service_lifecycle(observations),
         ResourceKind::Ingress => derive_ingress_lifecycle(observations),
-        // r[impl lifecycle.volume]
+        // spec: LCY#volumes
         ResourceKind::Volume => derive_volume_lifecycle(observations),
-        // r[impl lifecycle.external-volume]
+        // spec: LCY#external-volumes
         ResourceKind::ExternalVolume => derive_volume_lifecycle(observations),
         _ => (LifecycleState::Pending, None),
     }
@@ -399,7 +399,7 @@ fn derive_lifecycle_with_ms(
 // Per-kind derivation functions
 // ---------------------------------------------------------------------------
 
-// r[impl lifecycle.container]
+// spec: LCY#containers
 fn derive_container_lifecycle(observations: &[WorldObservation]) -> (LifecycleState, Option<i64>) {
     let mut state = LifecycleState::Pending;
     let mut transition_ms: Option<i64> = None;
@@ -410,7 +410,7 @@ fn derive_container_lifecycle(observations: &[WorldObservation]) -> (LifecycleSt
             transition_ms = None;
         }
 
-        // r[impl lifecycle.container.unhealthy-transition]
+        // spec: LCY#containers
         // Health demotion: Ready containers observed as unhealthy drop back to
         // Running, and only to Running — other states are unaffected.
         if obs.obs_kind == "health_check_fail" {
@@ -443,7 +443,7 @@ fn derive_container_lifecycle(observations: &[WorldObservation]) -> (LifecycleSt
     (state, transition_ms)
 }
 
-// r[impl lifecycle.service]
+// spec: LCY#services
 fn derive_service_lifecycle(observations: &[WorldObservation]) -> (LifecycleState, Option<i64>) {
     drive_observations(observations, |kind| match kind {
         "network_created" => Some(LifecycleState::Scheduled),
@@ -455,7 +455,7 @@ fn derive_service_lifecycle(observations: &[WorldObservation]) -> (LifecycleStat
     })
 }
 
-// r[impl lifecycle.ingress]
+// spec: LCY#ingresses
 fn derive_ingress_lifecycle(observations: &[WorldObservation]) -> (LifecycleState, Option<i64>) {
     drive_observations(observations, |kind| match kind {
         "ingress_configured" => Some(LifecycleState::Scheduled),
@@ -467,7 +467,7 @@ fn derive_ingress_lifecycle(observations: &[WorldObservation]) -> (LifecycleStat
     })
 }
 
-// r[impl lifecycle.volume]
+// spec: LCY#volumes
 fn derive_volume_lifecycle(observations: &[WorldObservation]) -> (LifecycleState, Option<i64>) {
     drive_observations(observations, |kind| match kind {
         "volume_created" => Some(LifecycleState::Scheduled),

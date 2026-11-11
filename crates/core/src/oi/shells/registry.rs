@@ -98,7 +98,7 @@ fn set_pty_size(fd: std::os::unix::io::RawFd, (rows, cols): (u16, u16)) {
     unsafe { libc::ioctl(fd, libc::TIOCSWINSZ as _, &ws) };
 }
 
-// i[shell.record]
+// spec: SHL#listing-sessions
 pub struct ShellRecord {
     pub session_id: SessionId,
     pub app: AppName,
@@ -146,7 +146,7 @@ impl ShellRegistry {
         true
     }
 
-    // i[shell.resize]
+    // spec: SHL#resizing-a-terminal
     pub fn resize(&self, id: &SessionId, rows: u16, cols: u16) -> bool {
         let mut sessions = self.sessions.lock();
         let Some(session) = sessions.get_mut(id) else {
@@ -159,7 +159,7 @@ impl ShellRegistry {
         true
     }
 
-    // i[shell.stop]
+    // spec: SHL#stopping-a-session
     pub fn stop(&self, id: &SessionId) -> bool {
         let mut sessions = self.sessions.lock();
         let Some(session) = sessions.remove(id) else {
@@ -169,7 +169,7 @@ impl ShellRegistry {
         true
     }
 
-    // i[shell.list]
+    // spec: SHL#listing-sessions
     pub fn list(&self, app: Option<&str>) -> Vec<ShellRecord> {
         self.sessions
             .lock()
@@ -243,7 +243,7 @@ mod tests {
         (ws.ws_row, ws.ws_col)
     }
 
-    // i[verify shell.startup]
+    // spec: SHL#session-startup
     #[test]
     fn starting_session_is_listed_before_it_has_a_container() {
         let registry = ShellRegistry::new();
@@ -255,8 +255,8 @@ mod tests {
         assert!(registry.active_container_names().is_empty());
     }
 
-    // i[verify shell.startup]
-    // i[verify shell.resize]
+    // spec: SHL#session-startup
+    // spec: SHL#resizing-a-terminal
     #[test]
     fn resize_while_starting_is_applied_when_the_terminal_exists() {
         let registry = ShellRegistry::new();
@@ -283,7 +283,7 @@ mod tests {
         }
     }
 
-    // i[verify shell.startup]
+    // spec: SHL#session-startup
     #[test]
     fn initial_size_applies_when_nothing_resizes_it() {
         let registry = ShellRegistry::new();
@@ -300,8 +300,8 @@ mod tests {
         }
     }
 
-    // i[verify shell.startup]
-    // i[verify shell.stop]
+    // spec: SHL#session-startup
+    // spec: SHL#stopping-a-session
     #[tokio::test]
     async fn stop_while_starting_signals_and_refuses_the_late_attach() {
         let registry = ShellRegistry::new();

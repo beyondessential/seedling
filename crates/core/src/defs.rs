@@ -26,7 +26,7 @@ pub trait Freezable {
     }
 }
 
-// l[impl bsl.name]
+// spec: BSL#names
 pub fn validate_name(name: &str) -> Result<(), Box<rhai::EvalAltResult>> {
     if name.starts_with('_') {
         return Err("name must not start with an underscore".into());
@@ -49,7 +49,7 @@ pub fn validate_name(name: &str) -> Result<(), Box<rhai::EvalAltResult>> {
     }
 }
 
-// l[impl bsl.port]
+// spec: BSL#ports
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Port(u16);
 
@@ -106,8 +106,7 @@ pub mod summary;
 pub mod take;
 pub mod volume;
 
-// l[impl bsl.syntax]
-// l[impl bsl.script]
+// spec: BSL#evaluation
 pub fn register(engine: &mut Engine) {
     engine.build_type::<app::App>();
     engine.build_type::<param::Param>();
@@ -131,7 +130,7 @@ pub fn register(engine: &mut Engine) {
     engine.build_type::<collection::Collection>();
     engine.build_type::<shell::ShellControl>();
 
-    // l[impl collection.col]
+    // spec: COL#coercion
     engine.register_fn("col", collection::col);
 }
 
@@ -187,77 +186,70 @@ fn read_mem_total_bytes() -> i64 {
     1
 }
 
-// l[impl bsl.scope]
-// l[impl bsl.enums]
+// spec: BSL#evaluation
+// spec: BSL#enums
 pub fn scope(bundle: Arc<crate::runtime::definition::Bundle>) -> (Scope<'static>, app::App) {
     let mut scope = Scope::new();
     let facts = crate::sysconst::get();
 
-    // l[impl const.available-threads]
+    // spec: CONST#host-constants
     scope.push_constant("AVAILABLE_THREADS", available_threads());
 
-    // l[impl const.available-memory]
+    // spec: CONST#host-constants
     scope.push_constant("AVAILABLE_MEMORY", available_memory_bytes());
 
-    // l[impl const.cpu-architecture]
+    // spec: CONST#host-constants
     scope.push_constant("CPU_ARCHITECTURE", std::env::consts::ARCH.to_owned());
 
-    // l[impl const.host-has-ipv4]
+    // spec: CONST#host-constants
     scope.push_constant("HOST_HAS_IPV4", facts.ipv4_egress);
 
-    // l[impl const.host-has-ipv6]
+    // spec: CONST#host-constants
     scope.push_constant("HOST_HAS_IPV6", facts.ipv6_egress);
 
-    // l[impl const.nat64-active]
+    // spec: CONST#host-constants
     scope.push_constant("NAT64_ACTIVE", facts.nat64_active);
 
-    // l[impl const.has-snapshots]
+    // spec: CONST#host-constants
     scope.push_constant("HAS_SNAPSHOTS", facts.has_snapshots);
 
-    // l[impl const.node-name]
+    // spec: CONST#host-constants
     scope.push_constant("NODE_NAME", facts.node_name.clone());
 
-    // l[impl const.timezone]
+    // spec: CONST#host-constants
     scope.push_constant("TIMEZONE", facts.timezone.clone());
 
-    // l[impl const.idle-cmd]
+    // spec: CONST#idle-command
+    // spec: LINUX#idle-command
     let idle_cmd: rhai::Array = vec![
         rhai::Dynamic::from("sleep".to_owned()),
         rhai::Dynamic::from("infinity".to_owned()),
     ];
     scope.push_constant("IDLE_CMD", idle_cmd);
 
-    // l[impl const.on-update.rolling]
-    // l[impl const.on-update.replace]
+    // spec: CONST#onupdate
     scope.push_constant("OnUpdate", enums::OnUpdate::rhai_constant());
 
-    // l[impl const.on-terminate.recreate]
+    // spec: CONST#onterminate
     scope.push_constant("OnTerminate", enums::OnTerminate::rhai_constant());
 
-    // l[impl const.on-exit.restart]
-    // l[impl const.on-exit.terminate]
-    // l[impl const.on-exit.restart-on-failure]
+    // spec: CONST#onexit
     scope.push_constant("OnExit", enums::OnExit::rhai_constant());
 
-    // l[impl const.priority.enum]
+    // spec: CONST#priority
     scope.push_constant("Priority", enums::Priority::rhai_constant());
 
-    // l[impl const.resource-type.enum]
+    // spec: CONST#resourcetype
     scope.push_constant("ResourceType", resource::ResourceKind::rhai_constant());
 
-    // l[impl const.terminate.tls]
-    // l[impl const.terminate.dtls]
-    // l[impl const.terminate.https]
+    // spec: ING#terminate
     scope.push_constant("Terminate", enums::Terminate::rhai_constant());
 
-    // l[impl const.output.tcp]
-    // l[impl const.output.udp]
-    // l[impl const.output.http1]
-    // l[impl const.output.http2]
+    // spec: ING#output
     scope.push_constant("Output", enums::Output::rhai_constant());
 
     let app = app::App::with_bundle(bundle);
-    // l[impl app.var]
+    // spec: APP#the-app-variable
     scope.push("app", app.clone());
     (scope, app)
 }

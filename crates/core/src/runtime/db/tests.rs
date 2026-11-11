@@ -1,7 +1,6 @@
 use super::*;
 
-// r[verify history.persistence]
-// r[verify history.storage]
+// spec: HIST#durability
 #[test]
 fn open_in_memory_succeeds() {
     let db = Db::open_in_memory().expect("in-memory DB should open");
@@ -16,7 +15,7 @@ fn open_in_memory_succeeds() {
     assert_eq!(version, 67);
 }
 
-// r[verify history.persistence]
+// spec: HIST#durability
 #[test]
 fn migrate_twice_is_idempotent() {
     let db = Db::open_in_memory().expect("open");
@@ -24,7 +23,7 @@ fn migrate_twice_is_idempotent() {
     db.migrate().expect("second migration should not error");
 }
 
-// i[verify param.store]
+// spec: PRM#parameter-storage
 #[test]
 fn params_table_exists() {
     let db = Db::open_in_memory().expect("open");
@@ -48,7 +47,7 @@ fn params_table_exists() {
     assert_eq!(version, 67);
 }
 
-// i[verify app.persist]
+// spec: APPS#persistence
 #[test]
 fn registered_apps_table_exists() {
     let db = Db::open_in_memory().expect("open");
@@ -66,9 +65,9 @@ fn registered_apps_table_exists() {
     );
 }
 
-// r[verify history.world.entries]
-// r[verify history.operations.entries]
-// r[verify history.action-log.entries]
+// spec: HIST#observations
+// spec: HIST#autonomous-operations
+// spec: HIST#action-calls
 #[test]
 fn all_tables_exist_after_migration() {
     let db = Db::open_in_memory().expect("open");
@@ -92,7 +91,7 @@ fn all_tables_exist_after_migration() {
     }
 }
 
-// r[verify infra.db.file-permissions]
+// spec: INFRA#file-permissions
 #[test]
 fn open_creates_database_with_owner_only_permissions() {
     use std::os::unix::fs::PermissionsExt;
@@ -104,7 +103,7 @@ fn open_creates_database_with_owner_only_permissions() {
     assert_eq!(mode, 0o600, "db file should be 0600, got 0{mode:o}");
 }
 
-// r[verify infra.db.file-permissions]
+// spec: INFRA#file-permissions
 #[test]
 fn open_rejects_database_with_group_readable_permissions() {
     use std::os::unix::fs::PermissionsExt;
@@ -125,7 +124,7 @@ fn open_rejects_database_with_group_readable_permissions() {
     );
 }
 
-// r[verify infra.db.busy-timeout]
+// spec: INFRA#database
 #[test]
 fn open_in_memory_sets_busy_timeout() {
     let db = Db::open_in_memory().expect("open");
@@ -140,7 +139,7 @@ fn open_in_memory_sets_busy_timeout() {
     );
 }
 
-// r[verify reconciliation.idempotency]
+// spec: RCN#reconciliation-loop
 #[test]
 fn action_log_has_unique_constraint() {
     let db = Db::open_in_memory().expect("open");
@@ -169,9 +168,9 @@ fn action_log_has_unique_constraint() {
     );
 }
 
-// r[verify generation.script-storage]
-// i[verify app.script]
-// i[verify definition.provenance]
+// spec: GEN#bundle-storage
+// spec: APPS#definition-retrieval
+// spec: DEFN#provenance-reporting
 #[test]
 fn stored_scripts_become_one_file_bundles_pushed_by_nobody_known() {
     use crate::runtime::definition::{Bundle, Source};
@@ -257,10 +256,10 @@ fn backup_tables_are_dropped_and_their_active_faults_retired() {
     assert_eq!(active, vec!["f4".to_owned()]);
 }
 
-// r[verify tls.strategy.canopy]
-// r[verify tls.strategy.canopy-only]
-// r[verify tls.chain.ladder]
-// r[verify tls.csr.flow]
+// spec: TCAN#applicability-and-availability
+// spec: TCAN#canopy-only-policy
+// spec: CHAIN#fall-through
+// spec: TLS#certificate-signing-requests
 #[test]
 fn canopy_migration_keeps_policies_certificates_and_attempt_links() {
     let db = Db::open_in_memory_through(60).expect("open at v60");
@@ -365,7 +364,7 @@ fn canopy_migration_keeps_policies_certificates_and_attempt_links() {
 /// Every stored certificate is indexed by the migration. One whose PEM will not
 /// parse is indexed as covering nothing rather than stopping the upgrade, and a
 /// row with no certificate yet is left out.
-// r[verify tls.cert.serve]
+// spec: TLS#serving
 #[test]
 fn san_index_migration_indexes_every_stored_certificate() {
     let db = Db::open_in_memory_through(66).expect("open at v66");

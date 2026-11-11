@@ -68,7 +68,7 @@ import type {
   VolumeRef,
 } from "../lib/types";
 
-// w[impl routes.volumes.delete-confirm]
+// spec: UI#volumes
 function ConfirmDeleteHeldDialog({
   volume,
   onCancel,
@@ -214,7 +214,7 @@ function RestoreHeldVolumeDialog({
   );
 }
 
-// w[impl routes.volumes.delete-confirm]
+// spec: UI#volumes
 function ConfirmDeleteSiteDialog({
   volume,
   onCancel,
@@ -289,7 +289,7 @@ function ConfirmDeleteSiteDialog({
   );
 }
 
-// w[impl routes.volumes]
+// spec: UI#volumes
 function CreateSiteVolumeDialog({
   open,
   onClose,
@@ -654,7 +654,7 @@ function MultiVolumeShellDialog({
       </DialogContent>
       <DialogActions>
         <Button onClick={handleClose}>Cancel</Button>
-        {/* w[impl volumes.shell-ui.read-only] */}
+        {/* spec: UI#shells */}
         <SolidActionButton
           safety="read"
           color={shellReadOnly ? undefined : "warning"}
@@ -671,7 +671,7 @@ function MultiVolumeShellDialog({
 }
 
 
-// w[impl routes.volumes]
+// spec: UI#volumes
 export default function Volumes() {
   const {
     data: siteVols,
@@ -711,7 +711,7 @@ export default function Volumes() {
   const { execute, error: actionError } = useOiAction();
   const { openVolumeShell } = useSessionContext();
   const { mode } = useSafetyMode();
-  // w[impl volumes.shell-ui.read-only]
+  // spec: UI#shells
   const shellReadOnly = mode === "read";
 
   const [createOpen, setCreateOpen] = useState(false);
@@ -783,7 +783,7 @@ export default function Volumes() {
         <Typography variant="h5" sx={{ flexGrow: 1 }}>
           Volumes
         </Typography>
-        {/* w[impl volumes.shell-ui.read-only] */}
+        {/* spec: UI#shells */}
         <OutlinedActionButton
           safety="read"
           color={shellReadOnly ? undefined : "warning"}
@@ -866,8 +866,8 @@ export default function Volumes() {
                         <TableCell sx={{ color: "text.secondary" }}>
                           {new Date(v.created_at).toLocaleString()}
                         </TableCell>
-                        {/* w[volumes.shell-ui] */}
-                        {/* w[impl volumes.shell-ui.read-only] */}
+                        {/* UI#shells */}
+                        {/* spec: UI#shells */}
                         <TableCell align="right" sx={{ px: 0.5, whiteSpace: "nowrap" }}>
                           <IconActionButton
                             safety="read"
@@ -960,7 +960,7 @@ export default function Volumes() {
                           {v.description ?? "—"}
                         </TableCell>
                         <TableCell align="right" sx={{ px: 0.5, whiteSpace: "nowrap" }}>
-                          {/* w[impl volumes.shell-ui.read-only] */}
+                          {/* spec: UI#shells */}
                           <IconActionButton
                             safety="read"
                             color={shellReadOnly ? undefined : "warning"}
@@ -1147,7 +1147,7 @@ export default function Volumes() {
                           {new Date(h.held_at).toLocaleString()}
                         </TableCell>
                         <TableCell align="right" sx={{ px: 0.5, whiteSpace: "nowrap" }}>
-                          {/* w[impl volumes.shell-ui.read-only] */}
+                          {/* spec: UI#shells */}
                           <IconActionButton
                             safety="read"
                             color={shellReadOnly ? undefined : "warning"}

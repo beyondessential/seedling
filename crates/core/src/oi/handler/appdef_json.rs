@@ -64,7 +64,7 @@ pub(crate) fn resource_static_json(
             "low": dep_def.scale.start,
             "high": dep_def.scale.end,
         });
-        // i[impl app.priority.describe]
+        // spec: CTL#app-priority
         obj["priority"] = json!(dep_def.priority.as_str());
     }
     if let Resource::Volume(vol) = resource {
@@ -93,9 +93,9 @@ pub(crate) fn param_schema_entry_json(name: &str, schema: &ParamDef) -> Value {
 }
 
 /// JSON for a lifecycle / scheduled action. The Start action is tagged as
-/// `lifecycle` (not `action`) per `l[action.start.no-manual-invoke]`.
+/// `lifecycle` (not `action`) per `ACN#start-action`.
 pub(crate) fn action_entry_json(a: &ActionDef) -> Value {
-    // l[impl action.start.no-manual-invoke]
+    // spec: ACN#start-action
     let kind = if a.name == "start" {
         "lifecycle"
     } else {

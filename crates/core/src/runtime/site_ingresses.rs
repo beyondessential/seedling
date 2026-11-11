@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::runtime::db::Db;
 
-// r[impl ingress.site]
+// spec: SITE#site-ingresses
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SiteIngressDef {
     pub name: SiteIngressName,
@@ -197,7 +197,7 @@ fn source_from_columns(
     }
 }
 
-// r[impl ingress.site.lifecycle]
+// spec: SITE#sources
 pub fn create(db: &Db, def: &SiteIngressDef) -> rusqlite::Result<()> {
     let (source, provider, key) = source_columns(&def.source);
     db.conn.execute(

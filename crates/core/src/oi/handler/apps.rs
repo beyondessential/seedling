@@ -50,7 +50,7 @@ pub(crate) struct CreateParams {
 }
 
 /// One parameter change made alongside a definition update.
-// i[impl app.update]
+// spec: APPS#update
 #[derive(Deserialize)]
 pub(crate) struct ParamUpdate {
     pub name: ParamName,
@@ -131,7 +131,7 @@ pub(crate) struct ResourceStopParams {
 
 /// The refusal of a request to `doing` an app that `blocker` holds, naming the
 /// holder and what the operator can do about it.
-// i[impl wire.error-codes]
+// spec: WIRE#error-codes
 pub(crate) fn app_blocked(app: &str, doing: &str, blocker: &AppBlocker) -> OiError {
     let advice = match blocker {
         AppBlocker::Active(_) => "cancel it first via /apps/action/cancel",
@@ -173,7 +173,7 @@ pub(crate) fn persist_app_fields(
     installing: bool,
 ) -> rusqlite::Result<()> {
     db.conn.execute(
-        // r[impl history.persist.partial-update]
+        // spec: INFRA#database
         "INSERT INTO registered_apps \
              (name, installed, uninstalling, installing, current_generation) \
          VALUES (?1, ?2, ?3, ?4, ?5) \
@@ -229,7 +229,7 @@ pub(crate) fn sync_fault_state(
         regs
     };
     db.call(move |db| {
-        // r[impl canopy.app.key]
+        // spec: CNR#applications
         // A definition that failed to evaluate says nothing of its type, and
         // dropping the type would take the app out of Canopy as if it had none.
         if script_error.is_none()
@@ -313,7 +313,7 @@ pub(crate) fn sync_fault_state(
     });
 }
 
-// r[impl schedule.prune]
+// spec: SCHED#schedule-records
 fn sync_action_schedules(state: &OiState, app_name: &AppName) {
     let valid_pairs: Vec<(ActionName, String)> = {
         let reg = state.registry.read();
@@ -346,7 +346,7 @@ fn sync_action_schedules(state: &OiState, app_name: &AppName) {
     });
 }
 
-// i[impl app.describe] — fills in `last_fired_at` and `next_fire_at` on each
+// spec: APPS#description — fills in `last_fired_at` and `next_fire_at` on each
 // action's `schedules` entries. Schedules whose cronexpr is no longer present
 // in the AppDef are ignored (they will be pruned by `sync_action_schedules`).
 fn enrich_action_schedules(state: &OiState, app: &AppName, actions_json: &mut [Value]) {
@@ -426,7 +426,7 @@ pub(crate) fn validate_name(name: &str) -> Result<(), OiError> {
             "name must not start with an underscore".to_string(),
         ));
     }
-    // l[bsl.name]: ^[a-zA-Z][a-zA-Z0-9-]{1,60}[a-zA-Z0-9]$
+    // spec: BSL#names: ^[a-zA-Z][a-zA-Z0-9-]{1,60}[a-zA-Z0-9]$
     let ok = name.len() >= 3
         && name.len() <= 63
         && name.starts_with(|c: char| c.is_ascii_alphabetic())
@@ -471,10 +471,10 @@ pub(crate) fn serialize_param_schema(
         .collect()
 }
 
-// i[app.list]
-// i[impl resource.stop.status]
+// spec: APPS#listing
+// spec: CTL#resource-stop
 pub(crate) fn list_apps(state: &OiState) -> HandlerResult {
-    // i[impl app.priority.describe]
+    // spec: CTL#app-priority
     // One read for every app's priority, rather than a round trip per app. A
     // failed read
     // is surfaced rather than defaulted: reporting every app as `normal` is
@@ -489,7 +489,7 @@ pub(crate) fn list_apps(state: &OiState) -> HandlerResult {
                 format!("could not read app priorities: {e}"),
             )
         })?;
-    // l[impl app.description]
+    // spec: APP#app-description
     let standings = app_status::standings(&state.registry, &state.scheduler, &state.db, |entry| {
         entry.app.def.load().description.clone()
     })
@@ -519,7 +519,7 @@ pub(crate) fn list_apps(state: &OiState) -> HandlerResult {
     Ok(json!(result))
 }
 
-// i[app.describe]
+// spec: APPS#description
 pub(crate) fn describe_app(state: &OiState, params: AppParams) -> HandlerResult {
     let name = params.app.as_str();
 
@@ -547,7 +547,7 @@ pub(crate) fn describe_app(state: &OiState, params: AppParams) -> HandlerResult 
         .db
         .call(move |db| faults::list_active_faults(db, Some(&name_owned)).unwrap_or_default());
 
-    // i[app.describe] — app-level faults from the DB.
+    // spec: APPS#description — app-level faults from the DB.
     let app_faults_json: Vec<Value> = all_faults_for_app
         .iter()
         .filter(|f| f.resource_type.is_none())
@@ -565,7 +565,7 @@ pub(crate) fn describe_app(state: &OiState, params: AppParams) -> HandlerResult 
         })
         .collect();
 
-    // i[impl resource.stop.status]
+    // spec: CTL#resource-stop
     let stopped_set = {
         let name_owned = params.app.clone();
         state
@@ -575,8 +575,8 @@ pub(crate) fn describe_app(state: &OiState, params: AppParams) -> HandlerResult 
 
     let def = entry.app.def.load();
 
-    // i[app.describe]
-    // i[impl app.describe.param-secret]
+    // spec: APPS#description
+    // spec: APPS#parameters
     let params_json: Vec<Value> = def
         .params
         .iter()
@@ -597,7 +597,7 @@ pub(crate) fn describe_app(state: &OiState, params: AppParams) -> HandlerResult 
         })
         .collect();
 
-    // i[app.describe] — params stored in the DB that the current script does
+    // spec: APPS#description — params stored in the DB that the current script does
     // not reference; shown for operator awareness only.
     let unknown_params_json: Vec<Value> = stored_params
         .iter()
@@ -605,7 +605,7 @@ pub(crate) fn describe_app(state: &OiState, params: AppParams) -> HandlerResult 
         .map(|(k, v)| json!({ "name": k, "value": v }))
         .collect();
 
-    // i[app.describe]
+    // spec: APPS#description
     let mut actions_json: Vec<Value> = def.actions.values().map(action_entry_json).collect();
     for s in def.shells.values() {
         actions_json.push(shell_entry_json(s));
@@ -614,7 +614,7 @@ pub(crate) fn describe_app(state: &OiState, params: AppParams) -> HandlerResult 
         actions_json.push(install_entry_json(inst));
     }
 
-    // i[impl app.describe] — overlay live schedule timing onto each action's
+    // spec: APPS#description — overlay live schedule timing onto each action's
     // `schedules` array. The bare entries from `action_entry_json` carry
     // `last_fired_at` and `next_fire_at` set to null; here we replace those
     // with the values stored in the schedule table and a freshly computed
@@ -633,7 +633,7 @@ pub(crate) fn describe_app(state: &OiState, params: AppParams) -> HandlerResult 
             | AppStatus::Installing
             | AppStatus::Uninstalling
     );
-    // i[app.describe]
+    // spec: APPS#description
     // Pre-render each resource's static declaration while we still hold the
     // def. The DB closure below only needs plain data (no locks) to augment
     // with instance state, faults, stopped flag, and current scale.
@@ -658,7 +658,7 @@ pub(crate) fn describe_app(state: &OiState, params: AppParams) -> HandlerResult 
     let all_faults_clone = all_faults_for_app.clone();
     let stopped_set_clone = stopped_set.clone();
     let resources_json: Vec<Value> = state.db.call(move |db| {
-        // i[impl app.describe]
+        // spec: APPS#description
         // Read the rate settings once per describe: every instance summary
         // reports its recent count over the same window.
         let restart_settings = restarts::settings(db).ok();
@@ -673,7 +673,7 @@ pub(crate) fn describe_app(state: &OiState, params: AppParams) -> HandlerResult 
                             let observations = query_observations(db, inst).unwrap_or_default();
                             let (lifecycle, transition_time) =
                                 derive_state_with_transition_time(inst, &observations);
-                            // i[impl app.describe]
+                            // spec: APPS#description
                             // Omitted entirely for an instance with no
                             // restart history, so a resource that has never
                             // restarted does not read as one that restarted
@@ -724,9 +724,9 @@ pub(crate) fn describe_app(state: &OiState, params: AppParams) -> HandlerResult 
                 resource_obj["faults"] = json!(resource_faults);
                 resource_obj["stopped"] = json!(is_stopped);
 
-                // i[impl scale.describe]
+                // spec: CTL#scaling
                 if let Some((low, high)) = info.scale_bounds {
-                    // r[impl scaling.decision.unreadable]
+                    // spec: AUTO#unreadable-scale
                     // Null rather than the lower bound. The bounds come from
                     // the app definition and are known; what the operator
                     // chose within them is not, and reporting the floor would
@@ -821,7 +821,7 @@ pub(crate) fn describe_app(state: &OiState, params: AppParams) -> HandlerResult 
                     "type": kind_str,
                     "anonymous": rec.resource_name.is_none(),
                     "operation_id": rec.operation_id,
-                    // l[impl bsl.resource.description]
+                    // spec: BSL#descriptions
                     "description": rec.description,
                     "instances": [{
                         "id": rec.instance_id,
@@ -840,13 +840,13 @@ pub(crate) fn describe_app(state: &OiState, params: AppParams) -> HandlerResult 
         Vec::new()
     };
 
-    // i[impl resource.stop.status]
+    // spec: CTL#resource-stop
     let stopped_resources_json: Vec<Value> = stopped_set
         .iter()
         .map(|(k, n)| json!({ "kind": kind_str(*k), "name": n }))
         .collect();
 
-    // i[impl app.priority.describe]
+    // spec: CTL#app-priority
     // Surfaced rather than defaulted, for the same reason as `/apps/list`.
     let app_priority = {
         let name_clone = params.app.clone();
@@ -864,10 +864,10 @@ pub(crate) fn describe_app(state: &OiState, params: AppParams) -> HandlerResult 
     let mut desc = json!({
         "status": status.name(),
         "generation": generation,
-        // i[impl definition.provenance]
+        // spec: DEFN#provenance-reporting
         "definition": entry.source.to_json(&entry.bundle),
         "description": def.description,
-        // i[impl app.canopy.describe]
+        // spec: APPS#description
         "canopy_type": def.canopy_type,
         "priority": app_priority.as_str(),
         "faults": app_faults_json,
@@ -879,7 +879,7 @@ pub(crate) fn describe_app(state: &OiState, params: AppParams) -> HandlerResult 
         "actions": actions_json,
     });
 
-    // i[impl action.describe.barrier]
+    // spec: APPS#current-operation
     // Surface the in-flight operation (action name, generation transition,
     // currently-blocking barrier) when the app is Operating or Installing,
     // from the same scheduler snapshot the status was derived from. An
@@ -892,7 +892,7 @@ pub(crate) fn describe_app(state: &OiState, params: AppParams) -> HandlerResult 
     });
     if let Some(op) = reported_operation {
         let op_id = &op.operation_id;
-        // i[impl action.describe.barrier]
+        // spec: APPS#current-operation
         // Surface the currently-blocking barrier (if any) so operators can
         // see elapsed time / deadline without tailing logs. Between replay
         // passes the unsatisfied barrier record sits in the action log
@@ -905,7 +905,7 @@ pub(crate) fn describe_app(state: &OiState, params: AppParams) -> HandlerResult 
             entries
                 .into_iter()
                 .filter_map(|e| {
-                    // i[impl action.describe.barrier]
+                    // spec: APPS#current-operation
                     // A call can hold several barriers; the one blocking it
                     // is whichever of them is still waiting.
                     let b = e.barriers.iter().find(|b| !b.satisfied)?;
@@ -977,10 +977,10 @@ fn definition_for(
     Ok((gen_n, bundle, source))
 }
 
-// i[app.script]
+// spec: APPS#definition-retrieval
 pub(crate) fn get_app_script(state: &OiState, params: GetScriptParams) -> HandlerResult {
     let (generation, bundle, _) = definition_for(state, &params.app, params.generation)?;
-    // i[impl app.script]
+    // spec: APPS#definition-retrieval
     let script = bundle.script().map_err(OiError::from)?;
     Ok(json!({
         "script": script.text(),
@@ -989,7 +989,7 @@ pub(crate) fn get_app_script(state: &OiState, params: GetScriptParams) -> Handle
     }))
 }
 
-// i[impl app.bundle]
+// spec: APPS#definition-retrieval
 pub(crate) fn get_app_bundle(state: &OiState, params: GetScriptParams) -> HandlerResult {
     let (generation, bundle, source) = definition_for(state, &params.app, params.generation)?;
     Ok(json!({
@@ -999,7 +999,7 @@ pub(crate) fn get_app_bundle(state: &OiState, params: GetScriptParams) -> Handle
     }))
 }
 
-// i[impl generation.history]
+// spec: APPS#generation-history
 pub(crate) fn list_generations(state: &OiState, params: ListGenerationsParams) -> HandlerResult {
     let name = params.app.as_str();
     {
@@ -1027,10 +1027,10 @@ pub(crate) fn list_generations(state: &OiState, params: ListGenerationsParams) -
             let entries = gens::list(db, &name_owned, before, limit)?;
 
             // Determine for each entry whether the script content changed relative to
-            // the immediately preceding generation (informational, per i[generation.history]).
+            // the immediately preceding generation (informational, per APPS#generation-history).
             let mut script_changed_for: std::collections::BTreeMap<u64, bool> =
                 std::collections::BTreeMap::new();
-            // i[impl generation.history] — the provenance of each installed
+            // spec: APPS#generation-history — the provenance of each installed
             // definition, with the bundle-derived fields filled in.
             let mut definitions: std::collections::BTreeMap<u64, Value> =
                 std::collections::BTreeMap::new();
@@ -1085,8 +1085,8 @@ pub(crate) fn list_generations(state: &OiState, params: ListGenerationsParams) -
                 obj.insert("param_name".into(), json!(name));
             }
             if e.param_name.is_some() {
-                // i[impl generation.history]
-                // r[impl secret.redaction]
+                // spec: APPS#generation-history
+                // spec: SEC#redaction
                 let is_secret = e
                     .param_name
                     .as_deref()
@@ -1140,7 +1140,7 @@ pub(crate) fn list_generations(state: &OiState, params: ListGenerationsParams) -
     Ok(json!(result))
 }
 
-// i[impl plan.dry-run]
+// spec: PRM#change-planning
 pub(crate) fn dry_run_plan(state: &OiState, params: PlanParams, ctx: &RequestCtx) -> HandlerResult {
     let name = params.app.as_str();
     {
@@ -1268,7 +1268,7 @@ pub(crate) fn dry_run_plan(state: &OiState, params: PlanParams, ctx: &RequestCtx
     }
     on_change_would_fire.sort();
 
-    // i[impl param.validation]
+    // spec: PRM#validation
     let rejections: Vec<Value> = rejections
         .into_iter()
         .map(|r| json!({ "name": r.name, "reason": r.reason }))
@@ -1282,8 +1282,8 @@ pub(crate) fn dry_run_plan(state: &OiState, params: PlanParams, ctx: &RequestCtx
     }))
 }
 
-// i[app.register]
-// i[app.persist]
+// spec: APPS#registration
+// spec: APPS#persistence
 pub(crate) fn register_app(
     state: &OiState,
     params: CreateParams,
@@ -1299,7 +1299,7 @@ pub(crate) fn check_registrable(state: &OiState, app: &AppName) -> Result<(), Oi
     let name = app.as_str();
     validate_name(name)?;
 
-    // r[impl priority.groups-owned]
+    // spec: PRIO#resource-control-groups
     // Creation only: a name the daemon claims is refused here, never on update
     // or delete, so an app registered before the reservation stays manageable.
     crate::reserved::check_app_name(app)
@@ -1316,7 +1316,7 @@ pub(crate) fn check_registrable(state: &OiState, app: &AppName) -> Result<(), Oi
 }
 
 /// Register `app` from a definition already resolved from its source.
-// i[impl app.register]
+// spec: APPS#registration
 pub(crate) fn register_resolved(
     state: &OiState,
     app_name: &AppName,
@@ -1325,15 +1325,15 @@ pub(crate) fn register_resolved(
 ) -> HandlerResult {
     let name = app_name.as_str();
     let Resolved { bundle, source } = resolved;
-    // i[impl definition.bundle.seedling-versions]
+    // spec: DEFN#seedling-version-support
     bundle.check_installable(&version::running())?;
 
-    // i[impl app.register] — durable first, observable second. The rows all
+    // spec: APPS#registration — durable first, observable second. The rows all
     // commit or none do, and only then does the app appear in the registry,
     // so a failed persist leaves nothing for `/apps/list` to show, nothing
     // for a restart to silently drop (load_from_db skips generation-0 rows),
     // and nothing for a retried `/apps/create` to collide with.
-    // i[impl param.validation] — registration runs no validators: a newly
+    // spec: PRM#validation — registration runs no validators: a newly
     // registered app has no set parameters.
     let (app, script_error) = crate::runtime::apps::evaluate(
         app_name,
@@ -1351,7 +1351,7 @@ pub(crate) fn register_resolved(
             let tx = db.conn.unchecked_transaction()?;
             // The app row first, so the generation rows can FK against it.
             persist_app_fields(db, &name_owned, 0, false, false, false)?;
-            // r[impl generation.bumps] — initial registration creates
+            // spec: GEN#generation-numbers — initial registration creates
             // generation 1.
             let generation = crate::runtime::generations::bump_register(
                 db,
@@ -1382,7 +1382,7 @@ pub(crate) fn register_resolved(
         }
     }
 
-    // r[impl schedule.prune]
+    // spec: SCHED#schedule-records
     sync_action_schedules(state, app_name);
 
     tracing::info!(app = %name, generation, "registered app");
@@ -1390,7 +1390,7 @@ pub(crate) fn register_resolved(
     Ok(json!({ "generation": generation }))
 }
 
-// i[app.deregister]
+// spec: APPS#removal
 pub(crate) fn deregister_app(
     state: &OiState,
     params: AppParams,
@@ -1452,21 +1452,21 @@ pub(crate) fn deregister_app(
                 .map_err(|e| OiError::new(ErrorCode::NotFound, format!("db remove: {e}")))?;
             crate::runtime::apps::delete_app_params(db, &name_owned)
                 .map_err(|e| OiError::new(ErrorCode::NotFound, format!("db param cleanup: {e}")))?;
-            // r[impl generation.deregister]
+            // spec: GEN#lineage
             if let Err(e) = crate::runtime::generations::delete_for_app(db, &name_owned) {
                 tracing::warn!(app = %name_owned, "failed to delete generation history during deregister: {e}");
             }
             if let Err(e) = crate::runtime::faults::clear_all_faults_for_app(db, &name_owned) {
                 tracing::warn!(app = %name_owned, "failed to clear faults during deregister: {e}");
             }
-            // r[impl canopy.app.key]
+            // spec: CNR#applications
             if let Err(e) = crate::runtime::canopy::store::delete_app(db, name_owned.as_str()) {
                 tracing::warn!(app = %name_owned, "failed to forget the Canopy type during deregister: {e}");
             }
             if let Err(e) = scaling::delete_scaling_decisions_for_app(db, &name_owned) {
                 tracing::warn!(app = %name_owned, "failed to clean up scaling decisions during deregister: {e}");
             }
-            // i[impl app.priority.reset-on-uninstall]
+            // spec: CTL#app-priority
             if let Err(e) = priority::delete_app_priority_for_app(db, &name_owned) {
                 tracing::warn!(app = %name_owned, "failed to clean up app priority during deregister: {e}");
             }
@@ -1476,7 +1476,7 @@ pub(crate) fn deregister_app(
             if let Err(e) = stopped::delete_stopped_for_app(db, &name_owned) {
                 tracing::warn!(app = %name_owned, "failed to clean up stopped resources during deregister: {e}");
             }
-            // r[impl gc.instances]
+            // spec: GC#unscheduled-instances
             // Once the app leaves the registry, the instance sweep can no
             // longer tell what it desires, so its rows go now or never.
             if let Err(e) = crate::runtime::history::delete_instances_for_app(db, &name_owned) {
@@ -1485,7 +1485,7 @@ pub(crate) fn deregister_app(
             if let Err(e) = crate::runtime::db::delete_schedules_for_app(db, &name_owned) {
                 tracing::warn!(app = %name_owned, "failed to clean up schedules during deregister: {e}");
             }
-            // r[impl deregister.purge]
+            // spec: TRD#deregistration
             // Left behind, these are inherited by the next app registered
             // under this name — and a volume mapping carries a target and a
             // read-only flag, so that app would come up already mounting
@@ -1537,7 +1537,7 @@ pub(crate) fn uninstall_app(state: &OiState, params: AppParams) -> HandlerResult
         Arc::clone(&entry.phase)
     };
 
-    // r[impl app.uninstall.exclusive]
+    // spec: TRD#uninstall-admission
     // Reaching here means the phase is `Installed`, which is also the phase an
     // app sits in while an action closure runs: the phase does not distinguish
     // an idle app from one mid-action. Ask the scheduler, which holds the
@@ -1580,11 +1580,11 @@ pub(crate) fn uninstall_app(state: &OiState, params: AppParams) -> HandlerResult
     // admitted, and holding a node-wide lock across it stalls every app.
     let name_owned = params.app.clone();
     state.db.call(move |db| {
-        // i[impl scale.reset-on-uninstall]
+        // spec: CTL#scaling
         if let Err(e) = scaling::delete_scaling_decisions_for_app(db, &name_owned) {
             tracing::warn!(app = %name_owned, "failed to clear scaling decisions on uninstall: {e}");
         }
-        // i[impl app.priority.reset-on-uninstall]
+        // spec: CTL#app-priority
         if let Err(e) = priority::delete_app_priority_for_app(db, &name_owned) {
             tracing::warn!(app = %name_owned, "failed to clear app priority on uninstall: {e}");
         }
@@ -1596,7 +1596,7 @@ pub(crate) fn uninstall_app(state: &OiState, params: AppParams) -> HandlerResult
         }
     });
 
-    // i[impl event.types]
+    // spec: EVT#event-types
     // Notify clients the app entered Uninstalling. The reconciler will emit a
     // second AppPhaseChanged(not_installed) once teardown completes.
     state
@@ -1636,7 +1636,7 @@ pub(crate) fn validation_error(rejections: &[crate::runtime::apps::Rejection]) -
     )
 }
 
-// i[app.update]
+// spec: APPS#update
 pub(crate) fn update_app(state: &OiState, params: UpdateParams, ctx: &RequestCtx) -> HandlerResult {
     let name = params.app.as_str();
 
@@ -1651,7 +1651,7 @@ pub(crate) fn update_app(state: &OiState, params: UpdateParams, ctx: &RequestCtx
     // until the handler for a changed param is admitted.
     let hold = super::params::hold_for_change(state, &params.app)?;
 
-    // i[impl app.update] — everything up to the commit below is a check:
+    // spec: APPS#update — everything up to the commit below is a check:
     // fetching, bundle rules, evaluation and validation all happen before
     // anything is stored, and every refusal returns with the database, the
     // registry and the fault store exactly as they were.
@@ -1669,7 +1669,7 @@ pub(crate) fn update_app(state: &OiState, params: UpdateParams, ctx: &RequestCtx
 
     let name_owned = params.app.clone();
     let cipher = Arc::clone(&state.cipher);
-    // r[impl secret.history] — whether the value being replaced is held in
+    // spec: SEC#generation-history — whether the value being replaced is held in
     // secret storage is read before anything is written, since this update
     // may be what stops the definition marking it secret.
     let changing = params.param.as_ref().map(|p| p.name.clone());
@@ -1687,7 +1687,7 @@ pub(crate) fn update_app(state: &OiState, params: UpdateParams, ctx: &RequestCtx
         })
         .map_err(|e| OiError::new(ErrorCode::Internal, format!("db params: {e}")))?;
 
-    // r[impl operation.lifecycle.param-change] — at most one parameter,
+    // spec: OPS#parameter-changes — at most one parameter,
     // carried in the same step as the definition.
     let mut proposed = current_params.clone();
     let change = params.param.and_then(|p| {
@@ -1702,7 +1702,7 @@ pub(crate) fn update_app(state: &OiState, params: UpdateParams, ctx: &RequestCtx
         Some((p.name, previous, p.value))
     });
 
-    // i[impl param.validation] — the validators are those of the new
+    // spec: PRM#validation — the validators are those of the new
     // definition, evaluated with the values the request would produce.
     let (app, evaluation) = crate::runtime::apps::evaluate_validated(
         &params.app,
@@ -1725,7 +1725,7 @@ pub(crate) fn update_app(state: &OiState, params: UpdateParams, ctx: &RequestCtx
             .is_some_and(|d| d.is_secret())
     });
 
-    // r[impl generation.bumps] — the definition, the parameter change, and
+    // spec: GEN#generation-numbers — the definition, the parameter change, and
     // the generation bump commit together or not at all.
     let name_owned = params.app.clone();
     let bundle_owned = Arc::clone(&bundle);
@@ -1764,7 +1764,7 @@ pub(crate) fn update_app(state: &OiState, params: UpdateParams, ctx: &RequestCtx
                 &source_owned,
                 recorded.as_ref().map(|c| (c, cipher.as_ref())),
             )?;
-            // r[impl secret.migration]
+            // spec: SEC#migration
             crate::runtime::apps::migrate_newly_secret_params(
                 db,
                 &cipher,
@@ -1785,7 +1785,7 @@ pub(crate) fn update_app(state: &OiState, params: UpdateParams, ctx: &RequestCtx
         generation,
     );
 
-    // r[impl actuate.volume.hold]
+    // spec: ACTU#held-volumes
     // Diff previous vs current volume resources and hold anything the new
     // definition dropped. Runs synchronously with the update so there's no
     // window where the operator sees the old volume as gone but the on-disk
@@ -1808,8 +1808,7 @@ pub(crate) fn update_app(state: &OiState, params: UpdateParams, ctx: &RequestCtx
             sync_fault_state(&state.db, entry);
         }
     }
-    // r[impl fault.definition-unsupported]
-    // r[impl fault.definition-source-moved]
+    // spec: FLT#app-faults
     {
         let name_owned = params.app.clone();
         let bundle_owned = Arc::clone(&bundle);
@@ -1823,7 +1822,7 @@ pub(crate) fn update_app(state: &OiState, params: UpdateParams, ctx: &RequestCtx
             crate::runtime::definition::faults::clear_source_moved(db, &name_owned);
         });
     }
-    // r[impl scaling.clamp]
+    // spec: AUTO#clamping
     {
         let reg = state.registry.read();
         if let Some(entry) = reg.get(name) {
@@ -1857,7 +1856,7 @@ pub(crate) fn update_app(state: &OiState, params: UpdateParams, ctx: &RequestCtx
         entry.tick_notify.notify_one();
     }
 
-    // i[forward.script-update] — tear down any forward whose target service,
+    // spec: FWD#forward-lifetime — tear down any forward whose target service,
     // or port for its proto, is no longer declared in the new AppDef.
     {
         // Collected before the forwards lock is taken: that lock is on the
@@ -1878,13 +1877,13 @@ pub(crate) fn update_app(state: &OiState, params: UpdateParams, ctx: &RequestCtx
         }
     }
 
-    // r[impl schedule.prune]
+    // spec: SCHED#schedule-records
     sync_action_schedules(state, &params.app);
 
-    // r[impl image.pin.update-reconcile]
+    // spec: IMG#pin-reconciliation
     super::images::reconcile_pins_post_update(state, &params.app);
 
-    // i[impl app.update] — a handler for the changed parameter, registered
+    // spec: APPS#update — a handler for the changed parameter, registered
     // by the new definition, runs under it with `old` the previous
     // generation. A definition replaced without a parameter change
     // schedules nothing.
@@ -1896,8 +1895,8 @@ pub(crate) fn update_app(state: &OiState, params: UpdateParams, ctx: &RequestCtx
     };
 
     tracing::info!(app = %name, generation, schedule, "updated app");
-    // i[impl event.types]
-    // r[impl secret.history] — each value is withheld on the same terms as
+    // spec: EVT#event-types
+    // spec: SEC#generation-history — each value is withheld on the same terms as
     // it is recorded, so dropping the `secret` flag does not announce the
     // value the flag was protecting.
     let param_event = change.as_ref().map(|(pname, previous, new_value)| {
@@ -1918,7 +1917,7 @@ pub(crate) fn update_app(state: &OiState, params: UpdateParams, ctx: &RequestCtx
     Ok(json!({ "schedule": schedule, "generation": generation }))
 }
 
-// r[impl actuate.volume.hold]
+// spec: ACTU#held-volumes
 fn hold_removed_volumes(state: &OiState, app: &AppName, removed: &[String], ctx: &RequestCtx) {
     let name = app.as_str();
     let vol_store = &state.driver.volume_store;
@@ -1958,7 +1957,7 @@ fn hold_removed_volumes(state: &OiState, app: &AppName, removed: &[String], ctx:
                         held_id = %meta.id,
                         "held volume removed from app definition"
                     );
-                    // r[impl actuate.volume.hold.events]
+                    // spec: ACTU#held-volumes
                     ctx.events
                         .held_volume_created(meta.id, app, &meta.volume_name, &meta.reason);
                 }
@@ -1998,7 +1997,7 @@ fn hold_removed_volumes(state: &OiState, app: &AppName, removed: &[String], ctx:
     }
 }
 
-// i[impl deployment.restart]
+// spec: CTL#deployment-restart
 pub(crate) fn restart_deployment(
     state: &OiState,
     params: RestartParams,
@@ -2041,7 +2040,7 @@ pub(crate) fn restart_deployment(
     Ok(json!({ "operation_id": operation_id }))
 }
 
-// i[impl scale.set]
+// spec: CTL#scaling
 pub(crate) fn scale_app(state: &OiState, params: ScaleParams, ctx: &RequestCtx) -> HandlerResult {
     let name = params.app.as_str();
     let deployment_name = params.deployment.as_str();
@@ -2074,7 +2073,7 @@ pub(crate) fn scale_app(state: &OiState, params: ScaleParams, ctx: &RequestCtx) 
     let (previous_scale, new_scale) = state.db.call(move |db| -> Result<_, OiError> {
         let current = scaling::effective_scale(db, &name_owned, &deployment_name_owned, low, high)
             .map_err(|e| OiError::new(ErrorCode::ScriptError, format!("db error: {e}")))?;
-        // i[impl scale.decision-persistence]
+        // spec: CTL#scaling
         scaling::save_scaling_decision(db, &name_owned, &deployment_name_owned, new_scale_clamped)
             .map_err(|e| OiError::new(ErrorCode::ScriptError, format!("db error: {e}")))?;
         Ok((current, new_scale_clamped))
@@ -2092,7 +2091,7 @@ pub(crate) fn scale_app(state: &OiState, params: ScaleParams, ctx: &RequestCtx) 
     }))
 }
 
-// i[impl app.priority.set]
+// spec: CTL#app-priority
 pub(crate) fn set_priority(
     state: &OiState,
     params: PriorityParams,
@@ -2116,13 +2115,13 @@ pub(crate) fn set_priority(
     let previous = state.db.call(move |db| -> Result<_, OiError> {
         let current = priority::effective_app_priority(db, &name_owned)
             .map_err(|e| OiError::new(ErrorCode::ScriptError, format!("db error: {e}")))?;
-        // r[impl priority.settings]
+        // spec: PRIO#priority-setting
         priority::save_app_priority(db, &name_owned, priority)
             .map_err(|e| OiError::new(ErrorCode::ScriptError, format!("db error: {e}")))?;
         Ok(current)
     })?;
 
-    // r[impl priority.settings]
+    // spec: PRIO#priority-setting
     // Wake the reconcile loop so the running workloads are re-weighted this
     // tick, without a redeploy or runtime restart.
     entry.tick_notify.notify_one();
@@ -2144,7 +2143,7 @@ fn resource_kind_from_debug_str(s: &str) -> Option<ResourceKind> {
     }
 }
 
-// i[impl resource.stop]
+// spec: CTL#resource-stop
 pub(crate) fn stop_resource(
     state: &OiState,
     params: ResourceStopParams,
@@ -2169,7 +2168,7 @@ pub(crate) fn stop_resource(
         )
     })?;
 
-    // i[impl resource.stop.no-active-op]
+    // spec: CTL#resource-stop
     // Desired-state mutations must not race with a running action, and an
     // action whose resource is about to vanish has no sensible continuation.
     // Operators cancel the active op first (via /apps/action/cancel), then
@@ -2213,7 +2212,7 @@ pub(crate) fn stop_resource(
     Ok(json!({}))
 }
 
-// i[impl resource.unstop]
+// spec: CTL#resource-stop
 pub(crate) fn unstop_resource(
     state: &OiState,
     params: ResourceStopParams,
@@ -2236,7 +2235,7 @@ pub(crate) fn unstop_resource(
         }
     }
 
-    // i[impl resource.stop.no-active-op]
+    // spec: CTL#resource-stop
     if let Some(blocker) = state.scheduler.lock().blocker_for(&params.app) {
         return Err(app_blocked(app, "start a resource of", &blocker));
     }
@@ -2261,7 +2260,7 @@ pub(crate) fn unstop_resource(
     Ok(json!({}))
 }
 
-// i[impl resource.unstop-all]
+// spec: CTL#resource-stop
 pub(crate) fn unstop_all_resources(
     state: &OiState,
     params: AppParams,
@@ -2276,7 +2275,7 @@ pub(crate) fn unstop_all_resources(
         }
     }
 
-    // i[impl resource.stop.no-active-op]
+    // spec: CTL#resource-stop
     if let Some(blocker) = state.scheduler.lock().blocker_for(&params.app) {
         return Err(app_blocked(app, "start the resources of", &blocker));
     }

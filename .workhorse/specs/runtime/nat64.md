@@ -1,0 +1,99 @@
+---
+id: NAT64
+---
+
+# NAT64
+
+Applies to the NAT64 translation and DNS64 synthesis the [runtime](../overview.md#runtime) provides so that workloads on IPv6-only [pod networks](infrastructure.md#pod-network) reach IPv4 destinations.
+
+## Borrowed terms
+
+| term | meaning |
+| --- | --- |
+| NAT64 | Stateful translation of IPv6 packets to IPv4 and back, [RFC 6146](https://www.rfc-editor.org/rfc/rfc6146). |
+| DNS64 | Synthesis of AAAA records for names that have only A records, [RFC 6147](https://www.rfc-editor.org/rfc/rfc6147). |
+| well-known prefix | The prefix `64:ff9b::/96` reserved for algorithmic IPv4-embedded IPv6 addresses, [RFC 6052 §2.1](https://www.rfc-editor.org/rfc/rfc6052#section-2.1). |
+| `ipv4only.arpa` | The name whose A records are `192.0.0.170` and `192.0.0.171`, queried for AAAA records to discover DNS64, [RFC 7050](https://www.rfc-editor.org/rfc/rfc7050). |
+| IPv4-mapped address | An IPv6 address of the form `::ffff:a.b.c.d` representing an IPv4 address, [RFC 4291 §2.5.5.2](https://www.rfc-editor.org/rfc/rfc4291#section-2.5.5.2). |
+
+## Terminology
+
+### Active NAT64
+
+The condition in which the runtime provides its own NAT64 translator for its host's workloads.
+
+## Mode
+
+The runtime MUST accept a `--nat64` option taking one of the values below:
+
+| value | NAT64 is active |
+| --- | --- |
+| `auto` | when [detection](#detection) finds no existing NAT64 |
+| `enabled` | always |
+| `disabled` | never |
+
+The option MUST default to `auto`.
+The runtime MUST decide whether NAT64 is active once, when it starts.
+
+## Detection
+
+In `auto` mode, the runtime MUST detect existing NAT64 by resolving `ipv4only.arpa` through the host's system resolver when it starts.
+If the response contains an IPv6 address other than the IPv4-mapped form of `192.0.0.170` or `192.0.0.171`, the network provides NAT64 and DNS64, and NAT64 MUST NOT be active.
+If the resolver answers without such an address, NAT64 MUST be active.
+
+A lookup that fails or receives no answer leaves detection undetermined.
+The runtime MUST NOT report an undetermined detection as the network providing or lacking NAT64.
+While detection is undetermined, NAT64 MUST be active, and the runtime MUST file a [`nat64_detection_failed`](faults.md#host-faults) fault.
+The runtime MUST retry detection on each later reconciliation iteration until it succeeds.
+A detection that succeeds after the runtime has started MUST NOT change whether NAT64 is active until the runtime next starts.
+
+> [!NOTE]
+> A translator that runs while the network also provides NAT64 costs little, while a missing one cuts workloads off from IPv4 destinations; an offline host whose resolver cannot answer still needs its workloads to start.
+
+## Translator
+
+While NAT64 is active, the runtime MUST run a stateful NAT64 translator using the well-known prefix.
+Traffic from workload containers to an address within the well-known prefix MUST reach the translator.
+The runtime MUST ensure that IPv6 and IPv4 forwarding are enabled on the host.
+
+## Translator lifecycle
+
+While NAT64 is active, the translator MUST be operational before any workload container starts.
+While NAT64 is active, the runtime MUST keep the translator set up whenever any app is installed or installing.
+While NAT64 is active, the runtime MUST set the translator up when it starts with an app installed or installing, and when an app begins installing after a period with none installed or installing.
+When it starts with no app installed or installing, the runtime MAY leave the translator torn down.
+The runtime MUST tear the translator down when no app is installed or installing.
+
+The runtime MUST NOT tear the translator down when it shuts down.
+
+> [!NOTE]
+> Workload containers keep running across a restart of the runtime, and depend on the translator to reach IPv4 destinations.
+
+If the translator cannot be set up while NAT64 is active, the runtime MUST report an error and file a [`nat64_setup_failed`](faults.md#host-faults) fault.
+It MUST NOT start workload containers until set-up succeeds, and MUST retry set-up on each later reconciliation iteration.
+
+A teardown that cannot establish whether the translator is installed has failed.
+The runtime MUST NOT report the translator removed while it remains installed.
+After a failed teardown, the runtime MUST file a [`nat64_teardown_failed`](faults.md#host-faults) fault, and MUST attempt the teardown again on each iteration while no app is installed or installing.
+
+## IPv6 egress
+
+When it starts, the runtime MUST determine whether the host has IPv6 egress to the internet.
+The host has IPv6 egress when it has a default IPv6 unicast route (`::/0`) and an interface other than loopback carries a globally routable IPv6 address, which excludes unique local and link-local addresses.
+The determination MUST rest only on the host's routing and address state, and MUST NOT depend on DNS resolution or on sending traffic.
+If that state cannot be read, the determination is undetermined, and the runtime MUST NOT report it as the host having or lacking IPv6 egress.
+While it is undetermined, the resolver MUST synthesise as for a host without IPv6 egress, and the runtime MUST file an [`ipv6_egress_undetermined`](faults.md#host-faults) fault.
+The runtime MUST retry the determination on each later reconciliation iteration until it succeeds.
+
+The runtime MUST record the first determined outcome, and MUST NOT change it while it runs.
+
+## DNS64
+
+While NAT64 is active, the [resolver](resolver.md) MUST synthesise AAAA records under the well-known prefix for names that have only A records.
+While NAT64 is not active, the resolver MUST NOT synthesise AAAA records.
+
+While NAT64 is active and the host has no [IPv6 egress](#ipv6-egress), the resolver MUST synthesise AAAA records under the well-known prefix for every name that has A records, including names that also have AAAA records of their own.
+In every other case, the resolver MUST return a name's own AAAA records unchanged.
+
+> [!NOTE]
+> Without forced synthesis, a workload would attempt native IPv6 to a dual-stack destination that the host cannot route.

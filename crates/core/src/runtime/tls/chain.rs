@@ -35,7 +35,7 @@
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Strategy {
     /// A certificate requested from Canopy over the relay.
-    // r[impl tls.strategy.canopy]
+    // spec: TCAN#applicability-and-availability
     Canopy,
     /// A public certificate the proxy obtains over HTTP-01.
     Http01,
@@ -59,7 +59,7 @@ impl Strategy {
 }
 
 /// The chain of a hostname bound to the Canopy-only policy.
-// r[impl tls.strategy.canopy-only]
+// spec: TCAN#canopy-only-policy
 pub const CANOPY_ONLY: [Strategy; 1] = [Strategy::Canopy];
 
 /// The chain of a hostname with no operator policy.
@@ -69,7 +69,7 @@ pub const CANOPY_ONLY: [Strategy; 1] = [Strategy::Canopy];
 /// Canopy type. It decides whether Canopy is in the chain, since a hostname
 /// Canopy cannot be asked about must not wait out a Canopy window before the
 /// proxy gets to renew it.
-// r[impl tls.strategy.default]
+// spec: CHAIN#default-chain
 pub fn default_chain(internal_name: bool, canopy_applies: bool) -> Vec<Strategy> {
     if internal_name {
         vec![Strategy::InternalCa]
@@ -109,7 +109,7 @@ pub struct Serving {
     pub identity: Identity,
     /// When a cycle starts for it: the start of the CA's suggested window when
     /// it supplied one, otherwise when a third of its lifetime remains.
-    // r[impl tls.chain.cycle]
+    // spec: CHAIN#cycles
     pub renewal_point: i64,
 }
 
@@ -168,10 +168,10 @@ pub struct Running {
 }
 
 /// Where a hostname stands in its chain.
-// r[impl tls.chain.cycle]
-// r[impl tls.chain.ladder]
-// r[impl tls.chain.no-certificate]
-// r[impl tls.chain.return]
+// spec: CHAIN#cycles
+// spec: CHAIN#fall-through
+// spec: CHAIN#hostnames-with-no-certificate
+// spec: CHAIN#return-to-the-first-strategy
 pub fn resolve(inputs: &Inputs<'_>) -> Cycle {
     let Inputs {
         chain,
@@ -187,7 +187,7 @@ pub fn resolve(inputs: &Inputs<'_>) -> Cycle {
     match serving {
         Some(serving) => {
             let row = row.filter(|r| r.identity == serving.identity);
-            // r[impl tls.chain.return]
+            // spec: CHAIN#return-to-the-first-strategy
             // An operator retry starts the cycle again from the first strategy,
             // whatever a refusal or the clock had already moved the hostname to.
             let (step, since) = match row {
@@ -213,7 +213,7 @@ pub fn resolve(inputs: &Inputs<'_>) -> Cycle {
             // A certificate revoked by its issuer is still the one being
             // replaced: its row says so, and the ladder is measured from its
             // expiry for as long as that lies ahead.
-            // r[impl tls.canopy.revoked]
+            // spec: TCAN#revocation
             if let Some(r) = row
                 && !r.identity.is_none()
                 && r.identity.not_after.is_some_and(|e| e > now)
@@ -253,7 +253,7 @@ pub fn resolve(inputs: &Inputs<'_>) -> Cycle {
 /// The proxy carries out the HTTP-01 and internal-CA strategies on its own
 /// schedule, so left alone it would order or renew the moment its own renewal
 /// point arrived, ahead of Canopy. This says when it is allowed to instead.
-// r[impl tls.chain.proxy-gate]
+// spec: CHAIN#proxy-strategies
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ProxyFrom {
     /// Whenever it likes: a proxy strategy is responsible, or first in the chain.
@@ -269,7 +269,7 @@ pub enum ProxyFrom {
 }
 
 /// When the proxy may start ordering, given where the hostname stands.
-// r[impl tls.chain.proxy-gate]
+// spec: CHAIN#proxy-strategies
 pub fn proxy_from(chain: &[Strategy], serving: Option<Serving>, cycle: &Cycle) -> ProxyFrom {
     let Some(proxy_at) = chain.iter().position(|s| s.is_proxy()) else {
         return ProxyFrom::Never;
@@ -333,7 +333,7 @@ fn running(
 
 /// When the strategy that became responsible at `since` falls through: halfway
 /// between then and the expiry of what is being replaced.
-// r[impl tls.chain.ladder]
+// spec: CHAIN#fall-through
 fn halfway(since: i64, expiry: i64) -> i64 {
     since + (expiry - since).max(0) / 2
 }
@@ -416,7 +416,7 @@ mod tests {
         }
     }
 
-    // r[verify tls.chain.cycle]
+    // spec: CHAIN#cycles
     #[test]
     fn a_usable_certificate_before_its_renewal_point_is_left_alone() {
         let cycle = resolve(&inputs(&TWO, 59 * DAY, Some(serving()), None));
@@ -428,8 +428,8 @@ mod tests {
         );
     }
 
-    // r[verify tls.chain.cycle]
-    // r[verify tls.chain.ladder]
+    // spec: CHAIN#cycles
+    // spec: CHAIN#fall-through
     #[test]
     fn the_first_strategy_is_responsible_from_the_renewal_point() {
         let r = running_of(resolve(&inputs(&TWO, 60 * DAY, Some(serving()), None)));
@@ -438,7 +438,7 @@ mod tests {
         assert_eq!(r.fall_through_at, Some(75 * DAY));
     }
 
-    // r[verify tls.chain.ladder]
+    // spec: CHAIN#fall-through
     #[test]
     fn the_second_strategy_takes_over_five_sixths_through() {
         let r = running_of(resolve(&inputs(&TWO, 75 * DAY, Some(serving()), None)));
@@ -447,7 +447,7 @@ mod tests {
         assert_eq!(r.fall_through_at, None);
     }
 
-    // r[verify tls.chain.ladder]
+    // spec: CHAIN#fall-through
     #[test]
     fn each_step_halves_what_is_left_for_a_longer_chain() {
         let chain = [Strategy::Canopy, Strategy::Http01, Strategy::InternalCa];
@@ -463,7 +463,7 @@ mod tests {
         assert_eq!(third.fall_through_at, None);
     }
 
-    // r[verify tls.chain.ladder]
+    // spec: CHAIN#fall-through
     #[test]
     fn the_answer_does_not_depend_on_when_it_is_asked() {
         let late = running_of(resolve(&inputs(&TWO, 89 * DAY, Some(serving()), None)));
@@ -475,7 +475,7 @@ mod tests {
         );
     }
 
-    // r[verify tls.chain.ladder]
+    // spec: CHAIN#fall-through
     #[test]
     fn a_suggested_window_moves_the_whole_ladder() {
         let s = Serving {
@@ -486,7 +486,7 @@ mod tests {
         assert_eq!(r.fall_through_at, Some(65 * DAY));
     }
 
-    // r[verify tls.chain.refusal]
+    // spec: CHAIN#refusal-handling
     #[test]
     fn a_recorded_refusal_moves_a_hostname_on_ahead_of_the_clock() {
         let row = Row {
@@ -506,7 +506,7 @@ mod tests {
         assert_eq!(r.since, 61 * DAY);
     }
 
-    // r[verify tls.chain.refusal]
+    // spec: CHAIN#refusal-handling
     #[test]
     fn a_step_recorded_past_the_end_of_the_chain_is_the_last_strategy() {
         let row = Row {
@@ -525,7 +525,7 @@ mod tests {
         assert_eq!(r.step, 1);
     }
 
-    // r[verify tls.chain.return]
+    // spec: CHAIN#return-to-the-first-strategy
     #[test]
     fn a_row_for_an_earlier_certificate_is_ignored() {
         let row = Row {
@@ -545,8 +545,8 @@ mod tests {
         );
     }
 
-    // r[verify tls.cert.force-retry]
-    // r[verify tls.chain.return]
+    // spec: TLS#retry-blocks-and-retries
+    // spec: CHAIN#return-to-the-first-strategy
     #[test]
     fn an_operator_retry_starts_a_cycle_at_once_from_the_first_strategy() {
         let mut i = inputs(&TWO, 10 * DAY, Some(serving()), None);
@@ -557,7 +557,7 @@ mod tests {
         assert_eq!(r.fall_through_at, Some(50 * DAY));
     }
 
-    // r[verify tls.chain.cycle]
+    // spec: CHAIN#cycles
     #[test]
     fn a_cycle_started_early_by_a_retry_goes_on_running() {
         let row = Row {
@@ -576,7 +576,7 @@ mod tests {
         assert_eq!(r.responsible, Strategy::Canopy);
     }
 
-    // r[verify tls.chain.no-certificate]
+    // spec: CHAIN#hostnames-with-no-certificate
     #[test]
     fn nothing_to_replace_starts_with_the_first_available_strategy() {
         let r = running_of(resolve(&inputs(&TWO, 5, None, None)));
@@ -587,7 +587,7 @@ mod tests {
         );
     }
 
-    // r[verify tls.chain.no-certificate]
+    // spec: CHAIN#hostnames-with-no-certificate
     #[test]
     fn nothing_to_replace_skips_canopy_at_once_without_a_live_offer() {
         let mut i = inputs(&TWO, 5, None, None);
@@ -596,7 +596,7 @@ mod tests {
         assert_eq!(r.responsible, Strategy::Http01);
     }
 
-    // r[verify tls.chain.no-certificate]
+    // spec: CHAIN#hostnames-with-no-certificate
     #[test]
     fn nothing_to_replace_stays_with_a_strategy_that_keeps_failing() {
         let row = Row {
@@ -614,7 +614,7 @@ mod tests {
         );
     }
 
-    // r[verify tls.chain.no-certificate]
+    // spec: CHAIN#hostnames-with-no-certificate
     #[test]
     fn an_open_order_keeps_a_hostname_with_its_strategy_when_the_offer_goes() {
         let row = Row {
@@ -631,7 +631,7 @@ mod tests {
         assert!(r.open_order);
     }
 
-    // r[verify tls.strategy.canopy-only]
+    // spec: TCAN#canopy-only-policy
     #[test]
     fn a_canopy_only_chain_is_never_skipped_for_want_of_an_offer() {
         let chain = [Strategy::Canopy];
@@ -641,7 +641,7 @@ mod tests {
         assert_eq!(r.responsible, Strategy::Canopy);
     }
 
-    // r[verify tls.strategy.canopy-only]
+    // spec: TCAN#canopy-only-policy
     #[test]
     fn a_canopy_only_chain_has_no_fall_through_point() {
         let chain = [Strategy::Canopy];
@@ -650,7 +650,7 @@ mod tests {
         assert_eq!(r.fall_through_at, None);
     }
 
-    // r[verify tls.canopy.revoked]
+    // spec: TCAN#revocation
     #[test]
     fn a_revoked_certificate_is_still_the_one_being_replaced() {
         let row = Row {
@@ -665,7 +665,7 @@ mod tests {
         assert_eq!(r.identity, row.identity);
     }
 
-    // r[verify tls.chain.no-certificate]
+    // spec: CHAIN#hostnames-with-no-certificate
     #[test]
     fn a_revoked_certificate_that_has_since_expired_is_nothing_to_replace() {
         let row = Row {
@@ -680,7 +680,7 @@ mod tests {
         assert_eq!(r.responsible, Strategy::Canopy);
     }
 
-    // r[verify tls.strategy.default]
+    // spec: CHAIN#default-chain
     #[test]
     fn the_default_chain_has_canopy_only_where_canopy_applies() {
         assert_eq!(
@@ -695,7 +695,7 @@ mod tests {
         );
     }
 
-    // r[verify tls.chain.proxy-gate]
+    // spec: CHAIN#proxy-strategies
     #[test]
     fn the_proxy_may_order_from_the_point_canopy_falls_through() {
         let serving = serving();
@@ -714,7 +714,7 @@ mod tests {
         assert_eq!(proxy_from(&TWO, Some(serving), &fallen), ProxyFrom::Always);
     }
 
-    // r[verify tls.chain.proxy-gate]
+    // spec: CHAIN#proxy-strategies
     #[test]
     fn a_chain_with_no_earlier_strategy_leaves_the_proxy_alone() {
         let chain = [Strategy::Http01];
@@ -725,8 +725,8 @@ mod tests {
         );
     }
 
-    // r[verify tls.chain.proxy-gate]
-    // r[verify tls.strategy.canopy-only]
+    // spec: CHAIN#proxy-strategies
+    // spec: TCAN#canopy-only-policy
     #[test]
     fn a_canopy_only_chain_never_lets_the_proxy_order() {
         let chain = [Strategy::Canopy];
@@ -734,15 +734,15 @@ mod tests {
         assert_eq!(proxy_from(&chain, Some(serving()), &idle), ProxyFrom::Never);
     }
 
-    // r[verify tls.chain.proxy-gate]
+    // spec: CHAIN#proxy-strategies
     #[test]
     fn with_nothing_to_replace_no_clock_says_when_the_proxy_may_order() {
         let cycle = resolve(&inputs(&TWO, 5, None, None));
         assert_eq!(proxy_from(&TWO, None, &cycle), ProxyFrom::Unknown);
     }
 
-    // r[verify tls.chain.return]
-    // r[verify tls.cert.force-retry]
+    // spec: CHAIN#return-to-the-first-strategy
+    // spec: TLS#retry-blocks-and-retries
     #[test]
     fn an_operator_retry_restarts_a_hostname_a_refusal_had_moved_on() {
         let row = Row {

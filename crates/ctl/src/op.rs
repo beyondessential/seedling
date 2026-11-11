@@ -36,7 +36,7 @@ pub(super) enum RegistriesCommand {
     /// Remove a registry from the allowlist
     Remove { registry: String },
     /// List a repository's tags, named without tag or digest
-    // i[impl ctl.registries.tags]
+    // spec: CLI#registry-tags
     Tags { repository: String },
 }
 
@@ -352,7 +352,7 @@ mod tests {
         cmd: RegistriesCommand,
     }
 
-    // i[verify ctl.registries.tags]
+    // spec: CLI#registry-tags
     #[test]
     fn tags_takes_a_repository() {
         let cli = TestCli::try_parse_from(["t", "tags", "ghcr.io/org/app-def"]).unwrap();

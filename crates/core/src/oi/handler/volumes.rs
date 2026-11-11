@@ -43,7 +43,7 @@ pub(crate) struct DeleteHeldParams {
     pub id: HeldVolumeId,
 }
 
-// r[impl actuate.volume.hold.confirm]
+// spec: ACTU#held-volumes
 pub(crate) fn delete_held(
     state: &OiState,
     params: DeleteHeldParams,
@@ -67,7 +67,7 @@ pub(crate) fn delete_held(
         })
     })?;
 
-    // r[impl actuate.volume.hold.events]
+    // spec: ACTU#held-volumes
     ctx.events.held_volume_deleted(params.id);
 
     Ok(json!({ "deleted": true }))
@@ -82,7 +82,7 @@ pub(crate) struct RestoreHeldParams {
     pub target_name: Option<SiteVolumeName>,
 }
 
-// r[impl actuate.volume.hold.restore]
+// spec: ACTU#held-volumes
 pub(crate) fn restore_held(
     state: &OiState,
     params: RestoreHeldParams,
@@ -122,12 +122,12 @@ pub(crate) fn restore_held(
         })?,
     };
 
-    // r[impl namespace.reserved]
+    // spec: IDN#reserved-names
     crate::reserved::check_site_volume_name(&target_name)
         .map_err(|e| OiError::new(ErrorCode::RequirementsInvalid, e.to_string()))?;
 
-    // r[impl volume.site.name-taken]
-    // r[impl actuate.volume.hold.restore]
+    // spec: SITE#site-volume-names
+    // spec: ACTU#held-volumes
     let _claim = check_site_name_free(state, &target_name)?;
 
     tokio::task::block_in_place(|| {
@@ -161,10 +161,10 @@ pub(crate) fn restore_held(
             )
         })?;
 
-    // r[impl actuate.volume.hold.events]
+    // spec: ACTU#held-volumes
     ctx.events
         .held_volume_restored(params.id, target_name.as_str());
-    // r[impl volume.site.lifecycle.events]
+    // spec: SITE#site-volumes
     ctx.events
         .site_volume_created(target_name.as_str(), "managed", None);
 
@@ -184,7 +184,7 @@ pub(crate) fn list_exported(state: &OiState) -> HandlerResult {
             if let crate::defs::resource::Resource::Volume(vol) = resource {
                 let vol_def = vol.def.lock();
                 if let Some(export_opts) = &vol_def.exported {
-                    // r[impl volume.export.host-path]
+                    // spec: ACTU#exported-volumes
                     // An exported volume exists to be shared, and a co-located
                     // tool that wants to use its contents (a socket directory,
                     // say) needs somewhere to look. Report where it lives so a
@@ -257,7 +257,7 @@ pub(crate) struct CreateSiteVolumeParams {
     pub host_path: Option<String>,
 }
 
-// r[impl volume.site.lifecycle]
+// spec: SITE#site-volumes
 pub(crate) fn create_site_volume(
     state: &OiState,
     params: CreateSiteVolumeParams,
@@ -265,10 +265,10 @@ pub(crate) fn create_site_volume(
 ) -> HandlerResult {
     use crate::runtime::site_volumes::{SiteVolumeDef, SiteVolumeKind};
 
-    // r[impl namespace.reserved]
+    // spec: IDN#reserved-names
     crate::reserved::check_site_volume_name(&params.name)
         .map_err(|e| OiError::new(ErrorCode::RequirementsInvalid, e.to_string()))?;
-    // r[impl volume.site.name-taken]
+    // spec: SITE#site-volume-names
     let _claim = check_site_name_free(state, &params.name)?;
 
     let kind = match params.kind.as_str() {
@@ -331,7 +331,7 @@ pub(crate) fn create_site_volume(
             )
         })?;
 
-    // r[impl volume.site.lifecycle.events]
+    // spec: SITE#site-volumes
     let (kind_str, host_path) = match &kind {
         SiteVolumeKind::Managed => ("managed", None),
         SiteVolumeKind::Bind { host_path } => ("bind", Some(host_path.as_str())),
@@ -386,7 +386,7 @@ pub(crate) struct DeleteSiteVolumeParams {
     pub name: SiteVolumeName,
 }
 
-// r[impl volume.site.lifecycle]
+// spec: SITE#site-volumes
 pub(crate) fn delete_site_volume(
     state: &OiState,
     params: DeleteSiteVolumeParams,
@@ -412,8 +412,8 @@ pub(crate) fn delete_site_volume(
         )
     })?;
 
-    // r[impl actuate.volume.hold]
-    // r[impl volume.site.snapshot.delete]
+    // spec: ACTU#held-volumes
+    // spec: SITE#site-volumes
     // Managed kinds carry runtime-owned data and route through the held-volume
     // mechanism so an operator must explicitly confirm the final removal.
     // Snapshot kinds are deleted directly: snapshots are read-only BTRFS
@@ -481,7 +481,7 @@ pub(crate) fn delete_site_volume(
         SiteVolumeKind::Snapshot { .. } => "snapshot",
     };
     if let Some(meta) = &held_meta {
-        // r[impl actuate.volume.hold.events]
+        // spec: ACTU#held-volumes
         //
         // Site-originated holds carry the synthetic "_site" marker in place
         // of an app name. Bypass validation so the pseudo-name round-trips
@@ -490,7 +490,7 @@ pub(crate) fn delete_site_volume(
         ctx.events
             .held_volume_created(meta.id, &held_app, &meta.volume_name, &meta.reason);
     }
-    // r[impl volume.site.lifecycle.events]
+    // spec: SITE#site-volumes
     ctx.events
         .site_volume_deleted(params.name.as_str(), kind_str, held_id);
 
@@ -509,12 +509,12 @@ pub(crate) fn delete_site_volume(
 /// The returned guard is the claim on the name. Hold it until the name has
 /// been taken — until both the storage and the record are in place — so that
 /// no other request can find the name free in the meantime.
-// r[impl volume.site.name-taken]
+// spec: SITE#site-volume-names
 fn check_site_name_free<'a>(
     state: &'a OiState,
     name: &SiteVolumeName,
 ) -> Result<parking_lot::MutexGuard<'a, ()>, OiError> {
-    // r[impl volume.site.name-taken]
+    // spec: SITE#site-volume-names
     // The claim is returned rather than dropped here, and the caller holds
     // it until the name has actually been taken. Finding the name free is
     // only worth anything if nothing else can take it in between: two
@@ -562,7 +562,7 @@ pub(crate) struct SnapshotSiteVolumeParams {
     pub source: String,
 }
 
-// r[impl volume.site.snapshot]
+// spec: SITE#site-volume-snapshots
 pub(crate) fn snapshot_site_volume(
     state: &OiState,
     params: SnapshotSiteVolumeParams,
@@ -570,10 +570,10 @@ pub(crate) fn snapshot_site_volume(
 ) -> HandlerResult {
     use crate::runtime::site_volumes::{SiteVolumeDef, SiteVolumeKind};
 
-    // r[impl namespace.reserved]
+    // spec: IDN#reserved-names
     crate::reserved::check_site_volume_name(&params.name)
         .map_err(|e| OiError::new(ErrorCode::RequirementsInvalid, e.to_string()))?;
-    // r[impl volume.site.name-taken]
+    // spec: SITE#site-volume-names
     let _claim = check_site_name_free(state, &params.name)?;
 
     let (source, source_path) = parse_source_vol_id(&params.source, state)
@@ -612,7 +612,7 @@ pub(crate) fn snapshot_site_volume(
             )
         })?;
 
-    // r[impl volume.site.snapshot.events]
+    // spec: SITE#site-volume-snapshots
     ctx.events
         .site_volume_snapshotted(params.name.as_str(), &event_source);
 
@@ -627,7 +627,7 @@ pub(crate) struct PromoteSiteVolumeParams {
     pub name: SiteVolumeName,
 }
 
-// r[impl volume.site.promote]
+// spec: SITE#snapshot-promotion
 pub(crate) fn promote_site_volume(
     state: &OiState,
     params: PromoteSiteVolumeParams,
@@ -635,10 +635,10 @@ pub(crate) fn promote_site_volume(
 ) -> HandlerResult {
     use crate::runtime::site_volumes::{SiteVolumeDef, SiteVolumeKind};
 
-    // r[impl namespace.reserved]
+    // spec: IDN#reserved-names
     crate::reserved::check_site_volume_name(&params.name)
         .map_err(|e| OiError::new(ErrorCode::RequirementsInvalid, e.to_string()))?;
-    // r[impl volume.site.name-taken]
+    // spec: SITE#site-volume-names
     let _claim = check_site_name_free(state, &params.name)?;
 
     let source_name = params.source.clone();
@@ -703,7 +703,7 @@ pub(crate) fn promote_site_volume(
             )
         })?;
 
-    // r[impl volume.site.promote.events]
+    // spec: SITE#snapshot-promotion
     ctx.events
         .site_volume_promoted(params.name.as_str(), params.source.as_str());
 
@@ -805,7 +805,7 @@ pub(crate) fn map_external_volume(
             )
         })?;
 
-    // r[impl volume.external.mapping.events]
+    // spec: SITE#external-mappings
     ctx.events
         .external_volume_mapped(&app, &external_name, &event_target, params.read_only);
 
@@ -870,7 +870,7 @@ pub(crate) fn unmap_external_volume(
         ));
     }
 
-    // r[impl volume.external.mapping.events]
+    // spec: SITE#external-mappings
     ctx.events
         .external_volume_unmapped(&params.app, &params.external_name);
 
@@ -918,7 +918,7 @@ pub(crate) fn remap_external_volume(
     }
 
     let previous = previous.expect("update succeeded so prior row existed");
-    // r[impl volume.external.mapping.events]
+    // spec: SITE#external-mappings
     ctx.events.external_volume_remapped(
         &params.app,
         &params.external_name,

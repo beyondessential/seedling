@@ -3,7 +3,7 @@ use seedling_protocol::names::{AppName, AppVolumeName, SiteVolumeName, VolumeRef
 
 use crate::runtime::db::Db;
 
-// r[impl volume.site]
+// spec: SITE#site-volumes
 #[derive(Debug, Clone)]
 pub struct SiteVolumeDef {
     pub name: SiteVolumeName,

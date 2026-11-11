@@ -38,7 +38,7 @@ function exitLabel(r: RestartRecord): string {
   }
 }
 
-// w[impl routes.restarts]
+// spec: UI#restart-history
 export default function Restarts() {
   const [app, setApp] = useState("");
   // An instance filter only ever arrives by link — from the restart chip on an

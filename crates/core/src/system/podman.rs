@@ -85,6 +85,7 @@ fn is_untagged_sentinel(tag: &str) -> bool {
 impl PodmanRuntime {
     pub(crate) async fn new() -> Result<Self, PodmanError> {
         let client = PodmanRestClient::new(Config {
+            // spec: LINUX#host-facilities
             uri: "unix:///run/podman/podman.sock".to_string(),
             identity_file: None,
         })
@@ -273,7 +274,7 @@ impl PodmanRuntime {
         }
     }
 
-    // r[impl infra.pod.network]
+    // spec: INFRA#pod-networks
     async fn create_network_impl(
         &self,
         name: &str,
@@ -485,7 +486,7 @@ impl PodmanRuntime {
             .collect())
     }
 
-    // l[impl rt.signal]
+    // spec: RT#signal-delivery
     async fn signal_container_impl(&self, name: &str, signal: &str) -> Result<bool, PodmanError> {
         use podman_rest_client::v5::params::ContainerKillLibpod;
         let params = ContainerKillLibpod {
@@ -499,7 +500,7 @@ impl PodmanRuntime {
             .await
         {
             Ok(_) => Ok(true),
-            // Gone and not-running are both "skipped" per `l[rt.signal]`.
+            // Gone and not-running are both "skipped" per `RT#signal-delivery`.
             Err(ref e) if is_not_found(e) || is_not_running(e) => Ok(false),
             Err(e) => Err(map_api_err(e)),
         }
@@ -820,7 +821,7 @@ fn map_api_err(e: podman_rest_client::Error) -> PodmanError {
 
 /// Whether the error says the container exists but is not running.
 ///
-/// `l[rt.signal]` says instances that are not running are "silently skipped
+/// `RT#signal-delivery` says instances that are not running are "silently skipped
 /// (no error)". Podman answers a kill against a `created` or `exited`
 /// container with 409 "container is not running", which is neither a 404 nor
 /// a "no such container" 500 — so it took the error path, logging a warning
@@ -880,7 +881,7 @@ fn is_not_found(e: &podman_rest_client::Error) -> bool {
 /// `stopping`, `removing` and `initialized`, and three layers away that
 /// became "the container was removed".
 ///
-/// r[impl observe.failure-not-absence] — an unrecognised state is logged and
+/// spec: OBS#failed-observation — an unrecognised state is logged and
 /// mapped to `Unknown`, which means *present but indeterminate*, never
 /// absent. The next state podman invents then fails loudly in one place.
 fn parse_container_status(s: &str) -> ContainerStatus {
@@ -1087,7 +1088,7 @@ impl ContainerRuntime for PodmanRuntime {
         })
     }
 
-    // l[impl rt.exec]
+    // spec: RT#command-execution
     fn exec_command<'a>(
         &'a self,
         name: &'a str,
@@ -1124,7 +1125,7 @@ impl ContainerRuntime for PodmanRuntime {
 mod status_tests {
     use super::*;
 
-    // r[verify observe.failure-not-absence]
+    // spec: OBS#failed-observation
     // The catch-all used to swallow podman's real transitional states, and
     // three layers away `Unknown` became "the container was removed" — so a
     // postgres draining through a long stop_timeout_secs was recorded as
@@ -1141,7 +1142,7 @@ mod status_tests {
         );
     }
 
-    // r[verify observe.failure-not-absence]
+    // spec: OBS#failed-observation
     #[test]
     fn initialized_is_created_not_unknown() {
         assert_eq!(
@@ -1150,7 +1151,7 @@ mod status_tests {
         );
     }
 
-    // r[verify observe.failure-not-absence]
+    // spec: OBS#failed-observation
     // An unmodelled state means "present, and nothing more can be said" —
     // never "absent". The next state podman invents fails loudly here rather
     // than quietly becoming a removal.
@@ -1189,8 +1190,8 @@ mod tests {
         }
     }
 
-    // l[verify rt.signal]
-    // `l[rt.signal]` says a non-running instance is silently skipped. Podman
+    // spec: RT#signal-delivery
+    // `RT#signal-delivery` says a non-running instance is silently skipped. Podman
     // answers a kill against a stopped container with 409 "container is not
     // running", which took the error path and logged a warning instead.
     #[test]
@@ -1202,14 +1203,14 @@ mod tests {
         assert!(!is_not_found(&api_err(409, "container abc is not running")));
     }
 
-    // l[verify rt.signal]
+    // spec: RT#signal-delivery
     #[test]
     fn other_conflicts_are_still_errors() {
         assert!(!is_not_running(&api_err(409, "some other conflict")));
         assert!(!is_not_running(&api_err(500, "boom")));
     }
 
-    // i[verify image.list]
+    // spec: IMGM#listing-images
     // Untagged images are spelt differently across podman versions; only the
     // fully-qualified sentinel was filtered, so a bare `<none>` reached
     // callers as though it were a real tag.
@@ -1220,7 +1221,7 @@ mod tests {
         }
     }
 
-    // i[verify image.list]
+    // spec: IMGM#listing-images
     #[test]
     fn a_real_tag_is_kept() {
         for tag in ["ghcr.io/x:1", "docker.io/library/nginx:latest", "x:none"] {
@@ -1228,7 +1229,7 @@ mod tests {
         }
     }
 
-    // l[verify rt.exec]
+    // spec: RT#command-execution
     // The container name is the positional that follows the `--env` flags,
     // so it is only safe from being read as a flag because name validation
     // forbids a leading dash. `--` makes that structural.
@@ -1251,7 +1252,7 @@ mod tests {
         );
     }
 
-    // l[verify rt.exec]
+    // spec: RT#command-execution
     #[test]
     fn the_argv_is_well_formed_with_no_env_and_no_command() {
         assert_eq!(

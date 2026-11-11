@@ -36,7 +36,7 @@ const isSessionEvent = (ev: SeedlingEvent) =>
   ev.type === "ForwardStarted" ||
   ev.type === "ForwardStopped";
 
-// w[impl routes.volumes.held-count]
+// spec: UI#volumes
 // The backend emits HeldVolumeCreated whenever a volume is placed into the
 // held state (app-script updates, backend-migration, operator-triggered site
 // volume deletion), HeldVolumeDeleted when an operator confirms final
@@ -78,7 +78,7 @@ export function Navbar() {
     (clients?.shells.length ?? 0) +
     (clients?.forwards.length ?? 0);
 
-  // w[impl sessions.safety-mode]
+  // spec: UI#guarded-controls
   // Compute the highest safety tier any *other* web session is currently in.
   // We exclude our own session (identified by webSessionId, set after the
   // first heartbeat round-trip) so promoting our own mode does not flag the

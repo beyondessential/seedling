@@ -19,7 +19,7 @@ pub struct ResourceId {
     pub name: ResourceName,
 }
 
-// l[impl const.resource-type.enum]
+// spec: CONST#resourcetype
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub enum ResourceKind {
     Parameter,
@@ -47,7 +47,7 @@ impl ResourceKind {
             "ExternalService".into(),
             Dynamic::from(Self::ExternalService),
         );
-        // l[impl const.resource-type.enum]
+        // spec: CONST#resourcetype
         // Action remains exposed for action-log identity records and so
         // that scripts surviving from the actions-as-resources era still
         // parse, but Actions are no longer enumerated by AppBag, so any
@@ -58,7 +58,7 @@ impl ResourceKind {
     }
 }
 
-// l[impl bsl.resource]
+// spec: BSL#resource
 #[derive(Debug, Clone)]
 pub enum Resource {
     Service(Service),
@@ -98,7 +98,7 @@ impl Resource {
         }
     }
 
-    // l[impl bsl.resource.description]
+    // spec: BSL#descriptions
     pub fn description(&self) -> Option<String> {
         match self {
             Self::Service(s) => s.def.lock().description.clone(),

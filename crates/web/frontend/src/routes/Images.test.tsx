@@ -53,7 +53,7 @@ const fixtures = {
 };
 
 describe("Images", () => {
-  // w[verify routes.images]
+  // spec: UI#images
   it("renders the empty states for images and pins", async () => {
     renderWithSession(<Images />, {
       fixtures: { "/images/list": { images: [] }, "/images/pins/list": { pins: [] } },
@@ -62,7 +62,7 @@ describe("Images", () => {
     expect(await screen.findByText("No image pins.")).toBeTruthy();
   });
 
-  // w[verify routes.images]
+  // spec: UI#images
   it("renders image rows with sizes, state chips, and pin rows", async () => {
     renderWithSession(<Images />, { fixtures });
     expect(await screen.findByText("docker.io/library/nginx:1.27")).toBeTruthy();
@@ -85,8 +85,7 @@ describe("Images", () => {
     expect(await screen.findByText(/podman died/)).toBeTruthy();
   });
 
-  // w[verify routes.images]
-  // w[verify routes.images.confirm]
+  // spec: UI#images
   it("removes an unused image via /images/remove after confirmation", async () => {
     const { request } = renderWithSession(<Images />, {
       fixtures,
@@ -109,7 +108,7 @@ describe("Images", () => {
     expect(within(row).getByRole("button")).toHaveProperty("disabled", true);
   });
 
-  // w[verify routes.images]
+  // spec: UI#images
   it("clears a pin via /images/pins/clear after confirmation", async () => {
     const { request } = renderWithSession(<Images />, {
       fixtures,
@@ -127,7 +126,7 @@ describe("Images", () => {
     );
   });
 
-  // w[verify routes.images]
+  // spec: UI#images
   it("bulk-clears only unused unpinned images", async () => {
     const { request } = renderWithSession(<Images />, {
       fixtures,

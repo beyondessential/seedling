@@ -18,7 +18,7 @@ function entry(overrides: Partial<LogEntry> = {}): LogEntry {
   };
 }
 
-// w[verify routes.logs]
+// spec: UI#operator-capabilities
 describe("Logs", () => {
   it("streams and renders log lines for the app scope", async () => {
     const { streamLogs } = renderWithSession(<Logs />, {

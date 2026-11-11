@@ -47,8 +47,7 @@ fn cert_hash_hex(identity: &Identity) -> String {
     digest.as_ref().iter().map(|b| format!("{b:02x}")).collect()
 }
 
-// w[wt.cert]
-// w[wt.cert.rotation]
+// spec: WEB#webtransport-certificate
 pub struct CertStore {
     pub current: CertEntry,
     pub next: Option<CertEntry>,
@@ -123,7 +122,7 @@ impl CertStore {
 mod tests {
     use super::*;
 
-    // w[verify wt.cert]
+    // spec: WEB#webtransport-certificate
     #[test]
     fn new_generates_current_cert_with_hash() {
         let store = CertStore::new();
@@ -136,7 +135,7 @@ mod tests {
         assert!(store.next.is_none());
     }
 
-    // w[verify wt.cert.rotation]
+    // spec: WEB#webtransport-certificate
     #[test]
     fn rotate_if_needed_is_noop_for_fresh_cert() {
         let mut store = CertStore::new();
@@ -146,7 +145,7 @@ mod tests {
         assert!(store.next.is_none(), "not yet in rotation window");
     }
 
-    // w[verify wt.cert.rotation]
+    // spec: WEB#webtransport-certificate
     #[test]
     fn rotate_if_needed_precomputes_next_when_in_rotation_window() {
         let mut store = CertStore::new();
@@ -171,7 +170,7 @@ mod tests {
         assert!(hashes.contains(&next_hash));
     }
 
-    // w[verify wt.cert.rotation]
+    // spec: WEB#webtransport-certificate
     #[test]
     fn rotate_if_needed_swaps_expired_current_to_pregenerated_next() {
         let mut store = CertStore::new();
@@ -190,7 +189,7 @@ mod tests {
         assert!(store.next.is_none(), "next slot cleared after promotion");
     }
 
-    // w[verify wt.cert.rotation]
+    // spec: WEB#webtransport-certificate
     // The spec requires rotating *before* expiry. Swapping on expiry left the
     // endpoint serving an expired certificate for up to a full tick, and a
     // browser rejects that however the hash was advertised.
@@ -214,7 +213,7 @@ mod tests {
         );
     }
 
-    // w[verify wt.cert.rotation]
+    // spec: WEB#webtransport-certificate
     // A margin no larger than the tick interval would let a tick straddle
     // expiry, which is the whole failure being fixed.
     #[test]
@@ -229,7 +228,7 @@ mod tests {
         );
     }
 
-    // w[verify wt.cert.rotation]
+    // spec: WEB#webtransport-certificate
     #[test]
     fn rotate_if_needed_generates_new_current_if_next_missing() {
         // If expiry was reached without a pre-generated `next` (e.g. system

@@ -9,7 +9,7 @@ use seedling_protocol::{
 const RECONNECT_TIMEOUT: Duration = Duration::from_secs(300);
 const MAX_BACKOFF: Duration = Duration::from_secs(30);
 
-// i[impl ctl.subscribe.reconnect]
+// spec: CLI#event-subscription
 /// `auth` is how the first connection authenticated, carried through so a
 /// reconnect uses the same terms.
 ///
@@ -74,7 +74,7 @@ enum SessionOutcome {
     Interrupted,
 }
 
-// i[impl ctl.graceful-shutdown]
+// spec: CLI#shutdown
 async fn run_subscribe_session(client: &OiClient) -> SessionOutcome {
     let mut event_stream = match client.subscribe_events().await {
         Ok(s) => s,

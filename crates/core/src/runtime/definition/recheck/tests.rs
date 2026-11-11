@@ -96,8 +96,8 @@ impl Harness {
     }
 }
 
-// r[verify fault.definition-source-moved]
-// r[verify definition.recheck]
+// spec: FLT#app-faults
+// spec: RCK#resolution
 #[test]
 fn a_moved_tag_files_the_fault_and_moving_back_clears_it() {
     let mut h = Harness::new();
@@ -123,7 +123,7 @@ fn a_moved_tag_files_the_fault_and_moving_back_clears_it() {
     assert!(h.moved_faults("web").is_empty());
 }
 
-// r[verify fault.definition-source-moved]
+// spec: FLT#app-faults
 #[test]
 fn a_failed_recheck_leaves_the_fault_as_it_was() {
     let mut h = Harness::new();
@@ -148,7 +148,7 @@ fn a_failed_recheck_leaves_the_fault_as_it_was() {
     assert!(h.moved_faults("web").is_empty(), "a failure must not file");
 }
 
-// r[verify definition.recheck.backoff]
+// spec: RCK#back-off
 #[test]
 fn failures_back_off_to_a_cap_and_a_success_resets() {
     let mut h = Harness::new();
@@ -181,8 +181,8 @@ fn failures_back_off_to_a_cap_and_a_success_resets() {
     assert_eq!(requests(&h), 6);
 }
 
-// r[verify definition.recheck.backoff]
-// r[verify definition.recheck]
+// spec: RCK#back-off
+// spec: RCK#resolution
 #[test]
 fn one_apps_failure_does_not_delay_another() {
     let mut h = Harness::new();
@@ -200,7 +200,7 @@ fn one_apps_failure_does_not_delay_another() {
     assert_eq!(h.moved_faults("good").len(), 1);
 }
 
-// r[verify definition.recheck]
+// spec: RCK#resolution
 #[test]
 fn pinned_and_pushed_definitions_are_never_rechecked() {
     let mut h = Harness::new();
@@ -215,7 +215,7 @@ fn pinned_and_pushed_definitions_are_never_rechecked() {
     assert!(h.moved_faults("pushed").is_empty());
 }
 
-// r[verify definition.recheck]
+// spec: RCK#resolution
 #[test]
 fn a_recheck_reads_only_manifests() {
     let mut h = Harness::new();
@@ -231,7 +231,7 @@ fn a_recheck_reads_only_manifests() {
     assert!(matches!(&entry.source, Source::Fetched { digest, .. } if *digest == first));
 }
 
-// r[verify definition.recheck]
+// spec: RCK#resolution
 #[test]
 fn a_registry_removed_from_the_allowlist_is_not_contacted() {
     let mut h = Harness::new();
@@ -245,8 +245,8 @@ fn a_registry_removed_from_the_allowlist_is_not_contacted() {
     assert!(h.moved_faults("web").is_empty());
 }
 
-// r[verify fault.definition-source-moved]
-// r[verify fault.lifecycle]
+// spec: FLT#app-faults
+// spec: FLT#filing-and-clearing
 #[test]
 fn a_filed_fault_survives_a_restart_and_a_failed_recheck() {
     let mut h = Harness::new();
@@ -264,7 +264,7 @@ fn a_filed_fault_survives_a_restart_and_a_failed_recheck() {
     assert_eq!(h.moved_faults("web").len(), 1);
 }
 
-// r[verify definition.recheck.cadence]
+// spec: RCK#schedule
 #[test]
 fn rechecks_are_infrequent_and_spread() {
     assert!(RECHECK_INTERVAL >= Duration::from_secs(60 * 60));
@@ -314,7 +314,7 @@ impl Registry for SlowRegistry<'_> {
     }
 }
 
-// r[verify definition.recheck]
+// spec: RCK#resolution
 #[test]
 fn a_slow_registry_does_not_hold_up_the_other_apps() {
     let mut h = Harness::new();

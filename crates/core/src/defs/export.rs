@@ -1,7 +1,7 @@
 use rhai::{EvalAltResult, Map};
 
-/// Shared options carried by `l[impl volume.exported]` and
-/// `l[impl service.exported]`. New fields should be optional so old
+/// Shared options carried by `spec: VOL#export` and
+/// `spec: SVC#export`. New fields should be optional so old
 /// callers keep compiling.
 #[derive(Debug, Clone, Default)]
 pub struct ExportOptions {

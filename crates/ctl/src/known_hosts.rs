@@ -16,6 +16,7 @@ pub struct KnownHosts {
 }
 
 impl KnownHosts {
+    // spec: LINUX#per-user-state
     pub fn default_path() -> PathBuf {
         dirs::state_dir()
             .or_else(dirs::data_local_dir)

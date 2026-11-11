@@ -41,7 +41,7 @@ async fn process_one_volume(
         remove_failure: None,
     };
 
-    // r[observe.volume]
+    // spec: OBS#volumes
     let facts = match observer.observe(&dr.instance, &dr.definition).await {
         Ok(f) => f,
         Err(e) => {
@@ -72,7 +72,7 @@ async fn process_one_volume(
         .any(|(f, _)| matches!(f, ObservationFact::VolumeBackendMismatch));
 
     match dr.desired {
-        // r[impl actuate.volume.hold]
+        // spec: ACTU#held-volumes
         LifecycleState::Ready if backend_mismatch => {
             // Storage backend changed; hold old volume and recreate.
             let hold_op = autonomous_ops::record(
@@ -122,7 +122,7 @@ async fn process_one_volume(
             create_op.complete(&create_outcome);
         }
         LifecycleState::Ready if !volume_present => {
-            // r[actuate.volume.start]
+            // spec: ACTU#volume-creation-and-seeding
             let op = autonomous_ops::record(
                 db,
                 &dr.instance,
@@ -148,7 +148,7 @@ async fn process_one_volume(
             result
                 .observations
                 .push((dr.instance.clone(), "stop_sent", json!({})));
-            // r[actuate.volume.stop]
+            // spec: ACTU#volume-removal
             let op = autonomous_ops::record(
                 db,
                 &dr.instance,
@@ -211,7 +211,7 @@ pub(super) async fn observe_and_actuate(
         }
     }
 
-    // r[impl lifecycle.external-volume]
+    // spec: LCY#external-volumes
     // External volume resources are declarations only — nothing to create or
     // destroy. Drive them directly to the appropriate lifecycle state.
     for dr in desired

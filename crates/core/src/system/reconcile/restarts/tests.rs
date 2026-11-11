@@ -26,7 +26,7 @@ fn records(db: &Db, inst: &ResourceInstance) -> Vec<restarts::RestartRecord> {
     restarts::list(db, None, Some(&inst.id.to_hex()), 1000).expect("list")
 }
 
-// r[verify autonomous.restart.record]
+// spec: AUTO#restart-record
 #[test]
 fn first_sighting_baselines_without_recording() {
     let db = Db::open_in_memory().expect("open");
@@ -43,7 +43,7 @@ fn first_sighting_baselines_without_recording() {
     );
 }
 
-// r[verify autonomous.restart.record]
+// spec: AUTO#restart-record
 #[test]
 fn counter_delta_across_a_restart_is_recorded_with_its_exit() {
     let db = Db::open_in_memory().expect("open");
@@ -70,7 +70,7 @@ fn counter_delta_across_a_restart_is_recorded_with_its_exit() {
     assert_eq!(rows[0].resource_name.as_deref(), Some("web"));
 }
 
-// r[verify autonomous.restart.record]
+// spec: AUTO#restart-record
 #[test]
 fn a_burst_between_ticks_records_every_restart() {
     let db = Db::open_in_memory().expect("open");
@@ -94,7 +94,7 @@ fn a_burst_between_ticks_records_every_restart() {
     assert!(rows[1..].iter().all(|r| r.exit_code.is_none()));
 }
 
-// r[verify autonomous.restart.record]
+// spec: AUTO#restart-record
 #[test]
 fn an_unmoved_counter_records_nothing() {
     let db = Db::open_in_memory().expect("open");
@@ -107,7 +107,7 @@ fn an_unmoved_counter_records_nothing() {
     assert_eq!(records(&db, &inst).len(), 2);
 }
 
-// r[verify autonomous.restart.record]
+// spec: AUTO#restart-record
 #[test]
 fn a_counter_reset_rebaselines_instead_of_recording_a_negative() {
     let db = Db::open_in_memory().expect("open");
@@ -130,7 +130,7 @@ fn a_counter_reset_rebaselines_instead_of_recording_a_negative() {
     assert_eq!(records(&db, &inst).len(), 6);
 }
 
-// r[verify autonomous.restart.record]
+// spec: AUTO#restart-record
 #[test]
 fn restarts_after_a_reset_are_recorded_not_dropped() {
     let db = Db::open_in_memory().expect("open");
@@ -145,7 +145,7 @@ fn restarts_after_a_reset_are_recorded_not_dropped() {
     assert_eq!(records(&db, &inst).len(), 7);
 }
 
-// r[verify autonomous.restart.record]
+// spec: AUTO#restart-record
 #[test]
 fn a_runtime_start_is_recorded_as_deliberate_and_rebaselines() {
     let db = Db::open_in_memory().expect("open");
@@ -171,7 +171,7 @@ fn a_runtime_start_is_recorded_as_deliberate_and_rebaselines() {
     assert_eq!(records(&db, &inst).len(), 4);
 }
 
-// r[verify autonomous.restart.record]
+// spec: AUTO#restart-record
 #[test]
 fn a_first_start_is_not_a_restart() {
     let db = Db::open_in_memory().expect("open");
@@ -182,7 +182,7 @@ fn a_first_start_is_not_a_restart() {
     assert!(records(&db, &inst).is_empty());
 }
 
-// r[verify autonomous.restart.rate]
+// spec: AUTO#crash-loop-detection
 #[test]
 fn crossing_the_rate_threshold_reports_a_crash_loop() {
     let db = Db::open_in_memory().expect("open");
@@ -208,8 +208,7 @@ fn crossing_the_rate_threshold_reports_a_crash_loop() {
     );
 }
 
-// r[verify autonomous.restart.rate]
-// r[verify autonomous.restart.rate.settings]
+// spec: AUTO#crash-loop-detection
 #[test]
 fn the_threshold_follows_the_operator_setting() {
     let db = Db::open_in_memory().expect("open");
@@ -222,7 +221,7 @@ fn the_threshold_follows_the_operator_setting() {
     assert_eq!(loops.len(), 1);
 }
 
-// r[verify autonomous.restart.rate]
+// spec: AUTO#crash-loop-detection
 #[test]
 fn a_rolling_update_does_not_read_as_a_crash_burst() {
     let db = Db::open_in_memory().expect("open");
@@ -243,7 +242,7 @@ fn a_rolling_update_does_not_read_as_a_crash_burst() {
     );
 }
 
-// r[verify autonomous.restart.rate]
+// spec: AUTO#crash-loop-detection
 #[test]
 fn instances_are_accounted_for_independently() {
     let db = Db::open_in_memory().expect("open");
@@ -265,7 +264,7 @@ fn instances_are_accounted_for_independently() {
     assert_eq!(records(&db, &two).len(), 1);
 }
 
-// r[verify gc.restarts]
+// spec: GC#restart-records
 #[test]
 fn gc_drops_bookkeeping_for_instances_that_no_longer_exist() {
     let db = Db::open_in_memory().expect("open");

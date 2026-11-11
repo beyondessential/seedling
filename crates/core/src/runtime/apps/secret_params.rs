@@ -6,7 +6,7 @@ use seedling_protocol::names::{AppName, ParamName};
 
 use crate::runtime::{db::Db, secrets::Cipher};
 
-// r[impl secret.storage]
+// spec: SEC#storage
 pub fn load_secret_params_for_app(
     db: &Db,
     cipher: &Cipher,
@@ -40,7 +40,7 @@ pub fn load_secret_params_for_app(
 /// A definition can stop marking a parameter secret without the value it
 /// already holds moving, so what a stored value needs is decided by where it
 /// lives, never by what the definition now says.
-// r[impl secret.history]
+// spec: SEC#generation-history
 pub fn is_stored_secret(db: &Db, app_name: &AppName, param: &ParamName) -> rusqlite::Result<bool> {
     let mut stmt = db
         .conn
@@ -48,7 +48,7 @@ pub fn is_stored_secret(db: &Db, app_name: &AppName, param: &ParamName) -> rusql
     stmt.exists(rusqlite::params![app_name, param])
 }
 
-// r[impl secret.storage]
+// spec: SEC#storage
 pub fn upsert_secret_param(
     db: &Db,
     cipher: &Cipher,
@@ -60,7 +60,7 @@ pub fn upsert_secret_param(
         .encrypt(value)
         .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
     db.conn.execute(
-        // r[impl history.persist.partial-update]
+        // spec: INFRA#database
         "INSERT INTO secret_params (app_name, param_name, ciphertext) VALUES (?1, ?2, ?3) \
          ON CONFLICT(app_name, param_name) DO UPDATE SET ciphertext = excluded.ciphertext",
         rusqlite::params![app_name, param_name, ct],
@@ -86,7 +86,7 @@ pub fn delete_app_secret_params(db: &Db, app_name: &AppName) -> rusqlite::Result
     Ok(())
 }
 
-// r[impl secret.migration]
+// spec: SEC#migration
 pub fn migrate_to_secret(
     db: &Db,
     cipher: &Cipher,

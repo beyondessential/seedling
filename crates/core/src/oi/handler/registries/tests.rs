@@ -2,7 +2,7 @@ use serde_json::json;
 
 use crate::oi::test_support::TestOi;
 
-// i[verify registry.list]
+// spec: IMGM#registry-allowlist
 #[test]
 fn list_returns_default_allowlist() {
     let oi = TestOi::new();
@@ -12,7 +12,7 @@ fn list_returns_default_allowlist() {
     assert!(registries.contains(&json!("ghcr.io")));
 }
 
-// i[verify registry.add]
+// spec: IMGM#registry-allowlist
 #[test]
 fn add_extends_allowlist_idempotently() {
     let oi = TestOi::new();
@@ -32,7 +32,7 @@ fn add_extends_allowlist_idempotently() {
     );
 }
 
-// i[verify registry.remove]
+// spec: IMGM#registry-allowlist
 #[test]
 fn remove_deletes_registry_or_errors_when_absent() {
     let oi = TestOi::new();
@@ -52,8 +52,8 @@ fn remove_deletes_registry_or_errors_when_absent() {
     assert_eq!(code, "not_found");
 }
 
-// i[verify registry.remove]
-// i[verify fault.derived]
+// spec: IMGM#registry-allowlist
+// spec: FLTS#listing-faults
 #[test]
 fn disallowed_registry_files_fault_and_removal_reevaluates_apps() {
     let oi = TestOi::new();
@@ -85,8 +85,8 @@ fn disallowed_registry_files_fault_and_removal_reevaluates_apps() {
     assert_eq!(faults.as_array().unwrap().len(), 1);
 }
 
-// r[verify fault.lifecycle]
-// i[verify registry.add]
+// spec: FLT#filing-and-clearing
+// spec: IMGM#registry-allowlist
 // `disallowed_registry` is true exactly while an app's images reference a
 // registry outside the allowlist. Adding the registry is the remediation, so
 // it has to re-evaluate — otherwise the fault the operator just fixed stood

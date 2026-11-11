@@ -15,7 +15,7 @@ use crate::{
 
 /// A parameter changed in the same step as a definition update. Values are
 /// `None` for an unset, and for a secret parameter.
-// i[impl event.types]
+// spec: EVT#event-types
 #[derive(Debug, Clone, Serialize)]
 pub struct AppUpdatedParam {
     pub name: ParamName,
@@ -23,11 +23,11 @@ pub struct AppUpdatedParam {
     pub new_value: Option<String>,
 }
 
-// i[event.types]
+// spec: EVT#event-types
 #[derive(Debug, Clone, Serialize)]
 #[serde(tag = "type")]
 pub enum OiEvent {
-    // r[impl audit.log.generations]
+    // spec: EVT#event-types
     AppRegistered {
         timestamp: Timestamp,
         app: AppName,
@@ -41,8 +41,7 @@ pub enum OiEvent {
         #[serde(skip_serializing_if = "Option::is_none")]
         actor: Option<Arc<Actor>>,
     },
-    // r[impl audit.log.generations]
-    // i[impl event.types]
+    // spec: EVT#event-types
     AppUpdated {
         timestamp: Timestamp,
         app: AppName,
@@ -56,7 +55,7 @@ pub enum OiEvent {
         #[serde(skip_serializing_if = "Option::is_none")]
         actor: Option<Arc<Actor>>,
     },
-    // i[impl event.types]
+    // spec: EVT#event-types
     /// Emitted on every transition of `AppPhase`. Phase is one of
     /// `"not_installed"`, `"installing"`, `"installed"`, `"uninstalling"`.
     /// The WebUI relies on this to refresh after uninstall completes,
@@ -69,8 +68,8 @@ pub enum OiEvent {
         #[serde(skip_serializing_if = "Option::is_none")]
         actor: Option<Arc<Actor>>,
     },
-    // r[impl audit.log.generations]
-    // i[impl param.store.secret]
+    // spec: EVT#event-types
+    // spec: PRM#parameter-storage
     ParamSet {
         timestamp: Timestamp,
         app: AppName,
@@ -86,8 +85,8 @@ pub enum OiEvent {
         #[serde(skip_serializing_if = "Option::is_none")]
         actor: Option<Arc<Actor>>,
     },
-    // r[impl audit.log.generations]
-    // i[impl param.store.secret]
+    // spec: EVT#event-types
+    // spec: PRM#parameter-storage
     ParamUnset {
         timestamp: Timestamp,
         app: AppName,
@@ -101,8 +100,8 @@ pub enum OiEvent {
         #[serde(skip_serializing_if = "Option::is_none")]
         actor: Option<Arc<Actor>>,
     },
-    // r[impl operation.lifecycle.generations]
-    // i[impl event.types]
+    // spec: OPS#initiating-events
+    // spec: EVT#event-types
     OperationStarted {
         timestamp: Timestamp,
         app: AppName,
@@ -114,7 +113,7 @@ pub enum OiEvent {
         #[serde(skip_serializing_if = "Option::is_none")]
         actor: Option<Arc<Actor>>,
     },
-    // r[impl operation.lifecycle.generations]
+    // spec: OPS#initiating-events
     OperationCompleted {
         timestamp: Timestamp,
         app: AppName,
@@ -125,7 +124,7 @@ pub enum OiEvent {
         #[serde(skip_serializing_if = "Option::is_none")]
         actor: Option<Arc<Actor>>,
     },
-    // r[impl operation.lifecycle.generations]
+    // spec: OPS#initiating-events
     OperationFailed {
         timestamp: Timestamp,
         app: AppName,
@@ -200,7 +199,7 @@ pub enum OiEvent {
         #[serde(skip_serializing_if = "Option::is_none")]
         actor: Option<Arc<Actor>>,
     },
-    // i[impl canopy.offer]
+    // spec: RLY#offers
     CanopyOffered {
         timestamp: Timestamp,
         offer_id: OfferId,
@@ -209,7 +208,7 @@ pub enum OiEvent {
         #[serde(skip_serializing_if = "Option::is_none")]
         actor: Option<Arc<Actor>>,
     },
-    // i[impl canopy.offer.lifetime]
+    // spec: RLY#offer-lifetime
     CanopyWithdrawn {
         timestamp: Timestamp,
         offer_id: OfferId,
@@ -230,7 +229,7 @@ pub enum OiEvent {
         #[serde(skip_serializing_if = "Option::is_none")]
         actor: Option<Arc<Actor>>,
     },
-    // i[impl app.priority.set]
+    // spec: CTL#app-priority
     AppPriorityChanged {
         timestamp: Timestamp,
         app: AppName,
@@ -239,7 +238,7 @@ pub enum OiEvent {
         #[serde(skip_serializing_if = "Option::is_none")]
         actor: Option<Arc<Actor>>,
     },
-    // i[impl deployment.restart]
+    // spec: CTL#deployment-restart
     DeploymentRestarted {
         timestamp: Timestamp,
         app: AppName,
@@ -248,7 +247,7 @@ pub enum OiEvent {
         #[serde(skip_serializing_if = "Option::is_none")]
         actor: Option<Arc<Actor>>,
     },
-    // i[impl resource.stop]
+    // spec: CTL#resource-stop
     ResourceStopped {
         timestamp: Timestamp,
         app: AppName,
@@ -257,7 +256,7 @@ pub enum OiEvent {
         #[serde(skip_serializing_if = "Option::is_none")]
         actor: Option<Arc<Actor>>,
     },
-    // i[impl resource.unstop]
+    // spec: CTL#resource-stop
     ResourceUnstopped {
         timestamp: Timestamp,
         app: AppName,
@@ -274,7 +273,7 @@ pub enum OiEvent {
     },
     /// Written to one subscriber in place of events it fell too far behind to
     /// receive. `skipped` is absent when the number is unknown.
-    // i[impl event.gap]
+    // spec: EVT#gaps
     EventsDropped {
         timestamp: Timestamp,
         #[serde(skip_serializing_if = "Option::is_none")]
@@ -295,7 +294,7 @@ pub enum OiEvent {
         #[serde(skip_serializing_if = "Option::is_none")]
         actor: Option<Arc<Actor>>,
     },
-    // r[impl actuate.volume.hold.events]
+    // spec: ACTU#held-volumes
     HeldVolumeRestored {
         timestamp: Timestamp,
         held_id: HeldVolumeId,
@@ -304,7 +303,7 @@ pub enum OiEvent {
         #[serde(skip_serializing_if = "Option::is_none")]
         actor: Option<Arc<Actor>>,
     },
-    // r[impl volume.site.lifecycle.events]
+    // spec: SITE#site-volumes
     SiteVolumeCreated {
         timestamp: Timestamp,
         name: String,
@@ -315,7 +314,7 @@ pub enum OiEvent {
         #[serde(skip_serializing_if = "Option::is_none")]
         actor: Option<Arc<Actor>>,
     },
-    // r[impl volume.site.lifecycle.events]
+    // spec: SITE#site-volumes
     SiteVolumeDeleted {
         timestamp: Timestamp,
         name: String,
@@ -328,7 +327,7 @@ pub enum OiEvent {
         #[serde(skip_serializing_if = "Option::is_none")]
         actor: Option<Arc<Actor>>,
     },
-    // r[impl volume.site.snapshot.events]
+    // spec: SITE#site-volume-snapshots
     SiteVolumeSnapshotted {
         timestamp: Timestamp,
         name: String,
@@ -336,7 +335,7 @@ pub enum OiEvent {
         #[serde(skip_serializing_if = "Option::is_none")]
         actor: Option<Arc<Actor>>,
     },
-    // r[impl volume.site.promote.events]
+    // spec: SITE#snapshot-promotion
     SiteVolumePromoted {
         timestamp: Timestamp,
         name: String,
@@ -344,7 +343,7 @@ pub enum OiEvent {
         #[serde(skip_serializing_if = "Option::is_none")]
         actor: Option<Arc<Actor>>,
     },
-    // r[impl volume.external.mapping.events]
+    // spec: SITE#external-mappings
     ExternalVolumeMapped {
         timestamp: Timestamp,
         app: AppName,
@@ -354,7 +353,7 @@ pub enum OiEvent {
         #[serde(skip_serializing_if = "Option::is_none")]
         actor: Option<Arc<Actor>>,
     },
-    // r[impl volume.external.mapping.events]
+    // spec: SITE#external-mappings
     ExternalVolumeUnmapped {
         timestamp: Timestamp,
         app: AppName,
@@ -362,7 +361,7 @@ pub enum OiEvent {
         #[serde(skip_serializing_if = "Option::is_none")]
         actor: Option<Arc<Actor>>,
     },
-    // r[impl volume.external.mapping.events]
+    // spec: SITE#external-mappings
     ExternalVolumeRemapped {
         timestamp: Timestamp,
         app: AppName,
@@ -374,7 +373,7 @@ pub enum OiEvent {
         #[serde(skip_serializing_if = "Option::is_none")]
         actor: Option<Arc<Actor>>,
     },
-    // r[impl service.site.lifecycle.events]
+    // spec: SITE#site-service-lifecycle
     SiteServiceCreated {
         timestamp: Timestamp,
         name: String,
@@ -383,14 +382,14 @@ pub enum OiEvent {
         #[serde(skip_serializing_if = "Option::is_none")]
         actor: Option<Arc<Actor>>,
     },
-    // r[impl service.site.lifecycle.events]
+    // spec: SITE#site-service-lifecycle
     SiteServiceDeleted {
         timestamp: Timestamp,
         name: String,
         #[serde(skip_serializing_if = "Option::is_none")]
         actor: Option<Arc<Actor>>,
     },
-    // r[impl service.site.lifecycle.events]
+    // spec: SITE#site-service-lifecycle
     SiteServiceEndpointAdded {
         timestamp: Timestamp,
         name: String,
@@ -401,7 +400,7 @@ pub enum OiEvent {
         #[serde(skip_serializing_if = "Option::is_none")]
         actor: Option<Arc<Actor>>,
     },
-    // r[impl service.site.lifecycle.events]
+    // spec: SITE#site-service-lifecycle
     SiteServiceEndpointRemoved {
         timestamp: Timestamp,
         name: String,
@@ -412,7 +411,7 @@ pub enum OiEvent {
         #[serde(skip_serializing_if = "Option::is_none")]
         actor: Option<Arc<Actor>>,
     },
-    // r[impl service.external.mapping.events]
+    // spec: SITE#external-mappings
     ExternalServiceMapped {
         timestamp: Timestamp,
         app: AppName,
@@ -421,7 +420,7 @@ pub enum OiEvent {
         #[serde(skip_serializing_if = "Option::is_none")]
         actor: Option<Arc<Actor>>,
     },
-    // r[impl service.external.mapping.events]
+    // spec: SITE#external-mappings
     ExternalServiceUnmapped {
         timestamp: Timestamp,
         app: AppName,
@@ -429,7 +428,7 @@ pub enum OiEvent {
         #[serde(skip_serializing_if = "Option::is_none")]
         actor: Option<Arc<Actor>>,
     },
-    // r[impl service.external.mapping.events]
+    // spec: SITE#external-mappings
     ExternalServiceRemapped {
         timestamp: Timestamp,
         app: AppName,
@@ -439,7 +438,7 @@ pub enum OiEvent {
         #[serde(skip_serializing_if = "Option::is_none")]
         actor: Option<Arc<Actor>>,
     },
-    // r[impl ingress.site.lifecycle.events]
+    // spec: SITE#attachments
     SiteIngressCreated {
         timestamp: Timestamp,
         name: SiteIngressName,
@@ -456,7 +455,7 @@ pub enum OiEvent {
         #[serde(skip_serializing_if = "Option::is_none")]
         actor: Option<Arc<Actor>>,
     },
-    // r[impl ingress.site.lifecycle.events]
+    // spec: SITE#attachments
     SiteIngressUpdated {
         timestamp: Timestamp,
         name: SiteIngressName,
@@ -469,7 +468,7 @@ pub enum OiEvent {
         #[serde(skip_serializing_if = "Option::is_none")]
         actor: Option<Arc<Actor>>,
     },
-    // r[impl ingress.site.lifecycle.events]
+    // spec: SITE#attachments
     SiteIngressDeleted {
         timestamp: Timestamp,
         name: SiteIngressName,
@@ -478,7 +477,7 @@ pub enum OiEvent {
         #[serde(skip_serializing_if = "Option::is_none")]
         actor: Option<Arc<Actor>>,
     },
-    // r[impl ingress.site.lifecycle.events]
+    // spec: SITE#attachments
     SiteIngressAttachmentAdded {
         timestamp: Timestamp,
         name: SiteIngressName,
@@ -497,7 +496,7 @@ pub enum OiEvent {
         #[serde(skip_serializing_if = "Option::is_none")]
         actor: Option<Arc<Actor>>,
     },
-    // r[impl ingress.site.lifecycle.events]
+    // spec: SITE#attachments
     SiteIngressAttachmentUpdated {
         timestamp: Timestamp,
         name: SiteIngressName,
@@ -515,7 +514,7 @@ pub enum OiEvent {
         #[serde(skip_serializing_if = "Option::is_none")]
         actor: Option<Arc<Actor>>,
     },
-    // r[impl ingress.site.lifecycle.events]
+    // spec: SITE#attachments
     SiteIngressAttachmentRemoved {
         timestamp: Timestamp,
         name: SiteIngressName,
@@ -524,28 +523,28 @@ pub enum OiEvent {
         #[serde(skip_serializing_if = "Option::is_none")]
         actor: Option<Arc<Actor>>,
     },
-    // r[impl audit.log.events]
+    // spec: AUD#entries
     TemplateCreated {
         timestamp: Timestamp,
         name: TemplateName,
         #[serde(skip_serializing_if = "Option::is_none")]
         actor: Option<Arc<Actor>>,
     },
-    // r[impl audit.log.events]
+    // spec: AUD#entries
     TemplateUpdated {
         timestamp: Timestamp,
         name: TemplateName,
         #[serde(skip_serializing_if = "Option::is_none")]
         actor: Option<Arc<Actor>>,
     },
-    // r[impl audit.log.events]
+    // spec: AUD#entries
     TemplateRemoved {
         timestamp: Timestamp,
         name: TemplateName,
         #[serde(skip_serializing_if = "Option::is_none")]
         actor: Option<Arc<Actor>>,
     },
-    // r[impl audit.log.events]
+    // spec: AUD#entries
     TemplateInstantiated {
         timestamp: Timestamp,
         template: TemplateName,
@@ -657,7 +656,7 @@ impl EventSender {
         });
     }
 
-    // i[impl app.priority.set]
+    // spec: CTL#app-priority
     /// Emit an app-priority-change event.
     pub fn app_priority_changed(
         &self,
@@ -751,7 +750,7 @@ impl EventSender {
         });
     }
 
-    // i[impl shell.start]
+    // spec: SHL#session-events
     pub fn shell_started(&self, session_id: SessionId, app: &AppName, name: &ShellName) {
         self.emit(OiEvent::ShellStarted {
             timestamp: now(),
@@ -762,7 +761,7 @@ impl EventSender {
         });
     }
 
-    // i[impl shell.exit]
+    // spec: SHL#session-end
     pub fn shell_exited(&self, session_id: SessionId, exit_code: i32) {
         self.emit(OiEvent::ShellExited {
             timestamp: now(),
@@ -772,7 +771,7 @@ impl EventSender {
         });
     }
 
-    // i[impl forward.start]
+    // spec: FWD#forward-events
     pub fn forward_started(&self, forward_id: ForwardId, app: &AppName, service: &str, port: u16) {
         self.emit(OiEvent::ForwardStarted {
             timestamp: now(),
@@ -784,7 +783,7 @@ impl EventSender {
         });
     }
 
-    // i[impl forward.start]
+    // spec: FWD#forward-events
     pub fn forward_stopped(&self, forward_id: ForwardId) {
         self.emit(OiEvent::ForwardStopped {
             timestamp: now(),
@@ -793,7 +792,7 @@ impl EventSender {
         });
     }
 
-    // i[impl canopy.offer]
+    // spec: RLY#offers
     pub fn canopy_offered(
         &self,
         offer_id: OfferId,
@@ -810,7 +809,7 @@ impl EventSender {
         });
     }
 
-    // i[impl canopy.offer.lifetime]
+    // spec: RLY#offer-lifetime
     /// `actor` is absent when the offer ended without anyone asking — the
     /// connection was lost — as [event.types] requires of autonomous events.
     pub fn canopy_withdrawn(&self, offer_id: OfferId, reason: &str, actor: Option<Arc<Actor>>) {
@@ -830,7 +829,7 @@ impl EventSender {
         });
     }
 
-    // r[impl actuate.volume.hold.events]
+    // spec: ACTU#held-volumes
     pub fn held_volume_created(
         &self,
         held_id: HeldVolumeId,
@@ -849,7 +848,7 @@ impl EventSender {
         });
     }
 
-    // r[impl actuate.volume.hold.events]
+    // spec: ACTU#held-volumes
     pub fn held_volume_deleted(&self, held_id: HeldVolumeId, actor: Option<Arc<Actor>>) {
         self.emit(OiEvent::HeldVolumeDeleted {
             timestamp: now(),
@@ -858,7 +857,7 @@ impl EventSender {
         });
     }
 
-    // r[impl actuate.volume.hold.events]
+    // spec: ACTU#held-volumes
     pub fn held_volume_restored(
         &self,
         held_id: HeldVolumeId,
@@ -873,7 +872,7 @@ impl EventSender {
         });
     }
 
-    // r[impl volume.site.lifecycle.events]
+    // spec: SITE#site-volumes
     pub fn site_volume_created(
         &self,
         name: &str,
@@ -890,7 +889,7 @@ impl EventSender {
         });
     }
 
-    // r[impl volume.site.lifecycle.events]
+    // spec: SITE#site-volumes
     pub fn site_volume_deleted(
         &self,
         name: &str,
@@ -907,7 +906,7 @@ impl EventSender {
         });
     }
 
-    // r[impl volume.site.snapshot.events]
+    // spec: SITE#site-volume-snapshots
     pub fn site_volume_snapshotted(
         &self,
         name: &str,
@@ -922,7 +921,7 @@ impl EventSender {
         });
     }
 
-    // r[impl volume.site.promote.events]
+    // spec: SITE#snapshot-promotion
     pub fn site_volume_promoted(&self, name: &str, source: &str, actor: Option<Arc<Actor>>) {
         self.emit(OiEvent::SiteVolumePromoted {
             timestamp: now(),
@@ -932,7 +931,7 @@ impl EventSender {
         });
     }
 
-    // r[impl volume.external.mapping.events]
+    // spec: SITE#external-mappings
     pub fn external_volume_mapped(
         &self,
         app: &AppName,
@@ -951,7 +950,7 @@ impl EventSender {
         });
     }
 
-    // r[impl volume.external.mapping.events]
+    // spec: SITE#external-mappings
     pub fn external_volume_unmapped(
         &self,
         app: &AppName,
@@ -966,7 +965,7 @@ impl EventSender {
         });
     }
 
-    // r[impl volume.external.mapping.events]
+    // spec: SITE#external-mappings
     pub fn external_volume_remapped(
         &self,
         app: &AppName,
@@ -987,7 +986,7 @@ impl EventSender {
         });
     }
 
-    // r[impl service.site.lifecycle.events]
+    // spec: SITE#site-service-lifecycle
     pub fn site_service_created(
         &self,
         name: &str,
@@ -1002,7 +1001,7 @@ impl EventSender {
         });
     }
 
-    // r[impl service.site.lifecycle.events]
+    // spec: SITE#site-service-lifecycle
     pub fn site_service_deleted(&self, name: &str, actor: Option<Arc<Actor>>) {
         self.emit(OiEvent::SiteServiceDeleted {
             timestamp: now(),
@@ -1011,7 +1010,7 @@ impl EventSender {
         });
     }
 
-    // r[impl service.site.lifecycle.events]
+    // spec: SITE#site-service-lifecycle
     #[allow(clippy::too_many_arguments)]
     pub fn site_service_endpoint_added(
         &self,
@@ -1033,7 +1032,7 @@ impl EventSender {
         });
     }
 
-    // r[impl service.site.lifecycle.events]
+    // spec: SITE#site-service-lifecycle
     #[allow(clippy::too_many_arguments)]
     pub fn site_service_endpoint_removed(
         &self,
@@ -1055,7 +1054,7 @@ impl EventSender {
         });
     }
 
-    // r[impl service.external.mapping.events]
+    // spec: SITE#external-mappings
     pub fn external_service_mapped(
         &self,
         app: &AppName,
@@ -1072,7 +1071,7 @@ impl EventSender {
         });
     }
 
-    // r[impl service.external.mapping.events]
+    // spec: SITE#external-mappings
     pub fn external_service_unmapped(
         &self,
         app: &AppName,
@@ -1087,7 +1086,7 @@ impl EventSender {
         });
     }
 
-    // r[impl service.external.mapping.events]
+    // spec: SITE#external-mappings
     pub fn external_service_remapped(
         &self,
         app: &AppName,
@@ -1106,7 +1105,7 @@ impl EventSender {
         });
     }
 
-    // r[impl ingress.site.lifecycle.events]
+    // spec: SITE#attachments
     #[allow(clippy::too_many_arguments)]
     pub fn site_ingress_created(
         &self,
@@ -1130,7 +1129,7 @@ impl EventSender {
         });
     }
 
-    // r[impl ingress.site.lifecycle.events]
+    // spec: SITE#attachments
     pub fn site_ingress_updated(
         &self,
         name: &SiteIngressName,
@@ -1149,7 +1148,7 @@ impl EventSender {
         });
     }
 
-    // r[impl ingress.site.lifecycle.events]
+    // spec: SITE#attachments
     pub fn site_ingress_deleted(
         &self,
         name: &SiteIngressName,
@@ -1164,7 +1163,7 @@ impl EventSender {
         });
     }
 
-    // r[impl ingress.site.lifecycle.events]
+    // spec: SITE#attachments
     #[allow(clippy::too_many_arguments)]
     pub fn site_ingress_attachment_added(
         &self,
@@ -1192,7 +1191,7 @@ impl EventSender {
         });
     }
 
-    // r[impl ingress.site.lifecycle.events]
+    // spec: SITE#attachments
     #[allow(clippy::too_many_arguments)]
     pub fn site_ingress_attachment_updated(
         &self,
@@ -1220,7 +1219,7 @@ impl EventSender {
         });
     }
 
-    // r[impl ingress.site.lifecycle.events]
+    // spec: SITE#attachments
     pub fn site_ingress_attachment_removed(
         &self,
         name: &SiteIngressName,
@@ -1237,7 +1236,7 @@ impl EventSender {
         });
     }
 
-    // i[impl deployment.restart]
+    // spec: CTL#deployment-restart
     pub fn deployment_restarted(
         &self,
         app: &AppName,
@@ -1254,7 +1253,7 @@ impl EventSender {
         });
     }
 
-    // i[impl resource.stop]
+    // spec: CTL#resource-stop
     pub fn resource_stopped(
         &self,
         app: &AppName,
@@ -1271,7 +1270,7 @@ impl EventSender {
         });
     }
 
-    // i[impl resource.unstop]
+    // spec: CTL#resource-stop
     pub fn resource_unstopped(
         &self,
         app: &AppName,
@@ -1290,7 +1289,7 @@ impl EventSender {
 
     /// Build a context for the three operation lifecycle events.
     /// The context is `Clone + Send + 'static` and can cross the blocking thread boundary.
-    // i[wire.actor]
+    // spec: WIRE#actor-attribution
     pub fn operation(
         &self,
         app: AppName,
@@ -1328,7 +1327,7 @@ impl EventSender {
         }
     }
 
-    // r[impl audit.log.events]
+    // spec: AUD#entries
     pub fn template_created(&self, name: &TemplateName, actor: Option<Arc<Actor>>) {
         self.emit(OiEvent::TemplateCreated {
             timestamp: now(),
@@ -1337,7 +1336,7 @@ impl EventSender {
         });
     }
 
-    // r[impl audit.log.events]
+    // spec: AUD#entries
     pub fn template_updated(&self, name: &TemplateName, actor: Option<Arc<Actor>>) {
         self.emit(OiEvent::TemplateUpdated {
             timestamp: now(),
@@ -1346,7 +1345,7 @@ impl EventSender {
         });
     }
 
-    // r[impl audit.log.events]
+    // spec: AUD#entries
     pub fn template_removed(&self, name: &TemplateName, actor: Option<Arc<Actor>>) {
         self.emit(OiEvent::TemplateRemoved {
             timestamp: now(),
@@ -1355,7 +1354,7 @@ impl EventSender {
         });
     }
 
-    // r[impl audit.log.events]
+    // spec: AUD#entries
     pub fn template_instantiated(
         &self,
         template: &TemplateName,
@@ -1389,13 +1388,13 @@ impl EventSenderWithActor {
             .app_registered(app, generation, Some(Arc::clone(&self.actor)));
     }
 
-    // i[impl canopy.offer]
+    // spec: RLY#offers
     pub fn canopy_offered(&self, offer_id: OfferId, agent: &str, endpoint: &str) {
         self.inner
             .canopy_offered(offer_id, agent, endpoint, Some(Arc::clone(&self.actor)));
     }
 
-    // i[impl canopy.offer.lifetime]
+    // spec: RLY#offer-lifetime
     pub fn canopy_withdrawn(&self, offer_id: OfferId, reason: &str) {
         self.inner
             .canopy_withdrawn(offer_id, reason, Some(Arc::clone(&self.actor)));
@@ -1429,7 +1428,7 @@ impl EventSenderWithActor {
             .app_phase_changed(app, phase, Some(Arc::clone(&self.actor)));
     }
 
-    // i[impl app.priority.set]
+    // spec: CTL#app-priority
     pub fn app_priority_changed(&self, app: &AppName, priority: &str, previous_priority: &str) {
         self.inner.app_priority_changed(
             app,
@@ -1455,7 +1454,7 @@ impl EventSenderWithActor {
         )
     }
 
-    // i[wire.actor]
+    // spec: WIRE#actor-attribution
     pub fn operation(
         &self,
         app: AppName,
@@ -1488,7 +1487,7 @@ impl EventSenderWithActor {
         )
     }
 
-    // i[impl deployment.restart]
+    // spec: CTL#deployment-restart
     pub fn deployment_restarted(&self, app: &AppName, deployment: &str, operation_id: &str) {
         self.inner.deployment_restarted(
             app,
@@ -1498,19 +1497,19 @@ impl EventSenderWithActor {
         );
     }
 
-    // i[impl resource.stop]
+    // spec: CTL#resource-stop
     pub fn resource_stopped(&self, app: &AppName, kind: &str, name: &str) {
         self.inner
             .resource_stopped(app, kind, name, Some(Arc::clone(&self.actor)));
     }
 
-    // i[impl resource.unstop]
+    // spec: CTL#resource-stop
     pub fn resource_unstopped(&self, app: &AppName, kind: &str, name: &str) {
         self.inner
             .resource_unstopped(app, kind, name, Some(Arc::clone(&self.actor)));
     }
 
-    // r[impl actuate.volume.hold.events]
+    // spec: ACTU#held-volumes
     pub fn held_volume_created(
         &self,
         held_id: HeldVolumeId,
@@ -1527,43 +1526,43 @@ impl EventSenderWithActor {
         );
     }
 
-    // r[impl actuate.volume.hold.events]
+    // spec: ACTU#held-volumes
     pub fn held_volume_deleted(&self, held_id: HeldVolumeId) {
         self.inner
             .held_volume_deleted(held_id, Some(Arc::clone(&self.actor)));
     }
 
-    // r[impl actuate.volume.hold.events]
+    // spec: ACTU#held-volumes
     pub fn held_volume_restored(&self, held_id: HeldVolumeId, site_name: &str) {
         self.inner
             .held_volume_restored(held_id, site_name, Some(Arc::clone(&self.actor)));
     }
 
-    // r[impl volume.site.lifecycle.events]
+    // spec: SITE#site-volumes
     pub fn site_volume_created(&self, name: &str, kind: &str, host_path: Option<&str>) {
         self.inner
             .site_volume_created(name, kind, host_path, Some(Arc::clone(&self.actor)));
     }
 
-    // r[impl volume.site.lifecycle.events]
+    // spec: SITE#site-volumes
     pub fn site_volume_deleted(&self, name: &str, kind: &str, held_id: Option<HeldVolumeId>) {
         self.inner
             .site_volume_deleted(name, kind, held_id, Some(Arc::clone(&self.actor)));
     }
 
-    // r[impl volume.site.snapshot.events]
+    // spec: SITE#site-volume-snapshots
     pub fn site_volume_snapshotted(&self, name: &str, source: &VolumeRef) {
         self.inner
             .site_volume_snapshotted(name, source, Some(Arc::clone(&self.actor)));
     }
 
-    // r[impl volume.site.promote.events]
+    // spec: SITE#snapshot-promotion
     pub fn site_volume_promoted(&self, name: &str, source: &str) {
         self.inner
             .site_volume_promoted(name, source, Some(Arc::clone(&self.actor)));
     }
 
-    // r[impl volume.external.mapping.events]
+    // spec: SITE#external-mappings
     pub fn external_volume_mapped(
         &self,
         app: &AppName,
@@ -1580,13 +1579,13 @@ impl EventSenderWithActor {
         );
     }
 
-    // r[impl volume.external.mapping.events]
+    // spec: SITE#external-mappings
     pub fn external_volume_unmapped(&self, app: &AppName, external_name: &ExternalVolumeName) {
         self.inner
             .external_volume_unmapped(app, external_name, Some(Arc::clone(&self.actor)));
     }
 
-    // r[impl volume.external.mapping.events]
+    // spec: SITE#external-mappings
     pub fn external_volume_remapped(
         &self,
         app: &AppName,
@@ -1603,19 +1602,19 @@ impl EventSenderWithActor {
         );
     }
 
-    // r[impl service.site.lifecycle.events]
+    // spec: SITE#site-service-lifecycle
     pub fn site_service_created(&self, name: &str, description: Option<&str>) {
         self.inner
             .site_service_created(name, description, Some(Arc::clone(&self.actor)));
     }
 
-    // r[impl service.site.lifecycle.events]
+    // spec: SITE#site-service-lifecycle
     pub fn site_service_deleted(&self, name: &str) {
         self.inner
             .site_service_deleted(name, Some(Arc::clone(&self.actor)));
     }
 
-    // r[impl service.site.lifecycle.events]
+    // spec: SITE#site-service-lifecycle
     pub fn site_service_endpoint_added(
         &self,
         name: &str,
@@ -1634,7 +1633,7 @@ impl EventSenderWithActor {
         );
     }
 
-    // r[impl service.site.lifecycle.events]
+    // spec: SITE#site-service-lifecycle
     pub fn site_service_endpoint_removed(
         &self,
         name: &str,
@@ -1653,7 +1652,7 @@ impl EventSenderWithActor {
         );
     }
 
-    // r[impl service.external.mapping.events]
+    // spec: SITE#external-mappings
     pub fn external_service_mapped(
         &self,
         app: &AppName,
@@ -1668,13 +1667,13 @@ impl EventSenderWithActor {
         );
     }
 
-    // r[impl service.external.mapping.events]
+    // spec: SITE#external-mappings
     pub fn external_service_unmapped(&self, app: &AppName, external_name: &ExternalServiceName) {
         self.inner
             .external_service_unmapped(app, external_name, Some(Arc::clone(&self.actor)));
     }
 
-    // r[impl service.external.mapping.events]
+    // spec: SITE#external-mappings
     pub fn external_service_remapped(
         &self,
         app: &AppName,
@@ -1691,7 +1690,7 @@ impl EventSenderWithActor {
         );
     }
 
-    // r[impl ingress.site.lifecycle.events]
+    // spec: SITE#attachments
     #[allow(clippy::too_many_arguments)]
     pub fn site_ingress_created(
         &self,
@@ -1713,7 +1712,7 @@ impl EventSenderWithActor {
         );
     }
 
-    // r[impl ingress.site.lifecycle.events]
+    // spec: SITE#attachments
     pub fn site_ingress_updated(
         &self,
         name: &SiteIngressName,
@@ -1730,13 +1729,13 @@ impl EventSenderWithActor {
         );
     }
 
-    // r[impl ingress.site.lifecycle.events]
+    // spec: SITE#attachments
     pub fn site_ingress_deleted(&self, name: &SiteIngressName, source: &str) {
         self.inner
             .site_ingress_deleted(name, source, Some(Arc::clone(&self.actor)));
     }
 
-    // r[impl ingress.site.lifecycle.events]
+    // spec: SITE#attachments
     #[allow(clippy::too_many_arguments)]
     pub fn site_ingress_attachment_added(
         &self,
@@ -1762,7 +1761,7 @@ impl EventSenderWithActor {
         );
     }
 
-    // r[impl ingress.site.lifecycle.events]
+    // spec: SITE#attachments
     #[allow(clippy::too_many_arguments)]
     pub fn site_ingress_attachment_updated(
         &self,
@@ -1788,7 +1787,7 @@ impl EventSenderWithActor {
         );
     }
 
-    // r[impl ingress.site.lifecycle.events]
+    // spec: SITE#attachments
     pub fn site_ingress_attachment_removed(
         &self,
         name: &SiteIngressName,
@@ -1803,25 +1802,25 @@ impl EventSenderWithActor {
         );
     }
 
-    // r[impl audit.log.events]
+    // spec: AUD#entries
     pub fn template_created(&self, name: &TemplateName) {
         self.inner
             .template_created(name, Some(Arc::clone(&self.actor)));
     }
 
-    // r[impl audit.log.events]
+    // spec: AUD#entries
     pub fn template_updated(&self, name: &TemplateName) {
         self.inner
             .template_updated(name, Some(Arc::clone(&self.actor)));
     }
 
-    // r[impl audit.log.events]
+    // spec: AUD#entries
     pub fn template_removed(&self, name: &TemplateName) {
         self.inner
             .template_removed(name, Some(Arc::clone(&self.actor)));
     }
 
-    // r[impl audit.log.events]
+    // spec: AUD#entries
     pub fn template_instantiated(&self, template: &TemplateName, app: &AppName) {
         self.inner
             .template_instantiated(template, app, Some(Arc::clone(&self.actor)));
@@ -1906,7 +1905,7 @@ impl ParamEventCtx {
         });
     }
 
-    // i[impl param.store.secret]
+    // spec: PRM#parameter-storage
     pub fn set_redacted(&self, name: &ParamName) {
         self.tx.emit(OiEvent::ParamSet {
             timestamp: now(),
@@ -1934,7 +1933,7 @@ impl ParamEventCtx {
         });
     }
 
-    // i[impl param.store.secret]
+    // spec: PRM#parameter-storage
     pub fn unset_redacted(&self, name: &ParamName) {
         self.tx.emit(OiEvent::ParamUnset {
             timestamp: now(),

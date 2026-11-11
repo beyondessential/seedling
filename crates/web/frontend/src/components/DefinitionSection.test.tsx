@@ -59,7 +59,7 @@ const plan: PlanResponse = {
 };
 
 describe("DefinitionSection", () => {
-  // w[verify routes.apps.definition]
+  // spec: UI#app-definitions
   it("shows a fetched definition's reference and digest", () => {
     mount(fetched);
     expect(screen.getByText("ghcr.io/org/central-def:v2.11.3")).toBeTruthy();
@@ -67,20 +67,20 @@ describe("DefinitionSection", () => {
     expect(screen.getByText(">=0.12")).toBeTruthy();
   });
 
-  // w[verify routes.apps.canopy-type]
+  // spec: UI#app-status
   it("shows the Canopy type the definition declares", () => {
     mount(fetched, [], {}, "tamanu-central");
     expect(screen.getByText("Canopy type")).toBeTruthy();
     expect(screen.getByText("tamanu-central")).toBeTruthy();
   });
 
-  // w[verify routes.apps.canopy-type]
+  // spec: UI#app-status
   it("shows no Canopy type row when the definition declares none", () => {
     mount(fetched);
     expect(screen.queryByText("Canopy type")).toBeNull();
   });
 
-  // w[verify routes.apps.definition]
+  // spec: UI#app-definitions
   it("shows a pushed definition's hash, pusher, and reported origin", () => {
     mount(pushed);
     expect(screen.getByText("Alex (ctl)")).toBeTruthy();
@@ -89,7 +89,7 @@ describe("DefinitionSection", () => {
     expect(screen.getByText("(reported by client)")).toBeTruthy();
   });
 
-  // w[verify routes.apps.definition.fetch]
+  // spec: UI#app-definitions
   it("flags a moved tag and offers it as the one to update to", async () => {
     const { request } = mount(fetched, [moved], {
       "/registries/tags": { tags: ["v2.11.2", "v2.11.3", "v2.12.0"] },
@@ -105,7 +105,7 @@ describe("DefinitionSection", () => {
     );
   });
 
-  // w[verify routes.apps.definition.fetch]
+  // spec: UI#app-definitions
   it("plans, then applies the definition and one param in one update", async () => {
     const { request } = mount(fetched, [], {
       "/registries/tags": { tags: ["v2.11.3", "v2.12.0"] },
@@ -139,7 +139,7 @@ describe("DefinitionSection", () => {
     expect(request.mock.calls.filter((c) => c[0] === "/apps/update")).toHaveLength(1);
   });
 
-  // w[verify routes.apps.definition.fetch]
+  // spec: UI#app-definitions
   it("shows a validator rejection and keeps Apply disabled", async () => {
     mount(fetched, [], {
       "/registries/tags": { tags: [] },
@@ -157,7 +157,7 @@ describe("DefinitionSection", () => {
     expect(screen.getByRole("button", { name: "Apply" }).hasAttribute("disabled")).toBe(true);
   });
 
-  // w[verify routes.apps.definition.fetch]
+  // spec: UI#app-definitions
   it("takes a complete reference for a pushed definition", async () => {
     const { request } = mount(pushed, [], { "/apps/plan": plan });
     fireEvent.click(screen.getByRole("button", { name: "Update from registry" }));

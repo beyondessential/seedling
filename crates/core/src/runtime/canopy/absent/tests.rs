@@ -24,7 +24,7 @@ fn db_with_app(since: i64) -> Db {
     db
 }
 
-// r[verify canopy.offer.absent]
+// spec: CNR#missing-offers
 #[test]
 fn the_period_runs_from_each_starting_moment_when_the_others_are_earlier() {
     // The daemon's start.
@@ -59,7 +59,7 @@ fn the_period_runs_from_each_starting_moment_when_the_others_are_earlier() {
     assert_eq!(held(&db), ["central"]);
 }
 
-// r[verify canopy.offer.absent]
+// spec: CNR#missing-offers
 #[test]
 fn a_short_absence_files_nothing() {
     let db = db_with_app(START - 10 * PERIOD);
@@ -68,7 +68,7 @@ fn a_short_absence_files_nothing() {
     assert!(held(&db).is_empty());
 }
 
-// r[verify canopy.offer.absent]
+// spec: CNR#missing-offers
 #[test]
 fn the_description_says_when_an_offer_was_last_live_or_that_none_ever_was() {
     let db = db_with_app(START - 10 * PERIOD);
@@ -88,7 +88,7 @@ fn the_description_says_when_an_offer_was_last_live_or_that_none_ever_was() {
     );
 }
 
-// r[verify canopy.offer.absent]
+// spec: CNR#missing-offers
 #[test]
 fn sweeping_again_does_not_file_a_second_fault() {
     let db = db_with_app(START - 10 * PERIOD);
@@ -98,7 +98,7 @@ fn sweeping_again_does_not_file_a_second_fault() {
     assert_eq!(held(&db), ["central"]);
 }
 
-// r[verify canopy.offer.absent]
+// spec: CNR#missing-offers
 #[test]
 fn a_held_fault_survives_a_restart_and_clears_on_the_next_offer() {
     let db = db_with_app(START - 10 * PERIOD);
@@ -116,7 +116,7 @@ fn a_held_fault_survives_a_restart_and_clears_on_the_next_offer() {
     assert!(held(&db).is_empty());
 }
 
-// r[verify canopy.offer.absent]
+// spec: CNR#missing-offers
 #[test]
 fn a_sweep_that_finds_an_offer_live_clears_the_fault() {
     let db = db_with_app(START - 10 * PERIOD);
@@ -125,7 +125,7 @@ fn a_sweep_that_finds_an_offer_live_clears_the_fault() {
     assert!(held(&db).is_empty());
 }
 
-// r[verify canopy.offer.absent]
+// spec: CNR#missing-offers
 #[test]
 fn disabling_access_clears_the_fault_and_files_nothing_while_disabled() {
     let db = db_with_app(START - 10 * PERIOD);
@@ -138,7 +138,7 @@ fn disabling_access_clears_the_fault_and_files_nothing_while_disabled() {
     assert!(held(&db).is_empty());
 }
 
-// r[verify canopy.offer.absent]
+// spec: CNR#missing-offers
 #[test]
 fn re_enabling_access_restarts_the_period() {
     let db = db_with_app(START - 10 * PERIOD);
@@ -152,7 +152,7 @@ fn re_enabling_access_restarts_the_period() {
     assert_eq!(held(&db), ["central"]);
 }
 
-// r[verify canopy.offer.absent]
+// spec: CNR#missing-offers
 #[test]
 fn an_app_that_drops_its_type_loses_the_fault() {
     let db = db_with_app(START - 10 * PERIOD);
@@ -164,7 +164,7 @@ fn an_app_that_drops_its_type_loses_the_fault() {
     assert_eq!(held(&db), ["other"]);
 }
 
-// r[verify canopy.offer.absent]
+// spec: CNR#missing-offers
 #[test]
 fn an_untyped_app_is_never_faulted() {
     let db = Db::open_in_memory().unwrap();
@@ -172,7 +172,7 @@ fn an_untyped_app_is_never_faulted() {
     assert!(held(&db).is_empty());
 }
 
-// r[verify canopy.offer.absent]
+// spec: CNR#missing-offers
 #[test]
 fn each_app_relying_on_canopy_is_faulted_on_its_own() {
     let db = db_with_app(START - 10 * PERIOD);

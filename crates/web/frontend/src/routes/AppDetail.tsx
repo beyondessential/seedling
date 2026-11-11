@@ -108,7 +108,7 @@ import type {
 /** Restart count for an instance, linking through to its full history. The
  *  count shown is the one the crash-loop rate is measured against, so it goes
  *  warning-coloured as soon as any recovery restart lands in the window. */
-// w[impl routes.restarts]
+// spec: UI#restart-history
 function RestartIndicator({
   instanceId,
   restarts,
@@ -139,7 +139,7 @@ function RestartIndicator({
   );
 }
 
-// w[impl routes.apps.priority]
+// spec: UI#priority
 /** The app's standing against the other apps on the host. A control rather
  *  than an indicator: the operator sets it, and it takes effect on the running
  *  app without a redeploy. */
@@ -229,7 +229,7 @@ function healthcheckChipColor(
   }
 }
 
-// w[impl routes.apps.healthcheck-indicator]
+// spec: UI#app-status
 function HealthcheckIndicator({
   hc,
   lifecycle,
@@ -276,7 +276,7 @@ function HealthcheckIndicator({
   );
 }
 
-// w[impl routes.apps.priority-indicator]
+// spec: UI#priority
 /** The level a Deployment declares in the app's definition. Read-only: this
  *  comes from the BSL script, so changing it means changing the definition and
  *  installing it. Standing is within the app — kill order is app-major, so a
@@ -656,7 +656,7 @@ function ResourcesSection({
   const { execute: executeStop, loading: stopping } = useOiAction();
   const { openVolumeShell } = useSessionContext();
   const { mode } = useSafetyMode();
-  // w[impl volumes.shell-ui.read-only]
+  // spec: UI#shells
   const shellReadOnly = mode === "read";
   const [snapshotTarget, setSnapshotTarget] = useState<{
     source: string;
@@ -833,8 +833,8 @@ function ResourcesSection({
                 <RefreshIcon sx={{ fontSize: 14 }} />
               </IconActionButton>
             )}
-            {/* w[volumes.shell-ui] */}
-            {/* w[impl volumes.shell-ui.read-only] */}
+            {/* UI#shells */}
+            {/* spec: UI#shells */}
             {!r.dynamic && r.type === "volume" && (
               <>
                 <IconActionButton
@@ -940,7 +940,7 @@ function ResourcesSection({
                             alignItems: "center",
                           }}
                         >
-                          {/* w[impl routes.apps.priority-indicator] */}
+                          {/* spec: UI#priority */}
                           {/* Only a level other than normal is worth showing:
                               the default says nothing an operator needs. */}
                           {r.priority !== undefined &&
@@ -1405,7 +1405,7 @@ function paramFieldType(kind: string, secret?: boolean): string {
   return "text";
 }
 
-// l[impl action.install.requirements.kind-random]
+// spec: ACN#param-kinds
 // Default `random` generator output: 32 bytes, lowercase hex (64 chars).
 function generateRandomHex(): string {
   const bytes = new Uint8Array(32);
@@ -1475,7 +1475,7 @@ function ActionInvokeDialog({
       !isStrongPassword(values[key]),
   );
 
-  // l[impl action.params.volume]
+  // spec: ACN#volume-params
   // The dialog opens on demand, so the extra round-trip when the action has
   // no volume params is acceptable; the alternative is a conditional hook
   // (which useOiQuery doesn't support).
@@ -1925,7 +1925,7 @@ function ActionsSection({
                       {a.description}
                     </TableCell>
                     <TableCell align="right">
-                      {/* w[shells.ui] */}
+                      {/* UI#shells */}
                       {a.kind === "shell" ? (
                         <OutlinedActionButton
                           safety="write"
@@ -2152,7 +2152,7 @@ function humanBytes(n: number): string {
   return `${(n / (1024 * 1024 * 1024)).toFixed(2)} GiB`;
 }
 
-// w[impl routes.images.discover]
+// spec: UI#images
 function DiscoverSummary({ result }: { result: DiscoverResponse }) {
   const problems = result.per_handler.filter(
     (h) => h.error !== null || h.skipped_reason !== null,
@@ -2179,7 +2179,7 @@ function DiscoverSummary({ result }: { result: DiscoverResponse }) {
   );
 }
 
-// w[impl routes.images.app-detail]
+// spec: UI#images
 function AppImagesSection({
   appName,
   resources,
@@ -2265,7 +2265,7 @@ function AppImagesSection({
     refreshAll();
   };
 
-  // w[impl routes.images.discover]
+  // spec: UI#images
   const runDiscover = async () => {
     clearError();
     setDiscovering(true);
@@ -2299,7 +2299,7 @@ function AppImagesSection({
     refreshAll();
   };
 
-  // w[impl routes.images.discover]
+  // spec: UI#images
   const warmAllDiscovered = async () => {
     if (discoveredExtras.length === 0) return;
     setWarmingAll(true);
@@ -2363,7 +2363,7 @@ function AppImagesSection({
         <Typography variant="h6" sx={{ flexGrow: 1 }}>
           Images
         </Typography>
-        {/* w[impl routes.images.discover] */}
+        {/* spec: UI#images */}
         {discoveredExtras.length > 0 && (
           <SolidActionButton
             safety="write"
@@ -2450,7 +2450,7 @@ function AppImagesSection({
                 </TableCell>
               </TableRow>
             ))}
-            {/* w[impl routes.images.discover] */}
+            {/* spec: UI#images */}
             {discoveredExtras.map((ref) => (
               <TableRow key={`discovered::${ref}`} hover>
                 <TableCell>
@@ -2488,7 +2488,7 @@ function AppImagesSection({
         </Table>
       </TableContainer>
 
-      {/* w[impl routes.images.confirm] */}
+      {/* spec: UI#images */}
       <Dialog
         open={removing !== null}
         onClose={() => setRemoving(null)}
@@ -2565,7 +2565,7 @@ function ClearFaultsButton({
   status: AppStatus;
   onCleared: () => void;
 }) {
-  // i[impl fault.clear-app]
+  // spec: FLTS#clearing-faults
   // Clearing faults from a not-installed app is write-level; from any other
   // phase it's danger-level because the operator may be silencing live signal
   // about a running workload's problems.
@@ -2759,7 +2759,7 @@ export default function AppDetail() {
   const navigate = useNavigate();
   const [removalOpen, setRemovalOpen] = useState(false);
   const { execute: executeUnstopAll, loading: unstoppingAll } = useOiAction();
-  // i[impl action.cancel]
+  // spec: ACI#cancellation
   const { execute: executeCancelAction, loading: cancellingAction } =
     useOiAction();
   const { data, loading, error, refetch } = useOiQuery<AppDetail>(
@@ -2873,7 +2873,7 @@ export default function AppDetail() {
                 color={statusColor(data.status)}
                 size="small"
               />
-              {/* w[impl routes.apps.priority] */}
+              {/* spec: UI#priority */}
               <AppPriorityControl
                 appName={name!}
                 priority={data.priority ?? "normal"}
@@ -2975,7 +2975,7 @@ export default function AppDetail() {
 
           <Divider />
 
-          {/* w[impl routes.apps.definition] */}
+          {/* spec: UI#app-definitions */}
           <DefinitionSection
             appName={name!}
             definition={data.definition}

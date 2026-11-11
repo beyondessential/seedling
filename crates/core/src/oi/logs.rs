@@ -26,14 +26,14 @@ fn default_tail() -> u64 {
 }
 
 /// Validate log stream params and produce a `LogStreamOptions`, or return an OI error.
-// i[logs.target]
+// spec: LOG#log-stream-request
 pub(crate) fn validate_params(
     state: &Arc<OiState>,
     params: LogStreamParams,
 ) -> Result<LogStreamOptions, OiError> {
     let target = match (params.app, params.infra) {
         (Some(app), None) => {
-            // i[logs.not-found]
+            // spec: LOG#log-stream-request
             {
                 let reg = state.registry.read();
                 if !reg.is_registered(&app) {
@@ -87,17 +87,17 @@ pub(crate) fn validate_params(
 
     Ok(LogStreamOptions {
         target,
-        // i[logs.follow]
+        // spec: LOG#entry-selection
         follow: params.follow,
-        // i[logs.tail]
+        // spec: LOG#entry-selection
         tail: params.tail,
     })
 }
 
 /// Stream log entries from the journal to a QUIC unidirectional stream.
 /// Called after the bidi handshake is complete.
-// i[logs.stream]
-// i[logs.entry]
+// spec: LOG#log-stream-request
+// spec: LOG#log-entries
 pub(crate) async fn log_stream_task(
     mut send: quinn::SendStream,
     mut rx: tokio::sync::mpsc::Receiver<crate::system::journal::LogEntry>,

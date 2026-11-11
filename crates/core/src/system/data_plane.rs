@@ -47,7 +47,7 @@ impl NftablesDataPlane {
 }
 
 impl NftablesDataPlane {
-    // r[impl infra.dataplane.output-nat]
+    // spec: INFRA#host-originated-traffic
     async fn apply_rules_impl(&self, rules: &DataPlaneRules) -> Result<(), DataPlaneError> {
         let mut batch = Batch::new();
         batch.add(nft::nft_table());
@@ -83,7 +83,7 @@ impl NftablesDataPlane {
             batch.add(nft::rule_obj(nft::CHAIN_POST, stmts));
         }
 
-        // r[impl infra.dataplane.forward-policy]
+        // spec: INFRA#forwarding-policy
         batch.add(nft::rule_obj(
             nft::CHAIN_FWD,
             nft::ct_state_established_related_accept(),

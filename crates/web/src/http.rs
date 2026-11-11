@@ -30,7 +30,7 @@ const PERMISSIONS_POLICY: &str = "accelerometer=(), autoplay=(), camera=(), \
 display-capture=(), encrypted-media=(), fullscreen=(), geolocation=(), \
 gyroscope=(), magnetometer=(), microphone=(), midi=(), payment=(), usb=()";
 
-// w[transport.http]
+// spec: WEB#console-delivery
 pub fn router(state: AppState) -> Router {
     let wt_port = state.wt_port;
     security_headers(
@@ -43,7 +43,7 @@ pub fn router(state: AppState) -> Router {
     .with_state(state)
 }
 
-// w[transport.http.security-headers]
+// spec: WEB#security-headers
 fn security_headers<S: Clone + Send + Sync + 'static>(
     router: Router<S>,
     wt_port: u16,
@@ -79,7 +79,7 @@ fn security_headers<S: Clone + Send + Sync + 'static>(
         ))
 }
 
-// w[transport.http.security-headers]
+// spec: WEB#security-headers
 // connect-src names the WebTransport origin precisely instead of a `https:`
 // scheme wildcard. The endpoint shares the page's hostname (the WebTransport
 // URL is built the same way in `auth::handle_connect`) on the dedicated
@@ -90,8 +90,8 @@ fn security_headers<S: Clone + Send + Sync + 'static>(
 /// both the advertised WebTransport URL and this CSP origin came out
 /// malformed and WebTransport could not be reached at all over IPv6. A
 /// bracketed literal keeps its brackets, which is what a URL authority needs.
-// w[impl auth.connect]
-// w[impl transport.http.security-headers]
+// spec: WEB#authentication
+// spec: WEB#security-headers
 pub(crate) fn hostname_from_host_header(host: &str) -> &str {
     if let Some(rest) = host.strip_prefix('[') {
         return match rest.find(']') {
@@ -126,7 +126,7 @@ async fn healthz() -> impl IntoResponse {
     (StatusCode::OK, Json(json!({ "status": "ok" })))
 }
 
-// w[auth.connect]
+// spec: WEB#authentication
 async fn connect(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -144,7 +144,7 @@ mod tests {
 
     use super::hostname_from_host_header as hostname;
 
-    // w[verify auth.connect]
+    // spec: WEB#authentication
     // Splitting on `:` turned `[::1]:7894` into `[`, so the advertised URL and
     // the CSP origin were both malformed and WebTransport was unreachable over
     // IPv6 entirely.
@@ -155,7 +155,7 @@ mod tests {
         assert_eq!(hostname("[2001:db8::5]:443"), "[2001:db8::5]");
     }
 
-    // w[verify auth.connect]
+    // spec: WEB#authentication
     #[test]
     fn a_named_or_ipv4_host_header_drops_only_the_port() {
         assert_eq!(hostname("example.com:80"), "example.com");
@@ -163,7 +163,7 @@ mod tests {
         assert_eq!(hostname("10.0.0.5:7894"), "10.0.0.5");
     }
 
-    // w[verify auth.connect]
+    // spec: WEB#authentication
     #[test]
     fn an_unclosed_bracket_is_returned_unchanged_rather_than_sliced() {
         assert_eq!(hostname("[::1"), "[::1");
@@ -173,7 +173,7 @@ mod tests {
 
     use super::*;
 
-    // w[verify transport.http.security-headers] Every response carries the
+    // spec: WEB#security-headers Every response carries the
     // baseline security headers, the cross-origin isolation headers, and a CSP
     // that keeps the policies the SPA relies on (inline styles, data:
     // images/fonts) while naming the WebTransport origin precisely rather than

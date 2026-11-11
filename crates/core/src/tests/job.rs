@@ -1,9 +1,9 @@
 use super::*;
 use defs::resource::ResourceKind;
 
-// l[verify job.type]
-// l[verify job.deadline]
-// l[verify container.command]
+// spec: JOB#instances
+// spec: JOB#deadline
+// spec: CTR#command-and-arguments
 #[test]
 fn job_with_deadline() {
     let app = run_test_script_app(
@@ -28,7 +28,7 @@ fn job_with_deadline() {
     }
 }
 
-// l[verify job.pod]
+// spec: JOB#declaration
 #[test]
 fn job_implements_pod_interface() {
     let app = run_test_script_app(
@@ -71,7 +71,7 @@ fn job_implements_pod_interface() {
     }
 }
 
-// l[verify job.deadline]
+// spec: JOB#deadline
 #[test]
 fn job_deadline_rejects_zero() {
     let _ = run_test_script_err(
@@ -81,7 +81,7 @@ fn job_deadline_rejects_zero() {
     );
 }
 
-// l[verify job.deadline]
+// spec: JOB#deadline
 #[test]
 fn job_deadline_rejects_negative() {
     let _ = run_test_script_err(

@@ -2,7 +2,7 @@ use super::*;
 
 use crate::defs::{enums::Priority, resource::Resource};
 
-// l[verify const.available-threads]
+// spec: CONST#host-constants
 #[test]
 fn available_threads_is_positive() {
     run_test_script_app(
@@ -12,7 +12,7 @@ fn available_threads_is_positive() {
     );
 }
 
-// l[verify const.available-threads]
+// spec: CONST#host-constants
 #[test]
 fn available_threads_usable_in_scale() {
     run_test_script_app(
@@ -23,7 +23,7 @@ fn available_threads_usable_in_scale() {
     );
 }
 
-// l[verify const.available-memory]
+// spec: CONST#host-constants
 #[test]
 fn available_memory_is_positive() {
     run_test_script_app(
@@ -33,7 +33,7 @@ fn available_memory_is_positive() {
     );
 }
 
-// l[verify const.cpu-architecture]
+// spec: CONST#host-constants
 #[test]
 fn cpu_architecture_is_nonempty_string() {
     run_test_script_app(
@@ -48,7 +48,7 @@ fn cpu_architecture_is_nonempty_string() {
     );
 }
 
-// l[verify const.host-has-ipv4]
+// spec: CONST#host-constants
 #[test]
 fn host_has_ipv4_is_bool() {
     run_test_script_app(
@@ -60,7 +60,7 @@ fn host_has_ipv4_is_bool() {
     );
 }
 
-// l[verify const.host-has-ipv6]
+// spec: CONST#host-constants
 #[test]
 fn host_has_ipv6_is_bool() {
     run_test_script_app(
@@ -72,7 +72,7 @@ fn host_has_ipv6_is_bool() {
     );
 }
 
-// l[verify const.nat64-active]
+// spec: CONST#host-constants
 #[test]
 fn nat64_active_is_bool() {
     run_test_script_app(
@@ -84,7 +84,7 @@ fn nat64_active_is_bool() {
     );
 }
 
-// l[verify const.has-snapshots]
+// spec: CONST#host-constants
 #[test]
 fn has_snapshots_is_bool() {
     run_test_script_app(
@@ -96,7 +96,7 @@ fn has_snapshots_is_bool() {
     );
 }
 
-// l[verify const.node-name]
+// spec: CONST#host-constants
 #[test]
 fn node_name_is_string() {
     run_test_script_app(
@@ -108,7 +108,7 @@ fn node_name_is_string() {
     );
 }
 
-// l[verify const.timezone]
+// spec: CONST#host-constants
 #[test]
 fn timezone_is_nonempty_string() {
     run_test_script_app(
@@ -123,7 +123,7 @@ fn timezone_is_nonempty_string() {
     );
 }
 
-// l[verify const.on-update.rolling]
+// spec: CONST#onupdate
 #[test]
 fn on_update_rolling() {
     let app = run_test_script_app(
@@ -146,7 +146,7 @@ fn on_update_rolling() {
     }
 }
 
-// l[verify const.on-update.replace]
+// spec: CONST#onupdate
 #[test]
 fn on_update_replace() {
     let app = run_test_script_app(
@@ -169,7 +169,7 @@ fn on_update_replace() {
     }
 }
 
-// l[verify const.on-terminate.recreate]
+// spec: CONST#onterminate
 #[test]
 fn on_terminate_recreate() {
     let app = run_test_script_app(
@@ -195,7 +195,7 @@ fn on_terminate_recreate() {
     }
 }
 
-// l[verify const.on-exit.restart]
+// spec: CONST#onexit
 #[test]
 fn on_exit_restart() {
     let app = run_test_script_app(
@@ -224,7 +224,7 @@ fn on_exit_restart() {
     }
 }
 
-// l[verify const.on-exit.terminate]
+// spec: CONST#onexit
 #[test]
 fn on_exit_terminate() {
     let app = run_test_script_app(
@@ -253,7 +253,7 @@ fn on_exit_terminate() {
     }
 }
 
-// l[verify const.on-exit.restart-on-failure]
+// spec: CONST#onexit
 #[test]
 fn on_exit_restart_on_failure() {
     let app = run_test_script_app(
@@ -282,7 +282,7 @@ fn on_exit_restart_on_failure() {
     }
 }
 
-// l[verify const.resource-type.enum]
+// spec: CONST#resourcetype
 #[test]
 fn resource_type_enum_variants_accessible() {
     run_test_script_app(
@@ -300,7 +300,7 @@ fn resource_type_enum_variants_accessible() {
     );
 }
 
-// l[verify const.priority.enum]
+// spec: CONST#priority
 #[test]
 fn priority_exposes_the_four_levels() {
     run_test_script_app(
@@ -314,7 +314,7 @@ fn priority_exposes_the_four_levels() {
     );
 }
 
-// l[verify deployment.priority]
+// spec: DEP#priority
 #[test]
 fn deployment_accepts_every_priority_level() {
     let app = run_test_script_app(
@@ -340,7 +340,7 @@ fn deployment_accepts_every_priority_level() {
     assert_eq!(levels["batch"], Priority::Low);
 }
 
-// l[verify deployment.priority]
+// spec: DEP#priority
 #[test]
 fn a_deployment_that_declares_no_priority_is_normal() {
     let app = run_test_script_app(r#"app.deployment("web").image("docker.io/library/nginx:1");"#);
@@ -356,7 +356,7 @@ fn a_deployment_that_declares_no_priority_is_normal() {
     assert_eq!(d.def.lock().priority, Priority::Normal);
 }
 
-// l[verify deployment.priority]
+// spec: DEP#priority
 // Priority is declared on Deployments only, so the method does not exist on a
 // Job and calling it is an evaluation error rather than a silent no-op.
 #[test]
@@ -371,7 +371,7 @@ fn priority_is_not_available_on_a_job() {
     );
 }
 
-// l[verify deployment.priority]
+// spec: DEP#priority
 #[test]
 fn priority_is_chainable_with_other_builders() {
     let app = run_test_script_app(

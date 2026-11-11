@@ -26,7 +26,7 @@ export function statusLabel(status: AppStatus, actionName?: string): string {
   return status.replace("_", " ");
 }
 
-// w[impl routes.apps.priority]
+// spec: UI#priority
 // Raised and lowered standing read differently: a raised app is one an operator
 // has deliberately protected, a lowered one is the first to give way.
 export function appPriorityColor(priority: AppPriority): ChipColor {
@@ -40,7 +40,7 @@ export function appPriorityColor(priority: AppPriority): ChipColor {
   }
 }
 
-// w[impl routes.apps.priority-indicator]
+// spec: UI#priority
 // The same scale as the app chip, so a raised level reads the same in both
 // places.
 export function deploymentPriorityColor(priority: DeploymentPriority): ChipColor {

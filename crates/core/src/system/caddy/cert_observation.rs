@@ -1,4 +1,4 @@
-// r[impl observe.ingress.certs]
+// spec: OBS#ingresses
 //
 // Observe Caddy's on-disk certificate cache and emit `cert_valid` /
 // `cert_acquisition_failed` observations against ingress instances.

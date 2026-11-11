@@ -42,7 +42,7 @@ pub trait ActionLog: Send + Sync {
 // InMemoryActionLog
 // ---------------------------------------------------------------------------
 
-// r[impl history.action-log]
+// spec: HIST#action-execution-log
 #[derive(Debug, Default)]
 pub struct InMemoryActionLog {
     entries: Mutex<Vec<ActionLogEntry>>,
@@ -61,8 +61,8 @@ impl ActionLog for InMemoryActionLog {
 
     fn commit(&self, new_entries: &[ActionLogEntry]) {
         let mut entries = self.entries.lock();
-        // r[impl reconciliation.idempotency]
-        // r[impl history.action-log.entries]
+        // spec: RCN#reconciliation-loop
+        // spec: HIST#action-calls
         // A re-emitted entry replaces the one at its position outright, as
         // the database log's INSERT OR REPLACE does. This used to merge
         // only a satisfied flag that had turned true, so a correction that
@@ -91,7 +91,7 @@ impl ActionLog for InMemoryActionLog {
 // DbActionLog
 // ---------------------------------------------------------------------------
 
-// r[impl history.action-log]
+// spec: HIST#action-execution-log
 pub struct DbActionLog {
     db: crate::runtime::db::DbHandle,
     operation_id: super::OperationId,
@@ -127,7 +127,7 @@ impl ActionLog for DbActionLog {
         let op_id = self.operation_id.clone();
         let app = self.app.clone();
         let action_name = self.action_name.clone();
-        // r[impl reconciliation.idempotency]
+        // spec: RCN#reconciliation-loop
         let entries = entries.to_vec();
         self.db.call(move |db| {
             for entry in &entries {
@@ -164,7 +164,7 @@ impl ActionLog for DbActionLog {
 // OperationResult
 // ---------------------------------------------------------------------------
 
-// r[impl operation.lifecycle]
+// spec: OPS#operation
 #[derive(Debug)]
 pub enum OperationResult {
     /// The closure ran to completion.
@@ -176,7 +176,7 @@ pub enum OperationResult {
     /// The operation was cancelled mid-run via the cancel token. Cleanup is
     /// run as for `Failed`, but the terminal state is distinct for audit
     /// purposes.
-    // r[impl operation.cancel]
+    // spec: OPS#cancellation
     Cancelled,
 }
 
@@ -234,7 +234,7 @@ pub struct OperationContext<'a, W: WorldStateOracle + 'static> {
     pub tick_notify: Option<Arc<Notify>>,
     /// Action params passed by the invoker. For install actions, contains the
     /// validated requirements. Empty map for actions with no params.
-    // r[impl operation.params]
+    // spec: OPS#persistence
     pub params: serde_json::Map<String, serde_json::Value>,
     /// `true` when this operation executes a shell action closure.
     /// Affects the call script used to invoke the closure.
@@ -244,11 +244,11 @@ pub struct OperationContext<'a, W: WorldStateOracle + 'static> {
     /// Generation that was current immediately before the change that
     /// triggered this operation. Used to materialise `old` for `on_change`
     /// handlers.
-    // r[impl operation.lifecycle.generations]
+    // spec: OPS#initiating-events
     pub source_generation: u64,
     /// Generation produced by the change that triggered this operation, or
     /// the current generation at dispatch for operator-invoked actions.
-    // r[impl operation.lifecycle.generations]
+    // spec: OPS#initiating-events
     pub target_generation: u64,
     /// Script limits to use when reconstructing the prior `App` for
     /// `on_change` handlers. Required only when source_generation > 0 and
@@ -260,31 +260,31 @@ pub struct OperationContext<'a, W: WorldStateOracle + 'static> {
     /// Operation-scoped external volume bindings injected by the runtime.
     /// Empty unless the operation hands a volume to the closure, as a
     /// `kind: "volume"` param does.
-    // l[impl volume.external.dynamic]
+    // spec: VOL#external-volumes
     pub operation_volume_bindings: HashMap<String, OperationVolumeBinding>,
     /// Cooperative cancellation signal. Barriers consult it at entry so an
     /// in-flight cancel unwinds quickly instead of waiting for the next
     /// deadline.
-    // r[impl operation.cancel]
+    // spec: OPS#cancellation
     pub cancel_token: Arc<CancelToken>,
     /// Hook for `rt.signal()`. `None` in language-only test contexts where
     /// no real container runtime exists.
-    // l[impl rt.signal]
+    // spec: RT#signal-delivery
     pub container_signaler: Option<std::sync::Arc<dyn crate::runtime::barrier::ContainerSignaler>>,
     /// Hook for `rt.write()`. `None` in language-only test contexts where no
     /// real filesystem is involved.
-    // l[impl rt.write]
+    // spec: RT#volume-writes
     pub volume_writer: Option<std::sync::Arc<dyn crate::runtime::barrier::VolumeWriter>>,
     /// Hook for `rt.exec()`. `None` in language-only test contexts where no
     /// real container runtime is present.
-    // l[impl rt.exec]
+    // spec: RT#command-execution
     pub executor: Option<std::sync::Arc<dyn crate::runtime::barrier::Executor>>,
 }
 
 /// The `log` carries committed entries across calls; pass the same `log`
 /// instance for all passes of the same operation to enable replay.
-// r[impl history.action-log.replay]
-// r[impl barrier.replay]
+// spec: HIST#action-calls
+// spec: SUSP#replay
 pub fn run_operation<W: WorldStateOracle + 'static>(
     op: OperationContext<'_, W>,
     scope: &mut Scope<'_>,
@@ -332,7 +332,7 @@ pub fn run_operation<W: WorldStateOracle + 'static>(
     // call_index 0 each pass; without this marker the duplicated
     // breadcrumbs after a barrier wake up look like the script ran
     // twice.
-    // r[impl actuate.breadcrumb.replay]
+    // spec: ACTU#breadcrumbs
     if !committed.is_empty() {
         crate::system::breadcrumb::Breadcrumb {
             app: Some(&app.def.load().name),
@@ -350,11 +350,11 @@ pub fn run_operation<W: WorldStateOracle + 'static>(
         world as Arc<dyn WorldStateOracle>,
         Arc::clone(&cancel_token),
     )));
-    // l[impl rt.signal]
+    // spec: RT#signal-delivery
     ctx.lock().container_signaler = container_signaler;
-    // l[impl rt.write]
+    // spec: RT#volume-writes
     ctx.lock().volume_writer = volume_writer;
-    // l[impl rt.exec]
+    // spec: RT#command-execution
     ctx.lock().executor = executor;
 
     // Clear the thread-local barrier-hit flag at the start of each pass.
@@ -363,7 +363,7 @@ pub fn run_operation<W: WorldStateOracle + 'static>(
     let app_name = app.def.load().name.clone();
     let rt =
         RuntimeInstance::with_context(Arc::clone(&ctx), app_name.clone(), registry, db.clone());
-    // l[impl action.call]
+    // spec: ACN#action-invocation
     // Cloned before pushing into the Rhai scope so the Action.call thread-
     // local stash can hold its own handle. The clone is cheap — every
     // RuntimeInstance field is Arc'd.
@@ -381,7 +381,7 @@ pub fn run_operation<W: WorldStateOracle + 'static>(
             d.name = app_name.clone();
             d
         });
-        // i[param.store] — restore persisted param values so is_set()/value()
+        // spec: PRM#parameter-storage — restore persisted param values so is_set()/value()
         // return correct results when the script is re-evaluated for closure recovery.
         *fresh_app.stored.lock() = app.stored.lock().clone();
         begin_closure_capture();
@@ -421,7 +421,7 @@ pub fn run_operation<W: WorldStateOracle + 'static>(
         // fresh_scope, and fresh_app are all dropped here.
     };
 
-    // l[impl param.on-change.old]
+    // spec: PARAM#change-handlers
     // For param-change handlers, materialise `old` from the previous
     // generation (= source_generation). For other operations, leave it
     // empty: the spec only defines `old` for on_change handlers, but the
@@ -493,7 +493,7 @@ pub fn run_operation<W: WorldStateOracle + 'static>(
         .compile(call_script)
         .expect("static call script must compile");
     let action_def = Arc::new(arc_swap::ArcSwap::new(app.def.load_full()));
-    // l[impl action.call]
+    // spec: ACN#action-invocation
     // The action call table makes captured FnPtrs available to
     // app.action(name) / Action.call(...) for the duration of the
     // outer closure body. The outer action's name seeds the call
@@ -537,7 +537,7 @@ pub fn run_operation<W: WorldStateOracle + 'static>(
     match result {
         Ok(_) => OperationResult::Completed,
         Err(ref e) => {
-            // r[impl operation.cancel]
+            // spec: OPS#cancellation
             if extract_cancel_hit(e) {
                 return OperationResult::Cancelled;
             }
@@ -553,7 +553,7 @@ pub fn run_operation<W: WorldStateOracle + 'static>(
 /// differ. A mismatch means the BSL script produces different structure on
 /// re-run, which indicates a non-idempotent script and may cause the closure's
 /// captured variables to be inconsistent with the stored resource state.
-// r[impl barrier.replay.determinism]
+// spec: SUSP#replay
 fn check_idempotent(fresh: &AppDef, stored: &AppDef) {
     let mut diffs: Vec<&str> = Vec::new();
 

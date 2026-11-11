@@ -1,7 +1,7 @@
 use super::*;
 use defs::resource::ResourceKind;
 
-// l[verify pod.interface]
+// spec: POD#pod-interface
 #[test]
 fn pod_is_an_interface_on_deployment_and_job() {
     run_test_script_app(
@@ -23,7 +23,7 @@ fn pod_is_an_interface_on_deployment_and_job() {
     );
 }
 
-// l[verify pod.mount-serviceport]
+// spec: POD#service-mounts
 #[test]
 fn pod_mount_serviceport() {
     let app = run_test_script_app(
@@ -50,8 +50,8 @@ fn pod_mount_serviceport() {
     }
 }
 
-// l[verify pod.http]
-// l[verify service.http.route]
+// spec: POD#port-bindings
+// spec: HTTP#routes
 #[test]
 fn pod_http_route_binding() {
     let app = run_test_script_app(
@@ -78,7 +78,7 @@ fn pod_http_route_binding() {
     }
 }
 
-// l[verify pod.http]
+// spec: POD#port-bindings
 #[test]
 fn pod_http_service_defaults_to_root_route() {
     let app = run_test_script_app(
@@ -104,7 +104,7 @@ fn pod_http_service_defaults_to_root_route() {
     }
 }
 
-// l[verify pod.tcp]
+// spec: POD#port-bindings
 #[test]
 fn pod_tcp_binding() {
     let app = run_test_script_app(
@@ -130,7 +130,7 @@ fn pod_tcp_binding() {
     }
 }
 
-// l[verify pod.tcp]
+// spec: POD#port-bindings
 #[test]
 fn pod_tcp_with_service_port() {
     let app = run_test_script_app(
@@ -157,7 +157,7 @@ fn pod_tcp_with_service_port() {
     }
 }
 
-// l[verify pod.udp]
+// spec: POD#port-bindings
 #[test]
 fn pod_udp_binding_with_service() {
     let app = run_test_script_app(
@@ -183,7 +183,7 @@ fn pod_udp_binding_with_service() {
     }
 }
 
-// l[verify pod.udp]
+// spec: POD#port-bindings
 #[test]
 fn pod_udp_binding_with_service_port() {
     let app = run_test_script_app(

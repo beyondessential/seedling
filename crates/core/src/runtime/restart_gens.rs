@@ -3,7 +3,7 @@ use seedling_protocol::names::AppName;
 
 use crate::runtime::db::Db;
 
-// i[impl deployment.restart]
+// spec: CTL#deployment-restart
 /// Load the stored restart generation for a deployment. Returns 0 if none has been stored.
 pub fn load_restart_gen(db: &Db, app: &AppName, deployment: &str) -> rusqlite::Result<u64> {
     let mut stmt = db
@@ -19,7 +19,7 @@ pub fn load_restart_gen(db: &Db, app: &AppName, deployment: &str) -> rusqlite::R
     }
 }
 
-// i[impl deployment.restart]
+// spec: CTL#deployment-restart
 /// Increment the restart generation for a deployment and return the new value.
 pub fn bump_restart_gen(db: &Db, app: &AppName, deployment: &str) -> rusqlite::Result<u64> {
     let now = jiff::Timestamp::now().to_string();

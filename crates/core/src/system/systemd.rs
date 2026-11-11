@@ -191,7 +191,8 @@ trait Systemd1Unit {
 
 /// Restart accounting lives on the `Service` interface, not the `Unit`
 /// interface above, so it needs its own proxy against the same object path.
-// r[impl autonomous.restart.record]
+// spec: AUTO#restart-record
+// spec: LINUX#exit-status
 #[zbus::proxy(
     interface = "org.freedesktop.systemd1.Service",
     default_service = "org.freedesktop.systemd1"
@@ -276,6 +277,7 @@ impl SystemdManager {
                 name: "StandardError",
                 value: Value::from("journal"),
             },
+            // spec: LINUX#supervised-units
             // Garbage-collect the transient unit (and remove its file from
             // /run/systemd/transient/) as soon as it reaches inactive or
             // failed state with no pending restart jobs. Without this the
@@ -287,7 +289,8 @@ impl SystemdManager {
             },
         ];
 
-        // l[impl container.stop-signal]
+        // spec: CTR#stopping
+        // spec: LINUX#stopping
         // Override systemd's default SIGTERM stop signal so that workloads
         // whose semantics need a different signal (postgres → SIGINT for
         // fast shutdown rather than SIGTERM smart-shutdown that waits for
@@ -305,14 +308,16 @@ impl SystemdManager {
                 value: Value::from(n),
             });
         }
-        // l[impl container.stop-timeout]
+        // spec: CTR#stopping
+        // spec: LINUX#stopping
         if let Some(secs) = spec.timeout_stop_secs {
             props.push(UnitProperty {
                 name: "TimeoutStopUSec",
                 value: Value::from(u64::from(secs) * 1_000_000),
             });
         }
-        // r[impl autonomous.restart.backoff]
+        // spec: AUTO#restart-pacing
+        // spec: LINUX#restart-pacing
         // Slow systemd's per-unit restart cadence so a crash-looping
         // container does not blow through the start-limit window in seconds.
         if let Some(secs) = spec.restart_sec {
@@ -333,7 +338,8 @@ impl SystemdManager {
                 value: Value::from(burst),
             });
         }
-        // r[impl priority.actuation]
+        // spec: PRIO#resource-control-groups
+        // spec: LINUX#resource-control-groups
         // The unit joins the slice its app and declared level resolve to; the
         // slice itself carries the CPU and I/O weights.
         if let Some(slice) = &spec.slice {
@@ -343,7 +349,8 @@ impl SystemdManager {
                 value: Value::from(slice.as_str()),
             });
         }
-        // r[impl priority.kill-order]
+        // spec: PRIO#kill-order
+        // spec: LINUX#kill-order
         // Set here rather than adjusted later because the supervisor applies it
         // when it spawns the process and cannot change it afterwards.
         if let Some(adj) = spec.oom_score_adjust {
@@ -352,8 +359,8 @@ impl SystemdManager {
                 value: Value::from(adj),
             });
         }
-        // r[impl actuate.container.journal-metadata]
-        // r[impl actuate.infra.journal-metadata]
+        // spec: ACTU#container-logs
+        // spec: LINUX#logs
         if !spec.log_extra_fields.is_empty() {
             let ay_sig = Signature::try_from("ay").map_err(|e| {
                 ProtocolSnafu {
@@ -417,7 +424,8 @@ impl SystemdManager {
     /// package on the host. Generated names all have this shape, and the only
     /// names offered for removal are ones read back out of the directory, so
     /// this is what keeps a malformed or unexpected entry from being unlinked.
-    // r[impl priority.groups-owned]
+    // spec: PRIO#resource-control-groups
+    // spec: LINUX#resource-control-groups
     fn is_owned_slice(name: &str) -> bool {
         name.starts_with("seedling-") && name.ends_with(".slice")
     }
@@ -439,7 +447,8 @@ impl SystemdManager {
         Ok(found)
     }
 
-    // r[impl priority.actuation]
+    // spec: PRIO#resource-control-groups
+    // spec: LINUX#resource-control-groups
     /// Bring the set of owned slices on this host into line with `desired`.
     ///
     /// The unit directory is the state, not any record this process keeps: what
@@ -516,7 +525,7 @@ impl SystemdManager {
                 .start_unit(&spec.name, "replace")
                 .await
                 .context(DBusSnafu)?;
-            // r[impl priority.settings]
+            // spec: PRIO#priority-setting
             // Pushed to the live group as well as written to the file, so an
             // app priority change reweights the workloads already running
             // rather than waiting for them to restart.
@@ -607,7 +616,8 @@ impl SystemdManager {
         let active = unit_proxy.active_state().await.context(DBusSnafu)?;
         let sub = unit_proxy.sub_state().await.context(DBusSnafu)?;
 
-        // r[impl autonomous.restart.record]
+        // spec: AUTO#restart-record
+        // spec: LINUX#exit-status
         // Two extra property reads on a path already fetching ActiveState and
         // SubState per instance. Failures are not fatal: the Service interface
         // only exists on .service units, and a unit that vanished between the
@@ -921,7 +931,8 @@ impl ProcessManager for SystemdManager {
 mod tests {
     use super::{UnitExit, UnitExitKind, parse_exec_main, validate_unit_name};
 
-    // r[verify autonomous.restart.record]
+    // spec: AUTO#restart-record
+    // spec: LINUX#exit-status
     #[test]
     fn exec_main_maps_si_codes_to_exit_kinds() {
         assert_eq!(
@@ -947,7 +958,8 @@ mod tests {
         );
     }
 
-    // r[verify autonomous.restart.record]
+    // spec: AUTO#restart-record
+    // spec: LINUX#exit-status
     #[test]
     fn exec_main_is_absent_while_the_main_process_lives() {
         assert_eq!(parse_exec_main(0, 0), None);

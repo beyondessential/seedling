@@ -133,7 +133,7 @@ pub async fn open_shell(
 /// Open a volume shell session against `/volumes/shell`. `read_only` forces
 /// every mount into the container as read-only regardless of the underlying
 /// volume kind.
-// i[impl volumes.shell]
+// spec: SHL#volume-shells
 pub async fn open_volume_shell(
     client: &OiClient,
     volumes: Vec<serde_json::Value>,
@@ -253,7 +253,7 @@ async fn run_shell(client: &OiClient, method: &str, request_params: serde_json::
     //    - session_recv → exit frame accumulation
     //    - SIGWINCH     → /shells/resize control request
     //
-    // i[impl stream.shell]
+    // spec: WIRE#shell-sessions
     // Stdin and the two outputs each run as their own future, so a write to
     // the session stream waiting on flow control never stops output being
     // drained: a shell echoing a large paste otherwise stalls with both
@@ -295,7 +295,7 @@ async fn run_shell(client: &OiClient, method: &str, request_params: serde_json::
     let mut stderr_done = false;
     let mut shutdown_deadline: Option<Instant> = None;
 
-    // i[impl ctl.graceful-shutdown]
+    // spec: CLI#shutdown
     let exit_code = loop {
         tokio::select! {
             // stdin: local terminal → container

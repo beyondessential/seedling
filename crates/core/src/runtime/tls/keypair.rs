@@ -57,7 +57,7 @@ pub fn from_pem(pem: &str) -> Result<KeyPair> {
 /// Build a CSR for `hostnames` against the given keypair. The CSR's DNS SAN
 /// set is exactly `hostnames`, in order; a name starting with `*.` is kept as
 /// a wildcard SAN.
-// r[impl tls.csr.flow]
+// spec: TLS#certificate-signing-requests
 pub fn build_csr(hostnames: &[&str], key: &KeyPair) -> Result<Csr> {
     let mut params = CertificateParams::new(
         hostnames
@@ -122,7 +122,7 @@ mod tests {
     }
 
     /// Every requested name goes into the CSR, not just the first.
-    // r[verify tls.csr.flow]
+    // spec: TLS#certificate-signing-requests
     #[test]
     fn build_csr_carries_every_requested_name() {
         let key = generate(KeyType::EcdsaP256).unwrap();

@@ -41,7 +41,7 @@ describe("AppDetail page", () => {
     expect(await screen.findByText(/no such app/)).toBeTruthy();
   });
 
-  // w[verify routes.apps]
+  // spec: UI#operator-capabilities
   it("renders header, status, params, actions, schedules, and resources", async () => {
     mount(baseFixtures(makeDetail()));
     expect(await screen.findByText("gen 4")).toBeTruthy();
@@ -115,7 +115,7 @@ describe("AppDetail page", () => {
     expect(screen.getByRole("button", { name: /Running…/ })).toBeTruthy();
     const run = screen.getByRole("button", { name: "Run" }) as HTMLButtonElement;
     expect(run.disabled).toBe(true);
-    // i[verify action.cancel]
+    // spec: ACI#cancellation
     fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
     await waitFor(() =>
       expect(callsTo(request, "/apps/action/cancel")).toEqual([
@@ -189,7 +189,7 @@ describe("AppDetail page", () => {
       );
     });
 
-    // w[verify routes.apps]
+    // spec: UI#operator-capabilities
     it("collects install requirements in a dialog before invoking", async () => {
       const withParams: AppAction = {
         ...installAction,

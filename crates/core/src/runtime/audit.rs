@@ -12,7 +12,7 @@ use tracing::{error, warn};
 
 use crate::runtime::db::DbHandle;
 
-// r[impl audit.log]
+// spec: AUD#storage
 pub struct AuditWriter {
     writer: BufWriter<File>,
     path: PathBuf,
@@ -20,7 +20,7 @@ pub struct AuditWriter {
 }
 
 impl AuditWriter {
-    // r[impl audit.log.path]
+    // spec: AUD#storage
     pub fn open(path: &Path) -> io::Result<Self> {
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent)?;
@@ -42,7 +42,7 @@ impl AuditWriter {
         })
     }
 
-    // r[impl audit.log.rotation]
+    // spec: AUD#rotation
     pub fn reopen_if_rotated(&mut self) -> io::Result<()> {
         let needs_reopen = match fs::metadata(&self.path) {
             Ok(meta) => meta.ino() != self.inode,
@@ -58,7 +58,7 @@ impl AuditWriter {
         Ok(())
     }
 
-    // r[impl audit.log.format]
+    // spec: AUD#entries
     pub fn write_event(&mut self, event: &OiEvent) -> io::Result<()> {
         self.reopen_if_rotated()?;
         serde_json::to_writer(&mut self.writer, event).map_err(io::Error::other)?;
@@ -68,7 +68,7 @@ impl AuditWriter {
     }
 }
 
-// r[impl audit.log.events]
+// spec: AUD#entries
 pub fn spawn_audit_task(
     path: PathBuf,
     mut rx: broadcast::Receiver<OiEvent>,
@@ -87,15 +87,15 @@ pub fn spawn_audit_task(
             match rx.recv().await {
                 Ok(event) => {
                     if let Err(e) = writer.write_event(&event) {
-                        // r[impl audit.log.resilience]
+                        // spec: AUD#write-failures
                         error!(path = %path.display(), "failed to write audit event: {e}");
                     }
                 }
                 Err(broadcast::error::RecvError::Lagged(n)) => {
-                    // r[impl audit.log.resilience]
+                    // spec: AUD#write-failures
                     warn!(dropped = n, "audit log receiver lagged, events lost");
                     db.call(move |db| {
-                        // r[impl fault.lifecycle] — an event fault: it records
+                        // spec: FLT#filing-and-clearing — an event fault: it records
                         // that lag happened, and there is no "currently
                         // lagging" set to converge against. Dedup on file, and
                         // the clear path is the operator's: the fault stands
@@ -138,8 +138,7 @@ mod tests {
     }
 
     #[test]
-    // r[verify audit.log]
-    // r[verify audit.log.path]
+    // spec: AUD#storage
     fn open_creates_parent_dirs() {
         let tmp = TempDir::new().unwrap();
         let nested = tmp.path().join("a").join("b").join("audit.log");
@@ -151,9 +150,8 @@ mod tests {
     }
 
     #[test]
-    // r[verify audit.log]
-    // r[verify audit.log.format]
-    // r[verify audit.log.events]
+    // spec: AUD#storage
+    // spec: AUD#entries
     fn write_event_produces_json_line() {
         let tmp = TempDir::new().unwrap();
         let path = tmp.path().join("audit.log");
@@ -172,8 +170,8 @@ mod tests {
     }
 
     #[test]
-    // r[verify audit.log.rotation]
-    // r[verify audit.log.resilience]
+    // spec: AUD#rotation
+    // spec: AUD#write-failures
     fn reopen_after_rotation() {
         let tmp = TempDir::new().unwrap();
         let path = tmp.path().join("audit.log");

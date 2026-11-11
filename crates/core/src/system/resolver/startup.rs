@@ -234,7 +234,7 @@ async fn start_slot(
             log_extra_fields: vec![("SEEDLING_INFRA".to_owned(), "resolver".to_owned())],
             kill_signal: None,
             timeout_stop_secs: None,
-            // r[impl priority.kill-order]
+            // spec: PRIO#kill-order
             // Infrastructure ranks above every app workload: a host under
             // memory pressure must not lose the components that route to
             // whatever survives.
@@ -449,8 +449,7 @@ pub async fn ensure_resolver_running(
                 inline_health_fail_count.store(0, Ordering::Relaxed);
                 stop_slot(&active, process, container).await;
             } else {
-                // r[impl infra.resolver.upgrade]
-                // r[impl infra.resolver.config.apply]
+                // spec: DNS#resolver-replacement
                 tracing::info!(
                     container = %active,
                     ?assessment,
@@ -513,7 +512,7 @@ mod tests {
         }
     }
 
-    // r[verify infra.resolver.config.apply]
+    // spec: DNS#resolver-replacement
     #[test]
     fn config_hash_follows_corefile_and_address() {
         let a: Ipv6Addr = "fd5e:a5:bac1:fd00::53".parse().unwrap();
@@ -524,21 +523,21 @@ mod tests {
         assert_ne!(base, config_hash("forward . 1.1.1.1\n", &b));
     }
 
-    // r[verify infra.resolver.config.apply]
+    // spec: DNS#resolver-replacement
     #[test]
     fn running_resolver_with_changed_config_is_stale() {
         let state = running(Some("img"), Some("old"));
         assert_eq!(assess_running(&state, "img", "new"), Running::StaleConfig);
     }
 
-    // r[verify infra.resolver.config.apply]
+    // spec: DNS#resolver-replacement
     #[test]
     fn running_resolver_without_a_config_label_is_stale() {
         let state = running(Some("img"), None);
         assert_eq!(assess_running(&state, "img", "new"), Running::StaleConfig);
     }
 
-    // r[verify infra.resolver.upgrade]
+    // spec: DNS#resolver-replacement
     #[test]
     fn running_resolver_on_another_image_is_stale() {
         let state = running(Some("old-img"), Some("cfg"));

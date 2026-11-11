@@ -2,8 +2,8 @@ use serde_json::json;
 
 use crate::oi::test_support::TestOi;
 
-// i[verify key.authorize]
-// i[verify key.list]
+// spec: KEY#authorising-a-key
+// spec: KEY#listing-keys
 #[test]
 fn authorise_then_list_shows_key() {
     let oi = TestOi::new();
@@ -24,7 +24,7 @@ fn authorise_then_list_shows_key() {
     assert!(keys[0]["added_at"].as_i64().unwrap() > 0);
 }
 
-// i[verify key.authorize]
+// spec: KEY#authorising-a-key
 #[test]
 fn authorise_defaults_label_and_updates_existing() {
     let oi = TestOi::new();
@@ -45,7 +45,7 @@ fn authorise_defaults_label_and_updates_existing() {
     assert_eq!(keys[0]["label"], "desk");
 }
 
-// i[verify key.revoke]
+// spec: KEY#revoking-a-key
 #[test]
 fn revoke_removes_key_or_errors_when_absent() {
     let oi = TestOi::new();
@@ -62,7 +62,7 @@ fn revoke_removes_key_or_errors_when_absent() {
     assert_eq!(code, "not_found");
 }
 
-// i[verify key.authorize]
+// spec: KEY#authorising-a-key
 // A fingerprint the verifier can never match is not a near miss: storing it
 // tells an operator they granted access they did not.
 #[test]
@@ -83,7 +83,7 @@ fn authorise_refuses_a_fingerprint_that_could_never_match() {
     );
 }
 
-// i[verify key.authorize]
+// spec: KEY#authorising-a-key
 #[test]
 fn authorise_normalises_case_and_a_sha256_prefix() {
     let oi = TestOi::new();
@@ -97,7 +97,7 @@ fn authorise_normalises_case_and_a_sha256_prefix() {
     assert_eq!(keys[0]["fingerprint"], canonical);
 }
 
-// i[verify key.revoke]
+// spec: KEY#revoking-a-key
 // The same key must be revocable with the same string it was authorised
 // with, whatever case or prefix that was in.
 #[test]

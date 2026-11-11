@@ -26,24 +26,23 @@ struct Migration {
 // stored in schema_version. A mismatch on startup means someone edited an
 // existing migration — which is forbidden. Add a new version block instead.
 
-// r[impl identity.stable]
-// r[impl identity.components]
-// r[impl history.world.entries]
-// r[impl history.operations.entries]
-// r[impl history.action-log.entries]
-// r[impl operation.lifecycle.events]
-// r[impl barrier.replay]
+// spec: IDN#instance-identity
+// spec: HIST#observations
+// spec: HIST#autonomous-operations
+// spec: HIST#action-calls
+// spec: OPS#initiating-events
+// spec: SUSP#replay
 const SQL_V2: &str = include_str!("db/migrations/v02.sql");
 const SQL_V3: &str = include_str!("db/migrations/v03.sql");
-// i[app.persist]
+// spec: APPS#persistence
 const SQL_V4: &str = include_str!("db/migrations/v04.sql");
-// i[key.authorize]
+// spec: KEY#authorising-a-key
 const SQL_V5: &str = include_str!("db/migrations/v05.sql");
-// i[param.store]
+// spec: PRM#parameter-storage
 const SQL_V6: &str = include_str!("db/migrations/v06.sql");
 const SQL_V7: &str = include_str!("db/migrations/v07.sql");
 const SQL_V8: &str = include_str!("db/migrations/v08.sql");
-// i[fault.record]
+// spec: FLTS#fault-records
 const SQL_V9: &str = include_str!("db/migrations/v09.sql");
 const SQL_V10: &str = include_str!("db/migrations/v10.sql");
 const SQL_V11: &str = include_str!("db/migrations/v11.sql");
@@ -55,92 +54,92 @@ const SQL_V16: &str = include_str!("db/migrations/v16.sql");
 const SQL_V17: &str = include_str!("db/migrations/v17.sql");
 const SQL_V18: &str = include_str!("db/migrations/v18.sql");
 const SQL_V19: &str = include_str!("db/migrations/v19.sql");
-// r[impl generation.history]
-// r[impl generation.script-storage]
+// spec: GEN#history-entries
+// spec: GEN#bundle-storage
 const SQL_V20: &str = migrations::v20::SQL;
-// r[impl operation.lifecycle.generations]
+// spec: OPS#initiating-events
 const SQL_V21: &str = include_str!("db/migrations/v21.sql");
-// r[impl schedule.state]
+// spec: SCHED#schedule-records
 const SQL_V22: &str = include_str!("db/migrations/v22.sql");
 const SQL_V23: &str = include_str!("db/migrations/v23.sql");
 const SQL_V24: &str = include_str!("db/migrations/v24.sql");
 const SQL_V25: &str = include_str!("db/migrations/v25.sql");
 const SQL_V26: &str = include_str!("db/migrations/v26.sql");
-// i[impl deployment.restart]
+// spec: CTL#deployment-restart
 const SQL_V27: &str = include_str!("db/migrations/v27.sql");
-// i[impl resource.stop]
+// spec: CTL#resource-stop
 const SQL_V28: &str = include_str!("db/migrations/v28.sql");
-// r[impl secret.storage]
-// r[impl secret.history]
+// spec: SEC#storage
+// spec: SEC#generation-history
 const SQL_V29: &str = include_str!("db/migrations/v29.sql");
-// i[impl action.invoke.install] r[impl operation.params]
+// spec: ACI#install, OPS#persistence
 const SQL_V30: &str = include_str!("db/migrations/v30.sql");
 const SQL_V31: &str = include_str!("db/migrations/v31.sql");
-// r[impl operation.params]
+// spec: OPS#persistence
 const SQL_V32: &str = include_str!("db/migrations/v32.sql");
-// r[impl template.persist]
+// spec: TPL#persistence
 const SQL_V33: &str = include_str!("db/migrations/v33.sql");
-// r[impl operation.cancel]
+// spec: OPS#cancellation
 const SQL_V34: &str = include_str!("db/migrations/v34.sql");
-// r[impl image.pin] r[impl image.track]
+// spec: IMG#pins, IMG#image-usage-tracking
 const SQL_V35: &str = include_str!("db/migrations/v35.sql");
-// r[impl image.track]
+// spec: IMG#image-usage-tracking
 const SQL_V36: &str = include_str!("db/migrations/v36.sql");
-// r[impl image.pin.expiry]
+// spec: IMG#pin-expiry
 const SQL_V37: &str = include_str!("db/migrations/v37.sql");
-// r[impl service.site] r[impl service.external.mapping.events]
+// spec: SITE#site-services, SITE#external-mappings
 const SQL_V38: &str = include_str!("db/migrations/v38.sql");
-// r[impl service.external.mapping.events]
+// spec: SITE#external-mappings
 const SQL_V39: &str = include_str!("db/migrations/v39.sql");
-// r[impl service.site]
+// spec: SITE#site-services
 const SQL_V40: &str = include_str!("db/migrations/v40.sql");
-// l[impl rt.signal]
+// spec: RT#signal-delivery
 const SQL_V41: &str = include_str!("db/migrations/v41.sql");
-// r[impl tls.dns-provider.lifecycle]
-// r[impl tls.csr.flow]
-// r[impl tls.strategy.manual]
-// r[impl tls.strategy.acme-dns]
-// r[impl tls.policy.apply]
+// spec: TLS#dns-providers
+// spec: TLS#certificate-signing-requests
+// spec: TLS#certificate-selection
+// spec: TLS#acme-dns-01-issuance
+// spec: TLS#policies
 const SQL_V42: &str = include_str!("db/migrations/v42.sql");
-// r[impl tls.acme.account.persist]
-// r[impl tls.cert.metadata]
+// spec: TLS#acme-accounts-and-settings
+// spec: TLS#hostname-state
 const SQL_V43: &str = include_str!("db/migrations/v43.sql");
-// r[impl tls.settings.contact-email]
+// spec: TLS#acme-accounts-and-settings
 const SQL_V44: &str = include_str!("db/migrations/v44.sql");
-// r[impl tls.cert.attempt-log]
-// r[impl tls.cert.retry-block]
+// spec: TLS#attempt-log
+// spec: TLS#retry-blocks-and-retries
 const SQL_V45: &str = include_str!("db/migrations/v45.sql");
-// r[impl tls.cert.force-retry]
+// spec: TLS#retry-blocks-and-retries
 const SQL_V46: &str = include_str!("db/migrations/v46.sql");
-// r[impl tls.cert.ari]
+// spec: TLS#renewal
 const SQL_V47: &str = include_str!("db/migrations/v47.sql");
 
 const SQL_V48: &str = include_str!("db/migrations/v48.sql");
-// r[impl ingress.site] r[impl ingress.site.attachment]
+// spec: SITE#site-ingresses, SITE#attachments
 const SQL_V49: &str = include_str!("db/migrations/v49.sql");
-// r[impl ingress.site.tailscale]
+// spec: SITE#tailscale-discovery
 const SQL_V50: &str = include_str!("db/migrations/v50.sql");
-// l[impl bsl.resource.description]
+// spec: BSL#descriptions
 const SQL_V51: &str = include_str!("db/migrations/v51.sql");
-// r[impl infra.proxy.upgrade.cache]
+// spec: PRX#proxy-upgrades
 const SQL_V52: &str = include_str!("db/migrations/v52.sql");
-// r[impl canopy.settings.enabled]
-// r[impl canopy.report.identity]
+// spec: CNR#canopy-access
+// spec: CNR#server-identity
 const SQL_V53: &str = include_str!("db/migrations/v53.sql");
-// r[impl autonomous.restart.record]
-// r[impl autonomous.restart.rate.settings]
+// spec: AUTO#restart-record
+// spec: AUTO#crash-loop-detection
 const SQL_V54: &str = include_str!("db/migrations/v54.sql");
 const SQL_V55: &str = include_str!("db/migrations/v55.sql");
 const SQL_V56: &str = include_str!("db/migrations/v56.sql");
-// r[impl priority.settings]
+// spec: PRIO#priority-setting
 const SQL_V57: &str = include_str!("db/migrations/v57.sql");
 const SQL_V58: &str = migrations::v58::SQL;
 const SQL_V59: &str = include_str!("db/migrations/v59.sql");
-// r[impl canopy.app.key]
-// r[impl canopy.offer.absent]
+// spec: CNR#applications
+// spec: CNR#missing-offers
 const SQL_V60: &str = include_str!("db/migrations/v60.sql");
-// r[impl tls.strategy.canopy]
-// r[impl tls.chain.ladder]
+// spec: TCAN#applicability-and-availability
+// spec: CHAIN#fall-through
 const SQL_V61: &str = include_str!("db/migrations/v61.sql");
 const SQL_V62: &str = include_str!("db/migrations/v62.sql");
 const SQL_V63: &str = include_str!("db/migrations/v63.sql");
@@ -492,14 +491,13 @@ fn migration_hash(sql: &str) -> String {
     s
 }
 
-// r[impl history.persistence]
-// r[impl history.storage]
+// spec: HIST#durability
 pub struct Db {
     pub conn: Connection,
 }
 
 impl Db {
-    // r[infra.db.file-permissions]
+    // spec: INFRA#file-permissions
     pub fn open(path: &Path) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
         if path.exists() {
             let mode = path.metadata()?.permissions().mode() & 0o777;
@@ -515,7 +513,7 @@ impl Db {
 
         let conn = Connection::open(path)?;
 
-        // r[infra.db.busy-timeout]
+        // spec: INFRA#database
         conn.busy_timeout(Duration::from_secs(5))?;
 
         if let Ok(meta) = path.metadata()
@@ -699,7 +697,7 @@ pub struct ScheduleRow {
     pub last_fired_at: Option<String>,
 }
 
-// r[impl schedule.state]
+// spec: SCHED#schedule-records
 pub fn upsert_schedule_fired(
     db: &Db,
     app: &AppName,
@@ -748,7 +746,7 @@ pub fn list_all_schedules(db: &Db) -> rusqlite::Result<Vec<ScheduleRow>> {
     rows.collect()
 }
 
-// r[impl schedule.prune]
+// spec: SCHED#schedule-records
 pub fn prune_schedules(
     db: &Db,
     app: &AppName,

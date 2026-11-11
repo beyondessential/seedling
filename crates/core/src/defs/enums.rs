@@ -2,10 +2,10 @@ use rhai::{Dynamic, Map};
 
 #[derive(Debug, Default, Clone, Copy)]
 pub enum OnUpdate {
-    // l[impl const.on-update.rolling]
+    // spec: CONST#onupdate
     #[default]
     Rolling,
-    // l[impl const.on-update.replace]
+    // spec: CONST#onupdate
     Replace,
 }
 
@@ -20,7 +20,7 @@ impl OnUpdate {
 
 #[derive(Debug, Default, Clone, Copy)]
 pub enum OnTerminate {
-    // l[impl const.on-terminate.recreate]
+    // spec: CONST#onterminate
     #[default]
     Recreate,
 }
@@ -35,12 +35,12 @@ impl OnTerminate {
 
 #[derive(Debug, Default, Clone, Copy)]
 pub enum OnExit {
-    // l[impl const.on-exit.restart]
+    // spec: CONST#onexit
     #[default]
     Restart,
-    // l[impl const.on-exit.terminate]
+    // spec: CONST#onexit
     Terminate,
-    // l[impl const.on-exit.restart-on-failure]
+    // spec: CONST#onexit
     RestartOnFailure,
 }
 
@@ -59,14 +59,14 @@ impl OnExit {
 
 /// A Deployment's claim on host resources relative to other workloads when the
 /// host is under memory, CPU, or I/O pressure. Declared in BSL; the runtime
-/// owns how each level is realised (see `r[priority.actuation]`).
+/// owns how each level is realised (see `PRIO#resource-control-groups`).
 ///
 /// Totally ordered: `Critical > Elevated > Normal > Low`. The ordering is
 /// derived rather than spelled out, and is relied on to keep the per-app set of
 /// declared levels in a stable order.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Priority {
-    // l[impl const.priority.enum]
+    // spec: CONST#priority
     // Declared weakest-claim first so the derived ordering is the documented
     // one: `Critical > Elevated > Normal > Low`.
     Low,
@@ -104,11 +104,11 @@ impl Priority {
 /// `ingress.tls(Terminate, Output)`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Terminate {
-    // l[impl const.terminate.tls]
+    // spec: ING#terminate
     Tls,
-    // l[impl const.terminate.dtls]
+    // spec: ING#terminate
     Dtls,
-    // l[impl const.terminate.https]
+    // spec: ING#terminate
     Https,
 }
 
@@ -126,13 +126,13 @@ impl Terminate {
 /// with [`Terminate`] in `ingress.tls(Terminate, Output)`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Output {
-    // l[impl const.output.tcp]
+    // spec: ING#output
     Tcp,
-    // l[impl const.output.udp]
+    // spec: ING#output
     Udp,
-    // l[impl const.output.http1]
+    // spec: ING#output
     Http1,
-    // l[impl const.output.http2]
+    // spec: ING#output
     Http2,
 }
 

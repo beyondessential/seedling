@@ -4,7 +4,7 @@ use std::time::{Duration, Instant};
 use argon2::{Argon2, PasswordHash, PasswordVerifier};
 use seedling_protocol::actor::Actor;
 
-// w[auth.password]
+// spec: WEB#password-login
 pub fn verify_password(hash_str: &str, password: &str) -> bool {
     let Ok(parsed) = PasswordHash::new(hash_str) else {
         tracing::warn!("configured password_hash is not a valid PHC string");
@@ -22,7 +22,7 @@ pub struct SessionEntry {
 
 pub type Sessions = parking_lot::Mutex<std::collections::HashMap<String, SessionEntry>>;
 
-// w[auth.password]
+// spec: WEB#password-login
 pub fn issue_session_token(sessions: &Sessions, actor: Arc<Actor>, lifetime: Duration) -> String {
     let token = uuid::Uuid::new_v4().to_string();
     let expires = Instant::now() + lifetime;
@@ -71,21 +71,21 @@ mod tests {
         })
     }
 
-    // w[verify auth.password]
+    // spec: WEB#password-login
     #[test]
     fn verify_password_accepts_correct_password() {
         let h = hash("correct horse battery staple");
         assert!(verify_password(&h, "correct horse battery staple"));
     }
 
-    // w[verify auth.password]
+    // spec: WEB#password-login
     #[test]
     fn verify_password_rejects_wrong_password() {
         let h = hash("correct horse battery staple");
         assert!(!verify_password(&h, "wrong password"));
     }
 
-    // w[verify auth.password]
+    // spec: WEB#password-login
     #[test]
     fn verify_password_rejects_malformed_hash() {
         // Not a PHC string — must return false, not panic.
@@ -93,7 +93,7 @@ mod tests {
         assert!(!verify_password("", "anything"));
     }
 
-    // w[verify auth.password]
+    // spec: WEB#password-login
     #[test]
     fn issue_then_verify_round_trips_actor() {
         let sessions = empty_sessions();
@@ -104,14 +104,14 @@ mod tests {
         assert_eq!(recovered.id, actor.id);
     }
 
-    // w[verify auth.password]
+    // spec: WEB#password-login
     #[test]
     fn verify_unknown_token_returns_none() {
         let sessions = empty_sessions();
         assert!(verify_session_token(&sessions, "no-such-token").is_none());
     }
 
-    // w[verify auth.password]
+    // spec: WEB#password-login
     #[test]
     fn expired_token_does_not_verify() {
         let sessions = empty_sessions();
@@ -123,7 +123,7 @@ mod tests {
         assert!(verify_session_token(&sessions, &token).is_none());
     }
 
-    // w[verify auth.password]
+    // spec: WEB#password-login
     #[test]
     fn issuing_new_token_prunes_expired_entries() {
         let sessions = empty_sessions();
@@ -139,7 +139,7 @@ mod tests {
         assert!(!map.contains_key(&stale_token));
     }
 
-    // w[verify auth.password]
+    // spec: WEB#password-login
     #[test]
     fn issued_tokens_are_unique() {
         let sessions = empty_sessions();

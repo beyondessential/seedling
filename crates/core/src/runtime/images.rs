@@ -11,7 +11,7 @@ pub struct ImagePin {
     pub pinned_at: i64,
     /// Unix-millisecond expiration, or `None` for an indefinite pin. When
     /// set and in the past, [`drop_expired_pins`] removes the pin.
-    // r[impl image.pin.expiry]
+    // spec: IMG#pin-expiry
     pub expires_at: Option<i64>,
 }
 
@@ -23,11 +23,11 @@ fn now_ms() -> i64 {
         .as_millis() as i64
 }
 
-// r[impl image.pin]
-// r[impl image.pin.expiry]
+// spec: IMG#pins
+// spec: IMG#pin-expiry
 /// Pin `reference` for `app`, clearing any pending expiration.
 ///
-/// `r[image.pin.expiry]` says expirations "are cleared whenever a pin's
+/// `IMG#pin-expiry` says expirations "are cleared whenever a pin's
 /// reference is observed to be valid again for the owning app", and an
 /// explicit re-warm is exactly that observation. `DO NOTHING` left an
 /// `expires_at` stamped by the post-update reconciliation rule in place, so
@@ -46,7 +46,7 @@ pub fn upsert_pin(db: &Db, app: &AppName, reference: &str) -> rusqlite::Result<(
     Ok(())
 }
 
-// r[impl image.pin]
+// spec: IMG#pins
 pub fn clear_pin(db: &Db, app: &AppName, reference: &str) -> rusqlite::Result<bool> {
     let n = db.conn.execute(
         "DELETE FROM image_pins WHERE app = ?1 AND reference = ?2",
@@ -55,7 +55,7 @@ pub fn clear_pin(db: &Db, app: &AppName, reference: &str) -> rusqlite::Result<bo
     Ok(n > 0)
 }
 
-// r[impl image.pin]
+// spec: IMG#pins
 pub fn clear_pins_for_app(db: &Db, app: &AppName) -> rusqlite::Result<usize> {
     db.conn
         .execute("DELETE FROM image_pins WHERE app = ?1", params![app])
@@ -64,7 +64,7 @@ pub fn clear_pins_for_app(db: &Db, app: &AppName) -> rusqlite::Result<usize> {
 /// Clear every pin whose reference matches. Used when an operator removes an
 /// image by reference and when the reconciler observes a running container
 /// using the reference.
-// r[impl image.pin]
+// spec: IMG#pins
 pub fn clear_pins_by_reference(db: &Db, reference: &str) -> rusqlite::Result<usize> {
     db.conn.execute(
         "DELETE FROM image_pins WHERE reference = ?1",
@@ -73,7 +73,7 @@ pub fn clear_pins_by_reference(db: &Db, reference: &str) -> rusqlite::Result<usi
 }
 
 /// Delete any pin whose `expires_at` has passed. Called once per reconcile tick.
-// r[impl image.pin.expiry]
+// spec: IMG#pin-expiry
 pub fn drop_expired_pins(db: &Db) -> rusqlite::Result<usize> {
     db.conn.execute(
         "DELETE FROM image_pins WHERE expires_at IS NOT NULL AND expires_at <= ?1",
@@ -91,7 +91,7 @@ pub fn drop_expired_pins(db: &Db) -> rusqlite::Result<usize> {
 ///     there isn't already an earlier expiration set.
 ///
 /// Returns the number of pins deleted (only non-zero when `probe_clean`).
-// r[impl image.pin.update-reconcile]
+// spec: IMG#pin-reconciliation
 pub fn reconcile_pins_after_update(
     db: &Db,
     app: &AppName,
@@ -256,7 +256,7 @@ pub struct ImageTrackingRow {
 /// Observe that `image_id` is locally present. Inserts the tracking row if
 /// missing. Does not update `last_used_at` for existing rows — use
 /// `mark_used` for that.
-// r[impl image.track]
+// spec: IMG#image-usage-tracking
 pub fn note_present(db: &Db, image_id: &str) -> rusqlite::Result<()> {
     let now = now_ms();
     db.conn.execute(
@@ -268,7 +268,7 @@ pub fn note_present(db: &Db, image_id: &str) -> rusqlite::Result<()> {
     Ok(())
 }
 
-// r[impl image.track]
+// spec: IMG#image-usage-tracking
 pub fn mark_used(db: &Db, image_id: &str) -> rusqlite::Result<()> {
     let now = now_ms();
     db.conn.execute(
@@ -349,7 +349,7 @@ pub fn drop_tracking(db: &Db, image_id: &str) -> rusqlite::Result<()> {
 
 /// Refresh `image_references` from an authoritative `(reference, image_id)` list.
 /// Rows not present in `refs` are deleted; present rows are inserted or updated.
-// r[impl image.track]
+// spec: IMG#image-usage-tracking
 pub fn refresh_references(db: &Db, refs: &[(String, String)]) -> rusqlite::Result<()> {
     let now = now_ms();
     let tx = db.conn.unchecked_transaction()?;
@@ -412,7 +412,7 @@ mod tests {
         AppName::new(s).unwrap()
     }
 
-    // r[verify image.pin.expiry]
+    // spec: IMG#pin-expiry
     // An expiration is set by the post-update reconciliation rule and must be
     // cleared once the reference is observed valid again. `DO NOTHING` kept
     // it, so a re-warmed image was still swept on a later tick.
@@ -443,9 +443,8 @@ mod tests {
         );
     }
 
-    // r[verify image.pin]
-    // i[verify image.pin.list]
-    // i[verify image.pin.clear]
+    // spec: IMG#pins
+    // spec: IMGM#image-pins
     #[test]
     fn pin_upsert_and_clear() {
         let db = Db::open_in_memory().unwrap();
@@ -461,7 +460,7 @@ mod tests {
         assert!(!cleared_again);
     }
 
-    // r[verify image.pin]
+    // spec: IMG#pins
     #[test]
     fn pin_clear_by_reference() {
         let db = Db::open_in_memory().unwrap();
@@ -473,7 +472,7 @@ mod tests {
         assert_eq!(list_pins(&db, None).unwrap().len(), 1);
     }
 
-    // r[verify image.track]
+    // spec: IMG#image-usage-tracking
     #[test]
     fn track_note_then_mark_used() {
         let db = Db::open_in_memory().unwrap();
@@ -492,7 +491,7 @@ mod tests {
         assert!(r2.last_used_at > r1.last_used_at - 1000);
     }
 
-    // r[verify image.pin.expiry]
+    // spec: IMG#pin-expiry
     #[test]
     fn drop_expired_pins_removes_past_due() {
         let db = Db::open_in_memory().unwrap();
@@ -517,7 +516,7 @@ mod tests {
         assert_eq!(remaining[0].reference, "ghcr.io/x:2");
     }
 
-    // r[verify image.pin.update-reconcile]
+    // spec: IMG#pin-reconciliation
     #[test]
     fn reconcile_strict_deletes_orphan_pins() {
         let db = Db::open_in_memory().unwrap();
@@ -540,7 +539,7 @@ mod tests {
         assert!(remaining[0].expires_at.is_none());
     }
 
-    // r[verify image.pin.update-reconcile]
+    // spec: IMG#pin-reconciliation
     #[test]
     fn reconcile_lenient_stamps_expiry_on_orphans() {
         let db = Db::open_in_memory().unwrap();
@@ -575,7 +574,7 @@ mod tests {
         assert!(exp > now && exp - now <= expiry_window + 1000);
     }
 
-    // r[verify image.pin.update-reconcile]
+    // spec: IMG#pin-reconciliation
     #[test]
     fn reconcile_clears_expiry_when_reference_becomes_safe_again() {
         let db = Db::open_in_memory().unwrap();
@@ -601,7 +600,7 @@ mod tests {
         assert!(pins[0].expires_at.is_none());
     }
 
-    // r[verify image.gc]
+    // spec: IMG#image-garbage-collection
     #[test]
     fn gc_candidates_respects_cutoff() {
         let db = Db::open_in_memory().unwrap();

@@ -42,7 +42,7 @@ impl std::fmt::Display for RelayFailure {
 
 impl std::error::Error for RelayFailure {}
 
-// i[canopy.relay]
+// spec: RLY#relay-streams
 /// Relay one request through `offer` and return whatever Canopy answered.
 ///
 /// Any status is a success here, including a non-2xx one: individual endpoints
@@ -73,7 +73,7 @@ pub async fn relay_request(
         .map_err(|e| RelayFailure::Peer(format!("cannot half-close the relay stream: {e}")))?;
     drop(send);
 
-    // i[canopy.relay.limits]
+    // spec: RLY#relay-limits
     // On a timeout the read future is dropped, which drops the stream's read
     // half, which is how the peer is told to stop sending: an answer arriving
     // later has nowhere to go.
@@ -89,7 +89,7 @@ pub async fn relay_request(
             headers,
             body,
         }),
-        // i[canopy.relay.error]
+        // spec: RLY#relay-errors
         RelayResponse::Error { error } => Err(RelayFailure::Client(error)),
     }
 }
@@ -129,7 +129,7 @@ mod tests {
             .expect("request parses")
     }
 
-    // i[verify canopy.relay]
+    // spec: RLY#relay-streams
     #[tokio::test]
     async fn a_request_reaches_the_client_intact_and_its_response_comes_back() {
         let (_state, offer) = offer_answering(|mut stream| {
@@ -169,7 +169,7 @@ mod tests {
         );
     }
 
-    // i[verify canopy.relay]
+    // spec: RLY#relay-streams
     #[tokio::test]
     async fn the_offer_id_is_carried_so_a_withdrawn_offer_can_be_rejected() {
         let (tx, rx) = std::sync::mpsc::channel();
@@ -198,7 +198,7 @@ mod tests {
         assert_eq!(rx.recv().unwrap(), offer.offer_id.to_string());
     }
 
-    // i[verify canopy.relay]
+    // spec: RLY#relay-streams
     #[tokio::test]
     async fn a_non_success_status_is_a_response_not_a_failure() {
         for status in [403u16, 412, 500] {
@@ -227,7 +227,7 @@ mod tests {
         }
     }
 
-    // i[verify canopy.relay.error]
+    // spec: RLY#relay-errors
     #[tokio::test]
     async fn an_error_frame_becomes_a_failure_carrying_its_code() {
         let (_state, offer) = offer_answering(|mut stream| {
@@ -258,7 +258,7 @@ mod tests {
         }
     }
 
-    // i[verify canopy.unavailable]
+    // spec: RLY#unavailability
     #[tokio::test]
     async fn a_peer_that_cannot_open_a_stream_fails_immediately() {
         let state = CanopyState::new();
@@ -276,7 +276,7 @@ mod tests {
         assert!(matches!(err, RelayFailure::Peer(_)), "{err}");
     }
 
-    // i[verify canopy.relay.limits]
+    // spec: RLY#relay-limits
     #[tokio::test]
     async fn a_client_that_never_answers_times_out() {
         tokio::time::pause();
@@ -298,7 +298,7 @@ mod tests {
         assert!(matches!(err, RelayFailure::Timeout), "{err}");
     }
 
-    // i[verify canopy.relay.limits]
+    // spec: RLY#relay-limits
     #[tokio::test]
     async fn a_response_body_past_the_ceiling_is_refused() {
         let (_state, offer) = offer_answering(|mut stream| {
@@ -327,7 +327,7 @@ mod tests {
         );
     }
 
-    // i[verify stream.canopy]
+    // spec: WIRE#canopy-relay-streams
     #[tokio::test]
     async fn a_client_that_reads_then_closes_without_answering_is_a_truncation() {
         let (_state, offer) = offer_answering(|mut stream| {
@@ -346,7 +346,7 @@ mod tests {
         );
     }
 
-    // i[verify stream.canopy]
+    // spec: WIRE#canopy-relay-streams
     #[tokio::test]
     async fn a_client_that_vanishes_mid_request_is_a_failure_not_an_empty_response() {
         // The write itself fails here rather than the read, which is a different

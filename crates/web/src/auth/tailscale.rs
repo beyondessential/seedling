@@ -4,7 +4,7 @@ use seedling_protocol::actor::Actor;
 const HEADER_LOGIN: &str = "tailscale-user-login";
 const HEADER_NAME: &str = "tailscale-user-name";
 
-// w[auth.tailscale]
+// spec: WEB#tailscale-identity
 pub fn extract_actor(headers: &HeaderMap) -> Option<Actor> {
     let id = headers.get(HEADER_LOGIN)?.to_str().ok()?.to_owned();
     let display = headers
@@ -42,7 +42,7 @@ mod tests {
         h
     }
 
-    // w[verify auth.tailscale]
+    // spec: WEB#tailscale-identity
     #[test]
     fn extract_with_login_and_name_uses_name_as_display() {
         let got = extract_actor(&headers(&[
@@ -59,7 +59,7 @@ mod tests {
         );
     }
 
-    // w[verify auth.tailscale]
+    // spec: WEB#tailscale-identity
     #[test]
     fn decodes_rfc2047_encoded_display_name() {
         // Tailscale Serve carries non-ASCII names as MIME encoded-words.
@@ -71,7 +71,7 @@ mod tests {
         assert_eq!(got.display.as_deref(), Some("Félix Saparelli"));
     }
 
-    // w[verify auth.tailscale]
+    // spec: WEB#tailscale-identity
     #[test]
     fn extract_with_login_only_falls_back_to_login_as_display() {
         let got = extract_actor(&headers(&[(HEADER_LOGIN, "bob@example.com")]))
@@ -80,7 +80,7 @@ mod tests {
         assert_eq!(got.display.as_deref(), Some("bob@example.com"));
     }
 
-    // w[verify auth.tailscale]
+    // spec: WEB#tailscale-identity
     #[test]
     fn extract_without_login_header_returns_none() {
         // Proxy did not inject the Tailscale headers — not a Tailscale request.
@@ -88,7 +88,7 @@ mod tests {
         assert!(extract_actor(&headers(&[])).is_none());
     }
 
-    // w[verify auth.tailscale]
+    // spec: WEB#tailscale-identity
     #[test]
     fn extract_with_non_ascii_login_header_returns_none() {
         // Non-ASCII header values cannot be represented as an Actor id; the

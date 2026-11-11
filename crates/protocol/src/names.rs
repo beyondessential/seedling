@@ -9,7 +9,7 @@ use uuid::Uuid;
 // ---------------------------------------------------------------------------
 
 /// Rejection reason produced by the bsl.name validator. Shared across all
-/// name newtypes whose rules match the `bsl.name` spec item.
+/// name newtypes whose rules match `spec: BSL#names`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum InvalidName {
     LeadingUnderscore,
@@ -34,7 +34,7 @@ impl fmt::Display for InvalidName {
 
 impl std::error::Error for InvalidName {}
 
-// l[impl bsl.name]
+// spec: BSL#names
 fn validate_bsl_name(s: &str) -> Result<(), InvalidName> {
     if s.starts_with('_') {
         return Err(InvalidName::LeadingUnderscore);
@@ -76,7 +76,7 @@ macro_rules! bsl_name_newtype {
         $name:ident
     ) => {
         $(#[$attr])*
-        // l[impl bsl.name]
+        // spec: BSL#names
         #[derive(Debug, Clone, Default, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize)]
         #[serde(transparent)]
         pub struct $name(CompactString);
@@ -391,7 +391,7 @@ uuid_newtype! {
 uuid_newtype! {
     /// Identifier for a registration by a client offering to carry Canopy
     /// requests. Ephemeral: it lives no longer than the connection that made it.
-    // i[canopy.offer]
+    // spec: RLY#offers
     OfferId
 }
 
@@ -551,7 +551,7 @@ mod tests {
         AppName::new(format!("a{}", "b".repeat(62))).unwrap();
     }
 
-    // l[verify bsl.name]
+    // spec: BSL#names
     // The message is what anyone hitting the rejection reads to work out the
     // rule, so its bounds have to be the validator's bounds.
     #[test]

@@ -2,7 +2,7 @@
 
 This document describes what seedling tries to defend against, what it does
 not, and the mechanisms it currently uses. It is descriptive, not normative:
-the authoritative requirements live under `docs/spec/`. Where a mitigation is
+the authoritative requirements live under `.workhorse/specs/`. Where a mitigation is
 mentioned, the relevant spec rule is cross-referenced.
 
 ## Audience
@@ -34,7 +34,7 @@ Below these, two further principals exist but are not trusted:
    the operator registered. May be the operator themselves, a vendor, a
    contractor, or a peer. The script is sandboxed by the rhai engine and
    only sees the builder methods seedling exposes — see
-   `docs/spec/runtime.md#r--engine.limits`.
+   [LIM#limits](../.workhorse/specs/runtime/engine-limits.md#limits).
 5. **Workloads.** Containers that seedling starts on the host. Always
    untrusted, even when the script was written by the operator.
 
@@ -93,15 +93,15 @@ scope).
 Parameter values marked secret must be encrypted at rest, must be omitted
 from operator-facing describe responses, and must remain encrypted in the
 generation history. The runtime decrypts them only to pass them to the
-container the script targets — see `docs/spec/runtime.md#r--secret.storage`,
-`#r--secret.history`, and `#r--secret.redaction`.
+container the script targets — see [SEC#storage](../.workhorse/specs/runtime/secrets.md#storage),
+[SEC#generation-history](../.workhorse/specs/runtime/secrets.md#generation-history), and [SEC#redaction](../.workhorse/specs/runtime/secrets.md#redaction).
 
 ### T7. Accidental destruction of operator data
 
 Not strictly a security threat in the confidentiality/integrity sense, but
 treated as one: deleting a managed volume routes through the held-volume
 mechanism so a fat-fingered command does not vapourise data —
-`docs/spec/runtime.md#r--actuate.volume.hold`. The same applies to
+[ACTU#held-volumes](../.workhorse/specs/runtime/actuation.md#held-volumes). The same applies to
 generation history retention: rolling back to an older generation is a
 first-class operation, not a forensic exercise.
 
@@ -109,8 +109,8 @@ first-class operation, not a forensic exercise.
 
 Every OI request must be attributable to an actor and recorded in the
 audit log so a post-incident review can answer "who did this and when".
-See `docs/spec/runtime.md#r--audit.log` and
-`docs/spec/interface.md#i--wire.actor`.
+See [AUD#storage](../.workhorse/specs/runtime/audit-log.md#storage) and
+[WIRE#actor-attribution](../.workhorse/specs/interface/wire.md#actor-attribution).
 
 ### T9. Disclosure of TLS key material
 
@@ -121,7 +121,7 @@ certs, and certs the runtime obtained itself via ACME). All three must
 be encrypted at rest, omitted from any operator-facing list/describe
 response, and reachable to the proxy only through the cert-serving
 endpoint defined in
-`docs/spec/runtime.md#r--tls.cert.serve`. In particular:
+[TLS#serving](../.workhorse/specs/runtime/tls/certificates.md#serving). In particular:
 
 - Private keys must never appear in the proxy's persistent
   configuration or its restart-replay cache.
@@ -175,7 +175,7 @@ will, including by reading the secret-key file.
 
 ### N4. Supply-chain compromise of container images
 
-The registry allowlist (`docs/spec/language.md#l--container.image.registry-allowlist`)
+The registry allowlist ([CTR#registry-allowlist](../.workhorse/specs/language/container.md#registry-allowlist))
 restricts *which registries* a script may pull from, not *what* those
 registries serve. Seedling does not verify image signatures, does not pin
 content digests by default beyond what the script asks for, and does not
@@ -188,7 +188,7 @@ the upstream base image is out of scope.
 Disk encryption and hardware security are the operator's responsibility.
 Seedling's secret-key file lives in the data directory with the database
 and is encrypted only by the host filesystem's permissions
-(`docs/spec/runtime.md#r--secret.key`). Anyone with raw read access to the
+([SEC#secret-key](../.workhorse/specs/runtime/secrets.md#secret-key)). Anyone with raw read access to the
 disk can read every secret parameter ever stored.
 
 ### N6. Side channels
@@ -200,7 +200,7 @@ attempt to make workloads constant-time or to enforce cache partitioning.
 ### N7. Denial of service against the OI by an authorised operator
 
 The OI has a global stream-concurrency limit
-(`docs/spec/interface.md#i--stream.concurrency-limit`) to protect against
+([WIRE#stream-limit](../.workhorse/specs/interface/wire.md#stream-limit)) to protect against
 *accidental* overload, but an authorised operator who deliberately tries to
 DoS the daemon will succeed. There is no per-key rate limiting today.
 
@@ -231,7 +231,7 @@ firewall blocking those endpoints will stall ACME-DNS issuance and
 renewal; the runtime files faults but cannot work around the lack of
 egress. Operators are responsible for permitting the necessary egress
 or supplying an alternative directory via
-[`tls.cert.issue-acme-dns`](docs/spec/interface.md#i--tls.cert.issue-acme-dns).
+[TLSM#operator-driven-issuance](../.workhorse/specs/interface/tls.md#operator-driven-issuance).
 
 ### N10. A rogue BSL author running code on the host directly
 
@@ -247,27 +247,27 @@ open".
 
 - **mTLS with raw public keys (RFC 7250).** Every OI client connection
   presents a SPKI; the daemon's authorised-key table gates connections at
-  the TLS layer. `docs/spec/interface.md#i--transport.client-auth`.
+  the TLS layer. [TRN#client-authentication](../.workhorse/specs/interface/transport.md#client-authentication).
 - **Bootstrap via `authorized_keys` file.** New keys can be added by an
   operator with write access to `$data_dir/authorized_keys` without
   needing a prior authenticated connection.
 - **TLS fingerprint probe.** The CLI presents a single-use ephemeral key
   on first contact to capture the server's SPKI fingerprint, which the
   user confirms before any real authentication
-  (`docs/spec/interface.md#i--transport.fingerprint-probe`). This avoids
+  ([TRN#fingerprint-probe](../.workhorse/specs/interface/transport.md#fingerprint-probe)). This avoids
   TOFU on the cert chain.
 - **Web auth.** Argon2id-hashed password, optional Tailscale identity
   headers (only when the operator has explicitly enabled trust), and an
   explicit dev bypass that is rejected at startup if the bind address is
-  not loopback (`docs/spec/web.md#w--auth.password`,
-  `#w--auth.tailscale`, `#w--auth.dev`).
+  not loopback ([WEB#password-login](../.workhorse/specs/web/serving.md#password-login),
+  [WEB#tailscale-identity](../.workhorse/specs/web/serving.md#tailscale-identity), [WEB#development-bypass](../.workhorse/specs/web/serving.md#development-bypass)).
 - **WebTransport handshake tokens.** Short-lived single-use tokens bridge
   `POST /connect` and the WebTransport handshake; they cannot be replayed
-  (`docs/spec/web.md#w--wt.token`).
+  ([WEB#session-establishment](../.workhorse/specs/web/serving.md#session-establishment)).
 - **Pinned WebTransport certs with rotation.** 14-day max validity,
   rotation with a 24-hour overlap window, fingerprints surfaced in
   `/connect` responses for `serverCertificateHashes`
-  (`docs/spec/web.md#w--wt.cert`, `#w--wt.cert.rotation`).
+  ([WEB#webtransport-certificate](../.workhorse/specs/web/serving.md#webtransport-certificate), [WEB#webtransport-certificate](../.workhorse/specs/web/serving.md#webtransport-certificate)).
 
 ### Container hardening
 
@@ -275,7 +275,7 @@ Every container seedling launches gets a hardened argv by default — see
 `crates/core/src/system/translate/container.rs` and the matching tests:
 
 - `--cap-drop=ALL` then opt-in `--cap-add` per BSL declaration
-  (`docs/spec/language.md#l--container.cap-add`).
+  ([CTR#privileges](../.workhorse/specs/language/container.md#privileges)).
 - `--security-opt no-new-privileges`.
 - `--read-only` rootfs by default; opt-in writable rootfs via BSL.
 - `--pids-limit` (default 1024, configurable) and `nofile=65536:65536`.
@@ -291,7 +291,7 @@ The rhai engine is configured with `engine.limits` (and the
 `engine.limits.*` sub-rules) to bound expression cost, recursion depth,
 operations per evaluation, and string/array/map sizes. There is
 no host filesystem, network, or process API exposed to BSL — only the
-builders enumerated in `docs/spec/language.md`.
+builders enumerated in the [language specs](../.workhorse/specs/language/).
 
 ### Image provenance gates
 
@@ -299,52 +299,52 @@ builders enumerated in `docs/spec/language.md`.
   `ghcr.io`; operator-configurable. A registered app whose script
   references an image outside the allowlist receives a
   `disallowed_registry` fault and is not installed
-  (`docs/spec/language.md#l--container.image.registry-allowlist`).
+  ([CTR#registry-allowlist](../.workhorse/specs/language/container.md#registry-allowlist)).
 - **Image pin tracking** records which apps depend on which images so the
   garbage collector does not delete an image still in use, and so a
   per-app probe can surface the digests actually in flight
-  (`docs/spec/runtime.md#r--image.pin`).
+  ([IMG#pins](../.workhorse/specs/runtime/images.md#pins)).
 
 ### Network isolation
 
 - Each pod runs on its own podman network with a deterministic
   `seedling-{display}` name and a per-pod IPv6 prefix derived from the
   pod's identity
-  (`docs/spec/runtime.md#r--infra.pod.network`). Cross-pod traffic
+  ([INFRA#pod-networks](../.workhorse/specs/runtime/infrastructure.md#pod-networks)). Cross-pod traffic
   goes through declared services or external service mappings, never via
   shared bridges.
 - A central NAT64 + DNS resolver presents IPv4 hosts to IPv6-only pods,
   with curated A/AAAA records under the seedling-managed zones; pods do
   not see the host's `/etc/resolv.conf`
-  (`docs/spec/runtime.md#r--infra.resolver`,
-  `docs/spec/runtime.md#r--infra.nat64.mode`).
+  ([DNS#resolver-lifecycle](../.workhorse/specs/runtime/resolver.md#resolver-lifecycle),
+  [NAT64#mode](../.workhorse/specs/runtime/nat64.md#mode)).
 
 ### Volume safety
 
 - **Held volumes** for accidental deletion of managed site volumes and
   app volumes whose name was removed from the script
-  (`docs/spec/runtime.md#r--actuate.volume.hold`).
+  ([ACTU#held-volumes](../.workhorse/specs/runtime/actuation.md#held-volumes)).
 - **Read-only volume shells** when the web UI is in read mode, so
   inspection cannot mutate
-  (`docs/spec/web.md#w--volumes.shell-ui.read-only`).
+  ([UI#shells](../.workhorse/specs/web/console.md#shells)).
 - **Snapshot site volumes are inherently RO at the filesystem level**
   (BTRFS) and the runtime checks that property when serving them
-  (`docs/spec/runtime.md#r--volume.site.snapshot`).
+  ([SITE#site-volume-snapshots](../.workhorse/specs/runtime/site-resources.md#site-volume-snapshots)).
 - **Bind site volumes require an absolute host path** — there is no
   string interpolation that could resolve to one
-  (`docs/spec/runtime.md#r--volume.site.lifecycle`). The operator-as-root
+  ([SITE#site-volumes](../.workhorse/specs/runtime/site-resources.md#site-volumes)). The operator-as-root
   assumption (N1) accepts that they can still point this anywhere.
 
 ### Secret parameter handling
 
 - **Encryption at rest** under a runtime-managed key file with the same
   permissions as the database
-  (`docs/spec/runtime.md#r--secret.key`, `#r--secret.storage`).
+  ([SEC#secret-key](../.workhorse/specs/runtime/secrets.md#secret-key), [SEC#storage](../.workhorse/specs/runtime/secrets.md#storage)).
 - **Redaction in describe and history responses**
-  (`docs/spec/runtime.md#r--secret.redaction`).
+  ([SEC#redaction](../.workhorse/specs/runtime/secrets.md#redaction)).
 - **Automatic migration** when a parameter transitions from non-secret to
   secret, so the historical plaintext does not linger
-  (`docs/spec/runtime.md#r--secret.migration`).
+  ([SEC#migration](../.workhorse/specs/runtime/secrets.md#migration)).
 
 ### TLS certificate handling
 
@@ -355,19 +355,19 @@ TLS handshake.
 - **Encryption at rest** for ACME account keys, DNS-provider
   credentials, manual private keys, and CSR-flow private keys, all
   under the same secret-key file used for secret parameters
-  (`docs/spec/runtime.md#r--tls.acme.account.persist`,
-  `#r--tls.dns-provider.lifecycle`, `#r--tls.strategy.manual`,
-  `#r--tls.csr.flow`).
+  ([TLS#acme-accounts-and-settings](../.workhorse/specs/runtime/tls/certificates.md#acme-accounts-and-settings),
+  [TLS#dns-providers](../.workhorse/specs/runtime/tls/certificates.md#dns-providers), [TLS#certificate-selection](../.workhorse/specs/runtime/tls/certificates.md#certificate-selection),
+  [TLS#certificate-signing-requests](../.workhorse/specs/runtime/tls/certificates.md#certificate-signing-requests)).
 - **Daemon-driven ACME-DNS** so DNS-provider credentials never
   reach the proxy or its persistent configuration. The runtime runs
   the ACME client itself, publishes the DNS-01 TXT record via the
   `DnsProvider` trait, and only then hands the resulting certificate
   to the proxy via the cert-serving endpoint
-  (`docs/spec/runtime.md#r--tls.strategy.acme-dns`).
+  ([TLS#acme-dns-01-issuance](../.workhorse/specs/runtime/tls/certificates.md#acme-dns-01-issuance)).
 - **No private keys in the proxy config** — the rendered Caddy JSON
   references the cert-serving endpoint URL and never contains cert
   bytes or keys, so the blue/green replay cache is safe to keep
-  in plaintext (`docs/spec/runtime.md#r--tls.cert.serve`).
+  in plaintext ([TLS#serving](../.workhorse/specs/runtime/tls/certificates.md#serving)).
 - **Cert-serving endpoint scope.** The endpoint binds to the
   seedling-proxy bridge gateway address (a ULA in `fd00::/8` reachable
   only from Caddy and host processes) and requires a per-installation
@@ -378,31 +378,31 @@ TLS handshake.
 - **Redaction in the OI.** The `tls.cert.list`, `tls.policy.list`, and
   `tls.dns-provider.list` responses describe certificates and
   providers without exposing private key material, account keys, or
-  provider credentials (`docs/spec/interface.md#i--tls.cert.list`,
-  `#i--tls.policy.list`, `#i--tls.dns-provider.list`). The CSR-flow
+  provider credentials ([TLSM#certificates](../.workhorse/specs/interface/tls.md#certificates),
+  [TLSM#policies](../.workhorse/specs/interface/tls.md#policies), [TLSM#dns-providers](../.workhorse/specs/interface/tls.md#dns-providers)). The CSR-flow
   contract additionally requires that a server-generated private key
   never leaves the host
-  (`docs/spec/runtime.md#r--tls.csr.flow`).
+  ([TLS#certificate-signing-requests](../.workhorse/specs/runtime/tls/certificates.md#certificate-signing-requests)).
 - **Autonomous renewal** of ACME-DNS certificates by a background
   task, before expiry, so a stalled operator does not turn into a
   served-cert outage. Manual and CSR-derived certs are flagged via
-  the `cert_expiring_soon` fault (`docs/spec/runtime.md#r--tls.fault.expiring`).
+  the `cert_expiring_soon` fault ([TLS#expiring-certificates](../.workhorse/specs/runtime/tls/certificates.md#expiring-certificates)).
 
 ### Audit and observability
 
 - **Audit log** records every OI request, the actor, and the resulting
   effect, separately from the autonomous operations log
-  (`docs/spec/runtime.md#r--audit.log`).
+  ([AUD#storage](../.workhorse/specs/runtime/audit-log.md#storage)).
 - **Wire-level actor binding** ensures the audit log can resolve the
   human (or system account) behind every action
-  (`docs/spec/interface.md#i--wire.actor`).
+  ([WIRE#actor-attribution](../.workhorse/specs/interface/wire.md#actor-attribution)).
 - **Generation history** retains both old and new values for every param
   change, enabling rollback and forensic diffing — secret values stay
-  encrypted (`docs/spec/runtime.md#r--secret.history`).
+  encrypted ([SEC#generation-history](../.workhorse/specs/runtime/secrets.md#generation-history)).
 - **Fault surface** turns persistent error conditions
   (`disallowed_registry`, `script_error`, `health_check_failed`,
   `operation_failed`, `operation_cancelled`, etc.) into operator-visible
-  state, not just log noise (`docs/spec/runtime.md#r--fault.surfacing`).
+  state, not just log noise ([FLT#fault-records](../.workhorse/specs/runtime/faults.md#fault-records)).
 
 ### UI ergonomics that reduce blast radius
 
@@ -414,9 +414,9 @@ operator confusing themselves into a destructive action:
   control by default; volume shells are still available but auto-RO.
 - **Confirmation dialogs** for destructive volume actions, distinguishing
   "moves to held" from "permanently deletes"
-  (`docs/spec/web.md#w--routes.volumes.delete-confirm`).
+  ([UI#volumes](../.workhorse/specs/web/console.md#volumes)).
 - **Plan-then-apply** for parameter changes
-  (`docs/spec/interface.md#i--plan.dry-run`) so an operator can preview
+  ([PRM#change-planning](../.workhorse/specs/interface/params.md#change-planning)) so an operator can preview
   what an update will trigger before committing.
 
 ## Reviewing changes against this model

@@ -23,8 +23,8 @@ fn dep(app: &str, name: &str) -> ResourceInstance {
 // Current operation
 // -----------------------------------------------------------------------
 
-// r[verify history.persistence]
-// r[verify operation.lifecycle.generations]
+// spec: HIST#durability
+// spec: OPS#initiating-events
 #[test]
 fn save_and_load_current_operation() {
     use crate::runtime::secrets::Cipher;
@@ -71,7 +71,7 @@ fn clear_current_operation_removes_record() {
     assert!(load_current_operation(&db).unwrap().is_none());
 }
 
-// r[verify operation.cancel.persistence]
+// spec: OPS#cancel-persistence
 #[test]
 fn cancel_requested_round_trips_through_db() {
     use crate::runtime::secrets::Cipher;
@@ -110,7 +110,7 @@ fn cancel_requested_round_trips_through_db() {
     assert!(!flipped);
 }
 
-// r[verify operation.params] i[verify action.invoke.install.validation]
+// spec: OPS#persistence, ACI#install-parameters
 #[test]
 fn install_params_round_trip_through_cipher() {
     use crate::runtime::secrets::Cipher;
@@ -149,7 +149,7 @@ fn install_params_round_trip_through_cipher() {
     );
 }
 
-// r[verify operation.params]
+// spec: OPS#persistence
 #[test]
 fn non_install_operation_params_round_trip() {
     use crate::runtime::secrets::Cipher;
@@ -177,7 +177,7 @@ fn non_install_operation_params_round_trip() {
     assert_eq!(restored, params);
 }
 
-// r[verify operation.params]
+// spec: OPS#persistence
 #[test]
 fn empty_params_round_trip() {
     use crate::runtime::secrets::Cipher;
@@ -232,8 +232,7 @@ fn save_overwrites_previous_current_operation() {
 // Instance registry
 // -----------------------------------------------------------------------
 
-// r[verify identity.stable]
-// r[verify identity.components]
+// spec: IDN#instance-identity
 #[test]
 fn insert_and_find_instance() {
     let db = Db::open_in_memory().unwrap();
@@ -247,7 +246,7 @@ fn insert_and_find_instance() {
     assert_eq!(found.display_name, instance.display_name);
 }
 
-// r[verify identity.stable]
+// spec: IDN#instance-identity
 #[test]
 fn find_instance_returns_none_for_unknown_id() {
     let db = Db::open_in_memory().unwrap();
@@ -255,7 +254,7 @@ fn find_instance_returns_none_for_unknown_id() {
     assert!(find_instance(&db, id).unwrap().is_none());
 }
 
-// r[verify identity.stable]
+// spec: IDN#instance-identity
 #[test]
 fn insert_instance_is_idempotent() {
     let db = Db::open_in_memory().unwrap();
@@ -266,7 +265,7 @@ fn insert_instance_is_idempotent() {
     assert_eq!(found.id, instance.id);
 }
 
-// r[verify identity.stable]
+// spec: IDN#instance-identity
 #[test]
 fn get_or_create_singleton_creates_on_first_call() {
     let db = Db::open_in_memory().unwrap();
@@ -282,7 +281,7 @@ fn get_or_create_singleton_creates_on_first_call() {
     assert_eq!(instance.variant, InstanceVariant::Singleton);
 }
 
-// r[verify identity.stable]
+// spec: IDN#instance-identity
 #[test]
 fn get_or_create_singleton_returns_same_id_on_second_call() {
     let db = Db::open_in_memory().unwrap();
@@ -304,7 +303,7 @@ fn get_or_create_singleton_returns_same_id_on_second_call() {
     assert_eq!(a.display_name, b.display_name);
 }
 
-// r[verify identity.components]
+// spec: IDN#instance-identity
 #[test]
 fn find_instances_for_group_returns_all_scaled() {
     let db = Db::open_in_memory().unwrap();
@@ -330,8 +329,8 @@ fn find_instances_for_group_returns_all_scaled() {
 // World observations
 // -----------------------------------------------------------------------
 
-// r[verify history.world]
-// r[verify history.world.entries]
+// spec: HIST#world-observation-history
+// spec: HIST#observations
 #[test]
 fn insert_and_retrieve_observation() {
     let db = Db::open_in_memory().unwrap();
@@ -344,7 +343,7 @@ fn insert_and_retrieve_observation() {
     assert_eq!(obs[0].resource.id, resource.id);
 }
 
-// r[verify history.world.entries]
+// spec: HIST#observations
 #[test]
 fn observations_ordered_by_recorded_at() {
     let db = Db::open_in_memory().unwrap();
@@ -358,7 +357,7 @@ fn observations_ordered_by_recorded_at() {
     assert_eq!(obs[1].obs_kind, "container_running");
 }
 
-// r[verify history.world.ordering]
+// spec: HIST#observations
 #[test]
 fn observations_with_tied_timestamp_return_in_insertion_order() {
     let db = Db::open_in_memory().unwrap();
@@ -389,7 +388,7 @@ fn observations_with_tied_timestamp_return_in_insertion_order() {
     assert_eq!(observed_kinds, kinds);
 }
 
-// r[verify history.world.entries]
+// spec: HIST#observations
 #[test]
 fn observations_scoped_to_instance_id() {
     let db = Db::open_in_memory().unwrap();
@@ -407,7 +406,7 @@ fn observations_scoped_to_instance_id() {
     assert_eq!(api_obs[0].obs_kind, "container_running");
 }
 
-// r[verify history.world.entries]
+// spec: HIST#observations
 #[test]
 fn observations_empty_for_unknown_instance() {
     let db = Db::open_in_memory().unwrap();
@@ -420,9 +419,9 @@ fn observations_empty_for_unknown_instance() {
 // Autonomous operations
 // -----------------------------------------------------------------------
 
-// r[verify history.operations]
-// r[verify history.operations.entries]
-// r[verify history.operations.provenance]
+// spec: HIST#autonomous-operations-log
+// spec: HIST#autonomous-operations
+// spec: HIST#operation-provenance
 #[test]
 fn insert_and_retrieve_autonomous_operation() {
     let db = Db::open_in_memory().unwrap();
@@ -441,7 +440,7 @@ fn insert_and_retrieve_autonomous_operation() {
     assert!(ops[0].outcome.is_none());
 }
 
-// r[verify history.operations.entries]
+// spec: HIST#autonomous-operations
 #[test]
 fn complete_autonomous_operation_sets_outcome() {
     let db = Db::open_in_memory().unwrap();
@@ -458,7 +457,7 @@ fn complete_autonomous_operation_sets_outcome() {
     assert!(ops[0].completed_at.is_some());
 }
 
-// r[verify history.operations.entries]
+// spec: HIST#autonomous-operations
 #[test]
 fn complete_autonomous_operation_with_error() {
     let db = Db::open_in_memory().unwrap();
@@ -474,7 +473,7 @@ fn complete_autonomous_operation_with_error() {
     assert_eq!(ops[0].outcome.as_deref(), Some("error: container exited 1"));
 }
 
-// r[verify history.operations.entries]
+// spec: HIST#autonomous-operations
 #[test]
 fn autonomous_operations_scoped_to_instance_id() {
     let db = Db::open_in_memory().unwrap();
@@ -514,8 +513,8 @@ fn make_entry(
     }
 }
 
-// r[verify history.action-log]
-// r[verify history.action-log.entries]
+// spec: HIST#action-execution-log
+// spec: HIST#action-calls
 #[test]
 fn insert_and_load_action_log_entry_without_barrier() {
     let db = Db::open_in_memory().unwrap();
@@ -530,7 +529,7 @@ fn insert_and_load_action_log_entry_without_barrier() {
     assert!(loaded[0].barrier(0).is_none());
 }
 
-// r[verify history.action-log.entries]
+// spec: HIST#action-calls
 #[test]
 fn insert_and_load_action_log_entry_with_barrier() {
     let db = Db::open_in_memory().unwrap();
@@ -553,7 +552,7 @@ fn insert_and_load_action_log_entry_with_barrier() {
     assert_eq!(b.started_at_secs, Some(1000));
 }
 
-// r[verify reconciliation.idempotency]
+// spec: RCN#reconciliation-loop
 #[test]
 fn barrier_satisfaction_update_via_replace() {
     let db = Db::open_in_memory().unwrap();
@@ -595,7 +594,7 @@ fn barrier_satisfaction_update_via_replace() {
     assert!(loaded[0].barrier(0).unwrap().satisfied);
 }
 
-// r[verify history.action-log.entries]
+// spec: HIST#action-calls
 #[test]
 fn action_log_multiple_entries_ordered_by_call_index() {
     let db = Db::open_in_memory().unwrap();
@@ -617,7 +616,7 @@ fn action_log_multiple_entries_ordered_by_call_index() {
     assert_eq!(loaded[2].call_index, 2);
 }
 
-// r[verify history.action-log.entries]
+// spec: HIST#action-calls
 #[test]
 fn action_log_scoped_to_operation_id() {
     let db = Db::open_in_memory().unwrap();
@@ -659,7 +658,7 @@ fn ensure_faults_init() {
     });
 }
 
-// r[verify gc.instances.atomic]
+// spec: GC#instance-retirement
 #[test]
 fn delete_instance_clears_observations_and_faults_atomically() {
     ensure_faults_init();
@@ -728,7 +727,7 @@ fn delete_instance_clears_observations_and_faults_atomically() {
     assert_eq!(op_count, 0, "autonomous operations deleted");
 }
 
-// r[verify history.operations.interrupted]
+// spec: HIST#autonomous-operations
 #[test]
 fn incomplete_autonomous_operations_are_interrupted_and_completed_ones_kept() {
     let db = Db::open_in_memory().unwrap();
@@ -750,7 +749,7 @@ fn incomplete_autonomous_operations_are_interrupted_and_completed_ones_kept() {
     assert_eq!(interrupt_incomplete_autonomous_operations(&db).unwrap(), 0);
 }
 
-// r[verify app.uninstall.scope]
+// spec: TRD#uninstall-scope
 // `seedling-{app}-` is not prefix-free: both app names and resource names may
 // contain hyphens, so uninstalling `app` matched every unit belonging to a
 // sibling called `app-db`, and the retry branch reset and stopped that
@@ -783,7 +782,7 @@ fn display_names_are_scoped_to_their_own_app() {
     );
 }
 
-// r[verify history.persist.partial-update]
+// spec: HIST#durability
 // The replay path re-saves the operation row immediately after the daemon has
 // read the cancel flag. Under INSERT OR REPLACE — delete-then-insert — that
 // reverted `cancel_requested` to its default, silently dropping a
@@ -816,7 +815,7 @@ fn re_saving_the_operation_preserves_a_cancel_request() {
     );
 }
 
-// r[verify history.storage]
+// spec: HIST#durability
 // The kind column is written on one side and parsed on the other, so a
 // variant missing from the parse turns a persisted row into a conversion
 // failure. `ExternalService` was exactly that: the reconciler writes those
@@ -849,7 +848,7 @@ fn every_resource_kind_round_trips_through_the_kind_column() {
     }
 }
 
-// r[verify barrier.satisfaction.recorded]
+// spec: SUSP#barrier-anchoring
 #[test]
 fn a_row_written_before_an_entry_held_several_barriers_still_loads_its_wait() {
     // Rows written before the barriers column existed carry their one
@@ -886,7 +885,7 @@ fn a_row_written_before_an_entry_held_several_barriers_still_loads_its_wait() {
     );
 }
 
-// r[verify history.world.source]
+// spec: HIST#observations
 #[test]
 fn observations_for_a_group_come_back_per_instance_in_order() {
     let db = Db::open_in_memory().unwrap();

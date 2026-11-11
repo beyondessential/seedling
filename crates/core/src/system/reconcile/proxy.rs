@@ -33,8 +33,8 @@ pub(super) struct ProxyBuildOutput {
     pub ready_observations: Vec<(ResourceInstance, &'static str, serde_json::Value)>,
 }
 
-// r[autonomous.ingress]
-// r[fault.non-blocking]
+// spec: AUTO#ingress-and-network-repair
+// spec: FLT#filing-and-clearing
 pub(super) fn collect(
     snapshot: &AppDef,
     desired: &DesiredState,
@@ -125,14 +125,14 @@ pub(super) fn collect(
             .entry(svc_name.to_owned())
             .or_insert_with(|| service_proxy_def(snapshot, svc_name));
 
-        // r[impl service.http.route.routing]
+        // spec: PRX#route-emission
         // Per-prefix routes derived from pod http_bindings. Caddy will
         // longest-prefix match these; the service IP fallback below only
         // kicks in if the service has no http_bindings at all (e.g. an
         // HTTPS-fronted TCP service).
         let routes = collect_http_routes(snapshot, svc_name, running_pods, service_def);
 
-        // r[impl service.http.route.redirect]
+        // spec: PRX#redirect-routes
         // Read from the service's own declaration rather than from the pods,
         // there being no pod behind a redirect to read it from.
         let redirects = collect_redirect_routes(service_def);
@@ -283,8 +283,8 @@ pub(super) fn service_proxy_def(snapshot: &AppDef, service_name: &str) -> Servic
 /// Settings for the synthesised `/` route, which a service is served through
 /// when no pod binds a prefix. A service may have declared settings for `/`
 /// even so, and they are what that route takes.
-// r[impl service.http.route.compression]
-// r[impl service.http.route.balancing]
+// spec: PRX#compression
+// spec: PRX#balancing
 pub(super) fn service_level_proxy(
     snapshot: &AppDef,
     service_name: &str,
@@ -341,7 +341,7 @@ fn zone_for(app: &str, service: &str, prefix: &str, scope: RateLimitScope) -> Ro
 /// Used by both app ingresses (where snapshot/running_pods belong to the
 /// same app as the ingress) and site ingresses (where snapshot/running_pods
 /// belong to whichever app actually declares the targeted service).
-// r[impl service.http.route.routing]
+// spec: PRX#route-emission
 pub(super) fn collect_http_routes(
     snapshot: &AppDef,
     service_name: &str,
@@ -400,8 +400,8 @@ pub(super) fn collect_http_routes(
         }
     }
 
-    // r[impl service.http.route.compression]
-    // r[impl service.http.route.balancing]
+    // spec: PRX#compression
+    // spec: PRX#balancing
     // Every emitted route carries settings, so a service that declared none
     // still gets the defaults rather than a bare proxy handler.
     by_prefix
@@ -431,7 +431,7 @@ pub(super) fn collect_http_routes(
 /// Unlike [`collect_http_routes`] this reads the service rather than the pods:
 /// a redirect answers for itself, so there is no binding to derive it from and
 /// no running pod for it to wait on.
-// r[impl service.http.route.redirect]
+// spec: PRX#redirect-routes
 pub(super) fn collect_redirect_routes(def: &ServiceProxyDef) -> Vec<HttpRedirectRoute> {
     def.routes
         .iter()
@@ -445,7 +445,7 @@ pub(super) fn collect_redirect_routes(def: &ServiceProxyDef) -> Vec<HttpRedirect
                 prefix: prefix.clone(),
                 target: redirect.target.iter().map(Into::into).collect(),
                 code: redirect.code,
-                // r[impl service.http.route.headers]
+                // spec: PRX#header-operations
                 // The response direction alone: a redirect sends no request
                 // onward, and a request operation the service declared is
                 // ignored on a redirect route rather than refused, so a
@@ -473,8 +473,8 @@ mod zone_tests {
     use super::*;
     use crate::defs::service::{CompressDecl, LbPolicy};
 
-    // r[verify service.http.route.compression]
-    // r[verify service.http.route.balancing]
+    // spec: PRX#compression
+    // spec: PRX#balancing
     #[test]
     fn the_fallback_route_takes_what_the_service_declared_for_slash() {
         // `service_level_proxy` resolves against the declared `/` route, not
@@ -513,7 +513,7 @@ mod zone_tests {
         assert_eq!(ignoring_root.balance.policy, LbPolicy::LeastConn);
     }
 
-    // r[verify service.http.route.rate-limiting]
+    // spec: PRX#rate-limiting
     #[test]
     fn an_inherited_limit_names_one_budget_whatever_prefix_resolves_it() {
         // The failure this guards is a service declaring one limit and getting
@@ -529,7 +529,7 @@ mod zone_tests {
         assert_eq!(api, RouteZone("demo/web".to_string()));
     }
 
-    // r[verify service.http.route.rate-limiting]
+    // spec: PRX#rate-limiting
     #[test]
     fn a_route_declared_limit_names_that_routes_own_budget() {
         let route = RateLimitScope::Route;
@@ -545,7 +545,7 @@ mod zone_tests {
         );
     }
 
-    // r[verify service.http.route.rate-limiting]
+    // spec: PRX#rate-limiting
     #[test]
     fn budgets_of_different_services_and_apps_stay_apart() {
         let route = RateLimitScope::Route;

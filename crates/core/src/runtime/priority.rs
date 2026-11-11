@@ -69,7 +69,7 @@ impl FromStr for AppPriority {
     }
 }
 
-// r[impl priority.app]
+// spec: PRIO#priority-setting
 /// Load the stored app priority for an app. Returns `None` when no decision has
 /// been stored, which means the app is at its default (`normal`).
 pub fn load_app_priority(db: &Db, app: &AppName) -> rusqlite::Result<Option<AppPriority>> {
@@ -89,12 +89,12 @@ pub fn load_app_priority(db: &Db, app: &AppName) -> rusqlite::Result<Option<AppP
     }
 }
 
-// r[impl priority.settings]
+// spec: PRIO#priority-setting
 /// Store the app priority for an app.
 pub fn save_app_priority(db: &Db, app: &AppName, priority: AppPriority) -> rusqlite::Result<()> {
     let now = jiff::Timestamp::now().to_string();
     db.conn.execute(
-        // r[impl history.persist.partial-update]
+        // spec: INFRA#database
         "INSERT INTO app_priorities (app, priority, updated_at)
          VALUES (?1, ?2, ?3)
          ON CONFLICT(app) DO UPDATE SET
@@ -105,7 +105,7 @@ pub fn save_app_priority(db: &Db, app: &AppName, priority: AppPriority) -> rusql
     Ok(())
 }
 
-// i[impl app.priority.reset-on-uninstall]
+// spec: CTL#app-priority
 /// Discard the stored app priority for an app (on uninstall or deregister), so
 /// a later reinstall starts again at `normal`.
 pub fn delete_app_priority_for_app(db: &Db, app: &AppName) -> rusqlite::Result<()> {
@@ -114,14 +114,14 @@ pub fn delete_app_priority_for_app(db: &Db, app: &AppName) -> rusqlite::Result<(
     Ok(())
 }
 
-// r[impl priority.app]
+// spec: PRIO#priority-setting
 /// The effective app priority: the stored decision, or `normal` when none is
 /// stored.
 pub fn effective_app_priority(db: &Db, app: &AppName) -> rusqlite::Result<AppPriority> {
     Ok(load_app_priority(db, app)?.unwrap_or_default())
 }
 
-// r[impl priority.app]
+// spec: PRIO#priority-setting
 /// Every stored app priority, in one read.
 ///
 /// Callers that need the standing of many apps at once — the reconcile tick and
@@ -153,14 +153,14 @@ mod tests {
         AppName::new("myapp").unwrap()
     }
 
-    // r[verify priority.app]
+    // spec: PRIO#priority-setting
     #[test]
     fn load_returns_none_before_save() {
         let db = Db::open_in_memory().unwrap();
         assert!(load_app_priority(&db, &app()).unwrap().is_none());
     }
 
-    // r[verify priority.app]
+    // spec: PRIO#priority-setting
     #[test]
     fn effective_is_normal_without_a_decision() {
         let db = Db::open_in_memory().unwrap();
@@ -170,7 +170,7 @@ mod tests {
         );
     }
 
-    // r[verify priority.settings]
+    // spec: PRIO#priority-setting
     #[test]
     fn save_then_load_round_trips() {
         let db = Db::open_in_memory().unwrap();
@@ -181,7 +181,7 @@ mod tests {
         );
     }
 
-    // r[verify priority.settings]
+    // spec: PRIO#priority-setting
     #[test]
     fn save_overwrites_previous_decision() {
         let db = Db::open_in_memory().unwrap();
@@ -193,7 +193,7 @@ mod tests {
         );
     }
 
-    // i[verify app.priority.reset-on-uninstall]
+    // spec: CTL#app-priority
     #[test]
     fn delete_removes_the_decision() {
         let db = Db::open_in_memory().unwrap();
@@ -202,7 +202,7 @@ mod tests {
         assert!(load_app_priority(&db, &app()).unwrap().is_none());
     }
 
-    // r[verify priority.app]
+    // spec: PRIO#priority-setting
     #[test]
     fn bulk_read_returns_every_stored_decision_and_omits_the_rest() {
         let db = Db::open_in_memory().unwrap();

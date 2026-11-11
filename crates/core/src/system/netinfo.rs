@@ -62,7 +62,7 @@ pub async fn detect_ipv4_egress() -> bool {
 ///
 /// Returns `false` on any rtnetlink error; an unreachable kernel
 /// interface is treated as the more conservative "no egress" case.
-// r[impl infra.nat64.ipv6-egress]
+// spec: NAT64#ipv6-egress
 pub async fn detect_ipv6_egress() -> bool {
     let (connection, handle, _) = match rtnetlink::new_connection() {
         Ok(v) => v,

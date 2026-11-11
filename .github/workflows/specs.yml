@@ -1,0 +1,29 @@
+name: Specs
+
+on:
+  pull_request:
+  merge_group:
+  push:
+    branches: [main]
+
+jobs:
+  links:
+    name: Spec links and anchors
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7.0.0
+      - name: Check links and heading anchors
+        uses: lycheeverse/lychee-action@v2.9.0
+        with:
+          args: --offline --include-fragments=anchor-only --no-progress '.workhorse/specs/**/*.md' 'docs/*.md' README.md
+          fail: true
+
+  style:
+    name: Spec style and citations
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7.0.0
+      - name: Spec style
+        run: etc/ci/check-spec-style.sh
+      - name: Code citations resolve
+        run: etc/ci/check-spec-citations.sh

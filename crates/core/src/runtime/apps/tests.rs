@@ -16,7 +16,7 @@ fn param(s: &str) -> ParamName {
     ParamName::new_unchecked(s)
 }
 
-// i[verify app.status] i[verify action.invoke.install]
+// spec: APPS#status-derivation, ACI#install
 #[test]
 fn phase_encode_round_trip() {
     use super::{decode_phase, encode_phase};
@@ -32,7 +32,7 @@ fn phase_encode_round_trip() {
     }
 }
 
-// i[verify app.status]
+// spec: APPS#status-derivation
 #[test]
 fn decode_phase_prefers_uninstalling_over_conflicts() {
     use super::decode_phase;
@@ -44,7 +44,7 @@ fn decode_phase_prefers_uninstalling_over_conflicts() {
     );
 }
 
-// i[verify param.store]
+// spec: PRM#parameter-storage
 #[test]
 fn upsert_and_load_params_round_trip() {
     let db = Db::open_in_memory().expect("open");
@@ -56,7 +56,7 @@ fn upsert_and_load_params_round_trip() {
     assert_eq!(params.get("port").map(String::as_str), Some("8080"));
 }
 
-// i[verify param.store]
+// spec: PRM#parameter-storage
 #[test]
 fn upsert_param_replaces_existing_value() {
     let db = Db::open_in_memory().expect("open");
@@ -85,7 +85,7 @@ fn make_entry(name: &str, script_error: Option<&str>) -> AppEntry {
     }
 }
 
-// i[verify fault.derived]
+// spec: FLTS#listing-faults
 #[test]
 fn sync_clears_fault_on_successful_reload() {
     let db = Db::open_in_memory().expect("open");
@@ -109,7 +109,7 @@ fn sync_clears_fault_on_successful_reload() {
     );
 }
 
-// i[verify fault.derived]
+// spec: FLTS#listing-faults
 #[test]
 fn sync_replaces_fault_when_error_changes() {
     let db = Db::open_in_memory().expect("open");
@@ -133,7 +133,7 @@ fn sync_replaces_fault_when_error_changes() {
     assert_ne!(faults[0].id, old_id, "should be a new fault record");
 }
 
-// i[verify fault.derived]
+// spec: FLTS#listing-faults
 #[test]
 fn sync_is_idempotent_for_same_error() {
     let db = Db::open_in_memory().expect("open");
@@ -153,7 +153,7 @@ fn sync_is_idempotent_for_same_error() {
     );
 }
 
-// i[verify param.store]
+// spec: PRM#parameter-storage
 #[test]
 fn load_params_scoped_to_app() {
     let db = Db::open_in_memory().expect("open");
@@ -167,7 +167,7 @@ fn load_params_scoped_to_app() {
     assert_eq!(params_b.get("key").map(String::as_str), Some("val-b"));
 }
 
-// i[verify param.store]
+// spec: PRM#parameter-storage
 #[test]
 fn load_params_returns_empty_for_unknown_app() {
     let db = Db::open_in_memory().expect("open");
@@ -175,7 +175,7 @@ fn load_params_returns_empty_for_unknown_app() {
     assert!(params.is_empty());
 }
 
-// i[verify param.store]
+// spec: PRM#parameter-storage
 #[test]
 fn delete_app_params_removes_only_that_apps_params() {
     let db = Db::open_in_memory().expect("open");
@@ -198,7 +198,7 @@ fn delete_app_params_removes_only_that_apps_params() {
     );
 }
 
-// i[verify param.store]
+// spec: PRM#parameter-storage
 #[test]
 fn evaluate_script_injects_params_into_stored() {
     let mut params = BTreeMap::new();
@@ -223,7 +223,7 @@ fn evaluate_script_injects_params_into_stored() {
     );
 }
 
-// i[verify param.store]
+// spec: PRM#parameter-storage
 #[test]
 fn evaluate_script_absent_param_has_no_stored_value() {
     let params = BTreeMap::new();
@@ -319,7 +319,7 @@ fn load_params_for_app_alone_misses_secrets() {
     );
 }
 
-// i[verify param.store]
+// spec: PRM#parameter-storage
 #[test]
 fn registry_load_from_db_restores_params() {
     let db = Db::open_in_memory().expect("open");
@@ -398,7 +398,7 @@ fn script_at(db: &Db, name: &str, generation: u64) -> Option<String> {
         .map(|(b, _)| script_text(&b).to_owned())
 }
 
-// i[verify app.register]
+// spec: APPS#registration
 #[test]
 fn register_adds_entry_and_makes_it_discoverable() {
     let mut reg = AppRegistry::new();
@@ -415,7 +415,7 @@ fn register_adds_entry_and_makes_it_discoverable() {
     assert!(reg.get("myapp").is_some());
 }
 
-// i[verify app.register]
+// spec: APPS#registration
 #[test]
 fn register_persists_script_verbatim_for_later_replay() {
     let mut reg = AppRegistry::new();
@@ -433,7 +433,7 @@ fn register_persists_script_verbatim_for_later_replay() {
     assert_eq!(entry.current_generation, 0);
 }
 
-// i[verify app.deregister]
+// spec: APPS#removal
 #[test]
 fn deregister_removes_entry() {
     let mut reg = AppRegistry::new();
@@ -451,14 +451,14 @@ fn deregister_removes_entry() {
     assert!(reg.get("myapp").is_none());
 }
 
-// i[verify app.deregister]
+// spec: APPS#removal
 #[test]
 fn deregister_unknown_returns_false() {
     let mut reg = AppRegistry::new();
     assert!(!reg.deregister("nonexistent"));
 }
 
-// i[verify app.list]
+// spec: APPS#listing
 #[test]
 fn list_returns_registered_apps_sorted() {
     let mut reg = AppRegistry::new();
@@ -477,7 +477,7 @@ fn list_returns_registered_apps_sorted() {
     assert_eq!(names, vec!["alpha-app", "mu-app", "zeta-app"]);
 }
 
-// i[verify app.update]
+// spec: APPS#update
 #[test]
 fn replace_definition_installs_bundle_and_source() {
     let mut reg = AppRegistry::new();
@@ -516,7 +516,7 @@ fn replace_definition_installs_bundle_and_source() {
 // Persistence — registered_apps round-trips
 // -----------------------------------------------------------------------
 
-// i[verify app.persist]
+// spec: APPS#persistence
 #[test]
 fn persist_and_load_round_trips_phase_and_generation() {
     let db = Db::open_in_memory().expect("open");
@@ -545,7 +545,7 @@ fn persist_and_load_round_trips_phase_and_generation() {
     assert_eq!(loaded.source, Source::unknown_push());
 }
 
-// i[verify app.persist]
+// spec: APPS#persistence
 #[test]
 fn load_from_db_skips_apps_without_a_generation() {
     let db = Db::open_in_memory().expect("open");
@@ -568,7 +568,7 @@ fn load_from_db_skips_apps_without_a_generation() {
     assert!(!registry.is_registered("broken"));
 }
 
-// i[verify app.deregister]
+// spec: APPS#removal
 #[test]
 fn remove_app_deletes_persisted_row() {
     let db = Db::open_in_memory().expect("open");
@@ -591,7 +591,7 @@ fn remove_app_deletes_persisted_row() {
     assert_eq!(count, 0);
 }
 
-// i[verify app.status]
+// spec: APPS#status-derivation
 #[test]
 fn transition_phase_updates_shared_state_and_db() {
     let db = Db::open_in_memory().expect("open");
@@ -612,7 +612,7 @@ fn transition_phase_updates_shared_state_and_db() {
     assert_eq!((installed, uninstalling, installing), (false, false, true));
 }
 
-// i[verify app.generation]
+// spec: APPS#generations
 #[test]
 fn script_retrieval_tracks_generation_bumps() {
     let db = Db::open_in_memory().expect("open");
@@ -634,14 +634,14 @@ fn script_retrieval_tracks_generation_bumps() {
     assert_eq!(script_at(&db, "myapp", second).as_deref(), Some(new_script));
 }
 
-// i[verify app.generation]
+// spec: APPS#generations
 #[test]
 fn script_retrieval_returns_none_for_unknown_app() {
     let db = Db::open_in_memory().expect("open");
     assert!(script_at(&db, "ghost", 1).is_none());
 }
 
-// r[verify generation.previous]
+// spec: GEN#reconstruction
 #[test]
 fn script_at_param_change_generation_resolves_to_most_recent_script() {
     // Param-set bumps do not change the script, so the script "at" such a
@@ -669,7 +669,7 @@ fn script_at_param_change_generation_resolves_to_most_recent_script() {
     );
 }
 
-// i[verify app.script]
+// spec: APPS#definition-retrieval
 #[test]
 fn script_at_nonexistent_generation_is_none() {
     let db = Db::open_in_memory().expect("open");
@@ -677,7 +677,7 @@ fn script_at_nonexistent_generation_is_none() {
     assert_eq!(script_at(&db, "myapp", 5), None);
 }
 
-// i[verify app.update]
+// spec: APPS#update
 // A script that throws part-way leaves a partially-populated App behind.
 // Publishing it would tell every downstream diff — volume hold, scaling
 // bounds, forwards, schedules — that the resources declared after the throw
@@ -726,7 +726,7 @@ fn failed_reload_keeps_the_previous_definition() {
     assert!(entry.script_error.is_some());
 }
 
-// i[verify app.update]
+// spec: APPS#update
 #[test]
 fn reload_of_unknown_app_is_noop() {
     let mut reg = AppRegistry::new();
@@ -743,7 +743,7 @@ fn reload_of_unknown_app_is_noop() {
     assert!(!reg.is_registered("ghost"));
 }
 
-// i[verify app.persist]
+// spec: APPS#persistence
 // A definition stored under one Seedling that no longer evaluates under the
 // next is still loaded, and is faulted rather than silently dropped.
 #[test]
@@ -773,8 +773,8 @@ fn a_stored_definition_that_no_longer_evaluates_is_faulted_on_reload() {
     );
 }
 
-// i[verify app.persist]
-// i[verify param.validation]
+// spec: APPS#persistence
+// spec: PRM#validation
 #[test]
 fn reload_runs_no_validators() {
     let db = Db::open_in_memory().expect("open");

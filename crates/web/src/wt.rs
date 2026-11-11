@@ -26,14 +26,14 @@ fn server_config(addr: SocketAddr, state: &AppState) -> ServerConfig {
 }
 
 /// Bind the WebTransport endpoint for `addr` with the current certificate.
-// w[impl bind]
+// spec: WEB#listen-addresses
 pub fn bind_wt_endpoint(addr: SocketAddr, state: &AppState) -> std::io::Result<Endpoint<Server>> {
     Endpoint::server(server_config(addr, state))
 }
 
 /// Serve WebTransport sessions on a bound endpoint, presenting the new
 /// certificate to new sessions whenever `rotation_rx` fires.
-// w[transport.webtransport]
+// spec: WEB#request-relay
 pub async fn run_wt_server(
     endpoint: Endpoint<Server>,
     addr: SocketAddr,
@@ -50,7 +50,7 @@ pub async fn run_wt_server(
                 });
             }
             Ok(()) = rotation_rx.changed() => {
-                // w[impl wt.cert.rotation]
+                // spec: WEB#webtransport-certificate
                 // Without a rebind the socket is kept, so this swaps the TLS
                 // configuration in place and established sessions carry on.
                 // Only rebinding can fail, so the error arm guards against a
@@ -81,7 +81,7 @@ async fn handle_incoming(incoming: wtransport::endpoint::IncomingSession, state:
         return;
     }
 
-    // w[wt.actor] — resolve actor from the single-use token embedded in the URL.
+    // spec: WEB#session-establishment — resolve actor from the single-use token embedded in the URL.
     let token = extract_query_param(&path, "t");
     let actor = match token.and_then(|t| state::consume_wt_token(&state.wt_tokens, &t)) {
         Some(a) => a,
@@ -106,10 +106,10 @@ async fn handle_incoming(incoming: wtransport::endpoint::IncomingSession, state:
         "WT session established"
     );
 
-    // w[impl sessions.events]
+    // spec: WEB#session-tracking
     let session_id = Uuid::new_v4();
     let connected_at = jiff::Timestamp::now();
-    // w[impl sessions.safety-mode]
+    // spec: UI#guarded-controls
     // Sessions register as `read` until the browser's first heartbeat reports
     // its current mode (the elevation is sessionStorage-backed, so a refresh
     // can resume in `write` or `dangerous`). This matches the server-side
@@ -119,7 +119,7 @@ async fn handle_incoming(incoming: wtransport::endpoint::IncomingSession, state:
     state.web_sessions.insert(WebSessionEntry {
         id: session_id,
         connected_at,
-        // w[impl sessions.stale-cutoff]
+        // spec: WEB#session-tracking
         last_seen: connected_at,
         actor: Arc::clone(&actor),
         safety_mode: initial_mode,
@@ -138,10 +138,10 @@ async fn handle_incoming(incoming: wtransport::endpoint::IncomingSession, state:
         ))
         .await;
 
-    // w[transport.webtransport]
-    // w[routes.events]
-    // w[routes.logs]
-    // w[shells.wire]
+    // spec: WEB#request-relay
+    // spec: UI#event-feed
+    // spec: UI#operator-capabilities
+    // spec: WEB#shell-relay
     while let Ok((mut wt_send, wt_recv)) = conn.accept_bi().await {
         let state3 = state.clone();
         let actor2 = Arc::clone(&actor);
@@ -155,10 +155,10 @@ async fn handle_incoming(incoming: wtransport::endpoint::IncomingSession, state:
                 }
             };
 
-            // w[impl sessions.heartbeat]
+            // spec: WEB#session-tracking
             if peeked.method == "/connected-clients/heartbeat" {
                 let now = jiff::Timestamp::now();
-                // w[impl sessions.safety-mode]
+                // spec: UI#guarded-controls
                 let reported_mode = parse_heartbeat_mode(&peeked.modified_line);
                 let outcome = state3.web_sessions.touch(&session_id, now, reported_mode);
                 if let HeartbeatOutcome::Alive {
@@ -183,7 +183,7 @@ async fn handle_incoming(incoming: wtransport::endpoint::IncomingSession, state:
                     "result": {
                         "alive": outcome.alive(),
                         "now": now.to_string(),
-                        // w[impl sessions.safety-mode]
+                        // spec: UI#guarded-controls
                         // Echoing the session id lets the browser identify
                         // its own row in /connected-clients/list and skip
                         // it when computing peer-elevation warnings.
@@ -197,8 +197,7 @@ async fn handle_incoming(incoming: wtransport::endpoint::IncomingSession, state:
                 return;
             }
 
-            // w[impl routes.sessions]
-            // w[impl sessions.actor-activity]
+            // spec: WEB#connected-clients
             if peeked.method == "/connected-clients/list" {
                 let web = state3.web_sessions.list();
                 let shells = match state3.daemon.request("/shells/list", json!({})).await {
@@ -235,7 +234,7 @@ async fn handle_incoming(incoming: wtransport::endpoint::IncomingSession, state:
             // server-initiated uni streams (stdout, stderr) that must be
             // forwarded as WT uni streams with an 8-byte BE stream ID prefix so
             // the browser can demux them.
-            // w[shells.wire] w[volumes.shell-ui]
+            // spec: WEB#shell-relay, UI#shells
             if peeked.method == "/shells/start" || peeked.method == "/volumes/shell" {
                 crate::shell::handle_shell_start(state3, conn2, wt_send, peeked).await;
                 return;
@@ -307,7 +306,7 @@ async fn handle_incoming(incoming: wtransport::endpoint::IncomingSession, state:
     // reaper may already have dropped this session and published its stop,
     // and a second event for the same id makes a client see two closes.
     if state.web_sessions.remove(&session_id) {
-        // w[impl sessions.events]
+        // spec: WEB#session-tracking
         state
             .event_broker
             .publish(Arc::from(
@@ -323,7 +322,7 @@ async fn handle_incoming(incoming: wtransport::endpoint::IncomingSession, state:
     }
 }
 
-// w[impl sessions.safety-mode]
+// spec: UI#guarded-controls
 /// Extract the optional `safety_mode` field from a heartbeat request body.
 /// `peeked_line` is the JSON wire bytes after actor injection — the
 /// `safety_mode` value sits under `params`. Unknown or absent values fall back
@@ -350,7 +349,7 @@ fn extract_query_param(path_with_query: &str, key: &str) -> Option<String> {
 /// Background task: drop web sessions whose `last_seen` has aged past the
 /// stale cutoff and emit `WebSessionStopped` events for each so other clients
 /// see the change without polling.
-// w[impl sessions.stale-cutoff]
+// spec: WEB#session-tracking
 pub async fn run_session_reaper(
     sessions: Arc<crate::web_sessions::WebSessionRegistry>,
     event_broker: Arc<EventBroker>,
@@ -381,7 +380,7 @@ pub async fn run_session_reaper(
 }
 
 /// Background task: check for cert rotation every hour.
-// w[wt.cert.rotation]
+// spec: WEB#webtransport-certificate
 pub async fn run_cert_rotation(
     cert_store: Arc<parking_lot::RwLock<crate::wt_cert::CertStore>>,
     rotation_tx: watch::Sender<()>,

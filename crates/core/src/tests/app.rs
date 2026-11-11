@@ -1,9 +1,7 @@
 use super::*;
 use defs::resource::ResourceKind;
 
-// l[verify app.var]
-// l[verify app.type]
-// l[verify app.constructor]
+// spec: APP#the-app-variable
 #[test]
 fn app_global_is_available_and_not_constructible() {
     run_test_script_app(
@@ -14,7 +12,7 @@ fn app_global_is_available_and_not_constructible() {
     );
 }
 
-// l[verify app.methods]
+// spec: APP#the-app-variable
 #[test]
 fn app_methods_are_defined() {
     run_test_script_app(
@@ -33,7 +31,7 @@ fn app_methods_are_defined() {
     );
 }
 
-// l[verify app.resources]
+// spec: APP#named-resources
 #[test]
 fn app_holds_resources() {
     let app = run_test_script_app(r#"let s = app.service("web");"#);
@@ -45,7 +43,7 @@ fn app_holds_resources() {
     );
 }
 
-// l[verify app.resources.static]
+// spec: APP#static-resource
 #[test]
 fn top_level_resources_are_static() {
     let app = run_test_script_app(
@@ -67,7 +65,7 @@ fn top_level_resources_are_static() {
     );
 }
 
-// l[verify app.resources.dynamic]
+// spec: APP#dynamic-resource-lifetime
 #[test]
 fn closures_create_dynamic_resources() {
     let app = run_test_script_app(
@@ -86,7 +84,7 @@ fn closures_create_dynamic_resources() {
     assert!(def.actions.contains_key("start"));
 }
 
-// l[verify app.resources.names]
+// spec: APP#named-resources
 #[test]
 fn same_name_returns_same_resource() {
     let app = run_test_script_app(
@@ -104,7 +102,7 @@ fn same_name_returns_same_resource() {
     assert_eq!(count, 1);
 }
 
-// l[verify param.type]
+// spec: PARAM#declaration
 #[test]
 fn param_declared_in_script_appears_in_params() {
     let app = run_test_script_app(r#"let x = app.param("foo");"#);

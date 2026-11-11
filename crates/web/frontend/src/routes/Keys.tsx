@@ -31,7 +31,7 @@ import { useOiQuery } from "../hooks/useOi";
 import { useOiAction } from "../hooks/useOiAction";
 import type { AuthorizedKey } from "../lib/types";
 
-// w[impl routes.keys]
+// spec: UI#operator-capabilities
 export default function Keys() {
   const { data, loading, error, refetch } =
     useOiQuery<AuthorizedKey[]>("/keys/list", {});

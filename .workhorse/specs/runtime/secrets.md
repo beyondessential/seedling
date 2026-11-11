@@ -1,0 +1,60 @@
+---
+id: SEC
+---
+
+# Secret parameter storage
+
+Applies to how the [runtime](../overview.md#runtime) protects secret values at rest, and withholds secret parameter values from operators.
+
+## Terminology
+
+### Secret parameter
+
+A parameter whose effective [`secret` flag](../language/parameter.md#secret-parameters) is `true` in the app's current [resource graph](../overview.md#resource-graph).
+
+## Secret key
+
+The runtime MUST keep a secret key for protecting secret values at rest, in the file `seedling.db.key` in its [data directory](actuation.md#data-directory), beside the database.
+The key file MUST carry the same [file permissions](infrastructure.md#file-permissions) as the database.
+If no key file exists when the runtime starts and the database holds no value protected under the secret key, the runtime MUST create one holding a freshly generated key.
+If no key file exists while the database holds a value protected under the secret key, the runtime MUST NOT start, and MUST report an error naming the missing key file.
+
+> [!NOTE]
+> A fresh key cannot decrypt the values already stored, so creating one would leave every protected value unreadable without saying so.
+
+## Storage
+
+The runtime MUST store the values of secret parameters apart from the values of other parameters.
+It MUST protect them at rest with authenticated encryption under the secret key.
+
+A script reading a parameter's [value](../language/parameter.md#values) MUST receive the value in plain form whether or not the parameter is secret.
+
+## Generation history
+
+An entry in the [generation history](generation.md#history-entries) recording a previous or new value of a parameter MUST protect each value under the secret key according to how that value was held:
+
+- the value being replaced MUST be protected if it was read from secret storage;
+- the value replacing it MUST be protected if it is written to secret storage.
+
+The event announcing the change MUST withhold a value under the same rule.
+
+> [!NOTE]
+> A definition that drops a parameter's `secret` flag in the same update that changes its value still protects the value it replaced.
+
+The runtime MUST decrypt protected history values when it reconstructs a past generation.
+
+## Redaction
+
+The runtime MUST NOT return the value of a secret parameter to a caller of the [Operator Interface](../overview.md#operator-interface).
+The runtime MUST NOT write a secret parameter's value to its logs, or emit it in an [event](../interface/events.md).
+It MUST NOT return a value recorded in the generation history if the parameter is secret now, or if the value was protected when it was recorded.
+A response withholding a value MUST say so with a machine-readable marker, so that a client can tell an unset value from a withheld one, as [describing an app](../interface/apps.md#parameters) and the [generation history](../interface/apps.md#generation-history) define.
+
+## Migration
+
+When a parameter becomes secret, the runtime MUST move its stored value from non-secret storage to secret storage without operator action.
+When a parameter stops being secret, the runtime MUST move its stored value from secret storage to non-secret storage without operator action.
+The runtime MUST make either move after every evaluation of the app's definition it applies, whatever caused the evaluation.
+
+The runtime MUST write the value to its new storage before removing it from the old.
+A generation history entry recorded while the parameter was secret MUST stay protected, and MUST stay [withheld](#redaction) from callers, after the parameter stops being secret.

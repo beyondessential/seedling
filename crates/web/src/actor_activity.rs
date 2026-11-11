@@ -4,7 +4,7 @@ use jiff::{SignedDuration, Timestamp};
 use parking_lot::Mutex;
 use serde_json::Value;
 
-// w[sessions.actor-activity]
+// spec: WEB#connected-clients
 /// Activity entries older than this are dropped at list time. Matches the
 /// web-session stale cutoff so the connected-clients view has a consistent
 /// "operator is here" window.
@@ -28,7 +28,7 @@ impl ActorActivityRegistry {
         Self::default()
     }
 
-    // w[impl sessions.actor-activity]
+    // spec: WEB#connected-clients
     /// Inspect a published event line and, if it carries an actor identity,
     /// update the corresponding entry. Events with no actor (autonomous
     /// reconciler activity such as boot/schedule fires) are ignored.
@@ -79,7 +79,7 @@ impl ActorActivityRegistry {
         }
     }
 
-    // w[impl sessions.actor-activity]
+    // spec: WEB#connected-clients
     /// Snapshot the entries whose last_seen is within the activity window.
     /// Older entries are dropped from the underlying map at the same time so
     /// the registry does not grow unboundedly across long-lived processes.

@@ -5,7 +5,7 @@ use seedling_protocol::names::AppName;
 
 use crate::runtime::db::Db;
 
-// r[impl scaling.decision]
+// spec: AUTO#scale
 /// Load the stored scaling decision for a specific deployment.
 /// Returns `None` if no decision has been stored.
 pub fn load_scaling_decision(
@@ -26,7 +26,7 @@ pub fn load_scaling_decision(
     }
 }
 
-// r[impl scaling.decision]
+// spec: AUTO#scale
 /// Store a scaling decision for a deployment.
 pub fn save_scaling_decision(
     db: &Db,
@@ -36,7 +36,7 @@ pub fn save_scaling_decision(
 ) -> rusqlite::Result<()> {
     let now = jiff::Timestamp::now().to_string();
     db.conn.execute(
-        // r[impl history.persist.partial-update]
+        // spec: INFRA#database
         "INSERT INTO scaling_decisions (app, deployment, scale, updated_at)
          VALUES (?1, ?2, ?3, ?4)
          ON CONFLICT(app, deployment) DO UPDATE SET
@@ -54,7 +54,7 @@ pub fn delete_scaling_decisions_for_app(db: &Db, app: &AppName) -> rusqlite::Res
     Ok(())
 }
 
-// r[impl scaling.clamp]
+// spec: AUTO#clamping
 /// Clamp all stored scaling decisions for an app to the bounds defined
 /// in the provided deployments map. Removes decisions for deployments
 /// that no longer exist.
@@ -95,7 +95,7 @@ pub fn clamp_scaling_decisions(
 /// Every stored scaling decision in the node, keyed by app and deployment.
 pub type ScalingDecisions = HashMap<(AppName, String), u16>;
 
-// r[impl scaling.decision]
+// spec: AUTO#scale
 /// Load every stored scaling decision in the node, keyed by app and deployment.
 ///
 /// One statement for the node. A reconcile tick walks every deployment of
@@ -114,7 +114,7 @@ pub fn load_all_scaling_decisions(db: &Db) -> rusqlite::Result<ScalingDecisions>
     rows.collect()
 }
 
-// r[impl scaling.decision]
+// spec: AUTO#scale
 /// Compute the effective scale for a deployment: the stored decision
 /// clamped to bounds, or the lower bound if no decision exists.
 pub fn effective_scale(
@@ -131,7 +131,7 @@ pub fn effective_scale(
     ))
 }
 
-// r[impl scaling.decision]
+// spec: AUTO#scale
 /// The effective scale rule, for a decision that is already loaded: the
 /// operator's choice clamped to the declared bounds, or the lower bound where
 /// they have made none.
@@ -155,14 +155,14 @@ mod tests {
         AppName::new("myapp").unwrap()
     }
 
-    // r[verify scaling.decision]
+    // spec: AUTO#scale
     #[test]
     fn load_returns_none_before_save() {
         let db = Db::open_in_memory().unwrap();
         assert!(load_scaling_decision(&db, &app(), "web").unwrap().is_none());
     }
 
-    // r[verify scaling.decision]
+    // spec: AUTO#scale
     #[test]
     fn save_then_load_round_trips() {
         let db = Db::open_in_memory().unwrap();
@@ -170,7 +170,7 @@ mod tests {
         assert_eq!(load_scaling_decision(&db, &app(), "web").unwrap(), Some(5),);
     }
 
-    // r[verify scaling.decision]
+    // spec: AUTO#scale
     #[test]
     fn save_overwrites_previous_decision() {
         let db = Db::open_in_memory().unwrap();
@@ -179,14 +179,14 @@ mod tests {
         assert_eq!(load_scaling_decision(&db, &app(), "web").unwrap(), Some(7),);
     }
 
-    // r[verify scaling.decision]
+    // spec: AUTO#scale
     #[test]
     fn effective_scale_uses_lower_bound_when_no_decision() {
         let db = Db::open_in_memory().unwrap();
         assert_eq!(effective_scale(&db, &app(), "web", 2, 10).unwrap(), 2);
     }
 
-    // r[verify scaling.decision.unreadable]
+    // spec: AUTO#unreadable-scale
     // The two cases have to stay apart here, because the callers decide
     // between them: a read that failed must not arrive looking like an
     // operator who chose nothing, or the reconciler converges the deployment
@@ -202,7 +202,7 @@ mod tests {
         );
     }
 
-    // r[verify scaling.decision]
+    // spec: AUTO#scale
     #[test]
     fn effective_scale_clamps_stored_decision_to_bounds() {
         let db = Db::open_in_memory().unwrap();
@@ -212,7 +212,7 @@ mod tests {
         assert_eq!(effective_scale(&db, &app(), "web", 2, 10).unwrap(), 2);
     }
 
-    // r[verify scaling.decision]
+    // spec: AUTO#scale
     // The batched reads exist so a reconcile tick does not query per
     // deployment. They have to answer exactly what the single-deployment read
     // answers, or the reconciler and the describe path drift apart on what the
@@ -241,7 +241,7 @@ mod tests {
         );
     }
 
-    // r[verify scaling.decision]
+    // spec: AUTO#scale
     #[test]
     fn delete_scaling_decisions_for_app_removes_all() {
         let db = Db::open_in_memory().unwrap();
@@ -252,7 +252,7 @@ mod tests {
         assert!(load_scaling_decision(&db, &app(), "api").unwrap().is_none());
     }
 
-    // r[verify scaling.clamp]
+    // spec: AUTO#clamping
     #[test]
     fn clamp_raises_value_below_new_lower_bound() {
         let db = Db::open_in_memory().unwrap();
@@ -263,7 +263,7 @@ mod tests {
         assert_eq!(load_scaling_decision(&db, &app(), "web").unwrap(), Some(3));
     }
 
-    // r[verify scaling.clamp]
+    // spec: AUTO#clamping
     #[test]
     fn clamp_lowers_value_above_new_upper_bound() {
         let db = Db::open_in_memory().unwrap();
@@ -274,7 +274,7 @@ mod tests {
         assert_eq!(load_scaling_decision(&db, &app(), "web").unwrap(), Some(5));
     }
 
-    // r[verify scaling.clamp]
+    // spec: AUTO#clamping
     #[test]
     fn clamp_leaves_in_range_values_alone() {
         let db = Db::open_in_memory().unwrap();
@@ -285,7 +285,7 @@ mod tests {
         assert_eq!(load_scaling_decision(&db, &app(), "web").unwrap(), Some(4));
     }
 
-    // r[verify scaling.clamp]
+    // spec: AUTO#clamping
     #[test]
     fn clamp_removes_decision_for_deleted_deployment() {
         let db = Db::open_in_memory().unwrap();

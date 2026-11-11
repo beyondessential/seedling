@@ -13,16 +13,16 @@ use super::{
     take::take_int_in_range,
 };
 
-// l[impl deployment.type]
+// spec: DEP#declaration
 #[derive(Debug, Clone)]
 pub struct DeploymentDef {
     pub pod: Holder<PodDef>,
     pub scale: Range<u16>,
     pub on_update: OnUpdate,
     pub on_terminate: OnTerminate,
-    // l[impl deployment.priority]
+    // spec: DEP#priority
     pub priority: Priority,
-    // l[impl bsl.resource.description]
+    // spec: BSL#descriptions
     pub description: Option<String>,
 }
 
@@ -47,7 +47,7 @@ pub struct Deployment {
 }
 
 impl Freezable for Deployment {
-    // l[impl app.resources.context.immutable]
+    // spec: APP#static-resource-immutability
     fn is_frozen(&self) -> bool {
         // Anonymous deployments use an empty name as a sentinel (see app/deployment.rs).
         self.frozen || (!self.name.is_empty() && is_in_action_closure())
@@ -71,7 +71,7 @@ impl super::app::StaticResource for Deployment {
 
 impl CustomType for Deployment {
     fn build(mut builder: TypeBuilder<Self>) {
-        // l[impl deployment.pod]
+        // spec: DEP#declaration
         PodDef::mixin(
             &mut builder,
             move |this| this.def.lock().pod.clone(),
@@ -82,7 +82,7 @@ impl CustomType for Deployment {
         );
         builder
             .with_name("Deployment")
-            // l[impl deployment.healthcheck]
+            // spec: DEP#health-checks
             .with_fn(
                 "healthcheck",
                 |this: &mut Self, config: rhai::Map| -> Result<Deployment, Box<EvalAltResult>> {
@@ -92,13 +92,13 @@ impl CustomType for Deployment {
                     Ok(this.clone())
                 },
             )
-            // l[impl deployment.scale]
+            // spec: DEP#scale
             .with_fn(
                 "scale",
                 |this: &mut Self, scale: i64| -> Result<Deployment, Box<EvalAltResult>> {
                     this.ensure_unfrozen()?;
                     let s = validate_scale(scale)?;
-                    // l[impl deployment.scale.max-lower-bound]
+                    // spec: DEP#scale
                     check_lower_bound(s)?;
                     this.def.lock().scale = s..s;
                     Ok(this.clone())
@@ -110,12 +110,12 @@ impl CustomType for Deployment {
                     this.ensure_unfrozen()?;
                     let min = validate_scale_lower(scale.start)?;
                     let max = validate_scale(scale.end)?;
-                    // l[impl deployment.scale.max-lower-bound]
+                    // spec: DEP#scale
                     check_lower_bound(min)?;
                     if max == 0 {
                         return Err("scale upper bound must be non-zero".into());
                     }
-                    // l[impl deployment.scale] — an inverted range is an empty
+                    // spec: DEP#scale — an inverted range is an empty
                     // one, so `scale(5..2)` stored bounds no replica count can
                     // satisfy instead of naming the mistake.
                     if min > max {
@@ -128,7 +128,7 @@ impl CustomType for Deployment {
                     Ok(this.clone())
                 },
             )
-            // l[impl deployment.on-update]
+            // spec: DEP#update-and-termination-strategies
             .with_fn(
                 "on_update",
                 |this: &mut Self, strategy: OnUpdate| -> Result<Deployment, Box<EvalAltResult>> {
@@ -137,7 +137,7 @@ impl CustomType for Deployment {
                     Ok(this.clone())
                 },
             )
-            // l[impl deployment.on-terminate]
+            // spec: DEP#update-and-termination-strategies
             .with_fn(
                 "on_terminate",
                 |this: &mut Self,
@@ -148,7 +148,7 @@ impl CustomType for Deployment {
                     Ok(this.clone())
                 },
             )
-            // l[impl deployment.priority]
+            // spec: DEP#priority
             .with_fn(
                 "priority",
                 |this: &mut Self, level: Priority| -> Result<Deployment, Box<EvalAltResult>> {
@@ -157,7 +157,7 @@ impl CustomType for Deployment {
                     Ok(this.clone())
                 },
             )
-            // l[impl bsl.resource.description]
+            // spec: BSL#descriptions
             .with_fn(
                 "description",
                 |this: &mut Self, desc: &str| -> Result<Deployment, Box<EvalAltResult>> {

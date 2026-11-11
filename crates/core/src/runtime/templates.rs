@@ -9,7 +9,7 @@ use crate::runtime::{
     generations,
 };
 
-// i[impl template.definition]
+// spec: TPL#template-definitions
 #[derive(Debug, Clone)]
 pub struct Template {
     pub name: TemplateName,
@@ -87,7 +87,7 @@ fn load(db: &Db, row: Row) -> Result<Template, Error> {
     })
 }
 
-// i[impl template.create]
+// spec: TPL#creation
 pub fn create(db: &Db, t: &Template) -> rusqlite::Result<()> {
     let tx = db.conn.unchecked_transaction()?;
     generations::store_bundle(db, &t.bundle)?;
@@ -105,7 +105,7 @@ pub fn create(db: &Db, t: &Template) -> rusqlite::Result<()> {
     tx.commit()
 }
 
-// i[impl template.list]
+// spec: TPL#listing
 pub fn list(db: &Db) -> Result<Vec<Template>, Error> {
     let rows: Vec<Row> = {
         let mut stmt = db
@@ -117,7 +117,7 @@ pub fn list(db: &Db) -> Result<Vec<Template>, Error> {
     rows.into_iter().map(|r| load(db, r)).collect()
 }
 
-// i[impl template.show]
+// spec: TPL#inspection
 pub fn get(db: &Db, name: &TemplateName) -> Result<Option<Template>, Error> {
     let row = db
         .conn
@@ -130,13 +130,13 @@ pub fn get(db: &Db, name: &TemplateName) -> Result<Option<Template>, Error> {
     row.map(|r| load(db, r)).transpose()
 }
 
-// i[impl template.update]
+// spec: TPL#update
 pub struct UpdateFields<'a> {
     pub definition: Option<(&'a Bundle, &'a Source)>,
     pub description: Option<Option<&'a str>>,
 }
 
-// i[impl template.update]
+// spec: TPL#update
 pub fn update(db: &Db, name: &TemplateName, fields: UpdateFields<'_>) -> rusqlite::Result<bool> {
     let mut sets: Vec<&'static str> = Vec::new();
     let mut values: Vec<Box<dyn rusqlite::ToSql>> = Vec::new();
@@ -167,7 +167,7 @@ pub fn update(db: &Db, name: &TemplateName, fields: UpdateFields<'_>) -> rusqlit
     Ok(n > 0)
 }
 
-// i[impl template.remove]
+// spec: TPL#removal
 pub fn delete(db: &Db, name: &TemplateName) -> rusqlite::Result<bool> {
     let tx = db.conn.unchecked_transaction()?;
     let n = db
@@ -211,8 +211,8 @@ mod tests {
         t.bundle.script().unwrap().text().trim_end().to_owned()
     }
 
-    // i[verify template.definition]
-    // i[verify template.create]
+    // spec: TPL#template-definitions
+    // spec: TPL#creation
     #[test]
     fn create_stores_template_body() {
         let db = Db::open_in_memory().unwrap();
@@ -234,7 +234,7 @@ mod tests {
         assert_eq!(got.description.as_deref(), Some("basic nginx"));
     }
 
-    // i[verify template.create]
+    // spec: TPL#creation
     #[test]
     fn create_duplicate_name_errors() {
         let db = Db::open_in_memory().unwrap();
@@ -242,14 +242,14 @@ mod tests {
         assert!(create(&db, &template("dup", "body2")).is_err());
     }
 
-    // i[verify template.list]
+    // spec: TPL#listing
     #[test]
     fn list_empty_returns_empty() {
         let db = Db::open_in_memory().unwrap();
         assert!(list(&db).unwrap().is_empty());
     }
 
-    // i[verify template.list]
+    // spec: TPL#listing
     #[test]
     fn list_returns_templates_ordered_by_name() {
         let db = Db::open_in_memory().unwrap();
@@ -260,7 +260,7 @@ mod tests {
         assert_eq!(got, vec!["alpha", "mu", "zeta"]);
     }
 
-    // i[verify template.show]
+    // spec: TPL#inspection
     #[test]
     fn show_returns_none_for_unknown() {
         let db = Db::open_in_memory().unwrap();
@@ -271,7 +271,7 @@ mod tests {
         );
     }
 
-    // i[verify template.remove]
+    // spec: TPL#removal
     #[test]
     fn remove_existing_returns_true_and_deletes() {
         let db = Db::open_in_memory().unwrap();
@@ -284,14 +284,14 @@ mod tests {
         );
     }
 
-    // i[verify template.remove]
+    // spec: TPL#removal
     #[test]
     fn remove_absent_returns_false() {
         let db = Db::open_in_memory().unwrap();
         assert!(!delete(&db, &TemplateName::new_unchecked("ghost")).unwrap());
     }
 
-    // i[verify template.update]
+    // spec: TPL#update
     #[test]
     fn update_replaces_body_and_description() {
         let db = Db::open_in_memory().unwrap();
@@ -324,7 +324,7 @@ mod tests {
         assert_eq!(got.created_at, "2026-04-23T00:00:00Z");
     }
 
-    // i[verify template.update]
+    // spec: TPL#update
     #[test]
     fn update_body_only_leaves_description_untouched() {
         let db = Db::open_in_memory().unwrap();
@@ -355,7 +355,7 @@ mod tests {
         assert_eq!(got.description.as_deref(), Some("keep me"));
     }
 
-    // i[verify template.update]
+    // spec: TPL#update
     #[test]
     fn update_description_to_null_clears_it() {
         let db = Db::open_in_memory().unwrap();
@@ -385,7 +385,7 @@ mod tests {
         assert!(got.description.is_none());
     }
 
-    // i[verify template.update]
+    // spec: TPL#update
     #[test]
     fn update_absent_returns_false() {
         let db = Db::open_in_memory().unwrap();

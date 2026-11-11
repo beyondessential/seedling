@@ -8,8 +8,7 @@ use super::App;
 use crate::runtime::barrier::runtime::is_in_action_closure;
 
 pub(super) fn on_app(builder: &mut TypeBuilder<App>) {
-    // l[impl action.type]
-    // l[impl action.option-description]
+    // spec: ACN#action-declaration
     builder
         .with_fn(
             "on_action",
@@ -46,7 +45,7 @@ pub(super) fn on_app(builder: &mut TypeBuilder<App>) {
                     .map_err(|e| -> Box<EvalAltResult> { e.to_string().into() })?;
                 let app_name = this.def.load().name.clone();
                 let desc = super::extract_description(&options)?;
-                // l[impl action.option-params]
+                // spec: ACN#param-schemas
                 let params = parse_action_params(&options)?;
                 let name_for_insert = action_name.clone();
                 this.def.rcu(|d| {
@@ -67,7 +66,7 @@ pub(super) fn on_app(builder: &mut TypeBuilder<App>) {
             },
         );
 
-    // l[impl action.lookup]
+    // spec: ACN#action-handles
     builder.with_fn(
         "action",
         |this: &mut App, name: &str| -> Result<Action, Box<EvalAltResult>> {
@@ -88,7 +87,7 @@ pub(super) fn on_app(builder: &mut TypeBuilder<App>) {
         },
     );
 
-    // l[impl action.start]
+    // spec: ACN#start-action
     builder
         .with_fn("on_start", |this: &mut App, closure: FnPtr| -> Action {
             let app_name = this.def.load().name.clone();

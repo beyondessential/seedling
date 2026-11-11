@@ -9,8 +9,7 @@ use super::{
     print_result,
 };
 
-// i[ctl.action.params]
-// i[ctl.shell.params]
+// spec: CLI#action-shell-and-install-parameters
 fn parse_positional_params(args: &[String]) -> serde_json::Map<String, serde_json::Value> {
     let mut map = serde_json::Map::new();
     for arg in args {
@@ -80,7 +79,7 @@ pub(super) enum AppsCommand {
         params: Vec<String>,
     },
     /// Cancel the in-flight lifecycle operation for an app
-    // i[impl ctl.action.cancel]
+    // spec: CLI#action-shell-and-install-parameters
     CancelAction { app: AppName },
     /// Invoke the install action
     Install {
@@ -246,7 +245,7 @@ impl PriorityLevel {
 /// needs a figure there is none of, so the caller says so rather than counting
 /// from zero: zero would turn a scale up into a scale down to the floor, which
 /// is the harm the daemon withheld the figure to avoid.
-// i[impl scale.describe]
+// spec: CTL#scaling
 fn resolve_relative_scale(
     direction: &ScaleDirection,
     current: Option<u16>,
@@ -293,7 +292,7 @@ pub(super) enum ParamCommand {
 /// to be dropped by a `filter_map` with no warning, so an operator who wrote
 /// `db-pass` instead of `db-pass=secret` got an install missing a parameter
 /// and no indication why.
-// i[impl ctl.install.params]
+// spec: CLI#action-shell-and-install-parameters
 fn parse_install_params(args: &[String]) -> Result<HashMap<String, String>, String> {
     let mut map = HashMap::new();
     for arg in args {
@@ -428,7 +427,7 @@ pub(super) async fn dispatch(client: &OiClient, cmd: AppsCommand) {
             set,
             unset,
         } => {
-            // i[impl ctl.definition.param]
+            // spec: CLI#parameter-change-on-update
             let param =
                 definition::param_change(set.as_deref(), unset.as_deref()).unwrap_or_else(|e| {
                     tracing::error!("{e}");
@@ -446,7 +445,7 @@ pub(super) async fn dispatch(client: &OiClient, cmd: AppsCommand) {
                     .await,
             );
         }
-        // i[impl ctl.definition.export]
+        // spec: CLI#definition-export
         AppsCommand::Export {
             app,
             folder,
@@ -497,7 +496,7 @@ pub(super) async fn dispatch(client: &OiClient, cmd: AppsCommand) {
             }
             print_result(client.request("/apps/action/invoke", req).await);
         }
-        // i[impl ctl.action.cancel]
+        // spec: CLI#action-shell-and-install-parameters
         AppsCommand::CancelAction { app } => {
             print_result(
                 client
@@ -736,7 +735,7 @@ mod tests {
         cmd: AppsCommand,
     }
 
-    // i[verify scale.describe]
+    // spec: CTL#scaling
     // `current` was read with `unwrap_or(0)`, so a deployment whose scaling
     // decision the daemon could not read answered `--up` with 0 + 1 = 1 and
     // scaled it down to its floor. That is the harm the null exists to
@@ -759,7 +758,7 @@ mod tests {
         );
     }
 
-    // i[verify scale.describe]
+    // spec: CTL#scaling
     #[test]
     fn a_known_scale_is_adjusted_within_its_bounds() {
         assert_eq!(
@@ -782,8 +781,8 @@ mod tests {
         );
     }
 
-    // i[verify ctl.definition.source]
-    // i[verify ctl.definition.param]
+    // spec: CLI#definition-sources
+    // spec: CLI#parameter-change-on-update
     #[test]
     fn update_takes_a_reference_and_one_param_change() {
         let cli = TestCli::try_parse_from([
@@ -822,7 +821,7 @@ mod tests {
         );
     }
 
-    // i[verify ctl.install.params]
+    // spec: CLI#action-shell-and-install-parameters
     // A bare key used to be dropped by a `filter_map`, so an operator who
     // wrote `db-pass` instead of `db-pass=secret` got an install missing a
     // parameter and nothing said so.
@@ -833,7 +832,7 @@ mod tests {
         assert!(err.contains("db-pass"), "should name the argument: {err}");
     }
 
-    // i[verify ctl.install.params]
+    // spec: CLI#action-shell-and-install-parameters
     #[test]
     fn install_params_take_pairs_including_empty_values() {
         let map = parse_install_params(&[
@@ -848,8 +847,7 @@ mod tests {
         assert!(parse_install_params(&[]).unwrap().is_empty());
     }
 
-    // i[verify ctl.action.params]
-    // i[verify ctl.shell.params]
+    // spec: CLI#action-shell-and-install-parameters
     #[test]
     fn positional_params_map_pairs_and_bare_keys() {
         let map = parse_positional_params(&[
@@ -863,7 +861,7 @@ mod tests {
         assert!(parse_positional_params(&[]).is_empty());
     }
 
-    // i[verify ctl.action.params]
+    // spec: CLI#action-shell-and-install-parameters
     #[test]
     fn action_args_after_name_are_collected_as_params() {
         let cli =

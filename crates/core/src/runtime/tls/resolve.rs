@@ -47,8 +47,8 @@ pub struct Rank {
 
 /// Rank a certificate's SAN set against `hostname`, or `None` if it does not
 /// cover it.
-// r[impl tls.strategy.manual]
-// r[impl tls.cert.validation.san-coverage]
+// spec: TLS#certificate-selection
+// spec: TLS#coverage
 pub fn rank(
     sans: &[String],
     hostname: &str,
@@ -90,7 +90,7 @@ mod tests {
         names.iter().map(|s| (*s).to_owned()).collect()
     }
 
-    // r[verify tls.strategy.manual]
+    // spec: TLS#certificate-selection
     #[test]
     fn an_exact_san_outranks_a_newer_wildcard() {
         let exact = rank(
@@ -119,7 +119,7 @@ mod tests {
         );
     }
 
-    // r[verify tls.strategy.manual]
+    // spec: TLS#certificate-selection
     #[test]
     fn a_ca_issued_cert_outranks_a_newer_self_issued_one() {
         let trusted = rank(
@@ -147,7 +147,7 @@ mod tests {
 
     /// Trust ranks above specificity: a dedicated certificate clients reject
     /// must not hold a hostname against a wildcard they accept.
-    // r[verify tls.strategy.manual]
+    // spec: TLS#certificate-selection
     #[test]
     fn a_ca_issued_wildcard_outranks_a_self_issued_exact_match() {
         let wildcard = rank(&sans(&["*.doma.in"]), "b.doma.in", false, None, 100, 1, 0).unwrap();
@@ -185,7 +185,7 @@ mod tests {
     /// can see them, which would otherwise let an expired exact match outrank
     /// the valid wildcard that is really being served — and the rollup would
     /// file an expiry fault for a hostname that is correctly covered.
-    // r[verify tls.strategy.manual]
+    // spec: TLS#certificate-selection
     #[test]
     fn a_valid_wildcard_outranks_an_expired_exact_match() {
         let now = 1_000;

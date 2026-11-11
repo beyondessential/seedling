@@ -97,7 +97,7 @@ impl From<EndpointParams> for SiteServiceEndpoint {
 /// site-service resolver; the reconciler turns failed resolution and
 /// missing-NAT64 routing into structured faults rather than a mysterious
 /// blackhole.
-// r[impl service.site.address]
+// spec: SITE#endpoint-addressing
 fn validate_remote_host(host: &str) -> Result<(), OiError> {
     if host.parse::<std::net::IpAddr>().is_ok() {
         return Ok(());
@@ -134,7 +134,7 @@ pub(crate) struct CreateSiteServiceParams {
     pub endpoints: Vec<EndpointParams>,
 }
 
-// r[impl service.site.lifecycle]
+// spec: SITE#site-service-lifecycle
 pub(crate) fn create_site_service(
     state: &OiState,
     params: CreateSiteServiceParams,
@@ -164,7 +164,7 @@ pub(crate) fn create_site_service(
             )
         })?;
 
-    // r[impl service.site.lifecycle.events]
+    // spec: SITE#site-service-lifecycle
     ctx.events
         .site_service_created(params.name.as_str(), params.description.as_deref());
     for ep in &endpoints {
@@ -230,7 +230,7 @@ pub(crate) struct DeleteSiteServiceParams {
     pub name: SiteServiceName,
 }
 
-// r[impl service.site.lifecycle]
+// spec: SITE#site-service-lifecycle
 pub(crate) fn delete_site_service(
     state: &OiState,
     params: DeleteSiteServiceParams,
@@ -281,7 +281,7 @@ pub(crate) fn delete_site_service(
         ));
     }
 
-    // r[impl service.site.lifecycle.events]
+    // spec: SITE#site-service-lifecycle
     ctx.events.site_service_deleted(params.name.as_str());
 
     if let Some(r) = state.site_resolver.as_deref() {
@@ -300,7 +300,7 @@ pub(crate) struct SiteServiceEndpointParams {
     pub remote_port: u16,
 }
 
-// r[impl service.site.lifecycle]
+// spec: SITE#site-service-lifecycle
 pub(crate) fn add_site_service_endpoint(
     state: &OiState,
     params: SiteServiceEndpointParams,
@@ -322,7 +322,7 @@ pub(crate) fn add_site_service_endpoint(
         .call(move |db| crate::runtime::site_services::add_endpoint(db, &name, &ep_for_db))
         .map_err(|e| OiError::new(ErrorCode::Internal, format!("failed to add endpoint: {e}")))?;
 
-    // r[impl service.site.lifecycle.events]
+    // spec: SITE#site-service-lifecycle
     ctx.events.site_service_endpoint_added(
         params.name.as_str(),
         params.service_port,
@@ -338,7 +338,7 @@ pub(crate) fn add_site_service_endpoint(
     Ok(json!({ "added": true }))
 }
 
-// r[impl service.site.lifecycle]
+// spec: SITE#site-service-lifecycle
 pub(crate) fn remove_site_service_endpoint(
     state: &OiState,
     params: SiteServiceEndpointParams,
@@ -376,7 +376,7 @@ pub(crate) fn remove_site_service_endpoint(
         ));
     }
 
-    // r[impl service.site.lifecycle.events]
+    // spec: SITE#site-service-lifecycle
     ctx.events.site_service_endpoint_removed(
         params.name.as_str(),
         params.service_port,
@@ -395,7 +395,7 @@ pub(crate) fn remove_site_service_endpoint(
 /// Snapshot of the site-service DNS resolver cache. Operators inspect
 /// this to confirm what addresses a DNS-named endpoint is currently
 /// routing to.
-// r[impl service.site.address]
+// spec: SITE#endpoint-addressing
 pub(crate) fn site_service_resolver_status(state: &OiState) -> HandlerResult {
     let entries = state
         .site_resolver
@@ -426,7 +426,7 @@ pub(crate) struct MapExternalServiceParams {
     pub target: ServiceRef,
 }
 
-// r[impl service.external.mapping.events]
+// spec: SITE#external-mappings
 pub(crate) fn map_external_service(
     state: &OiState,
     params: MapExternalServiceParams,
@@ -466,7 +466,7 @@ pub(crate) struct UnmapExternalServiceParams {
     pub external_name: ExternalServiceName,
 }
 
-// r[impl service.external.mapping.events]
+// spec: SITE#external-mappings
 pub(crate) fn unmap_external_service(
     state: &OiState,
     params: UnmapExternalServiceParams,
@@ -523,7 +523,7 @@ pub(crate) fn unmap_external_service(
     Ok(json!({ "unmapped": true }))
 }
 
-// r[impl service.external.mapping.events]
+// spec: SITE#external-mappings
 pub(crate) fn remap_external_service(
     state: &OiState,
     params: MapExternalServiceParams,
@@ -721,7 +721,7 @@ mod tests {
             .clone()
     }
 
-    // r[verify service.site.lifecycle]
+    // spec: SITE#site-service-lifecycle
     #[test]
     fn site_service_create_list_delete_roundtrip() {
         let oi = TestOi::new();
@@ -764,7 +764,7 @@ mod tests {
         assert_eq!(code, "requirements_invalid");
     }
 
-    // r[verify service.site.address]
+    // spec: SITE#endpoint-addressing
     // Port 0 deserialises happily into a plain `u16` but is not a routable
     // listener or backend port; it used to reach the site-proxy config as
     // `listen :0` / dial `:0` rather than being named as a bad field here.
@@ -794,7 +794,7 @@ mod tests {
         }
     }
 
-    // r[verify service.site.address]
+    // spec: SITE#endpoint-addressing
     #[test]
     fn adding_an_endpoint_rejects_port_zero() {
         let oi = TestOi::new();
@@ -815,7 +815,7 @@ mod tests {
         assert_eq!(code, "requirements_invalid");
     }
 
-    // r[verify service.site.address]
+    // spec: SITE#endpoint-addressing
     #[test]
     fn site_service_create_rejects_invalid_remote_host() {
         let oi = TestOi::new();
@@ -838,7 +838,7 @@ mod tests {
         assert!(site_services(&oi).is_empty());
     }
 
-    // r[verify service.site.lifecycle]
+    // spec: SITE#site-service-lifecycle
     #[test]
     fn site_service_endpoint_add_and_remove() {
         let oi = TestOi::new();
@@ -877,7 +877,7 @@ mod tests {
         assert_eq!(code, "requirements_invalid");
     }
 
-    // r[verify service.site.lifecycle]
+    // spec: SITE#site-service-lifecycle
     #[test]
     fn site_service_delete_blocked_while_mapped() {
         let oi = TestOi::new();
@@ -911,7 +911,7 @@ mod tests {
         );
     }
 
-    // r[verify service.site.address]
+    // spec: SITE#endpoint-addressing
     #[test]
     fn resolver_status_empty_without_resolver() {
         let oi = TestOi::new();
@@ -958,7 +958,7 @@ mod tests {
         assert_eq!(exported[0]["app"], "svc-app");
     }
 
-    // r[verify service.external.mapping.events]
+    // spec: SITE#external-mappings
     #[test]
     fn external_service_mapping_map_remap_unmap_flow() {
         let oi = TestOi::new();

@@ -6,7 +6,7 @@
 //! its `discovered_key` is the stable Tailscale node id, so renames update
 //! the row in place and attachments survive them.
 //
-// r[impl ingress.site.tailscale]
+// spec: SITE#tailscale-discovery
 
 use std::{path::PathBuf, sync::Arc, time::Duration};
 
@@ -193,7 +193,7 @@ impl TailscaleProvider {
                         // Mark any existing discovered row stale so the
                         // reconciler stops emitting routes for it.
                         self.mark_existing_stale(true);
-                        // r[impl fault.lifecycle] — the fault this threshold
+                        // spec: FLT#filing-and-clearing — the fault this threshold
                         // exists for was documented but never actually filed,
                         // so a tailnet that had been unreachable for hours
                         // showed up only as a `warn!` in the log.
@@ -219,7 +219,7 @@ impl TailscaleProvider {
     /// fault cannot outlive the outage — including across a daemon restart,
     /// where the failure counter starts at zero but the fault is in the
     /// database.
-    // r[impl fault.lifecycle]
+    // spec: FLT#filing-and-clearing
     fn sync_unreachable_fault(&self, unreachable: bool) {
         let socket = self.config.socket_path.display().to_string();
         self.db.call(move |db| {
@@ -334,7 +334,7 @@ impl TailscaleProvider {
     fn mark_existing_stale(&self, stale: bool) {
         self.db.call(move |db| {
             let name = SiteIngressName::new_unchecked(TAILSCALE_INGRESS_NAME);
-            // r[impl namespace.reserved] — act on the row this provider owns,
+            // spec: IDN#reserved-names — act on the row this provider owns,
             // not on whatever holds the name. A manual ingress an operator
             // created before the name was reserved was disabled here on the
             // provider's first bad poll, and never re-enabled.
@@ -449,7 +449,7 @@ fn upsert_discovered_row(
     // case, which matches the design intent: a node-id change is "the
     // host identity changed" and attachments shouldn't silently follow.
     let name = SiteIngressName::new_unchecked(TAILSCALE_INGRESS_NAME);
-    // r[impl namespace.reserved] — a manual row under this name is the
+    // spec: IDN#reserved-names — a manual row under this name is the
     // operator's. Falling through to `create` collided on the primary key
     // every poll, so the provider livelocked and the operator's row stayed
     // stale forever.

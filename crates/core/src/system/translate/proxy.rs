@@ -33,7 +33,7 @@ pub struct ServiceUpstream {
     /// The prefixes this service answers with a redirect rather than
     /// proxying. Declared on the service, so unlike `routes` these do not
     /// depend on a pod binding them.
-    // r[impl service.http.route.redirect]
+    // spec: PRX#redirect-routes
     pub redirects: Vec<HttpRedirectRoute>,
     pub service_ip: Ipv6Addr,
     pub service_port: u16,
@@ -44,7 +44,7 @@ pub struct ServiceUpstream {
 
 /// One HTTP route on a service: the URL prefix declared in BSL, plus the
 /// concrete pod-IP upstreams backing that prefix on the current tick.
-// r[impl service.http.route.routing]
+// spec: PRX#route-emission
 #[derive(Debug, Clone)]
 pub struct HttpForwardRoute {
     pub prefix: String,
@@ -56,7 +56,7 @@ pub struct HttpForwardRoute {
 
 /// One redirect route on a service: the URL prefix declared in BSL, and what
 /// the route answers requests under it with.
-// r[impl service.http.route.redirect]
+// spec: PRX#redirect-routes
 #[derive(Debug, Clone)]
 pub struct HttpRedirectRoute {
     pub prefix: String,
@@ -64,7 +64,7 @@ pub struct HttpRedirectRoute {
     pub code: u16,
     /// The route's resolved response header operations. A redirect sends no
     /// request onward, so the request direction has nowhere to apply.
-    // r[impl service.http.route.headers]
+    // spec: PRX#header-operations
     pub headers: RouteHeaderOps,
 }
 
@@ -125,7 +125,7 @@ pub fn instance_ipv6(node_prefix: &Ipv6Net, instance: &ResourceInstance) -> Ipv6
 ///
 /// Changing the derivation re-homes each instance at its next pod recreation,
 /// when its per-instance network is torn down and remade; no flag day.
-// r[impl infra.pod.subnet]
+// spec: INFRA#pod-networks
 pub fn pod_network_prefix(node_prefix: &Ipv6Net, instance: &ResourceInstance) -> Ipv6Net {
     debug_assert_eq!(node_prefix.prefix_len(), 48, "node prefix must be /48");
 
@@ -157,7 +157,7 @@ pub fn pod_network_prefix(node_prefix: &Ipv6Net, instance: &ResourceInstance) ->
 /// The address does not need to be assigned to any interface.  Containers
 /// route it via the pod bridge gateway; nftables prerouting DNAT intercepts
 /// it before any routing decision.
-// r[impl infra.pod.mount]
+// spec: INFRA#mount-endpoint-addressing
 pub fn node_mount_addr(prefix: &Ipv6Net) -> Ipv6Addr {
     let mut bytes = [0u8; 16];
     bytes[..6].copy_from_slice(&prefix.network().octets()[..6]);
@@ -182,14 +182,14 @@ pub fn build_proxy_config(
     for (ingress, upstream) in forwards {
         register_listeners(&mut listener_set, ingress);
         let vhost = ensure_vhost(&mut vhosts, ingress);
-        // r[impl service.http.route.routing]
+        // spec: PRX#route-emission
         // Prefer per-prefix routes when the BSL declared any: walk each route
         // declared by the service's http_bindings (longest prefix wins inside
         // Caddy) and emit a ProxyRoute pointing at the matching pod IPs. Fall
         // back to a single "/" route through the service IP when the service
         // has no http_bindings (TCP-only services fronted by an HTTPS
         // ingress, or a transient state where no pod has bound yet).
-        // r[impl service.http.route.redirect]
+        // spec: PRX#redirect-routes
         // Emitted whether or not a pod binds anything: a redirect route is
         // declared on the service and answers for itself.
         for redirect in &upstream.redirects {
@@ -202,7 +202,7 @@ pub fn build_proxy_config(
                 },
             });
         }
-        // r[impl service.http.route.redirect]
+        // spec: PRX#redirect-routes
         // Gated on the pod-bound routes alone. A redirect route sits above
         // this fallback rather than in place of it: routes are emitted
         // longest-prefix-first and terminal, and a redirect can never be
@@ -261,7 +261,7 @@ pub fn build_proxy_config(
     }
 }
 
-// r[impl actuate.ingress.plaintext]
+// spec: PRX#plaintext-ingresses
 fn register_listeners(set: &mut BTreeSet<ProxyListener>, ingress: &IngressDef) {
     // An ingress serves HTTPS only when it terminates TLS *and* HTTP. HTTP
     // termination alone does not imply TLS: a site-ingress attachment whose
@@ -293,8 +293,8 @@ fn register_listeners(set: &mut BTreeSet<ProxyListener>, ingress: &IngressDef) {
     }
 }
 
-// r[impl actuate.ingress.port-scope]
-// r[impl actuate.ingress.plaintext]
+// spec: PRX#port-scope
+// spec: PRX#plaintext-ingresses
 // Vhosts are keyed by `(hostname, port, tls)`, not by hostname alone. The port
 // keeps two ingresses for one hostname apart: merged by name, a public site
 // and an admin endpoint on another port would share one route list and the
@@ -318,7 +318,7 @@ fn ensure_vhost<'a>(
             routes: vec![],
         });
 
-    // l[impl ingress.redirect]
+    // spec: ING#redirect-to-https
     // A redirect is only declarable on an HTTPS-terminating ingress, so the
     // ingress's own port is the one serving this hostname over TLS.
     if let Some(redirect) = &ingress.redirect {
@@ -336,7 +336,7 @@ fn ensure_vhost<'a>(
 /// `OperationProgress.warm_cert_hostnames` sets. Hostnames already present as a
 /// vhost (i.e. routed) are skipped — Caddy's vhost-driven acquisition handles
 /// those, and adding them to `automate` is redundant.
-// r[impl actuate.ingress.warm-certs]
+// spec: RT#certificate-warming
 pub fn augment_with_warm_certs(config: &mut ProxyConfig, warm_hostnames: BTreeSet<String>) {
     let already_routed: BTreeSet<&str> = config
         .virtual_hosts
@@ -410,7 +410,7 @@ mod tests {
         assert_eq!(&octets[8..], &[0u8; 8]);
     }
 
-    // r[verify infra.pod.subnet]
+    // spec: INFRA#pod-networks
     // The pod /64 no longer shares its low byte with the instance address —
     // that byte is a hash of the full identity now — but it keeps the kind
     // discriminant, which is what holds pod /64s disjoint from the service
@@ -425,7 +425,7 @@ mod tests {
         assert_eq!(&addr.octets()[..7], &net.network().octets()[..7]);
     }
 
-    // r[verify infra.pod.subnet]
+    // spec: INFRA#pod-networks
     // Static Jobs carry a nil InstanceId, so deriving the subnet from
     // `uuid[0]` gave every static Job on the node — across every app — the
     // same /64, and netavark refuses the second network on a duplicate
@@ -496,7 +496,7 @@ mod tests {
         }
     }
 
-    // r[verify service.http.route.redirect]
+    // spec: PRX#redirect-routes
     // A redirect sits above the fallback rather than in place of it: a
     // service served through its routing pool keeps answering every path the
     // redirect does not claim.
@@ -530,7 +530,7 @@ mod tests {
         ));
     }
 
-    // r[verify service.http.route.redirect]
+    // spec: PRX#redirect-routes
     #[test]
     fn a_redirect_is_emitted_alongside_the_prefixes_a_pod_binds() {
         let mut upstream = upstream(8080);
@@ -566,7 +566,7 @@ mod tests {
             .any(|l| l.port == port && l.proto == proto)
     }
 
-    // r[verify actuate.ingress.plaintext]
+    // spec: PRX#plaintext-ingresses
     #[test]
     fn plaintext_http_ingress_listens_for_http() {
         // The shape a site-ingress attachment produces when its parent's TLS
@@ -584,7 +584,7 @@ mod tests {
         );
     }
 
-    // r[verify actuate.ingress.plaintext]
+    // spec: PRX#plaintext-ingresses
     #[test]
     fn plaintext_http_ingress_takes_no_quic_listener() {
         let cfg = build_proxy_config(&[(ing("clinic.local", 80, false, true), upstream(80))], &[]);
@@ -594,7 +594,7 @@ mod tests {
         );
     }
 
-    // r[verify actuate.ingress.plaintext]
+    // spec: PRX#plaintext-ingresses
     #[test]
     fn tls_http_ingress_still_listens_for_https_and_quic() {
         let cfg = build_proxy_config(
@@ -606,7 +606,7 @@ mod tests {
         assert!(!has(&cfg, 443, ProxyListenerProto::Http));
     }
 
-    // r[verify actuate.ingress.plaintext]
+    // spec: PRX#plaintext-ingresses
     #[test]
     fn tls_passthrough_ingress_takes_no_quic_listener() {
         // `Terminate.Tls + Output.Tcp`: terminates TLS but not HTTP, so it
@@ -618,7 +618,7 @@ mod tests {
         assert!(!has(&cfg, 5432, ProxyListenerProto::Quic));
     }
 
-    // r[verify actuate.ingress.port-scope]
+    // spec: PRX#port-scope
     #[test]
     fn one_hostname_on_two_ports_yields_one_vhost_per_port() {
         // A public site on :80 and an admin endpoint on :8080 under one
@@ -640,7 +640,7 @@ mod tests {
         }
     }
 
-    // r[verify actuate.ingress.plaintext]
+    // spec: PRX#plaintext-ingresses
     #[test]
     fn plaintext_and_tls_ingresses_on_one_hostname_stay_separate() {
         // One hostname, plaintext on :80 and TLS-terminating on :443. Keying

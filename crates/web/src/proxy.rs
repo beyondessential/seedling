@@ -70,8 +70,8 @@ pub async fn peek_request(
     })
 }
 
-// w[transport.webtransport]
-// w[wt.actor]
+// spec: WEB#request-relay
+// spec: WEB#session-establishment
 /// Splice a pre-peeked request through to a daemon stream.
 pub async fn proxy_from_peeked(
     wt_send: &mut wtransport::SendStream,
@@ -99,7 +99,7 @@ pub async fn proxy_from_peeked(
 mod tests {
     use super::read_bounded_line;
 
-    // w[verify transport.webtransport]
+    // spec: WEB#request-relay
     #[tokio::test]
     async fn a_line_within_the_limit_is_read_whole() {
         let data = b"hello\nrest".to_vec();
@@ -110,7 +110,7 @@ mod tests {
         assert_eq!(out, "hello\n");
     }
 
-    // w[verify transport.webtransport]
+    // spec: WEB#request-relay
     // The limit has to bound the read, not just describe it afterwards: a peer
     // that never sends a newline could otherwise buffer without limit.
     #[tokio::test]
@@ -123,7 +123,7 @@ mod tests {
         assert_eq!(out.len(), 17);
     }
 
-    // w[verify transport.webtransport]
+    // spec: WEB#request-relay
     #[tokio::test]
     async fn an_over_long_line_is_detectable_by_length() {
         let mut data = vec![b'a'; 32];

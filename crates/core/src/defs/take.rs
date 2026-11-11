@@ -21,7 +21,7 @@ use std::ops::RangeInclusive;
 
 use rhai::{Dynamic, EvalAltResult};
 
-// l[impl bsl.args.strict] — every helper below converts or throws; none
+// spec: BSL#arguments — every helper below converts or throws; none
 // coerces, defaults, or drops. Per-builder rules keep their own annotations
 // at the call sites.
 

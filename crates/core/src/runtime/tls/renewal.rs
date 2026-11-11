@@ -32,7 +32,7 @@ pub const DEFAULT_TICK: Duration = Duration::from_secs(3600);
 /// says "issue now" and ask the coordinator to ensure each. Returns the
 /// number of hostnames the coordinator was asked to act on; the actual
 /// success/failure is observed via the attempt log.
-// r[impl tls.acme.renewal.auto]
+// spec: TLS#renewal
 pub async fn tick(db: &DbHandle, coord: &Arc<Coordinator>) -> RenewalReport {
     let mut report = RenewalReport::default();
 

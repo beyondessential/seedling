@@ -12,8 +12,8 @@ fn oi_with_params_app() -> TestOi {
     oi
 }
 
-// i[verify param.set]
-// i[verify param.store]
+// spec: PRM#parameter-set
+// spec: PRM#parameter-storage
 #[test]
 fn set_param_bumps_generation_and_stores_value() {
     let oi = oi_with_params_app();
@@ -36,7 +36,7 @@ fn set_param_bumps_generation_and_stores_value() {
     assert_eq!(greeting["is_set"], true);
 }
 
-// i[verify param.set]
+// spec: PRM#parameter-set
 #[test]
 fn set_same_value_is_a_noop() {
     let oi = oi_with_params_app();
@@ -55,8 +55,8 @@ fn set_same_value_is_a_noop() {
     assert_eq!(result["schedule"], "not_scheduled");
 }
 
-// i[verify param.store.secret]
-// i[verify app.describe.param-secret]
+// spec: PRM#parameter-storage
+// spec: APPS#parameters
 #[test]
 fn secret_param_is_redacted_in_describe_and_history() {
     let oi = oi_with_params_app();
@@ -88,7 +88,7 @@ fn secret_param_is_redacted_in_describe_and_history() {
     assert!(entry.get("new_value").is_none());
 }
 
-// i[verify param.unknown]
+// spec: PRM#parameter-storage
 #[test]
 fn set_undeclared_param_is_stored_as_unknown() {
     let oi = oi_with_params_app();
@@ -105,7 +105,7 @@ fn set_undeclared_param_is_stored_as_unknown() {
     assert_eq!(unknown[0]["value"], "42");
 }
 
-// i[verify param.unset]
+// spec: PRM#parameter-unset
 #[test]
 fn unset_param_removes_value_and_bumps_generation() {
     let oi = oi_with_params_app();
@@ -133,7 +133,7 @@ fn unset_param_removes_value_and_bumps_generation() {
     assert!(greeting["value"].is_null());
 }
 
-// r[verify generation.bumps]
+// spec: GEN#generation-numbers
 #[test]
 fn a_param_set_whose_bump_fails_stores_nothing() {
     let oi = oi_with_params_app();
@@ -175,7 +175,7 @@ fn a_param_set_whose_bump_fails_stores_nothing() {
     assert_eq!(generations, 1);
 }
 
-// i[verify param.unset]
+// spec: PRM#parameter-unset
 #[test]
 fn unset_never_set_param_is_a_noop() {
     let oi = oi_with_params_app();
@@ -189,7 +189,7 @@ fn unset_never_set_param_is_a_noop() {
     assert_eq!(result["schedule"], "not_scheduled");
 }
 
-// i[verify param.set]
+// spec: PRM#parameter-set
 #[test]
 fn param_calls_on_unknown_app_are_not_found() {
     let oi = TestOi::new();
@@ -210,7 +210,7 @@ fn param_calls_on_unknown_app_are_not_found() {
     assert_eq!(code, "not_found");
 }
 
-// i[verify param.set] r[verify app.uninstall.exclusive]
+// spec: PRM#parameter-set, TRD#uninstall-admission
 // The handler was asked for during a teardown, which the scheduler refuses,
 // and the request failed after the value had been stored.
 #[test]
@@ -242,7 +242,7 @@ fn a_param_set_during_an_uninstall_stores_the_value_and_runs_no_handler() {
     assert!(oi.state.scheduler.lock().active().is_none());
 }
 
-// r[verify secret.migration]
+// spec: SEC#migration
 // Only startup and a definition update migrated, so a param made secret by
 // another param's change kept its plaintext row until the daemon restarted.
 #[test]
@@ -291,7 +291,7 @@ fn a_param_made_secret_by_a_param_change_moves_to_secret_storage() {
     assert!(secret, "the value is in secret storage");
 }
 
-// i[verify generation.history]
+// spec: APPS#generation-history
 // A handler queued behind another app's operation is still the operation the
 // change triggered, but only one that started at once was recorded against
 // the generation.

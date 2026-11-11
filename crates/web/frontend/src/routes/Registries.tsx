@@ -38,7 +38,7 @@ interface RegistriesResponse {
 // optional :NNN suffix.
 const REGISTRY_RE = /^[a-zA-Z0-9]([a-zA-Z0-9-.]*[a-zA-Z0-9])?(:\d{1,5})?$/;
 
-// w[impl routes.registries]
+// spec: UI#operator-capabilities
 export default function Registries() {
   const { data, loading, error, refetch } =
     useOiQuery<RegistriesResponse>("/registries/list", {});

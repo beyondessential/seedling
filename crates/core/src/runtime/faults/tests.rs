@@ -11,8 +11,8 @@ fn app(s: &str) -> AppName {
     AppName::new(s).unwrap()
 }
 
-// r[verify fault.definition]
-// i[verify fault.record]
+// spec: FLT#fault-records
+// spec: FLTS#fault-records
 #[test]
 fn file_and_list_fault() {
     let db = Db::open_in_memory().expect("open");
@@ -38,7 +38,7 @@ fn file_and_list_fault() {
     assert!(faults[0].resource_type.is_none());
 }
 
-// i[verify fault.record]
+// spec: FLTS#fault-records
 #[test]
 fn file_fault_with_resource_fields() {
     let db = Db::open_in_memory().expect("open");
@@ -62,7 +62,7 @@ fn file_fault_with_resource_fields() {
     assert_eq!(faults[0].instance_id.as_deref(), Some("abcd1234"));
 }
 
-// i[verify fault.derived]
+// spec: FLTS#listing-faults
 #[test]
 fn clear_fault_sets_cleared_at() {
     let db = Db::open_in_memory().expect("open");
@@ -76,7 +76,7 @@ fn clear_fault_sets_cleared_at() {
     assert!(active.is_empty());
 }
 
-// i[verify fault.derived]
+// spec: FLTS#listing-faults
 #[test]
 fn clear_faults_by_kind_clears_matching() {
     let db = Db::open_in_memory().expect("open");
@@ -113,7 +113,7 @@ fn clear_faults_by_kind_clears_matching() {
     assert_eq!(remaining[0].kind, "crash_loop");
 }
 
-// i[verify fault.list]
+// spec: FLTS#listing-faults
 #[test]
 fn list_active_faults_filters_by_app() {
     let db = Db::open_in_memory().expect("open");
@@ -147,7 +147,7 @@ fn list_active_faults_filters_by_app() {
     assert_eq!(all_faults.len(), 2);
 }
 
-// i[verify fault.list]
+// spec: FLTS#listing-faults
 #[test]
 fn list_active_faults_excludes_cleared() {
     let db = Db::open_in_memory().expect("open");
@@ -271,8 +271,8 @@ fn count_active_faults_counts_all_apps() {
     assert_eq!(count_active_faults(&db).expect("count"), 1);
 }
 
-// r[verify fault.surfacing]
-// i[verify fault.derived]
+// spec: FLT#fault-records
+// spec: FLTS#listing-faults
 #[test]
 fn file_fault_emits_fault_filed_event() {
     let db = Db::open_in_memory().expect("open");
@@ -304,8 +304,8 @@ fn file_fault_emits_fault_filed_event() {
     );
 }
 
-// r[verify fault.surfacing]
-// i[verify fault.derived]
+// spec: FLT#fault-records
+// spec: FLTS#listing-faults
 #[test]
 fn clear_fault_emits_fault_cleared_event() {
     let db = Db::open_in_memory().expect("open");
@@ -344,7 +344,7 @@ fn clear_fault_emits_fault_cleared_event() {
     assert!(found, "expected a FaultCleared event");
 }
 
-// r[verify fault.image-pull]
+// spec: FLT#workload-faults
 #[test]
 fn clear_faults_for_instance_only_removes_matching_instance() {
     let db = Db::open_in_memory().expect("open");
@@ -401,7 +401,7 @@ fn desc(key: &FaultKey) -> std::collections::BTreeMap<FaultKey, (FaultMeta, Stri
     map
 }
 
-// r[verify fault.lifecycle]
+// spec: FLT#filing-and-clearing
 // At most one active fault per key: `audit_lag` filed one per lag event
 // without bound, and GC prunes only cleared faults.
 #[test]
@@ -417,7 +417,7 @@ fn file_once_does_not_duplicate() {
     assert_eq!(active.len(), 1, "{active:#?}");
 }
 
-// r[verify fault.lifecycle]
+// spec: FLT#filing-and-clearing
 // Clearing keyed no more broadly than filing: this is H8 — a success for one
 // volume cleared every other volume's failure.
 #[test]
@@ -446,7 +446,7 @@ fn faults_for_different_subjects_are_independent() {
     assert_eq!(active[0].subject, "site/archive");
 }
 
-// r[verify fault.lifecycle]
+// spec: FLT#filing-and-clearing
 // A condition fault is active exactly while its condition holds — including
 // when the condition stopped holding before this process started. The
 // reconciler used to diff against an in-memory prior set that empties on
@@ -473,7 +473,7 @@ fn sync_clears_a_fault_filed_by_a_previous_process() {
     assert!(list_active_faults(&db, None).unwrap().is_empty());
 }
 
-// r[verify fault.lifecycle]
+// spec: FLT#filing-and-clearing
 #[test]
 fn sync_is_idempotent_and_converges_from_any_state() {
     let db = Db::open_in_memory().expect("open");
@@ -503,7 +503,7 @@ fn sync_is_idempotent_and_converges_from_any_state() {
     assert_eq!(list_active_faults(&db, None).unwrap().len(), 1);
 }
 
-// r[verify fault.lifecycle]
+// spec: FLT#filing-and-clearing
 // A sweep may only clear within its declared scope; otherwise converging one
 // kind to empty would wipe every other kind's faults.
 #[test]

@@ -21,17 +21,17 @@ pub use proxy::{
 
 mod proxy;
 
-// l[impl service.type]
+// spec: SVC#declaration
 #[derive(Debug, Default, Clone)]
 pub struct ServiceDef {
     pub http: Option<HttpServiceDef>,
     /// How the proxy picks among this service's backends. Service-wide
     /// rather than HTTP-only: a balancing policy is a property of a pool of
     /// backends, and non-HTTP ingress traffic has one too.
-    // l[impl service.balance]
+    // spec: HTTP#balancing
     pub balance: BalanceSettings,
     pub exported: Option<ExportOptions>,
-    // l[impl bsl.resource.description]
+    // spec: BSL#descriptions
     pub description: Option<String>,
 }
 
@@ -46,7 +46,7 @@ pub struct Service {
 }
 
 impl super::Freezable for Service {
-    // l[impl app.resources.context.immutable]
+    // spec: APP#static-resource-immutability
     fn is_frozen(&self) -> bool {
         // Anonymous services use an empty name as a sentinel (see app/service.rs);
         // they remain mutable inside the action that creates them.
@@ -96,7 +96,7 @@ impl CustomType for Service {
     fn build(mut builder: TypeBuilder<Self>) {
         builder
             .with_name("Service")
-            // l[impl service.port]
+            // spec: SVC#service-ports
             .with_fn(
                 "port",
                 |this: &mut Self, port: i64| -> Result<ServicePort, Box<EvalAltResult>> {
@@ -108,7 +108,7 @@ impl CustomType for Service {
                     })
                 },
             )
-            // l[impl service.http]
+            // spec: HTTP#declaration
             .with_fn(
                 "http",
                 |this: &mut Self| -> Result<HttpService, Box<EvalAltResult>> {
@@ -132,7 +132,7 @@ impl CustomType for Service {
                     })
                 },
             )
-            // l[impl service.balance]
+            // spec: HTTP#balancing
             .with_fn(
                 "balance",
                 |this: &mut Self, config: Map| -> Result<Service, Box<EvalAltResult>> {
@@ -141,7 +141,7 @@ impl CustomType for Service {
                     Ok(this.clone())
                 },
             )
-            // l[impl service.exported]
+            // spec: SVC#export
             .with_fn(
                 "exported",
                 |this: &mut Self| -> Result<Service, Box<EvalAltResult>> {
@@ -153,7 +153,7 @@ impl CustomType for Service {
                     Ok(this.clone())
                 },
             )
-            // l[impl service.exported]
+            // spec: SVC#export
             .with_fn(
                 "exported",
                 |this: &mut Self, options: Map| -> Result<Service, Box<EvalAltResult>> {
@@ -174,7 +174,7 @@ impl CustomType for Service {
                     declare_ingress(this, hostname, port)
                 },
             )
-            // l[impl bsl.resource.description]
+            // spec: BSL#descriptions
             .with_fn(
                 "description",
                 |this: &mut Self, desc: &str| -> Result<Service, Box<EvalAltResult>> {
@@ -191,8 +191,8 @@ impl CustomType for Service {
 /// validation, identity, conflict semantics, and resource-tree side
 /// effects. The `HttpService` route just picks the underlying
 /// `Service` out of its `BoundService` and calls this.
-// l[impl ingress.type]
-// l[impl ingress.conflicts]
+// spec: ING#declaration
+// spec: ING#identity-within-an-app
 pub(crate) fn declare_ingress(
     service: &mut Service,
     hostname: &str,
@@ -202,7 +202,7 @@ pub(crate) fn declare_ingress(
     // An anonymous service belongs to no app, so an ingress on it could be
     // neither conflict-checked nor registered: it would be a handle nothing
     // routes to.
-    // l[impl ingress.type]
+    // spec: ING#declaration
     if service.name.is_empty() {
         return Err("ingress() is not available on an anonymous service".into());
     }
@@ -307,7 +307,7 @@ impl BoundService {
     }
 
     /// Whether `prefix` is declared as a redirect on this service.
-    // l[impl service.http.route.redirect]
+    // spec: HTTP#route-redirects
     fn is_redirect(&self, prefix: &str) -> bool {
         let declared = |def: &Option<HttpServiceDef>| {
             def.as_ref().is_some_and(|h| h.redirect(prefix).is_some())
@@ -325,7 +325,7 @@ impl BoundService {
     /// noting that a prefix is spoken for is not a configuration change.
     ///
     /// [`register_route`]: Self::register_route
-    // l[impl service.http.route.redirect]
+    // spec: HTTP#route-redirects
     fn record_binding(&mut self, prefix: &str) -> Result<(), Box<EvalAltResult>> {
         let service = self.name().to_string();
         let record = |def: &mut Option<HttpServiceDef>| -> Result<(), Box<EvalAltResult>> {
@@ -381,7 +381,7 @@ impl From<ExternalService> for BoundService {
     }
 }
 
-// l[impl service.port]
+// spec: SVC#service-ports
 #[derive(Debug, Clone)]
 pub struct ServicePort {
     pub service: BoundService,
@@ -394,7 +394,7 @@ impl CustomType for ServicePort {
     }
 }
 
-// l[impl service.http]
+// spec: HTTP#declaration
 #[derive(Debug, Default, Clone)]
 pub struct HttpServiceDef {
     /// Compression for every route of this service that does not set its own.
@@ -403,11 +403,11 @@ pub struct HttpServiceDef {
     /// The limit every route of this service that does not set its own is
     /// held to. Rate limiting is applied by the HTTP proxy, so like
     /// compression it lives here rather than on the Service.
-    // l[impl service.http.rate-limit]
+    // spec: HTTP#rate-limiting
     pub rate_limit: Option<RateLimitDecl>,
     /// The header operations every route of this service inherits, each of
     /// which a route may override for the headers it names.
-    // l[impl service.http.headers]
+    // spec: HTTP#header-operations
     pub headers: HeaderSettings,
     /// Every URL prefix this service is served through, with what the app
     /// declared on it. An entry carrying nothing is still a route:
@@ -433,7 +433,7 @@ pub struct RouteDecl {
 /// rather than an invariant each entry point has to defend for itself. The
 /// binding sits in the proxied arm for the same reason — a bound prefix
 /// cannot become a redirect by construction, rather than by check.
-// l[impl service.http.route.redirect]
+// spec: HTTP#route-redirects
 #[derive(Debug, Clone)]
 pub enum RouteKind {
     /// Served by whichever pods bind the prefix. `bound` records that at
@@ -458,7 +458,7 @@ impl Default for RouteKind {
 /// prefix becomes a map key. Normalising at emission instead would let two
 /// spellings pass the "either redirected or proxied" check as different
 /// prefixes and then emit two routes claiming the same requests.
-// l[impl service.http.route]
+// spec: HTTP#routes
 pub fn normalise_prefix(prefix: &str) -> String {
     let trimmed = prefix.trim_end_matches('/');
     if trimmed.is_empty() {
@@ -475,7 +475,7 @@ pub fn normalise_prefix(prefix: &str) -> String {
 ///
 /// One wording for both declaration orders: the clash is the same fact
 /// whichever of the two was written first.
-// l[impl service.http.route.redirect]
+// spec: HTTP#route-redirects
 fn refuse_prefix_serves_both(prefix: &str, service: &str) -> Box<EvalAltResult> {
     format!(
         "`{prefix}` on service `{service}` is asked to be both a redirect and a prefix a pod \
@@ -491,7 +491,7 @@ impl HttpServiceDef {
     }
 
     /// The redirect declared on one prefix, if that is what it is.
-    // l[impl service.http.route.redirect]
+    // spec: HTTP#route-redirects
     pub fn redirect(&self, prefix: &str) -> Option<&RouteRedirect> {
         match &self.routes.get(prefix)?.kind {
             RouteKind::Redirect(redirect) => Some(redirect),
@@ -500,7 +500,7 @@ impl HttpServiceDef {
     }
 
     /// Every prefix this service answers with a redirect.
-    // l[impl service.http.route.redirect]
+    // spec: HTTP#route-redirects
     pub fn redirects(&self) -> impl Iterator<Item = (&String, &RouteRedirect)> {
         self.routes
             .iter()
@@ -529,7 +529,7 @@ impl CustomType for HttpService {
     fn build(mut builder: TypeBuilder<Self>) {
         builder
             .with_name("HttpService")
-            // l[impl service.http.route]
+            // spec: HTTP#routes
             .with_fn(
                 "route",
                 |this: &mut Self, prefix: &str| -> Result<HttpServiceRoute, Box<EvalAltResult>> {
@@ -559,7 +559,7 @@ impl CustomType for HttpService {
                     })
                 },
             )
-            // l[impl service.http.compress]
+            // spec: HTTP#compression
             .with_fn(
                 "compress",
                 |this: &mut Self, enabled: bool| -> Result<Self, Box<EvalAltResult>> {
@@ -568,7 +568,7 @@ impl CustomType for HttpService {
                     Ok(this.clone())
                 },
             )
-            // l[impl service.http.compress]
+            // spec: HTTP#compression
             .with_fn(
                 "compress",
                 |this: &mut Self, config: Map| -> Result<Self, Box<EvalAltResult>> {
@@ -578,7 +578,7 @@ impl CustomType for HttpService {
                     Ok(this.clone())
                 },
             )
-            // l[impl service.balance]
+            // spec: HTTP#balancing
             // A pass-through to the backing Service, so that declaring the
             // policy mid-chain reads naturally without balancing becoming an
             // HTTP-only concept.
@@ -590,7 +590,7 @@ impl CustomType for HttpService {
                     Ok(this.clone())
                 },
             )
-            // l[impl service.http.rate-limit]
+            // spec: HTTP#rate-limiting
             .with_fn(
                 "rate_limit",
                 |this: &mut Self, config: Map| -> Result<Self, Box<EvalAltResult>> {
@@ -600,7 +600,7 @@ impl CustomType for HttpService {
                     Ok(this.clone())
                 },
             )
-            // l[impl service.http.rate-limit]
+            // spec: HTTP#rate-limiting
             .with_fn(
                 "rate_limit",
                 |this: &mut Self, enabled: bool| -> Result<Self, Box<EvalAltResult>> {
@@ -609,7 +609,7 @@ impl CustomType for HttpService {
                     Ok(this.clone())
                 },
             )
-            // l[impl service.http.headers]
+            // spec: HTTP#header-operations
             .with_fn(
                 "headers",
                 |this: &mut Self, config: Map| -> Result<Self, Box<EvalAltResult>> {
@@ -619,7 +619,7 @@ impl CustomType for HttpService {
                     Ok(this.clone())
                 },
             )
-            // l[impl ingress.type]
+            // spec: ING#declaration
             // Pass-through to the underlying Service: declaring an
             // ingress on `svc.http()` is just a chaining-friendly way
             // of declaring it on `svc`. The resulting Ingress is bound
@@ -654,7 +654,7 @@ impl HttpService {
     }
 }
 
-// l[impl service.http.route]
+// spec: HTTP#routes
 #[derive(Debug, Clone)]
 pub struct HttpServiceRoute {
     pub http: HttpService,
@@ -665,7 +665,7 @@ impl CustomType for HttpServiceRoute {
     fn build(mut builder: TypeBuilder<Self>) {
         builder
             .with_name("HttpServiceRoute")
-            // l[impl service.http.compress]
+            // spec: HTTP#compression
             .with_fn(
                 "compress",
                 |this: &mut Self, enabled: bool| -> Result<Self, Box<EvalAltResult>> {
@@ -674,7 +674,7 @@ impl CustomType for HttpServiceRoute {
                     Ok(this.clone())
                 },
             )
-            // l[impl service.http.compress]
+            // spec: HTTP#compression
             .with_fn(
                 "compress",
                 |this: &mut Self, config: Map| -> Result<Self, Box<EvalAltResult>> {
@@ -685,7 +685,7 @@ impl CustomType for HttpServiceRoute {
                     Ok(this.clone())
                 },
             )
-            // l[impl service.balance]
+            // spec: HTTP#balancing
             .with_fn(
                 "balance",
                 |this: &mut Self, config: Map| -> Result<Self, Box<EvalAltResult>> {
@@ -694,7 +694,7 @@ impl CustomType for HttpServiceRoute {
                     Ok(this.clone())
                 },
             )
-            // l[impl service.http.rate-limit]
+            // spec: HTTP#rate-limiting
             .with_fn(
                 "rate_limit",
                 |this: &mut Self, config: Map| -> Result<Self, Box<EvalAltResult>> {
@@ -705,7 +705,7 @@ impl CustomType for HttpServiceRoute {
                     Ok(this.clone())
                 },
             )
-            // l[impl service.http.rate-limit]
+            // spec: HTTP#rate-limiting
             .with_fn(
                 "rate_limit",
                 |this: &mut Self, enabled: bool| -> Result<Self, Box<EvalAltResult>> {
@@ -714,12 +714,12 @@ impl CustomType for HttpServiceRoute {
                     Ok(this.clone())
                 },
             )
-            // l[impl service.http.headers]
+            // spec: HTTP#header-operations
             .with_fn(
                 "headers",
                 |this: &mut Self, config: Map| -> Result<Self, Box<EvalAltResult>> {
                     let settings = proxy::parse_headers(config)?;
-                    // l[impl service.http.route.redirect]
+                    // spec: HTTP#route-redirects
                     // A redirect sends no request onward, and computes the one
                     // response header an operation here could displace.
                     if this.http.service.is_redirect(&this.prefix) {
@@ -734,7 +734,7 @@ impl CustomType for HttpServiceRoute {
                     Ok(this.clone())
                 },
             )
-            // l[impl service.http.route.redirect]
+            // spec: HTTP#route-redirects
             .with_fn(
                 "redirect",
                 |this: &mut Self, to: &str| -> Result<Self, Box<EvalAltResult>> {
@@ -743,7 +743,7 @@ impl CustomType for HttpServiceRoute {
                     Ok(this.clone())
                 },
             )
-            // l[impl service.http.route.redirect]
+            // spec: HTTP#route-redirects
             .with_fn(
                 "redirect",
                 |this: &mut Self, to: &str, code: i64| -> Result<Self, Box<EvalAltResult>> {
@@ -752,7 +752,7 @@ impl CustomType for HttpServiceRoute {
                     Ok(this.clone())
                 },
             )
-            // l[impl service.http.route.redirect]
+            // spec: HTTP#route-redirects
             .with_fn(
                 "redirect",
                 |this: &mut Self, config: Map| -> Result<Self, Box<EvalAltResult>> {
@@ -767,7 +767,7 @@ impl CustomType for HttpServiceRoute {
 /// `rate_limit(false)` switches limiting off. `rate_limit(true)` has nothing to
 /// mean — there is no default limit to enable — so it is refused rather than
 /// silently doing nothing.
-// l[impl service.http.rate-limit]
+// spec: HTTP#rate-limiting
 fn rate_limit_decl(enabled: bool) -> Result<RateLimitDecl, Box<EvalAltResult>> {
     if enabled {
         return Err(
@@ -791,7 +791,7 @@ fn compress_decl(enabled: bool) -> CompressDecl {
 
 impl HttpServiceRoute {
     /// Record that a pod binds this route's prefix.
-    // l[impl service.http.route.redirect]
+    // spec: HTTP#route-redirects
     pub(super) fn record_binding(&mut self) -> Result<(), Box<EvalAltResult>> {
         let prefix = self.prefix.clone();
         self.http.service.record_binding(&prefix)
@@ -803,7 +803,7 @@ impl HttpServiceRoute {
     /// A second `redirect()` replaces the first: the route is still a
     /// redirect either way, so there is nothing for the two to contradict
     /// each other about.
-    // l[impl service.http.route.redirect]
+    // spec: HTTP#route-redirects
     fn declare_redirect(&mut self, redirect: RouteRedirect) -> Result<(), Box<EvalAltResult>> {
         if self.prefix == "/" {
             return Err(
@@ -836,7 +836,7 @@ impl HttpServiceRoute {
     /// its author having decided which it is. `None` is for the settings a
     /// redirect does carry — header operations, which a response it serves can
     /// bear — and those check themselves for what a redirect cannot take.
-    // l[impl service.http.route.redirect]
+    // spec: HTTP#route-redirects
     fn with_route_settings<R>(
         &mut self,
         setting: Option<&str>,
@@ -853,13 +853,13 @@ impl HttpServiceRoute {
     }
 }
 
-// l[impl service.external]
+// spec: SVC#external-services
 #[derive(Debug, Default, Clone)]
 pub struct ExternalServiceDef {
-    // l[impl bsl.resource.description]
+    // spec: BSL#descriptions
     pub description: Option<String>,
     pub http: Option<HttpServiceDef>,
-    // l[impl service.balance]
+    // spec: HTTP#balancing
     pub balance: BalanceSettings,
 }
 
@@ -874,7 +874,7 @@ impl ExternalServiceDef {
     }
 }
 
-// l[impl service.external]
+// spec: SVC#external-services
 #[derive(Debug, Clone)]
 pub struct ExternalService {
     pub name: ResourceName,
@@ -883,7 +883,7 @@ pub struct ExternalService {
 }
 
 impl super::Freezable for ExternalService {
-    // l[impl app.resources.context.immutable]
+    // spec: APP#static-resource-immutability
     fn is_frozen(&self) -> bool {
         // An external service has no anonymous form, so every one is static
         // and immutable inside an action closure.
@@ -910,7 +910,7 @@ impl CustomType for ExternalService {
     fn build(mut builder: TypeBuilder<Self>) {
         builder
             .with_name("ExternalService")
-            // l[impl service.external]
+            // spec: SVC#external-services
             // An external-service slot exposes the same port/http surface a
             // native service does, but the resulting ServicePort/HttpService
             // carries `BoundService::External`, so the reconciler knows to
@@ -948,7 +948,7 @@ impl CustomType for ExternalService {
                     })
                 },
             )
-            // l[impl service.balance]
+            // spec: HTTP#balancing
             .with_fn(
                 "balance",
                 |this: &mut Self, config: Map| -> Result<Self, Box<EvalAltResult>> {
@@ -957,7 +957,7 @@ impl CustomType for ExternalService {
                     Ok(this.clone())
                 },
             )
-            // l[impl bsl.resource.description]
+            // spec: BSL#descriptions
             .with_fn(
                 "description",
                 |this: &mut Self, desc: &str| -> Result<Self, Box<EvalAltResult>> {
@@ -969,7 +969,7 @@ impl CustomType for ExternalService {
     }
 }
 
-// l[impl ingress.hostname]
+// spec: ING#hostnames
 fn validate_hostname(hostname: &str) -> Result<(), Box<EvalAltResult>> {
     if hostname.is_empty() || hostname.len() > 253 {
         return Err(format!("hostname must be 1–253 characters, got {}", hostname.len()).into());

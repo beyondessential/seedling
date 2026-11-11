@@ -11,7 +11,7 @@ const FORBIDDEN_MOUNTPOINTS: &[&str] = &[
     "/run",
 ];
 
-// l[impl container.mount-volume.validation]
+// spec: CTR#volume-mounts
 fn validate_mountpoint(path: &str) -> Result<(), Box<EvalAltResult>> {
     if path.contains('\0') {
         return Err("mountpoint must not contain null bytes".into());
@@ -48,7 +48,7 @@ fn validate_mountpoint(path: &str) -> Result<(), Box<EvalAltResult>> {
     Ok(())
 }
 
-// l[impl container.image]
+// spec: CTR#image
 fn validate_image_ref(image: &str) -> Result<(), Box<EvalAltResult>> {
     let (name_tag, digest) = match image.split_once('@') {
         Some((left, right)) => (left, Some(right)),
@@ -288,9 +288,9 @@ fn take_command_cmd(map: &mut rhai::Map) -> Result<Vec<String>, Box<EvalAltResul
     Ok(cmd)
 }
 
-// l[impl deployment.healthcheck]
+// spec: DEP#health-checks
 pub(super) fn parse_healthcheck(mut map: rhai::Map) -> Result<HealthcheckDef, Box<EvalAltResult>> {
-    // l[impl deployment.healthcheck.kind]
+    // spec: DEP#health-checks
     let kind_raw = map.remove("kind").ok_or_else(|| -> Box<EvalAltResult> {
         "healthcheck requires a `kind` field (\"command\")".into()
     })?;
@@ -298,7 +298,7 @@ pub(super) fn parse_healthcheck(mut map: rhai::Map) -> Result<HealthcheckDef, Bo
         format!("healthcheck `kind` must be a string, got {t}").into()
     })?;
     let kind = match kind_str.as_str() {
-        // l[impl deployment.healthcheck.command]
+        // spec: DEP#command-checks
         "command" => HealthcheckKind::Command {
             cmd: take_command_cmd(&mut map)?,
         },
@@ -313,7 +313,7 @@ pub(super) fn parse_healthcheck(mut map: rhai::Map) -> Result<HealthcheckDef, Bo
         }
     };
 
-    // l[impl deployment.healthcheck.timings]
+    // spec: DEP#check-timing
     let interval_secs = take_nonneg_secs(&mut map, "interval", HEALTHCHECK_DEFAULT_INTERVAL_SECS)?;
     let timeout_secs = take_nonneg_secs(&mut map, "timeout", HEALTHCHECK_DEFAULT_TIMEOUT_SECS)?;
     let start_period_secs = take_nonneg_secs(
@@ -322,7 +322,7 @@ pub(super) fn parse_healthcheck(mut map: rhai::Map) -> Result<HealthcheckDef, Bo
         HEALTHCHECK_DEFAULT_START_PERIOD_SECS,
     )?;
     let retries = take_retries(&mut map)?;
-    // l[impl deployment.healthcheck.on-failure]
+    // spec: DEP#failure-response
     let on_failure = take_on_failure(&mut map)?;
 
     if !map.is_empty() {
@@ -344,7 +344,7 @@ pub(super) fn parse_healthcheck(mut map: rhai::Map) -> Result<HealthcheckDef, Bo
     })
 }
 
-// l[impl container.interface]
+// spec: CTR#container-interface
 #[derive(Debug, Default, Clone)]
 pub struct ContainerDef {
     pub image: Option<String>,
@@ -432,8 +432,8 @@ impl ContainerDef {
         ext: impl Fn(&mut T) -> Holder<Self> + Copy + 'static,
         _resource: impl Fn(&mut T) -> ResourceId + Copy + 'static,
     ) {
-        // l[impl container.image]
-        // l[impl bsl.builder]
+        // spec: CTR#image
+        // spec: BSL#builders
         // Canonical builder method: takes `&mut T`, returns `this.clone()` so
         // calls chain. Every `with_fn` below this follows the same shape.
         builder.with_fn(
@@ -446,7 +446,7 @@ impl ContainerDef {
             },
         );
 
-        // l[impl container.command]
+        // spec: CTR#command-and-arguments
         builder
             .with_fn(
                 "command",
@@ -466,7 +466,7 @@ impl ContainerDef {
                 },
             );
 
-        // l[impl container.arg]
+        // spec: CTR#command-and-arguments
         builder
             .with_fn(
                 "arg",
@@ -492,7 +492,7 @@ impl ContainerDef {
                 },
             );
 
-        // l[impl container.env]
+        // spec: CTR#environment
         builder
             .with_fn(
                 "env",
@@ -548,7 +548,7 @@ impl ContainerDef {
                 },
             );
 
-        // l[impl container.mount-volume]
+        // spec: CTR#volume-mounts
         builder
             .with_fn(
                 "mount",
@@ -578,7 +578,7 @@ impl ContainerDef {
                 },
             );
 
-        // l[impl container.on-exit]
+        // spec: CTR#exit-strategy
         builder.with_fn(
             "on_exit",
             move |this: &mut T, strategy: OnExit| -> Result<T, Box<EvalAltResult>> {
@@ -588,7 +588,7 @@ impl ContainerDef {
             },
         );
 
-        // l[impl container.memory]
+        // spec: CTR#resource-limits
         builder.with_fn(
             "memory",
             move |this: &mut T, limit: &str| -> Result<T, Box<EvalAltResult>> {
@@ -599,7 +599,7 @@ impl ContainerDef {
             },
         );
 
-        // l[impl container.cpus]
+        // spec: CTR#resource-limits
         builder.with_fn(
             "cpus",
             move |this: &mut T, limit: f64| -> Result<T, Box<EvalAltResult>> {
@@ -612,7 +612,7 @@ impl ContainerDef {
             },
         );
 
-        // l[impl container.cap-add]
+        // spec: CTR#privileges
         builder.with_fn(
             "cap_add",
             move |this: &mut T, cap: &str| -> Result<T, Box<EvalAltResult>> {
@@ -627,7 +627,7 @@ impl ContainerDef {
             },
         );
 
-        // l[impl container.writable-rootfs]
+        // spec: CTR#privileges
         builder.with_fn(
             "writable_rootfs",
             move |this: &mut T| -> Result<T, Box<EvalAltResult>> {
@@ -637,7 +637,7 @@ impl ContainerDef {
             },
         );
 
-        // l[impl container.pids-limit]
+        // spec: CTR#resource-limits
         builder.with_fn(
             "pids_limit",
             move |this: &mut T, limit: i64| -> Result<T, Box<EvalAltResult>> {
@@ -651,7 +651,7 @@ impl ContainerDef {
             },
         );
 
-        // l[impl container.workdir]
+        // spec: CTR#working-directory
         builder.with_fn(
             "workdir",
             move |this: &mut T, path: String| -> Result<T, Box<EvalAltResult>> {
@@ -664,7 +664,7 @@ impl ContainerDef {
             },
         );
 
-        // l[impl container.user]
+        // spec: CTR#privileges
         builder.with_fn(
             "user",
             move |this: &mut T, spec: String| -> Result<T, Box<EvalAltResult>> {
@@ -681,7 +681,7 @@ impl ContainerDef {
             },
         );
 
-        // l[impl container.stop-signal]
+        // spec: CTR#stopping
         builder.with_fn(
             "stop_signal",
             move |this: &mut T, signal: String| -> Result<T, Box<EvalAltResult>> {
@@ -692,7 +692,7 @@ impl ContainerDef {
             },
         );
 
-        // l[impl container.stop-timeout]
+        // spec: CTR#stopping
         builder.with_fn(
             "stop_timeout",
             move |this: &mut T, secs: i64| -> Result<T, Box<EvalAltResult>> {

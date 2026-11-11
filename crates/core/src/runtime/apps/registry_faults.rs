@@ -42,7 +42,7 @@ fn collect_image_registries(entry: &AppEntry) -> BTreeSet<String> {
     registries
 }
 
-// l[impl container.image.registry-allowlist]
+// spec: CTR#registry-allowlist
 pub fn sync_registry_faults(db: &Db, entry: &AppEntry) {
     let used = collect_image_registries(entry);
 

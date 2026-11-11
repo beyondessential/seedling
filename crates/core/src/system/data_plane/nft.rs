@@ -287,7 +287,7 @@ pub(super) fn mount_rule_stmts(rule: &MountRule) -> Vec<Vec<Statement<'static>>>
     }
 }
 
-// r[impl infra.dataplane.service-dnat]
+// spec: INFRA#service-translation
 pub(super) fn service_dnat_rule_stmts(rule: &ServiceDnatRule) -> Vec<Vec<Statement<'static>>> {
     if rule.backends.is_empty() {
         return vec![];
@@ -319,7 +319,7 @@ pub(super) fn service_dnat_rule_stmts(rule: &ServiceDnatRule) -> Vec<Vec<Stateme
 /// DNAT to one or more backends. Single backend: plain DNAT. Multiple
 /// backends: round-robin via `numgen inc mod N` mapping to `addr . port`
 /// concatenations so each backend can have its own pod-side port.
-// l[impl service.routing]
+// spec: SVC#routing
 pub(super) fn dnat_lb(backends: &[(Ipv6Addr, u16)]) -> Statement<'static> {
     assert!(!backends.is_empty(), "dnat_lb called with no backends");
 
@@ -396,7 +396,7 @@ pub(super) fn loopback_masquerade_stmts() -> Vec<Vec<Statement<'static>>> {
     ]
 }
 
-// r[impl infra.dataplane.forward-policy]
+// spec: INFRA#forwarding-policy
 pub(super) fn ct_state_established_related_accept() -> Vec<Statement<'static>> {
     let ct_expr = Expression::Named(NamedExpression::CT(CT {
         key: Cow::Borrowed("state"),
@@ -435,12 +435,12 @@ pub(super) fn match_ct_status_dnat() -> Statement<'static> {
     })
 }
 
-// r[impl infra.dataplane.forward-policy]
+// spec: INFRA#forwarding-policy
 pub(super) fn ct_status_dnat_accept() -> Vec<Statement<'static>> {
     vec![match_ct_status_dnat(), Statement::Accept(None)]
 }
 
-// r[impl infra.dataplane.forward-policy]
+// spec: INFRA#forwarding-policy
 pub(super) fn seedling_forward_stmts(node_prefix: &Ipv6Net) -> Vec<Statement<'static>> {
     let pfx = prefix_expr(node_prefix.network().to_string(), node_prefix.prefix_len());
     vec![
@@ -450,7 +450,7 @@ pub(super) fn seedling_forward_stmts(node_prefix: &Ipv6Net) -> Vec<Statement<'st
     ]
 }
 
-// r[impl infra.dataplane.forward-policy]
+// spec: INFRA#forwarding-policy
 pub(super) fn drop_unsolicited_inbound_stmts(node_prefix: &Ipv6Net) -> Vec<Statement<'static>> {
     let pfx = prefix_expr(node_prefix.network().to_string(), node_prefix.prefix_len());
     vec![

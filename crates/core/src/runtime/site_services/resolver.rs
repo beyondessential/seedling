@@ -8,7 +8,7 @@
 //! kicks the reconciler when a host's resolved set changes so route /
 //! nftables state catches up promptly.
 //
-// r[impl service.site.address]
+// spec: SITE#endpoint-addressing
 
 use std::{
     collections::{HashMap, HashSet},
@@ -308,7 +308,7 @@ impl SiteServiceResolver {
                     aaaa: entry.aaaa.clone(),
                     a: entry.a.clone(),
                     last_attempt_failed: entry.last_attempt_failed,
-                    // r[impl service.site.address.partial-answer]
+                    // spec: SITE#partial-dns-answers
                     degraded_family: entry.degraded_family,
                     age,
                     ttl_remaining,
@@ -568,7 +568,7 @@ async fn lookup_records(resolver: &TokioResolver, host: &str) -> Result<Lookup, 
     combine_families(aaaa, a, now)
 }
 
-// r[impl service.site.address.partial-answer]
+// spec: SITE#partial-dns-answers
 fn combine_families<E: std::fmt::Display>(
     aaaa: FamilyResult<Ipv6Addr, E>,
     a: FamilyResult<Ipv4Addr, E>,
@@ -709,7 +709,7 @@ mod tests {
         Ok((addrs.iter().map(|s| s.parse().unwrap()).collect(), None))
     }
 
-    // r[verify service.site.address.partial-answer]
+    // spec: SITE#partial-dns-answers
     #[test]
     fn failed_aaaa_with_a_records_is_a_partial_lookup() {
         let out = combine_families(
@@ -725,7 +725,7 @@ mod tests {
         }
     }
 
-    // r[verify service.site.address.partial-answer]
+    // spec: SITE#partial-dns-answers
     #[test]
     fn failed_a_with_aaaa_records_is_a_partial_lookup() {
         let out = combine_families(
@@ -741,7 +741,7 @@ mod tests {
         }
     }
 
-    // r[verify service.site.address.partial-answer]
+    // spec: SITE#partial-dns-answers
     #[test]
     fn failed_family_with_nothing_from_the_other_is_a_failure() {
         let out = combine_families(Err("servfail".to_owned()), v4(&[]), Instant::now());
@@ -764,7 +764,7 @@ mod tests {
         }
     }
 
-    // r[verify service.site.address.partial-answer]
+    // spec: SITE#partial-dns-answers
     #[test]
     fn partial_lookup_keeps_failed_family_answer_and_clears_failure_state() {
         let r = mkresolver();
@@ -803,7 +803,7 @@ mod tests {
         assert!(!newly_degraded);
     }
 
-    // r[verify service.site.address.partial-answer]
+    // spec: SITE#partial-dns-answers
     #[test]
     fn status_names_the_degraded_family_until_the_lookup_recovers() {
         let r = mkresolver();
@@ -832,7 +832,7 @@ mod tests {
         assert_eq!(entry(&r).degraded_family, None);
     }
 
-    // r[verify service.site.address.partial-answer]
+    // spec: SITE#partial-dns-answers
     #[test]
     fn a_wholly_failed_lookup_clears_the_degraded_family() {
         // Both families failing says nothing about either, so the claim that
@@ -855,7 +855,7 @@ mod tests {
         assert!(entry.last_attempt_failed);
     }
 
-    // r[verify service.site.address.partial-answer]
+    // spec: SITE#partial-dns-answers
     #[test]
     fn partial_lookup_for_new_host_leaves_failed_family_empty() {
         let r = mkresolver();

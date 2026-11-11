@@ -113,7 +113,7 @@ describe("Navbar", () => {
     expect(await screen.findByText("3")).toBeTruthy();
   });
 
-  // w[verify sessions.safety-mode]
+  // spec: UI#guarded-controls
   it("flags peer sessions in elevated modes but ignores our own session", async () => {
     const elevated: ConnectedClients = {
       ...clients,
@@ -134,7 +134,7 @@ describe("Navbar", () => {
     expect(tooltip.textContent).toContain("1 in write mode");
   });
 
-  // w[verify sessions.safety-mode]
+  // spec: UI#guarded-controls
   it("does not flag elevation when only our own session is elevated", async () => {
     const ownOnly: ConnectedClients = {
       web: [webSession("test-web-session", "dangerous")],
@@ -151,7 +151,7 @@ describe("Navbar", () => {
     expect(tooltip.textContent).toBe("1 connected client");
   });
 
-  // w[verify routes.volumes.held-count]
+  // spec: UI#volumes
   it("shows a held-volume count badge on the volumes link", async () => {
     renderWithSession(<Navbar />, {
       fixtures: { "/volumes/held/list": [heldVolume] },

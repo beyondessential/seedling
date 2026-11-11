@@ -21,8 +21,7 @@ fn now_ms() -> i64 {
 // Instance registry
 // ---------------------------------------------------------------------------
 
-// r[impl identity.stable]
-// r[impl identity.components]
+// spec: IDN#instance-identity
 pub fn insert_instance(db: &Db, instance: &ResourceInstance) -> rusqlite::Result<()> {
     db.conn.execute(
         "INSERT OR IGNORE INTO resource_instances
@@ -41,7 +40,7 @@ pub fn insert_instance(db: &Db, instance: &ResourceInstance) -> rusqlite::Result
     Ok(())
 }
 
-// r[impl identity.stable]
+// spec: IDN#instance-identity
 pub fn find_instance(db: &Db, id: InstanceId) -> rusqlite::Result<Option<ResourceInstance>> {
     let mut stmt = db.conn.prepare(
         "SELECT app, kind, name, is_scaled, display_name
@@ -87,7 +86,7 @@ pub fn find_instance(db: &Db, id: InstanceId) -> rusqlite::Result<Option<Resourc
 /// is not prefix-free: `seedling-app-` matches every unit of an app called
 /// `app-db`. These rows survive until uninstall *completes*, so they are
 /// available for the whole window in which the match runs.
-// r[impl identity.components]
+// spec: IDN#instance-identity
 pub fn display_names_for_app(db: &Db, app: &AppName) -> rusqlite::Result<Vec<String>> {
     let mut stmt = db
         .conn
@@ -96,7 +95,7 @@ pub fn display_names_for_app(db: &Db, app: &AppName) -> rusqlite::Result<Vec<Str
     rows.collect()
 }
 
-// r[impl identity.components]
+// spec: IDN#instance-identity
 pub fn find_instances_for_group(
     db: &Db,
     app: &AppName,
@@ -139,8 +138,8 @@ pub fn find_instances_for_group(
     Ok(instances)
 }
 
-// r[impl gc.instances]
-// r[impl gc.instances.atomic]
+// spec: GC#unscheduled-instances
+// spec: GC#instance-retirement
 pub fn delete_instance(db: &Db, id: InstanceId) -> rusqlite::Result<()> {
     let hex = id.to_hex();
     db.atomically(|db| {
@@ -170,8 +169,7 @@ pub fn delete_instances_for_app(db: &Db, app: &AppName) -> rusqlite::Result<usiz
     )
 }
 
-// r[impl identity.stable]
-// r[impl identity.components]
+// spec: IDN#instance-identity
 pub fn get_or_create_singleton(
     db: &Db,
     app: &AppName,
@@ -230,7 +228,7 @@ pub fn get_or_create_singleton(
 // World observations
 // ---------------------------------------------------------------------------
 
-// r[impl history.world]
+// spec: HIST#world-observation-history
 pub struct WorldObservation {
     pub id: i64,
     pub recorded_at: i64,
@@ -239,7 +237,7 @@ pub struct WorldObservation {
     pub payload: serde_json::Value,
 }
 
-// r[impl history.world.entries]
+// spec: HIST#observations
 pub fn insert_observation(
     db: &Db,
     instance: &ResourceInstance,
@@ -262,8 +260,8 @@ pub fn insert_observation(
     Ok(())
 }
 
-// r[impl history.world.state-derivation]
-// r[impl history.world.ordering]
+// spec: LCY#derivation
+// spec: HIST#observations
 pub fn query_observations(
     db: &Db,
     instance: &ResourceInstance,
@@ -292,7 +290,7 @@ pub fn query_observations(
     rows.collect()
 }
 
-// r[impl history.world.source]
+// spec: HIST#observations
 /// The observations of every instance given, each instance's in the same
 /// order [`query_observations`] returns them.
 ///
@@ -358,7 +356,7 @@ pub fn query_observations_for(
 // Autonomous operations
 // ---------------------------------------------------------------------------
 
-// r[impl history.operations]
+// spec: HIST#autonomous-operations-log
 pub struct AutonomousOperation {
     pub id: i64,
     pub recorded_at: i64,
@@ -369,13 +367,13 @@ pub struct AutonomousOperation {
     pub completed_at: Option<i64>,
 }
 
-// r[impl history.operations.provenance]
+// spec: HIST#operation-provenance
 pub struct Provenance {
     pub observation_ids: Vec<i64>,
     pub rule: String,
 }
 
-// r[impl history.operations.entries]
+// spec: HIST#autonomous-operations
 pub fn insert_autonomous_operation(
     db: &Db,
     resource_id: InstanceId,
@@ -419,7 +417,7 @@ pub const INTERRUPTED_OUTCOME: &str = "interrupted";
 /// completes an operation, and none outlives the process, so this is called
 /// at startup before the reconciler records anything: an incomplete record
 /// then can only be one whose handle died with the previous run.
-// r[impl history.operations.interrupted]
+// spec: HIST#autonomous-operations
 pub fn interrupt_incomplete_autonomous_operations(db: &Db) -> rusqlite::Result<usize> {
     db.conn.execute(
         "UPDATE autonomous_operations SET outcome = ?1, completed_at = ?2
@@ -462,8 +460,8 @@ pub fn query_autonomous_operations(
 // Action log
 // ---------------------------------------------------------------------------
 
-// r[impl history.action-log]
-// r[impl history.action-log.entries]
+// spec: HIST#action-execution-log
+// spec: HIST#action-calls
 pub fn insert_action_log_entry(
     db: &Db,
     operation_id: &OperationId,
@@ -472,7 +470,7 @@ pub fn insert_action_log_entry(
     entry: &ActionLogEntry,
 ) -> rusqlite::Result<()> {
     let resources_json = serde_json::to_string(&entry.resources).unwrap_or_default();
-    // r[impl barrier.satisfaction.recorded]
+    // spec: SUSP#barrier-anchoring
     // Every barrier of the call goes in `barriers`. The four single-record
     // columns are still written, from the call's first barrier, so a row
     // this version writes is still legible to the reader that only knows
@@ -518,7 +516,7 @@ pub fn insert_action_log_entry(
     Ok(())
 }
 
-// r[impl history.action-log.replay]
+// spec: HIST#action-calls
 pub fn load_action_log(
     db: &Db,
     operation_id: &OperationId,
@@ -570,7 +568,7 @@ pub fn load_action_log(
                 )
             })?;
 
-        // r[impl barrier.satisfaction.recorded]
+        // spec: SUSP#barrier-anchoring
         // A row written before the call could hold more than one barrier
         // has nothing in `barriers`, and its one record is read from the
         // columns that do carry it — so an operation suspended across the
@@ -614,9 +612,8 @@ pub fn load_action_log(
 
 /// Persists the identity of the one in-progress lifecycle operation so that
 /// a runtime restart can detect it and replay rather than starting fresh.
-// r[impl operation.lifecycle.events]
-// r[impl operation.lifecycle.generations]
-// r[impl barrier.replay]
+// spec: OPS#initiating-events
+// spec: SUSP#replay
 pub struct CurrentOperation {
     pub operation_id: OperationId,
     pub app: AppName,
@@ -625,7 +622,7 @@ pub struct CurrentOperation {
     pub target_generation: u64,
 }
 
-// r[impl operation.params] r[impl barrier.replay]
+// spec: OPS#persistence, SUSP#replay
 /// Persist the current lifecycle operation alongside its params, encrypted
 /// with the site cipher. Params may carry secret values (install action
 /// passwords, action params containing tokens, etc.); they are never stored
@@ -645,7 +642,7 @@ pub fn save_current_operation(
         .map_err(OperationPersistError::Cipher)?;
     db.conn
         .execute(
-            // r[impl history.persist.partial-update]
+            // spec: HIST#durability
             // Not INSERT OR REPLACE. That is delete-then-insert, so every
             // column this statement does not name reverts to its default —
             // including `cancel_requested`, which a *different* writer owns.
@@ -682,7 +679,7 @@ pub fn save_current_operation(
 /// any. Returns `Ok(None)` when no row is persisted, and an empty map when
 /// the row exists but carries no params (i.e. the operation was dispatched
 /// with no params).
-// r[impl operation.params] r[impl barrier.replay]
+// spec: OPS#persistence, SUSP#replay
 pub fn load_current_operation_params(
     db: &Db,
     cipher: &crate::runtime::secrets::Cipher,
@@ -735,7 +732,7 @@ impl From<rusqlite::Error> for OperationPersistError {
     }
 }
 
-// r[impl barrier.replay]
+// spec: SUSP#replay
 pub fn load_current_operation(db: &Db) -> rusqlite::Result<Option<CurrentOperation>> {
     let result = db.conn.query_row(
         "SELECT operation_id, app, action_name, source_generation, target_generation
@@ -778,7 +775,7 @@ pub fn app_resource_instance_count(db: &Db, app: &AppName) -> rusqlite::Result<i
 /// its operation_id matches. Returns `Ok(true)` when a row was updated and
 /// `Ok(false)` when no matching row was found (op already completed, or a
 /// different op is now active).
-// r[impl operation.cancel.persistence]
+// spec: OPS#cancel-persistence
 pub fn set_cancel_requested(db: &Db, operation_id: &OperationId) -> rusqlite::Result<bool> {
     let n = db.conn.execute(
         "UPDATE current_operation \
@@ -791,7 +788,7 @@ pub fn set_cancel_requested(db: &Db, operation_id: &OperationId) -> rusqlite::Re
 
 /// Read the persisted cancel flag for the in-flight operation. Returns
 /// `false` if no row exists.
-// r[impl operation.cancel.persistence]
+// spec: OPS#cancel-persistence
 pub fn load_cancel_requested(db: &Db) -> rusqlite::Result<bool> {
     db.conn
         .query_row(

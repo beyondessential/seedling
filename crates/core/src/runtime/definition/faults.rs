@@ -18,7 +18,7 @@ pub const SOURCE_MOVED: &str = "definition_source_moved";
 /// app's definition's requirement. The condition only changes when the
 /// definition is replaced or the runtime restarts, so it is converged at
 /// those two points.
-// r[impl fault.definition-unsupported]
+// spec: FLT#app-faults
 pub fn sync_unsupported(db: &Db, app: &AppName, bundle: &Bundle, running: &Version) {
     let mut current = BTreeMap::new();
     if let Some(req) = bundle.seedling_versions()
@@ -43,7 +43,7 @@ pub fn sync_unsupported(db: &Db, app: &AppName, bundle: &Bundle, running: &Versi
 }
 
 /// Clear `definition_source_moved` because the definition was replaced.
-// r[impl fault.definition-source-moved]
+// spec: FLT#app-faults
 pub fn clear_source_moved(db: &Db, app: &AppName) {
     sync_source_moved(db, app, None);
 }
@@ -60,7 +60,7 @@ pub struct Moved {
 /// *successful* re-check: `Some` when the tag moved, `None` when it selects
 /// the running digest. A failed re-check must not call this at all, since an
 /// unreachable registry shows neither that the tag moved nor that it did not.
-// r[impl fault.definition-source-moved]
+// spec: FLT#app-faults
 pub fn sync_source_moved(db: &Db, app: &AppName, moved: Option<Moved>) {
     let mut current = BTreeMap::new();
     if let Some(m) = moved {

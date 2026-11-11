@@ -38,7 +38,7 @@ use crate::runtime::db::{Db, DbHandle};
 /// error rather than a certificate covering nothing: what the certificate
 /// covers could not be determined, and storing it unindexed would hide it from
 /// every lookup with nothing said.
-// r[impl tls.cert.serve]
+// spec: TLS#serving
 pub fn index_stored(conn: &Connection, id: i64, pem: &str) -> rusqlite::Result<()> {
     let facts = parse::leaf_facts(pem).map_err(|e| {
         super::store::unreadable(format!(
@@ -559,7 +559,7 @@ mod tests {
     /// The spec bounds a lookup by the certificates that could cover the
     /// hostname: one nothing names has no candidates to parse, however many
     /// certificates are stored.
-    // r[verify tls.cert.serve]
+    // spec: TLS#serving
     #[test]
     fn a_hostname_no_certificate_names_has_no_candidates() {
         let db = Db::open_in_memory().unwrap();
@@ -574,8 +574,8 @@ mod tests {
         assert!(served(&db, "unknown.example.org").is_none());
     }
 
-    // r[verify tls.cert.serve]
-    // r[verify tls.cert.validation.san-coverage]
+    // spec: TLS#serving
+    // spec: TLS#coverage
     #[test]
     fn a_wildcard_is_found_for_a_name_one_label_below_it_only() {
         let db = Db::open_in_memory().unwrap();
@@ -588,7 +588,7 @@ mod tests {
 
     /// History stays in the index; the join to the certificate's state is what
     /// keeps a superseded certificate from being served.
-    // r[verify tls.cert.serve]
+    // spec: TLS#serving
     #[test]
     fn a_superseded_certificate_is_not_served() {
         let db = Db::open_in_memory().unwrap();
@@ -634,8 +634,8 @@ mod tests {
     /// An index row claiming a name the certificate does not carry is caught
     /// by confirming against the PEM, rewritten from it, and passed over for
     /// the next candidate.
-    // r[verify tls.cert.serve]
-    // r[verify tls.cert.validation.san-coverage]
+    // spec: TLS#serving
+    // spec: TLS#coverage
     #[test]
     fn an_index_entry_the_pem_contradicts_is_rewritten_and_passed_over() {
         let db = Db::open_in_memory().unwrap();

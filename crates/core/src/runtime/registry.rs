@@ -46,7 +46,7 @@ impl RegistryError {
     }
 }
 
-// r[impl gc.instances.operation-keep-set]
+// spec: GC#instances-started-by-actions
 /// Whether a group may take an instance that has already been torn down back
 /// into its keep set.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -259,7 +259,7 @@ impl InstanceRegistry for DbInstanceRegistry {
             .call(move |db| history::get_or_create_singleton(db, &app, kind, name.as_deref()))?)
     }
 
-    // r[impl autonomous.healthcheck-replace]
+    // spec: AUTO#health-check-replacement
     fn ensure_scaled_group(
         &self,
         app: &AppName,
@@ -310,7 +310,7 @@ impl InstanceRegistry for DbInstanceRegistry {
                 // replica that had since been brought back would be dropped
                 // from the keep set while it was still running — and a
                 // `rt.stop` would leave it serving, which is the split
-                // r[scaling.decision.actions] exists to prevent.
+                // AUTO#scale exists to prevent.
                 //
                 // The observations are ordered by recorded_at then id, so
                 // the last is the most recent.
@@ -321,7 +321,7 @@ impl InstanceRegistry for DbInstanceRegistry {
                 observed.push((inst, state, torn_down));
             }
 
-            // r[impl gc.instances.operation-keep-set]
+            // spec: GC#instances-started-by-actions
             // An instance that has been torn down is one the retirement
             // sweep deletes, so a caller that must not have its keep set
             // deleted under it does not take one. Set them aside before the

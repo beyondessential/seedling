@@ -42,7 +42,7 @@ mod tests {
     /// observe add/remove side effects in isolation.
     const TEST_REG: &str = "registry.example.invalid";
 
-    // i[verify registry.list]
+    // spec: IMGM#registry-allowlist
     #[test]
     fn list_returns_default_seeded_registries() {
         let db = Db::open_in_memory().unwrap();
@@ -51,8 +51,7 @@ mod tests {
         assert!(list.contains(&"ghcr.io".to_owned()));
     }
 
-    // i[verify registry.add]
-    // i[verify registry.list]
+    // spec: IMGM#registry-allowlist
     #[test]
     fn add_then_list_includes_added_registry() {
         let db = Db::open_in_memory().unwrap();
@@ -65,7 +64,7 @@ mod tests {
         assert_eq!(list, sorted);
     }
 
-    // i[verify registry.add]
+    // spec: IMGM#registry-allowlist
     #[test]
     fn add_is_idempotent() {
         let db = Db::open_in_memory().unwrap();
@@ -76,7 +75,7 @@ mod tests {
         assert_eq!(after, before + 1, "duplicate add should not double-insert");
     }
 
-    // i[verify registry.remove]
+    // spec: IMGM#registry-allowlist
     #[test]
     fn remove_returns_true_when_present() {
         let db = Db::open_in_memory().unwrap();
@@ -89,7 +88,7 @@ mod tests {
         );
     }
 
-    // i[verify registry.remove]
+    // spec: IMGM#registry-allowlist
     #[test]
     fn remove_returns_false_when_absent() {
         let db = Db::open_in_memory().unwrap();

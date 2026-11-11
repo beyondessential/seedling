@@ -22,7 +22,7 @@ interface Props {
   unwarmedHandlerImages?: string[];
 }
 
-// w[impl routes.images.discover]
+// spec: UI#images
 export function PlanDiff({ plan, unwarmedHandlerImages }: Props) {
   const diff = plan.diff ?? [];
   const handlers = plan.on_change_would_fire ?? [];
@@ -38,7 +38,7 @@ export function PlanDiff({ plan, unwarmedHandlerImages }: Props) {
             {e}
           </Alert>
         ))}
-      {/* w[impl routes.apps.definition.fetch] */}
+      {/* spec: UI#app-definitions */}
       {rejections.map((r) => (
         <Alert key={r.name} severity="error">
           <Box component="span" sx={{ fontFamily: "monospace" }}>

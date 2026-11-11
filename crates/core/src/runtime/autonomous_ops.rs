@@ -35,7 +35,7 @@ impl AutonomousOpHandle {
     }
 }
 
-// r[impl autonomous.provenance-required]
+// spec: AUTO#operation-provenance
 /// Record the start of an autonomous operation. Must be called before the
 /// underlying action (start/stop/reconfigure/etc.) is initiated. Returns a
 /// handle whose [`complete`](AutonomousOpHandle::complete) method records
@@ -90,7 +90,7 @@ mod tests {
         )
     }
 
-    // r[verify autonomous.provenance-required]
+    // spec: AUTO#operation-provenance
     #[test]
     fn record_inserts_entry_before_returning_handle() {
         let db = DbHandle::from_db(Db::open_in_memory().unwrap());
@@ -120,7 +120,7 @@ mod tests {
         handle.complete("ok");
     }
 
-    // r[verify autonomous.provenance-required]
+    // spec: AUTO#operation-provenance
     #[test]
     fn complete_attaches_outcome() {
         let db = DbHandle::from_db(Db::open_in_memory().unwrap());

@@ -19,7 +19,7 @@ pub(crate) struct ListRestartsParams {
     pub limit: Option<usize>,
 }
 
-// i[impl restart.list]
+// spec: FLTS#listing-restarts
 pub(crate) fn list_restarts(state: &OiState, params: ListRestartsParams) -> HandlerResult {
     let ListRestartsParams {
         app,
@@ -32,7 +32,7 @@ pub(crate) fn list_restarts(state: &OiState, params: ListRestartsParams) -> Hand
         .call(move |db| restarts::list(db, app.as_ref(), instance.as_deref(), limit))
         .map_err(|e| OiError::new(ErrorCode::NotFound, format!("db query: {e}")))?;
 
-    // i[impl restart.record]
+    // spec: FLTS#restart-records
     let result: Vec<serde_json::Value> = records
         .into_iter()
         .map(|r| {
@@ -53,7 +53,7 @@ pub(crate) fn list_restarts(state: &OiState, params: ListRestartsParams) -> Hand
     Ok(json!(result))
 }
 
-// i[impl restart.settings]
+// spec: FLTS#crash-loop-settings
 pub(crate) fn get_settings(state: &OiState) -> HandlerResult {
     let s = state
         .db
@@ -70,7 +70,7 @@ pub(crate) struct SetSettingsParams {
     pub window_secs: Option<i64>,
 }
 
-// i[impl restart.settings]
+// spec: FLTS#crash-loop-settings
 pub(crate) fn set_settings(state: &OiState, params: SetSettingsParams) -> HandlerResult {
     let SetSettingsParams {
         threshold,

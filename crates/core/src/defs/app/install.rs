@@ -8,7 +8,7 @@ use super::super::take::{take_bool, take_map, take_string};
 use super::App;
 
 pub(super) fn on_app(builder: &mut TypeBuilder<App>) {
-    // l[impl action.install]
+    // spec: ACN#install-action
     builder
         .with_fn("on_install", |this: &mut App, closure: FnPtr| {
             this.def.rcu(|d| {
@@ -23,7 +23,7 @@ pub(super) fn on_app(builder: &mut TypeBuilder<App>) {
         .with_fn(
             "on_install",
             |this: &mut App, closure: FnPtr, config: Map| -> Result<(), Box<EvalAltResult>> {
-                // l[impl action.install.requirements]
+                // spec: ACN#param-schemas
                 let params_map = config
                     .get("params")
                     .cloned()
@@ -44,9 +44,9 @@ pub(super) fn on_app(builder: &mut TypeBuilder<App>) {
         );
 }
 
-// l[impl action.install.requirements.kind-unknown]
-// l[impl action.option-params]
-// l[impl action.params.volume]
+// spec: ACN#param-kinds
+// spec: ACN#param-schemas
+// spec: ACN#volume-params
 pub(super) fn parse_param_defs(
     map: &Map,
     allow_volume: bool,

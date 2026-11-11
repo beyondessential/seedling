@@ -13,7 +13,7 @@ pub struct ShellExecTarget {
     /// the container display name.
     pub job_name: String,
     pub app_name: AppName,
-    // r[impl identity.job.shell]
+    // spec: IDN#job-instances
     /// Fresh randomly-generated instance ID chosen at `attach()` call time.
     /// Each shell session gets a distinct ID so concurrent sessions against
     /// the same Job definition produce distinct container names.
@@ -45,7 +45,7 @@ pub fn clear_shell_attach_ctx() {
     SHELL_ATTACH_CTX.with(|c| *c.borrow_mut() = None);
 }
 
-// l[impl action.shell.control]
+// spec: ACN#shell-control
 #[derive(Debug, Clone)]
 pub struct ShellControl {
     attached: bool,
@@ -62,7 +62,7 @@ impl ShellControl {
         Self { attached: false }
     }
 
-    // l[impl action.shell.attach]
+    // spec: ACN#shell-control
     fn do_attach(&mut self, job: Dynamic) -> Result<(), Box<EvalAltResult>> {
         use crate::defs::job::Job;
 

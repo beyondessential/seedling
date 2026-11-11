@@ -1,7 +1,7 @@
 use super::*;
 use defs::resource::ResourceKind;
 
-// l[verify container.interface]
+// spec: CTR#container-interface
 #[test]
 fn container_is_an_interface_on_deployment_and_job() {
     run_test_script_app(
@@ -21,7 +21,7 @@ fn container_is_an_interface_on_deployment_and_job() {
     );
 }
 
-// l[verify container.image]
+// spec: CTR#image
 #[test]
 fn container_image_sets_uri() {
     let app = run_test_script_app(
@@ -48,25 +48,25 @@ fn container_image_sets_uri() {
     }
 }
 
-// l[verify container.image]
+// spec: CTR#image
 #[test]
 fn image_rejects_bare_name() {
     let _ = run_test_script_err(r#"app.deployment("web").image("nginx");"#);
 }
 
-// l[verify container.image]
+// spec: CTR#image
 #[test]
 fn image_rejects_name_with_tag_but_no_registry() {
     let _ = run_test_script_err(r#"app.deployment("web").image("nginx:latest");"#);
 }
 
-// l[verify container.image]
+// spec: CTR#image
 #[test]
 fn image_rejects_no_tag_or_digest() {
     let _ = run_test_script_err(r#"app.deployment("web").image("docker.io/library/nginx");"#);
 }
 
-// l[verify container.image]
+// spec: CTR#image
 #[test]
 fn image_accepts_registry_with_tag() {
     let app =
@@ -90,7 +90,7 @@ fn image_accepts_registry_with_tag() {
     }
 }
 
-// l[verify container.image]
+// spec: CTR#image
 #[test]
 fn image_accepts_digest() {
     run_test_script_app(
@@ -98,7 +98,7 @@ fn image_accepts_digest() {
     );
 }
 
-// l[verify container.image]
+// spec: CTR#image
 #[test]
 fn image_accepts_registry_with_port() {
     run_test_script_app(
@@ -106,19 +106,19 @@ fn image_accepts_registry_with_port() {
     );
 }
 
-// l[verify container.image]
+// spec: CTR#image
 #[test]
 fn image_accepts_ghcr() {
     run_test_script_app(r#"app.deployment("web").image("ghcr.io/owner/repo:main");"#);
 }
 
-// l[verify container.image]
+// spec: CTR#image
 #[test]
 fn image_rejects_empty() {
     let _ = run_test_script_err(r#"app.deployment("web").image("");"#);
 }
 
-// l[verify container.image]
+// spec: CTR#image
 #[test]
 fn image_rejects_invalid_digest() {
     let _ = run_test_script_err(
@@ -126,7 +126,7 @@ fn image_rejects_invalid_digest() {
     );
 }
 
-// l[verify container.command]
+// spec: CTR#command-and-arguments
 #[test]
 fn container_command_string() {
     let app = run_test_script_app(
@@ -150,7 +150,7 @@ fn container_command_string() {
     }
 }
 
-// l[verify container.command]
+// spec: CTR#command-and-arguments
 #[test]
 fn container_command_array() {
     let app = run_test_script_app(
@@ -178,7 +178,7 @@ fn container_command_array() {
     }
 }
 
-// l[verify container.arg]
+// spec: CTR#command-and-arguments
 #[test]
 fn container_arg_single() {
     let app = run_test_script_app(
@@ -205,7 +205,7 @@ fn container_arg_single() {
     }
 }
 
-// l[verify container.arg]
+// spec: CTR#command-and-arguments
 #[test]
 fn container_arg_array() {
     let app = run_test_script_app(
@@ -232,7 +232,7 @@ fn container_arg_array() {
     }
 }
 
-// l[verify container.env]
+// spec: CTR#environment
 #[test]
 fn container_env_override() {
     let app = run_test_script_app(
@@ -261,7 +261,7 @@ fn container_env_override() {
     }
 }
 
-// l[verify container.mount-volume]
+// spec: CTR#volume-mounts
 #[test]
 fn container_mount_volume() {
     run_test_script_app(
@@ -274,7 +274,7 @@ fn container_mount_volume() {
     );
 }
 
-// l[verify container.mount-volume]
+// spec: CTR#volume-mounts
 #[test]
 fn container_mount_external_volume() {
     run_test_script_app(
@@ -287,7 +287,7 @@ fn container_mount_external_volume() {
     );
 }
 
-// l[verify container.mount-volume.validation]
+// spec: CTR#volume-mounts
 #[test]
 fn mount_rejects_root() {
     let _ = run_test_script_err(
@@ -298,7 +298,7 @@ fn mount_rejects_root() {
     );
 }
 
-// l[verify container.mount-volume.validation]
+// spec: CTR#volume-mounts
 #[test]
 fn mount_rejects_proc() {
     let _ = run_test_script_err(
@@ -309,7 +309,7 @@ fn mount_rejects_proc() {
     );
 }
 
-// l[verify container.mount-volume.validation]
+// spec: CTR#volume-mounts
 #[test]
 fn mount_rejects_sys() {
     let _ = run_test_script_err(
@@ -320,7 +320,7 @@ fn mount_rejects_sys() {
     );
 }
 
-// l[verify container.mount-volume.validation]
+// spec: CTR#volume-mounts
 #[test]
 fn mount_rejects_dev() {
     let _ = run_test_script_err(
@@ -331,7 +331,7 @@ fn mount_rejects_dev() {
     );
 }
 
-// l[verify container.mount-volume.validation]
+// spec: CTR#volume-mounts
 #[test]
 fn mount_rejects_etc() {
     let _ = run_test_script_err(
@@ -342,7 +342,7 @@ fn mount_rejects_etc() {
     );
 }
 
-// l[verify container.mount-volume.validation]
+// spec: CTR#volume-mounts
 #[test]
 fn mount_rejects_bin() {
     let _ = run_test_script_err(
@@ -353,7 +353,7 @@ fn mount_rejects_bin() {
     );
 }
 
-// l[verify container.mount-volume.validation]
+// spec: CTR#volume-mounts
 #[test]
 fn mount_rejects_usr() {
     let _ = run_test_script_err(
@@ -364,7 +364,7 @@ fn mount_rejects_usr() {
     );
 }
 
-// l[verify container.mount-volume.validation]
+// spec: CTR#volume-mounts
 #[test]
 fn mount_rejects_traversal_to_forbidden() {
     let _ = run_test_script_err(
@@ -375,7 +375,7 @@ fn mount_rejects_traversal_to_forbidden() {
     );
 }
 
-// l[verify container.mount-volume.validation]
+// spec: CTR#volume-mounts
 #[test]
 fn mount_rejects_traversal_to_root() {
     let _ = run_test_script_err(
@@ -386,7 +386,7 @@ fn mount_rejects_traversal_to_root() {
     );
 }
 
-// l[verify container.mount-volume.validation]
+// spec: CTR#volume-mounts
 #[test]
 fn mount_rejects_repeated_slashes() {
     let _ = run_test_script_err(
@@ -397,7 +397,7 @@ fn mount_rejects_repeated_slashes() {
     );
 }
 
-// l[verify container.mount-volume.validation]
+// spec: CTR#volume-mounts
 #[test]
 fn mount_rejects_relative_path() {
     let _ = run_test_script_err(
@@ -408,7 +408,7 @@ fn mount_rejects_relative_path() {
     );
 }
 
-// l[verify container.mount-volume.validation]
+// spec: CTR#volume-mounts
 #[test]
 fn mount_rejects_null_bytes() {
     let _ = run_test_script_err(
@@ -419,7 +419,7 @@ fn mount_rejects_null_bytes() {
     );
 }
 
-// l[verify container.mount-volume.validation]
+// spec: CTR#volume-mounts
 #[test]
 fn mount_accepts_valid_paths() {
     run_test_script_app(
@@ -434,7 +434,7 @@ fn mount_accepts_valid_paths() {
     );
 }
 
-// l[verify container.mount-volume.validation]
+// spec: CTR#volume-mounts
 #[test]
 fn mount_accepts_subpath_of_forbidden() {
     run_test_script_app(
@@ -448,7 +448,7 @@ fn mount_accepts_subpath_of_forbidden() {
     );
 }
 
-// l[verify container.mount-volume.validation]
+// spec: CTR#volume-mounts
 #[test]
 fn mount_rejects_forbidden_external_volume() {
     let _ = run_test_script_err(
@@ -459,7 +459,7 @@ fn mount_rejects_forbidden_external_volume() {
     );
 }
 
-// l[verify container.env.validation]
+// spec: CTR#environment
 #[test]
 fn env_rejects_path() {
     let _ = run_test_script_err(
@@ -469,7 +469,7 @@ fn env_rejects_path() {
     );
 }
 
-// l[verify container.env.validation]
+// spec: CTR#environment
 #[test]
 fn env_rejects_ld_preload() {
     let _ = run_test_script_err(
@@ -479,7 +479,7 @@ fn env_rejects_ld_preload() {
     );
 }
 
-// l[verify container.env.validation]
+// spec: CTR#environment
 #[test]
 fn env_rejects_ld_library_path() {
     let _ = run_test_script_err(
@@ -489,7 +489,7 @@ fn env_rejects_ld_library_path() {
     );
 }
 
-// l[verify container.env.validation]
+// spec: CTR#environment
 #[test]
 fn env_rejects_ld_audit() {
     let _ = run_test_script_err(
@@ -499,7 +499,7 @@ fn env_rejects_ld_audit() {
     );
 }
 
-// l[verify container.env.validation]
+// spec: CTR#environment
 #[test]
 fn env_rejects_empty_name() {
     let _ = run_test_script_err(
@@ -509,7 +509,7 @@ fn env_rejects_empty_name() {
     );
 }
 
-// l[verify container.env.validation]
+// spec: CTR#environment
 #[test]
 fn env_rejects_name_starting_with_digit() {
     let _ = run_test_script_err(
@@ -519,7 +519,7 @@ fn env_rejects_name_starting_with_digit() {
     );
 }
 
-// l[verify container.env.validation]
+// spec: CTR#environment
 #[test]
 fn env_rejects_name_with_special_chars() {
     let _ = run_test_script_err(
@@ -529,7 +529,7 @@ fn env_rejects_name_with_special_chars() {
     );
 }
 
-// l[verify container.env.validation]
+// spec: CTR#environment
 #[test]
 fn env_rejects_null_in_value() {
     let _ = run_test_script_err(
@@ -539,7 +539,7 @@ fn env_rejects_null_in_value() {
     );
 }
 
-// l[verify container.env.validation]
+// spec: CTR#environment
 #[test]
 fn env_accepts_valid_names() {
     run_test_script_app(
@@ -552,7 +552,7 @@ fn env_accepts_valid_names() {
     );
 }
 
-// l[verify container.env.validation]
+// spec: CTR#environment
 #[test]
 fn env_map_form_rejects_forbidden() {
     let _ = run_test_script_err(
@@ -562,7 +562,7 @@ fn env_map_form_rejects_forbidden() {
     );
 }
 
-// l[verify container.workdir]
+// spec: CTR#working-directory
 #[test]
 fn container_workdir_sets_path() {
     let app = run_test_script_app(
@@ -588,13 +588,13 @@ fn container_workdir_sets_path() {
     }
 }
 
-// l[verify container.workdir]
+// spec: CTR#working-directory
 #[test]
 fn container_workdir_rejects_relative_path() {
     let _ = run_test_script_err(r#"app.deployment("web").workdir("app/relative");"#);
 }
 
-// l[verify container.on-exit]
+// spec: CTR#exit-strategy
 #[test]
 fn container_on_exit_strategy() {
     let app = run_test_script_app(
@@ -643,7 +643,7 @@ fn with_container<R>(
     f(&container)
 }
 
-// l[verify container.memory]
+// spec: CTR#resource-limits
 #[test]
 fn container_memory_sets_limit() {
     let app = run_test_script_app(
@@ -658,7 +658,7 @@ fn container_memory_sets_limit() {
     });
 }
 
-// l[verify container.memory]
+// spec: CTR#resource-limits
 #[test]
 fn container_memory_case_insensitive_suffix() {
     let app = run_test_script_app(
@@ -669,7 +669,7 @@ fn container_memory_case_insensitive_suffix() {
     });
 }
 
-// l[verify container.memory]
+// spec: CTR#resource-limits
 #[test]
 fn container_memory_rejects_missing_suffix() {
     let _ = run_test_script_err(
@@ -677,7 +677,7 @@ fn container_memory_rejects_missing_suffix() {
     );
 }
 
-// l[verify container.memory]
+// spec: CTR#resource-limits
 #[test]
 fn container_memory_rejects_unknown_suffix() {
     let _ = run_test_script_err(
@@ -685,7 +685,7 @@ fn container_memory_rejects_unknown_suffix() {
     );
 }
 
-// l[verify container.cpus]
+// spec: CTR#resource-limits
 #[test]
 fn container_cpus_sets_limit() {
     let app = run_test_script_app(
@@ -700,7 +700,7 @@ fn container_cpus_sets_limit() {
     });
 }
 
-// l[verify container.cpus]
+// spec: CTR#resource-limits
 #[test]
 fn container_cpus_rejects_zero() {
     let _ = run_test_script_err(
@@ -708,7 +708,7 @@ fn container_cpus_rejects_zero() {
     );
 }
 
-// l[verify container.cpus]
+// spec: CTR#resource-limits
 #[test]
 fn container_cpus_rejects_negative() {
     let _ = run_test_script_err(
@@ -716,7 +716,7 @@ fn container_cpus_rejects_negative() {
     );
 }
 
-// l[verify container.cap-add]
+// spec: CTR#privileges
 #[test]
 fn container_cap_add_appends_capability() {
     let app = run_test_script_app(
@@ -731,7 +731,7 @@ fn container_cap_add_appends_capability() {
     });
 }
 
-// l[verify container.cap-add]
+// spec: CTR#privileges
 #[test]
 fn container_cap_add_normalises_to_uppercase() {
     let app = run_test_script_app(
@@ -742,7 +742,7 @@ fn container_cap_add_normalises_to_uppercase() {
     });
 }
 
-// l[verify container.cap-add]
+// spec: CTR#privileges
 #[test]
 fn container_cap_add_deduplicates() {
     let app = run_test_script_app(
@@ -758,7 +758,7 @@ fn container_cap_add_deduplicates() {
     });
 }
 
-// l[verify container.writable-rootfs]
+// spec: CTR#privileges
 #[test]
 fn container_writable_rootfs_defaults_false() {
     let app =
@@ -768,7 +768,7 @@ fn container_writable_rootfs_defaults_false() {
     });
 }
 
-// l[verify container.writable-rootfs]
+// spec: CTR#privileges
 #[test]
 fn container_writable_rootfs_opts_in() {
     let app = run_test_script_app(
@@ -783,7 +783,7 @@ fn container_writable_rootfs_opts_in() {
     });
 }
 
-// l[verify container.pids-limit]
+// spec: CTR#resource-limits
 #[test]
 fn container_pids_limit_sets_value() {
     let app = run_test_script_app(
@@ -798,7 +798,7 @@ fn container_pids_limit_sets_value() {
     });
 }
 
-// l[verify container.pids-limit]
+// spec: CTR#resource-limits
 #[test]
 fn container_pids_limit_rejects_zero() {
     let _ = run_test_script_err(
@@ -806,7 +806,7 @@ fn container_pids_limit_rejects_zero() {
     );
 }
 
-// l[verify container.pids-limit]
+// spec: CTR#resource-limits
 #[test]
 fn container_pids_limit_rejects_negative() {
     let _ = run_test_script_err(
@@ -814,7 +814,7 @@ fn container_pids_limit_rejects_negative() {
     );
 }
 
-// l[verify container.stop-signal]
+// spec: CTR#stopping
 #[test]
 fn container_stop_signal_canonicalises_signal_name() {
     let app = run_test_script_app(
@@ -835,7 +835,7 @@ fn container_stop_signal_canonicalises_signal_name() {
     });
 }
 
-// l[verify container.stop-signal]
+// spec: CTR#stopping
 #[test]
 fn container_stop_signal_rejects_unknown() {
     let _ = run_test_script_err(
@@ -843,7 +843,7 @@ fn container_stop_signal_rejects_unknown() {
     );
 }
 
-// l[verify container.stop-timeout]
+// spec: CTR#stopping
 #[test]
 fn container_stop_timeout_sets_value() {
     let app = run_test_script_app(
@@ -858,7 +858,7 @@ fn container_stop_timeout_sets_value() {
     });
 }
 
-// l[verify container.stop-timeout]
+// spec: CTR#stopping
 #[test]
 fn container_stop_timeout_rejects_zero() {
     let _ = run_test_script_err(
@@ -866,8 +866,8 @@ fn container_stop_timeout_rejects_zero() {
     );
 }
 
-// l[verify bsl.args.strict]
-// l[verify container.pids-limit]
+// spec: BSL#arguments
+// spec: CTR#resource-limits
 // The unchecked `as u32` wrapped: pids_limit(4294967297) became 1, and the
 // container could not start a workload.
 #[test]
@@ -883,8 +883,8 @@ fn pids_limit_rejects_values_beyond_u32() {
     assert!(message.contains("`pids_limit`"), "{message}");
 }
 
-// l[verify bsl.args.strict]
-// l[verify container.stop-timeout]
+// spec: BSL#arguments
+// spec: CTR#stopping
 #[test]
 fn stop_timeout_rejects_values_beyond_u32() {
     let err = run_test_script_err(
@@ -897,8 +897,8 @@ fn stop_timeout_rejects_values_beyond_u32() {
     assert!(err.to_string().contains("`stop_timeout`"), "{err}");
 }
 
-// l[verify bsl.args.strict]
-// l[verify container.command]
+// spec: BSL#arguments
+// spec: CTR#command-and-arguments
 #[test]
 fn command_array_rejects_non_string_elements() {
     let err = run_test_script_err(
@@ -913,8 +913,8 @@ fn command_array_rejects_non_string_elements() {
     assert!(message.contains("element 1"), "{message}");
 }
 
-// l[verify bsl.args.strict]
-// l[verify container.arg]
+// spec: BSL#arguments
+// spec: CTR#command-and-arguments
 #[test]
 fn arg_array_rejects_non_string_elements() {
     let err = run_test_script_err(
@@ -927,8 +927,8 @@ fn arg_array_rejects_non_string_elements() {
     assert!(err.to_string().contains("element 1"), "{err}");
 }
 
-// l[verify bsl.args.strict]
-// l[verify container.env]
+// spec: BSL#arguments
+// spec: CTR#environment
 // A non-map entry used to be skipped, so the variable simply did not exist.
 #[test]
 fn env_array_rejects_non_map_entries() {
@@ -944,8 +944,8 @@ fn env_array_rejects_non_map_entries() {
     assert!(message.contains("must be a map"), "{message}");
 }
 
-// l[verify bsl.args.strict]
-// l[verify container.image]
+// spec: BSL#arguments
+// spec: CTR#image
 // `is_ascii_lowercase` accepts g–z, so a digest of g's passed as hex.
 #[test]
 fn image_digest_must_be_hex() {

@@ -28,10 +28,10 @@ impl EventBroker {
         })
     }
 
-    // w[impl sessions.actor-activity]
+    // spec: WEB#connected-clients
     pub async fn publish(&self, line: Arc<str>) {
         self.actor_activity.record_from_event_line(&line);
-        // w[impl routes.events.replay]
+        // spec: WEB#event-relay
         // Caching and broadcasting under one lock means a subscriber, which
         // snapshots the cache and subscribes under the same lock, sees each
         // event in exactly one of the two, and both in the same order.
@@ -44,7 +44,7 @@ impl EventBroker {
     }
 
     /// Snapshot the recent events and subscribe to live ones from that point.
-    // w[impl routes.events.replay]
+    // spec: WEB#event-relay
     async fn subscribe(&self) -> (Vec<Arc<str>>, broadcast::Receiver<Arc<str>>) {
         let recent = self.recent.lock().await;
         (recent.iter().cloned().collect(), self.tx.subscribe())
@@ -65,7 +65,7 @@ impl EventBroker {
                 Ok(line) => line,
                 Err(broadcast::error::RecvError::Lagged(n)) => {
                     tracing::warn!(skipped = n, "event broker: client lagged, events skipped");
-                    // w[impl routes.events.gap]
+                    // spec: WEB#event-relay
                     gap_marker(Some(n))
                 }
                 Err(broadcast::error::RecvError::Closed) => return,
@@ -119,7 +119,7 @@ async fn stream_events(
     let client = daemon.new_events_client().await?;
     let uni = client.subscribe_events().await?;
     if *resumed {
-        // w[impl routes.events.gap]
+        // spec: WEB#event-relay
         broker.publish(gap_marker(None)).await;
     }
     *resumed = true;
@@ -133,7 +133,7 @@ async fn stream_events(
         }
         let trimmed = line.trim_end_matches(['\n', '\r']);
         if !trimmed.is_empty() {
-            // w[impl routes.events.gap]
+            // spec: WEB#event-relay
             // The daemon's own EventsDropped is relayed like any other event.
             broker.publish(Arc::from(trimmed)).await;
         }
@@ -172,7 +172,7 @@ mod tests {
         assert_eq!(&*recent[CACHE_SIZE - 1], format!("event-{CACHE_SIZE}"));
     }
 
-    // w[verify routes.events.replay]
+    // spec: WEB#event-relay
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn subscriber_sees_each_event_once_in_order() {
         const N: usize = CACHE_SIZE;
@@ -209,7 +209,7 @@ mod tests {
         }
     }
 
-    // w[verify routes.events.gap]
+    // spec: WEB#event-relay
     #[tokio::test]
     async fn lagged_client_receives_gap_marker() {
         let broker = broker();
@@ -251,7 +251,7 @@ mod tests {
         assert_eq!(broker.recent.lock().await.len(), 1);
     }
 
-    // w[verify sessions.actor-activity]
+    // spec: WEB#connected-clients
     #[tokio::test]
     async fn publish_records_actor_activity() {
         let registry = Arc::new(ActorActivityRegistry::new());

@@ -2,8 +2,8 @@
 // lives in the navbar ("Show events" tooltip) and toggles a panel that
 // renders the cached events list.
 //
-// w[verify routes.events]
-// w[verify sessions.events]
+// spec: UI#event-feed
+// spec: WEB#session-tracking
 
 import { expect, test } from "../test-fixtures";
 

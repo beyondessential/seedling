@@ -26,10 +26,10 @@ use crate::runtime::{LifecycleState, ResourceInstance, restart_gens};
 
 /// Default deadline for `.scheduled()` — a pod not scheduled inside this
 /// window almost always indicates a cluster-level problem, not a slow workload.
-// l[impl rt.started.default-deadlines]
+// spec: RT#barriers
 /// Resolve an explicit deadline argument against the state's default.
 ///
-/// `l[rt.started.state-methods]` says the argument must be a positive integer
+/// `RT#barriers` says the argument must be a positive integer
 /// number of seconds, and that zero or absent means the state's default.
 /// Both used to go through `d.max(0) as u64`, so `0` became `Some(0)` — which
 /// the `elapsed >= d` check trips on the very next pass, the exact opposite
@@ -39,7 +39,7 @@ use crate::runtime::{LifecycleState, ResourceInstance, restart_gens};
 /// A negative is not a deadline at all, and the defs layer's rule is to throw
 /// on malformed input rather than coerce it into something that means
 /// something else.
-// l[impl rt.started.state-methods]
+// spec: RT#barriers
 fn resolve_deadline(d: i64, default_secs: u64) -> Result<u64, Box<EvalAltResult>> {
     match d {
         0 => Ok(default_secs),
@@ -51,24 +51,24 @@ fn resolve_deadline(d: i64, default_secs: u64) -> Result<u64, Box<EvalAltResult>
 pub const DEFAULT_SCHEDULED_DEADLINE_SECS: u64 = 30;
 
 /// Default deadline for `.running()` — same reasoning as `.scheduled()`.
-// l[impl rt.started.default-deadlines]
+// spec: RT#barriers
 pub const DEFAULT_RUNNING_DEADLINE_SECS: u64 = 30;
 
 /// Default deadline for `.ready()`. Bounded by default because an unready
 /// resource is usually a deployment bug; callers that legitimately need to
 /// wait indefinitely (e.g. Let's Encrypt cert provisioning under rate limit)
 /// opt in to `.ready_eventually()`.
-// l[impl rt.started.default-deadlines]
+// spec: RT#barriers
 pub const DEFAULT_READY_DEADLINE_SECS: u64 = 30;
 
 /// Default deadline for `.terminated()`. Sized for long-running jobs (the
 /// common caller): 6 hours covers almost every realistic batch workload.
 /// Callers that truly have no bound on duration use `.terminated_eventually()`.
-// l[impl rt.started.default-deadlines]
+// spec: RT#barriers
 pub const DEFAULT_TERMINATED_DEADLINE_SECS: u64 = 6 * 3600;
 
 /// Default deadline for `rt.stop()` — stops should settle quickly.
-// l[impl rt.started.default-deadlines]
+// spec: RT#barriers
 pub const DEFAULT_STOP_DEADLINE_SECS: u64 = 30;
 
 // ---------------------------------------------------------------------------
@@ -112,7 +112,7 @@ pub fn is_in_action_closure() -> bool {
 // consult this flag and fall back to returning stubs instead of errors.
 // ---------------------------------------------------------------------------
 
-// r[impl image.discover]
+// spec: IMG#image-discovery
 thread_local! {
     static IN_PROBE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
@@ -176,7 +176,7 @@ fn clear_action_def() {
 // through the Rhai scope. Set/cleared by `ActionClosureGuard`.
 // ---------------------------------------------------------------------------
 
-// l[impl action.call]
+// spec: ACN#action-invocation
 thread_local! {
     static ACTIVE_RT: RefCell<Option<RuntimeInstance>> = const { RefCell::new(None) };
 }
@@ -281,7 +281,7 @@ impl ActionClosureGuard {
         Self
     }
 
-    // l[impl action.call]
+    // spec: ACN#action-invocation
     /// Stash the active runtime handle so `Action.call(...)` can invoke
     /// sub-actions with the same `rt` the outer closure received.
     pub fn with_active_rt(self, rt: RuntimeInstance) -> Self {
@@ -342,7 +342,7 @@ pub fn extract_barrier_hit(err: &EvalAltResult) -> Option<BarrierCondition> {
 // CancelHit — operation cancellation control-flow exception
 // ---------------------------------------------------------------------------
 
-// r[impl operation.cancel]
+// spec: OPS#cancellation
 #[derive(Debug, Clone)]
 pub struct CancelHitPayload;
 
@@ -369,8 +369,8 @@ pub fn extract_cancel_hit(err: &EvalAltResult) -> bool {
 /// pairs for those that declare a non-empty image reference. Anonymous
 /// resources arrive with a def attached; named ones are looked up in the
 /// action-context AppDef (the thread-local set by [`ActionClosureGuard`]).
-// r[impl barrier.replay.positional]
-// r[impl history.action-log.entries]
+// spec: SUSP#positional-replay
+// spec: HIST#action-calls
 /// `rt.stop` blocks on exactly one barrier, which is therefore the first
 /// and only one on its entry.
 const STOP_BARRIER_SEQ: usize = 0;
@@ -414,8 +414,7 @@ fn claim_log_position(
     Ok(idx)
 }
 
-// r[impl barrier.replay.anchor]
-// r[impl barrier.satisfaction.recorded]
+// spec: SUSP#barrier-anchoring
 /// Record `record` against the log entry of the call a barrier belongs to,
 /// reporting whether that entry was found.
 ///
@@ -465,8 +464,7 @@ fn record_at_anchor(ctx: &mut ReplayContext, call_index: usize, record: BarrierR
     true
 }
 
-// l[impl collection.only]
-// l[impl collection.except]
+// spec: COL#query-methods
 /// How a `Started`'s resources are matched against another collection: by
 /// type and name, which is all a
 /// [`ResourceId`](crate::defs::resource::ResourceId) carries. Two instances
@@ -569,9 +567,7 @@ pub(crate) fn extract_container_images(
 // RuntimeInstance
 // ---------------------------------------------------------------------------
 
-// l[impl rt.var]
-// l[impl rt.type]
-// l[impl rt.constructor]
+// spec: RT#handle-availability
 #[derive(Clone)]
 pub struct RuntimeInstance {
     pub ctx: Option<SharedContext>,
@@ -614,7 +610,7 @@ impl RuntimeInstance {
         }
     }
 
-    // r[impl scaling.decision.actions]
+    // spec: AUTO#scale
     /// How many replicas a named Deployment currently has, as the reconciler
     /// resolves it: the stored scaling decision clamped to the declared
     /// range, or the lower bound where no decision has been stored.
@@ -694,7 +690,7 @@ impl RuntimeInstance {
                 };
                 return Ok(vec![(instance, Some(Resource::Deployment(dep)))]);
             }
-            // r[impl identity.scaled]
+            // spec: IDN#scaled-instances
             // Named deployments resolve through the scaled-group API: the
             // steady-state reconciler keeps every replica as `is_scaled=1`,
             // so creating a singleton here would only produce a transient
@@ -702,7 +698,7 @@ impl RuntimeInstance {
             // An action that needs to refer to all of them — `rt.signal`,
             // `rt.stop`, `rt.query` — gets every replica back from this
             // single call.
-            // r[impl scaling.decision.actions]
+            // spec: AUTO#scale
             // Which is the effective scale, as the reconciler resolves it,
             // and not the low end of the declared range. A deployment
             // declared `scale(2..10)` and scaled to 5 used to yield 2
@@ -714,7 +710,7 @@ impl RuntimeInstance {
                 (def.scale.start, def.scale.end)
             };
             let scale = self.effective_scale(&dep.name, scale.0, scale.1)?;
-            // r[impl gc.instances.operation-keep-set]
+            // spec: GC#instances-started-by-actions
             let group = self.registry.ensure_scaled_group(
                 &self.app_name,
                 ResourceKind::Deployment,
@@ -748,7 +744,7 @@ impl RuntimeInstance {
                 };
                 return Ok(vec![(instance, Some(Resource::Job(job)))]);
             }
-            // r[impl identity.job]
+            // spec: IDN#job-instances
             // Named jobs inside an action closure get an instance ID derived
             // from the operation ID via UUID v5, giving a stable identity
             // within one operation (replay-safe) while ensuring distinct
@@ -829,8 +825,8 @@ impl RuntimeInstance {
             return Ok(vec![(instance, Some(Resource::Ingress(ing)))]);
         }
 
-        // l[impl rt.start]
-        // l[impl rt.started.type]
+        // spec: RT#starting-resources
+        // spec: RT#started
         // A Started handle (returned from rt.start / rt.query / etc.)
         // exposes its underlying ResourceInstance set so it can be
         // forwarded to rt.stop / rt.signal / rt.exec without the
@@ -842,8 +838,8 @@ impl RuntimeInstance {
             return Ok(started.resources.into_iter().map(|r| (r, None)).collect());
         }
 
-        // l[impl rt.start]
-        // l[impl action.type]
+        // spec: RT#starting-resources
+        // spec: ACN#action-declaration
         // Action handles are not resources; rejecting here surfaces the
         // mistake as a clear script error instead of silently dropping
         // the call. Action invocation goes through `Action.call(...)`.
@@ -854,8 +850,8 @@ impl RuntimeInstance {
             )));
         }
 
-        // l[impl rt.start]
-        // l[impl collection.col]
+        // spec: RT#starting-resources
+        // spec: COL#coercion
         // App or Collection (e.g. `rt.start(app)` or `rt.start(col(app).except(...))`):
         // expand into the underlying resource handles via the standard
         // collection coercion, then recurse for each handle. The recursive
@@ -899,7 +895,7 @@ impl RuntimeInstance {
         Ok(vec![])
     }
 
-    // r[impl desired-state.during-operation]
+    // spec: RCN#desired-state
     fn do_start(
         &mut self,
         resources_with_defs: Vec<(ResourceInstance, Option<crate::defs::resource::Resource>)>,
@@ -907,7 +903,7 @@ impl RuntimeInstance {
         self.do_start_or_query(resources_with_defs, CallKind::Start)
     }
 
-    // l[impl rt.query]
+    // spec: RT#querying-resources
     fn do_query(
         &mut self,
         resources_with_defs: Vec<(ResourceInstance, Option<crate::defs::resource::Resource>)>,
@@ -929,7 +925,7 @@ impl RuntimeInstance {
         let resources: Vec<ResourceInstance> =
             resources_with_defs.iter().map(|(r, _)| r.clone()).collect();
 
-        // r[impl image.discover]
+        // spec: IMG#image-discovery
         // Probe mode: capture images that would be pulled and return an
         // already-satisfied Started. No log entries, no DB writes.
         if let Some(ctx) = &self.ctx
@@ -961,7 +957,7 @@ impl RuntimeInstance {
                 if let Some(resource) = maybe_def {
                     let instance = instance.clone();
                     let op_id = op_id.clone();
-                    // l[impl bsl.resource.description]
+                    // spec: BSL#descriptions
                     let description = resource.description();
                     if let Err(e) = db.call(move |db| {
                         crate::runtime::desired::insert_dynamic_resource(
@@ -1020,14 +1016,13 @@ impl RuntimeInstance {
         })
     }
 
-    // l[impl rt.warm-certs]
-    // r[impl actuate.ingress.warm-certs]
+    // spec: RT#certificate-warming
     fn do_warm_certs(
         &mut self,
         resources_with_defs: Vec<(ResourceInstance, Option<crate::defs::resource::Resource>)>,
     ) -> Result<Started, Box<EvalAltResult>> {
         // Filter to TLS-terminating ingresses; ignore everything else
-        // (per the language spec rule l[rt.warm-certs]).
+        // (per the language spec rule RT#certificate-warming).
         let resources: Vec<ResourceInstance> = resources_with_defs
             .into_iter()
             .filter(|(inst, def)| {
@@ -1048,7 +1043,7 @@ impl RuntimeInstance {
             .map(|(inst, _)| inst)
             .collect();
 
-        // r[impl image.discover]
+        // spec: IMG#image-discovery
         // Probe mode: warm_certs has no image content to surface and no
         // relevant side effect for discovery; return an immediate Started.
         if let Some(ctx) = &self.ctx
@@ -1095,8 +1090,8 @@ impl RuntimeInstance {
         })
     }
 
-    // l[impl rt.warm-images]
-    // r[impl actuate.image.warm]
+    // spec: RT#image-warming
+    // spec: IMG#image-warming
     fn do_warm_images(
         &mut self,
         resources_with_defs: Vec<(ResourceInstance, Option<crate::defs::resource::Resource>)>,
@@ -1108,7 +1103,7 @@ impl RuntimeInstance {
             .collect();
         let resources: Vec<ResourceInstance> = pairs.iter().map(|(r, _)| r.clone()).collect();
 
-        // r[impl image.discover]
+        // spec: IMG#image-discovery
         // Probe mode: capture refs, skip pin writes and log entries, and
         // return a Started whose barrier resolves immediately.
         if let Some(ctx) = &self.ctx
@@ -1172,8 +1167,8 @@ impl RuntimeInstance {
         })
     }
 
-    // l[impl rt.signal]
-    // r[impl rt.signal]
+    // spec: RT#signal-delivery
+    // spec: SUSP#side-effecting-calls
     /// Deliver a POSIX signal to one or more running container instances.
     /// Replay-safe: an entry committed in a prior pass is skipped on the
     /// next replay so the signal is sent at most once. The actual signal
@@ -1252,7 +1247,7 @@ impl RuntimeInstance {
             Some(c) => Arc::clone(c),
         };
 
-        // l[impl rt.signal] r[impl barrier.replay.positional]
+        // spec: RT#signal-delivery, SUSP#positional-replay
         // At-most-once is per *call site*, not per (resources, signal) value.
         // Scanning the whole committed log for a matching value got both
         // halves wrong: a second, identical rt.signal later in the same
@@ -1307,8 +1302,8 @@ impl RuntimeInstance {
         Ok(())
     }
 
-    // l[impl rt.exec]
-    // r[impl rt.exec]
+    // spec: RT#command-execution
+    // spec: SUSP#side-effecting-calls
     /// Run a command inside a running container. Blocks until the command
     /// exits and returns an `Executed` carrying the exit code. Replay-safe:
     /// an entry committed in a prior pass is not re-executed; the recorded
@@ -1324,7 +1319,7 @@ impl RuntimeInstance {
             return Err("rt.exec: argv must be non-empty".into());
         }
 
-        // r[impl image.discover]
+        // spec: IMG#image-discovery
         if let Some(ctx) = &self.ctx
             && ctx.lock().probe_mode()
         {
@@ -1351,12 +1346,12 @@ impl RuntimeInstance {
             Some(c) => Arc::clone(c),
         };
 
-        // r[impl operation.cancel]
+        // spec: OPS#cancellation
         if ctx.lock().cancel_token.is_cancelled() {
             return Err(make_cancel_error());
         }
 
-        // r[impl barrier.replay]
+        // spec: SUSP#replay
         // On replay, recover the exit code from the committed entry without
         // re-issuing the exec.
         {
@@ -1467,8 +1462,8 @@ impl RuntimeInstance {
         })
     }
 
-    // l[impl rt.write]
-    // r[impl rt.write]
+    // spec: RT#volume-writes
+    // spec: SUSP#side-effecting-calls
     /// Write a file into a volume at action runtime. Replay-safe: an entry
     /// committed in a prior pass is skipped on the next replay so the write
     /// is performed at most once. Resolution of the target volume to a host
@@ -1485,7 +1480,7 @@ impl RuntimeInstance {
 
         // Probe mode: rt.write has no image content and no discovery-relevant
         // side effect; return immediately without touching the log.
-        // r[impl image.discover]
+        // spec: IMG#image-discovery
         if let Some(ctx) = &self.ctx
             && ctx.lock().probe_mode()
         {
@@ -1504,13 +1499,13 @@ impl RuntimeInstance {
             Some(c) => Arc::clone(c),
         };
 
-        // r[impl operation.cancel]
+        // spec: OPS#cancellation
         if ctx.lock().cancel_token.is_cancelled() {
             return Err(make_cancel_error());
         }
 
-        // r[impl barrier.replay]
-        // r[impl barrier.replay.positional]
+        // spec: SUSP#replay
+        // spec: SUSP#positional-replay
         // On replay, skip a write that was already performed at this call
         // site. The entry at this position must be that write: advancing
         // past whatever occupied the slot would take a different call as
@@ -1556,13 +1551,13 @@ impl RuntimeInstance {
         Ok(())
     }
 
-    // r[impl barrier.replay.rt-stop]
+    // spec: SUSP#rtstop
     fn do_stop(
         &mut self,
         resources: Vec<ResourceInstance>,
         deadline_secs: Option<u64>,
     ) -> Result<(), Box<EvalAltResult>> {
-        // r[impl image.discover]
+        // spec: IMG#image-discovery
         // Probe mode: stop has no image content and no discovery-relevant
         // side effect. Return immediately without touching the log.
         if let Some(ctx) = &self.ctx
@@ -1584,15 +1579,15 @@ impl RuntimeInstance {
             Some(c) => Arc::clone(c),
         };
 
-        // r[impl operation.cancel]
+        // spec: OPS#cancellation
         if ctx.lock().cancel_token.is_cancelled() {
             return Err(make_cancel_error());
         }
 
         let mut g = ctx.lock();
 
-        // r[impl barrier.replay]
-        // r[impl barrier.replay.positional]
+        // spec: SUSP#replay
+        // spec: SUSP#positional-replay
         // The entry at this position must be the stop this call is making.
         // Taking whatever occupied the slot let a satisfied Ready record
         // left there by an rt.start return Ok from a stop that stopped
@@ -1640,8 +1635,8 @@ impl RuntimeInstance {
         });
 
         if !all_terminated {
-            // r[impl barrier.deadline]
-            // r[impl barrier.replay.rt-stop]
+            // spec: SUSP#deadlines
+            // spec: SUSP#rtstop
             // Enforce the stop deadline against the earliest unsatisfied record
             // for these resources. Mirrors the check in check_barrier so
             // rt.stop() participates in the same suspension semantics as the
@@ -1728,12 +1723,12 @@ impl RuntimeInstance {
     }
 }
 
-// l[impl rt.methods]
+// spec: RT
 impl CustomType for RuntimeInstance {
     fn build(mut builder: TypeBuilder<Self>) {
         builder
             .with_name("RuntimeInstance")
-            // l[impl rt.restart]
+            // spec: RT#deployment-restart
             .with_fn(
                 "restart",
                 |this: &mut Self, resource: Dynamic| -> Result<(), Box<EvalAltResult>> {
@@ -1745,7 +1740,7 @@ impl CustomType for RuntimeInstance {
                     if dep_name.is_empty() {
                         return Err("rt.restart requires a named deployment".into());
                     }
-                    // r[impl image.discover]
+                    // spec: IMG#image-discovery
                     if let Some(ctx) = &this.ctx
                         && ctx.lock().probe_mode()
                     {
@@ -1767,11 +1762,11 @@ impl CustomType for RuntimeInstance {
                     Ok(())
                 },
             )
-            // l[impl rt.start]
+            // spec: RT#starting-resources
             .with_fn(
                 "start",
                 |this: &mut Self, resources: Dynamic| -> Result<Started, Box<EvalAltResult>> {
-                    // r[impl gc.instances.operation-keep-set]
+                    // spec: GC#instances-started-by-actions
                     // The call that brings replicas up is the one that must
                     // not adopt an instance retirement is about to delete.
                     let resources_with_defs = this
@@ -1785,7 +1780,7 @@ impl CustomType for RuntimeInstance {
                     this.do_start(resources_with_defs)
                 },
             )
-            // l[impl rt.stop]
+            // spec: RT#stopping-resources
             .with_fn(
                 "stop",
                 |this: &mut Self, resources: Dynamic| -> Result<(), Box<EvalAltResult>> {
@@ -1826,7 +1821,7 @@ impl CustomType for RuntimeInstance {
                     )
                 },
             )
-            // l[impl rt.query]
+            // spec: RT#querying-resources
             .with_fn(
                 "query",
                 |this: &mut Self, resources: Dynamic| -> Result<Started, Box<EvalAltResult>> {
@@ -1841,7 +1836,7 @@ impl CustomType for RuntimeInstance {
                     this.do_query(resources_with_defs)
                 },
             )
-            // l[impl rt.warm-certs]
+            // spec: RT#certificate-warming
             .with_fn(
                 "warm_certs",
                 |this: &mut Self, resources: Dynamic| -> Result<Started, Box<EvalAltResult>> {
@@ -1856,7 +1851,7 @@ impl CustomType for RuntimeInstance {
                     this.do_warm_certs(resources_with_defs)
                 },
             )
-            // l[impl rt.warm-images]
+            // spec: RT#image-warming
             .with_fn(
                 "warm_images",
                 |this: &mut Self, resources: Dynamic| -> Result<Started, Box<EvalAltResult>> {
@@ -1871,7 +1866,7 @@ impl CustomType for RuntimeInstance {
                     this.do_warm_images(resources_with_defs)
                 },
             )
-            // l[impl rt.signal]
+            // spec: RT#signal-delivery
             .with_fn(
                 "signal",
                 |this: &mut Self,
@@ -1891,7 +1886,7 @@ impl CustomType for RuntimeInstance {
                     this.do_signal(resources, signal)
                 },
             )
-            // l[impl rt.write]
+            // spec: RT#volume-writes
             .with_fn(
                 "write",
                 |this: &mut Self,
@@ -1906,7 +1901,7 @@ impl CustomType for RuntimeInstance {
                     this.do_write(write_target, instance, path, contents.as_bytes())
                 },
             )
-            // l[impl rt.write]
+            // spec: RT#volume-writes
             .with_fn(
                 "write",
                 |this: &mut Self,
@@ -1921,7 +1916,7 @@ impl CustomType for RuntimeInstance {
                     this.do_write(write_target, instance, path, &file.contents)
                 },
             )
-            // l[impl rt.exec]
+            // spec: RT#command-execution
             .with_fn(
                 "exec",
                 |this: &mut Self,
@@ -1955,7 +1950,7 @@ impl CustomType for RuntimeInstance {
     }
 }
 
-// l[impl rt.exec]
+// spec: RT#command-execution
 fn exec_argv_from_array(args: rhai::Array) -> Result<Vec<String>, Box<EvalAltResult>> {
     if args.is_empty() {
         return Err("rt.exec: argv must be non-empty".into());
@@ -1970,7 +1965,7 @@ fn exec_argv_from_array(args: rhai::Array) -> Result<Vec<String>, Box<EvalAltRes
     Ok(out)
 }
 
-// l[impl rt.exec]
+// spec: RT#command-execution
 fn parse_exec_options(options: Map) -> Result<Vec<(String, String)>, Box<EvalAltResult>> {
     let mut env = Vec::new();
     for (key, value) in options {
@@ -2009,7 +2004,7 @@ fn is_valid_env_var_name(s: &str) -> bool {
         && chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
 }
 
-// l[impl rt.exec]
+// spec: RT#command-execution
 /// Resolve a BSL `Started`, `Deployment`, or `Job` argument to the single
 /// container instance the exec should run in. Rejects targets that resolve
 /// to zero or more than one instance, or that are anonymous and have not
@@ -2087,7 +2082,7 @@ fn resolve_exec_target(
     Err("rt.exec: target must be a Started, Deployment, or Job".into())
 }
 
-// l[impl rt.write]
+// spec: RT#volume-writes
 /// Resolve a BSL `Volume` or `ExternalVolume` argument into a runtime
 /// [`VolumeWriteTarget`] plus the [`ResourceInstance`] used for log keying.
 fn resolve_volume_write_target(
@@ -2169,7 +2164,7 @@ pub enum WarmMode {
     None,
     /// `rt.warm_certs` returned this `Started`. `.ready()` waits for the
     /// TLS cert of every resource to be observed valid.
-    // l[impl rt.warm-certs]
+    // spec: RT#certificate-warming
     Certs,
     /// `rt.warm_images` returned this `Started`. `.ready()` waits until each
     /// image reference is present in local container storage.
@@ -2178,17 +2173,17 @@ pub enum WarmMode {
     /// lets a [`Started`] that has been narrowed by a collection method
     /// narrow what its barrier waits on: the references alone could not say
     /// which resource had been selected away.
-    // l[impl rt.warm-images]
+    // spec: RT#image-warming
     Images(Vec<(ResourceInstance, String)>),
 }
 
-// l[impl rt.started.type]
+// spec: RT#started
 #[derive(Debug, Clone)]
 pub struct Started {
     pub ctx: Option<SharedContext>,
     pub resources: Vec<ResourceInstance>,
     pub warm: WarmMode,
-    // r[impl barrier.replay.anchor]
+    // spec: SUSP#barrier-anchoring
     /// The `call_index` of the log entry the originating `rt.*` call
     /// produced. A barrier called on this `Started` is decided from that
     /// entry and no other.
@@ -2202,7 +2197,7 @@ pub struct Started {
 }
 
 impl Started {
-    // l[impl rt.started.type]
+    // spec: RT#started
     /// This `Started` over `kept` alone.
     ///
     /// The anchor carries through, so a barrier on the narrowed group is
@@ -2227,7 +2222,7 @@ impl Started {
         }
     }
 
-    // r[impl barrier.replay.anchor]
+    // spec: SUSP#barrier-anchoring
     /// The entry this barrier's record belongs to.
     ///
     /// A group a collection method narrowed uses the entry of the call it
@@ -2239,7 +2234,7 @@ impl Started {
         self.origin_index
     }
 
-    // r[impl barrier.suspension]
+    // spec: SUSP#barriers
     fn check_barrier(
         &mut self,
         required: LifecycleState,
@@ -2257,14 +2252,14 @@ impl Started {
             Some(c) => Arc::clone(c),
         };
 
-        // r[impl image.discover]
+        // spec: IMG#image-discovery
         // Probe mode: every barrier resolves immediately.
         if ctx.lock().probe_mode() {
             let _ = (required, deadline_secs);
             return Ok(self.clone());
         }
 
-        // r[impl operation.cancel]
+        // spec: OPS#cancellation
         // Cooperatively honour a cancel request before doing any more work.
         if ctx.lock().cancel_token.is_cancelled() {
             return Err(make_cancel_error());
@@ -2273,15 +2268,15 @@ impl Started {
         let mut g = ctx.lock();
         let now = (g.now_secs)();
 
-        // r[impl barrier.replay.anchor]
+        // spec: SUSP#barrier-anchoring
         // Which barrier on its call this is. Drawn afresh each pass, in the
         // order the closure asserts them, so the same barrier draws the
         // same number every time and reads back its own record.
         let anchor = self.anchor();
         let seq = anchor.map_or(0, |idx| g.next_barrier_seq(idx));
 
-        // r[impl barrier.replay]
-        // r[impl barrier.replay.anchor]
+        // spec: SUSP#replay
+        // spec: SUSP#barrier-anchoring
         // Ask the entry of the call this barrier was called on, and no
         // other. Matching by resources and required state instead let a
         // `.terminated()` barrier short-circuit against the record an
@@ -2308,21 +2303,21 @@ impl Started {
         //   present in local container storage; the resources it holds are
         //   only for audit (and may be empty for anonymous references).
         let all_reached = match (&self.warm, required) {
-            // l[impl rt.warm-certs]
+            // spec: RT#certificate-warming
             // An empty resource list here means every element was filtered
             // out (e.g. no TLS-terminating ingresses in the selection); the
             // language spec says such a `Started` is immediately satisfied.
             (WarmMode::Certs, LifecycleState::Ready) => {
                 self.resources.iter().all(|r| g.world.cert_valid_for(r))
             }
-            // l[impl rt.warm-images]
-            // r[impl actuate.image.warm]
+            // spec: RT#image-warming
+            // spec: IMG#image-warming
             // Empty `refs` means the selection contained no container
             // resources with an image to warm — immediately satisfied.
             (WarmMode::Images(pairs), LifecycleState::Ready) => {
                 pairs.iter().all(|(_, image)| g.world.image_present(image))
             }
-            // l[impl rt.started.state-methods]
+            // spec: RT#barriers
             // A group holding no resources has nothing to wait on. The warm
             // variants above already answered that way; this arm did not,
             // so a group a collection method had narrowed down to nothing
@@ -2333,7 +2328,7 @@ impl Started {
                 .all(|r| g.world.lifecycle_state(r).has_reached(required)),
         };
 
-        // r[impl barrier.resume]
+        // spec: SUSP#barriers
         // Always consult the oracle BEFORE the deadline check: a barrier that
         // is currently satisfied must succeed even if more than `deadline_secs`
         // have elapsed since the original suspension. The committed log can
@@ -2342,8 +2337,7 @@ impl Started {
         // so deadline-then-oracle would spuriously time out a barrier whose
         // resources have actually reached the required state.
         if all_reached {
-            // r[impl barrier.satisfaction.recorded]
-            // r[impl barrier.replay.anchor]
+            // spec: SUSP#barrier-anchoring
             // Record the pass against this barrier's own entry. Marking
             // pending entries only lost it on a replay pass, where pending
             // is empty until the closure makes its first fresh rt.* call:
@@ -2371,7 +2365,7 @@ impl Started {
         // Not yet reached — check deadline: find when we first started
         // waiting. The wait belongs to this call, so it is read off this
         // call's own entry.
-        // r[impl barrier.replay.anchor]
+        // spec: SUSP#barrier-anchoring
         let started_at = anchor
             .and_then(|idx| {
                 g.pending
@@ -2383,7 +2377,7 @@ impl Started {
             .filter(|b| b.required_state == required && !b.satisfied)
             .and_then(|b| b.started_at_secs);
 
-        // r[impl barrier.deadline]
+        // spec: SUSP#deadlines
         if let (Some(d), Some(started_at)) = (deadline_secs, started_at)
             && now.saturating_sub(started_at) >= d
         {
@@ -2402,8 +2396,7 @@ impl Started {
 
         // The barrier records the start its deadline is measured from
         // under its own position on its call's entry.
-        // r[impl barrier.satisfaction.recorded]
-        // r[impl barrier.replay.anchor]
+        // spec: SUSP#barrier-anchoring
         let waiting = BarrierRecord {
             seq,
             required_state: required,
@@ -2439,7 +2432,7 @@ impl Started {
         Err(make_barrier_error(condition))
     }
 
-    // l[impl rt.termination.ensure-success]
+    // spec: RT#termination
     /// Consult the world oracle for every resource in this `Started` group
     /// and aggregate their termination outcomes. All resources must report
     /// `Some(true)` for the group to be considered successful; any `Some(false)`
@@ -2457,7 +2450,7 @@ impl Started {
                 failed: Vec::new(),
             };
         };
-        // r[impl image.discover]
+        // spec: IMG#image-discovery
         // Probe mode: pretend every terminated resource succeeded. We
         // accept that this misses error-path image references (code
         // guarded by `termination.ensure_success()` throwing); catching
@@ -2486,7 +2479,7 @@ impl CustomType for Started {
     fn build(mut builder: TypeBuilder<Self>) {
         builder
             .with_name("Started")
-            // l[impl rt.started.state-methods]
+            // spec: RT#barriers
             .with_fn(
                 "scheduled",
                 |this: &mut Self| -> Result<Started, Box<EvalAltResult>> {
@@ -2535,14 +2528,14 @@ impl CustomType for Started {
                     )
                 },
             )
-            // l[impl rt.started.ready-eventually]
+            // spec: RT#barriers
             .with_fn(
                 "ready_eventually",
                 |this: &mut Self| -> Result<Started, Box<EvalAltResult>> {
                     this.check_barrier(LifecycleState::Ready, None)
                 },
             )
-            // l[impl rt.started.terminated]
+            // spec: RT#barriers
             .with_fn(
                 "terminated",
                 |this: &mut Self| -> Result<Termination, Box<EvalAltResult>> {
@@ -2563,7 +2556,7 @@ impl CustomType for Started {
                     Ok(this.compute_termination())
                 },
             )
-            // l[impl rt.started.terminated-eventually]
+            // spec: RT#barriers
             .with_fn(
                 "terminated_eventually",
                 |this: &mut Self| -> Result<Termination, Box<EvalAltResult>> {
@@ -2571,13 +2564,13 @@ impl CustomType for Started {
                     Ok(this.compute_termination())
                 },
             )
-            // l[impl rt.started.type]
+            // spec: RT#started
             // Collection's methods on a Started return Starteds over the
             // selected resources. These used to ignore their arguments and
             // return the whole group, so
             // `rt.start(app).except(app.deployment("optional")).ready()`
             // went on waiting for the resource the author had excluded.
-            // l[impl collection.one]
+            // spec: COL#query-methods
             .with_fn("one", |this: &mut Self| -> Dynamic {
                 match this.resources.first().map(|r| r.id) {
                     Some(first) => Dynamic::from(this.narrowed_to(|r| r.id == first)),
@@ -2587,17 +2580,17 @@ impl CustomType for Started {
                     None => Dynamic::UNIT,
                 }
             })
-            // l[impl collection.only]
+            // spec: COL#query-methods
             .with_fn("only", |this: &mut Self, other: Dynamic| -> Self {
                 let keys = resource_keys(other);
                 this.narrowed_to(|r| keys_hold(&keys, r))
             })
-            // l[impl collection.except]
+            // spec: COL#query-methods
             .with_fn("except", |this: &mut Self, other: Dynamic| -> Self {
                 let keys = resource_keys(other);
                 this.narrowed_to(|r| !keys_hold(&keys, r))
             })
-            // l[impl collection.select]
+            // spec: COL#selection
             .with_fn(
                 "select",
                 |this: &mut Self, criterion: Map| -> Result<Self, Box<EvalAltResult>> {
@@ -2614,7 +2607,7 @@ impl CustomType for Started {
 // Termination
 // ---------------------------------------------------------------------------
 
-// l[impl rt.termination.type]
+// spec: RT#termination
 #[derive(Debug, Clone)]
 pub struct Termination {
     pub success: bool,
@@ -2629,7 +2622,7 @@ impl CustomType for Termination {
     fn build(mut builder: TypeBuilder<Self>) {
         builder
             .with_name("Termination")
-            // l[impl rt.termination.ensure-success]
+            // spec: RT#termination
             .with_fn(
                 "ensure_success",
                 |this: &mut Self| -> Result<(), Box<EvalAltResult>> {
@@ -2658,7 +2651,7 @@ impl CustomType for Termination {
 // Executed
 // ---------------------------------------------------------------------------
 
-// l[impl rt.executed.type]
+// spec: RT#executed
 #[derive(Debug, Clone)]
 pub struct Executed {
     pub exit_code: i32,
@@ -2714,13 +2707,13 @@ impl CustomType for Executed {
     fn build(mut builder: TypeBuilder<Self>) {
         builder
             .with_name("Executed")
-            // l[impl rt.executed.exit-code]
+            // spec: RT#executed
             .with_fn("exit_code", |this: &mut Self| -> i64 {
                 this.exit_code as i64
             })
-            // l[impl rt.executed.success]
+            // spec: RT#executed
             .with_fn("success", |this: &mut Self| -> bool { this.exit_code == 0 })
-            // l[impl rt.executed.ensure-success]
+            // spec: RT#executed
             .with_fn(
                 "ensure_success",
                 |this: &mut Self| -> Result<(), Box<EvalAltResult>> {
@@ -2772,7 +2765,7 @@ mod exit_code_tests {
 mod tests {
     use super::{DEFAULT_READY_DEADLINE_SECS, DEFAULT_TERMINATED_DEADLINE_SECS, resolve_deadline};
 
-    // l[verify rt.started.state-methods]
+    // spec: RT#barriers
     // Zero used to become `Some(0)`, which the `elapsed >= d` check trips on
     // the very next pass — so `ready(0)`, written expecting the documented
     // default, failed about two seconds later instead of waiting 30.
@@ -2788,7 +2781,7 @@ mod tests {
         );
     }
 
-    // l[verify rt.started.state-methods]
+    // spec: RT#barriers
     #[test]
     fn a_positive_deadline_is_taken_as_given() {
         assert_eq!(
@@ -2797,7 +2790,7 @@ mod tests {
         );
     }
 
-    // l[verify rt.started.state-methods]
+    // spec: RT#barriers
     // The spec says the argument must be positive; clamping a negative to
     // zero would silently mean "fail immediately".
     #[test]

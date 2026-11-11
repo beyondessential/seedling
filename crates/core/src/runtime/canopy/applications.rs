@@ -28,7 +28,7 @@ enum Hold {
     Dropped,
 }
 
-// r[impl canopy.app.health]
+// spec: CNR#application-health
 /// Grade an app's `health/app` check from its status.
 ///
 /// A lifecycle operation neither raises nor recovers health, and Canopy closes
@@ -75,7 +75,7 @@ fn fault_detail(fault: &faults::FaultRecord) -> Value {
     detail
 }
 
-// r[impl canopy.app.key]
+// spec: CNR#applications
 /// The `applications` section of a report: one entry per registered app that
 /// declares a Canopy type, keyed by the app's name.
 ///

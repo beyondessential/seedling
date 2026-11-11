@@ -57,7 +57,7 @@ const INFRA_ENSURE_TIMEOUT: Duration = Duration::from_secs(10);
 /// Back-off for reapplying the resource-control slices after the supervisor
 /// refuses them. Capped rather than terminal: a host that recovers picks the
 /// slices up again without an operator touching anything.
-// r[impl priority.actuation]
+// spec: PRIO#resource-control-groups
 const SLICE_BACKOFF_BASE: Duration = Duration::from_secs(10);
 /// Budget for one slice sync. Bounded like every other blocking supervisor call
 /// on this path, so a wedged bus cannot hold up the tick's actuation.
@@ -75,7 +75,7 @@ const SLICE_FAULT_THRESHOLD: u32 = 5;
 /// attachment — there's no point asking the issuance coordinator (and,
 /// for tailnet hostnames, tailscaled) to mint a cert for a hostname
 /// nothing is going to serve traffic on yet.
-// r[impl ingress.site.tailscale]
+// spec: SITE#tailscale-discovery
 fn site_ingress_tls_hostnames(snapshot: &site_proxy::SiteIngressSnapshot) -> Vec<String> {
     let mut out = Vec::new();
     for ing in &snapshot.ingresses {
@@ -295,7 +295,7 @@ pub(crate) struct RunningPod {
     /// True if podman last reported the container as healthy, or if no
     /// healthcheck is declared (running implies healthy in that case). Used by
     /// the routing layer to prefer healthy backends in the service pool.
-    /// r[impl lifecycle.service.routing-pool]
+    /// spec: LCY#routing-pool
     pub observed_healthy: bool,
 }
 
@@ -348,23 +348,23 @@ struct AppSnapshot {
     /// `desired` was computed from the app definition, so it names every
     /// instance the app's active desired state holds. False while an
     /// operation, install or uninstall is steering it instead.
-    // r[impl gc.instances]
+    // spec: GC#unscheduled-instances
     steady: bool,
     app_def: AppDef,
     phase: AppPhase,
     phase_handle: Arc<Mutex<AppPhase>>,
     /// Hostnames whose certs should be pre-warmed. Captured from the in-flight
     /// `OperationProgress`, if any.
-    // r[impl actuate.ingress.warm-certs]
+    // spec: RT#certificate-warming
     warm_cert_hostnames: std::collections::BTreeSet<String>,
     /// Generation number of the app definition this snapshot was taken from.
     /// Used to detect operator-pushed updates that should reset transient
     /// per-deployment state such as the replace-loop guard.
-    // r[impl autonomous.healthcheck-replace.guard]
+    // spec: AUTO#replacement-guard
     current_generation: u64,
     /// The operator-set app priority, read fresh this tick so a change takes
     /// effect without a redeploy.
-    // r[impl priority.settings]
+    // spec: PRIO#priority-setting
     app_priority: AppPriority,
 }
 
@@ -387,14 +387,14 @@ pub struct Reconciler {
     /// observer's poll interval (so no `container_running` observation was
     /// ever recorded). Cleared when the instance is replaced/retired.
     started_jobs: HashSet<InstanceId>,
-    // r[impl autonomous.job-terminal.defense]
+    // spec: AUTO#job-completion
     /// Job instance IDs known to have completed during this process lifetime.
     /// If these appear running on a subsequent tick they are stopped immediately.
     completed_jobs: HashSet<InstanceId>,
     /// Instances with an active `crash_loop` fault. Re-derived from the fault
     /// table at the top of each tick so the suppression survives a daemon
     /// restart and lifts as soon as an operator clears the fault.
-    // r[impl fault.crash-loop]
+    // spec: FLT#workload-faults
     crash_looped: HashSet<InstanceId>,
     event_tx: EventSender,
     shells: Arc<ShellRegistry>,
@@ -403,7 +403,7 @@ pub struct Reconciler {
     /// Deployments with an active rolling update, keyed by (app, deployment_name).
     /// Set from pod actuation results; read by `compute_effective_scales` to bump
     /// the effective instance count by one during rollouts.
-    // r[impl update.rolling.over-provision]
+    // spec: UPD#rolling-updates
     rolling_updates: HashSet<(AppName, String)>,
     /// Deployments needing a healthcheck-driven replacement, keyed by
     /// (app, deployment_name). Populated each tick from observed pod health:
@@ -411,22 +411,22 @@ pub struct Reconciler {
     /// is below its target gets bumped by one effective instance, so
     /// `ensure_scaled_group` provisions a fresh replacement alongside the
     /// existing (unhealthy) one.
-    // r[impl autonomous.healthcheck-replace]
+    // spec: AUTO#health-check-replacement
     unhealthy_replace_deployments: HashSet<(AppName, String)>,
     /// Deployments whose latest replacement attempt itself failed to become
     /// healthy. While present, the runtime suppresses further bumps
     /// (`autonomous.healthcheck-replace.guard`). Cleared when the AppDef
     /// generation for the app changes (operator-pushed update).
-    // r[impl autonomous.healthcheck-replace.guard]
+    // spec: AUTO#replacement-guard
     replace_failed: HashSet<(AppName, String)>,
     /// Last `current_generation` we saw for each app; a higher value on a
     /// subsequent tick triggers a reset of `replace_failed` for that app.
-    // r[impl autonomous.healthcheck-replace.guard]
+    // spec: AUTO#replacement-guard
     last_seen_generation: HashMap<AppName, u64>,
     /// Paces retries when the supervisor refuses the slice set, so a host with
     /// a read-only unit directory is not asked to re-read its units every tick.
     /// One gate, not one per slice: the set is synced as a whole.
-    // r[impl priority.actuation]
+    // spec: PRIO#resource-control-groups
     slice_retry: crate::runtime::retry::RetryGate,
     /// Whether seedling is providing its own NAT64 translator.
     nat64_active: bool,
@@ -434,14 +434,14 @@ pub struct Reconciler {
     /// this host. The daemon sets up NAT64 at startup when required,
     /// and the reconciler tears it down on transition to idle and
     /// re-installs it on the transition back to non-idle.
-    // r[impl infra.nat64.translator.lifecycle]
+    // spec: NAT64#translator-lifecycle
     nat64_installed: bool,
     /// Whether the DNS64 plugin should translate names that already
     /// have a real AAAA record (emits `translate_all` into the
     /// Corefile). Set when NAT64 is seedling-managed and the host has
     /// no IPv6 egress — forcing every flow through the translator is
     /// the only way the pod can reach dual-stack remotes.
-    // r[impl infra.nat64.dns64.force-translation]
+    // spec: NAT64#dns64
     force_dns64_translation: bool,
     /// Upstream DNS servers CoreDNS forwards to. When `--dns-upstreams`
     /// is set, these are the operator-supplied servers; otherwise it's
@@ -452,39 +452,39 @@ pub struct Reconciler {
     resolver_addr: Option<Ipv6Addr>,
     /// Host-filesystem path of the Caddy data volume. Resolved lazily on the
     /// first tick that needs to inspect Caddy's certificate cache.
-    // r[impl observe.ingress.certs]
+    // spec: OBS#ingresses
     caddy_data_path: tokio::sync::OnceCell<PathBuf>,
     /// First time each warm-cert hostname was seen during the current process
     /// lifetime, used to gate `cert_acquisition_failed` faults.
-    // r[impl fault.cert-acquisition]
+    // spec: FLT#certificate-faults
     warm_cert_first_seen: HashMap<String, std::time::Instant>,
     /// What has been read of the stored certificates, so each is parsed once
     /// and not on every tick.
     leaf_facts: crate::runtime::tls::env::LeafFactsCache,
     /// Scratch state for the image reconcile phase (last-GC timestamp).
-    // r[impl image.gc]
+    // spec: IMG#image-garbage-collection
     image_phase_state: images::ImagePhaseState,
     /// Cadence and retention of the unscheduled-instance sweep, and when it
     /// last ran.
-    // r[impl gc.instances]
+    // spec: GC#unscheduled-instances
     instance_gc: InstanceGcConfig,
     last_instance_gc: Option<std::time::Instant>,
     /// URL Caddy should use for `tls.certificates.get_certificate`. Set
     /// once at daemon startup; threaded into every proxy config build so
     /// runtime-managed certs are served via the daemon.
-    // r[impl tls.cert.serve]
+    // spec: TLS#serving
     cert_endpoint_url: Option<String>,
     /// Drives ACME-DNS issuance for hostnames declared by ingresses. The
     /// reconciler calls `ensure()` for each TLS-terminating hostname after
     /// building the proxy config; the coordinator dedups and runs the flow
     /// in the background.
-    // r[impl tls.cert.eager-issuance]
+    // spec: TLS#issuance
     tls_coordinator: Option<Arc<crate::runtime::tls::issuance::Coordinator>>,
     /// The renewal points last handed to the proxy, kept for the ticks on which
     /// they cannot be worked out: the proxy configuration is rebuilt and applied
     /// whole, so leaving them out would tell the proxy to renew whenever it
     /// likes for as long as the facts were unreadable.
-    // r[impl tls.chain.proxy-gate]
+    // spec: CHAIN#proxy-strategies
     last_renewal_ratios: std::collections::BTreeMap<String, f64>,
     /// Counter of consecutive resolver inline-health-check failures, owned
     /// by the reconciler so [`resolver::ensure_resolver_running`] can
@@ -496,12 +496,12 @@ pub struct Reconciler {
     /// path may have failed to read system DNS config; in that case the
     /// reconciler still runs but DNS-named site service endpoints stay
     /// unresolved.
-    // r[impl service.site.address]
+    // spec: SITE#endpoint-addressing
     site_resolver: Option<Arc<SiteServiceResolver>>,
     /// Consecutive failed observations per instance, so a single blip logs an
     /// error without minting an operator-visible fault. In memory beside the
     /// reconciler's other per-tick state; a restart re-observes anyway.
-    // r[impl observe.failure-not-absence]
+    // spec: OBS#failed-observation
     observe_failure_streaks: HashMap<InstanceId, u32>,
 }
 
@@ -511,7 +511,7 @@ pub struct Reconciler {
 /// not prefix-free, so `app-db`'s units land here too. It exists for the one
 /// question the recorded identities cannot answer when there are none of them:
 /// is there anything at all that might still be this app's?
-// r[impl app.uninstall.scope]
+// spec: TRD#uninstall-scope
 /// Workload units that could belong to `app`, as candidates only — the caller
 /// decides by matching exactly against recorded identity.
 ///
@@ -610,9 +610,7 @@ impl Reconciler {
         }
     }
 
-    // r[desired-state.definition]
-    // r[desired-state.steady]
-    // r[desired-state.during-operation]
+    // spec: RCN#desired-state
     ///
     /// Returns the snapshots alongside how many installed apps were dropped
     /// because computing their desired state failed. The count is not
@@ -623,7 +621,7 @@ impl Reconciler {
         let reg = self.app_registry.read();
         let mut snapshots = Vec::new();
         let mut skipped = 0usize;
-        // r[impl priority.settings]
+        // spec: PRIO#priority-setting
         // One read of every app's standing for the whole tick, rather than a
         // round trip per app. A failure is not an answer: the standings decide
         // both the slice weights and the kill preference baked into any unit
@@ -660,8 +658,8 @@ impl Reconciler {
                 return (Vec::new(), reg.names().len().max(1));
             }
         };
-        // r[impl scaling.decision]
-        // r[impl scaling.decision.unreadable]
+        // spec: AUTO#scale
+        // spec: AUTO#unreadable-scale
         // One read of every operator scaling decision for the whole tick,
         // rather than a round trip per app. A failure is not an answer: the
         // decisions say how many instances each deployment is owed, so rather
@@ -701,7 +699,7 @@ impl Reconciler {
                 None => continue,
             };
             let phase = entry.phase.lock().clone();
-            // r[impl desired-state.during-install]
+            // spec: RCN#desired-state
             // Installing apps participate in reconciliation exactly like
             // Installed apps: the install closure's rt.start() / rt.stop()
             // calls populate active_progress and the reconciler actuates the
@@ -715,10 +713,10 @@ impl Reconciler {
             let progress = entry.active_progress.read();
             let app_def_arc = entry.app.def.load_full();
             let app_def = (*app_def_arc).clone();
-            // r[impl autonomous.scale]
+            // spec: AUTO#scale
             let effective_scales =
                 self.compute_effective_scales(&name, &app_def, &scaling_decisions);
-            // i[impl resource.stop]
+            // spec: CTL#resource-stop
             let stopped_set = {
                 let app_name_for_stop = name.clone();
                 self.db.call(move |db| {
@@ -728,7 +726,7 @@ impl Reconciler {
             let desired = match phase {
                 AppPhase::Uninstalling => compute_uninstalling(&name, &app_def, &*self.registry),
                 AppPhase::NotInstalled => unreachable!(),
-                // r[impl desired-state.during-install]
+                // spec: RCN#desired-state
                 // While Installing, the install closure drives every
                 // resource into desired state explicitly via rt.start.
                 // If the closure hasn't pushed its first entry yet
@@ -779,7 +777,7 @@ impl Reconciler {
                 .map(|p| p.warm_cert_hostnames.clone())
                 .unwrap_or_default();
             let current_generation = entry.current_generation;
-            // r[impl priority.settings]
+            // spec: PRIO#priority-setting
             // Read once for the whole tick above; an app with no stored
             // decision stands at the default.
             let app_priority = priorities.get(&name).copied().unwrap_or_default();
@@ -804,8 +802,8 @@ impl Reconciler {
 ///
 /// Pure so the derivation can be checked without a supervisor: applying it is
 /// [`Reconciler::reconcile_slices`].
-// r[impl priority.actuation]
-// r[impl priority.scheduling]
+// spec: PRIO#resource-control-groups
+// spec: PRIO#contended-capacity
 fn desired_slices(apps: &[AppSnapshot]) -> BTreeMap<String, SliceSpec> {
     let mut desired: BTreeMap<String, SliceSpec> = BTreeMap::new();
 
@@ -845,8 +843,8 @@ fn desired_slices(apps: &[AppSnapshot]) -> BTreeMap<String, SliceSpec> {
         }
     }
 
-    // r[impl priority.kill-order]
-    // r[impl priority.groups-owned]
+    // spec: PRIO#kill-order
+    // spec: PRIO#resource-control-groups
     // Inserted last so it always wins the key: an app named for the
     // infrastructure component realises the same slice name, and an app that
     // predates the reservation on that name would otherwise reweight the group
@@ -869,7 +867,7 @@ impl Reconciler {
     ///
     /// When the decisions cannot be made the last ones stand, rather than an
     /// empty set that would release every hostname at once.
-    // r[impl tls.chain.proxy-gate]
+    // spec: CHAIN#proxy-strategies
     fn resolve_renewal_ratios(&mut self) -> std::collections::BTreeMap<String, f64> {
         // Asked every tick, and answered from the one state the coordinator
         // holds for every chain decision: a second copy here would be a second
@@ -899,7 +897,7 @@ impl Reconciler {
     /// already carries the right weights, and reweights the slices of workloads
     /// that are already running, which is what makes an app priority change
     /// take effect without a redeploy.
-    // r[impl priority.actuation]
+    // spec: PRIO#resource-control-groups
     async fn reconcile_slices(&mut self, apps: &[AppSnapshot], dropped_apps: usize) {
         let now = Instant::now();
         if !self.slice_retry.should_attempt(now) {
@@ -907,7 +905,7 @@ impl Reconciler {
         }
 
         let desired: Vec<SliceSpec> = desired_slices(apps).into_values().collect();
-        // r[impl reconciliation.absolute-state]
+        // spec: RCN#applying-absolute-state
         // Forgetting a slice is only safe when every app was accounted for. An
         // app dropped by a transient error is absent from `apps` while its
         // workloads keep running, and its slice carries the weights they run
@@ -935,7 +933,7 @@ impl Reconciler {
 
     /// Pace the retry and, past a threshold, tell the operator. There is no
     /// give-up state: the next tick past the back-off tries again.
-    // r[impl priority.actuation]
+    // spec: PRIO#resource-control-groups
     fn record_slice_failure(&mut self, now: Instant, error: &str) {
         self.slice_retry.record_failure(now);
         let failures = self.slice_retry.failures();
@@ -959,7 +957,7 @@ impl Reconciler {
     /// Reads from the decisions the tick already loaded: the table is read
     /// once for the node, not once per app, because this runs for every app on
     /// every tick.
-    // r[impl update.rolling.over-provision]
+    // spec: UPD#rolling-updates
     fn compute_effective_scales(
         &self,
         app_name: &AppName,
@@ -995,7 +993,7 @@ impl Reconciler {
             .collect();
         let mut scales = EffectiveScales::new();
         for (dep_name, low, high, mut effective) in scale_data {
-            // r[impl autonomous.healthcheck-replace.guard]
+            // spec: AUTO#replacement-guard
             // The replace-loop guard suppresses BOTH rolling and
             // healthcheck-driven bumps once it trips. Otherwise a deployment
             // with a permanently-broken healthcheck would keep spawning
@@ -1010,7 +1008,7 @@ impl Reconciler {
                 {
                     effective = effective.saturating_add(1);
                 }
-                // r[impl autonomous.healthcheck-replace]
+                // spec: AUTO#health-check-replacement
                 if self
                     .unhealthy_replace_deployments
                     .contains(&(app_name.clone(), dep_name.clone()))
@@ -1027,13 +1025,11 @@ impl Reconciler {
     // Tick — main reconciliation loop body
     // -----------------------------------------------------------------------
 
-    // r[reconciliation.loop]
-    // r[reconciliation.convergence]
-    // r[reconciliation.idempotency]
-    // r[fault.non-blocking]
+    // spec: RCN#reconciliation-loop
+    // spec: FLT#filing-and-clearing
     #[tracing::instrument(skip_all, level = "debug")]
     pub async fn tick(&mut self) -> bool {
-        // r[impl infra.node.degraded] — when the daemon came up without a
+        // spec: INFRA#unavailable-backends — when the daemon came up without a
         // working container runtime / process manager, every actuation would
         // just error against the unavailable backends. File the overarching
         // system fault (idempotent) and skip the rest of the tick so the OI
@@ -1055,7 +1051,7 @@ impl Reconciler {
         let (apps, dropped_apps) = self.snapshot_all_apps();
 
         if apps.is_empty() {
-            // r[impl reconciliation.absolute-state] — an empty snapshot list
+            // spec: RCN#applying-absolute-state — an empty snapshot list
             // means "no app is installed" only when nothing was dropped on the
             // way here. Tearing down on a transient registry error would flush
             // every rule and remove Caddy, the resolver and NAT64 while the
@@ -1075,7 +1071,7 @@ impl Reconciler {
 
         self.reconcile_slices(&apps, dropped_apps).await;
 
-        // r[impl infra.nat64.translator.lifecycle]
+        // spec: NAT64#translator-lifecycle
         // Wake-from-idle: ensure NAT64 translator is installed before any
         // pod starts. Setup is idempotent (forwarding sysctls already at 1,
         // module already loaded, instance-add handles EEXIST) so it is safe
@@ -1097,7 +1093,7 @@ impl Reconciler {
             }
         }
 
-        // r[impl fault.crash-loop]
+        // spec: FLT#workload-faults
         // The auto-restart suppression is in-memory but its truth lives in the
         // fault table, so re-derive it each tick: the suppression then
         // survives a daemon restart, and an operator clearing the fault takes
@@ -1118,10 +1114,10 @@ impl Reconciler {
             out
         });
 
-        // r[impl reconciliation.liveness]
+        // spec: RCN#reconciliation-loop
         // --- Concurrent phase: pods ∥ volumes ∥ caddy ∥ resolver ---
         let (pod_updates, vol_observations, caddy_result, resolver_result) = tokio::join!(
-            // r[impl autonomous.job-terminal]
+            // spec: AUTO#job-completion
             // Pass written_obs so the pod phase can detect completed Jobs: if
             // container_running was previously written for a Job instance but
             // the container is now gone, the job finished — don't restart.
@@ -1147,7 +1143,7 @@ impl Reconciler {
                     &self.data_dir,
                 ),
             ),
-            // r[impl infra.resolver.startup]
+            // spec: DNS#resolver-lifecycle
             tokio::time::timeout(
                 INFRA_ENSURE_TIMEOUT,
                 resolver::ensure_resolver_running(
@@ -1170,7 +1166,7 @@ impl Reconciler {
         self.ingest_volume_results(&apps, vol_observations);
 
         // --- Image reconciliation: pins, tracking, and autonomous GC ---
-        // r[impl actuate.image.warm] r[impl image.pin] r[impl image.track]
+        // spec: IMG#image-warming, IMG#pins, IMG#image-usage-tracking
         self.reconcile_images(running_pods_by_app.values().flatten())
             .await;
 
@@ -1191,7 +1187,7 @@ impl Reconciler {
         }
 
         // --- Process caddy result ---
-        // r[autonomous.ingress]
+        // spec: AUTO#ingress-and-network-repair
         let caddy_addrs = match caddy_result {
             Ok(Ok(addrs)) => match caddy::build_client(&addrs.admin_socket) {
                 Ok(client) => {
@@ -1261,7 +1257,7 @@ impl Reconciler {
         //     endpoints will surface as `Unresolved` and produce a fault
         //     after the consecutive-failure threshold via the resolver
         //     loop's separate path. ---
-        // r[impl service.site.address]
+        // spec: SITE#endpoint-addressing
         let site_resolver_clone = self.site_resolver.clone();
         let nat64_active = self.nat64_active;
         let has_ipv6_egress = !self.force_dns64_translation;
@@ -1297,7 +1293,7 @@ impl Reconciler {
 
         // --- Classify site-service endpoint outcomes and reconcile the
         //     associated `site_service_endpoint_*` faults. ---
-        // r[impl service.site.address]
+        // spec: SITE#endpoint-addressing
         {
             let unresolved_hosts: HashSet<String> = self
                 .site_resolver
@@ -1313,7 +1309,7 @@ impl Reconciler {
         }
 
         // --- Load site-ingress snapshot (DB-backed) once per tick. ---
-        // r[impl ingress.site] r[impl ingress.site.attachment]
+        // spec: SITE#site-ingresses, SITE#attachments
         let site_ingress_snapshot = self
             .db
             .call(|db| Ok::<_, rusqlite::Error>(site_proxy::load(db)))
@@ -1325,7 +1321,7 @@ impl Reconciler {
                 }
             });
 
-        // r[impl tls.chain.proxy-gate]
+        // spec: CHAIN#proxy-strategies
         let renewal_ratios = self.resolve_renewal_ratios();
 
         // --- Compute nftables + proxy (sync, gated on caddy) ---
@@ -1365,7 +1361,7 @@ impl Reconciler {
                     coverage: rules_coverage,
                 } = nft_build;
                 let rules_coverage = rules_coverage.and(app_coverage);
-                // r[impl fault.service-degraded]
+                // spec: FLT#ingress-and-service-faults
                 self.file_service_degraded_faults(&apps, &degraded_services_by_app);
                 let phases::ProxyBuildResult {
                     config: proxy_config,
@@ -1376,9 +1372,9 @@ impl Reconciler {
                     unresolved_site_attachments,
                 } = proxy_build;
                 let proxy_coverage = proxy_coverage.and(app_coverage);
-                // r[impl ingress.site.conflict]
+                // spec: SITE#ingress-conflicts
                 self.reconcile_ingress_conflicts(&ingress_conflicts);
-                // r[impl ingress.site.attachment]
+                // spec: SITE#attachments
                 self.reconcile_unresolved_site_attachments(&unresolved_site_attachments);
                 // The TLS-managed-ingress enumeration is shared with
                 // the OI rollup and the expiry sweep so all three call
@@ -1390,7 +1386,7 @@ impl Reconciler {
                     crate::runtime::tls::state::managed_ingresses(&reg)
                 };
 
-                // r[impl tls.cert.eager-issuance]
+                // spec: TLS#issuance
                 // Hand every TLS-terminating hostname to the issuance
                 // coordinator. ensure() dedups in-flight requests, skips
                 // hostnames with current certs / paused / non-acme_dns
@@ -1399,7 +1395,7 @@ impl Reconciler {
                     for mi in &managed_ingresses {
                         coord.ensure(&mi.hostname);
                     }
-                    // r[impl ingress.site.tailscale]
+                    // spec: SITE#tailscale-discovery
                     // Site-ingress hostnames (manual + discovered) flow
                     // through the same coordinator. The dispatch inside
                     // ensure() picks the Tailscale issuer for discovered
@@ -1411,7 +1407,7 @@ impl Reconciler {
                     }
                 }
 
-                // r[impl tls.fault.expiring]
+                // spec: TLS#expiring-certificates
                 // Reconcile cert_expiring_soon faults against the
                 // current TLS-terminating ingresses. Manual / CSR-derived
                 // certs are surfaced when within fourteen days of expiry;
@@ -1436,7 +1432,7 @@ impl Reconciler {
 
                 self.persist_obs(proxy_obs);
 
-                // r[impl reconciliation.absolute-state] — each of these three
+                // spec: RCN#applying-absolute-state — each of these three
                 // replaces the host's whole state for its plane, so an
                 // incomplete build must be withheld rather than applied: the
                 // apps missing from it are still running.
@@ -1503,7 +1499,7 @@ impl Reconciler {
                             "proxy_failed",
                             &format!("apply_config failed: {e}"),
                         );
-                        // r[impl fault.proxy-apply-failed]
+                        // spec: FLT#ingress-and-service-faults
                         // Mirror the system-level proxy_failed fault at
                         // resource granularity so each affected app sees
                         // the degradation in `DescribeApp` / `GetStatus`,
@@ -1533,11 +1529,11 @@ impl Reconciler {
                     }
                     Some(Ok(())) => {
                         self.clear_system_fault("proxy_failed");
-                        // r[impl fault.proxy-apply-failed]
+                        // spec: FLT#ingress-and-service-faults
                         self.clear_proxy_apply_failed_faults();
                         self.persist_obs(proxy_ready_obs);
 
-                        // r[impl infra.proxy.upgrade.cache]
+                        // spec: PRX#proxy-upgrades
                         if let Err(e) =
                             caddy::write_cached_proxy_config(&self.data_dir, &proxy_config)
                         {
@@ -1550,7 +1546,7 @@ impl Reconciler {
                     None => {}
                 }
 
-                // r[impl observe.ingress.certs]
+                // spec: OBS#ingresses
                 self.observe_warm_certs(&apps).await;
             }
             None => {
@@ -1635,12 +1631,12 @@ impl Reconciler {
             error!(error = %e, "idle: clear routes failed");
         }
         caddy::teardown_caddy(&*self.driver.container, &*self.driver.process).await;
-        // r[impl infra.resolver]
+        // spec: DNS#resolver-lifecycle
         resolver::teardown_resolver(&*self.driver.container, &*self.driver.process).await;
         self.caddy_v4_addr = None;
         self.resolver_addr = None;
 
-        // r[impl infra.nat64.translator.lifecycle]
+        // spec: NAT64#translator-lifecycle
         if self.nat64_installed {
             match crate::system::jool::teardown_nat64().await {
                 Ok(()) => self.nat64_installed = false,
@@ -1665,25 +1661,25 @@ impl Reconciler {
         pod_updates: Vec<(AppName, pods::PodActuationUpdate)>,
     ) -> HashMap<AppName, Vec<RunningPod>> {
         let mut running_pods_by_app = HashMap::new();
-        // r[impl update.rolling.over-provision]
+        // spec: UPD#rolling-updates
         // Rebuild rolling_updates from scratch each tick so that completed
         // rollouts are automatically cleared.
         self.rolling_updates.clear();
         for (app_name, mut pod_update) in pod_updates {
-            // r[fault.image-pull]
+            // spec: FLT#workload-faults
             self.file_image_pull_faults(&app_name, &pod_update);
-            // r[fault.container-start]
+            // spec: FLT#workload-faults
             self.file_unit_failure_faults(&app_name, &pod_update);
-            // r[autonomous.restart.record]
-            // r[autonomous.restart.rate]
+            // spec: AUTO#restart-record
+            // spec: AUTO#crash-loop-detection
             // Restart bookkeeping runs first: it appends rate-derived crash
             // loops to the update so both triggers file through one path.
             self.record_restarts(&app_name, &mut pod_update);
-            // r[fault.crash-loop]
+            // spec: FLT#workload-faults
             self.file_crash_loop_faults(&app_name, &pod_update);
-            // r[fault.healthcheck]
+            // spec: FLT#workload-faults
             self.file_health_check_faults(&app_name, &pod_update);
-            // r[fault.external-volume-unmapped]
+            // spec: FLT#workload-faults
             self.file_external_volume_faults(&app_name, &pod_update);
             self.file_instance_registry_faults(&app_name, &pod_update);
             self.file_pod_actuation_faults(&app_name, &pod_update);
@@ -1694,7 +1690,7 @@ impl Reconciler {
             self.persist_obs(pod_update.observations);
             for instance in &pod_update.started_instances {
                 self.written_obs.retain(|(id, _)| *id != instance.id);
-                // r[impl autonomous.job-terminal.defense]
+                // spec: AUTO#job-completion
                 self.completed_jobs.remove(&instance.id);
                 // Track that this Job was started by the reconciler so that
                 // a fast-completing job (which exits before the observer's
@@ -1704,7 +1700,7 @@ impl Reconciler {
                     self.started_jobs.insert(instance.id);
                 }
             }
-            // r[impl autonomous.job-terminal.defense]
+            // spec: AUTO#job-completion
             for completed in &pod_update.completed_job_instances {
                 self.completed_jobs.insert(*completed);
                 self.started_jobs.remove(completed);
@@ -1715,8 +1711,8 @@ impl Reconciler {
         running_pods_by_app
     }
 
-    // r[impl autonomous.healthcheck-replace]
-    // r[impl autonomous.healthcheck-replace.guard]
+    // spec: AUTO#health-check-replacement
+    // spec: AUTO#replacement-guard
     fn update_replace_state(
         &mut self,
         apps: &[AppSnapshot],
@@ -1731,7 +1727,7 @@ impl Reconciler {
             .retain(|app, _| active.contains(app));
         self.replace_failed.retain(|(app, _)| active.contains(app));
 
-        // r[impl autonomous.healthcheck-replace.guard]
+        // spec: AUTO#replacement-guard
         // The guard is in-memory but its truth lives in the persisted fault
         // table. Re-derive each tick so the suppression survives daemon
         // restarts (and so an operator clearing the fault has its effect
@@ -1758,7 +1754,7 @@ impl Reconciler {
         for app in apps {
             let prior = self.last_seen_generation.get(&app.name).copied();
             if prior.map(|p| app.current_generation > p).unwrap_or(false) {
-                // r[impl autonomous.healthcheck-replace.guard]
+                // spec: AUTO#replacement-guard
                 // Operator changed the AppDef — give the workload a fresh
                 // chance to converge. Clear both the in-memory bump
                 // suppression and the persisted hard fault.
@@ -1823,7 +1819,7 @@ impl Reconciler {
             }
         }
 
-        // r[impl scaling.decision]
+        // spec: AUTO#scale
         // How many healthy instances a deployment is owed is the scale the
         // operator chose, not the declared lower bound. Read against the
         // bound, a deployment declaring `scale 1..5` and scaled to 5 that
@@ -1849,7 +1845,7 @@ impl Reconciler {
                     .collect())
             })
         };
-        // r[impl scaling.decision.unreadable]
+        // spec: AUTO#unreadable-scale
         // Carried as `None` rather than as the lower bound. Read against the
         // bound a deployment scaled above it is never short, so substituting
         // one would withhold every replacement while reading as a decision to
@@ -1877,7 +1873,7 @@ impl Reconciler {
             }
         }
 
-        // r[impl autonomous.healthcheck-replace.guard]
+        // spec: AUTO#replacement-guard
         // Check each deployment that's currently bringing up a fresh instance —
         // whether the bump is from a rolling update (operator pushed new code)
         // or from healthcheck-driven replace (existing instance went sour).
@@ -1970,7 +1966,7 @@ impl Reconciler {
             if !running.is_empty() {
                 continue;
             }
-            // r[impl app.uninstall.scope] — match units against the
+            // spec: TRD#uninstall-scope — match units against the
             // identities the registry recorded, not against a name prefix.
             // `seedling-{app}-` is not prefix-free: uninstalling `app` matched
             // every unit of a sibling called `app-db`, and the retry branch
@@ -2082,7 +2078,7 @@ impl Reconciler {
                             "uninstall_unidentifiable_units",
                         );
                     });
-                    // i[impl event.types]
+                    // spec: EVT#event-types
                     // Uninstall is reconciler-driven and therefore emits no
                     // OperationCompleted event; this phase change is the only
                     // signal the UI gets that teardown has finished.
@@ -2156,8 +2152,8 @@ struct DeploymentStanding {
 /// healthcheck but `on_failure: monitor` with no grace window at all, so the
 /// guard never evaluated it and a stuck update inhibited its stale instances
 /// for good.
-// r[impl autonomous.healthcheck-replace]
-// r[impl autonomous.healthcheck-replace.guard]
+// spec: AUTO#health-check-replacement
+// spec: AUTO#replacement-guard
 fn deployment_standing(
     healthcheck: Option<(crate::defs::container::HealthcheckOnFailure, i64)>,
     instance_health: &[bool],
@@ -2169,7 +2165,7 @@ fn deployment_standing(
             wants_replacement: false,
         };
     };
-    // r[impl scaling.decision.unreadable]
+    // spec: AUTO#unreadable-scale
     // A deployment whose target could not be read is not a deployment known to
     // have enough: how many it is owed is simply unanswered, and spawning a
     // replacement against a guess is the churn the guard exists to bound. Its
@@ -2200,7 +2196,7 @@ fn deployment_standing(
 /// coverage check is what tells it apart from a build that could not compute
 /// one. Skipping it left whatever the proxy had last been given in force, so a
 /// deleted ingress stayed reachable.
-// r[impl reconciliation.absolute-state]
+// spec: RCN#applying-absolute-state
 async fn apply_proxy_plane(
     proxy: &dyn super::NetworkProxy,
     config: &crate::system::types::ProxyConfig,
@@ -2235,7 +2231,7 @@ mod tests {
         }
     }
 
-    // r[verify reconciliation.absolute-state]
+    // spec: RCN#applying-absolute-state
     // Removing the last ingress produces an empty config. It used to be skipped
     // and reported as a success, so the proxy kept serving the ingress that was
     // deleted.
@@ -2249,7 +2245,7 @@ mod tests {
         assert_eq!(*proxy.0.lock(), vec![true], "applied once, and empty");
     }
 
-    // r[verify reconciliation.absolute-state]
+    // spec: RCN#applying-absolute-state
     // An empty config from a build that could not cover every app is not the
     // answer "nothing to serve", and must leave the previous state standing.
     #[tokio::test]
@@ -2270,7 +2266,7 @@ mod tests {
         deployment_standing(Some((on_failure, 90)), health, Some(target))
     }
 
-    // r[verify autonomous.healthcheck-replace.guard]
+    // spec: AUTO#replacement-guard
     // The grace window was recorded only after the on_failure=replace filter,
     // and the guard's candidate list is looked up through that map. A rolling
     // update of a deployment with a healthcheck but on_failure=monitor had no
@@ -2294,7 +2290,7 @@ mod tests {
         );
     }
 
-    // r[verify autonomous.healthcheck-replace]
+    // spec: AUTO#health-check-replacement
     // Only `replace` spawns a replacement; `monitor` keeps its routing-pool
     // preference but is never bumped.
     #[test]
@@ -2307,7 +2303,7 @@ mod tests {
         );
     }
 
-    // r[verify scaling.decision.unreadable]
+    // spec: AUTO#unreadable-scale
     // The lower bound carried two wrong answers at once: a scaled-up
     // deployment never looked short, and one sitting at its floor looked
     // adequately staffed for a reason nobody had checked. Unknown is carried
@@ -2334,7 +2330,7 @@ mod tests {
         );
     }
 
-    // r[verify scaling.decision]
+    // spec: AUTO#scale
     // The threshold was the declared lower bound while the running instances
     // follow the operator's effective scale. A deployment declaring
     // `scale 1..5` and scaled to 5 that loses one instance has four healthy
@@ -2354,7 +2350,7 @@ mod tests {
         );
     }
 
-    // r[verify observe.persist]
+    // spec: OBS#recording
     // `OBS_KINDS` exists to intern what `to_obs_kinds` persists, so a kind in
     // one and not the other silently defeats the restart seed: the row is
     // read from the DB, fails to intern, and the observation is re-written
@@ -2415,7 +2411,7 @@ mod tests {
         }
     }
 
-    // r[verify app.uninstall.scope]
+    // spec: TRD#uninstall-scope
     #[test]
     fn no_recorded_identities_with_units_still_loaded_is_not_teardown_finished() {
         let units = [
@@ -2431,7 +2427,7 @@ mod tests {
         );
     }
 
-    // r[verify app.uninstall.scope]
+    // spec: TRD#uninstall-scope
     #[test]
     fn no_recorded_identities_and_no_units_is_genuinely_nothing_to_tear_down() {
         let units = [unit("seedling-other-web.service")];
@@ -2443,8 +2439,8 @@ mod tests {
         );
     }
 
-    // r[verify app.uninstall.scope]
-    // r[verify priority.groups-owned]
+    // spec: TRD#uninstall-scope
+    // spec: PRIO#resource-control-groups
     // The runtime's own slices sit under the same prefix and outlive the
     // workloads in them, so counting one as a live workload would strand an app
     // that has no recorded instances in uninstalling forever.
@@ -2463,7 +2459,7 @@ mod tests {
         );
     }
 
-    // r[verify app.uninstall.scope]
+    // spec: TRD#uninstall-scope
     #[test]
     fn the_candidate_scan_may_over_match_a_sibling_but_only_towards_caution() {
         let units = [unit("seedling-app-db-web.service")];
@@ -2582,7 +2578,7 @@ mod tests {
         }
     }
 
-    // r[verify priority.actuation]
+    // spec: PRIO#resource-control-groups
     #[test]
     fn each_declared_level_gets_a_tier_slice_under_its_app() {
         let apps = vec![snapshot_with_priorities(
@@ -2610,7 +2606,7 @@ mod tests {
         assert!(!slices.contains_key("seedling-demo-elevated.slice"));
     }
 
-    // r[verify priority.scheduling]
+    // spec: PRIO#contended-capacity
     #[test]
     fn the_app_slice_carries_the_app_weight_and_the_tier_slice_the_tier_weight() {
         let apps = vec![snapshot_with_priorities(
@@ -2632,7 +2628,7 @@ mod tests {
         assert_eq!(tier.weight, priority::deployment_weight(Priority::Critical));
     }
 
-    // r[verify priority.settings]
+    // spec: PRIO#priority-setting
     // The same definition at a different app priority must produce a different
     // app-slice weight: that difference is what a reweight applies.
     #[test]
@@ -2651,7 +2647,7 @@ mod tests {
         );
     }
 
-    // r[verify priority.kill-order]
+    // spec: PRIO#kill-order
     #[test]
     fn the_infra_slice_is_always_present_and_outweighs_every_app() {
         let slices = desired_slices(&[]);
@@ -2667,7 +2663,7 @@ mod tests {
         assert!(with_app[priority::INFRA_SLICE].weight > with_app["seedling-demo.slice"].weight);
     }
 
-    // r[verify priority.groups-owned]
+    // spec: PRIO#resource-control-groups
     // Registering an app under the infrastructure name is refused, but an app
     // that predates that reservation still reaches this derivation, and its
     // slice name is byte-identical to the infrastructure slice. The
@@ -2688,7 +2684,7 @@ mod tests {
         );
     }
 
-    // r[verify priority.groups-owned]
+    // spec: PRIO#resource-control-groups
     // Two apps whose names differ only by a hyphen must not share a slice, nor
     // nest one inside the other.
     #[test]
@@ -2707,7 +2703,7 @@ mod tests {
         );
     }
 
-    // r[verify reconciliation.absolute-state]
+    // spec: RCN#applying-absolute-state
     // Routes are applied wholesale, so an app dropped from the computed set
     // has its live routes deleted. The tick has to know the set is short.
     #[test]
@@ -2748,7 +2744,7 @@ mod tests {
         );
     }
 
-    // r[verify reconciliation.absolute-state]
+    // spec: RCN#applying-absolute-state
     #[test]
     fn routes_report_complete_coverage_when_every_app_builds() {
         let apps = vec![
@@ -2779,7 +2775,7 @@ mod tests {
         assert_eq!(build.routes.len(), 2);
     }
 
-    // r[verify reconciliation.absolute-state]
+    // spec: RCN#applying-absolute-state
     // The whole point of the distinction: an empty app set means "nothing is
     // installed" only when nothing was dropped getting there.
     #[test]

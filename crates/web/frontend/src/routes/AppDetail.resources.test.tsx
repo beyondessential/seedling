@@ -59,7 +59,7 @@ describe("AppDetail params", () => {
     }
   });
 
-  // w[verify routes.apps]
+  // spec: UI#operator-capabilities
   it("sets a param from the edit row", async () => {
     const { request } = mount(baseFixtures(makeDetail()), "write");
     expect(await screen.findByText("domain")).toBeTruthy();
@@ -74,7 +74,7 @@ describe("AppDetail params", () => {
     );
   });
 
-  // w[verify routes.apps]
+  // spec: UI#operator-capabilities
   it("unsets an optional param", async () => {
     const { request } = mount(baseFixtures(makeDetail()), "write");
     expect(await screen.findByText("domain")).toBeTruthy();
@@ -106,7 +106,7 @@ describe("AppDetail params", () => {
 });
 
 describe("AppDetail restarts", () => {
-  // w[verify routes.restarts]
+  // spec: UI#restart-history
   it("shows the instance's restart count and links to its history", async () => {
     mount(
       baseFixtures(
@@ -137,7 +137,7 @@ describe("AppDetail restarts", () => {
     expect(chip.getAttribute("href")).toBe("/restarts?instance=inst-web-0");
   });
 
-  // w[verify routes.restarts]
+  // spec: UI#restart-history
   it("shows no restart chip for an instance with no history", async () => {
     mount(baseFixtures(makeDetail()));
     expect(await screen.findByText("web-0")).toBeTruthy();
@@ -146,7 +146,7 @@ describe("AppDetail restarts", () => {
 });
 
 describe("AppDetail resources", () => {
-  // w[verify routes.apps]
+  // spec: UI#operator-capabilities
   it("scales a deployment up and down", async () => {
     const { request } = mount(baseFixtures(makeDetail()), "write");
     expect(await screen.findByText("web-0")).toBeTruthy();
@@ -165,7 +165,7 @@ describe("AppDetail resources", () => {
     );
   });
 
-  // w[verify routes.apps]
+  // spec: UI#operator-capabilities
   // The daemon reports `current` as null when it could not read the operator's
   // scaling decision. Read as a number, `null + 1` is 1, so scaling up a
   // deployment running five instances sent scale=1 and tore four down: the
@@ -204,7 +204,7 @@ describe("AppDetail resources", () => {
     );
   });
 
-  // w[verify volumes.shell-ui.read-only]
+  // spec: UI#shells
   it("opens a volume shell read-only in read mode and read-write in write mode", async () => {
     const first = mount(baseFixtures(makeDetail()));
     expect(await screen.findByText("web-0")).toBeTruthy();
@@ -226,7 +226,7 @@ describe("AppDetail resources", () => {
     );
   });
 
-  // w[verify routes.apps.healthcheck-indicator]
+  // spec: UI#app-status
   it("shows a healthy healthcheck indicator for a ready instance", async () => {
     const dep = makeWebDeployment();
     if (dep.def?.kind === "deployment") dep.def.container.healthcheck = healthcheck;
@@ -239,7 +239,7 @@ describe("AppDetail resources", () => {
     ).toBeTruthy();
   });
 
-  // w[verify routes.apps.healthcheck-indicator]
+  // spec: UI#app-status
   it("shows an unhealthy indicator when a health_check_failed fault targets the instance", async () => {
     const dep = makeWebDeployment({
       faults: [
@@ -257,7 +257,7 @@ describe("AppDetail resources", () => {
 });
 
 describe("AppDetail actions", () => {
-  // w[verify routes.apps]
+  // spec: UI#operator-capabilities
   it("invokes a no-param action through the dialog", async () => {
     const { request } = mount(baseFixtures(makeDetail()), "write");
     expect(await screen.findByText("db-shell")).toBeTruthy();
@@ -290,7 +290,7 @@ describe("AppDetail actions", () => {
     );
   });
 
-  // w[verify shells.ui]
+  // spec: UI#shells
   it("opens a no-param shell action immediately", async () => {
     const { openShell } = mount(baseFixtures(makeDetail()), "write");
     expect(await screen.findByText("db-shell")).toBeTruthy();
@@ -298,7 +298,7 @@ describe("AppDetail actions", () => {
     expect(openShell).toHaveBeenCalledWith("myapp", "db-shell", {});
   });
 
-  // w[verify shells.ui]
+  // spec: UI#shells
   it("collects shell params in a dialog before opening the session", async () => {
     const detail = makeDetail({
       actions: [installAction, backupAction, reindexAction, psqlShellAction],

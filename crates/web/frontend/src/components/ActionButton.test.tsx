@@ -24,7 +24,7 @@ describe("ActionButton safety guards", () => {
     expect(onClick).toHaveBeenCalledTimes(1);
   });
 
-  // w[verify sessions.safety-mode]
+  // spec: UI#guarded-controls
   it("write-tier buttons are disabled in read mode", () => {
     const onClick = vi.fn();
     renderWithSession(
@@ -37,7 +37,7 @@ describe("ActionButton safety guards", () => {
     expect(onClick).not.toHaveBeenCalled();
   });
 
-  // w[verify sessions.safety-mode]
+  // spec: UI#guarded-controls
   it("write-tier buttons are enabled in write mode", () => {
     const onClick = vi.fn();
     renderWithSession(
@@ -51,7 +51,7 @@ describe("ActionButton safety guards", () => {
     expect(onClick).toHaveBeenCalledTimes(1);
   });
 
-  // w[verify sessions.safety-mode]
+  // spec: UI#guarded-controls
   it("dangerous-tier buttons stay disabled in write mode", () => {
     renderWithSession(
       <SolidActionButton safety="dangerous">Delete</SolidActionButton>,
@@ -60,7 +60,7 @@ describe("ActionButton safety guards", () => {
     expect(button("Delete").disabled).toBe(true);
   });
 
-  // w[verify sessions.safety-mode]
+  // spec: UI#guarded-controls
   it("dangerous-tier buttons are enabled in dangerous mode", () => {
     const onClick = vi.fn();
     renderWithSession(
@@ -84,7 +84,7 @@ describe("ActionButton safety guards", () => {
     expect(button("Deploy").disabled).toBe(true);
   });
 
-  // w[verify sessions.safety-mode]
+  // spec: UI#guarded-controls
   it("icon buttons follow the same guard", () => {
     const onClick = vi.fn();
     const { unmount } = renderWithSession(

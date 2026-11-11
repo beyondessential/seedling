@@ -82,7 +82,7 @@ pub fn delete(
 /// deregistered. The app name is the runtime's identity for an app, so a
 /// mapping left behind is inherited by the next app registered under that
 /// name rather than belonging to nobody.
-// r[impl deregister.purge]
+// spec: TRD#deregistration
 pub fn delete_for_app(db: &Db, app: &AppName) -> rusqlite::Result<usize> {
     db.conn.execute(
         "DELETE FROM external_volume_mappings WHERE app = ?1",

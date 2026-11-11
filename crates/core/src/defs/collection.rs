@@ -27,7 +27,7 @@ use collectable::{BagCollection, Empty, Except, Only, Select, Union};
 // Collection — the Rhai-facing type
 // ---------------------------------------------------------------------------
 
-// l[impl collection.interface]
+// spec: COL#collection
 #[derive(Clone)]
 pub struct Collection(pub(crate) Rc<dyn Collectable>);
 
@@ -44,7 +44,7 @@ impl Collection {
         self.0.resolve()
     }
 
-    // l[impl collection.one]
+    // spec: COL#query-methods
     pub fn one(&self) -> Dynamic {
         self.resolve()
             .into_iter()
@@ -53,7 +53,7 @@ impl Collection {
             .unwrap_or(Dynamic::UNIT)
     }
 
-    // l[impl collection.only]
+    // spec: COL#query-methods
     pub fn only(self, other: Dynamic) -> Self {
         Self(Rc::new(Only {
             left: self,
@@ -61,7 +61,7 @@ impl Collection {
         }))
     }
 
-    // l[impl collection.except]
+    // spec: COL#query-methods
     pub fn except(self, other: Dynamic) -> Self {
         Self(Rc::new(Except {
             left: self,
@@ -69,7 +69,7 @@ impl Collection {
         }))
     }
 
-    // l[impl collection.select]
+    // spec: COL#selection
     pub fn select(self, criterion: &Map) -> Result<Self, Box<rhai::EvalAltResult>> {
         Ok(Self(Rc::new(Select {
             inner: self,
@@ -82,17 +82,17 @@ impl CustomType for Collection {
     fn build(mut builder: TypeBuilder<Self>) {
         builder
             .with_name("Collection")
-            // l[impl collection.one]
+            // spec: COL#query-methods
             .with_fn("one", |this: &mut Self| -> Dynamic { this.one() })
-            // l[impl collection.only]
+            // spec: COL#query-methods
             .with_fn("only", |this: &mut Self, other: Dynamic| -> Collection {
                 this.clone().only(other)
             })
-            // l[impl collection.except]
+            // spec: COL#query-methods
             .with_fn("except", |this: &mut Self, other: Dynamic| -> Collection {
                 this.clone().except(other)
             })
-            // l[impl collection.select]
+            // spec: COL#selection
             .with_fn(
                 "select",
                 |this: &mut Self, criterion: Map| -> Result<Collection, Box<rhai::EvalAltResult>> {
@@ -106,7 +106,7 @@ impl CustomType for Collection {
 // col() — coerce any value into a Collection
 // ---------------------------------------------------------------------------
 
-// l[impl collection.col]
+// spec: COL#coercion
 pub fn col(val: Dynamic) -> Collection {
     if let Some(c) = val.clone().try_cast::<Collection>() {
         return c;

@@ -29,21 +29,21 @@ pub(crate) struct InvokeActionParams {
     pub params: Option<serde_json::Map<String, serde_json::Value>>,
 }
 
-// i[action.cancel]
+// spec: ACI#cancellation
 #[derive(Deserialize)]
 pub(crate) struct CancelActionParams {
     pub app: AppName,
 }
 
 /// Request cancellation of the currently-active operation for `app`.
-// r[impl operation.cancel]
-// i[action.cancel]
+// spec: OPS#cancellation
+// spec: ACI#cancellation
 pub(crate) fn cancel_action(state: &Arc<OiState>, params: CancelActionParams) -> HandlerResult {
     let app_name = &params.app;
     let outcome = state.scheduler.lock().request_cancel(app_name);
     match outcome {
         CancelOutcome::Cancelled(op_id) | CancelOutcome::AlreadyCancelled(op_id) => {
-            // r[impl operation.cancel.persistence]
+            // spec: OPS#cancel-persistence
             // Persist the flag so a daemon crash between the in-memory flip
             // and cancel observation leaves the op in a pre-cancelled state
             // on the next start-up. Do this on AlreadyCancelled too so a
@@ -65,7 +65,7 @@ pub(crate) fn cancel_action(state: &Arc<OiState>, params: CancelActionParams) ->
             Ok(json!({ "cancelled": true }))
         }
         CancelOutcome::NoActiveOp => {
-            // r[impl operation.cancel.stuck-recovery]
+            // spec: OPS#stuck-install-recovery
             // The scheduler has no live operation, but the app's persisted
             // phase may be Installing from a prior run that crashed or whose
             // post-cancel cleanup failed to revert the phase. Without a
@@ -121,15 +121,14 @@ fn validation_error_to_oi(e: ParamValidationError) -> OiError {
     OiError::new(code, e.to_string())
 }
 
-// l[impl action.params]
-// r[impl operation.volume-param.reserved]
+// spec: ACN#param-delivery
 fn validate_action_params(
     params: &serde_json::Map<String, serde_json::Value>,
 ) -> Result<(), OiError> {
     action_params::reject_reserved_keys(params).map_err(validation_error_to_oi)
 }
 
-// l[impl action.params.volume]
+// spec: ACN#volume-params
 fn validate_volume_params(
     state: &OiState,
     schema: &BTreeMap<ParamName, ParamDef>,
@@ -139,7 +138,7 @@ fn validate_volume_params(
         .map_err(validation_error_to_oi)
 }
 
-// i[action.invoke]
+// spec: ACI#invoking-an-action
 fn apply_action_param_schema(
     action_params_schema: &BTreeMap<ParamName, ParamDef>,
     params: &mut serde_json::Map<String, serde_json::Value>,
@@ -147,8 +146,7 @@ fn apply_action_param_schema(
     action_params::apply_schema(action_params_schema, params).map_err(validation_error_to_oi)
 }
 
-// i[action.not-installed-gate]
-// i[action.invoke]
+// spec: ACI#invoking-an-action
 pub(crate) fn invoke_action(
     state: &Arc<OiState>,
     params: InvokeActionParams,
@@ -165,7 +163,7 @@ pub(crate) fn invoke_action(
             .get(app_name.as_str())
             .ok_or_else(|| OiError::not_found(format!("app not found: {app_name}")))?;
 
-        // i[action.not-installed-gate]
+        // spec: ACI#invoking-an-action
         if !matches!(*entry.phase.lock(), AppPhase::Installed) {
             return Err(OiError::new(
                 ErrorCode::NotInstalled,
@@ -173,7 +171,7 @@ pub(crate) fn invoke_action(
             ));
         }
 
-        // i[action.invoke] - reject if script_error fault is active
+        // spec: ACI#invoking-an-action - reject if script_error fault is active
         if entry.script_error.is_some() {
             return Err(OiError::script_error(format!(
                 "app has a script error: {app_name}"
@@ -186,7 +184,7 @@ pub(crate) fn invoke_action(
                 "'{action_name}' is a shell action; use /shells/start"
             )));
         }
-        // l[impl action.start.no-manual-invoke]
+        // spec: ACN#start-action
         if action_name == "start" {
             return Err(OiError::not_found(
                 "'start' is a lifecycle action and cannot be manually invoked".to_string(),
@@ -197,9 +195,9 @@ pub(crate) fn invoke_action(
             .get(action_name.as_str())
             .ok_or_else(|| OiError::not_found(format!("action not found: {action_name}")))?;
 
-        // i[action.invoke]
+        // spec: ACI#invoking-an-action
         apply_action_param_schema(&action_def.params, &mut action_params)?;
-        // l[impl action.params.volume]
+        // spec: ACN#volume-params
         validate_volume_params(state, &action_def.params, &action_params)?;
 
         Arc::clone(&entry.phase)
@@ -215,7 +213,7 @@ pub(crate) fn invoke_action(
     };
     let (result, op_id_str) = {
         let mut sched = state.scheduler.lock();
-        // r[impl app.uninstall.exclusive]
+        // spec: TRD#uninstall-admission
         // The phase read above was taken and released before this lock, so an
         // uninstall could have landed in between. The scheduler reads the
         // phase under its own lock and refuses an app being torn down, so the
@@ -273,7 +271,7 @@ pub(crate) fn invoke_action(
             ErrorCode::OperationInProgress,
             format!("a change to {app_name} is being applied; try again once it is applied"),
         )),
-        // r[impl app.uninstall.exclusive]
+        // spec: TRD#uninstall-admission
         ScheduleResult::Rejected(RejectReason::AppUninstalling) => Err(OiError::new(
             ErrorCode::NotInstalled,
             format!("app is being uninstalled: {app_name}"),
@@ -285,7 +283,7 @@ pub(crate) fn invoke_action(
 mod tests {
     use super::*;
 
-    // l[impl action.params] r[impl operation.volume-param.reserved]
+    // spec: ACN#param-delivery
     #[test]
     fn rejects_reserved_volume_suffix() {
         let mut params = serde_json::Map::new();
@@ -294,7 +292,7 @@ mod tests {
         assert!(matches!(err.code, ErrorCode::RequirementsInvalid));
     }
 
-    // l[impl action.params] r[impl operation.volume-param.reserved]
+    // spec: ACN#param-delivery
     #[test]
     fn rejects_reserved_filename_suffix() {
         let mut params = serde_json::Map::new();
@@ -315,7 +313,7 @@ mod tests {
 
     use crate::oi::test_support::TestOi;
 
-    // i[verify action.invoke]
+    // spec: ACI#invoking-an-action
     #[test]
     fn invoke_on_unknown_app_is_not_found() {
         let oi = TestOi::new();
@@ -328,7 +326,7 @@ mod tests {
         assert_eq!(code, "not_found");
     }
 
-    // i[verify action.not-installed-gate]
+    // spec: ACI#invoking-an-action
     #[test]
     fn invoke_on_uninstalled_app_is_rejected() {
         let oi = TestOi::with_app("demo");
@@ -341,7 +339,7 @@ mod tests {
         assert_eq!(code, "not_installed");
     }
 
-    // i[verify action.invoke]
+    // spec: ACI#invoking-an-action
     #[test]
     fn invoke_unknown_action_on_installed_app_is_not_found() {
         let oi = TestOi::with_app("demo");
@@ -356,7 +354,7 @@ mod tests {
         assert!(message.contains("action not found"), "message: {message}");
     }
 
-    // l[verify action.start.no-manual-invoke]
+    // spec: ACN#start-action
     #[test]
     fn invoke_start_is_rejected() {
         let oi = TestOi::with_app("demo");
@@ -371,7 +369,7 @@ mod tests {
         assert!(message.contains("lifecycle action"), "message: {message}");
     }
 
-    // r[verify operation.volume-param.reserved]
+    // spec: ACN#param-delivery
     #[test]
     fn invoke_with_reserved_param_key_is_rejected() {
         let oi = TestOi::with_app("demo");
@@ -389,7 +387,7 @@ mod tests {
         assert_eq!(code, "requirements_invalid");
     }
 
-    // i[verify action.cancel]
+    // spec: ACI#cancellation
     #[test]
     fn cancel_without_active_operation_is_not_found() {
         let oi = TestOi::with_app("demo");

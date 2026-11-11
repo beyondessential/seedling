@@ -5,8 +5,8 @@ use super::super::install::{ParamDef, ParamKind};
 use super::App;
 
 pub(super) fn on_app(builder: &mut TypeBuilder<App>) {
-    // l[impl param.type]
-    // l[impl param.schema]
+    // spec: PARAM#declaration
+    // spec: PARAM#schema
     builder.with_fn(
         "param",
         |this: &mut App, name: &str| -> Result<super::super::param::Param, Box<EvalAltResult>> {

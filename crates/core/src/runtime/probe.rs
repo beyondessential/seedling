@@ -1,7 +1,7 @@
 //! Handler probe — dry-run execution mode that enumerates container image
 //! references an app's action/shell/install/on_change handlers might pull.
 //!
-//! See `r[image.discover]` in `docs/spec/runtime.md` for semantics. The
+//! See `spec: IMG#image-discovery` for semantics. The
 //! behaviour of individual `rt.*` calls under probe mode is implemented in
 //! [`super::barrier::runtime`].
 
@@ -82,7 +82,7 @@ pub struct ProbeResponse {
     pub all_images: BTreeSet<String>,
 }
 
-// r[impl image.discover]
+// spec: IMG#image-discovery
 pub fn probe_app(
     engine: &Engine,
     script_ast: &AST,
@@ -204,7 +204,7 @@ fn probe_handler(
     schema: &BTreeMap<ParamName, ParamDef>,
     request: &ProbeRequest,
 ) -> HandlerProbe {
-    // r[impl image.discover.params]
+    // spec: IMG#probe-parameters
     let supplied = request.action_params.get(handler_name);
     let stored = app.stored.lock().clone();
     let (resolved_params, missing_required) = resolve_params(schema, supplied, &stored);
@@ -281,7 +281,7 @@ fn probe_handler(
     let action_def = Arc::new(arc_swap::ArcSwap::new(app.def.load_full()));
     let eval_result = {
         let _guard = ActionClosureGuard::new(action_def, op_id.0.clone(), HashMap::new());
-        // r[impl image.discover]
+        // spec: IMG#image-discovery
         let _probe_guard = ProbeGuard::new();
         engine.compile(call_script).ok().and_then(|ast| {
             engine
@@ -355,7 +355,7 @@ mod tests {
         (engine, ast, app)
     }
 
-    // r[verify image.discover]
+    // spec: IMG#image-discovery
     #[test]
     fn probes_dynamic_job_images_in_action() {
         let (engine, ast, app) = setup_engine_and_app(
@@ -386,7 +386,7 @@ mod tests {
         assert!(response.all_images.contains("ghcr.io/example/foo:1.2.3"));
     }
 
-    // r[verify image.discover]
+    // spec: IMG#image-discovery
     #[test]
     fn probes_rt_start_dynamic_deployment_image() {
         let (engine, ast, app) = setup_engine_and_app(
@@ -408,7 +408,7 @@ mod tests {
         );
     }
 
-    // r[verify image.discover.params]
+    // spec: IMG#probe-parameters
     #[test]
     fn lenient_skips_action_with_missing_required_param() {
         let (engine, ast, app) = setup_engine_and_app(
@@ -466,7 +466,7 @@ mod tests {
         );
     }
 
-    // r[verify image.discover.params]
+    // spec: IMG#probe-parameters
     #[test]
     fn strict_reports_missing_required_param_as_error() {
         let (engine, ast, app) = setup_engine_and_app(
@@ -513,7 +513,7 @@ mod tests {
         assert!(deploy.skipped_reason.is_none());
     }
 
-    // r[verify image.discover]
+    // spec: IMG#image-discovery
     #[test]
     fn handles_external_volume_with_unset_param_key() {
         // A handler that calls `app.external_volume(param["output_volume"])`:
@@ -552,7 +552,7 @@ mod tests {
         assert!(response.all_images.contains("ghcr.io/example/tool:0.21.0"));
     }
 
-    // r[verify image.discover]
+    // spec: IMG#image-discovery
     #[test]
     fn surfaces_error_for_nested_param_indexing() {
         // Nested indexing such as `config["mode"]` — `config` is unset
@@ -600,7 +600,7 @@ mod tests {
         assert!(!response.all_images.contains("ghcr.io/example/tool:0.21.0"));
     }
 
-    // r[verify image.discover]
+    // spec: IMG#image-discovery
     #[test]
     fn passes_through_termination_ensure_success() {
         // A closure that gates further image refs on a terminated job's

@@ -18,8 +18,8 @@ use sha2::{Digest, Sha256};
 
 /// Load an Ed25519 signing key from a PKCS#8 DER file, or generate and
 /// persist one if the file does not exist.
-// r[infra.key.file-permissions]
-// i[key.client.file-permissions]
+// spec: INFRA#file-permissions
+// spec: CLI#client-identity-key
 pub fn load_or_generate(path: &Path) -> io::Result<SigningKey> {
     if path.exists() {
         #[cfg(unix)]
@@ -180,6 +180,7 @@ impl ClientIdentity {
     }
 
     /// Default key path: `$XDG_STATE_HOME/seedling/client.key`.
+    // spec: LINUX#per-user-state
     pub fn default_path() -> std::path::PathBuf {
         dirs::state_dir()
             .or_else(dirs::data_local_dir)
@@ -209,14 +210,14 @@ mod tests {
 
     use super::{InvalidFingerprint, parse_fingerprint};
 
-    // i[verify key.authorize]
+    // spec: KEY#authorising-a-key
     #[test]
     fn a_canonical_fingerprint_parses_unchanged() {
         let fp = "a".repeat(64);
         assert_eq!(parse_fingerprint(&fp), Ok(fp.clone()));
     }
 
-    // i[verify key.authorize]
+    // spec: KEY#authorising-a-key
     // Comparison against a real client is byte-for-byte, so these all had to
     // be normalised rather than stored as given.
     #[test]
@@ -231,7 +232,7 @@ mod tests {
         );
     }
 
-    // i[verify key.authorize]
+    // spec: KEY#authorising-a-key
     // A wrong-shaped value is not a near miss: it is a key that can never
     // authenticate, and storing it says access was granted when it was not.
     #[test]
@@ -255,8 +256,8 @@ mod tests {
 
     use super::*;
 
-    // r[verify infra.key.file-permissions]
-    // i[verify key.client.file-permissions]
+    // spec: INFRA#file-permissions
+    // spec: CLI#client-identity-key
     #[test]
     fn load_or_generate_creates_key_with_owner_only_perms() {
         let dir = tempfile::tempdir().expect("tempdir");
@@ -266,8 +267,8 @@ mod tests {
         assert_eq!(mode, 0o600, "new key file should be 0600, got 0{mode:o}");
     }
 
-    // r[verify infra.key.file-permissions]
-    // i[verify key.client.file-permissions]
+    // spec: INFRA#file-permissions
+    // spec: CLI#client-identity-key
     #[test]
     fn load_or_generate_rejects_existing_key_with_group_perms() {
         let dir = tempfile::tempdir().expect("tempdir");

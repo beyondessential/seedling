@@ -8,12 +8,12 @@ use super::{
     resource::{Resource, ResourceId, ResourceKind, ResourceName},
 };
 
-// l[impl job.type]
+// spec: JOB#instances
 #[derive(Debug, Default, Clone)]
 pub struct JobDef {
     pub pod: Holder<PodDef>,
     pub deadline: Option<u64>,
-    // l[impl bsl.resource.description]
+    // spec: BSL#descriptions
     pub description: Option<String>,
 }
 
@@ -25,7 +25,7 @@ pub struct Job {
 }
 
 impl super::Freezable for Job {
-    // l[impl app.resources.context.immutable]
+    // spec: APP#static-resource-immutability
     fn is_frozen(&self) -> bool {
         // Anonymous jobs use an empty name as a sentinel (see app/job.rs).
         self.frozen || (!self.name.is_empty() && is_in_action_closure())
@@ -50,7 +50,7 @@ impl super::app::StaticResource for Job {
 impl CustomType for Job {
     fn build(mut builder: TypeBuilder<Self>) {
         builder.with_name("Job");
-        // l[impl job.pod]
+        // spec: JOB#declaration
         PodDef::mixin(
             &mut builder,
             move |this| this.def.lock().pod.clone(),
@@ -59,7 +59,7 @@ impl CustomType for Job {
                 name: this.name.clone(),
             },
         );
-        // l[impl job.deadline]
+        // spec: JOB#deadline
         builder.with_fn(
             "deadline",
             |this: &mut Self, seconds: i64| -> Result<Job, Box<EvalAltResult>> {
@@ -71,7 +71,7 @@ impl CustomType for Job {
                 Ok(this.clone())
             },
         );
-        // l[impl bsl.resource.description]
+        // spec: BSL#descriptions
         builder.with_fn(
             "description",
             |this: &mut Self, desc: &str| -> Result<Job, Box<EvalAltResult>> {

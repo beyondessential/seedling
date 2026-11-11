@@ -16,7 +16,7 @@ use tokio::io::{
 /// Header names and values, lower-cased, with repeats combined per RFC 9110.
 pub type Headers = BTreeMap<String, String>;
 
-// i[canopy.relay.limits]
+// spec: RLY#relay-limits
 /// Ceiling on a relayed body in either direction.
 ///
 /// The wire format is streaming-capable — body bytes run to the end of the
@@ -24,7 +24,7 @@ pub type Headers = BTreeMap<String, String>;
 /// so a ceiling is needed to bound that buffer.
 pub const MAX_RELAY_BODY: usize = 16 * 1024 * 1024;
 
-// i[canopy.relay.limits]
+// spec: RLY#relay-limits
 /// How long the server waits for a complete relayed response before resetting
 /// the stream.
 ///
@@ -33,11 +33,11 @@ pub const MAX_RELAY_BODY: usize = 16 * 1024 * 1024;
 /// the server guessing from a silence.
 pub const RELAY_TIMEOUT: Duration = Duration::from_secs(60);
 
-// i[canopy.relay.limits]
+// spec: RLY#relay-limits
 /// How many relayed requests may be in flight at once.
 pub const MAX_INFLIGHT_RELAYS: usize = 8;
 
-// i[canopy.offer]
+// spec: RLY#offers
 /// Params of `/canopy/offer`.
 ///
 /// All three fields are recorded for operator display only; no behaviour
@@ -53,14 +53,14 @@ pub struct OfferParams {
     pub via: Option<String>,
 }
 
-// i[canopy.offer]
+// spec: RLY#offers
 /// Result of `/canopy/offer`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OfferResult {
     pub offer_id: crate::names::OfferId,
 }
 
-// i[canopy.relay]
+// spec: RLY#relay-streams
 /// Header line opening a relay stream, server to client.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RelayRequest {
@@ -79,8 +79,8 @@ pub struct RelayRequest {
     pub headers: Headers,
 }
 
-// i[canopy.relay]
-// i[canopy.relay.error]
+// spec: RLY#relay-streams
+// spec: RLY#relay-errors
 /// Header line answering a relay stream, client to server.
 ///
 /// Untagged so the two shapes are distinguished by which key is present, as the
@@ -100,14 +100,14 @@ pub enum RelayResponse {
     Error { error: RelayError },
 }
 
-// i[canopy.relay.error]
+// spec: RLY#relay-errors
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RelayError {
     pub code: RelayErrorCode,
     pub message: String,
 }
 
-// i[canopy.relay.error]
+// spec: RLY#relay-errors
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum RelayErrorCode {
@@ -196,7 +196,7 @@ impl From<std::io::Error> for FrameError {
 /// the reader buffer without bound before the body limit could apply.
 const MAX_HEADER_LINE: usize = 64 * 1024;
 
-// i[stream.canopy]
+// spec: WIRE#canopy-relay-streams
 /// Write a header line and body, then half-close.
 pub async fn write_frame<W, H>(mut w: W, header: &H, body: &[u8]) -> Result<(), FrameError>
 where
@@ -211,7 +211,7 @@ where
     Ok(())
 }
 
-// i[stream.canopy]
+// spec: WIRE#canopy-relay-streams
 /// Read a header line and the body that follows it, to the end of the stream.
 ///
 /// `max_body` bounds the body; a stream carrying more is an error rather than a
@@ -267,7 +267,7 @@ mod tests {
             .collect()
     }
 
-    // i[verify stream.canopy]
+    // spec: WIRE#canopy-relay-streams
     #[tokio::test]
     async fn request_frame_round_trips_with_a_body() {
         let header = RelayRequest {
@@ -290,7 +290,7 @@ mod tests {
         assert_eq!(body, b"\x1f\x8b body");
     }
 
-    // i[verify stream.canopy]
+    // spec: WIRE#canopy-relay-streams
     #[tokio::test]
     async fn frame_round_trips_with_an_empty_body() {
         let header = RelayRequest {
@@ -308,7 +308,7 @@ mod tests {
         assert!(body.is_empty());
     }
 
-    // i[verify canopy.relay]
+    // spec: RLY#relay-streams
     #[tokio::test]
     async fn a_response_frame_carries_any_status() {
         for status in [200u16, 403, 412, 500] {
@@ -334,7 +334,7 @@ mod tests {
         }
     }
 
-    // i[verify canopy.relay.error]
+    // spec: RLY#relay-errors
     #[tokio::test]
     async fn an_error_frame_is_distinguished_from_a_response() {
         let mut buf = Vec::new();
@@ -360,7 +360,7 @@ mod tests {
         assert!(body.is_empty());
     }
 
-    // i[verify canopy.relay.error]
+    // spec: RLY#relay-errors
     #[test]
     fn error_codes_use_their_wire_spelling() {
         let json = serde_json::to_value(RelayError::unknown_offer("c9")).unwrap();
@@ -371,7 +371,7 @@ mod tests {
         );
     }
 
-    // i[verify canopy.relay.limits]
+    // spec: RLY#relay-limits
     #[tokio::test]
     async fn a_body_past_the_limit_is_an_error_not_a_truncation() {
         let header = RelayRequest {
@@ -389,7 +389,7 @@ mod tests {
         assert!(matches!(err, FrameError::TooLarge), "{err}");
     }
 
-    // i[verify canopy.relay.limits]
+    // spec: RLY#relay-limits
     #[tokio::test]
     async fn a_body_exactly_at_the_limit_is_accepted() {
         let header = RelayRequest {
@@ -405,7 +405,7 @@ mod tests {
         assert_eq!(body.len(), 32);
     }
 
-    // i[verify stream.canopy]
+    // spec: WIRE#canopy-relay-streams
     #[tokio::test]
     async fn a_stream_ending_mid_header_is_truncated_not_malformed() {
         let err = read_frame::<_, RelayRequest>(&b"{\"canopy\":\"c1\""[..], MAX_RELAY_BODY)
@@ -414,7 +414,7 @@ mod tests {
         assert!(matches!(err, FrameError::Truncated), "{err}");
     }
 
-    // i[verify stream.canopy]
+    // spec: WIRE#canopy-relay-streams
     #[tokio::test]
     async fn an_empty_stream_is_truncated() {
         let err = read_frame::<_, RelayRequest>(&b""[..], MAX_RELAY_BODY)
@@ -423,7 +423,7 @@ mod tests {
         assert!(matches!(err, FrameError::Truncated), "{err}");
     }
 
-    // i[verify stream.canopy]
+    // spec: WIRE#canopy-relay-streams
     #[tokio::test]
     async fn a_header_line_past_the_ceiling_is_too_large() {
         let mut line = vec![b'{'; MAX_HEADER_LINE + 16];
@@ -434,7 +434,7 @@ mod tests {
         assert!(matches!(err, FrameError::TooLarge), "{err}");
     }
 
-    // i[verify stream.canopy]
+    // spec: WIRE#canopy-relay-streams
     #[tokio::test]
     async fn a_malformed_header_is_reported_as_such() {
         let err = read_frame::<_, RelayRequest>(&b"not json\n"[..], MAX_RELAY_BODY)
@@ -443,7 +443,7 @@ mod tests {
         assert!(matches!(err, FrameError::Header(_)), "{err}");
     }
 
-    // i[verify canopy.offer]
+    // spec: RLY#offers
     #[test]
     fn offer_params_omit_an_absent_via() {
         let params = OfferParams {

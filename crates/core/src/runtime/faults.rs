@@ -17,7 +17,7 @@ pub fn init(tx: EventSender) {
         .expect("faults::init must be called exactly once");
 }
 
-// r[impl fault.surfacing]
+// spec: FLT#fault-records
 fn emit_filed(record: &FaultRecord) {
     if let Some(tx) = EVENT_TX.get() {
         tx.fault_filed(
@@ -38,7 +38,7 @@ fn emit_cleared(id: &str, app: &AppName, kind: &str) {
     }
 }
 
-// r[impl fault.definition]
+// spec: FLT#fault-records
 #[derive(Debug, Clone, Serialize)]
 pub struct FaultRecord {
     pub id: String,
@@ -64,7 +64,7 @@ pub struct FaultRecord {
 ///
 /// `resource_type`/`resource_name`/`instance_id` remain display metadata.
 /// Matching and clearing use this key alone.
-// r[impl fault.lifecycle]
+// spec: FLT#filing-and-clearing
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct FaultKey {
     pub app: AppName,
@@ -116,7 +116,7 @@ impl FaultMeta {
     }
 }
 
-// i[fault.record]
+// spec: FLTS#fault-records
 pub fn file_fault(
     db: &crate::runtime::db::Db,
     app: &AppName,
@@ -149,7 +149,7 @@ pub fn file_fault(
 /// that four sites hand-rolled as an `already_filed` scan of
 /// `list_active_faults`, and that `audit_lag` omitted entirely — so it
 /// duplicated without bound.
-// r[impl fault.lifecycle]
+// spec: FLT#filing-and-clearing
 pub fn file_once(
     db: &crate::runtime::db::Db,
     key: &FaultKey,
@@ -224,7 +224,7 @@ fn file_keyed(
 /// kind is read in the same statement and included in the emitted
 /// `FaultCleared` event so clients can render a meaningful summary without
 /// having to remember every fault ID they saw.
-// i[impl fault.derived]
+// spec: FLTS#listing-faults
 pub fn clear_fault(
     db: &crate::runtime::db::Db,
     fault_id: &str,
@@ -250,7 +250,7 @@ pub fn clear_fault(
     Ok(())
 }
 
-// i[fault.list]
+// spec: FLTS#listing-faults
 pub fn list_active_faults(
     db: &crate::runtime::db::Db,
     app: Option<&AppName>,
@@ -302,7 +302,7 @@ fn row_to_record(row: &rusqlite::Row<'_>) -> rusqlite::Result<FaultRecord> {
 }
 
 /// Clear all active faults matching an app + kind. Returns how many were cleared.
-// i[impl fault.derived]
+// spec: FLTS#listing-faults
 pub fn clear_faults_by_kind(
     db: &crate::runtime::db::Db,
     app: &AppName,
@@ -315,7 +315,7 @@ pub fn clear_faults_by_kind(
 ///
 /// The scope picks the rows in SQL, so a sweep that clears a kind across every
 /// app costs what that kind costs rather than what the whole fault table does.
-// r[impl fault.lifecycle]
+// spec: FLT#filing-and-clearing
 pub fn clear_faults_in_scope(
     db: &crate::runtime::db::Db,
     scope: &FaultScope,
@@ -346,7 +346,7 @@ pub fn clear_all_faults_for_app(
 /// being retired. Without this, per-instance faults (image_pull_failed,
 /// container_start_failed, …) filed against short-lived Job instances
 /// linger forever because nothing ever references the dead instance id again.
-// i[impl fault.derived]
+// spec: FLTS#listing-faults
 pub fn clear_faults_for_instance(
     db: &crate::runtime::db::Db,
     app: &AppName,
@@ -391,7 +391,7 @@ pub fn count_active_faults(db: &crate::runtime::db::Db) -> rusqlite::Result<i64>
 /// about: a sweep that computes every currently-conflicting `(host, port)`
 /// must not treat the absence of an unrelated key as a reason to clear
 /// one.
-// r[impl fault.lifecycle]
+// spec: FLT#filing-and-clearing
 #[derive(Debug, Clone)]
 pub enum FaultScope {
     /// Every active fault of this kind, across all apps. For conditions
@@ -479,7 +479,7 @@ pub struct SyncOutcome {
 /// filed before a restart could never clear. Comparing against the persisted
 /// active set instead is restart-safe by construction: there is no warm-up
 /// state to reconstruct and none to forget to persist.
-// r[impl fault.lifecycle]
+// spec: FLT#filing-and-clearing
 pub fn sync_faults(
     db: &crate::runtime::db::Db,
     scope: &FaultScope,

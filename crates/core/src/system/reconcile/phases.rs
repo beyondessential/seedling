@@ -138,7 +138,7 @@ pub(super) fn compute_routes(
 
 /// Per-tick classification of every site-service endpoint into the kinds of
 /// faults the reconciler should file.
-// r[impl service.site.address]
+// spec: SITE#endpoint-addressing
 #[derive(Debug, Default, Clone)]
 pub(super) struct SiteServiceFaultSet {
     /// Site services with at least one DNS-named endpoint whose name has
@@ -155,7 +155,7 @@ pub(super) struct SiteServiceFaultSet {
 /// Walk every site service endpoint and bucket the outcomes per service
 /// into faultable categories. Hosts that resolve cleanly contribute
 /// nothing.
-// r[impl service.site.address]
+// spec: SITE#endpoint-addressing
 pub(super) fn classify_site_service_endpoints(
     snapshot: &ExternalServiceSnapshot,
     resolve_ctx: &ResolveCtx<'_>,
@@ -292,7 +292,7 @@ pub(super) struct ProxyBuildResult {
     /// detected this tick. The reconciler files faults on both parties for
     /// new conflicts and clears them when a `(host, port)` drops out of the
     /// set. Both sides are dropped from the proxy config.
-    // r[impl ingress.site.conflict]
+    // spec: SITE#ingress-conflicts
     pub conflicts: super::site_proxy::ConflictReport,
     /// Site-ingress attachments that couldn't be resolved this tick (target
     /// app/service missing, unsupported protocol, etc). Each entry produces
@@ -304,7 +304,7 @@ pub(super) struct ProxyBuildResult {
 /// pairs. Filters out non-TLS ingresses and ingresses already covered by a
 /// routed vhost (since Caddy will acquire those via the standard server-block
 /// driven path).
-// r[impl actuate.ingress.warm-certs]
+// spec: RT#certificate-warming
 pub(super) fn warm_cert_targets(
     apps: &[AppSnapshot],
     registry: &dyn InstanceRegistry,
@@ -395,7 +395,7 @@ pub(super) fn compute_proxy_config(
         all_l4_routes.extend(build.l4_routes);
         observations.extend(build.observations);
         ready_observations.extend(build.ready_observations);
-        // r[impl actuate.ingress.warm-certs]
+        // spec: RT#certificate-warming
         // Translate ingress resource *names* in OperationProgress to ingress
         // *hostnames* by looking them up in the AppDef. Ignore non-TLS
         // ingresses; Caddy can't pre-warm a cert without TLS configured.
@@ -416,7 +416,7 @@ pub(super) fn compute_proxy_config(
         }
     }
 
-    // r[impl ingress.site] r[impl ingress.site.attachment]
+    // spec: SITE#site-ingresses, SITE#attachments
     let site_data = site_proxy::collect(
         site_snapshot,
         apps,
@@ -425,7 +425,7 @@ pub(super) fn compute_proxy_config(
         registry,
     );
 
-    // r[impl ingress.site.conflict]
+    // spec: SITE#ingress-conflicts
     let conflicts = site_proxy::detect_conflicts(&all_pairs, &site_data);
     let surviving_app_pairs =
         site_proxy::drop_conflicting_app_pairs(all_pairs, &conflicts.conflicts);
@@ -453,7 +453,7 @@ pub(super) fn compute_proxy_config(
     combined_forwards.extend(site_forward_pairs);
     let mut config = build_proxy_config(&combined_forwards, &site_redirect_pairs);
     config.l4_routes = all_l4_routes;
-    // r[impl ingress.site.attachment]
+    // spec: SITE#attachments
     config.l4_routes.extend(
         surviving_site_data
             .l4_routes

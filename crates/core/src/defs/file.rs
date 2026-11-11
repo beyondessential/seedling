@@ -2,7 +2,7 @@ use bytes::Bytes;
 use rhai::{CustomType, EvalAltResult, TypeBuilder};
 
 /// A file read from the app's definition bundle.
-// l[impl file.type]
+// spec: BND#bundle-files
 #[derive(Debug, Clone)]
 pub struct File {
     pub path: String,
@@ -13,7 +13,7 @@ impl CustomType for File {
     fn build(mut builder: TypeBuilder<Self>) {
         builder
             .with_name("File")
-            // l[impl file.text]
+            // spec: BND#bundle-files
             .with_fn(
                 "text",
                 |this: &mut Self| -> Result<String, Box<EvalAltResult>> {
@@ -27,7 +27,7 @@ impl CustomType for File {
 
 /// Every file beneath a directory of the definition bundle, each at its path
 /// relative to that directory.
-// l[impl app.dir]
+// spec: BND#bundle-files
 #[derive(Debug, Clone)]
 pub struct Directory {
     pub path: String,

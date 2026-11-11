@@ -18,7 +18,7 @@ use crate::system::types::{
 ///
 /// Reported rather than quietly resolved: dropping one side would silently
 /// serve an ingress on a protocol its author did not ask for.
-// r[impl actuate.ingress.plaintext]
+// spec: PRX#plaintext-ingresses
 pub(crate) fn conflicting_listener_ports(config: &ProxyConfig) -> Vec<u16> {
     let mut plaintext: BTreeSet<u16> = BTreeSet::new();
     let mut tls: BTreeSet<u16> = BTreeSet::new();
@@ -57,7 +57,7 @@ pub(crate) fn build_caddy_config(config: &ProxyConfig) -> Value {
         .map(|l| l.port)
         .collect();
 
-    // r[impl ingress.persistent-connections]
+    // spec: PRX#persistent-connections
     // Each server below carries its listeners, its routes and, for plaintext,
     // the switch that keeps it plaintext, and nothing else. That absence is
     // the implementation: the proxy keeps HTTP/1.1
@@ -68,7 +68,7 @@ pub(crate) fn build_caddy_config(config: &ProxyConfig) -> Value {
     // silently — a request would still be answered, one connection at a time.
     let mut servers = serde_json::Map::new();
 
-    // r[impl actuate.ingress.port-scope]
+    // spec: PRX#port-scope
     // One server per listener port. A server's routes match on host (and
     // path), never on the port the request arrived on, so a server spanning
     // several ports would answer every vhost on every one of them, and two
@@ -101,13 +101,13 @@ pub(crate) fn build_caddy_config(config: &ProxyConfig) -> Value {
     for &port in http_ports.iter().collect::<BTreeSet<_>>() {
         let mut routes: Vec<Value> = Vec::new();
 
-        // r[impl actuate.ingress.plaintext]
+        // spec: PRX#plaintext-ingresses
         // A vhost that terminates no TLS is served here, as plaintext, and is
         // absent from the TLS automation subjects below so no certificate is
         // requested for its hostname.
         for vh in &config.virtual_hosts {
             if let Some(redirect) = &vh.redirect {
-                // r[impl actuate.ingress.port-scope]
+                // spec: PRX#port-scope
                 // Answers on the port the redirect names, which is not the
                 // port of the ingress that declared it.
                 if redirect.from_port == port {
@@ -119,7 +119,7 @@ pub(crate) fn build_caddy_config(config: &ProxyConfig) -> Value {
         }
 
         if !routes.is_empty() {
-            // r[impl actuate.ingress.plaintext]
+            // spec: PRX#plaintext-ingresses
             // The proxy turns TLS on for any server listening off its HTTP
             // port that matches hostnames, so left to itself it would answer
             // a plaintext ingress on `:8080`, or a redirect declared there,
@@ -162,10 +162,10 @@ pub(crate) fn build_caddy_config(config: &ProxyConfig) -> Value {
     let mut apps = json!({ "http": { "servers": servers } });
 
     if !all_subjects.is_empty() {
-        // r[impl actuate.ingress.warm-certs]
-        // r[impl tls.strategy.default]
-        // r[impl tls.cert.serve]
-        // l[impl ingress.certificates]
+        // spec: RT#certificate-warming
+        // spec: CHAIN#default-chain
+        // spec: TLS#serving
+        // spec: ING#certificates
         // For routed subjects, Caddy acquires the cert lazily on first
         // request to the matching server; for warm-only subjects, no server
         // matches and Caddy must be told explicitly via certificates.automate.
@@ -194,7 +194,7 @@ pub(crate) fn build_caddy_config(config: &ProxyConfig) -> Value {
             .partition(|h| is_caddy_internal(h));
 
         let mut policies: Vec<Value> = Vec::with_capacity(2);
-        // r[impl tls.chain.proxy-gate]
+        // spec: CHAIN#proxy-strategies
         // Subjects the proxy may renew only later than its default are split
         // out by the point they are given, since the ratio belongs to a policy
         // and not to a subject. Everything else keeps the one policy it had.
@@ -310,7 +310,7 @@ fn build_policy(
 }
 
 fn proxy_routes_for_vhost(vh: &VirtualHost) -> Vec<Value> {
-    // r[impl service.http.route.routing]
+    // spec: PRX#route-emission
     // Caddy evaluates routes within a server in order and a `/` matcher
     // matches every request, so longer prefixes must come first or they
     // get shadowed. Sort by prefix length descending; ties (rare) keep
@@ -321,7 +321,7 @@ fn proxy_routes_for_vhost(vh: &VirtualHost) -> Vec<Value> {
         .iter()
         .map(|route| {
             let match_expr = match &route.handler {
-                // r[impl service.http.route.redirect]
+                // spec: PRX#redirect-routes
                 // Matched on segment boundaries, unlike a proxied prefix. The
                 // tail is spliced into a `Location`, so a request that merely
                 // begins with the prefix — `/v1/login.example.net` under
@@ -350,7 +350,7 @@ fn proxy_routes_for_vhost(vh: &VirtualHost) -> Vec<Value> {
                         .collect();
 
                     let mut chain: Vec<Value> = Vec::with_capacity(4);
-                    // r[impl service.http.route.headers]
+                    // spec: PRX#header-operations
                     // Ahead of everything else, because its response
                     // operations are deferred to when the response headers are
                     // written. Sitting first is what puts them on a response
@@ -360,14 +360,14 @@ fn proxy_routes_for_vhost(vh: &VirtualHost) -> Vec<Value> {
                     if !proxy.headers.is_empty() {
                         chain.push(headers_handler(&proxy.headers));
                     }
-                    // r[impl service.http.route.rate-limiting]
+                    // spec: PRX#rate-limiting
                     // Ahead of compression and the proxy: an over-limit
                     // request is answered without engaging either, so the
                     // excess costs a backend nothing.
                     if let Some(rate_limit) = &proxy.rate_limit {
                         chain.push(rate_limit_handler(rate_limit));
                     }
-                    // r[impl service.http.route.compression]
+                    // spec: PRX#compression
                     // `encode` wraps the response writer, so it has to sit
                     // ahead of the proxy in the chain to see what comes back.
                     // Caddy skips a response that already carries a
@@ -379,12 +379,12 @@ fn proxy_routes_for_vhost(vh: &VirtualHost) -> Vec<Value> {
                     chain.push(json!({
                         "handler": "reverse_proxy",
                         "upstreams": upstreams,
-                        // r[impl service.http.route.balancing]
+                        // spec: PRX#balancing
                         "load_balancing": load_balancing(&proxy.balance),
                     }));
                     Value::Array(chain)
                 }
-                // r[impl service.http.route.redirect]
+                // spec: PRX#redirect-routes
                 crate::system::types::ProxyRouteHandler::RouteRedirect {
                     target,
                     code,
@@ -393,7 +393,7 @@ fn proxy_routes_for_vhost(vh: &VirtualHost) -> Vec<Value> {
                     let (location, needs_request_parts) = redirect_location(target);
 
                     let mut chain: Vec<Value> = Vec::with_capacity(3);
-                    // r[impl service.http.route.headers]
+                    // spec: PRX#header-operations
                     // First, as on a proxied route: its response operations
                     // are deferred to when the headers are written, which is
                     // what puts them on the response this route serves.
@@ -413,7 +413,7 @@ fn proxy_routes_for_vhost(vh: &VirtualHost) -> Vec<Value> {
                     }));
                     Value::Array(chain)
                 }
-                // r[impl ingress.site.attachment]
+                // spec: SITE#attachments
                 crate::system::types::ProxyRouteHandler::Redirect {
                     url,
                     code,
@@ -446,7 +446,7 @@ fn proxy_routes_for_vhost(vh: &VirtualHost) -> Vec<Value> {
         .collect()
 }
 
-// r[impl service.http.route.headers]
+// spec: PRX#header-operations
 fn headers_handler(headers: &RouteHeaders) -> Value {
     let mut handler = serde_json::Map::new();
     handler.insert("handler".into(), json!("headers"));
@@ -485,7 +485,7 @@ fn header_ops(ops: &RouteHeaderOps) -> Value {
     Value::Object(out)
 }
 
-// r[impl service.http.route.rate-limiting]
+// spec: PRX#rate-limiting
 fn rate_limit_handler(limit: &RouteRateLimit) -> Value {
     // The zone name identifies the declaration and is built in
     // `reconcile::proxy`; see `RouteRateLimit::zone` for why it is not derived
@@ -516,7 +516,7 @@ fn rate_limit_handler(limit: &RouteRateLimit) -> Value {
     })
 }
 
-// r[impl service.http.route.compression]
+// spec: PRX#compression
 fn encode_handler(compress: &RouteCompress) -> Value {
     // `encodings` is a module map keyed by encoder name; `prefer` is what
     // carries the order when the client expresses no preference.
@@ -542,7 +542,7 @@ fn encode_handler(compress: &RouteCompress) -> Value {
     Value::Object(handler)
 }
 
-// r[impl service.http.route.balancing]
+// spec: PRX#balancing
 fn load_balancing(balance: &RouteBalance) -> Value {
     json!({
         "selection_policy": { "policy": balance.policy },
@@ -575,7 +575,7 @@ fn redirect_prefix(prefix: &str) -> &str {
 
 /// Build the `Location` template for a route redirect, and say whether it
 /// names any part of the request.
-// r[impl service.http.route.redirect]
+// spec: PRX#redirect-routes
 fn redirect_location(target: &[RedirectSegment]) -> (String, bool) {
     let mut location = String::new();
     let mut names_request_parts = false;
@@ -610,7 +610,7 @@ fn redirect_location(target: &[RedirectSegment]) -> (String, bool) {
 /// `/` rather than as nothing, so the tail would never be empty.
 ///
 /// The two are defined together because they are one cut of one string.
-// r[impl service.http.route.redirect]
+// spec: PRX#redirect-routes
 fn request_parts_handler(prefix: &str) -> Value {
     let prefix = regexp_literal(redirect_prefix(prefix));
     json!({
@@ -654,7 +654,7 @@ fn regexp_literal(text: &str) -> String {
     out
 }
 
-// l[impl ingress.redirect]
+// spec: ING#redirect-to-https
 fn redirect_route(hostname: &str, redirect: &HttpRedirect) -> Value {
     let location = if redirect.to_port == 443 {
         "https://{http.request.host}{http.request.uri}".to_string()

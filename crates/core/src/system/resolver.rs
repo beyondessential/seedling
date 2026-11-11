@@ -28,7 +28,7 @@ pub fn resolver_network_prefix(node_prefix: &Ipv6Net) -> Ipv6Net {
 ///
 /// This is a well-known address at `::53` (hexadecimal) within the resolver
 /// network prefix, chosen to match the DNS port for memorability.
-// r[impl infra.resolver.address]
+// spec: DNS#resolver-addresses
 pub fn resolver_addr(node_prefix: &Ipv6Net) -> Ipv6Addr {
     let bytes = node_prefix.network().octets();
     let mut addr = [0u8; 16];
@@ -60,7 +60,7 @@ pub fn resolver_ipv4_subnet() -> Ipv4Net {
 mod tests {
     use super::*;
 
-    // r[verify infra.resolver.address]
+    // spec: DNS#resolver-addresses
     #[test]
     fn resolver_addr_ends_in_hex_53_within_the_resolver_network() {
         let prefix: Ipv6Net = "fd5e:aabb:ccdd::/48".parse().unwrap();

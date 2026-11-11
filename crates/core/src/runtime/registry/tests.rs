@@ -9,7 +9,7 @@ fn app(s: &str) -> AppName {
     AppName::new(s).unwrap()
 }
 
-// r[verify autonomous.healthcheck-replace]
+// spec: AUTO#health-check-replacement
 // When a deployment has more existing instances than the requested count, the
 // keep set must prefer instances whose lifecycle is Ready (currently healthy)
 // over those that aren't. This is what makes the replace flow converge:
@@ -73,7 +73,7 @@ fn ensure_scaled_group_prefers_healthy_in_keep() {
     );
 }
 
-// r[verify autonomous.healthcheck-replace.guard]
+// spec: AUTO#replacement-guard
 // When all instances are equally not-Ready (e.g. both unhealthy, or both still
 // in start-period), the keep set must fall back to creation order. This is
 // what keeps the original instance serving in degraded mode after the
@@ -126,7 +126,7 @@ fn ensure_scaled_group_keeps_oldest_when_all_equally_unhealthy() {
     assert_eq!(group.excess[0].id, younger.id);
 }
 
-// r[verify gc.instances.operation-keep-set]
+// spec: GC#instances-started-by-actions
 #[test]
 fn an_operation_does_not_reuse_an_instance_that_has_been_torn_down() {
     // The keep set is drawn in readiness-then-creation order, so an excess
@@ -203,7 +203,7 @@ fn an_operation_does_not_reuse_an_instance_that_has_been_torn_down() {
     );
 }
 
-// r[verify gc.instances.operation-keep-set]
+// spec: GC#instances-started-by-actions
 #[test]
 fn an_instance_brought_back_after_a_teardown_is_reused() {
     // Whether an instance has been torn down is the latest observation's

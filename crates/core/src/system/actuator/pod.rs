@@ -26,6 +26,7 @@ fn pod_network_name(instance: &ResourceInstance) -> String {
     format!("seedling-{}", instance.display_name)
 }
 
+// spec: LINUX#supervised-units
 fn unit_name(instance: &ResourceInstance) -> String {
     format!("seedling-{}.service", instance.display_name)
 }
@@ -63,7 +64,7 @@ pub(crate) struct ContainerVolume {
 /// Host path under which tmpfs volumes are bind-mounted. /run is tmpfs-backed
 /// on systemd hosts, so volumes here satisfy the BSL spec's "RAM-based
 /// filesystem" semantic without seedling having to mount its own tmpfs.
-// r[impl actuate.volume.tmpfs]
+// spec: ACTU#volume-storage
 pub const TMPFS_VOLUMES_DIR: &str = "/run/seedling/tmpfs-volumes";
 
 /// Host path backing one tmpfs volume, named or anonymous.
@@ -73,7 +74,7 @@ pub const TMPFS_VOLUMES_DIR: &str = "/run/seedling/tmpfs-volumes";
 /// translator that builds the container's bind mount, and the `rt.write` path
 /// — must address the same directory, so the join lives here rather than
 /// being repeated beside a comment asking callers to keep it in sync.
-// r[impl actuate.volume.tmpfs]
+// spec: ACTU#volume-storage
 pub fn tmpfs_volume_path(name: &str) -> std::path::PathBuf {
     std::path::Path::new(TMPFS_VOLUMES_DIR).join(name)
 }
@@ -103,7 +104,7 @@ pub(super) fn collect_container_volumes(
                             .anon_id
                             .clone()
                             .expect("anonymous volume must have an anon_id");
-                        // r[impl actuate.volume.tmpfs]
+                        // spec: ACTU#volume-storage
                         // Anonymous tmpfs volumes get a host bind path under
                         // /run so that `volume.write` declarations actually
                         // propagate into the container — podman's own tmpfs
@@ -119,7 +120,7 @@ pub(super) fn collect_container_volumes(
                     Some(n) => {
                         let vol_name = VolumeName::for_app(instance.app.as_str(), n.as_str());
                         let host_path = if tmpfs {
-                            // r[impl actuate.volume.tmpfs]
+                            // spec: ACTU#volume-storage
                             Some(tmpfs_volume_path(vol_name.as_str()))
                         } else {
                             volumes_dir.map(|dir| dir.join(vol_name.as_str()))
@@ -158,7 +159,7 @@ async fn ensure_volumes(driver: &System, volumes: &[ContainerVolume]) -> Result<
     for vol in volumes {
         if let Some(host_path) = &vol.host_path {
             if vol.def.tmpfs {
-                // r[impl actuate.volume.tmpfs]
+                // spec: ACTU#volume-storage
                 // Tmpfs volumes are bind-mounted from a tmpfs-backed host
                 // path under /run/seedling/tmpfs-volumes. Ensure the path
                 // exists and re-apply declared writes every time the volume
@@ -176,8 +177,8 @@ async fn ensure_volumes(driver: &System, volumes: &[ContainerVolume]) -> Result<
                     safe_volume_write(host_path, path, contents).await?;
                 }
             } else {
-                // r[impl actuate.volume.storage]
-                // r[impl actuate.volume.start]
+                // spec: ACTU#volume-storage
+                // spec: ACTU#volume-creation-and-seeding
                 // Named non-tmpfs volume managed by VolumeStore. This phase
                 // runs alongside the volumes phase, so it may well be the one
                 // that finds the volume absent — in which case it owes the
@@ -273,7 +274,7 @@ impl Actuator {
             .collect::<Result<Vec<_>, _>>()
     }
 
-    // r[impl actuate.deployment.anon-volume.start]
+    // spec: ACTU#deployment-and-job-instances
     #[expect(
         clippy::too_many_arguments,
         reason = "single internal helper that fans out the per-instance start; \
@@ -361,13 +362,16 @@ impl Actuator {
                 restart,
                 kill_signal,
                 timeout_stop_secs,
-                // r[impl priority.actuation]
+                // spec: PRIO#resource-control-groups
+                // spec: LINUX#resource-control-groups
                 // The tier slice carries the Deployment weight and nests under
                 // the app slice, which carries the app weight.
                 slice: Some(standing.slice(&instance.app)),
-                // r[impl priority.kill-order]
+                // spec: PRIO#kill-order
+                // spec: LINUX#kill-order
                 oom_score_adjust: Some(standing.oom_score_adjust()),
-                // r[impl autonomous.restart.backoff]
+                // spec: AUTO#restart-pacing
+                // spec: LINUX#restart-pacing
                 // Pod containers: 5 second pause between restarts, and a
                 // 10-minute / 10-attempt window before systemd gives up. The
                 // wider window means a slow-failing container (e.g. takes
@@ -417,7 +421,7 @@ impl Actuator {
         Ok(bridge_name)
     }
 
-    // r[impl reconciliation.liveness]
+    // spec: RCN#reconciliation-loop
     pub(crate) async fn stop_pod_instance(
         &self,
         instance: &ResourceInstance,

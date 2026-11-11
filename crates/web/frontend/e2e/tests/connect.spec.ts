@@ -2,9 +2,8 @@
 // seedling-web with --dev-no-auth on a loopback bind, so /connect resolves
 // an actor without credentials.
 //
-// w[verify auth.connect]
-// w[verify wt.token]
-// w[verify wt.actor]
+// spec: WEB#authentication
+// spec: WEB#session-establishment
 
 import { expect, test } from "../test-fixtures";
 

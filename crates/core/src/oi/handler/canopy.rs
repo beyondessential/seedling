@@ -45,8 +45,8 @@ pub(crate) struct SettingsParams {
     pub enabled: bool,
 }
 
-// i[canopy.offer]
-// i[canopy.offer.disabled]
+// spec: RLY#offers
+// spec: RLY#disabled-access
 /// Register the calling connection as a Canopy provider.
 ///
 /// Needs the connection itself, not just the request, so it is dispatched from
@@ -80,7 +80,7 @@ pub(crate) fn offer(
     );
     ctx.events
         .canopy_offered(offer.offer_id, &offer.agent, &offer.endpoint);
-    // r[impl canopy.offer.absent] — an offer is live, so the apps relying on
+    // spec: CNR#missing-offers — an offer is live, so the apps relying on
     // Canopy have what they need again.
     state.db.call(|db| {
         if let Err(e) = absent::clear_all(db) {
@@ -91,7 +91,7 @@ pub(crate) fn offer(
     Ok(json!({ "offer_id": offer.offer_id }))
 }
 
-// i[canopy.withdraw]
+// spec: RLY#offer-lifetime
 pub(crate) fn withdraw(
     state: &Arc<OiState>,
     conn: &quinn::Connection,
@@ -107,14 +107,14 @@ pub(crate) fn withdraw(
     tracing::info!(offer_id = %params.offer_id, "a client stopped carrying Canopy requests");
     ctx.events
         .canopy_withdrawn(params.offer_id, WithdrawReason::Requested.as_str());
-    // r[impl canopy.report.fault] — if that was the last offer, reporting is no
+    // spec: CNR#report-failure-fault — if that was the last offer, reporting is no
     // longer expected, so a fault from when it was would misdescribe us.
     crate::runtime::canopy::clear_fault_if_not_expected(state);
     absent::offer_was_live(state);
     Ok(json!({}))
 }
 
-// i[canopy.settings]
+// spec: RLY#settings
 pub(crate) fn get_settings(state: &OiState) -> HandlerResult {
     let settings = state
         .db
@@ -126,8 +126,8 @@ pub(crate) fn get_settings(state: &OiState) -> HandlerResult {
     }))
 }
 
-// i[canopy.settings]
-// i[canopy.offer.disabled]
+// spec: RLY#settings
+// spec: RLY#disabled-access
 pub(crate) fn set_settings(
     state: &Arc<OiState>,
     params: SettingsParams,
@@ -141,7 +141,7 @@ pub(crate) fn set_settings(
     state.canopy.set_enabled(enabled);
 
     if !enabled {
-        // r[impl canopy.offer.absent] — turning access off is the operator's
+        // spec: CNR#missing-offers — turning access off is the operator's
         // decision, not a malfunction to fault.
         state.db.call(|db| {
             if let Err(e) = absent::clear_all(db) {
@@ -166,12 +166,12 @@ pub(crate) fn set_settings(
                 .canopy_withdrawn(offer.offer_id, WithdrawReason::Disabled.as_str());
         }
     }
-    // r[impl canopy.report.fault] — nothing is expected of a disabled instance.
+    // spec: CNR#report-failure-fault — nothing is expected of a disabled instance.
     crate::runtime::canopy::clear_fault_if_not_expected(state);
     Ok(json!({}))
 }
 
-// i[canopy.status]
+// spec: RLY#status
 pub(crate) fn status(state: &Arc<OiState>) -> HandlerResult {
     let settings = state
         .db
@@ -196,7 +196,7 @@ pub(crate) fn status(state: &Arc<OiState>) -> HandlerResult {
         value
     });
 
-    // i[impl canopy.status]
+    // spec: RLY#status
     let applications: Vec<Value> = state
         .db
         .call(store::list_apps)
@@ -222,7 +222,7 @@ mod tests {
     use super::*;
     use crate::oi::test_support::TestOi;
 
-    // i[verify canopy.status]
+    // spec: RLY#status
     #[test]
     fn a_fresh_instance_is_enabled_with_nothing_offering() {
         let oi = TestOi::new();
@@ -238,7 +238,7 @@ mod tests {
         );
     }
 
-    // i[verify canopy.status]
+    // spec: RLY#status
     #[test]
     fn status_lists_the_apps_reported_as_applications_by_name() {
         let oi = TestOi::new();
@@ -260,7 +260,7 @@ mod tests {
         );
     }
 
-    // i[verify canopy.status]
+    // spec: RLY#status
     #[test]
     fn a_fresh_instance_reports_no_applications() {
         let oi = TestOi::new();
@@ -270,7 +270,7 @@ mod tests {
         );
     }
 
-    // r[verify canopy.offer.absent]
+    // spec: CNR#missing-offers
     #[test]
     fn disabling_clears_the_missing_offer_fault() {
         let oi = TestOi::new();
@@ -298,7 +298,7 @@ mod tests {
         assert_eq!(active_faults(&oi), 0);
     }
 
-    // i[verify canopy.settings]
+    // spec: RLY#settings
     #[test]
     fn the_setting_round_trips_through_the_interface() {
         let oi = TestOi::new();
@@ -326,7 +326,7 @@ mod tests {
         );
     }
 
-    // i[verify canopy.settings]
+    // spec: RLY#settings
     #[test]
     fn setting_it_stamps_when_it_changed() {
         let oi = TestOi::new();
@@ -344,7 +344,7 @@ mod tests {
         );
     }
 
-    // i[verify canopy.offer.disabled]
+    // spec: RLY#disabled-access
     #[test]
     fn disabling_revokes_a_live_offer_rather_than_waiting_for_a_reconnect() {
         let oi = TestOi::new();
@@ -365,7 +365,7 @@ mod tests {
         assert_eq!(status["offer"], Value::Null);
     }
 
-    // i[verify canopy.offer.disabled]
+    // spec: RLY#disabled-access
     #[test]
     fn re_enabling_does_not_resurrect_a_revoked_offer() {
         let oi = TestOi::new();
@@ -386,7 +386,7 @@ mod tests {
         assert_eq!(oi.call("/canopy/status", json!({})).unwrap()["offers"], 0);
     }
 
-    // i[verify canopy.status]
+    // spec: RLY#status
     #[test]
     fn the_status_describes_the_offer_that_would_serve_the_next_request() {
         let oi = TestOi::new();
@@ -430,7 +430,7 @@ mod tests {
             .len()
     }
 
-    // r[verify canopy.report.fault]
+    // spec: CNR#report-failure-fault
     #[test]
     fn disabling_clears_a_report_fault_at_once() {
         // Not at the next scheduled tick: an instance that is no longer expected
@@ -451,7 +451,7 @@ mod tests {
         assert_eq!(active_faults(&oi), 0);
     }
 
-    // r[verify canopy.report.fault]
+    // spec: CNR#report-failure-fault
     #[test]
     fn a_report_fault_survives_while_another_offer_still_carries() {
         // The expectation to report has not ended, so neither has the fault.
@@ -482,7 +482,7 @@ mod tests {
         assert_eq!(active_faults(&oi), 0, "the last one ending ends it");
     }
 
-    // i[verify canopy.withdraw]
+    // spec: RLY#offer-lifetime
     #[test]
     fn withdrawing_is_not_reachable_through_the_operator_table() {
         // /canopy/offer and /canopy/withdraw need the connection they arrived

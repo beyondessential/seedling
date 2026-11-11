@@ -26,7 +26,7 @@ const events: SeedlingEvent[] = [
   },
 ];
 
-// w[verify routes.events]
+// spec: UI#event-feed
 describe("EventsSidebar", () => {
   it("renders the empty state with infrastructure defaulting to stopped", async () => {
     renderWithSession(<EventsSidebar />);

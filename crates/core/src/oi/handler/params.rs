@@ -55,8 +55,8 @@ fn param_is_secret(state: &OiState, app: &AppName, name: &ParamName) -> bool {
         .unwrap_or(false)
 }
 
-// i[impl param.set] i[impl param.unset]
-// r[impl operation.lifecycle.param-change]
+// spec: PRM#parameter-set, PRM#parameter-unset
+// spec: OPS#parameter-changes
 /// Hold `app` for a parameter or definition change, or refuse the change.
 ///
 /// Params cannot be mutated while an operation is in flight for the app:
@@ -151,7 +151,7 @@ fn reload_and_persist_apperror(
 /// proposed values; when that evaluation fails, those of the app's most
 /// recent successful evaluation, which the registry holds as its running
 /// `App` together with the bundle and values it came from.
-// i[impl param.validation]
+// spec: PRM#validation
 fn validate_proposed(
     state: &OiState,
     app: &AppName,
@@ -217,7 +217,7 @@ pub(crate) fn schedule_on_change(
         let reg = state.registry.read();
         let entry = reg.get(app.as_str()).expect("confirmed registered");
         let has = entry.app.def.load().param_changes.contains(param_name);
-        // r[impl app.uninstall.exclusive]
+        // spec: TRD#uninstall-admission
         // An app being torn down admits no handler. The hold keeps an
         // uninstall from starting until the handler is admitted, so the
         // phase read here is the one admission will see.
@@ -273,12 +273,10 @@ pub(crate) fn schedule_on_change(
     }
 }
 
-// i[param.store]
-// i[param.set]
-// i[param.unknown]
-// i[impl param.store.secret]
-// l[impl param.on-change.transitions]
-// l[impl param.on-change.not-on-install]
+// spec: PRM#parameter-storage
+// spec: PRM#parameter-set
+// spec: PRM#parameter-storage
+// spec: PARAM#change-handlers
 pub(crate) fn set_param(
     state: &OiState,
     params: SetParamParams,
@@ -332,9 +330,9 @@ pub(crate) fn set_param(
     let (generation, previous_is_secret) = state
         .db
         .call(move |db| -> rusqlite::Result<_> {
-            // r[impl generation.bumps] — the stored value commits with its bump.
+            // spec: GEN#generation-numbers — the stored value commits with its bump.
             db.atomically(|db| {
-                // r[impl secret.history] — read before the write replaces it.
+                // spec: SEC#generation-history — read before the write replaces it.
                 let previous_is_secret = crate::runtime::apps::secret_params::is_stored_secret(
                     db,
                     &app_owned,
@@ -363,13 +361,13 @@ pub(crate) fn set_param(
 
     reload_and_persist_apperror(state, app, generation)?;
 
-    // r[impl image.pin.update-reconcile]
+    // spec: IMG#pin-reconciliation
     super::images::reconcile_pins_post_update(state, app);
 
     let schedule = schedule_on_change(state, hold, app, param_name, generation)?;
 
-    // i[impl param.store.secret]
-    // r[impl secret.history] — the event carries one redaction flag for both
+    // spec: PRM#parameter-storage
+    // spec: SEC#generation-history — the event carries one redaction flag for both
     // values, so a previous value that was secret withholds the pair.
     if is_secret || previous_is_secret {
         ctx.events
@@ -385,9 +383,8 @@ pub(crate) fn set_param(
     Ok(json!({ "schedule": schedule, "generation": generation }))
 }
 
-// i[param.unset]
-// l[impl param.on-change.transitions]
-// l[impl param.on-change.not-on-install]
+// spec: PRM#parameter-unset
+// spec: PARAM#change-handlers
 pub(crate) fn unset_param(
     state: &OiState,
     params: UnsetParamParams,
@@ -437,9 +434,9 @@ pub(crate) fn unset_param(
     let (generation, previous_is_secret) = state
         .db
         .call(move |db| -> rusqlite::Result<_> {
-            // r[impl generation.bumps] — the stored value commits with its bump.
+            // spec: GEN#generation-numbers — the stored value commits with its bump.
             db.atomically(|db| {
-                // r[impl secret.history] — read before the delete removes it.
+                // spec: SEC#generation-history — read before the delete removes it.
                 let previous_is_secret = crate::runtime::apps::secret_params::is_stored_secret(
                     db,
                     &app_owned,
@@ -468,13 +465,13 @@ pub(crate) fn unset_param(
 
     reload_and_persist_apperror(state, app, generation)?;
 
-    // r[impl image.pin.update-reconcile]
+    // spec: IMG#pin-reconciliation
     super::images::reconcile_pins_post_update(state, app);
 
     let schedule = schedule_on_change(state, hold, app, param_name, generation)?;
 
-    // i[impl param.store.secret]
-    // r[impl secret.history]
+    // spec: PRM#parameter-storage
+    // spec: SEC#generation-history
     if previous_is_secret {
         ctx.events
             .param_change(app.clone(), generation, previous_generation)

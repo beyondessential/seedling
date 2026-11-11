@@ -67,7 +67,7 @@ export default function EditScript() {
     if (data) setScript(data.script);
   }, [data]);
 
-  // w[impl routes.apps.definition.edit]
+  // spec: UI#app-definitions
   // Only a definition with exactly one script file is edited here; every
   // other file in its bundle is carried over untouched.
   const scriptFiles = data?.files ?? ["app.seed.rhai"];
@@ -104,7 +104,7 @@ export default function EditScript() {
       // and cross-check its dynamic images against what's currently
       // present + pinned. Errors here are silently ignored — the user
       // can still proceed with the update.
-      // w[impl routes.images.discover]
+      // spec: UI#images
       if ((result.errors?.length ?? 0) === 0) {
         try {
           const [discovered, imgs, pins] = await Promise.all([

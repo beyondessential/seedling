@@ -119,7 +119,7 @@ describe("Volumes", () => {
     await screen.findByText("No site volumes.");
   });
 
-  // w[verify routes.volumes]
+  // spec: UI#volumes
   it("renders all sections when populated", async () => {
     renderWithSession(<Volumes />, { fixtures: populated });
 
@@ -183,8 +183,7 @@ describe("Volumes", () => {
     expect(iconButton(managed, "Open shell (read-only)").disabled).toBe(false);
   });
 
-  // w[verify volumes.shell-ui]
-  // w[verify volumes.shell-ui.read-only]
+  // spec: UI#shells
   it("opens a read-only volume shell from a site row in read mode", async () => {
     const { openVolumeShell } = renderWithSession(<Volumes />, { fixtures: populated });
     await screen.findByText("data");
@@ -196,7 +195,7 @@ describe("Volumes", () => {
     );
   });
 
-  // w[verify volumes.shell-ui.read-only]
+  // spec: UI#shells
   it("opens a read-write volume shell in write mode", async () => {
     const { openVolumeShell } = renderWithSession(<Volumes />, {
       fixtures: populated,
@@ -211,7 +210,7 @@ describe("Volumes", () => {
     );
   });
 
-  // w[verify routes.volumes.delete-confirm]
+  // spec: UI#volumes
   it("confirms managed site volume deletion before issuing the request", async () => {
     const { request } = renderWithSession(<Volumes />, {
       fixtures: populated,
@@ -230,7 +229,7 @@ describe("Volumes", () => {
     );
   });
 
-  // w[verify routes.volumes.delete-confirm]
+  // spec: UI#volumes
   it("keeps the delete dialog open and shows the error when deletion fails", async () => {
     renderWithSession(<Volumes />, {
       fixtures: {
@@ -249,7 +248,7 @@ describe("Volumes", () => {
     expect(await within(dialog).findByText(/disk on fire/)).toBeTruthy();
   });
 
-  // w[verify routes.volumes.delete-confirm]
+  // spec: UI#volumes
   it("states kind-specific consequences for snapshot and bind deletion", async () => {
     const { request } = renderWithSession(<Volumes />, {
       fixtures: populated,
@@ -271,7 +270,7 @@ describe("Volumes", () => {
     expect(callsTo(request, "/volumes/site/delete")).toHaveLength(0);
   });
 
-  // w[verify routes.volumes.delete-confirm]
+  // spec: UI#volumes
   it("confirms held volume deletion and issues the delete", async () => {
     const { request } = renderWithSession(<Volumes />, {
       fixtures: populated,
@@ -400,7 +399,7 @@ describe("Volumes", () => {
     );
   });
 
-  // w[verify routes.volumes]
+  // spec: UI#volumes
   it("creates a managed site volume through the New dialog", async () => {
     const { request } = renderWithSession(<Volumes />, {
       fixtures: populated,
@@ -450,7 +449,7 @@ describe("Volumes", () => {
     );
   });
 
-  // w[verify volumes.shell-ui.read-only]
+  // spec: UI#shells
   it("opens a multi-volume shell over the selected volumes", async () => {
     const { openVolumeShell } = renderWithSession(<Volumes />, { fixtures: populated });
     await screen.findByText("data");

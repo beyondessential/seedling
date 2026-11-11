@@ -13,7 +13,7 @@ use std::sync::Arc;
 
 pub use cancel::CancelToken;
 
-// r[impl operation.lifecycle]
+// spec: OPS#operation
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct OperationId(pub String);
 
@@ -29,14 +29,14 @@ impl Default for OperationId {
     }
 }
 
-// r[impl barrier.condition]
+// spec: SUSP#barriers
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BarrierCondition {
     pub resources: Vec<ResourceInstance>,
     pub required_state: LifecycleState,
     /// `None` means the barrier has no deadline (waits indefinitely, resumed
     /// only when the condition is satisfied or the operation is cancelled).
-    // r[impl barrier.deadline]
+    // spec: SUSP#deadlines
     #[serde(default)]
     pub deadline_secs: Option<u64>,
 }
@@ -48,44 +48,44 @@ pub enum CallKind {
     Query,
     /// `rt.warm_certs(...)` — pre-provision TLS certificates without routing
     /// traffic. Records intent without affecting the standard desired state.
-    // r[impl actuate.ingress.warm-certs]
+    // spec: RT#certificate-warming
     WarmCerts,
     /// `rt.warm_images(...)` — pre-pull container images without running them,
     /// pinning the references for autonomous-GC exemption. The image refs are
     /// not stored on the log entry: pins persist directly to `image_pins`
     /// at call time, which is what the reconciler and barrier consult.
-    // r[impl actuate.image.warm]
+    // spec: IMG#image-warming
     WarmImages,
     /// `rt.signal(...)` — deliver a POSIX signal to one or more container
     /// instances. The signal name is stored separately on the entry; on
     /// replay, an already-committed signal is not re-sent.
-    // l[impl rt.signal]
+    // spec: RT#signal-delivery
     Signal,
     /// `rt.write(...)` — write a file into a volume at action runtime. The
     /// target volume is recorded as the entry's single resource; the path is
     /// stored in `extra`. On replay, an already-committed write is not
     /// re-executed.
-    // l[impl rt.write]
+    // spec: RT#volume-writes
     Write,
     /// `rt.exec(...)` — run a command inside a running container at action
     /// runtime. The target container instance is recorded as the entry's
     /// single resource; the exit code is stored in `extra` (decimal). On
     /// replay, an already-committed exec is not re-executed; the recorded
     /// exit code is returned through the Executed handle.
-    // l[impl rt.exec]
+    // spec: RT#command-execution
     Exec,
     /// `Action.call(params?)` — a sub-action invocation. The entry has no
     /// resources; `extra` carries a JSON payload `{"action": <name>,
     /// "params": <validated map>}` so replay can recover the called
     /// action's name and the post-validation params without re-running
     /// validation (whose result must be deterministic across replays per
-    /// `r[operation.composition.params]`).
-    // r[impl operation.composition]
-    // r[impl history.action-log.entries]
+    /// `OPS#sub-action-parameters`).
+    // spec: OPS#action-composition
+    // spec: HIST#action-calls
     SubAction,
 }
 
-// r[impl history.action-log.entries]
+// spec: HIST#action-calls
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ActionLogEntry {
     pub call_index: usize,
@@ -100,18 +100,18 @@ pub struct ActionLogEntry {
     /// own, which meant whichever wrote last displaced the rest — so a
     /// barrier could take another's passing for its own, or lose the start
     /// its deadline was measured from.
-    // r[impl barrier.satisfaction.recorded]
+    // spec: SUSP#barrier-anchoring
     #[serde(default, alias = "barrier", deserialize_with = "de_barriers")]
     pub barriers: Vec<BarrierRecord>,
     /// Per-call_kind metadata. For `CallKind::Signal` this carries the
     /// canonical signal name (e.g. `"SIGHUP"`). Other kinds leave it `None`.
-    // l[impl rt.signal]
+    // spec: RT#signal-delivery
     #[serde(default)]
     pub extra: Option<String>,
 }
 
 impl ActionLogEntry {
-    // r[impl barrier.replay.anchor]
+    // spec: SUSP#barrier-anchoring
     /// The record of the `seq`th barrier on this call, if it has one.
     pub fn barrier(&self, seq: usize) -> Option<&BarrierRecord> {
         self.barriers.iter().find(|b| b.seq == seq)
@@ -143,7 +143,7 @@ fn de_barriers<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Vec<BarrierReco
     })
 }
 
-// r[impl barrier.deadline]
+// spec: SUSP#deadlines
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BarrierRecord {
     /// Which barrier on the call this is: the position of the barrier
@@ -155,7 +155,7 @@ pub struct BarrierRecord {
     /// for that — a replica may come or go between passes and it is still
     /// the same barrier — and neither is its required state, since nothing
     /// stops a closure asserting the same state twice on one call.
-    // r[impl barrier.replay.anchor]
+    // spec: SUSP#barrier-anchoring
     #[serde(default)]
     pub seq: usize,
     pub required_state: LifecycleState,
@@ -166,13 +166,13 @@ pub struct BarrierRecord {
     pub started_at_secs: Option<u64>,
 }
 
-// r[impl barrier.replay]
+// spec: SUSP#replay
 /// The committed log does not describe the calls the closure is making.
 ///
 /// Means the script changed between the crash and the replay, or the engine
 /// took a different branch. Either way the recorded results cannot be
 /// attributed to the calls now being made.
-// r[impl barrier.replay.positional]
+// spec: SUSP#positional-replay
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ReplayMismatch {
     /// A different kind of call is being made at this position.
@@ -250,7 +250,7 @@ pub struct ReplayContext {
     pub pending: Vec<ActionLogEntry>,
     /// How many barriers each call has had asserted on it so far this pass,
     /// which is where the next one's position comes from.
-    // r[impl barrier.replay.anchor]
+    // spec: SUSP#barrier-anchoring
     pub barrier_seq: std::collections::HashMap<usize, usize>,
     pub pending_barrier: Option<BarrierCondition>,
     pub now_secs: Arc<dyn Fn() -> u64 + Send + Sync>,
@@ -258,7 +258,7 @@ pub struct ReplayContext {
     /// Cancellation signal for the current operation. Checked at the entry of
     /// every barrier / stop call so an in-flight cancel aborts cleanly instead
     /// of waiting for the next deadline.
-    // r[impl operation.cancel]
+    // spec: OPS#cancellation
     pub cancel_token: Arc<CancelToken>,
     /// Definitions of dynamic (anonymous) resources started during this pass.
     /// Populated by rt.start() calls in the action closure; read by the
@@ -275,22 +275,22 @@ pub struct ReplayContext {
     /// and image references extracted from `rt.start` / `rt.warm_images`
     /// resources are appended to this set. The call site never needs to
     /// inspect it directly — it uses [`probe_mode`](Self::probe_mode) instead.
-    // r[impl image.discover]
+    // spec: IMG#image-discovery
     pub probe_images: Option<Arc<Mutex<std::collections::BTreeSet<String>>>>,
     /// Hook for `rt.signal()`. The runtime calls this synchronously to deliver
     /// a POSIX signal to a running container. `None` in test / stub contexts
     /// where no real container runtime is present.
-    // l[impl rt.signal]
+    // spec: RT#signal-delivery
     pub container_signaler: Option<Arc<dyn ContainerSignaler>>,
     /// Hook for `rt.write()`. The runtime calls this synchronously to write a
     /// file into a volume during action execution. `None` in test / stub
     /// contexts where no real filesystem is involved.
-    // l[impl rt.write]
+    // spec: RT#volume-writes
     pub volume_writer: Option<Arc<dyn VolumeWriter>>,
     /// Hook for `rt.exec()`. The runtime calls this synchronously to run a
     /// command inside a running container during action execution. `None` in
     /// test / stub contexts where no real container runtime is present.
-    // l[impl rt.exec]
+    // spec: RT#command-execution
     pub executor: Option<Arc<dyn Executor>>,
 }
 
@@ -298,7 +298,7 @@ pub struct ReplayContext {
 /// deliver a signal to a running container. Implemented in the operation
 /// loop (`oi/handler/actions/lifecycle.rs`) on top of the system actuator;
 /// stubbed out in language-only tests where no real runtime exists.
-// l[impl rt.signal]
+// spec: RT#signal-delivery
 pub trait ContainerSignaler: Send + Sync {
     /// Deliver `signal` to the named container's PID 1.
     /// Returns `Ok(true)` when the signal was sent, `Ok(false)` when the
@@ -308,14 +308,14 @@ pub trait ContainerSignaler: Send + Sync {
 
 /// Identifies which volume a runtime-time `rt.write` should land in. Resolved
 /// to a host path by the [`VolumeWriter`] impl in the operation loop.
-// l[impl rt.write]
+// spec: RT#volume-writes
 #[derive(Debug, Clone)]
 pub enum VolumeWriteTarget {
     /// A named static volume scoped to the current app.
     NamedVolume { name: String, tmpfs: bool },
     /// An anonymous volume created earlier in the action closure.
     AnonymousVolume { anon_id: String, tmpfs: bool },
-    /// An external volume bound by the operation (`l[action.params.volume]`).
+    /// An external volume bound by the operation (`ACN#volume-params`).
     ExternalBound { host_path: std::path::PathBuf },
 }
 
@@ -323,7 +323,7 @@ pub enum VolumeWriteTarget {
 /// a file into a volume at action runtime. Implemented in the operation loop
 /// on top of the system actuator's `safe_volume_write`; stubbed out in
 /// language-only tests where no real filesystem is involved.
-// l[impl rt.write]
+// spec: RT#volume-writes
 pub trait VolumeWriter: Send + Sync {
     /// Resolve `target` to a host path and write `contents` to `path` within
     /// it. The implementation must enforce `openat2(RESOLVE_BENEATH)`-style
@@ -341,7 +341,7 @@ pub trait VolumeWriter: Send + Sync {
 /// command inside a running container at action runtime. Implemented in the
 /// operation loop on top of `ContainerRuntime::exec_command`; stubbed out in
 /// language-only tests where no real container runtime is present.
-// l[impl rt.exec]
+// spec: RT#command-execution
 pub trait Executor: Send + Sync {
     /// Run `argv` inside the running container `name`, layering `extra_env`
     /// on top of the container's environment. Blocks until the command exits
@@ -404,7 +404,7 @@ impl ReplayContext {
 
     /// Construct a `ReplayContext` configured for probe execution: no
     /// committed entries, no real oracle, and an image-capture buffer.
-    // r[impl image.discover]
+    // spec: IMG#image-discovery
     pub fn new_probe(
         operation_id: OperationId,
         world: Arc<dyn oracle::WorldStateOracle>,
@@ -425,7 +425,7 @@ impl ReplayContext {
         self.call_index < self.committed.len()
     }
 
-    // r[impl barrier.replay.anchor]
+    // spec: SUSP#barrier-anchoring
     /// Hand out the position of the next barrier asserted on `call_index`.
     ///
     /// Counted afresh each pass, which is what makes it the same number for
@@ -456,7 +456,7 @@ impl ReplayContext {
     ///
     /// Advancing the index is part of consuming the entry, so a caller cannot
     /// check without advancing or advance without checking.
-    // r[impl barrier.replay.positional]
+    // spec: SUSP#positional-replay
     /// `expect_extra` is checked when the caller's argument is stable across
     /// passes by construction; pass `None` to skip the check. Positional
     /// matching alone would treat a script edit that changes the argument at

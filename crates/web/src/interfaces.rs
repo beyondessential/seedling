@@ -60,14 +60,14 @@ impl std::error::Error for InterfaceError {}
 mod tests {
     use super::*;
 
-    // w[verify bind]
+    // spec: WEB#listen-addresses
     #[test]
     fn empty_inputs_default_to_loopback() {
         let got = resolve_bind_addrs(&[], &[], 8080).unwrap();
         assert_eq!(got, vec!["127.0.0.1:8080".parse().unwrap()]);
     }
 
-    // w[verify bind]
+    // spec: WEB#listen-addresses
     #[test]
     fn explicit_addrs_are_passed_through() {
         let explicit: Vec<SocketAddr> = vec![
@@ -80,7 +80,7 @@ mod tests {
         assert!(got.contains(&"198.51.100.1:8080".parse().unwrap()));
     }
 
-    // w[verify bind]
+    // spec: WEB#listen-addresses
     #[test]
     fn duplicate_addrs_across_sources_are_deduplicated() {
         let explicit: Vec<SocketAddr> = vec![
@@ -91,7 +91,7 @@ mod tests {
         assert_eq!(got.len(), 1);
     }
 
-    // w[verify bind]
+    // spec: WEB#listen-addresses
     #[test]
     fn unknown_interface_name_is_warned_not_fatal() {
         // An interface name that does not exist on any system is skipped

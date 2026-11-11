@@ -9,8 +9,8 @@ use super::super::{
 use super::App;
 
 pub(super) fn on_app(builder: &mut TypeBuilder<App>) {
-    // l[impl job.type]
-    // l[impl app.resources.context.named]
+    // spec: JOB#instances
+    // spec: APP#named-resources
     builder.with_fn(
         "job",
         |this: &mut App, name: &str| -> Result<Job, Box<EvalAltResult>> {
@@ -44,7 +44,7 @@ pub(super) fn on_app(builder: &mut TypeBuilder<App>) {
         },
     );
 
-    // l[impl app.resources.context.anonymous]
+    // spec: APP#anonymous-resources
     builder.with_fn(
         "job",
         |_this: &mut App| -> Result<Job, Box<EvalAltResult>> {

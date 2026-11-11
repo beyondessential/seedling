@@ -112,7 +112,7 @@ fn to_map(state: DesiredState) -> HashMap<String, LifecycleState> {
 // Steady state (no operation)
 // -----------------------------------------------------------------------
 
-// r[verify desired-state.steady]
+// spec: RCN#desired-state
 #[test]
 fn steady_state_all_resources_are_ready() {
     let app_def = make_app_def(&["web", "api"]);
@@ -137,7 +137,7 @@ fn steady_state_all_resources_are_ready() {
     );
 }
 
-// r[verify desired-state.steady]
+// spec: RCN#desired-state
 #[test]
 fn steady_state_resource_names_match_app_def() {
     let app_def = make_app_def(&["web", "api"]);
@@ -158,7 +158,7 @@ fn steady_state_resource_names_match_app_def() {
     assert!(map.contains_key("api"));
 }
 
-// r[verify desired-state.steady]
+// spec: RCN#desired-state
 #[test]
 fn steady_state_instances_carry_app_name() {
     let app_def = make_app_def(&["web"]);
@@ -177,7 +177,7 @@ fn steady_state_instances_carry_app_name() {
     assert_eq!(state.resources[0].instance.app, "myapp");
 }
 
-// r[verify desired-state.steady]
+// spec: RCN#desired-state
 #[test]
 fn steady_state_empty_app_def_gives_empty_desired_state() {
     let app_def = AppDef::default();
@@ -199,7 +199,7 @@ fn steady_state_empty_app_def_gives_empty_desired_state() {
 // During operation
 // -----------------------------------------------------------------------
 
-// r[verify desired-state.during-operation]
+// spec: RCN#desired-state
 #[test]
 fn operation_with_no_starts_gives_empty_desired_state() {
     let app_def = make_app_def(&["web", "api"]);
@@ -218,7 +218,7 @@ fn operation_with_no_starts_gives_empty_desired_state() {
     assert!(state.is_empty());
 }
 
-// r[verify desired-state.during-operation]
+// spec: RCN#desired-state
 #[test]
 fn started_resource_is_desired_at_ready() {
     let app_def = make_app_def(&["web", "api"]);
@@ -242,7 +242,7 @@ fn started_resource_is_desired_at_ready() {
     assert_eq!(state.resources[0].instance.name.as_deref(), Some("web"));
 }
 
-// r[verify desired-state.during-operation]
+// spec: RCN#desired-state
 #[test]
 fn stopped_resource_is_desired_at_unscheduled() {
     let app_def = make_app_def(&["web"]);
@@ -269,7 +269,7 @@ fn stopped_resource_is_desired_at_unscheduled() {
     );
 }
 
-// r[verify gc.instances.never-actuated]
+// spec: GC#demoted-instances
 #[test]
 fn replica_stopped_by_an_operation_is_demoted() {
     let app_def = make_app_def(&["web"]);
@@ -296,7 +296,7 @@ fn replica_stopped_by_an_operation_is_demoted() {
     assert!(state.resources[0].demoted);
 }
 
-// r[verify desired-state.during-operation]
+// spec: RCN#desired-state
 #[test]
 fn stop_after_start_overrides_to_unscheduled() {
     let app_def = make_app_def(&["web"]);
@@ -321,7 +321,7 @@ fn stop_after_start_overrides_to_unscheduled() {
     assert_eq!(state.resources[0].desired, LifecycleState::Unscheduled);
 }
 
-// r[verify desired-state.during-operation]
+// spec: RCN#desired-state
 #[test]
 fn started_resource_not_in_app_def_is_dropped() {
     let app_def = make_app_def(&["web"]);
@@ -347,7 +347,7 @@ fn started_resource_not_in_app_def_is_dropped() {
 // OperationProgress::from_log
 // -----------------------------------------------------------------------
 
-// r[verify desired-state.during-operation]
+// spec: RCN#desired-state
 #[test]
 fn from_log_start_entry_maps_to_ready() {
     let app_def = make_app_def(&["web"]);
@@ -370,7 +370,7 @@ fn from_log_start_entry_maps_to_ready() {
     assert_eq!(map["web"], LifecycleState::Ready);
 }
 
-// r[verify desired-state.during-operation]
+// spec: RCN#desired-state
 #[test]
 fn from_log_stop_entry_maps_to_unscheduled() {
     let app_def = make_app_def(&["web"]);
@@ -393,7 +393,7 @@ fn from_log_stop_entry_maps_to_unscheduled() {
     assert_eq!(map["web"], LifecycleState::Unscheduled);
 }
 
-// r[verify desired-state.during-operation]
+// spec: RCN#desired-state
 #[test]
 fn from_log_query_entry_is_ignored() {
     let entries = [log_entry(CallKind::Query, vec![dep("myapp", "web")])];
@@ -401,7 +401,7 @@ fn from_log_query_entry_is_ignored() {
     assert!(progress.is_empty());
 }
 
-// r[verify desired-state.during-operation]
+// spec: RCN#desired-state
 #[test]
 fn from_log_later_entry_overrides_earlier_for_same_resource() {
     let app_def = make_app_def(&["web"]);
@@ -428,7 +428,7 @@ fn from_log_later_entry_overrides_earlier_for_same_resource() {
     assert_eq!(map["web"], LifecycleState::Unscheduled);
 }
 
-// r[verify desired-state.during-operation]
+// spec: RCN#desired-state
 #[test]
 fn from_log_multiple_resources_in_one_entry() {
     let app_def = make_app_def(&["web", "api"]);
@@ -459,7 +459,7 @@ fn from_log_multiple_resources_in_one_entry() {
     );
 }
 
-// r[verify desired-state.definition]
+// spec: RCN#desired-state
 #[test]
 fn definition_field_is_populated_from_app_def() {
     let app_def = make_app_def(&["web"]);
@@ -486,7 +486,7 @@ fn definition_field_is_populated_from_app_def() {
 // Scaling
 // -----------------------------------------------------------------------
 
-// r[verify autonomous.scale]
+// spec: AUTO#scale
 #[test]
 fn scaled_deployment_produces_multiple_instances() {
     let app_def = make_app_def_scaled(&[("web", 1..3)]);
@@ -516,7 +516,7 @@ fn scaled_deployment_produces_multiple_instances() {
     );
 }
 
-// r[verify autonomous.scale]
+// spec: AUTO#scale
 #[test]
 fn scaled_deployment_effective_less_than_existing_marks_excess_unscheduled() {
     let app_def = make_app_def_scaled(&[("web", 1..5)]);
@@ -565,7 +565,7 @@ fn scaled_deployment_effective_less_than_existing_marks_excess_unscheduled() {
     assert!(unscheduled.iter().all(|r| r.demoted), "excess is demoted");
 }
 
-// r[verify autonomous.scale]
+// spec: AUTO#scale
 #[test]
 fn fixed_scale_one_uses_scaled_instance() {
     let app_def = make_app_def(&["web"]);
@@ -589,7 +589,7 @@ fn fixed_scale_one_uses_scaled_instance() {
     );
 }
 
-// r[verify autonomous.scale]
+// spec: AUTO#scale
 #[test]
 fn fixed_scale_two_uses_scaled_instances() {
     let app_def = make_app_def_scaled(&[("web", 2..2)]);
@@ -615,7 +615,7 @@ fn fixed_scale_two_uses_scaled_instances() {
     );
 }
 
-// r[verify autonomous.scale]
+// spec: AUTO#scale
 #[test]
 fn scale_zero_lower_bound_starts_with_zero_instances() {
     let app_def = make_app_def_scaled(&[("web", 0..3)]);
@@ -643,7 +643,7 @@ fn scale_zero_lower_bound_starts_with_zero_instances() {
     );
 }
 
-// r[verify autonomous.scale]
+// spec: AUTO#scale
 #[test]
 fn scaled_instances_have_distinct_ids() {
     let app_def = make_app_def_scaled(&[("web", 1..5)]);
@@ -664,7 +664,7 @@ fn scaled_instances_have_distinct_ids() {
     assert_eq!(ids.len(), unique.len(), "all instance IDs must be distinct");
 }
 
-// r[verify autonomous.scale]
+// spec: AUTO#scale
 #[test]
 fn scaled_instances_are_stable_across_recomputes() {
     let app_def = make_app_def_scaled(&[("web", 1..5)]);
@@ -709,7 +709,7 @@ fn scaled_instances_are_stable_across_recomputes() {
     );
 }
 
-// r[verify autonomous.scale]
+// spec: AUTO#scale
 #[test]
 fn scale_up_preserves_existing_instances() {
     let app_def = make_app_def_scaled(&[("web", 1..5)]);
@@ -762,7 +762,7 @@ fn scale_up_preserves_existing_instances() {
     }
 }
 
-// r[verify autonomous.scale]
+// spec: AUTO#scale
 #[test]
 fn mixed_fixed_and_scalable_deployments() {
     let mut def = AppDef::default();
@@ -809,7 +809,7 @@ fn mixed_fixed_and_scalable_deployments() {
     );
 }
 
-// r[verify autonomous.scale]
+// spec: AUTO#scale
 #[test]
 fn singleton_to_scaled_transition_marks_old_singleton_excess() {
     let app_def = make_app_def(&["web"]);
@@ -865,7 +865,7 @@ fn singleton_to_scaled_transition_marks_old_singleton_excess() {
     );
 }
 
-// r[verify autonomous.scale]
+// spec: AUTO#scale
 #[test]
 fn uninstall_tears_down_all_scaled_instances() {
     let app_def = make_app_def_scaled(&[("web", 1..5)]);
@@ -898,8 +898,8 @@ fn uninstall_tears_down_all_scaled_instances() {
 // Stopped resources
 // -----------------------------------------------------------------------
 
-// i[verify resource.stop]
-// r[verify gc.instances]
+// spec: CTL#resource-stop
+// spec: GC#unscheduled-instances
 #[test]
 fn stopped_singleton_resource_is_desired_at_unscheduled() {
     use crate::defs::volume::Volume;
@@ -938,7 +938,7 @@ fn stopped_singleton_resource_is_desired_at_unscheduled() {
     assert_eq!(map["web"], LifecycleState::Ready, "unstopped stays Ready");
 }
 
-// i[verify resource.stop]
+// spec: CTL#resource-stop
 #[test]
 fn stopped_deployment_scales_to_zero_unscheduling_existing_instances() {
     let app_def = make_app_def_scaled(&[("web", 1..5)]);
@@ -982,7 +982,7 @@ fn stopped_deployment_scales_to_zero_unscheduling_existing_instances() {
 // from_log — non-lifecycle call kinds
 // -----------------------------------------------------------------------
 
-// r[verify actuate.ingress.warm-certs]
+// spec: RT#certificate-warming
 #[test]
 fn from_log_warm_certs_records_hostnames_without_touching_desired_state() {
     let ingress = ResourceInstance::new_singleton(
@@ -999,7 +999,7 @@ fn from_log_warm_certs_records_hostnames_without_touching_desired_state() {
     assert!(progress.warm_cert_hostnames.contains("warm.example.com"));
 }
 
-// r[verify desired-state.during-operation]
+// spec: RCN#desired-state
 #[test]
 fn from_log_ignores_transient_side_effect_kinds() {
     let target = dep("myapp", "web");
@@ -1024,7 +1024,7 @@ fn from_log_ignores_transient_side_effect_kinds() {
 // Dynamic resources
 // -----------------------------------------------------------------------
 
-// r[verify desired-state.during-operation]
+// spec: RCN#desired-state
 #[test]
 fn dynamic_resource_definition_comes_from_operation_progress() {
     let app_def = make_app_def(&["web"]);

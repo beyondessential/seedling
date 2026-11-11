@@ -3,7 +3,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use seedling_protocol::{client::OiClient, names::AppName, relay::relay_forward_stream};
 
-// i[impl ctl.forward.stats]
+// spec: CLI#port-forward-statistics
 struct ForwardStats {
     bytes_to_service: AtomicU64,
     bytes_from_service: AtomicU64,
@@ -12,9 +12,9 @@ struct ForwardStats {
     datagrams_to_service: AtomicU64,
     datagrams_from_service: AtomicU64,
     /// Datagrams the connection would not carry — over path MTU. Counted
-    /// rather than fatal: i[forward.mtu] says oversize payloads are dropped
+    /// rather than fatal: FWD#udp-tunnelling says oversize payloads are dropped
     /// and reported, and the operator needs to see that it happened.
-    // i[impl ctl.forward.stats]
+    // spec: CLI#port-forward-statistics
     datagrams_dropped: AtomicU64,
 }
 
@@ -192,7 +192,7 @@ pub async fn forward_port(
                                     return;
                                 }
                                 let (mut tcp_read, mut tcp_write) = tcp_conn.into_split();
-                                // i[impl forward.tunnel.tcp]
+                                // spec: FWD#tcp-tunnelling
                                 if let Err(e) = relay_forward_stream(
                                     (&mut fwd_send, &mut fwd_recv),
                                     (&mut tcp_read, &mut tcp_write),
@@ -262,7 +262,7 @@ pub async fn forward_port(
                             let mut pkt = Vec::with_capacity(2 + n);
                             pkt.extend_from_slice(&key_bytes);
                             pkt.extend_from_slice(&buf[..n]);
-                            // i[impl forward.mtu]
+                            // spec: FWD#udp-tunnelling
                             // Only a lost connection ends the forward. An
                             // oversized datagram — anything past path MTU, so
                             // EDNS responses and QUIC payloads routinely — is

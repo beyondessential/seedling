@@ -11,8 +11,7 @@ fn bundle_path(path: &str) -> Result<String, Box<EvalAltResult>> {
 }
 
 pub(super) fn on_app(builder: &mut TypeBuilder<App>) {
-    // l[impl app.file]
-    // l[impl app.bundle.context]
+    // spec: BND#bundle-files
     builder.with_fn(
         "file",
         |this: &mut App, path: &str| -> Result<File, Box<EvalAltResult>> {
@@ -30,8 +29,7 @@ pub(super) fn on_app(builder: &mut TypeBuilder<App>) {
         },
     );
 
-    // l[impl app.dir]
-    // l[impl app.bundle.context]
+    // spec: BND#bundle-files
     builder.with_fn(
         "dir",
         |this: &mut App, path: &str| -> Result<Directory, Box<EvalAltResult>> {

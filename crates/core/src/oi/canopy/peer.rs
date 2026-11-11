@@ -23,7 +23,7 @@ pub type RelayStream = (
     Box<dyn AsyncRead + Send + Unpin>,
 );
 
-// i[stream.canopy]
+// spec: WIRE#canopy-relay-streams
 /// A client that has offered to carry Canopy requests.
 pub trait RelayPeer: Send + Sync + 'static {
     /// Open a fresh stream for one relayed request.
@@ -48,7 +48,7 @@ impl QuicPeer {
 }
 
 impl RelayPeer for QuicPeer {
-    // i[canopy.relay]
+    // spec: RLY#relay-streams
     fn open(&self) -> BoxFuture<'_, Result<RelayStream, String>> {
         Box::pin(async move {
             let (send, recv) = self

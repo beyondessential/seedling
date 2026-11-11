@@ -31,7 +31,7 @@ use seedling_protocol::keys;
 /// Rather than announce which key went — a signal a busy connection could
 /// miss — each change bumps a generation, and a connection woken by it
 /// asks again whether its own key is still here.
-// i[impl transport.client-auth]
+// spec: TRN#client-authentication
 #[derive(Debug)]
 pub struct TrustedKeySet {
     keys: RwLock<HashSet<String>>,
@@ -184,7 +184,7 @@ pub fn get_label(db: &Db, fingerprint: &str) -> rusqlite::Result<Option<String>>
     rows.next()?.map(|r| r.get(0)).transpose()
 }
 
-// i[key.list]
+// spec: KEY#listing-keys
 pub fn list_keys(db: &Db) -> rusqlite::Result<Vec<(String, String, i64)>> {
     let mut stmt = db.conn.prepare(
         "SELECT fingerprint, label, added_at \
@@ -195,7 +195,7 @@ pub fn list_keys(db: &Db) -> rusqlite::Result<Vec<(String, String, i64)>> {
 }
 
 /// Insert a key, or update its label if it already exists.
-// i[key.authorize]
+// spec: KEY#authorising-a-key
 pub fn authorize_key(
     db: &Db,
     trusted: &TrustedKeys,
@@ -216,13 +216,13 @@ pub fn authorize_key(
 }
 
 /// Remove a key. Returns `true` if it was present and removed.
-// i[key.revoke]
+// spec: KEY#revoking-a-key
 pub fn revoke_key(db: &Db, trusted: &TrustedKeys, fp: &str) -> rusqlite::Result<bool> {
     let rows = db
         .conn
         .execute("DELETE FROM authorized_keys WHERE fingerprint = ?1", [fp])?;
     if rows > 0 {
-        // i[impl key.revoke] — out of the set the verifier reads, and the
+        // spec: KEY#revoking-a-key — out of the set the verifier reads, and the
         // signal that goes with it ends the connections it had authorised.
         trusted.remove(fp);
         Ok(true)
@@ -325,15 +325,15 @@ impl ClientCertVerifier for SeedlingClientVerifier {
 mod tests {
     use super::*;
 
-    // i[verify key.list]
+    // spec: KEY#listing-keys
     #[test]
     fn list_empty_on_fresh_db() {
         let db = Db::open_in_memory().unwrap();
         assert!(list_keys(&db).unwrap().is_empty());
     }
 
-    // i[verify key.authorize]
-    // i[verify key.list]
+    // spec: KEY#authorising-a-key
+    // spec: KEY#listing-keys
     #[test]
     fn authorize_then_list_returns_inserted_key() {
         let db = Db::open_in_memory().unwrap();
@@ -346,7 +346,7 @@ mod tests {
         assert!(trusted.contains("fp-1"));
     }
 
-    // i[verify key.authorize]
+    // spec: KEY#authorising-a-key
     #[test]
     fn authorize_updates_label_on_conflict() {
         let db = Db::open_in_memory().unwrap();
@@ -358,7 +358,7 @@ mod tests {
         assert_eq!(list[0].1, "new-label");
     }
 
-    // i[verify key.revoke]
+    // spec: KEY#revoking-a-key
     #[test]
     fn revoke_removes_authorized_key() {
         let db = Db::open_in_memory().unwrap();
@@ -369,7 +369,7 @@ mod tests {
         assert!(!trusted.contains("fp-1"));
     }
 
-    // i[verify key.revoke]
+    // spec: KEY#revoking-a-key
     #[test]
     fn revoke_returns_false_for_unknown_fingerprint() {
         let db = Db::open_in_memory().unwrap();

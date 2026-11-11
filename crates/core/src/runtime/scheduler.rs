@@ -15,7 +15,7 @@ use crate::runtime::identity::InstanceId;
 // Types
 // ---------------------------------------------------------------------------
 
-// r[impl operation.lifecycle]
+// spec: OPS#operation
 #[derive(Debug, Clone)]
 pub struct ActiveOperation {
     pub app: AppName,
@@ -24,20 +24,20 @@ pub struct ActiveOperation {
     /// Generation that was current immediately before the change that
     /// triggered this operation. Equal to target for operations not
     /// triggered by a generation bump.
-    // r[impl operation.lifecycle.generations]
+    // spec: OPS#initiating-events
     pub source_generation: u64,
     /// Generation produced by the change that triggered this operation, or
     /// the current generation at dispatch for operator-invoked actions.
-    // r[impl operation.lifecycle.generations]
+    // spec: OPS#initiating-events
     pub target_generation: u64,
     /// Cooperative cancellation signal. Flipped by the cancel-action
     /// endpoint; observed by the action runtime at barrier entry and by the
     /// lifecycle loop's interruptible sleep.
-    // r[impl operation.cancel]
+    // spec: OPS#cancellation
     pub cancel_token: Arc<CancelToken>,
 }
 
-// r[impl operation.lifecycle]
+// spec: OPS#operation
 #[derive(Debug, Clone)]
 pub struct QueuedOperation {
     pub app: AppName,
@@ -45,17 +45,17 @@ pub struct QueuedOperation {
     pub operation_id: OperationId,
     /// Action params passed by the invoker. For install actions, contains the
     /// validated requirements. Empty map for actions with no params.
-    // r[impl operation.params]
+    // spec: OPS#persistence
     pub params: serde_json::Map<String, serde_json::Value>,
-    // r[impl operation.lifecycle.generations]
+    // spec: OPS#initiating-events
     pub source_generation: u64,
-    // r[impl operation.lifecycle.generations]
+    // spec: OPS#initiating-events
     pub target_generation: u64,
-    // i[impl event.types]
+    // spec: EVT#event-types
     pub trigger: String,
 }
 
-// r[impl operation.lifecycle.single]
+// spec: OPS#concurrency
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ScheduleResult {
     /// Operation started immediately (no prior active op).
@@ -66,7 +66,7 @@ pub enum ScheduleResult {
     Rejected(RejectReason),
 }
 
-// r[impl operation.cancel]
+// spec: OPS#cancellation
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CancelOutcome {
     /// The token was flipped; the action runtime will observe the cancel at
@@ -82,15 +82,14 @@ pub enum CancelOutcome {
     NoActiveOp,
 }
 
-// r[impl operation.lifecycle.single.intra-app]
-// r[impl operation.lifecycle.single.inter-app]
+// spec: OPS#concurrency
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RejectReason {
     /// A lifecycle operation for this application is already in progress.
     SameAppOperationInProgress,
     /// A lifecycle operation for this application is already queued.
     SameAppAlreadyQueued,
-    // r[impl app.uninstall.exclusive]
+    // spec: TRD#uninstall-admission
     /// The application is being torn down, so nothing further may run
     /// against it.
     AppUninstalling,
@@ -120,7 +119,7 @@ impl std::fmt::Display for AppBlocker {
     }
 }
 
-// r[impl operation.composition.cycles]
+// spec: OPS#cycles
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CycleError {
     /// The action whose invocation would form a cycle.
@@ -148,7 +147,7 @@ impl std::error::Error for CycleError {}
 /// Enforces the single-active-operation rule, per-app queuing, and cycle
 /// detection for action composition. The scheduler tracks policy only; it
 /// does not execute operations.
-// r[impl operation.lifecycle.single]
+// spec: OPS#concurrency
 #[derive(Debug, Default)]
 pub struct Scheduler {
     active: Option<ActiveOperation>,
@@ -188,7 +187,7 @@ impl Scheduler {
         self.held.contains(app).then_some(AppBlocker::Change)
     }
 
-    // r[impl operation.lifecycle.param-change]
+    // spec: OPS#parameter-changes
     /// Hold `app` against every admission while a change to it is committed.
     ///
     /// A parameter or definition change checks that nothing runs for the app,
@@ -207,7 +206,7 @@ impl Scheduler {
         }
     }
 
-    // r[impl app.uninstall.exclusive]
+    // spec: TRD#uninstall-admission
     /// Admit a lifecycle operation for `app` / `action`, subject to its phase.
     ///
     /// The only way in from outside this module. [`Self::request`] is the queue
@@ -256,9 +255,7 @@ impl Scheduler {
     ///
     /// The queue mechanic alone, with no view of the app's phase: reach it
     /// through [`Self::admit`], which decides whether the app may have one.
-    // r[impl operation.lifecycle.single]
-    // r[impl operation.lifecycle.single.intra-app]
-    // r[impl operation.lifecycle.single.inter-app]
+    // spec: OPS#concurrency
     fn request(
         &mut self,
         app: &AppName,
@@ -314,11 +311,11 @@ impl Scheduler {
                 ScheduleResult::Accepted
             }
             Some(active) if active.app == *app => {
-                // r[impl operation.lifecycle.single.intra-app]
+                // spec: OPS#concurrency
                 ScheduleResult::Rejected(RejectReason::SameAppOperationInProgress)
             }
             Some(_) => {
-                // r[impl operation.lifecycle.single.inter-app]
+                // spec: OPS#concurrency
                 if self.queue.iter().any(|q| q.app == *app) {
                     return ScheduleResult::Rejected(RejectReason::SameAppAlreadyQueued);
                 }
@@ -339,7 +336,7 @@ impl Scheduler {
     /// Mark the current operation as complete and dequeue the next one, if any.
     ///
     /// Returns the newly-started operation so the caller knows what to run.
-    // r[impl operation.lifecycle.completion]
+    // spec: OPS#completion
     pub fn complete_current(&mut self) -> Option<QueuedOperation> {
         self.active = None;
         self.call_stack.clear();
@@ -357,7 +354,7 @@ impl Scheduler {
     }
 
     /// Request cancellation of the active operation if it belongs to `app`.
-    // r[impl operation.cancel]
+    // spec: OPS#cancellation
     pub fn request_cancel(&self, app: &AppName) -> CancelOutcome {
         let Some(active) = self.active.as_ref() else {
             return CancelOutcome::NoActiveOp;
@@ -376,9 +373,9 @@ impl Scheduler {
     ///
     /// Returns `Err(CycleError)` if `action_name` is already on the stack,
     /// which means this invocation would form a direct or transitive cycle.
-    // r[impl operation.composition]
+    // spec: OPS#action-composition
     pub fn push_call(&mut self, action_name: &ActionName) -> Result<(), CycleError> {
-        // r[impl operation.composition.cycles]
+        // spec: OPS#cycles
         if self.call_stack.iter().any(|a| a == action_name.as_str()) {
             return Err(CycleError {
                 action: action_name.as_str().to_owned(),
@@ -483,7 +480,7 @@ const MAX_BACKOFF_SECS: u64 = 300;
 /// Returns `Some(remaining_wait)` if the operation should be deferred, or
 /// `None` if it should proceed now. The backoff counter resets automatically
 /// when the gap since the last matching operation exceeds `MAX_BACKOFF_SECS`.
-// r[impl history.operations.rate-limiting]
+// spec: HIST#autonomous-operations
 pub fn should_back_off(
     resource_id: InstanceId,
     operation: &str,

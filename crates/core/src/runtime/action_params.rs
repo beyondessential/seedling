@@ -11,10 +11,10 @@
 //! caller maps to its own error type.
 //!
 //! # Spec
-//! - l[impl action.params]
-//! - l[impl action.params.volume]
-//! - r[impl operation.composition.params]
-//! - r[impl operation.volume-param.reserved]
+//! - spec: ACN#param-delivery
+//! - spec: ACN#volume-params
+//! - spec: OPS#sub-action-parameters
+//! - spec: ACN#param-delivery
 
 use std::collections::BTreeMap;
 
@@ -85,8 +85,7 @@ impl std::fmt::Display for ParamValidationError {
 
 impl std::error::Error for ParamValidationError {}
 
-// l[impl action.params]
-// r[impl operation.volume-param.reserved]
+// spec: ACN#param-delivery
 /// Reject any param key ending in a reserved suffix.
 pub fn reject_reserved_keys(
     params: &serde_json::Map<String, serde_json::Value>,
@@ -136,7 +135,7 @@ pub fn apply_schema(
     Ok(())
 }
 
-// l[impl action.params.volume]
+// spec: ACN#volume-params
 /// Resolve every `kind: "volume"` param against `lookup`, ensuring
 /// each declared volume name is present (when required) and points at
 /// a real site volume.
@@ -195,7 +194,7 @@ pub trait VolumeLookup {
     fn site_volume_exists(&self, name: &SiteVolumeName) -> bool;
 }
 
-// r[impl operation.composition.params]
+// spec: OPS#sub-action-parameters
 /// Run the schema check used by [`apply_schema`]. Extracted so the
 /// existing OI install path (which validates a `BTreeMap<String,
 /// String>` directly without going through a `serde_json::Map`) can
@@ -249,7 +248,7 @@ pub fn run_requirements(
     }
 }
 
-// i[impl action.invoke.install.validation]
+// spec: ACI#install-parameters
 pub(crate) fn is_valid_email(email: &str) -> bool {
     let mut parts = email.splitn(2, '@');
     let local = parts.next().unwrap_or("");
@@ -261,7 +260,7 @@ pub(crate) fn is_valid_email(email: &str) -> bool {
         && !domain.ends_with('.')
 }
 
-// i[impl action.invoke.install.validation]
+// spec: ACI#install-parameters
 pub(crate) fn is_strong_password(password: &str) -> bool {
     zxcvbn::zxcvbn(password, &[]).score() >= zxcvbn::Score::Three
 }
@@ -291,7 +290,7 @@ mod tests {
         m
     }
 
-    // l[verify action.option-params]
+    // spec: ACN#param-schemas
     // A non-string used to be skipped as absent, so a submitted value was
     // silently replaced by the field's default — the caller believed the
     // value they sent had been taken.
@@ -316,7 +315,7 @@ mod tests {
         );
     }
 
-    // l[verify action.option-params]
+    // spec: ACN#param-schemas
     #[test]
     fn an_absent_field_still_takes_its_default() {
         let sch = schema("name", text_with_default("fallback"));
@@ -326,7 +325,7 @@ mod tests {
         assert_eq!(params["name"], serde_json::json!("fallback"));
     }
 
-    // l[verify action.option-params]
+    // spec: ACN#param-schemas
     #[test]
     fn a_string_value_is_taken_as_given() {
         let sch = schema("name", text_with_default("fallback"));

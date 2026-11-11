@@ -51,7 +51,7 @@ const clients: ConnectedClients = {
 };
 
 describe("Apps", () => {
-  // w[verify routes.apps]
+  // spec: UI#operator-capabilities
   it("renders the empty state", async () => {
     renderWithSession(<Apps />, {
       fixtures: { "/apps/list": [], "/connected-clients/list": noClients },
@@ -59,8 +59,8 @@ describe("Apps", () => {
     expect(await screen.findByText("No apps registered.")).toBeTruthy();
   });
 
-  // w[verify routes.apps]
-  // w[verify routes.apps.fault-count]
+  // spec: UI#operator-capabilities
+  // spec: UI#app-status
   it("renders app rows with status chips and fault counts", async () => {
     renderWithSession(<Apps />, {
       fixtures: { "/apps/list": apps, "/connected-clients/list": noClients },

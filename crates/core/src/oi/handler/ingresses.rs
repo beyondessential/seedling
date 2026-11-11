@@ -196,14 +196,14 @@ fn default_manual_tls_provider() -> TlsProvider {
     TlsProvider::Acme
 }
 
-// r[impl ingress.site.lifecycle]
+// spec: SITE#sources
 pub(crate) fn create_site_ingress(
     state: &OiState,
     params: CreateSiteIngressParams,
     ctx: &RequestCtx,
 ) -> HandlerResult {
     validate_hostname(&params.hostname)?;
-    // r[impl namespace.reserved]
+    // spec: IDN#reserved-names
     crate::reserved::check_site_ingress_name(&params.name)
         .map_err(|e| OiError::new(ErrorCode::RequirementsInvalid, e.to_string()))?;
     if matches!(params.tls_provider, TlsProvider::Tailscale) {
@@ -235,7 +235,7 @@ pub(crate) fn create_site_ingress(
             )
         })?;
 
-    // r[impl ingress.site.lifecycle.events]
+    // spec: SITE#attachments
     ctx.events.site_ingress_created(
         &def.name,
         &def.hostname,
@@ -254,7 +254,7 @@ pub(crate) struct DeleteSiteIngressParams {
     pub name: SiteIngressName,
 }
 
-// r[impl ingress.site.lifecycle]
+// spec: SITE#sources
 pub(crate) fn delete_site_ingress(
     state: &OiState,
     params: DeleteSiteIngressParams,
@@ -306,7 +306,7 @@ pub(crate) fn delete_site_ingress(
         ));
     }
 
-    // r[impl ingress.site.lifecycle.events]
+    // spec: SITE#attachments
     ctx.events.site_ingress_deleted(&existing.name, "manual");
 
     state.tick_notify.notify_one();
@@ -326,7 +326,7 @@ pub(crate) struct UpdateSiteIngressParams {
     pub tls_provider: Option<TlsProvider>,
 }
 
-// r[impl ingress.site.lifecycle]
+// spec: SITE#sources
 pub(crate) fn update_site_ingress(
     state: &OiState,
     params: UpdateSiteIngressParams,
@@ -481,7 +481,7 @@ fn validate_redirect_url(url: &str) -> Result<(), OiError> {
     Ok(())
 }
 
-// r[impl ingress.site.attachment]
+// spec: SITE#attachments
 pub(crate) fn attach_forward(
     state: &OiState,
     params: AttachmentForwardParams,
@@ -525,7 +525,7 @@ pub(crate) fn attach_forward(
     Ok(json!({ "attached": true }))
 }
 
-// r[impl ingress.site.attachment]
+// spec: SITE#attachments
 pub(crate) fn attach_redirect(
     state: &OiState,
     params: AttachmentRedirectParams,
@@ -585,7 +585,7 @@ pub(crate) fn attach_redirect(
     Ok(json!({ "attached": true }))
 }
 
-// r[impl ingress.site.attachment]
+// spec: SITE#attachments
 pub(crate) fn detach(
     state: &OiState,
     params: DetachAttachmentParams,
@@ -628,7 +628,7 @@ pub(crate) fn detach(
 /// Tailscale provider's poll loop and reported here with health, last
 /// poll time, and any pending error so the operator can see *why*
 /// discovery is unhealthy without grepping logs.
-// r[impl ingress.site.tailscale]
+// spec: SITE#tailscale-discovery
 pub(crate) fn discovery_status(state: &OiState) -> HandlerResult {
     let discovered = state.db.call(site_ingresses::list).map_err(|e| {
         OiError::new(
@@ -688,7 +688,7 @@ pub(crate) fn discovery_status(state: &OiState) -> HandlerResult {
 /// Force the Tailscale provider's poll loop to run now instead of
 /// waiting for the next tick. Returns `{"refreshed": true}` when the
 /// kick was delivered, or an error if no provider is configured.
-// r[impl ingress.site.tailscale]
+// spec: SITE#tailscale-discovery
 pub(crate) fn discovery_refresh(state: &OiState) -> HandlerResult {
     match &state.tailscale_provider {
         Some(p) => {

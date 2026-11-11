@@ -22,7 +22,7 @@ fn test_rule(port: u16, proto: ForwardProto) -> IngressRule {
     }
 }
 
-// r[verify infra.dataplane.output-nat]
+// spec: INFRA#host-originated-traffic
 #[test]
 fn output_rules_have_fib_daddr_local_guard() {
     let rule = test_rule(80, ForwardProto::Tcp);
@@ -47,7 +47,7 @@ fn output_rules_have_fib_daddr_local_guard() {
     );
 }
 
-// r[verify infra.dataplane.output-nat]
+// spec: INFRA#host-originated-traffic
 #[test]
 fn output_rules_dnat_to_caddy() {
     let rule = test_rule(443, ForwardProto::Tcp);
@@ -60,7 +60,7 @@ fn output_rules_dnat_to_caddy() {
     assert!(json.contains("8080"), "dnat should target caddy port 8080");
 }
 
-// r[verify infra.dataplane.output-nat]
+// spec: INFRA#host-originated-traffic
 #[test]
 fn output_rules_both_proto_produces_two_vecs() {
     let rule = test_rule(80, ForwardProto::Both);
@@ -72,7 +72,7 @@ fn output_rules_both_proto_produces_two_vecs() {
     );
 }
 
-// r[verify infra.dataplane.output-nat]
+// spec: INFRA#host-originated-traffic
 #[test]
 fn output_and_prerouting_rules_have_same_dnat_target() {
     let rule = test_rule(80, ForwardProto::Tcp);
@@ -87,7 +87,7 @@ fn output_and_prerouting_rules_have_same_dnat_target() {
     );
 }
 
-// r[verify infra.dataplane.output-nat]
+// spec: INFRA#host-originated-traffic
 #[test]
 fn output_rules_have_nfproto_ipv6_guard() {
     let rule = test_rule(80, ForwardProto::Tcp);
@@ -104,7 +104,7 @@ fn output_rules_have_nfproto_ipv6_guard() {
     );
 }
 
-// r[verify infra.dataplane.output-nat]
+// spec: INFRA#host-originated-traffic
 #[test]
 fn output_rules_match_dport() {
     let rule = test_rule(8443, ForwardProto::Tcp);
@@ -125,7 +125,7 @@ fn sample_prefix() -> Ipv6Net {
     "fd5e:1234:5678::/48".parse().expect("valid prefix")
 }
 
-// r[verify infra.dataplane.forward-policy]
+// spec: INFRA#forwarding-policy
 #[test]
 fn ct_state_established_related_accept_json() {
     let stmts = ct_state_established_related_accept();
@@ -149,7 +149,7 @@ fn ct_state_established_related_accept_json() {
     assert!(json.contains("\"in\""), "must use IN operator, got: {json}");
 }
 
-// r[verify infra.dataplane.forward-policy]
+// spec: INFRA#forwarding-policy
 #[test]
 fn ct_status_dnat_accept_json() {
     let stmts = ct_status_dnat_accept();
@@ -173,7 +173,7 @@ fn ct_status_dnat_accept_json() {
     );
 }
 
-// r[verify infra.dataplane.forward-policy]
+// spec: INFRA#forwarding-policy
 #[test]
 fn drop_unsolicited_inbound_stmts_json() {
     let prefix = sample_prefix();
@@ -195,7 +195,7 @@ fn drop_unsolicited_inbound_stmts_json() {
     );
 }
 
-// l[verify service.routing]
+// spec: SVC#routing
 #[test]
 fn dnat_lb_single_backend() {
     let backends = vec![(Ipv6Addr::new(0xfd5e, 0, 0, 0, 0, 0, 0, 1), 8080)];
@@ -216,9 +216,9 @@ fn dnat_lb_single_backend() {
     );
 }
 
-// l[verify service.routing]
-// r[verify infra.dataplane.service-dnat]
-// r[verify infra.dataplane.mount-dnat]
+// spec: SVC#routing
+// spec: INFRA#service-translation
+// spec: INFRA#mount-endpoint-addressing
 #[test]
 fn dnat_lb_multiple_backends_uniform_port() {
     let backends = vec![
@@ -245,9 +245,9 @@ fn dnat_lb_multiple_backends_uniform_port() {
     );
 }
 
-// l[verify service.routing]
-// r[verify infra.dataplane.service-dnat]
-// r[verify infra.dataplane.mount-dnat]
+// spec: SVC#routing
+// spec: INFRA#service-translation
+// spec: INFRA#mount-endpoint-addressing
 #[test]
 fn dnat_lb_multiple_backends_mixed_ports() {
     let backends = vec![
@@ -279,7 +279,7 @@ fn dnat_lb_multiple_backends_mixed_ports() {
     );
 }
 
-// r[verify infra.dataplane.forward-policy]
+// spec: INFRA#forwarding-policy
 #[test]
 fn seedling_forward_stmts_json() {
     let prefix = sample_prefix();

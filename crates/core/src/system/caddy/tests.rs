@@ -113,8 +113,8 @@ fn https_vhost_goes_in_https_server_redirect_in_http() {
     assert_eq!(redirect["handle"][0]["status_code"], 308);
 }
 
-// r[verify tls.strategy.acme-dns]
-// r[verify tls.policy.apply]
+// spec: TLS#acme-dns-01-issuance
+// spec: TLS#policies
 #[test]
 fn tls_acme_subjects_appear_in_automation() {
     let config = ProxyConfig {
@@ -145,7 +145,7 @@ fn tls_acme_subjects_appear_in_automation() {
     assert_eq!(subjects[0], "secure.example.com");
 }
 
-// r[verify actuate.ingress.warm-certs]
+// spec: RT#certificate-warming
 #[test]
 fn warm_cert_only_emits_certificates_automate_and_policy() {
     let mut config = ProxyConfig::default();
@@ -168,7 +168,7 @@ fn warm_cert_only_emits_certificates_automate_and_policy() {
     assert_eq!(automate[0], "warm.example.com");
 }
 
-// r[verify actuate.ingress.warm-certs]
+// spec: RT#certificate-warming
 #[test]
 fn warm_cert_skipped_when_already_routed() {
     let mut config = ProxyConfig {
@@ -296,8 +296,8 @@ fn https_server_includes_quic_listener() {
     );
 }
 
-// r[verify tls.cert.serve]
-// r[verify tls.strategy.default]
+// spec: TLS#serving
+// spec: CHAIN#default-chain
 #[test]
 fn cert_endpoint_url_is_emitted_inside_automation_policy() {
     let config = ProxyConfig {
@@ -336,7 +336,7 @@ fn cert_endpoint_url_is_emitted_inside_automation_policy() {
     );
 }
 
-// r[verify tls.strategy.default]
+// spec: CHAIN#default-chain
 #[test]
 fn internal_hostnames_pin_caddy_internal_issuer() {
     // `node.localhost` cannot be issued by a public CA. With a single
@@ -382,7 +382,7 @@ fn internal_hostnames_pin_caddy_internal_issuer() {
     assert_eq!(issuers[0]["module"], "internal");
 }
 
-// r[verify tls.strategy.default]
+// spec: CHAIN#default-chain
 #[test]
 fn only_internal_hostnames_emit_just_internal_policy() {
     let config = ProxyConfig {
@@ -405,7 +405,7 @@ fn only_internal_hostnames_emit_just_internal_policy() {
     assert_eq!(policies[0]["subjects"][0], "node.localhost");
 }
 
-// r[verify service.http.route.routing]
+// spec: PRX#route-emission
 #[test]
 fn vhost_with_multiple_prefixes_emits_per_prefix_routes_longest_first() {
     let config = ProxyConfig {
@@ -525,7 +525,7 @@ fn no_l4_routes_means_no_layer4_app() {
     assert!(json["apps"]["layer4"].is_null());
 }
 
-// r[verify ingress.site.attachment]
+// spec: SITE#attachments
 #[test]
 fn redirect_handler_emits_static_response_with_and_without_path_preservation() {
     let config = ProxyConfig {
@@ -584,7 +584,7 @@ fn redirect_handler_emits_static_response_with_and_without_path_preservation() {
     );
 }
 
-// l[verify ingress.redirect]
+// spec: ING#redirect-to-https
 #[test]
 fn http_to_https_redirect_targets_nonstandard_https_port() {
     let mut vhost = https_vhost("example.com", "[fd5e::1]:3000");
@@ -638,7 +638,7 @@ fn redirecting_tls_ingress(hostname: &str, port: u16) -> crate::defs::ingress::I
     }
 }
 
-// l[verify ingress.redirect]
+// spec: ING#redirect-to-https
 // The redirect used to target the node's lowest HTTPS port, which sent the
 // 8443 hostname's clients to 443 and only worked because the TLS server
 // happened to serve every hostname on every port.
@@ -706,7 +706,7 @@ fn service_upstream(port: u16) -> crate::system::translate::proxy::ServiceUpstre
     }
 }
 
-// r[verify actuate.ingress.plaintext]
+// spec: PRX#plaintext-ingresses
 #[test]
 fn plaintext_only_config_requests_no_certificate() {
     let config = ProxyConfig {
@@ -729,7 +729,7 @@ fn plaintext_only_config_requests_no_certificate() {
     );
 }
 
-// r[verify actuate.ingress.plaintext]
+// spec: PRX#plaintext-ingresses
 #[test]
 fn plaintext_vhost_gets_no_redirect_route() {
     let config = ProxyConfig {
@@ -752,7 +752,7 @@ fn plaintext_vhost_gets_no_redirect_route() {
     );
 }
 
-// r[verify actuate.ingress.plaintext]
+// spec: PRX#plaintext-ingresses
 #[test]
 fn plaintext_ingress_is_served_end_to_end() {
     // Translate then render, so this covers the whole path a `.local` host
@@ -786,7 +786,7 @@ fn plaintext_ingress_is_served_end_to_end() {
     );
 }
 
-// r[verify actuate.ingress.plaintext]
+// spec: PRX#plaintext-ingresses
 #[test]
 fn mixed_termination_on_one_hostname_serves_each_from_its_own_listener() {
     let mut secure = plaintext_ingress("clinic.local", 443);
@@ -821,7 +821,7 @@ fn mixed_termination_on_one_hostname_serves_each_from_its_own_listener() {
     );
 }
 
-// r[verify service.http.route.compression]
+// spec: PRX#compression
 #[test]
 fn reverse_proxy_routes_compress_ahead_of_the_proxy() {
     let config = ProxyConfig {
@@ -847,7 +847,7 @@ fn reverse_proxy_routes_compress_ahead_of_the_proxy() {
     assert!(handle[0]["match"].is_null());
 }
 
-// r[verify service.http.route.balancing]
+// spec: PRX#balancing
 #[test]
 fn reverse_proxy_routes_carry_balancing_defaults() {
     let config = ProxyConfig {
@@ -867,8 +867,8 @@ fn reverse_proxy_routes_carry_balancing_defaults() {
     assert_eq!(lb["try_interval"], 250_000_000i64);
 }
 
-// r[verify service.http.route.compression]
-// r[verify service.http.route.balancing]
+// spec: PRX#compression
+// spec: PRX#balancing
 #[test]
 fn redirect_routes_are_emitted_bare() {
     let config = ProxyConfig {
@@ -900,7 +900,7 @@ fn redirect_routes_are_emitted_bare() {
     assert!(handle[1].is_null());
 }
 
-// r[verify service.http.route.compression]
+// spec: PRX#compression
 #[test]
 fn compression_can_be_switched_off_for_a_route() {
     use crate::system::types::{RouteBalance, RouteProxy};
@@ -988,7 +988,7 @@ fn vhost_with(hostname: &str, routes: Vec<ProxyRoute>) -> ProxyConfig {
     }
 }
 
-// r[verify service.http.route.rate-limiting]
+// spec: PRX#rate-limiting
 #[test]
 fn a_limited_route_carries_the_rate_limit_handler() {
     let config = vhost_with(
@@ -1016,7 +1016,7 @@ fn a_limited_route_carries_the_rate_limit_handler() {
     assert_eq!(zone["key"], "{http.request.client_ip}");
 }
 
-// r[verify service.http.route.rate-limiting]
+// spec: PRX#rate-limiting
 #[test]
 fn an_unlimited_route_carries_no_rate_limit_handler() {
     let config = vhost_with("app.example.com", vec![limited_route("/api", None)]);
@@ -1027,8 +1027,8 @@ fn an_unlimited_route_carries_no_rate_limit_handler() {
     assert!(handle[1].is_null());
 }
 
-// r[verify service.http.route.rate-limiting]
-// r[verify infra.proxy.image.modules]
+// spec: PRX#rate-limiting
+// spec: PRX#proxy-image
 #[test]
 fn emitted_zone_uses_only_fields_the_pinned_module_declares() {
     use super::image::{RATE_LIMIT_HANDLER_FIELDS, RATE_LIMIT_ZONE_FIELDS};
@@ -1079,8 +1079,8 @@ fn emitted_zone_uses_only_fields_the_pinned_module_declares() {
     );
 }
 
-// r[verify service.http.route.rate-limiting]
-// r[verify service.http.route.routing]
+// spec: PRX#rate-limiting
+// spec: PRX#route-emission
 #[test]
 fn a_longer_prefix_carries_its_own_zone_ahead_of_the_shorter_one() {
     let config = vhost_with(
@@ -1122,7 +1122,7 @@ fn a_longer_prefix_carries_its_own_zone_ahead_of_the_shorter_one() {
     assert!(tight["demo/web/api"].is_null());
 }
 
-// r[verify service.http.route.rate-limiting]
+// spec: PRX#rate-limiting
 #[test]
 fn redirect_routes_are_never_rate_limited() {
     let config = ProxyConfig {
@@ -1152,7 +1152,7 @@ fn redirect_routes_are_never_rate_limited() {
     assert_eq!(handle[0]["handler"], "static_response");
     assert!(handle[1].is_null());
 }
-// r[verify infra.proxy.upgrade.cache]
+// spec: PRX#proxy-upgrades
 #[test]
 fn old_cached_config_without_rate_limit_still_deserialises() {
     // The proxy config is cached as JSON and read back on startup, so a
@@ -1178,7 +1178,7 @@ fn old_cached_config_without_rate_limit_still_deserialises() {
     assert_eq!(proxy.rate_limit, None);
 }
 
-// r[verify infra.proxy.upgrade.cache]
+// spec: PRX#proxy-upgrades
 // A document cached before redirects recorded their target is replayed as the
 // daemon that wrote it rendered it: to the first HTTPS listener it lists.
 #[test]
@@ -1196,7 +1196,7 @@ fn old_cached_redirect_without_a_target_port_replays_as_it_was_rendered() {
     assert_eq!(redirect.code, 308);
 }
 
-// r[verify infra.proxy.upgrade.cache]
+// spec: PRX#proxy-upgrades
 #[test]
 fn cached_redirect_keeps_its_recorded_target_port() {
     let mut vhost = https_vhost("app.example.com", "[fd5e::1]:3000");
@@ -1221,7 +1221,7 @@ fn cached_redirect_keeps_its_recorded_target_port() {
     );
 }
 
-// r[verify service.http.route.rate-limiting]
+// spec: PRX#rate-limiting
 #[test]
 fn a_zone_reaches_the_emitted_document_unchanged() {
     // Which routes should share a budget is `zone_for`'s decision, tested in
@@ -1282,7 +1282,7 @@ fn a_zone_reaches_the_emitted_document_unchanged() {
     }
 }
 
-// r[verify service.http.route.rate-limiting]
+// spec: PRX#rate-limiting
 #[test]
 fn ipv6_clients_are_counted_per_64_and_ipv4_per_address() {
     let config = vhost_with(
@@ -1309,7 +1309,7 @@ fn ipv6_clients_are_counted_per_64_and_ipv4_per_address() {
     assert!(zone["ipv4_prefix"].is_null());
 }
 
-// r[verify actuate.ingress.plaintext]
+// spec: PRX#plaintext-ingresses
 // Caddy refuses a config where two servers bind one address, and the admin
 // POST is all-or-nothing — so a single conflicting pair used to invalidate
 // every route and cert policy on the node, not just the offending ingress.
@@ -1338,7 +1338,7 @@ fn a_port_declared_as_both_plaintext_and_tls_is_reported() {
     assert_eq!(conflicting_listener_ports(&config), vec![8443]);
 }
 
-// r[verify actuate.ingress.plaintext]
+// spec: PRX#plaintext-ingresses
 #[test]
 fn distinct_ports_per_protocol_do_not_conflict() {
     use crate::system::caddy::config::conflicting_listener_ports;
@@ -1418,7 +1418,7 @@ fn handle_for(config: &ProxyConfig) -> Vec<serde_json::Value> {
         .clone()
 }
 
-// r[verify service.http.route.headers]
+// spec: PRX#header-operations
 #[test]
 fn each_operation_is_emitted_in_the_proxys_own_vocabulary() {
     let config = vhost_with(
@@ -1463,7 +1463,7 @@ fn each_operation_is_emitted_in_the_proxys_own_vocabulary() {
     );
 }
 
-// r[verify service.http.route.headers]
+// spec: PRX#header-operations
 #[test]
 fn response_operations_are_deferred_and_ordered_ahead_of_the_limiter() {
     // A route declaring that nothing under it may be cached must have that
@@ -1492,7 +1492,7 @@ fn response_operations_are_deferred_and_ordered_ahead_of_the_limiter() {
     assert_eq!(handle[0]["response"]["deferred"], serde_json::json!(true));
 }
 
-// r[verify service.http.route.headers]
+// spec: PRX#header-operations
 #[test]
 fn a_direction_with_no_operations_is_left_out_entirely() {
     let config = vhost_with(
@@ -1515,7 +1515,7 @@ fn a_direction_with_no_operations_is_left_out_entirely() {
     assert!(handle[0]["request"].get("add").is_none());
 }
 
-// r[verify service.http.route.headers]
+// spec: PRX#header-operations
 #[test]
 fn a_route_declaring_no_headers_carries_no_handler() {
     let config = vhost_with("app.example.com", vec![limited_route("/", None)]);
@@ -1523,7 +1523,7 @@ fn a_route_declaring_no_headers_carries_no_handler() {
     assert_eq!(handle[0]["handler"], "reverse_proxy");
 }
 
-// r[verify infra.proxy.upgrade.cache]
+// spec: PRX#proxy-upgrades
 #[test]
 fn old_cached_config_without_headers_still_deserialises() {
     // As for rate limiting: the config is cached as JSON and read back on
@@ -1548,7 +1548,7 @@ fn old_cached_config_without_headers_still_deserialises() {
     assert!(proxy.headers.is_empty());
 }
 
-// r[verify ingress.persistent-connections]
+// spec: PRX#persistent-connections
 #[test]
 fn no_server_takes_away_the_proxys_default_keep_alive() {
     // HTTP/1.1 reuse is reached by saying nothing: the proxy keeps connections
@@ -1603,7 +1603,7 @@ fn no_server_takes_away_the_proxys_default_keep_alive() {
     }
 }
 
-// r[verify infra.proxy.upgrade.cache]
+// spec: PRX#proxy-upgrades
 #[test]
 fn a_route_with_no_headers_serialises_as_it_did_before() {
     // The config is cached as JSON and compared on startup. A route declaring
@@ -1673,7 +1673,7 @@ fn location(json: &serde_json::Value, index: usize, handler: usize) -> String {
         .to_string()
 }
 
-// r[verify service.http.route.redirect]
+// spec: PRX#redirect-routes
 // The production case: a prefix moves and everything under it comes along.
 #[test]
 fn a_tail_carrying_redirect_cuts_the_rest_of_the_request_line_into_the_target() {
@@ -1713,7 +1713,7 @@ fn a_tail_carrying_redirect_cuts_the_rest_of_the_request_line_into_the_target() 
     assert_eq!(map["defaults"], serde_json::json!(["", ""]));
 }
 
-// r[verify service.http.route.redirect]
+// spec: PRX#redirect-routes
 // The request line is read in its escaped form, and only where it is the shape
 // the route claimed: a request the pattern does not match contributes nothing
 // rather than contributing text nothing checked.
@@ -1746,7 +1746,7 @@ fn the_request_parts_pattern_is_case_insensitive_and_refuses_braces() {
     assert!(pattern.contains(r"(\?[^{}]*)?"), "{pattern}");
 }
 
-// r[verify service.http.route.redirect]
+// spec: PRX#redirect-routes
 #[test]
 fn a_prefix_carrying_pattern_metacharacters_is_matched_literally() {
     let config = vhost_with(
@@ -1769,7 +1769,7 @@ fn a_prefix_carrying_pattern_metacharacters_is_matched_literally() {
     assert!(pattern.contains(r"\/v1\.0\/log\+in"), "{pattern}");
 }
 
-// r[verify service.http.route.redirect]
+// spec: PRX#redirect-routes
 #[test]
 fn a_target_naming_nothing_is_one_handler_serving_it_as_declared() {
     let config = vhost_with(
@@ -1787,7 +1787,7 @@ fn a_target_naming_nothing_is_one_handler_serving_it_as_declared() {
     assert_eq!(location(&json, 0, 0), "https://example.com/new");
 }
 
-// r[verify service.http.route.redirect]
+// spec: PRX#redirect-routes
 // The query carries its leading `?` only when there is one, and the proxy
 // offers the query without it and no way to test it inline.
 #[test]
@@ -1813,7 +1813,7 @@ fn a_query_carried_on_its_own_is_mapped_so_an_absent_one_adds_nothing() {
     assert_eq!(location(&json, 0, 1), "/find{seedling.redirect.query}");
 }
 
-// r[verify service.http.route.redirect]
+// spec: PRX#redirect-routes
 // A tail on its own drops the query rather than smuggling it through the
 // placeholder that spells path and query together.
 #[test]
@@ -1833,8 +1833,8 @@ fn a_tail_carried_on_its_own_leaves_the_query_behind() {
     assert_eq!(location(&json, 0, 1), "/api{seedling.redirect.tail}");
 }
 
-// r[verify service.http.route.headers]
-// r[verify service.http.route.redirect]
+// spec: PRX#header-operations
+// spec: PRX#redirect-routes
 #[test]
 fn a_redirect_route_carries_its_response_header_operations_first() {
     let mut route = redirect_route_at(
@@ -1863,8 +1863,8 @@ fn a_redirect_route_carries_its_response_header_operations_first() {
     assert_eq!(handler["response"]["set"]["Cache-Control"][0], "no-store");
 }
 
-// r[verify service.http.route.redirect]
-// r[verify service.http.route.routing]
+// spec: PRX#redirect-routes
+// spec: PRX#route-emission
 #[test]
 fn a_redirect_takes_its_place_in_the_longest_prefix_ordering() {
     let config = vhost_with(
@@ -1885,7 +1885,7 @@ fn a_redirect_takes_its_place_in_the_longest_prefix_ordering() {
     assert_eq!(handlers(&json, 1), vec!["reverse_proxy"]);
 }
 
-// r[verify service.http.route.redirect]
+// spec: PRX#redirect-routes
 // A plaintext request under a redirect route's prefix is sent to HTTPS first
 // and meets the redirect on arrival, rather than being handed a target it
 // would reach without ever having been moved to TLS.
@@ -1944,7 +1944,7 @@ fn an_ingress_redirect_answers_ahead_of_a_redirect_route_on_the_plaintext_vhost(
     assert_eq!(https[0]["match"][0]["path"][0], "/v1/login");
 }
 
-// r[verify service.http.route.redirect]
+// spec: PRX#redirect-routes
 #[test]
 fn a_redirect_route_round_trips_through_the_cached_document() {
     let config = vhost_with(
@@ -1971,7 +1971,7 @@ fn a_redirect_route_round_trips_through_the_cached_document() {
     assert_eq!(target[1], RedirectSegment::Tail);
 }
 
-// r[verify tls.chain.proxy-gate]
+// spec: CHAIN#proxy-strategies
 #[test]
 fn a_hostname_held_back_from_renewing_gets_a_policy_of_its_own() {
     let config = ProxyConfig {
@@ -2031,7 +2031,7 @@ fn a_hostname_held_back_from_renewing_gets_a_policy_of_its_own() {
     }
 }
 
-// r[verify tls.chain.proxy-gate]
+// spec: CHAIN#proxy-strategies
 #[test]
 fn a_ratio_for_a_hostname_the_proxy_does_not_serve_is_ignored() {
     let config = ProxyConfig {
@@ -2053,7 +2053,7 @@ fn a_ratio_for_a_hostname_the_proxy_does_not_serve_is_ignored() {
     assert!(policies[0]["renewal_window_ratio"].is_null());
 }
 
-// r[verify actuate.ingress.port-scope]
+// spec: PRX#port-scope
 // Two ingresses for one hostname on different ports used to merge into one
 // route list, so the public site answered on the admin port and the admin
 // service was unreachable.
@@ -2094,7 +2094,7 @@ fn same_hostname_on_two_ports_keeps_each_ingress_apart() {
     assert!(dial("seedling_http_8080").contains(":4000"), "{json}");
 }
 
-// r[verify actuate.ingress.port-scope]
+// spec: PRX#port-scope
 #[test]
 fn tls_ingresses_on_two_ports_get_their_own_servers() {
     let mut a = https_vhost("x.example.com", "[fd5e::1]:3000");
@@ -2134,7 +2134,7 @@ fn tls_ingresses_on_two_ports_get_their_own_servers() {
     }
 }
 
-// r[verify actuate.ingress.port-scope]
+// spec: PRX#port-scope
 #[test]
 fn a_redirect_answers_only_on_the_port_it_names() {
     let mut vhost = https_vhost("x.example.com", "[fd5e::1]:3000");
@@ -2170,7 +2170,7 @@ fn a_redirect_answers_only_on_the_port_it_names() {
     );
 }
 
-// r[verify infra.proxy.upgrade.cache]
+// spec: PRX#proxy-upgrades
 // A document cached before vhosts carried a port is replayed as the daemon
 // that wrote it served it: each vhost on every port of its protocol.
 #[test]
@@ -2200,7 +2200,7 @@ fn old_cached_vhosts_without_a_port_replay_on_every_port_of_their_class() {
     );
 }
 
-// r[verify actuate.ingress.plaintext]
+// spec: PRX#plaintext-ingresses
 // The proxy makes any server off its HTTP port TLS unless told not to, so a
 // plaintext ingress on :8080 answered plain HTTP clients with an error.
 #[test]
@@ -2227,7 +2227,7 @@ fn plaintext_servers_on_any_port_opt_out_of_automatic_https() {
     }
 }
 
-// r[verify actuate.ingress.plaintext]
+// spec: PRX#plaintext-ingresses
 #[test]
 fn tls_servers_keep_automatic_https() {
     let mut vhost = https_vhost("x.example.com", "[fd5e::1]:3000");

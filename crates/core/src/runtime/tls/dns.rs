@@ -79,7 +79,7 @@ pub fn build_provider(entry: &DnsProviderEntry) -> Result<Box<dyn DnsProvider>, 
 /// so wildcard issuance could never succeed — and nothing rejects a wildcard
 /// hostname on the way in, since `build_csr` deliberately preserves wildcard
 /// SANs.
-// r[impl tls.strategy.acme-dns]
+// spec: TLS#acme-dns-01-issuance
 pub fn challenge_record_name(name: &str) -> String {
     let stripped = name.strip_suffix('.').unwrap_or(name);
     let base = stripped.strip_prefix("*.").unwrap_or(stripped);
@@ -90,7 +90,7 @@ pub fn challenge_record_name(name: &str) -> String {
 mod tests {
     use super::*;
 
-    // r[verify tls.strategy.acme-dns]
+    // spec: TLS#acme-dns-01-issuance
     // RFC 8555 validates a wildcard at the base domain's challenge record.
     // Leaving the `*.` in asked the provider to create
     // `_acme-challenge.*.example.com`, which no zone will hold, so wildcard
@@ -111,7 +111,7 @@ mod tests {
         );
     }
 
-    // r[verify tls.strategy.acme-dns]
+    // spec: TLS#acme-dns-01-issuance
     #[test]
     fn a_literal_star_label_is_not_mistaken_for_a_wildcard_prefix() {
         // Only a leading `*.` is a wildcard; a `*` elsewhere is not.

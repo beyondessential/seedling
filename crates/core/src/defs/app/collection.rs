@@ -6,7 +6,7 @@ use super::super::collection::{AppBag, Collection};
 use super::App;
 
 pub(super) fn on_app(builder: &mut TypeBuilder<App>) {
-    // l[impl collection.select]
+    // spec: COL#selection
     builder.with_fn(
         "select",
         |this: &mut App, criterion: Map| -> Result<Collection, Box<rhai::EvalAltResult>> {
@@ -14,17 +14,17 @@ pub(super) fn on_app(builder: &mut TypeBuilder<App>) {
         },
     );
 
-    // l[impl collection.one]
+    // spec: COL#query-methods
     builder.with_fn("one", |this: &mut App| -> Dynamic {
         Collection::from_bag(Rc::new(AppBag(this.clone()))).one()
     });
 
-    // l[impl collection.only]
+    // spec: COL#query-methods
     builder.with_fn("only", |this: &mut App, other: Dynamic| -> Collection {
         Collection::from_bag(Rc::new(AppBag(this.clone()))).only(other)
     });
 
-    // l[impl collection.except]
+    // spec: COL#query-methods
     builder.with_fn("except", |this: &mut App, other: Dynamic| -> Collection {
         Collection::from_bag(Rc::new(AppBag(this.clone()))).except(other)
     });

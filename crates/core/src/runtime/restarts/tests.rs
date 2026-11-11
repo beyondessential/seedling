@@ -22,8 +22,8 @@ fn exited(code: i32) -> Option<ExitStatus> {
     })
 }
 
-// r[verify autonomous.restart.record]
-// i[verify restart.record]
+// spec: AUTO#restart-record
+// spec: FLTS#restart-records
 #[test]
 fn records_carry_identity_exit_and_cause() {
     let db = Db::open_in_memory().expect("open");
@@ -43,7 +43,7 @@ fn records_carry_identity_exit_and_cause() {
     assert_eq!(r.exit_kind, Some(ExitKind::Exited));
 }
 
-// i[verify restart.list]
+// spec: FLTS#listing-restarts
 #[test]
 fn list_is_most_recent_first_and_filters() {
     let db = Db::open_in_memory().expect("open");
@@ -66,7 +66,7 @@ fn list_is_most_recent_first_and_filters() {
     assert_eq!(limited.len(), 1);
 }
 
-// r[verify autonomous.restart.rate]
+// spec: AUTO#crash-loop-detection
 #[test]
 fn deliberate_restarts_are_excluded_from_the_rate() {
     let db = Db::open_in_memory().expect("open");
@@ -80,7 +80,7 @@ fn deliberate_restarts_are_excluded_from_the_rate() {
     assert_eq!(recent_recovery_count(&db, "aa", 1800).expect("count"), 1);
 }
 
-// r[verify autonomous.restart.rate]
+// spec: AUTO#crash-loop-detection
 #[test]
 fn restarts_outside_the_window_do_not_count() {
     let db = Db::open_in_memory().expect("open");
@@ -92,7 +92,7 @@ fn restarts_outside_the_window_do_not_count() {
     assert_eq!(recent_recovery_count(&db, "aa", 7200).expect("count"), 2);
 }
 
-// r[verify gc.restarts]
+// spec: GC#restart-records
 #[test]
 fn per_instance_cap_holds_under_a_sustained_crash_loop() {
     let db = Db::open_in_memory().expect("open");
@@ -146,8 +146,8 @@ fn baselines_round_trip_and_clear() {
     assert_eq!(baseline(&db, "aa").expect("baseline"), None);
 }
 
-// r[verify autonomous.restart.rate.settings]
-// i[verify restart.settings]
+// spec: AUTO#crash-loop-detection
+// spec: FLTS#crash-loop-settings
 #[test]
 fn settings_default_and_update_partially() {
     let db = Db::open_in_memory().expect("open");
@@ -165,7 +165,7 @@ fn settings_default_and_update_partially() {
     assert_eq!(s.window_secs, 600);
 }
 
-// i[verify restart.settings]
+// spec: FLTS#crash-loop-settings
 #[test]
 fn settings_reject_out_of_bounds_values() {
     let db = Db::open_in_memory().expect("open");

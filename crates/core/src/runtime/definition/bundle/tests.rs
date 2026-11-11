@@ -33,8 +33,8 @@ fn add_file(b: &mut tar::Builder<Vec<u8>>, path: &str, contents: &[u8]) {
     b.append_data(&mut header, path, contents).unwrap();
 }
 
-// l[verify bsl.bundle]
-// l[verify bsl.bundle.metadata]
+// spec: BND#script-formation
+// spec: BND#metadata-file
 #[test]
 fn a_lone_script_is_a_one_file_bundle() {
     let b = Bundle::from_script("let x = 1;\n").unwrap();
@@ -44,7 +44,7 @@ fn a_lone_script_is_a_one_file_bundle() {
     assert_eq!(script.files().collect::<Vec<_>>(), vec!["app.seed.rhai"]);
 }
 
-// l[verify bsl.bundle]
+// spec: BND#script-formation
 #[test]
 fn listed_scripts_concatenate_in_order() {
     let b = Bundle::from_files(files(&[
@@ -65,7 +65,7 @@ fn listed_scripts_concatenate_in_order() {
     );
 }
 
-// l[verify bsl.bundle.script-errors]
+// spec: BND#script-formation
 #[test]
 fn error_positions_name_the_file_and_its_own_line() {
     let b = Bundle::from_files(files(&[
@@ -86,7 +86,7 @@ fn error_positions_name_the_file_and_its_own_line() {
     assert_eq!(script.remap_error("line of text"), "line of text");
 }
 
-// i[verify definition.bundle.limits]
+// spec: DEFN#bundle-rules
 #[test]
 fn paths_escaping_the_root_are_rejected() {
     for bad in ["/etc/passwd", "../x", "a/../../x", "a\0b"] {
@@ -100,7 +100,7 @@ fn paths_escaping_the_root_are_rejected() {
     assert!(b.file("app.seed.rhai").is_some());
 }
 
-// i[verify definition.bundle.limits]
+// spec: DEFN#bundle-rules
 #[test]
 fn oversize_bundles_are_rejected() {
     let big = vec![b'x'; BUNDLE_SIZE_LIMIT];
@@ -111,7 +111,7 @@ fn oversize_bundles_are_rejected() {
     assert!(m.contains("size limit"), "{m}");
 }
 
-// i[verify definition.bundle.limits]
+// spec: DEFN#bundle-rules
 #[test]
 fn metadata_breaking_the_rules_is_reported_by_field() {
     let cases: &[(&[u8], &str)] = &[
@@ -136,7 +136,7 @@ fn metadata_breaking_the_rules_is_reported_by_field() {
     }
 }
 
-// i[verify definition.bundle.seedling-versions]
+// spec: DEFN#seedling-version-support
 #[test]
 fn an_unsupported_requirement_is_reported_before_unknown_fields() {
     let b = Bundle::from_files(files(&[
@@ -152,8 +152,8 @@ fn an_unsupported_requirement_is_reported_before_unknown_fields() {
     assert!(b.supports(&Version::new(99, 0, 0)));
 }
 
-// i[verify definition.content-hash]
-// r[verify generation.script-storage]
+// spec: DEFN#content-hash-computation
+// spec: GEN#bundle-storage
 #[test]
 fn hash_depends_only_on_paths_and_contents() {
     let pushed =
@@ -177,7 +177,7 @@ fn hash_depends_only_on_paths_and_contents() {
     assert_ne!(pushed.hash(), other.hash());
 }
 
-// i[verify definition.bundle.limits]
+// spec: DEFN#bundle-rules
 #[test]
 fn archives_with_links_are_rejected() {
     let data = tar_gz(|b| {
@@ -205,7 +205,7 @@ fn canonical_and_wire_forms_round_trip() {
     assert_eq!(Bundle::from_wire(&b.to_wire()).unwrap(), b);
 }
 
-// l[verify bsl.bundle.script-errors]
+// spec: BND#script-formation
 #[test]
 fn an_empty_script_file_does_not_shift_the_line_table() {
     let b = Bundle::from_files(files(&[
@@ -230,7 +230,7 @@ fn an_empty_script_file_does_not_shift_the_line_table() {
     );
 }
 
-// i[verify definition.bundle.limits]
+// spec: DEFN#bundle-rules
 #[test]
 fn bundles_holding_too_many_files_are_rejected() {
     let paths: Vec<(String, Vec<u8>)> = (0..=BUNDLE_FILE_LIMIT)
@@ -258,7 +258,7 @@ fn bundles_holding_too_many_files_are_rejected() {
     assert_eq!(stored.files().len(), BUNDLE_FILE_LIMIT + 1);
 }
 
-// i[verify definition.bundle.limits]
+// spec: DEFN#bundle-rules
 #[test]
 fn a_file_and_a_folder_of_the_same_name_conflict() {
     for pair in [
@@ -274,7 +274,7 @@ fn a_file_and_a_folder_of_the_same_name_conflict() {
     Bundle::from_files(files(&[("a!b", b"y"), ("a/b", b"x")])).unwrap();
 }
 
-// i[verify definition.provenance]
+// spec: DEFN#provenance-reporting
 #[test]
 fn the_requirement_is_readable_without_rebuilding_the_bundle() {
     let cases: &[&[(&str, &[u8])]] = &[

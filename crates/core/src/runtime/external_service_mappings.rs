@@ -8,7 +8,7 @@ use seedling_protocol::names::{
 use crate::runtime::db::Db;
 use crate::runtime::site_services::{self, SiteServiceEndpoint};
 
-// r[impl service.external.mapping.events]
+// spec: SITE#external-mappings
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ExternalServiceMapping {
     pub app: AppName,
@@ -82,7 +82,7 @@ pub fn delete(
 /// deregistered. The app name is the runtime's identity for an app, so a
 /// mapping left behind is inherited by the next app registered under that
 /// name rather than belonging to nobody.
-// r[impl deregister.purge]
+// spec: TRD#deregistration
 pub fn delete_for_app(db: &Db, app: &AppName) -> rusqlite::Result<usize> {
     db.conn.execute(
         "DELETE FROM external_service_mappings WHERE app = ?1",

@@ -21,7 +21,7 @@ pub type WtTokens = Mutex<std::collections::HashMap<String, WtTokenEntry>>;
 /// Single-use WT tokens are valid for 30 seconds to bridge POST /connect → WT handshake.
 pub const WT_TOKEN_LIFETIME: Duration = Duration::from_secs(30);
 
-// w[wt.token]
+// spec: WEB#session-establishment
 pub fn issue_wt_token(tokens: &WtTokens, actor: Arc<Actor>) -> String {
     let token = uuid::Uuid::new_v4().to_string();
     let expires = Instant::now() + WT_TOKEN_LIFETIME;
@@ -40,7 +40,7 @@ pub fn issue_wt_token(tokens: &WtTokens, actor: Arc<Actor>) -> String {
 }
 
 /// Validates and consumes a single-use WT token. Returns the associated actor or None.
-// w[wt.token]
+// spec: WEB#session-establishment
 pub fn consume_wt_token(tokens: &WtTokens, token: &str) -> Option<Arc<Actor>> {
     let mut map = tokens.lock();
     let entry = map.get_mut(token)?;
@@ -69,7 +69,7 @@ mod tests {
         })
     }
 
-    // w[verify wt.token]
+    // spec: WEB#session-establishment
     #[test]
     fn issue_and_consume_round_trip() {
         let t = tokens();
@@ -78,7 +78,7 @@ mod tests {
         assert_eq!(got.id.as_deref(), Some("admin"));
     }
 
-    // w[verify wt.token]
+    // spec: WEB#session-establishment
     #[test]
     fn tokens_are_single_use() {
         let t = tokens();
@@ -90,14 +90,14 @@ mod tests {
         );
     }
 
-    // w[verify wt.token]
+    // spec: WEB#session-establishment
     #[test]
     fn unknown_token_returns_none() {
         let t = tokens();
         assert!(consume_wt_token(&t, "no-such-token").is_none());
     }
 
-    // w[verify wt.token]
+    // spec: WEB#session-establishment
     #[test]
     fn expired_token_does_not_consume() {
         let t = tokens();
@@ -111,7 +111,7 @@ mod tests {
         assert!(consume_wt_token(&t, &token).is_none());
     }
 
-    // w[verify wt.token]
+    // spec: WEB#session-establishment
     #[test]
     fn issuing_prunes_expired_and_used_entries() {
         let t = tokens();
@@ -147,7 +147,7 @@ mod tests {
         assert_eq!(map.len(), 1);
     }
 
-    // w[verify wt.token]
+    // spec: WEB#session-establishment
     #[test]
     fn issued_tokens_are_unique() {
         let t = tokens();

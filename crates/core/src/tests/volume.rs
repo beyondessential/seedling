@@ -3,7 +3,7 @@ use std::sync::Arc;
 use super::*;
 use defs::resource::ResourceKind;
 
-// l[verify volume.type]
+// spec: VOL#declaration
 #[test]
 fn volume_named() {
     let app = run_test_script_app(
@@ -19,7 +19,7 @@ fn volume_named() {
     );
 }
 
-// l[verify volume.type]
+// spec: VOL#declaration
 #[test]
 fn volume_anonymous_disallowed_at_top_level() {
     let (engine, mut scope, _app) =
@@ -36,7 +36,7 @@ fn volume_anonymous_disallowed_at_top_level() {
     );
 }
 
-// l[verify volume.tmpfs]
+// spec: VOL#storage-options
 #[test]
 fn volume_tmpfs() {
     let app = run_test_script_app(r#"let v = app.volume("cache").tmpfs();"#);
@@ -53,7 +53,7 @@ fn volume_tmpfs() {
     }
 }
 
-// l[verify volume.tmpfs]
+// spec: VOL#storage-options
 #[test]
 fn volume_tmpfs_defaults_false() {
     let app = run_test_script_app(r#"let v = app.volume("data");"#);
@@ -70,7 +70,7 @@ fn volume_tmpfs_defaults_false() {
     }
 }
 
-// l[verify volume.exported]
+// spec: VOL#export
 #[test]
 fn volume_exported_marks_export() {
     let app = run_test_script_app(r#"let v = app.volume("pub").exported();"#);
@@ -87,7 +87,7 @@ fn volume_exported_marks_export() {
     }
 }
 
-// l[verify volume.exported]
+// spec: VOL#export
 #[test]
 fn volume_exported_with_description() {
     let app = run_test_script_app(
@@ -108,7 +108,7 @@ fn volume_exported_with_description() {
     }
 }
 
-// l[verify volume.readonly]
+// spec: VOL#storage-options
 #[test]
 fn volume_readonly() {
     let app = run_test_script_app(
@@ -129,7 +129,7 @@ fn volume_readonly() {
     }
 }
 
-// l[verify volume.write]
+// spec: VOL#declared-file-writes
 #[test]
 fn volume_write() {
     let app = run_test_script_app(
@@ -153,7 +153,7 @@ fn volume_write() {
     }
 }
 
-// l[verify volume.write.validation]
+// spec: VOL#write-paths
 #[test]
 fn volume_write_rejects_path_traversal() {
     let _ = run_test_script_err(
@@ -164,7 +164,7 @@ fn volume_write_rejects_path_traversal() {
     );
 }
 
-// l[verify volume.write.validation]
+// spec: VOL#write-paths
 #[test]
 fn volume_write_rejects_dotdot_escape() {
     let _ = run_test_script_err(
@@ -175,7 +175,7 @@ fn volume_write_rejects_dotdot_escape() {
     );
 }
 
-// l[verify volume.write.validation]
+// spec: VOL#write-paths
 #[test]
 fn volume_write_rejects_relative_path() {
     let _ = run_test_script_err(
@@ -186,7 +186,7 @@ fn volume_write_rejects_relative_path() {
     );
 }
 
-// l[verify volume.write.validation]
+// spec: VOL#write-paths
 #[test]
 fn volume_write_rejects_null_bytes() {
     let _ = run_test_script_err(
@@ -197,7 +197,7 @@ fn volume_write_rejects_null_bytes() {
     );
 }
 
-// l[verify volume.write.validation]
+// spec: VOL#write-paths
 #[test]
 fn volume_write_rejects_root() {
     let _ = run_test_script_err(
@@ -208,7 +208,7 @@ fn volume_write_rejects_root() {
     );
 }
 
-// l[verify volume.write.validation]
+// spec: VOL#write-paths
 #[test]
 fn volume_write_rejects_dotdot_to_root() {
     let _ = run_test_script_err(
@@ -219,7 +219,7 @@ fn volume_write_rejects_dotdot_to_root() {
     );
 }
 
-// l[verify volume.write.validation]
+// spec: VOL#write-paths
 #[test]
 fn volume_write_accepts_nested_paths() {
     run_test_script_app(
@@ -232,7 +232,7 @@ fn volume_write_accepts_nested_paths() {
     );
 }
 
-// l[verify volume.write]
+// spec: VOL#declared-file-writes
 #[test]
 fn volume_write_multiple() {
     let app = run_test_script_app(
@@ -256,7 +256,7 @@ fn volume_write_multiple() {
     }
 }
 
-// l[verify volume.external]
+// spec: VOL#external-volumes
 #[test]
 fn external_volume_creates_resource() {
     let app = run_test_script_app(
@@ -272,7 +272,7 @@ fn external_volume_creates_resource() {
     );
 }
 
-// l[verify volume.external]
+// spec: VOL#external-volumes
 #[test]
 fn external_volume_can_be_mounted() {
     run_test_script_app(
@@ -316,7 +316,7 @@ fn run_action_with_volumes(
     progress.read().clone().expect("progress should be set")
 }
 
-// l[verify app.resources.context.anonymous]
+// spec: APP#anonymous-resources
 #[test]
 fn anon_volume_in_action_gets_seedling_prefix() {
     let progress = run_action_with_volumes(
@@ -360,7 +360,7 @@ fn anon_volume_in_action_gets_seedling_prefix() {
     }
 }
 
-// l[verify app.resources.context.anonymous]
+// spec: APP#anonymous-resources
 #[test]
 fn shared_anon_volume_same_id_across_containers() {
     let progress = run_action_with_volumes(
@@ -405,7 +405,7 @@ fn shared_anon_volume_same_id_across_containers() {
     );
 }
 
-// l[verify app.resources.context.anonymous]
+// spec: APP#anonymous-resources
 #[test]
 fn distinct_anon_volumes_get_distinct_ids() {
     let progress = run_action_with_volumes(
@@ -447,7 +447,7 @@ fn distinct_anon_volumes_get_distinct_ids() {
     );
 }
 
-// l[verify app.resources.context.anonymous]
+// spec: APP#anonymous-resources
 #[test]
 fn anon_volume_writes_preserved_through_action() {
     let progress = run_action_with_volumes(
@@ -489,7 +489,7 @@ fn anon_volume_writes_preserved_through_action() {
 // Operation-scoped external volume bindings
 // ---------------------------------------------------------------------------
 
-// l[verify volume.external.dynamic]
+// spec: VOL#external-volumes
 #[test]
 fn external_volume_in_action_picks_up_operation_binding() {
     use crate::defs::container::VolumeMount;
@@ -582,7 +582,7 @@ fn external_volume_in_action_picks_up_operation_binding() {
     panic!("expected Job with ExternalVolume mount in dynamic defs");
 }
 
-// l[verify volume.external.dynamic]
+// spec: VOL#external-volumes
 #[test]
 fn external_volume_without_binding_has_no_operation_binding() {
     use crate::defs::container::VolumeMount;
@@ -617,7 +617,7 @@ fn external_volume_without_binding_has_no_operation_binding() {
     panic!("expected Job with ExternalVolume mount in dynamic defs");
 }
 
-// l[verify volume.external.dynamic]
+// spec: VOL#external-volumes
 #[test]
 fn operation_bindings_cleared_after_guard_drops() {
     use crate::defs::volume::OperationVolumeBinding;
@@ -662,8 +662,8 @@ fn operation_bindings_cleared_after_guard_drops() {
     );
 }
 
-// l[verify app.resources.context.named]
-// l[verify app.resources.context.immutable]
+// spec: APP#named-resources
+// spec: APP#static-resource-immutability
 #[test]
 fn frozen_static_volume_cannot_be_modified_in_action() {
     let msg = run_action_err(
@@ -681,7 +681,7 @@ fn frozen_static_volume_cannot_be_modified_in_action() {
     );
 }
 
-// l[verify app.resources.context.immutable]
+// spec: APP#static-resource-immutability
 #[test]
 fn captured_static_volume_cannot_be_modified_in_action() {
     use crate::runtime::barrier::replay::OperationResult;
@@ -793,7 +793,7 @@ pub(super) fn run_action_with_writer_in(
     )
 }
 
-// l[verify rt.write]
+// spec: RT#volume-writes
 #[test]
 fn rt_write_named_volume_invokes_writer() {
     use crate::runtime::barrier::VolumeWriteTarget;
@@ -828,7 +828,7 @@ fn rt_write_named_volume_invokes_writer() {
     }
 }
 
-// l[verify rt.write]
+// spec: RT#volume-writes
 #[test]
 fn rt_write_anonymous_volume_invokes_writer() {
     use crate::runtime::barrier::VolumeWriteTarget;
@@ -860,7 +860,7 @@ fn rt_write_anonymous_volume_invokes_writer() {
     }
 }
 
-// l[verify rt.write]
+// spec: RT#volume-writes
 #[test]
 fn rt_write_tmpfs_volume_is_allowed() {
     use crate::runtime::barrier::VolumeWriteTarget;
@@ -889,7 +889,7 @@ fn rt_write_tmpfs_volume_is_allowed() {
     }
 }
 
-// l[verify rt.write]
+// spec: RT#volume-writes
 // `/../escape` leaves the volume, so it is still refused — what changed is
 // that the rule is about escaping the root rather than about the `..`
 // component appearing at all, so the message says so.
@@ -923,7 +923,7 @@ fn rt_write_rejects_path_traversal() {
     assert!(writer.writes.lock().is_empty());
 }
 
-// l[verify rt.write]
+// spec: RT#volume-writes
 #[test]
 fn rt_write_outside_action_is_script_error() {
     let result = std::panic::catch_unwind(|| {
@@ -940,7 +940,7 @@ fn rt_write_outside_action_is_script_error() {
     );
 }
 
-// l[verify const.idle-cmd]
+// spec: CONST#idle-command
 #[test]
 fn idle_cmd_constant_usable_as_command() {
     let app = run_test_script_app(
@@ -968,7 +968,7 @@ fn idle_cmd_constant_usable_as_command() {
     );
 }
 
-// l[verify rt.write] r[verify rt.write]
+// spec: RT#volume-writes, SUSP#side-effecting-calls
 #[test]
 fn rt_write_skipped_on_replay() {
     use crate::runtime::barrier::CallKind;

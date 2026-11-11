@@ -17,7 +17,7 @@ fn secret(s: &str) -> SecretString {
     SecretString::new(s.to_owned().into())
 }
 
-// r[verify secret.storage]
+// spec: SEC#storage
 #[test]
 fn upsert_and_load_round_trip_with_ciphertext_at_rest() {
     let db = Db::open_in_memory().expect("open");
@@ -51,7 +51,7 @@ fn upsert_and_load_round_trip_with_ciphertext_at_rest() {
     );
 }
 
-// r[verify secret.storage]
+// spec: SEC#storage
 #[test]
 fn upsert_replaces_existing_value() {
     let db = Db::open_in_memory().expect("open");
@@ -121,7 +121,7 @@ fn delete_app_secret_params_is_scoped_to_app() {
     );
 }
 
-// r[verify secret.migration]
+// spec: SEC#migration
 #[test]
 fn migrate_to_secret_moves_plaintext_row_into_secret_storage() {
     let db = Db::open_in_memory().expect("open");
@@ -148,7 +148,7 @@ fn migrate_to_secret_moves_plaintext_row_into_secret_storage() {
     );
 }
 
-// r[verify secret.migration]
+// spec: SEC#migration
 #[test]
 fn migrate_to_secret_is_a_noop_when_no_plaintext_exists() {
     let db = Db::open_in_memory().expect("open");

@@ -11,7 +11,7 @@ pub static NAT64_PREFIX_NET: LazyLock<Ipv6Net> =
 /// Synthesise the NAT64 IPv6 form of an IPv4 address per RFC 6052 using the
 /// IANA well-known prefix `64:ff9b::/96`. The low 32 bits hold the IPv4
 /// address; all higher bits are fixed by the prefix.
-// r[impl service.site.address]
+// spec: SITE#endpoint-addressing
 pub fn synth_v4(v4: Ipv4Addr) -> Ipv6Addr {
     let octets = v4.octets();
     Ipv6Addr::new(

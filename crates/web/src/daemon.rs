@@ -50,7 +50,7 @@ impl UniRouter {
         let (tx, rx) = oneshot::channel();
         let mut inner = self.inner.lock().await;
         if inner.closed {
-            // w[impl shells.wire]
+            // spec: WEB#shell-relay
             drop(tx);
         } else if let Some(stream) = inner.parked.remove(&stream_id) {
             let _ = tx.send(stream);
@@ -257,7 +257,7 @@ impl DaemonConn {
     async fn try_reconnect(&self, failed: usize) -> Result<(), ClientError> {
         let waiting_since = Instant::now();
         let mut last_failure = self.reconnecting.lock().await;
-        // w[impl shells.wire]
+        // spec: WEB#shell-relay
         // Closing a connection that is not the failed one would end the
         // shells already started on it.
         if self.inner.lock().await.client.connection().stable_id() != failed {
@@ -294,7 +294,7 @@ impl DaemonConn {
 
         let old = std::mem::replace(&mut *self.inner.lock().await, Upstream::new(new_client));
 
-        // w[impl shells.wire]
+        // spec: WEB#shell-relay
         // The old dispatcher holds a handle to its connection, which would keep
         // it open; close it so the dispatcher ends, and release anything still
         // waiting on a stream it can no longer carry.
@@ -339,6 +339,7 @@ impl DaemonConn {
     }
 
     /// Default path for the web binary's persistent client key.
+    // spec: LINUX#per-user-state
     pub fn default_key_path() -> PathBuf {
         dirs::state_dir()
             .or_else(dirs::data_local_dir)
@@ -352,7 +353,7 @@ impl DaemonConn {
 mod tests {
     use super::*;
 
-    // w[verify shells.wire]
+    // spec: WEB#shell-relay
     #[tokio::test]
     async fn registration_after_close_fails_at_once() {
         let router = UniRouter::new();

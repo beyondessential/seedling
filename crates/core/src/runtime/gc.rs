@@ -27,7 +27,7 @@ impl Default for GcConfig {
     }
 }
 
-// r[impl gc.background]
+// spec: GC#collection
 pub fn spawn_gc_task(db: DbHandle, config: GcConfig) -> JoinHandle<()> {
     use std::sync::Arc;
     let config = Arc::new(config);
@@ -67,7 +67,7 @@ fn run_gc_cycle(db: &Db, config: &GcConfig) {
         Err(e) => error!(error = %e, "gc: orphaned operations cleanup failed"),
         _ => {}
     }
-    // r[impl gc.restarts]
+    // spec: GC#restart-records
     match crate::system::reconcile::gc_restart_records(db) {
         Ok(n) if n > 0 => debug!(rows = n, "gc: pruned restart records"),
         Err(e) => error!(error = %e, "gc: restart records cleanup failed"),
@@ -83,7 +83,7 @@ fn now_ms() -> i64 {
         .as_millis() as i64
 }
 
-// r[impl gc.action-log]
+// spec: GC#retention
 fn gc_action_log(db: &Db, retain: Duration) -> rusqlite::Result<usize> {
     let cutoff = now_ms() - retain.as_millis() as i64;
     db.conn.execute(
@@ -94,7 +94,7 @@ fn gc_action_log(db: &Db, retain: Duration) -> rusqlite::Result<usize> {
     )
 }
 
-// r[impl gc.faults]
+// spec: GC#retention
 fn gc_cleared_faults(db: &Db, retain: Duration) -> rusqlite::Result<usize> {
     let cutoff = Timestamp::now()
         .checked_sub(jiff::SignedDuration::from_secs(retain.as_secs() as i64))
@@ -106,7 +106,7 @@ fn gc_cleared_faults(db: &Db, retain: Duration) -> rusqlite::Result<usize> {
     )
 }
 
-// r[impl gc.observations]
+// spec: GC#retention
 fn gc_orphaned_observations(db: &Db) -> rusqlite::Result<usize> {
     db.conn.execute(
         "DELETE FROM world_observations WHERE instance_id NOT IN (SELECT id FROM resource_instances)",
@@ -114,7 +114,7 @@ fn gc_orphaned_observations(db: &Db) -> rusqlite::Result<usize> {
     )
 }
 
-// r[impl gc.autonomous-operations]
+// spec: GC#retention
 fn gc_completed_operations(db: &Db, retain: Duration) -> rusqlite::Result<usize> {
     let cutoff = now_ms() - retain.as_millis() as i64;
     db.conn.execute(
@@ -123,7 +123,7 @@ fn gc_completed_operations(db: &Db, retain: Duration) -> rusqlite::Result<usize>
     )
 }
 
-// r[impl gc.autonomous-operations]
+// spec: GC#retention
 fn gc_orphaned_operations(db: &Db) -> rusqlite::Result<usize> {
     db.conn.execute(
         "DELETE FROM autonomous_operations WHERE instance_id NOT IN (SELECT id FROM resource_instances)",
@@ -173,7 +173,7 @@ impl KnownDesiredState {
 /// Delete instances that have been Unscheduled for longer than `retain` and
 /// are not part of their app's active desired state, returning the ids
 /// retired.
-// r[impl gc.instances]
+// spec: GC#unscheduled-instances
 pub fn gc_unscheduled_instances(
     db: &Db,
     retain: Duration,
@@ -215,7 +215,7 @@ pub fn gc_unscheduled_instances(
 
     let param_refs: Vec<&dyn rusqlite::types::ToSql> = params.iter().map(|p| &**p).collect();
 
-    // r[impl gc.instances.atomic]
+    // spec: GC#instance-retirement
     // One atomic section across the selection and every instance's deletion,
     // so a mid-sequence error can't leave one of an instance's records in a
     // state the GC will never see again (observation history empty means the
@@ -294,7 +294,7 @@ mod tests {
         });
     }
 
-    // r[verify gc.action-log]
+    // spec: GC#retention
     #[test]
     fn gc_action_log_removes_old_entries() {
         let db = Db::open_in_memory().unwrap();
@@ -396,7 +396,7 @@ mod tests {
         assert_eq!(count, 3);
     }
 
-    // r[verify gc.faults]
+    // spec: GC#retention
     #[test]
     fn gc_cleared_faults_removes_old() {
         ensure_faults_init();
@@ -449,7 +449,7 @@ mod tests {
         assert_eq!(total, 1);
     }
 
-    // r[verify gc.observations]
+    // spec: GC#retention
     #[test]
     fn gc_orphaned_observations_removes_unreferenced() {
         let db = Db::open_in_memory().unwrap();
@@ -486,7 +486,7 @@ mod tests {
         assert_eq!(remaining, 0);
     }
 
-    // r[verify gc.autonomous-operations]
+    // spec: GC#retention
     #[test]
     fn gc_completed_operations_removes_old() {
         let db = Db::open_in_memory().unwrap();
@@ -520,7 +520,7 @@ mod tests {
         assert_eq!(remaining, 0);
     }
 
-    // r[verify gc.autonomous-operations]
+    // spec: GC#retention
     #[test]
     fn gc_orphaned_operations_removes_unreferenced() {
         let db = Db::open_in_memory().unwrap();
@@ -549,8 +549,8 @@ mod tests {
         );
     }
 
-    // r[verify gc.instances]
-    // r[verify gc.instances.atomic]
+    // spec: GC#unscheduled-instances
+    // spec: GC#instance-retirement
     #[test]
     fn gc_unscheduled_instances_removes_old() {
         ensure_faults_init();
@@ -726,7 +726,7 @@ mod tests {
             == 1
     }
 
-    // r[verify gc.instances]
+    // spec: GC#unscheduled-instances
     // A kept replica whose container has been missing for longer than the
     // retention period (an image pull failing during a recreate, say) looks
     // exactly like a retired one to the observation history.
@@ -773,7 +773,7 @@ mod tests {
         assert_eq!(kept_faults, 1);
     }
 
-    // r[verify gc.instances]
+    // spec: GC#unscheduled-instances
     // An app with no entry is one whose desired state is not known this pass
     // (mid-operation, failed to compute, failed to load), not one that
     // desires nothing.
