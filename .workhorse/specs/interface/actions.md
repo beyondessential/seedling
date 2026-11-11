@@ -20,7 +20,7 @@ The server MUST reject a request naming an app that is not registered with `not_
 The server MUST reject the request with `not_installed` unless the app is `Installed`.
 If the app has an active `script_error` [fault](../overview.md#fault), the server MUST reject the request with `script_error`.
 
-The server MUST reject with `not_found` a `name` that names one of the app's shells, a `name` of `"start"`, and a `name` that names no action the app declares.
+The server MUST reject with `not_found` a `name` of `"start"`, and a `name` that names no action the app declares.
 
 A `params` key ending in `_volume` or `_filename` is [reserved](../language/action.md#param-delivery), and the server MUST reject a request carrying one with `requirements_invalid`.
 Where the action declares parameters, the server MUST validate the submitted values and fill in defaults as for [install parameters](#install-parameters) before the operation is scheduled.
@@ -60,7 +60,7 @@ If the app declares no install action, `params` MUST be absent or empty, and the
 The server MUST then move the app to `Installed` at once and answer `{ "schedule": "accepted" }`, with no `operation_id`.
 
 If the app declares an install action, the server MUST validate `params` as [install parameters](#install-parameters) specifies and schedule the install as a lifecycle operation named `install` with the trigger `"operator"`.
-Scheduling, its rejections and its result are as for [action invocation](#invoking-an-action).
+The server MUST reject the request with `operation_in_progress` or `already_queued` on the same terms as [action invocation](#invoking-an-action), and its result is as for action invocation.
 
 The app MUST be `Installing` from the time its install operation starts, whether the operation was accepted at once or started later from the queue.
 A queued install MUST leave the app `NotInstalled` until the install starts.

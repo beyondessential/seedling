@@ -434,7 +434,7 @@ The result is `{ ok, cleared }`, where `ok` is `true` and `cleared` says whether
 | `contact_email` | string | no | the new contact email; the empty string clears it |
 | `cert_profile` | string or null | no | the new ACME profile; `null` clears it, so that the CA selects its default profile |
 
-The runtime MUST refuse a `contact_email` that is neither empty nor a single `@` with at least one character on each side of it, with `requirements_invalid`.
+The runtime MUST refuse a `contact_email` that is neither empty nor a string holding exactly one `@` with at least one character on each side of it, with `requirements_invalid`.
 The runtime MUST treat a `cert_profile` that is the empty string as `null`.
 
 The result is `{ "ok": true }`.

@@ -92,17 +92,19 @@ A session's [attachment](../language/action.md#shell-control) to its job ends wh
 - the client finishes its sending side of the session stream;
 - the stdout stream cannot be written;
 - the connection is lost;
-- an operator stops the session with `/shells/stop`.
+- an operator stops the session with `/shells/stop`;
+- the app whose shell the session runs is uninstalled or removed.
 
 When the attachment ends, the server MUST terminate the job if it is still running, and MUST finish the stdout stream.
 The shell's script then runs on until it returns, and the session ends when it does.
 A session an operator stops MUST end only once the script has stopped, whether the attachment has ended or not.
+When an app is uninstalled or removed, the server MUST stop every session on the app's shells as `/shells/stop` does.
 
 When a session ends, the server MUST write the exit frame `{ "exit_code": <integer> }` to the session stream and then finish its sending side of the session stream.
 The server MUST finish the stderr stream when the session ends.
 
-Where the job exited with a status, `exit_code` MUST be that status.
-Where the job was terminated by a signal, `exit_code` MUST be negative.
+Where the job ended, `exit_code` MUST be its exit status, as [`Executed`](../language/rt.md#executed) defines exit statuses.
+An `exit_code` of `-1` MUST mean only that the session failed, as [session startup](#session-startup) specifies.
 
 However the session ends, the server MUST terminate the session's job and remove the network created for it, including when the stdin sent with the request could not be delivered to the job.
 The runtime MUST clean up resources created within the session as [shell resources](../runtime/operations.md#shell-sessions) specifies.
@@ -143,7 +145,7 @@ Without `app` the server MUST list every registered session on the host.
 | `app` | string | the app the session belongs to, or `"_volumes"` for a [volume shell](#volume-shells) |
 | `name` | string | the shell's name, or for a volume shell its mounts' display names |
 | `opened_at` | string | when the session was opened, as an [RFC 3339](https://www.rfc-editor.org/rfc/rfc3339) timestamp |
-| `actor` | object or null | the [actor](wire.md#actor-attribution) the opening request carried |
+| `actor` | object | the [actor](wire.md#actor-attribution) the opening request is attributed to |
 
 ## Stopping a session
 
@@ -176,7 +178,7 @@ The server MUST allow shell sessions to run concurrently with lifecycle operatio
 
 The server MUST reject an empty `volumes` with `requirements_invalid`.
 The server MUST reject a request referencing a volume that does not exist, or whose storage does not exist, with `not_found`.
-If the server cannot prepare the volume shell's image or network, it MUST answer with an error response in place of the handshake response.
+If the server cannot prepare the volume shell's image or network, it MUST answer with `internal` in place of the handshake response.
 
 The server MUST mount each volume at `/mnt/<display name>`.
 A site volume's display name is its `name`.

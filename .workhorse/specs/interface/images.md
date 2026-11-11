@@ -15,7 +15,7 @@ Applies to the [Operator Interface](../overview.md#operator-interface) methods t
 
 ## Registry allowlist
 
-The registry allowlist is the set of registry hosts from which the runtime accepts images and [definition bundles](definitions.md#registry-access).
+The registry allowlist is the set of registry hosts from which the runtime accepts [definition bundles](definitions.md#registry-access), and against which it checks the images an app declares, as [CTR](../language/container.md#registry-allowlist) specifies.
 An image's registry is the `registry` part of its [reference](../language/container.md#image).
 The runtime MUST compare a registry against the allowlist by exact string equality.
 
@@ -75,6 +75,7 @@ The server MUST reject an empty `reference` with `requirements_invalid`.
 The server MUST reject an `app` that is not a valid app name with `requirements_invalid`, and one naming an app that is not registered with `not_found`.
 Where `app` is given, the runtime MUST pin `reference` to that app, whether or not the pull succeeds.
 
+The server MUST pull `reference` whether or not its registry is on the [registry allowlist](#registry-allowlist).
 The server MUST make one attempt at the pull, and MUST answer once it has finished.
 On success the result is `{ "ok": true }`.
 If the pull fails, the server MUST answer with `fetch_failed`, whose `message` carries the cause.
@@ -92,7 +93,7 @@ If the pull fails, the server MUST answer with `fetch_failed`, whose `message` c
 | `force` | boolean | no, default `false` | removes the image even while a running container uses it |
 
 The server MUST reject an empty `reference` with `requirements_invalid`.
-Unless `force` is `true`, the server MUST reject the request with `requirements_invalid` while a running container uses the image.
+Unless `force` is `true`, the server MUST reject the request with `image_in_use` while a running container uses the image.
 Otherwise the runtime MUST clear every pin on `reference`, whether or not an image is then removed.
 The server MUST reject a `reference` that resolves to no image on the host with `not_found`.
 On success the result is `{ "ok": true }`.
@@ -136,7 +137,7 @@ The handlers are the install action, the start action, every other action, every
 | --- | --- | --- | --- |
 | `app` | string | yes | the app's name |
 | `proposed_script` | string | no | script source to probe in place of the app's stored script |
-| `action_params` | object | no | parameter values per handler: handler name to an object of parameter name to string value |
+| `action_params` | object | no | parameter values per handler: handler `kind` to an object of handler `name` to an object of parameter name to string value |
 | `lenient` | boolean | no, default `false` | reports a handler with unresolved required parameters as skipped rather than as an error |
 
 The server MUST reject a request naming an app that is not registered with `not_found`.
@@ -159,7 +160,7 @@ Each `per_handler` entry is:
 
 | member | type | meaning |
 | --- | --- | --- |
-| `name` | string | the handler's name |
+| `name` | string | `"install"` for the install action, the action's name for the start action and every other action, the shell's name for a shell, and the parameter's name for an `on_change` handler |
 | `kind` | string | `"install"`, `"start"`, `"action"`, `"shell"` or `"param_change"` |
 | `images` | array of strings | the image references the handler might pull |
 | `error` | string or null | why the handler could not be probed |

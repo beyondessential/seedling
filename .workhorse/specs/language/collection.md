@@ -72,6 +72,7 @@ A resource matches a criterion when it matches every key the criterion holds, so
 | `name_patterns` | array of strings | its name matches at least one of the patterns |
 
 `select` MUST throw if `criterion` holds any key other than these.
+An anonymous resource has no name, so it MUST NOT match a criterion holding `names` or `name_patterns`.
 
 A name pattern MUST match a resource's whole name, case-sensitively.
 In a pattern, `*` matches any sequence of zero or more characters, `?` matches exactly one character, and every other character matches itself.

@@ -30,18 +30,22 @@ Applies to a [host](../overview.md#host) running Linux, settling for that platfo
 | container runtime | Podman, reached over its API socket at `/run/podman/podman.sock` |
 | system journal | the journal |
 | resource-control group | a slice, over cgroup v2 |
-| system resolver | systemd-resolved |
+| system resolver | systemd-resolved, at its extra stub listener `127.0.0.54:53` |
 
 The host MUST run systemd as its service manager, with the unified cgroup v2 hierarchy.
 Unless the resolver is given its upstreams, the host MUST run systemd-resolved with its extra stub listener on `127.0.0.54`, which is the resolver's [default upstream](../runtime/resolver.md#upstreams).
+
+> [!NOTE]
+> systemd-resolved accepts queries at `127.0.0.54` that are relayed from a source outside the loopback range.
 
 ## Supervised units
 
 The runtime MUST run each container instance, workload or infrastructure, as a transient service unit.
 A workload container instance's unit MUST be named `seedling-<display name>.service`, where `<display name>` is the instance's [display name](../runtime/identity.md#display-name).
-Every unit the runtime creates MUST have a name beginning `seedling-`.
+Every service and slice unit the runtime creates MUST have a name beginning `seedling-`.
 
-The runtime MUST create each transient unit so that systemd discards it once it is inactive or failed with no restart pending.
+The runtime MUST create each transient unit so that systemd discards it once it is inactive with no restart pending.
+The runtime MUST keep a failed unit loaded until it has observed the unit's result, and MUST then discard the unit.
 
 ### Exit status
 
@@ -64,11 +68,11 @@ The runtime MUST configure each unit's automatic restarts, as [restart pacing](.
 | start-limit interval | 600 seconds |
 | start-limit burst | 10 starts |
 
-The supervisor has given up restarting an instance when systemd reports the unit's result as `start-limit-hit`.
+The supervisor has given up restarting an instance when the unit's result, as the runtime observes it, is `start-limit-hit`.
 
 ## Resource-control groups
 
-The runtime MUST realise [resource-control groups](../runtime/priority.md#resource-control-groups) as slices nested under one root slice, `seedling.slice`, which systemd places under its root slice.
+The runtime MUST realise [resource-control groups](../runtime/priority.md#resource-control-groups) as slices nested under one root slice, `seedling.slice`, which systemd creates as their parent and places under its own root slice.
 
 | slice | holds | CPU and I/O weight |
 | --- | --- | --- |
@@ -82,7 +86,10 @@ In a slice name, `<app>` is the app's name with each `-` replaced by `_`, and `<
 > systemd reads a `-` in a slice name as a step down the hierarchy, so an app named `a-b` would otherwise land inside the slice of an app named `a`.
 
 The runtime MUST write each slice it creates as a unit file in `/etc/systemd/system`, so that its weights survive a restart of systemd.
-The runtime MUST remove only slice unit files whose names have the forms in the table.
+The runtime MUST record each slice unit file it writes, and MUST remove only slice unit files it has recorded.
+It MUST remove an app's slice and its priority slices once the app is uninstalled.
+It MUST remove a priority slice of an installed app once none of the app's Deployments declares that priority, and MUST keep the app's `normal` priority slice, in which its other workloads run.
+It MUST NOT remove a slice on an iteration that could not account for every app, as [absolute state](../runtime/reconciliation.md#applying-absolute-state) requires.
 
 ## Kill order
 

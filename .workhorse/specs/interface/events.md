@@ -22,18 +22,20 @@ Every event MUST carry these members:
 | `timestamp` | string | when the event occurred, as an [RFC 3339](https://www.rfc-editor.org/rfc/rfc3339) timestamp |
 
 When a request on the Operator Interface causes an event, the event MUST carry an `actor` member holding the [actor](wire.md#actor-attribution) resolved from that request.
+The events of an operation with the [trigger](../runtime/operations.md#initiating-events) `install` or `param_change` MUST carry the actor of the request that installed the app or changed the parameter.
 An event the runtime causes on its own, such as an operation with the trigger `boot` or `schedule`, MUST NOT carry `actor`.
 
 A client MUST ignore members it does not recognise, and SHOULD ignore events whose `type` it does not recognise.
 
 ## Common members
 
-Members of the same name carry the same type and meaning across event types.
+Each member in the table below has the same type and meaning in every event type that carries it.
 
 | member | type | meaning |
 | --- | --- | --- |
 | `app` | string | an [app](../overview.md#app)'s name |
-| `generation`, `previous_generation` | integer | an app's [generation](../overview.md#generation) after and before the change |
+| `generation` | integer | an app's [generation](../overview.md#generation) after the change |
+| `previous_generation` | integer or null | an app's generation before the change, or `null` where the app had none |
 | `source_generation`, `target_generation` | integer | an operation's [source and target generations](../runtime/operations.md#initiating-events) |
 | `action_name` | string | the name of the action an operation runs |
 | `operation_id` | string | a [lifecycle operation](../overview.md#lifecycle-operation)'s identifier |
@@ -44,7 +46,7 @@ Members of the same name carry the same type and meaning across event types.
 | `name` | string | the name of the thing the event is about |
 | `external_name` | string | the name of an app's external volume or external service slot |
 | `deployment` | string | a deployment's name |
-| `description` | string | text an operator supplied |
+| `description` | string | text for an operator to read |
 
 A volume target is a [volume reference](shells.md#volume-reference) with `kind` `"site"` or `"app"`.
 A service target is a JSON object with `kind` `"site"` and `name`, naming a site service, or with `kind` `"app"`, `app` and `service`, naming a service an app declares.
@@ -60,20 +62,21 @@ A member marked "optional" is absent where it has no value.
 | --- | --- | --- |
 | `AppRegistered` | `app`, `generation` | as [registration](apps.md#registration) specifies |
 | `AppDeregistered` | `app` | as [deregistration](apps.md#removal) specifies |
-| `AppUpdated` | `app`, `generation`, `previous_generation` (integer or null), `definition` (object); and `name`, `previous_value`, `new_value` when a parameter changed alongside | as [definition update](apps.md#update) specifies |
+| `AppUpdated` | `app`, `generation`, `previous_generation`, `definition` (object); and `name`, `previous_value`, `new_value` when a parameter changed alongside | as [definition update](apps.md#update) specifies |
 | `AppPhaseChanged` | `app`, `phase` | on every change of an app's [install phase](../overview.md#install-phase) |
 | `AppPriorityChanged` | `app`, `priority` (string), `previous_priority` (string) | as [priority change](app-control.md#app-priority) specifies |
 | `ParamSet` | `app`, `name`, `previous_value` (string, optional), `new_value` (string, optional), `redacted` (`true`, optional), `generation`, `previous_generation` | as [setting a parameter](params.md#parameter-set) specifies |
 | `ParamUnset` | `app`, `name`, `previous_value` (string, optional), `redacted` (`true`, optional), `generation`, `previous_generation` | as [unsetting a parameter](params.md#parameter-unset) specifies |
 | `ScaleChanged` | `app`, `deployment`, `scale`, `previous_scale`, `bounds_low`, `bounds_high` (integers) | when a deployment's scale changes, by [operator request](app-control.md#scaling) or [autonomously](../runtime/autonomous.md#scale) |
-| `DeploymentRestarted` | `app`, `deployment`, `operation_id` | as [deployment restart](app-control.md#deployment-restart) specifies |
+| `DeploymentRestarted` | `app`, `deployment`, `restart_id` (string) | as [deployment restart](app-control.md#deployment-restart) specifies |
 | `ResourceStopped` | `app`, `kind` (string), `name` | as [stopping a resource](app-control.md#resource-stop) specifies |
 | `ResourceUnstopped` | `app`, `kind` (string), `name` | as [unstopping a resource](app-control.md#resource-stop) specifies |
 
+`restart_id` in `DeploymentRestarted` is the restart's identifier, as [deployment restart](app-control.md#deployment-restart) defines it.
 `definition` in `AppUpdated` is the [definition provenance](definitions.md#provenance-reporting) of the new definition.
 In `AppUpdated`, `previous_value` and `new_value` MUST be `null` for an unset value and for a secret parameter.
 `phase` in `AppPhaseChanged` is one of `"not_installed"`, `"installing"`, `"installed"` and `"uninstalling"`.
-In `ParamSet` and `ParamUnset`, a secret parameter's event MUST carry `redacted` `true` and no `previous_value` or `new_value`, as [secret parameter events](params.md#parameter-storage) require.
+In `ParamSet` and `ParamUnset`, a secret parameter's event MUST carry `redacted` `true` and no `previous_value` or `new_value`, as [secret parameter events](../runtime/secrets.md#generation-history) require.
 
 ### Operation events
 
@@ -93,9 +96,11 @@ In `ParamSet` and `ParamUnset`, a secret parameter's event MUST carry `redacted`
 | `FaultFiled` | `id`, `app`, `resource_type`, `resource_name`, `instance_id`, `kind`, `description` | when a fault is filed |
 | `FaultCleared` | `id`, `app`, `kind` | when a fault is cleared |
 | `ResourceStateChanged` | `app`, `resource_type` (string), `resource_name` (string), `instance_id` (string), `state` (string) | when a resource instance's derived lifecycle state changes |
+| `InstanceHealthChanged` | `app`, `resource_type` (string), `resource_name` (string), `instance_id` (string), `health` (string or null) | as [app description](apps.md#resources) specifies |
 
 `FaultFiled` carries the members of a [fault record](faults.md#fault-records), and its `timestamp` is the record's.
 In `ResourceStateChanged`, `resource_type` is the resource's [type name](wire.md#resource-type-names), and `state` is the instance's new [lifecycle state](../overview.md#lifecycle-state), named as the lifecycle states are.
+In `InstanceHealthChanged`, `resource_type` is the resource's type name, and `health` is the instance's new `health`, as [app description](apps.md#resources) reports it.
 
 ### Session events
 
@@ -139,7 +144,7 @@ In `ResourceStateChanged`, `resource_type` is the resource's [type name](wire.md
 | `SiteIngressDeleted` | `name`, `source` (string) | as [site ingress events](../runtime/site-resources.md#attachments) specifies |
 | `SiteIngressAttachmentAdded` | `name`, `port` (integer), `protocol` (string), `target_kind` (string), `target_app` (string, optional), `target_service` (string, optional), `redirect_url` (string, optional), `redirect_code` (integer, optional) | as [site ingress events](../runtime/site-resources.md#attachments) specifies |
 | `SiteIngressAttachmentUpdated` | as `SiteIngressAttachmentAdded` | as [site ingress events](../runtime/site-resources.md#attachments) specifies |
-| `SiteIngressAttachmentRemoved` | `name`, `port` (integer), `protocol` (string) | as [site ingress events](../runtime/site-resources.md#attachments) specifies |
+| `SiteIngressAttachmentRemoved` | `name`, `port` (integer), `protocol` (string), `target_kind` (string), `target_app` (string, optional), `target_service` (string, optional), `redirect_url` (string, optional), `redirect_code` (integer, optional) | as [site ingress events](../runtime/site-resources.md#attachments) specifies |
 | `TemplateCreated` | `name` | as [template creation](templates.md#creation) specifies |
 | `TemplateUpdated` | `name` | as [template update](templates.md#update) specifies |
 | `TemplateRemoved` | `name` | as [template removal](templates.md#removal) specifies |
@@ -156,6 +161,8 @@ In the attachment events, `target_kind` is `"forward"` or `"redirect"`; a forwar
 | --- | --- | --- |
 | `ServerBusy` | `reason` (string) | when the server refuses a stream at its [stream limit](wire.md#stream-limit) |
 | `EventsDropped` | `skipped` (integer, optional) | as [gaps](#gaps) specifies |
+
+`reason` in `ServerBusy` is `"stream concurrency limit reached"`.
 
 ## Ordering
 

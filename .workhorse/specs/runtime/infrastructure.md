@@ -34,7 +34,7 @@ It MUST still bring up the [Operator Interface](../overview.md#operator-interfac
 While either backend is unavailable, the runtime MUST NOT actuate workloads, or infrastructure that depends on the unavailable backend.
 On each reconciliation iteration while either is unavailable, the runtime MUST file a [`container_runtime_unavailable`](faults.md#host-faults) fault.
 
-While either backend is unavailable, the runtime MUST probe it again on later reconciliation iterations.
+The runtime MUST probe each unavailable backend again on later reconciliation iterations.
 Successive probes of an unavailable backend MUST be spaced by an increasing delay up to a fixed maximum, and the runtime MUST keep probing at that maximum however long the backend stays unavailable.
 Once both backends are reachable, the runtime MUST clear `container_runtime_unavailable` and actuate workloads as usual.
 

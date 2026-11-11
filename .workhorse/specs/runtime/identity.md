@@ -75,7 +75,7 @@ The runtime grants itself these names in namespaces operators also use:
 | app names | `seedling` | faults about the runtime's own reporting, as [FLT](faults.md#fault-records) specifies |
 | external volume mapping names | every name beginning `seedling-op-` | [operation-scoped volume bindings](operations.md#operation-scoped-volumes) |
 
-The runtime MUST reject the creation of a site volume, site ingress, external volume mapping or app under a reserved name.
+The runtime MUST reject every operation that would bring a site volume, site ingress, external volume mapping or app into being under a reserved name, including each operation that [site volume names](site-resources.md#site-volume-names) lists.
 The runtime MUST NOT reject an update, rename or deletion of an object because its name is reserved.
 
 A component that deletes, disables or replaces objects it considers its own MUST identify them by the ownership the runtime recorded, whatever they are named.

@@ -65,7 +65,7 @@ After an error response the server MUST finish its sending side of the control s
 The server MUST allocate a forward key to every forward, TCP and UDP alike, and the forward MUST hold it for its lifetime.
 Two live forwards on one connection MUST NOT hold the same key, so a connection can hold at most 65536 forwards at once.
 The server MUST reuse the keys of forwards that have ended.
-If every key is held, the server MUST reject the request with `internal`.
+If every key is held, the server MUST reject the request with `server_busy`.
 
 ## Status messages
 
@@ -85,8 +85,7 @@ The server MUST report each of the following by a status message:
 - a failure receiving from the service on a UDP forward's relay;
 - a failure sending to the service on a UDP forward's relay, once when failures begin and again, with the number of failed sends, when a send next succeeds;
 - datagrams toward the service dropped because the forward's relay is not keeping up with them, once when dropping begins and again, with the number dropped, when a datagram next gets through;
-- a tunnelled TCP connection the server could not open to the service;
-- a UDP forward's relay ending.
+- a tunnelled TCP connection the server could not open to the service.
 
 ## TCP tunnelling
 
@@ -126,8 +125,8 @@ A relay MUST drop and report a datagram that exceeds the maximum datagram size, 
 A relay MUST relay a zero-length datagram.
 A relay MUST report a transient socket error, including an ICMP port-unreachable surfacing on a connected socket, and continue.
 A relay MUST NOT end except when its forward ends or the connection is lost.
+A failure receiving from or sending to the service MUST NOT end the relay or the forward.
 The client MUST classify these conditions as the server does.
-A relay that has ended MUST NOT continue to be reported as active, and its end MUST be reported to the client that opened the forward.
 
 ## Forward lifetime
 
@@ -136,8 +135,10 @@ A port forward remains active until one of the following occurs:
 - the client finishes or resets its sending side of the control stream;
 - an operator stops the forward with [`/forwards/stop`](#stopping-a-forward);
 - the connection is lost;
+- the app is uninstalled or removed;
 - a new [resource graph](../overview.md#resource-graph) takes effect for the app that no longer declares the forward's service, or its port for the forward's `proto`.
 
+When an app is uninstalled or removed, the server MUST end every forward of that app.
 When a new resource graph takes effect for an app, the server MUST end every forward of that app whose service or port the graph no longer declares, and MUST leave the app's other forwards active.
 A forward MUST NOT outlive a resource graph change that removes its port, including a change that takes effect while the forward is being established, in which case the request MUST be rejected with `not_found`.
 
@@ -167,7 +168,7 @@ Without `app` the server MUST list every active forward on the host.
 | `port` | integer | the service port the forward reaches |
 | `proto` | string | `"tcp"` or `"udp"` |
 | `opened_at` | string | when the forward was established, as an [RFC 3339](https://www.rfc-editor.org/rfc/rfc3339) timestamp |
-| `actor` | object or null | the [actor](wire.md#actor-attribution) the opening request carried |
+| `actor` | object | the [actor](wire.md#actor-attribution) the opening request is attributed to |
 
 ## Stopping a forward
 

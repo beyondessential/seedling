@@ -62,7 +62,8 @@ The method is defined on `Deployment` alone.
 | `on_failure` | string | no | `"replace"` | the response to an instance that stays unhealthy; `"replace"` or `"monitor"` |
 
 A `config` with any key not in the table MUST throw.
-`interval`, `timeout` and `start_period` MUST be non-negative, and a negative value MUST throw.
+An `interval` or `timeout` below 1 MUST throw.
+A negative `start_period` MUST throw.
 A `retries` below 1 MUST throw.
 An `on_failure` other than `"replace"` or `"monitor"` MUST throw.
 

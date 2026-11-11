@@ -25,8 +25,8 @@ The server MUST answer it without consulting the container engine or any app's s
 | `apps_by_status` | object or null | for each [app status](apps.md#app-status) at least one app holds, the number of apps holding it, keyed by status |
 | `active_operations` | integer or null | the number of lifecycle operations in progress; a queued operation is not in progress |
 | `active_faults` | integer or null | the number of active [faults](../overview.md#fault) on the host |
-| `active_shells` | integer | the number of open shell sessions |
-| `active_forwards` | integer | the number of active port forwards |
+| `active_shells` | integer or null | the number of open shell sessions |
+| `active_forwards` | integer or null | the number of active port forwards |
 
 The server MUST NOT perform any expensive computation to answer `/server/status`, such as consulting the container engine.
 The server MUST NOT fail `/server/status` except when the transport does.

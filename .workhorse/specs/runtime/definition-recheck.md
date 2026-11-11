@@ -22,12 +22,13 @@ The outcome of a re-check is reported by the [`definition_source_moved`](faults.
 
 ## Schedule
 
-The runtime MUST re-check each app infrequently.
+The runtime MUST NOT re-check an app within an hour of that app's last successful re-check.
+The runtime SHOULD re-check each app about every six hours.
 The runtime MUST spread the timing of its re-checks so that hosts do not re-resolve against a registry at the same moment.
 
 > [!NOTE]
 > A tag moves rarely, and acting on a move is the operator's decision.
-> One such schedule re-checks each app every six hours, and delays each app's first re-check, and each re-check after a success, by a further random interval of up to a tenth of the six hours.
+> One such schedule waits six hours plus a random delay of up to 36 minutes before each app's first re-check and after each successful one.
 
 ## Back-off
 

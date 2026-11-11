@@ -25,7 +25,7 @@ A parameter with no stored value is unset.
 Every evaluation of an app's definition MUST be given the app's stored parameter values.
 
 The runtime MUST store the value of a parameter whose effective [secret flag](../language/parameter.md#secret-parameters) is true in [protected storage](../runtime/secrets.md#storage), whether `/apps/params/set`, `/apps/params/unset` or [`/apps/update`](apps.md#update) writes it.
-An event a change causes MUST NOT carry the plaintext of a value that is secret after the change, nor of one that was secret before it.
+The events a change causes withhold parameter values as [SEC](../runtime/secrets.md#generation-history) specifies.
 
 A client MAY set a value for an unknown parameter.
 The runtime MUST store it, and it takes effect once the app's definition declares the parameter.
@@ -65,6 +65,7 @@ If `value` equals the parameter's stored value, the request is a no-op: the serv
 
 Otherwise the server MUST validate the proposed values before it persists anything.
 It MUST then store the value and bump the app's generation, with a `param_set` [history entry](apps.md#generation-history), as one durable change.
+Once the change is durable, it MUST emit a `ParamSet` [event](events.md#app-events).
 
 The server MUST then evaluate the app's definition with its new values.
 If the evaluation fails, the server MUST file a [`script_error`](../runtime/faults.md#app-faults) fault against the app, and the request still succeeds.
@@ -92,6 +93,7 @@ If the parameter has no stored value, the request is a no-op: the server MUST ch
 
 Otherwise the server MUST validate the proposed values before it changes anything.
 It MUST then remove the value and bump the app's generation, with a `param_unset` history entry, as one durable change.
+Once the change is durable, it MUST emit a `ParamUnset` event.
 It MUST then evaluate the definition, file a `script_error` fault if the evaluation fails, and schedule an `on_change` handler, as `/apps/params/set` does.
 
 ## Change planning
@@ -123,7 +125,7 @@ The result has these members.
 | `errors` | array of strings | the evaluation errors, if the proposed definition fails to evaluate |
 | `rejections` | array | one `{ "name": <string>, "reason": <string> }` for each parameter whose validator rejects the proposed values |
 
-If the proposed definition fails to evaluate, the result MUST hold `errors` alone.
+If the proposed definition fails to evaluate, the result MUST carry `errors` and no other member.
 Otherwise `errors` MUST be empty.
 If the request carries neither a proposed definition nor `proposed_params`, every array in the result MUST be empty.
 

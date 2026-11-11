@@ -102,7 +102,7 @@ The runtime MUST run a validator only while its parameter would be set.
 A parameter that would be unset passes, and its `required` flag governs whether it needs a value.
 
 The runtime MUST NOT give a validator a runtime handle.
-A validator runs in the [validator context](app.md#validator-context), which refuses every call that changes the app.
+A validator runs in the [validator context](app.md#validator-context), where every call that changes the app throws, as [validator immutability](app.md#validator-immutability) specifies.
 
 > [!NOTE]
 > A validator only judges a proposed value, so a validator that could change the app would make the definition depend on which values were checked.

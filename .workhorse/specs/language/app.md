@@ -56,9 +56,9 @@ In the action context, `http` on a static Service or External Service MUST throw
 The proxy setting methods `compress`, `balance`, `rate_limit`, `headers` and `redirect` MUST throw in the action context when called on an `HttpService` or `HttpServiceRoute` that views a static Service or External Service.
 `service.port`, `httpService.port` and `httpService.route` MUST behave in the action context as they do in the static context.
 
-## Validator context
+## Validator immutability
 
-In the validator context, every method of `app` that declares a resource MUST throw, whether or not it is given a name.
+In the [validator context](#validator-context), every method of `app` that declares a resource MUST throw, whether or not it is given a name.
 Calling a builder method on any resource MUST throw, whether the script obtained the handle within the validator or captured it from the static context.
 Calling any other method that changes the app, its parameters' schemas or its actions MUST throw.
 

@@ -19,7 +19,10 @@ Applies to the methods that adjust how a registered app runs without changing it
 The server MUST refuse the request with `not_found` if the app is not registered or its current definition declares no deployment of that name.
 The server MUST clamp `scale` to the deployment's declared scale bounds, and a request outside them succeeds at the nearer bound.
 
+The server MUST accept the request for a registered app in any [install phase](../overview.md#install-phase).
+
 The result is `{ "scale": <integer>, "bounds": { "low": <integer>, "high": <integer> } }`, giving the scale stored and the deployment's declared bounds.
+On success the server MUST emit a `ScaleChanged` [event](events.md#app-events), carrying the scale stored and the deployment's effective scale before the request.
 
 The runtime MUST store the scaling decision durably, and MUST use it for the deployment's [effective scale](../runtime/autonomous.md#effective-scale) after the daemon restarts.
 
@@ -48,9 +51,13 @@ If `current` is `null`, a client adjusting a deployment by a step MUST report th
 
 The server MUST refuse any other `priority` with `requirements_invalid`, leaving the stored priority as it was.
 The server MUST refuse the request with `not_found` if the app is not registered.
+The server MUST accept the request for a registered app in any install phase.
 The result is `{ "priority": <string> }`, giving the priority stored.
+On success the server MUST emit an `AppPriorityChanged` event, carrying the priority stored and the app's priority before the request.
 
-The runtime MUST store the app priority durably, and MUST apply it to the app's running workloads without restarting or redeploying them, as [priority settings](../runtime/priority.md#priority-setting) specifies.
+The runtime MUST store the app priority durably.
+The runtime MUST apply the app priority's division of contended CPU and I/O to the app's running workloads without restarting or redeploying them.
+The app priority reaches a workload's place in the kill order as [priority setting](../runtime/priority.md#priority-setting) specifies.
 
 Uninstalling an app MUST discard its stored app priority, and an app with none stored has the priority `normal`.
 
@@ -68,13 +75,16 @@ If the stored app priority cannot be read, the server MUST refuse `/apps/show` a
 | `deployment` | string | yes | the deployment's name |
 
 The server MUST refuse the request with `not_found` if the app is not registered or its current definition declares no deployment of that name.
+The server MUST refuse the request with `not_installed` unless the app's install phase is `Installed`.
 
 The runtime MUST replace the instances following the deployment's [update strategy](../runtime/update-strategies.md).
 A restart MUST NOT change the app's definition or generation.
 
 The runtime MUST record the restart durably before answering, so that a restart the daemon had not finished when it stopped is resumed when it starts again.
 
-The result is `{ "operation_id": <string> }`, where `operation_id` identifies this restart and is never reused.
+The result is `{ "restart_id": <string> }`.
+The `restart_id` identifies this restart, and the server MUST NOT reuse it for another restart.
+On success the server MUST emit a `DeploymentRestarted` event carrying the `restart_id`.
 
 ## Resource stop
 
@@ -95,16 +105,20 @@ A stopped resource's desired [lifecycle state](../overview.md#lifecycle-state) i
 
 The runtime MUST store the stop durably.
 The result is `{}`.
+On success the server MUST emit a `ResourceStopped` event naming the resource.
 
 `/apps/resource/unstop` takes the same parameters and reverses a stop of the resource they name.
 The server MUST refuse a `kind` that names no resource kind with `requirements_invalid`, and MUST refuse the request with `not_found` if the app is not registered.
-Unstopping a resource that is not stopped MUST change nothing.
+The server MUST refuse the request with `requirements_invalid` if the app's current definition declares no resource of that kind and name.
 Unstopping a deployment restores its effective scale.
 The result is `{}`.
+When it reverses a stop, the server MUST emit a `ResourceUnstopped` event naming the resource.
+Unstopping a resource that is not stopped MUST change nothing and MUST emit no event.
 
 `/apps/unstop` takes an `app` parameter and reverses every stop of that app's resources.
 The server MUST refuse it with `not_found` if the app is not registered.
 The result is `{}`.
+The server MUST emit a `ResourceUnstopped` event for each stop it reverses.
 
 The server MUST refuse all three methods with `operation_in_progress` while a lifecycle operation is running or queued for the app, or a change to the app is being applied.
 

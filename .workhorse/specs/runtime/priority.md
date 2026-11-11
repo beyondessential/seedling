@@ -14,7 +14,7 @@ An [app](../overview.md#app)'s standing against the other apps on its host, set 
 
 ## Priority setting
 
-Each installed app MUST have an app priority of `high`, `normal` or `low`.
+Each registered app MUST have an app priority of `high`, `normal` or `low`.
 An app's priority MUST default to `normal`.
 Only an operator sets an app's priority, [through the Operator Interface](../interface/app-control.md#app-priority); an app's definition does not declare it.
 

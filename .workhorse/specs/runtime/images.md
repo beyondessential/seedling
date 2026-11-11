@@ -96,7 +96,7 @@ Every running container on the host, whether a workload container, an infrastruc
 If the runtime cannot determine whether an image is pinned or in use, it MUST NOT remove the image in that pass.
 A failure to remove one image MUST be logged, and MUST NOT prevent the removal of other images in the same pass.
 
-Without explicit operator configuration, the runtime MUST NOT autonomously remove an image last used fewer than 30 days ago, nor remove images by any more aggressive policy.
+The runtime MUST NOT autonomously remove an image last used fewer than 30 days ago.
 Operators remove images sooner through [image management](../interface/images.md#removing-an-image).
 
 ## Image discovery

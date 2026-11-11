@@ -71,8 +71,6 @@ The runtime MUST be able to reconstruct an app's resource graph as it was at any
 If any recorded value needed for step 2 cannot be read, reconstruction MUST fail.
 The runtime MUST NOT treat an unreadable value as unset.
 
-The runtime MUST reconstruct the previous generation to supply the `old` argument of an [`on_change` handler](../language/parameter.md#change-handlers).
-
 ## Lineage
 
 When an app is deregistered, the runtime MUST delete its generation history and every stored bundle that no remaining generation history entry or [template](../interface/templates.md) references.

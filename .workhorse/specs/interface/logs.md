@@ -6,6 +6,12 @@ id: LOG
 
 Applies to the [Operator Interface](../overview.md#operator-interface) method through which an operator reads the logs of an [app](../overview.md#app)'s workloads or of the host's infrastructure.
 
+## Borrowed terms
+
+| term | meaning |
+| --- | --- |
+| severity | a log entry's syslog severity level, as defined in [RFC 5424](https://www.rfc-editor.org/rfc/rfc5424) section 6.2.1, where error is level 3 and lower levels are more severe |
+
 ## Log stream request
 
 `/logs/stream` is a [subscription request](wire.md#subscription-requests) that delivers [log entries](#log-entries).
@@ -18,7 +24,7 @@ On success the result is `{}`.
 | `instance` | string | no | with `app` and `resource`, restricts the logs to the instance with that display name |
 | `infra` | string | one of `app` or `infra` | selects the logs of an infrastructure component, `"proxy"` or `"resolver"` |
 | `follow` | boolean | no, default `false` | keeps the stream open for new entries once the history is delivered |
-| `tail` | integer | no, default `100` | the number of most recent entries to deliver before any new ones |
+| `tail` | integer, at least 0 | no, default `100` | the number of most recent entries to deliver before any new ones |
 
 The server MUST reject with `requirements_invalid` a request that carries both `app` and `infra`, or neither.
 The server MUST reject with `requirements_invalid` a request that carries `resource` or `instance` without `app`, or `instance` without `resource`.
@@ -44,8 +50,8 @@ Each log entry is a JSON object.
 | --- | --- | --- | --- |
 | `timestamp` | string | always | when the entry was recorded, as an [RFC 3339](https://www.rfc-editor.org/rfc/rfc3339) timestamp to the microsecond |
 | `message` | string | always | the log line |
-| `unit` | string | always | the process supervision unit that produced the entry |
-| `stream` | string | always | `"stderr"` for an entry logged at error priority or higher, otherwise `"stdout"` |
+| `unit` | string | always | the [supervised unit](../platform/linux.md#supervised-units) that produced the entry |
+| `stream` | string | always | `"stderr"` for an entry logged at error severity or more severe, otherwise `"stdout"` |
 | `app` | string | app entries | the app's name |
 | `resource_kind` | string | app entries naming a resource | the resource's [type name](wire.md#resource-type-names) |
 | `resource` | string | app entries naming a resource | the resource's name |

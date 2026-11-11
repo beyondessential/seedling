@@ -120,8 +120,9 @@ Wherever a message names a [resource type](../language/overview.md#resource-type
 | `bundle_invalid` | a definition bundle breaks the [bundle rules](definitions.md#bundle-rules); `message` names the offending path or field |
 | `unsupported_seedling` | a definition does not [support](definitions.md#seedling-version-support) the running Seedling version |
 | `fetch_failed` | a definition could not be [fetched](definitions.md#fetching), or an image [pulled](images.md#pulling-an-image), from its registry; `message` gives the cause |
+| `image_in_use` | the request would remove an image that a running container uses |
 | `registry_not_allowed` | the registry a reference names is not on the [registry allowlist](images.md#registry-allowlist) |
-| `server_busy` | the server's [stream limit](#stream-limit) was reached |
+| `server_busy` | the server's [stream limit](#stream-limit) was reached, or every [forward key](port-forwards.md#forward-key) of the connection is held |
 | `internal` | a failure inside the server, such as a storage error, kept the request from completing; a read that fails is answered with `internal`, never as `not_found` or an empty result |
 | `canopy_disabled` | Canopy access is turned off on the host, and the request was refused for that reason alone |
 
@@ -139,8 +140,7 @@ A client MUST NOT wait without limit for the unidirectional stream after a succe
 
 After a successful `/events/subscribe`, the server MUST open one unidirectional stream and write [events](events.md#subscription) to it as JSON objects, each followed by a line feed, for as long as the connection lasts.
 After a successful `/logs/stream`, the server MUST open one unidirectional stream and write [log entries](logs.md#log-stream-request) to it as JSON objects, each followed by a line feed.
-Without follow mode the server MUST finish the stream once it has written the entries the request selects.
-In follow mode the server MUST keep the stream open and write new entries as they appear, until the connection ends.
+[Entry selection](logs.md#entry-selection) defines when the server finishes that stream.
 
 ## Session requests
 
@@ -173,8 +173,7 @@ Each end finishes or resets the stream as [TCP tunnelling](port-forwards.md#tcp-
 
 Each UDP datagram tunnelled through a port forward is carried as one QUIC datagram.
 A datagram MUST begin with the forward's 16-bit `forward_key`, in network byte order, immediately followed by the UDP payload.
-The server MUST ignore a datagram shorter than 2 bytes, and one whose key names no forward of the connection.
-A payload larger than the path's maximum datagram size is handled as [relay resilience](port-forwards.md#relay-resilience) specifies.
+The server routes each datagram by its key as [UDP tunnelling](port-forwards.md#udp-tunnelling) specifies, and handles a payload larger than the path's maximum datagram size as [relay resilience](port-forwards.md#relay-resilience) specifies.
 
 ## Canopy relay streams
 

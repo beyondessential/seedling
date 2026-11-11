@@ -17,13 +17,16 @@ Applies to the BSL `Ingress` type, through which an app exposes one of its servi
 | HTTP/2 | as defined by [RFC 9113](https://www.rfc-editor.org/rfc/rfc9113); in cleartext, started with prior knowledge as in §3.3 |
 | HTTP/3 | as defined by [RFC 9114](https://www.rfc-editor.org/rfc/rfc9114) |
 | label | one dot-separated component of a domain name, as defined by [RFC 1035](https://www.rfc-editor.org/rfc/rfc1035) §2.3.1 and [RFC 1123](https://www.rfc-editor.org/rfc/rfc1123) §2.1 |
-| redirection status code | a 3xx status code, as defined by RFC 9110 §15.4 |
 
 ## Terminology
 
 ### Ingress
 
 An externally reachable endpoint of an app, identified by a hostname and a port, that delivers traffic to one of the app's services.
+
+### TLS-terminating ingress
+
+An ingress whose [termination](#termination) is `Terminate.Tls`, `Terminate.Dtls` or `Terminate.Https`.
 
 ## Declaration
 
@@ -41,6 +44,7 @@ The runtime MUST deliver traffic arriving at an ingress's hostname and port to t
 ### Identity within an app
 
 An ingress is identified within its app by its hostname and port.
+An ingress's name MUST be its [hostname](#hostnames) in lower case, followed by `:` and its port in decimal, such as `example.org:443`.
 Declaring an ingress whose hostname and port match an ingress already declared in the same app MUST throw, and MUST leave the earlier ingress as it was.
 
 > [!NOTE]
@@ -86,7 +90,7 @@ A second `tls()` call MUST replace the first.
 An ingress terminating TLS or DTLS MUST NOT interpret the application protocol inside it.
 An ingress with a termination MUST reject traffic that is not of the protocol it accepts.
 
-An ingress on which `tls()` is never called MUST forward TCP connections to its Service unmodified.
+An ingress on which `tls()` is never called MUST forward TCP connections to its Service unmodified, and MUST NOT forward UDP traffic.
 
 ### Terminate
 
@@ -113,19 +117,19 @@ An ingress on which `tls()` is never called MUST forward TCP connections to its 
 
 `ingress.redirect()`, `ingress.redirect(port: number)` and `ingress.redirect(port: number, code: number)` declare that plaintext HTTP on `port` is redirected to the ingress.
 The `port` defaults to 80, and MUST be validated as a [port number](overview.md#ports).
-The `code` defaults to 307, and MUST be a [redirection status code](#borrowed-terms) from 300 to 399.
-A `code` outside that range MUST throw.
+The `code` defaults to 307, and MUST be one of 301, 302, 307 or 308, as for [route redirect codes](http-service.md#redirect-codes).
+Any other `code` MUST throw.
 
 A definition in which an ingress declares a redirect and, once the definition has evaluated, its termination is not `Terminate.Https`, MUST fail to evaluate, with an error naming the ingress.
 The order of the `tls()` and `redirect` calls MUST NOT matter.
 
-While the ingress holds a certificate for its hostname, the runtime MUST answer every plaintext HTTP request for that hostname on `port` with a redirect of `code`.
-The redirect's `Location` MUST be `https://`, the request's host, the ingress's own port preceded by `:` unless that port is 443, and the request's path and query string.
+The runtime MUST answer every plaintext HTTP request for the ingress's hostname on `port` with a redirect of `code`.
+The redirect's `Location` MUST be `https://`, the request's hostname without its port, the ingress's own port preceded by `:` unless that port is 443, and the request's path and query string.
 
 > [!NOTE]
 > The redirect always targets the ingress's own port, whatever other HTTPS ports the host listens on.
 
 ## Certificates
 
-Whenever it is able to, the runtime MUST obtain a certificate for the hostname of every ingress that terminates TLS, DTLS or HTTPS, as [certificates](../runtime/tls/certificates.md) specifies.
+Whenever it is able to, the runtime MUST obtain a certificate for the hostname of every TLS-terminating ingress, as [certificates](../runtime/tls/certificates.md) specifies.
 The runtime MUST NOT make a certificate's private key available to the app.

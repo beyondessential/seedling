@@ -94,9 +94,12 @@ An entry already in the set MUST keep the label it has.
 Each line of the file, with surrounding whitespace removed, is blank, a comment beginning with `#`, or an entry.
 An entry is a fingerprint, then optionally a single space and a label running to the end of the line.
 An entry without a label MUST be given the label `bootstrap`.
+If a line of the file is not blank, a comment or an entry with an acceptable fingerprint, the daemon MUST fail to start, with an error naming the line.
 
-The server MUST accept a fingerprint an operator supplies in upper or lower case, optionally prefixed `sha256:` or `SHA256:`, and MUST compare it with the fingerprints it computes in its lowercase form.
-The server MUST refuse an operator-supplied fingerprint that is not 64 hexadecimal digits once any prefix is removed.
+An operator supplies fingerprints in the file `authorized_keys` and through [key management](keys.md).
+The server MUST accept an operator-supplied fingerprint with surrounding whitespace, in upper or lower case, and with or without a `sha256:` or `SHA256:` prefix.
+The server MUST store and compare an operator-supplied fingerprint as 64 lowercase hexadecimal digits.
+The server MUST refuse an operator-supplied fingerprint that is not 64 hexadecimal digits once surrounding whitespace and any prefix are removed.
 
 Authorisation MUST hold for the life of a connection, not only at its handshake.
 When a fingerprint leaves the authorised key set, the server MUST close every connection authenticated with that key, with application error code 0 and the reason `key revoked`.

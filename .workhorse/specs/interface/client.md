@@ -28,13 +28,27 @@ The CLI MUST refuse to load a key file that grants any permission to its group o
 > A distinct key file gives a caller a distinct identity, such as a co-located service that needs its own authorised key.
 > A key can be generated at a chosen path and authorised before its first use.
 
+## Server trust
+
+The CLI MUST connect to the server at the address its `--endpoint` option gives, as `host:port`, where `host` is a hostname or an IP address literal.
+The default endpoint is `[::1]:7891`.
+
+With `--fingerprint`, the CLI MUST authenticate the server against that [fingerprint](transport.md#fingerprint) alone.
+
+Without `--fingerprint`, the CLI MUST keep the fingerprints it trusts in the file `seedling/known_hosts` under the user's [state directory](../platform/linux.md#per-user-state).
+Each line of the file is blank, a comment beginning with `#`, or an entry: an endpoint as given to `--endpoint`, a single space, and the fingerprint trusted for that endpoint.
+Before each connection, the CLI MUST learn the server's fingerprint with a [fingerprint probe](transport.md#fingerprint-probe) and compare it with the file's entry for the endpoint.
+If the file has no entry for the endpoint, the CLI MUST show the fingerprint, MUST connect only if the operator confirms it, and MUST then add an entry for it.
+If the CLI cannot write the file, it SHOULD warn the operator and connect.
+If the entry differs from the probed fingerprint, the CLI MUST refuse to connect, MUST report both fingerprints and the file's path, and MUST leave the entry unchanged.
+
 ## Shutdown
 
 The CLI MUST put the local terminal into raw mode for a shell session, and MUST restore it when the session ends.
 In raw mode, the CLI MUST pass every control character typed at the terminal, including the interrupt character, to the remote shell as input.
 On SIGTERM during a shell session, the CLI MUST send ETX (`0x03`) on the session stream's stdin direction, then wait up to five seconds for the session to end.
 If the session has not ended by then, the CLI MUST close the connection and exit with status 130.
-When a shell session ends, the CLI MUST exit with the session's exit code.
+When a shell session ends, the CLI MUST exit with the session's `exit_code`, or with status 255 where `exit_code` is `-1`.
 
 On SIGINT or SIGTERM during a [port forward](#port-forward-statistics), the CLI MUST close the forward's control stream and exit.
 

@@ -22,7 +22,7 @@ A call in an action closure that waits for resources to reach a [lifecycle state
 
 ## Handle availability
 
-The runtime MUST pass a runtime handle as the first argument of every action closure.
+The runtime MUST pass a runtime handle as the first argument of every action closure, except a [change handler](parameter.md#change-handlers) that takes no arguments.
 Scripts conventionally name it `rt`.
 The runtime MUST NOT expose any way for a script to construct a `RuntimeInstance`.
 
@@ -40,6 +40,10 @@ A selection is one of these values, holding the resources listed:
 
 A runtime handle method MUST act only on the deployments, jobs, services and ingresses of a selection, and MUST ignore its other resources.
 A selection that is an `Action`, or any value not in the table, MUST make the method throw.
+
+A runtime handle method MUST resolve each resource of a selection to its instances when the method is called.
+A named Deployment MUST resolve to as many instances as its current instance count under its [scale](deployment.md#scale), and to at least one where that count is 0.
+Every other resource MUST resolve to its one instance.
 
 ## Workload control
 
@@ -68,11 +72,11 @@ Restart semantics are specified by [deployment restart](../interface/app-control
 
 ### Certificate warming
 
-`rt.warm_certs(selection)` MUST start provisioning a certificate for every TLS-terminating [ingress](ingress.md#declaration) of the selection, and returns a `Started` over those ingresses.
+`rt.warm_certs(selection)` MUST start provisioning a certificate for every [TLS-terminating ingress](ingress.md#tls-terminating-ingress) of the selection, and returns a `Started` over those ingresses.
 It MUST ignore every other resource of the selection.
 It MUST NOT route traffic to an ingress.
 A certificate acquired this way MUST be the one served when the same ingress is later started.
-A repeated call with the same selection MUST observe the existing certificate state and return at once when a usable certificate is [served](../runtime/tls/certificates.md#served-certificate) for every ingress's hostname, without beginning acquisition again.
+`rt.warm_certs` MUST NOT begin acquisition again for an ingress whose hostname already has a usable certificate [served](../runtime/tls/certificates.md#served-certificate).
 
 On a `Started` returned by `rt.warm_certs`, `ready()` and `ready_eventually()` MUST wait until a usable certificate is served for the hostname of every ingress it holds, instead of waiting for the Ready state.
 Such a `Started` holding no ingress MUST satisfy them at once.
@@ -121,13 +125,13 @@ A `target` that does not resolve to exactly one running container MUST make `rt.
 Any other `args` MUST make `rt.exec` throw.
 
 `options` MAY carry `env`, a map from environment variable names to string values, added to the container's environment for the command.
-Each name MUST match `[A-Za-z_][A-Za-z0-9_]*`.
-An `options` map carrying any other key, an `env` that is not a map, an invalid name, or a value that is not a string MUST make `rt.exec` throw.
+Each name and value MUST meet the rules a [container environment](container.md#environment) variable meets.
+An `options` map carrying any other key, an `env` that is not a map, a name or value breaking those rules, or a value that is not a string MUST make `rt.exec` throw.
 
 The runtime MUST NOT return the command's standard output or standard error to the script.
 The runtime MUST record them with the target container's logs.
 Each call MUST run its command at most once, including when the action closure is replayed, and a replayed call MUST return the exit status recorded when it ran.
-`rt.exec` called while no action closure is running MUST throw.
+`rt.exec` MUST throw when called outside the [action context](app.md#action-context).
 
 ### Volume writes
 
@@ -145,23 +149,24 @@ Any other `target` MUST make `rt.write` throw, including an ExternalVolume that 
 
 The runtime MUST NOT write the file again when a container using the volume restarts.
 Each call MUST write at most once, including when the action closure is replayed.
-`rt.write` called while no action closure is running MUST throw.
+`rt.write` MUST throw when called outside the action context.
 
 > [!NOTE]
-> A file written into a tmpfs volume is gone the next time a container using the volume starts.
+> A file written into a tmpfs volume is lost when the host restarts, and the runtime does not write it again, as it does a tmpfs volume's [declared file writes](volume.md#declared-file-writes).
 
 ## Waiting on resource state
 
 ### Started
 
-A `Started` is an opaque value standing for a group of resources a runtime handle method returned.
-A `Started` MUST offer the [Collection](collection.md#collection) methods `one`, `only`, `except` and `select`, each returning a `Started` over the resources it selects instead of the resources themselves.
-`one()` on a `Started` holding no resources MUST return unit.
+A `Started` is an opaque value standing for the instances a runtime handle method resolved its selection to.
+A `Started` MUST offer the [Collection](collection.md#collection) methods `one`, `only`, `except` and `select`, each returning a `Started` over the instances it selects instead of the resources themselves.
+These methods MUST judge an instance by the resource type and name of its resource.
+`one()` on a `Started` holding no instances MUST return unit.
 A `Started` returned by a Collection method MUST keep the barriers of the `Started` it came from.
 
 ### Barriers
 
-`Started` has these barriers, each waiting until every resource it holds has reached the lifecycle state named, or a [later one](../runtime/lifecycle.md#transitions):
+`Started` has these barriers, each waiting until every instance it holds has reached the lifecycle state named or any state after it in the [transition order](../runtime/lifecycle.md#transitions):
 
 | barrier | state | default deadline | returns |
 | --- | --- | --- | --- |
@@ -182,22 +187,26 @@ The default deadline of `rt.stop` is 30 seconds more than the longest [stop time
 `deadline` is an integer number of seconds.
 A positive `deadline` MUST be used as given, zero MUST select the default, and a negative `deadline` MUST make the barrier throw.
 
-A barrier on a `Started` holding no resources MUST return at once.
+A barrier on a `Started` holding no instances MUST return at once.
 A barrier whose condition holds MUST return, even if its deadline has passed.
 If the deadline passes while the condition does not hold, the barrier MUST throw.
 A barrier with no deadline MUST wait until its condition holds or the operation is [cancelled](../runtime/operations.md#cancellation).
 While a barrier waits, the action closure is suspended as [suspension](../runtime/suspension.md#barriers) specifies.
 
+> [!NOTE]
+> An instance that has terminated satisfies `scheduled()`, `running()` and `ready()`, so those barriers do not show that an instance is still serving.
+> `terminated()` and its `Termination` show whether a run succeeded.
+
 ### Termination
 
-A `Termination` is an opaque value standing for how the resources of a `Started` ended.
+A `Termination` is an opaque value standing for how the instances of a `Started` ended.
 
-`termination.ensure_success()` returns no value, and MUST throw unless every resource the `Termination` covers succeeded.
+`termination.ensure_success()` returns no value, and MUST throw unless every instance the `Termination` covers succeeded.
 
 A deployment or job instance succeeded if its most recent run exited with status 0.
 If the runtime did not observe that run's exit status, the run succeeded only if the host's process supervisor reported it as succeeded.
-Any other resource succeeded once it reached Terminated.
-A resource whose outcome the runtime cannot determine MUST count as not having succeeded.
+An instance of any other resource succeeded once it reached Terminated or Unscheduled.
+An instance whose outcome the runtime cannot determine MUST count as not having succeeded.
 
 ### Executed
 

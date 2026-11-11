@@ -37,7 +37,6 @@ The app MUST NOT appear in listings, MUST NOT reappear after the daemon restarts
 ## Persistence
 
 The runtime MUST store every registered app, with each of its definitions and their [definition provenance](definitions.md#provenance-reporting), durably, and MUST load them again when the daemon starts.
-Loading a stored app runs no [validators](params.md#validation).
 If a stored definition fails to evaluate when it is loaded, the runtime MUST file a `script_error` fault against the app.
 
 ## Generations
@@ -72,6 +71,7 @@ Every piece of state derived from the definition MUST stay as it was, so that a 
 > State derived from the definition includes held volume data, clamped scaling decisions, port forwards to the app's services, and action schedules.
 
 On success the server MUST record the new definition and the parameter change together in a single generation bump, with a `script_update` history entry.
+It MUST then emit an `AppUpdated` [event](events.md#app-events).
 
 If the update changes a parameter, the app is installed, and the new definition registers an `on_change` handler for the parameter that the change's [transition](../language/parameter.md#change-handlers) triggers, the server MUST schedule the handler as a [lifecycle operation](../overview.md#lifecycle-operation).
 The handler MUST run under the new definition, with `old` being the previous generation.
@@ -181,8 +181,15 @@ Each instance has these members.
 | `lifecycle` | string | its lifecycle state: `Pending`, `Scheduled`, `Running`, `Ready`, `Terminating`, `Terminated` or `Unscheduled` |
 | `transition_time` | string or null | the timestamp at which it entered that state |
 | `restarts` | object or null | a summary of its [restart history](faults.md#restart-records), or `null` where it has none or has no container |
+| `health` | string or null | its health check state: `starting`, `passing` or `failing`, as below |
 
 `restarts` has the members `recent`, the number of recovery restarts within the current [rate window](faults.md#crash-loop-settings); `window_secs`, that window's length in seconds; `total`, the number of retained restart records; and `last_at`, `last_exit_code` and `last_exit_kind`, describing the most recent record.
+
+`health` reports the state of the [health check](../language/deployment.md#health-checks) of a Deployment instance whose Deployment declares one.
+It is `failing` once the check has failed `retries` consecutive times outside its `start_period`, until the check next passes.
+Otherwise it is `passing` once a check has passed since the instance's container started, and `starting` before then.
+`health` MUST be `null` for an instance of any other resource, for an instance with no running container, and for an instance whose health check has not been observed since its container started.
+Whenever an instance's `health` changes, the runtime MUST emit an `InstanceHealthChanged` [event](events.md#fault-and-resource-events).
 
 `def` has a `kind` member, and the other members its kind gives.
 

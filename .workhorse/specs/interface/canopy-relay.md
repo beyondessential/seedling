@@ -47,7 +47,8 @@ The result is `{ "offer_id": <string> }`, where `offer_id` is an opaque string i
 On success, the runtime MUST emit a `CanopyOffered` [event](events.md#session-events).
 
 An offer belongs to the connection that made it.
-The runtime MUST accept `/canopy/offer` and `/canopy/withdraw` only on a connection over which it can open relay streams.
+The runtime MUST accept `/canopy/offer` and `/canopy/withdraw` only as requests arriving on a client-initiated bidirectional stream of a connection, since the offer belongs to that connection.
+The runtime MUST refuse either method with `not_found` when it receives it any other way.
 
 ## Offer lifetime
 
@@ -113,8 +114,6 @@ The offering client answers with a response header line followed by the response
 
 The offering client MUST report every status Canopy returned in a response header line, including a status outside the 2xx range.
 The runtime MUST leave the interpretation of a status to the caller of the relayed request.
-
-A header line, including its terminating newline, MUST NOT exceed 65,536 bytes.
 
 ## Relay errors
 

@@ -14,12 +14,18 @@ A fault record is a JSON object.
 | --- | --- | --- |
 | `id` | string | the fault's identifier, opaque to the client |
 | `app` | string | the app the fault belongs to |
-| `resource_type` | string or null | the kind of thing the fault is about, where it is about less than the whole app |
+| `resource_type` | string or null | the kind of thing the fault is about |
 | `resource_name` | string or null | the name of that thing |
-| `instance_id` | string or null | the resource instance the fault is about, where it is about one instance |
+| `instance_id` | string or null | the [instance ID](../runtime/identity.md#instance-id) of the resource instance the fault is about, as 32 lowercase hexadecimal digits |
 | `kind` | string | the fault's [kind](../runtime/faults.md#fault-records) |
 | `timestamp` | string | when the fault was filed, as an [RFC 3339](https://www.rfc-editor.org/rfc/rfc3339) timestamp |
 | `description` | string | text for the operator |
+
+`resource_type`, `resource_name` and `instance_id` identify the fault's subject for display, and take no part in the fault's [identity](../runtime/faults.md#fault-records).
+For a fault about a resource instance, they MUST give the instance's resource [type name](wire.md#resource-type-names), its resource name and its instance ID.
+For a fault about an app's ingress, `resource_type` MUST be `ingress`, `resource_name` MUST be the ingress's name, and `instance_id` MUST be `null`.
+For a fault about a site ingress or a site service, `resource_type` MUST be `site_ingress` or `site_service`, `resource_name` MUST be its name, and `instance_id` MUST be `null`.
+For any other fault, all three MUST be `null`, and its `description` SHOULD name its subject.
 
 ## Listing faults
 
@@ -27,10 +33,11 @@ A fault record is a JSON object.
 
 | member | type | required | meaning |
 | --- | --- | --- | --- |
-| `app` | string | no | restricts the list to that app's faults |
+| `app` | string | no | restricts the list to that app's faults, or to those filed against `_system` or `seedling` |
 
 The result is an array of [fault records](#fault-records).
 Without `app` the server MUST list every active fault on the host.
+The server MUST refuse an `app` that names no registered app, other than `_system` and `seedling`, with `not_found`.
 
 ## Clearing faults
 
@@ -40,6 +47,7 @@ Without `app` the server MUST list every active fault on the host.
 | --- | --- | --- | --- |
 | `app` | string | yes | the app whose faults to clear, or `_system` or `seedling` |
 
+The server MUST refuse an `app` that names no registered app, other than `_system` and `seedling`, with `not_found`.
 The result is `{ "app": <string>, "cleared": <integer> }`, where `cleared` is the number of faults that went from active to cleared.
 The server MUST emit a `FaultCleared` event for each fault it clears.
 Clearing a fault MUST NOT stop the runtime filing it again while its [filing condition](../runtime/faults.md#filing-and-clearing) holds.
@@ -52,7 +60,7 @@ A restart record is a JSON object describing one restart of a resource instance'
 | --- | --- | --- |
 | `id` | integer | the record's identifier, increasing with each record |
 | `app` | string | the app the instance belongs to |
-| `instance_id` | string | the instance restarted |
+| `instance_id` | string | the instance ID of the instance restarted, as 32 lowercase hexadecimal digits |
 | `resource_type` | string or null | the instance's resource [type name](wire.md#resource-type-names) |
 | `resource_name` | string or null | the instance's resource name |
 | `generation` | integer or null | the app's [generation](../overview.md#generation) at the time, or `null` where the app had none |
@@ -71,7 +79,7 @@ For `"signalled"` and `"dumped"`, `exit_code` MUST be the number of the signal t
 | member | type | required | meaning |
 | --- | --- | --- | --- |
 | `app` | string | no | restricts the list to that app's restarts |
-| `instance` | string | no | restricts the list to that instance's restarts |
+| `instance` | string | no | restricts the list to the restarts of the instance with that instance ID |
 | `limit` | integer | no, default `100` | the most records to return |
 
 The result is an array of [restart records](#restart-records).

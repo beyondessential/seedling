@@ -50,6 +50,10 @@ Called on an `HttpService` that views an External Service, it MUST throw.
 
 `httpService.route(prefix: string)` returns the `HttpServiceRoute` for `prefix`.
 A `prefix` that is empty or does not begin with `/` MUST throw.
+A `prefix` containing `{`, or an ASCII control character other than horizontal tab, MUST throw.
+
+A Service's routes MUST be shared by every `HttpService` that views it, whatever port each names.
+`svc.http(80).route("/a")` and `svc.http(8080).route("/a")` MUST name the same route, with the same proxy settings.
 
 A prefix MUST be normalised by removing every trailing `/`, and a prefix that is empty after that is `/`.
 Two spellings with the same normalised form MUST name the same route.
@@ -134,7 +138,7 @@ A `code` MUST be one of 301, 302, 307 or 308, and any other value MUST throw.
 > A redirect on `/` would answer for the whole hostname.
 > Retiring a hostname is a [site ingress redirect attachment](../runtime/site-resources.md#attachments), made by an operator.
 
-A prefix MUST be either a redirect or bound by a pod.
+A prefix MUST NOT be both a redirect and bound by a pod.
 Declaring a redirect on a prefix a pod binds through [`pod.http`](pod.md#port-bindings) MUST throw, and so MUST binding a pod to a prefix declared as a redirect, in either order.
 A second `redirect()` on the same route MUST replace the first.
 
@@ -152,7 +156,7 @@ Declaring a `response` operation naming `Location` on a redirect route MUST thro
 A script declares compression of proxied responses with `compress(enabled: bool)` or `compress(config: map)`, on an `HttpService` or an `HttpServiceRoute`.
 `compress(false)` switches compression off.
 `compress(true)` switches it on with the default settings.
-`compress(config)` switches it on with the fields `config` names, and the defaults for the rest.
+`compress(config)` switches it on with the fields `config` names, and [compression resolution](#compression-resolution) gives the rest.
 
 | field | type | default | meaning |
 | --- | --- | --- | --- |
@@ -169,7 +173,15 @@ A `config` with any other key MUST throw.
 A `content_types` entry ending in `*` matches every media type beginning with the text before the `*`.
 Any other entry matches that media type exactly.
 
-The default `content_types` MUST cover text and text-like media types: markup, stylesheets, scripts, JSON and other structured text, SVG, and fonts.
+The default `content_types` MUST be the entries below.
+
+| media type family | entries |
+| --- | --- |
+| text | `text/*` |
+| application | `application/atom+xml*`, `application/eot*`, `application/font*`, `application/geo+json*`, `application/graphql+json*`, `application/graphql-response+json*`, `application/javascript*`, `application/json*`, `application/ld+json*`, `application/manifest+json*`, `application/opentype*`, `application/otf*`, `application/rss+xml*`, `application/truetype*`, `application/ttf*`, `application/vnd.api+json*`, `application/vnd.ms-fontobject*`, `application/wasm*`, `application/x-httpd-cgi*`, `application/x-javascript*`, `application/x-opentype*`, `application/x-otf*`, `application/x-perl*`, `application/x-protobuf*`, `application/x-ttf*`, `application/xhtml+xml*`, `application/xml*` |
+| font | `font/ttf*`, `font/otf*` |
+| image | `image/svg+xml*`, `image/vnd.microsoft.icon*`, `image/x-icon*` |
+| multipart | `multipart/bag*`, `multipart/mixed*` |
 
 How the runtime compresses is specified by [route compression](../runtime/proxy.md#compression).
 

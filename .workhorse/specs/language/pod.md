@@ -35,4 +35,4 @@ A script binds a port of the pod to a service with these methods, where `port` i
 
 The runtime MUST route traffic of the bound protocol arriving at the route or Service Port to `port` on the pod, and its replies back.
 
-Binding a pod to a route declared as a [redirect](http-service.md#redirect-route-constraints) MUST throw.
+Binding a pod to a route declared as a redirect throws, as [redirect route constraints](http-service.md#redirect-route-constraints) specifies.

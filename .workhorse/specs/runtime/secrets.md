@@ -41,7 +41,7 @@ The event announcing the change MUST withhold a value under the same rule.
 > [!NOTE]
 > A definition that drops a parameter's `secret` flag in the same update that changes its value still protects the value it replaced.
 
-The runtime MUST decrypt protected history values before giving them to a caller authorised to reconstruct past generations.
+The runtime MUST decrypt protected history values when it reconstructs a past generation.
 
 ## Redaction
 
@@ -53,6 +53,8 @@ A response withholding a value MUST say so with a machine-readable marker, so th
 ## Migration
 
 When a parameter becomes secret, the runtime MUST move its stored value from non-secret storage to secret storage without operator action.
-The runtime MUST make that move after every evaluation of the app's definition it applies, whatever caused the evaluation.
+When a parameter stops being secret, the runtime MUST move its stored value from secret storage to non-secret storage without operator action.
+The runtime MUST make either move after every evaluation of the app's definition it applies, whatever caused the evaluation.
 
-The runtime MUST write the value to secret storage before removing it from non-secret storage.
+The runtime MUST write the value to its new storage before removing it from the old.
+A generation history entry recorded while the parameter was secret MUST stay protected, and MUST stay [withheld](#redaction) from callers, after the parameter stops being secret.
