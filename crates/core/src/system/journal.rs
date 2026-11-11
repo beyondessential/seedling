@@ -87,7 +87,7 @@ fn journal_reader_thread(
     opts: LogStreamOptions,
     tx: tokio::sync::mpsc::Sender<LogEntry>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    use systemd::journal::{JournalSeek, OpenOptions};
+    use systemd::journal::OpenOptions;
 
     let mut journal = OpenOptions::default().system(true).open()?;
 
@@ -114,13 +114,8 @@ fn journal_reader_thread(
         }
     }
 
-    // Seek to the tail, then walk backwards to find the starting position.
-    journal.seek(JournalSeek::Tail)?;
-    for _ in 0..opts.tail {
-        if journal.previous()? == 0 {
-            break;
-        }
-    }
+    // i[impl logs.tail]
+    seek_tail_window(&mut journal, opts.tail)?;
 
     loop {
         match journal.next_entry()? {
@@ -143,6 +138,26 @@ fn journal_reader_thread(
         }
     }
 
+    Ok(())
+}
+
+/// Position `journal` so that the next entry read is the oldest of its last
+/// `tail` entries.
+///
+/// Reading advances before it reads, so the cursor goes one entry further
+/// back than the window. Running out of entries first means the window is
+/// the whole journal, which is then read from the head.
+fn seek_tail_window(journal: &mut systemd::Journal, tail: u64) -> systemd::Result<()> {
+    use systemd::journal::JournalSeek;
+
+    journal.seek(JournalSeek::Tail)?;
+    let mut stepped = 0;
+    while stepped <= tail && journal.previous()? != 0 {
+        stepped += 1;
+    }
+    if stepped <= tail {
+        journal.seek(JournalSeek::Head)?;
+    }
     Ok(())
 }
 
@@ -177,5 +192,78 @@ fn record_to_entry(timestamp_us: u64, fields: &BTreeMap<String, String>) -> LogE
         infra: fields.get("SEEDLING_INFRA").cloned(),
         rt_call: fields.get("SEEDLING_RT_CALL").cloned(),
         script_pos: fields.get("SEEDLING_SCRIPT_POS").cloned(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+
+    use systemd::journal::OpenOptions;
+
+    use super::*;
+
+    const MARKER_FIELD: &str = "SEEDLING_TEST_MARKER";
+
+    fn open_marked(marker: &str) -> systemd::Journal {
+        let mut journal = OpenOptions::default()
+            .current_user(true)
+            .open()
+            .expect("open journal");
+        journal.match_add(MARKER_FIELD, marker).expect("match");
+        journal
+    }
+
+    fn count_marked(marker: &str) -> usize {
+        let mut journal = open_marked(marker);
+        let mut count = 0;
+        while journal.next().expect("read") != 0 {
+            count += 1;
+        }
+        count
+    }
+
+    fn read_window(marker: &str, tail: u64) -> Vec<String> {
+        let mut journal = open_marked(marker);
+        seek_tail_window(&mut journal, tail).expect("seek");
+        let mut messages = Vec::new();
+        while let Some(entry) = journal.next_entry().expect("read") {
+            messages.push(entry["MESSAGE"].clone());
+        }
+        messages
+    }
+
+    // i[verify logs.tail]
+    #[test]
+    #[ignore = "needs a running journald"]
+    fn tail_window_holds_the_last_entries() {
+        let marker = format!(
+            "{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        );
+        for i in 0..3 {
+            systemd::journal::send(&[
+                &format!("MESSAGE=entry {i}"),
+                &format!("{MARKER_FIELD}={marker}"),
+            ]);
+        }
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while count_marked(&marker) < 3 {
+            assert!(
+                Instant::now() < deadline,
+                "entries never reached the journal"
+            );
+            std::thread::sleep(Duration::from_millis(100));
+        }
+
+        assert!(read_window(&marker, 0).is_empty());
+        assert_eq!(read_window(&marker, 1), ["entry 2"]);
+        assert_eq!(read_window(&marker, 2), ["entry 1", "entry 2"]);
+        assert_eq!(read_window(&marker, 3), ["entry 0", "entry 1", "entry 2"]);
+        assert_eq!(read_window(&marker, 10), ["entry 0", "entry 1", "entry 2"]);
     }
 }
