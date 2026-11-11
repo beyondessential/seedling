@@ -4,54 +4,60 @@ id: COL
 
 # Collections
 
-## Collection
+Applies to the `Collection` type, through which a script gathers [resources](overview.md#resource) to act on, and to the `col` function that forms one from any value.
 
-<!-- from language: Collection -->
+## Terminology
 
-> l[collection.interface]
-> A `Collection` is an abstract interface of things that can be zero or more Resources.
-> Workload control methods often operate on or with Collections.
-> Collections can hold different resource types, and can hold Collections.
-> Order within a collection is not defined.
->
-> An array of Collections is a Collection of the contents.
->
-> All Resources are a Collection of the resource itself and all resources that are contained (not references) in it.
+### Collection
 
-> l[collection.one]
-> `col.one()` is a method which returns any one Resource from the collection (or null if the collection is empty).
->
-> This is most useful for collections which have zero or one resources within.
+A value of type `Collection`: a group of zero or more resources, of any [resource types](overview.md#resource-type), in no defined order.
 
-> l[collection.only]
-> `col.only(other: Collection)` is a method which returns a Collection of all resources in this Collection that are present in the `other` collection.
+## Coercion
 
-> l[collection.except]
-> `col.except(other: Collection)` is a method which returns a Collection of all resources in this Collection that are _not_ present in the `other` collection.
+`col(value)` is a function that MUST accept a value of any type and return a collection, as the table gives.
 
-> l[collection.select]
-> `col.select(criterion: object)` is a method which returns a Collection of all the resources within this Collection that match the `criterion`.
->
-> The criterion is an object map where all keys are optional. Resources must match all keys to be selected. All possible keys are defined in this spec.
+| value | collection returned |
+| --- | --- |
+| a `Collection` | that collection |
+| an `App` | every resource of the app's [resource graph](overview.md#resource-graph) |
+| a named `Deployment`, `Job`, `Service`, `Ingress`, `Volume` or `ExternalVolume` | that resource alone |
+| an anonymous `Deployment`, `Job` or `Service` | that resource alone |
+| an `HttpService` | the service it is a view of, alone |
+| an array | every resource in the collections its elements coerce to |
+| an anonymous `Volume` | an empty collection |
+| any other value | an empty collection |
 
-> l[collection.select.types]
-> `types`: must match one of an array of [ResourceTypes](rule:l/const.resource-type.enum).
+An action handle is among the values that coerce to an empty collection.
 
-> l[collection.select.names]
-> `names`: must match one of an array of resource names
+> [!NOTE]
+> An action is invoked through [`Action.invoke`](rule:l/action.call), not acted on as a resource, so no collection holds one.
 
-> l[collection.select.name-patterns]
-> `name_patterns`: must match at least one glob pattern
+## Query methods
 
-> l[collection.col]
-> `col(val)` is a free function that coerces any value into a `Collection`.
->
-> The following values are accepted:
-> - A `Collection` — returned as-is.
-> - An `App` — yields a Collection of all its named resources.
-> - Any named Resource (Deployment, Service, HttpService, Job, Ingress, named Volume, ExternalVolume) — yields a Collection of that single resource.
-> - An array — yields a Collection of all elements coerced the same way (a union).
-> - An anonymous Volume (without a name) — yields an empty Collection.
-> - Any other value — yields an empty Collection.
->
-> Action handles are not coercible to a Collection: `col(action)` yields an empty Collection, because actions are invoked via [`Action.invoke()`](rule:l/action.call), not scheduled as resources.
+A `Collection` MUST offer the methods `one`, `only`, `except` and `select`.
+An `App` MUST offer the same four methods, with the result each gives on `col(app)`.
+
+`collection.one()` MUST return one resource from the collection, or the unit value `()` if the collection is empty.
+
+> [!NOTE]
+> `one` suits a collection known to hold at most one resource, since the collection's order does not decide which resource it returns.
+
+`collection.only(other)` MUST return a collection of every resource in `collection` that is also in `col(other)`.
+`collection.except(other)` MUST return a collection of every resource in `collection` that is not in `col(other)`.
+For both, a resource is in `col(other)` when a resource of the same resource type and name is.
+
+## Selection
+
+`collection.select(criterion: map)` MUST return a collection of every resource in `collection` that matches `criterion`.
+A resource matches a criterion when it matches every key the criterion holds, so an empty criterion matches every resource.
+
+| key | type | a resource matches when |
+| --- | --- | --- |
+| `types` | array of `ResourceType` | its resource type is one in the array |
+| `names` | array of strings | its name is one in the array |
+| `name_patterns` | array of strings | its name matches at least one of the patterns |
+
+`select` MUST throw if `criterion` holds any key other than these.
+
+A name pattern MUST match a resource's whole name, case-sensitively.
+In a pattern, `*` matches any sequence of zero or more characters, `?` matches exactly one character, and every other character matches itself.
