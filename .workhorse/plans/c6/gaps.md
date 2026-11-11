@@ -69,3 +69,44 @@ POSIX crontab (Issue 8), IANA tz database, SipHash, zxcvbn (ACN).
 - Active NAT64: the runtime providing its own NAT64 translator for its host's workloads (NAT64).
 - Action, Action closure (ACN#action-closure; root Lifecycle operation entry uses it).
 - Barrier, Runtime handle (RT).
+
+## Batch reports (appended as they arrive)
+
+### Language A (BSL BND COL CONST APP PARAM SVC)
+Open:
+- CONST: failed egress probe reports false, undetected time zone UTC ("could not determine"): keep+document, block evaluation, or fault+fallback (rec.).
+- CONST: IDLE_CMD needs an image `sleep` accepting `infinity`: state image requirement, or runtime provides idle process.
+- CONST: host facts read once at daemon start; pick up network changes without restart?
+- COL: col(external_service) is empty though col(app) includes it: fix code to coerce to itself, or keep.
+- COL: anonymous resources of one type compare equal in only/except: own identity, or accept.
+- COL: col([a,a]) duplicates; col(app) taken early includes later declarations: state sets resolved on use, or leave unstated.
+- PARAM: validators block only resource declaration: forbid all builder methods, or only declarations.
+- SVC: unmapped external service has no target, so drop-or-reject routing applies: confirm.
+Spec leads code:
+- PARAM: previous generation unbuildable -> handler runs with empty `old` (spec: MUST NOT run with a substitute).
+- PARAM: old.<type>(name) in a change handler returns the current generation's resource (spec: previous).
+- PARAM: one-parameter change-handler closure registers but fails at run.
+- SVC: service.port on a static service in action context throws (spec: instance method).
+- BSL/VOL/SVC: exported(options) skips unknown keys (spec: throw).
+- APP: ExternalVolume.description mutates a static external volume in action context.
+Moves: DEFN `definition.bundle.limits` -> link BND#metadata-file; `/services/exported/list` OI endpoint has no interface spec; event non-emission of secret params belongs in SEC.
+Standards: TOML, Cargo version requirement syntax, SemVer 2.0.0, RFC 6146, 6147, IANA tz.
+Glossary: Script (BSL), Action context (APP), Static resource (APP).
+
+### Language B (HTTP ING DEP JOB CTR POD VOL)
+Open:
+- ING: redirect() then tls() with a non-HTTPS pairing leaves a redirect on non-HTTPS: tls() throws, tls() clears, or check at end of evaluation.
+- ING: two apps declaring the same (hostname, port) ungoverned: drop both + fault, first-installed wins + fault, or refuse install.
+- DEP: scale(1..4) read as inclusive though Rhai `..` is exclusive; `..=` unsupported: keep+note, accept `..=` too, or only `..=`.
+- CTR: no stop timeout leaves systemd's default; spec SHOULD 90 s: pin 90, or drop the number.
+- CTR: container with no image: throw at end of evaluation, fault at start, or unspecified.
+- CTR: trimming `user` is a coercion: keep as defined coercion, or throw on whitespace.
+- POD: two mounted Service Ports with the same port collide at localmount:<port>: second throws, or specify winner.
+Spec leads code:
+- JOB: `deadline` never enforced.
+- CTR: failed allowlist read treated as empty and files the fault (spec forbids).
+- CTR: env array entries with extra keys accepted (spec: throw).
+- VOL: readonly() has no effect (always mounted rw).
+Moves: PRX rate-limit budget sentence should say a service-declared limit is shared by inheriting routes; ACTU hardening should link CTR for the PID default; 0640 write mode fits ACTU near storage confinement; SVC dead links to pod.bind/container.mount-service -> POD#service-mounts, POD#port-bindings.
+Standards: RFC 9110, 8878 (HTTP); RFC 8446, 9147, 9110, 9112, 9113, 9114, 1035, 1123 (ING); OCI image config, capabilities(7), signal(7) (CTR).
+Glossary: Ingress (ING); External volume, Declared file write (VOL).

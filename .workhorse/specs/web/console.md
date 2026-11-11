@@ -2,208 +2,170 @@
 id: UI
 ---
 
-# Web console
+# Operator console
 
-## Operator Capabilities
+Applies to the browser application through which an [operator](../overview.md#operator) observes and controls a [host](../overview.md#host) by way of the [web interface](serving.md#web-interface).
 
-<!-- from web: Operator Capabilities -->
+## Terminology
 
-> w[routes.apps]
-> The web interface exposes the full app management surface of the OI:
-> listing registered apps and their statuses; showing detailed app status including resources, faults, params, install requirements, and actions; registering new apps with a BSL script; updating an app's BSL script or fetching its definition from a registry; deregistering apps; setting and unsetting parameters; scaling deployments; setting an app's priority; viewing generation history; planning proposed changes; invoking lifecycle actions; and invoking the install action with its requirements.
+### Console
 
-> w[routes.apps.definition]
-> The app detail page must show where the app's current definition came from, following its [provenance](rule:i/definition.provenance): for a fetched definition, its reference and digest; for a pushed one, its content hash and who pushed it, together with any origin the client reported, marked as reported by the client.
+The single-page application the web interface serves, through which an operator works with a host from a browser.
 
-> w[routes.apps.definition.fetch]
-> The app detail page must let the operator update the app's definition from a registry.
-> For an app whose definition was fetched, it lists the tags of the recorded reference's repository through [`/registries/tags`](rule:i/definition.tags) for the operator to pick from; the operator may instead enter a complete reference.
-> The operator may change one parameter alongside the new definition.
-> Before applying, the page shows the [planned change](rule:i/plan.dry-run), including any validator rejections, and a change that is rejected cannot be applied.
-> The update is issued as a single [`/apps/update`](rule:i/app.update) request.
-> While the app has an active `definition_source_moved` fault, the page shows beside the provenance that the recorded tag has moved, and offers that tag as the one to update to.
+### Safety mode
 
-> w[routes.apps.definition.edit]
-> The script editor edits the definition's script file when the definition has exactly one, carrying every other file in the bundle over unchanged, and the result is recorded as pushed.
-> A definition whose script spans several files is shown read-only in the editor, and is updated by pushing or fetching.
-> Applying is withheld until the definition's files have been read, since a bundle that has not arrived is not an empty one, and the reason is shown when they cannot be.
+The tier of controls a console currently enables: `read`, `write` or `dangerous`, in increasing order.
 
-> w[routes.apps.canopy-type]
-> The app detail page must show the app's [Canopy application type](rule:l/app.canopy-type) when its definition declares one, beside the app's other declared details.
+## Operator capabilities
 
-> w[routes.apps.fault-count]
-> The apps table on the home route must surface, per app, how many active faults are currently filed against it.
-> When the count is greater than zero, the row's status column shows an additional chip displaying the count alongside the existing status chip; when zero, no extra chip is shown.
-> The chip uses the error palette to align with the existing fault indicators elsewhere in the UI.
+The console MUST let an operator observe and control a host through its [Operator Interface](../overview.md#operator-interface) from a browser, without a terminal.
+It SHOULD offer each Operator Interface operation the CLI offers, other than those this spec withholds and those a browser cannot carry out, such as listening on a local port for a port forward.
+It MUST offer log streaming for both app workloads and the host's infrastructure components.
 
-> w[routes.apps.healthcheck-indicator]
-> When a container resource (Deployment or Job) has a declared [healthcheck](rule:l/deployment.healthcheck), the app detail page must show a small indicator alongside the resource's lifecycle state.
-> The indicator must convey:
->
-> - that a healthcheck is declared,
-> - the configured `on_failure` response,
-> - the current check state derived from recent observations: passing, failing, or in start-period.
->
-> The indicator's colour must align with the existing status palette: a healthy state uses the success colour, a failing state uses the error colour, and the start-period state uses the warning or neutral colour.
-> Hovering or focusing the indicator must reveal the declared `kind`, `on_failure`, and (for `kind: "command"`) a truncated form of the `cmd`.
+The console MUST show the operator the error of each request that fails.
+It MUST NOT present a read that failed as an empty result.
+While ingress discovery is unhealthy, the console MUST warn the operator.
 
-> w[routes.apps.priority]
-> The app detail page must show the app's [app priority](rule:i/app.priority.set) and let the operator set it to any of the levels the OI accepts.
-> The apps table on the home route must surface an app whose priority is not `normal` with a chip in its status column, alongside the existing status and fault chips. An app at `normal` shows no chip, so the table draws the eye only where an operator has deliberately changed an app's standing.
-> The chip must distinguish a raised priority from a lowered one by colour, following the status palette used elsewhere in the UI.
-> A priority change takes effect on the running app without a redeploy, so the new value must be reflected in both the detail page and the apps table without requiring a page reload.
+## Guarded controls
 
-> w[routes.apps.priority-indicator]
-> The app detail page must show, for each Deployment resource declaring a [priority](rule:l/deployment.priority) other than `normal`, an indicator of the declared level alongside the resource's lifecycle state.
-> The indicator must read as declared configuration rather than as a control: a Deployment's priority comes from the app's BSL definition, so changing it means changing that definition and installing it.
-> The indicator's colour must follow the same scale as the app priority chip, so a raised level reads the same way in both places.
-> The indicator must convey standing within the app rather than across apps: [kill order](rule:r/priority.kill-order) is app-major, so a `Critical` Deployment in a `low`-priority app is shed before any workload of a `high`-priority one.
+A console MUST start in the `read` safety mode.
+A console reloaded in the same browser tab MAY resume an elevation that has not expired.
 
-> w[routes.logs]
-> The web interface exposes log streaming for app workload containers and infrastructure components.
+A control that changes host state MUST require at least the `write` mode.
+A control that removes, revokes, stops, cancels or clears something SHOULD require the `dangerous` mode.
+A control that requires a mode above the console's current one MUST be disabled, and SHOULD show the mode it requires.
 
-> w[routes.events]
-> The web interface exposes the OI event feed, delivering a live stream of runtime events to the operator.
+Elevating to `dangerous` MUST require the operator's confirmation.
+An elevation to `write` or `dangerous` MUST revert to `read` no later than ten minutes after it began, and the console SHOULD show the time remaining.
+The console reports its safety mode to the web interface as [session tracking](serving.md#session-tracking) specifies.
 
-> w[routes.events.replay]
-> A client subscribing to the event feed first receives the web interface's most recent events, then live events from that point on.
-> Each event reaches a subscriber once, in the order the web interface received it, with no overlap between the replay and the live events.
+The console MUST show the operator when any other web session is in the `write` or `dangerous` mode, distinguishing the two, whatever the console's own mode.
 
-> w[routes.events.gap]
-> The web interface relays the OI feed's `EventsDropped` events unchanged.
-> When a client falls behind the web interface's own feed, the web interface writes an `EventsDropped` event to that client, with the meaning [event.gap](rule:i/event.gap) gives it.
-> When the web interface's own subscription to the OI feed is lost and later re-established, it writes an `EventsDropped` event to every client, without a `skipped` count, since the number of events in between is unknown.
-> On receiving `EventsDropped`, the client reads afresh every view the event feed keeps current.
+> [!NOTE]
+> The safety mode guards against slips, not against a hostile operator.
+> The web interface relays every request whatever mode a console reports.
 
-> w[routes.shells]
-> The web interface exposes interactive shell sessions, allowing operators to open a terminal session within an app's context directly from the browser.
-> See [shells.wire](rule:w/shells.wire), [shells.ui](rule:w/shells.ui), and [shells.resize](rule:w/shells.resize) for the wire protocol and UI details.
+## Event feed
 
-> w[shells.wire]
-> The browser opens a single WT bidirectional stream and writes one newline-terminated JSON request line `{"method":"/shells/start","params":{"app","name","rows","cols"}}`.
-> The gateway writes back one newline-terminated JSON line — either `{"result":{"session_id","stdout_stream_id","stderr_stream_id",...}}` or `{"error":{...}}` — then the stream carries raw stdin bytes upstream and the final `{"exit_code":N}\n` frame downstream, followed by FIN.
-> The gateway also opens two server-initiated WT unidirectional streams, one for stdout and one for stderr.
-> Each uni stream begins with an 8-byte big-endian QUIC stream ID that matches the corresponding `stdout_stream_id` or `stderr_stream_id` in the handshake response; subsequent bytes are raw PTY output.
-> The browser reads the 8-byte prefix to route each uni stream to the correct shell session.
-> Since the gateway uses a shared QUIC connection to the daemon, stream IDs are unique across all concurrent shells on a given browser session; no rewriting or additional multiplexing is required.
-> The gateway takes a shell's stdout and stderr streams from the daemon connection that carried that shell's handshake.
-> When the gateway replaces its daemon connection, shells waiting on the old connection end, and the old connection's closing has no effect on shells started on the new one.
+The console MUST subscribe to the [event feed](serving.md#event-relay) for as long as its web session is open, and show the operator events as they arrive.
+A view the console keeps current from the feed MUST update without polling and without a reload.
+On receiving an `EventsDropped` event, the console MUST read afresh every view it keeps current from the feed.
 
-> w[shells.resize]
-> Terminal resize is sent as a standard `/shells/resize` OI request over the browser's shared WebTransport session.
-> The browser coalesces resize events to at most one in-flight request at a time.
+## App definitions
 
-> w[shells.exit]
-> When the daemon session ends, the gateway forwards the final `{"exit_code":N}\n` frame from the daemon's server-initiated bidi to the browser's bidi stream and closes the downstream half.
-> The browser reads this frame to surface the exit code in the UI per [shells.ui](rule:w/shells.ui).
+The app detail view MUST show the source of the app's current definition, from its [provenance](rule:i/definition.provenance).
+For a fetched definition, it MUST show the reference and digest.
+For a pushed definition, it MUST show the content hash and the actor who pushed it, with any origin the client reported, marked as reported by the client.
 
-> w[volumes.shell-ui]
-> Each site volume row in the Volumes page and each volume resource row in the App Detail page expose an "Open shell" button.
-> Clicking the button immediately opens a volume shell session (via `/volumes/shell`) for that single volume, using the existing shell sidebar.
-> The tab label is the volume's display name.
+The console MUST let the operator update an app's definition from a registry.
+For an app whose definition was fetched, it MUST offer the [tags](rule:i/definition.tags) of the recorded reference's repository to pick from, and the operator MAY instead enter a complete reference.
+The operator MAY change one parameter alongside the new definition.
+Before the update is applied, the console MUST show the [planned change](rule:i/plan.dry-run), including any validator rejections, and MUST NOT apply a change that is rejected.
+The console MUST issue the update as a single [`/apps/update`](rule:i/app.update) request.
+While the app has an active `definition_source_moved` fault, the console MUST show beside the provenance that the recorded tag has moved, and offer that tag to update to.
 
-> w[volumes.shell-ui.read-only]
-> Volume shells are available regardless of the current safety mode. When the UI is in read mode the shell session is opened with `read_only: true` so every bind mount is forced read-only inside the container, and the tab label carries a visible read-only marker (such as a `(ro)` suffix). In write or dangerous mode the shell is opened read-write as before. The selected mode is captured at the moment the operator opens the shell; switching modes afterwards does not change the shell's mount flags.
+The console MUST let the operator edit a definition whose bundle has exactly one script file.
+An edit MUST carry every other file in the bundle over unchanged, and is recorded as pushed.
+A definition whose script spans several files MUST be shown read-only.
+The console MUST NOT apply an edit until it has read the definition's files, and MUST show the reason when it cannot read them.
 
-> w[shells.ui]
-> The app detail page exposes each shell defined in the app (from `/apps/show`'s `actions[].kind=="shell"`) as an "Open shell" button.
-> If the shell declares `params`, clicking the button first shows a params dialog (identical in structure to the action invoke dialog) to collect param values before opening the session.
-> Shells open in a persistent tabbed sidebar on the left of the main layout.
-> Multiple shell sessions may be open simultaneously, each in its own tab.
-> The sidebar must fit the terminal to the available space and send resize events when the sidebar or window size changes.
-> On clean exit, an overlay must show the exit code with options to close or reopen the shell.
-> Closing a tab before a clean exit must trigger `/shells/stop` to tear down the daemon session.
+## App status
 
-> w[routes.keys]
-> The web interface exposes OI key management: listing authorized client keys, authorising new keys, and revoking existing keys.
+The apps list MUST show, for each app with active faults, how many there are.
 
-> w[routes.registries]
-> The web interface exposes the container registry allowlist: listing, adding, and removing registry hostnames.
+The app detail view MUST show the app's [Canopy application type](rule:l/app.canopy-type) when its definition declares one.
 
-> w[routes.canopy]
-> The web interface provides a Canopy page at `/canopy` showing:
->
-> - Whether Canopy access is enabled, with a control to turn it on or off.
-> - The offer that would serve the next request — the offering agent, the endpoint it reaches, and when it was offered — or an indication that no client is currently offering one.
-> - The outcome and time of the most recent status report, including the error when the last one failed.
-> - Each app reported to Canopy as an application, with its type.
->
-> Registering and withdrawing offers is not exposed: those are made by the client that carries the requests, not by an operator.
-> Nor is relaying a request or forcing a report: the relay carries what the runtime itself needs, and a control for relaying an arbitrary request would grant any operator the full authority of the carrying client's Canopy identity.
+For each container resource with a declared [healthcheck](rule:l/deployment.healthcheck), the app detail view MUST show its `on_failure` response and its current check state: passing, failing, or within its start period.
+It SHOULD reveal the healthcheck's `kind` and, for a command healthcheck, its command, on hover or focus.
 
-> w[routes.images]
-> The web interface provides a dedicated Images page at `/images` showing:
->
-> - A table of every container image in local storage — with its references, size, last-used timestamp, and pin/in-use status — and a per-row remove action.
-> - A separate table of current image pins — with the pinning app, reference, and pinned-at timestamp — and a per-row clear action.
-> - A "clear unused" button that removes every image that is not currently backing a running container, issued as a batch of individual remove calls.
->
-> The page must not expose the force-remove option, nor a generic pull action; both remain OI/CLI-only affordances to keep the browser surface low-risk.
+## Priority
 
-> w[routes.images.app-detail]
-> Each app's detail page must show a table of the images that the app is directly concerned with — every image currently in-use by one of the app's running containers, together with every image the app has pinned. Each row exposes a remove action (non-forceful) and a single "clear all pins" button is offered for the app as a whole.
+The app detail view MUST show the app's [priority](rule:i/app.priority.set) and let the operator set it to any level the Operator Interface accepts.
+The apps list MUST mark each app whose priority is not `normal`, distinguishing a raised priority from a lowered one.
+A change of priority MUST appear in both views without a reload.
 
-> w[routes.images.confirm]
-> Both the images page and the app-detail images table must require confirmation before issuing an image remove, and the confirmation must state that remove fails if the image is currently in use.
+For each Deployment declaring a [priority](rule:l/deployment.priority) other than `normal`, the app detail view MUST show the declared level as configuration, not as a control.
+That indicator MUST read as standing within the app, not across apps.
 
-> w[routes.images.discover]
-> The app detail Images section must offer a "Discover from handlers" action that calls [`/apps/images/discover`](rule:i/image.discover) with `lenient: true`, merging the discovered image references into the displayed table as a third state — _potentially used_ — distinct from _in use_ and _pinned_.
-> When any handler's probe reports an error or is skipped, that must be surfaced inline near the discover results so the operator can decide to re-run the probe with explicit param values.
-> A "Warm all discovered" button must enqueue a pull-and-pin for each discovered image reference that is not already present or pinned.
+> [!NOTE]
+> [Kill order](rule:r/priority.kill-order) is app-major, so a `Critical` Deployment in a `low`-priority app is shed before any workload of a `high`-priority app.
 
-> w[routes.ingresses]
-> The web interface exposes site ingress management: listing manual and discovered ingresses separately; creating, updating, and deleting manual ingresses; attaching and detaching forward and redirect targets; and showing discovery provider status, including a warning while discovery is unhealthy. Failures of the underlying queries and mutations must be surfaced to the operator.
+## Shells
 
-> w[routes.sessions]
-> The web interface must provide a connected-clients view showing all active web UI sessions, open CLI shell sessions, and active port forwards. Each entry must show at minimum the client identity, the connected or opened timestamp, and — for shells and forwards — the associated app. Web UI session entries must additionally surface a `last_seen` timestamp updated by [sessions.heartbeat](rule:w/sessions.heartbeat) so operators can distinguish a fresh session from one waiting to age out.
+The console MUST offer each shell an app defines, as an action of kind `shell` in its [description](rule:i/app.describe), and MUST collect values for the shell's declared parameters before opening it.
+It MUST offer a [volume shell](rule:i/volumes.shell) over a single volume from each site volume and each app volume resource it lists, and SHOULD label the shell with the volume's display name.
 
-> w[sessions.heartbeat]
-> The web interface must periodically send a heartbeat over the active WebTransport session at an interval no greater than one third of the [stale cutoff](rule:w/sessions.stale-cutoff) so a single missed heartbeat does not retire a still-connected session. The heartbeat is delivered as the OI method `/connected-clients/heartbeat` and updates the corresponding session's `last_seen` timestamp on the server. The heartbeat parameters carry the session's current [safety mode](rule:w/sessions.safety-mode); the server records the reported mode on the session so other operators can observe it via [`/connected-clients/list`](rule:w/routes.sessions). The browser must additionally attempt a best-effort heartbeat-or-close on `pagehide` so a deliberate tab close does not require waiting for the cutoff.
+The console MUST let several shells be open at once.
+It MUST fit each terminal to the space it has and send [`/shells/resize`](rule:i/shell.resize) when that space changes, with at most one resize request in flight for a shell at a time.
+When a shell exits, the console MUST show its exit code and offer to reopen it.
+When the operator closes a shell that has not exited, the console MUST stop it with [`/shells/stop`](rule:i/shell.stop).
 
-> w[sessions.safety-mode]
-> Each web session has a safety mode — one of `read`, `write`, or `dangerous` — chosen by the operator that controls which client-side actions are enabled. The web interface must:
->
-> - Report the active mode in every [heartbeat](rule:w/sessions.heartbeat) and send a heartbeat immediately when the operator changes mode so peer sessions see the change without waiting for the next heartbeat tick.
-> - Surface the recorded mode for every web session in [`/connected-clients/list`](rule:w/routes.sessions) and as a field on the [`WebSessionStarted`](rule:w/sessions.events) event for new sessions; emit a `WebSessionModeChanged` event whenever a session's recorded mode changes.
-> - Display each peer session's current mode alongside its other fields in the connected-clients view.
-> - Visually flag the session-count indicator and the local mode switcher whenever any *other* session is in `write` or `dangerous` mode, so an operator notices when a peer is performing mutations even if their own session is read-only. The flag must distinguish the highest peer tier (write vs dangerous) by colour, matching the safety-mode palette used elsewhere.
->
-> The mode is purely advisory: the server records and broadcasts what each client reports but does not gate any OI request on it.
+Volume shells MUST be available in every safety mode.
+In the `read` mode the console MUST open a volume shell with `read_only: true`, and SHOULD mark it as read-only.
+The safety mode in force when the operator opens a shell MUST govern its mounts for the shell's lifetime.
 
-> w[sessions.stale-cutoff]
-> The web frontend must consider a web session stale when its `last_seen` is older than ten minutes (matching the write-mode elevation window). The server must drop stale sessions from `/connected-clients/list` and emit a `WebSessionStopped` event when it does so, so other operators see the same staleness without polling. A session with no observed heartbeat yet (the WebTransport session has just opened) is not stale; its `last_seen` defaults to its `connected_at` so the cutoff measurement is well-defined.
+## Images
 
-> w[sessions.actor-activity]
-> `/connected-clients/list` must additionally return an `actors` array surfacing operators (web *or* CLI) that have caused at least one event with an attributed actor identity within the past ten minutes. Each entry has `actor_kind`, `actor_id`, `actor_display`, `last_seen` (RFC 3339), and `last_action` (a short human-readable summary of the most recent attributed event). Entries are deduplicated by `(actor_kind, actor_id)`, with the most recent event's display name and action winning. Operators using `seedling-ctl` directly do not appear in the `web` section of the response — this surface is the only way they show up in the connected-clients view.
+The console MUST show every image in the host's local storage, with its references, size, last use, and whether it is pinned or in use, and let the operator remove it.
+It MUST show the host's image pins, with the pinning app, reference and time pinned, and let the operator clear each.
+It MUST let the operator remove every image that is not backing a running container in one action.
 
-> w[routes.volumes]
-> The web interface exposes volume management: listing, creating, and deleting site volumes (managed, bind-mount, and snapshot kinds); listing volumes exported by apps; listing, adding, remapping, and removing external volume mappings; and listing and confirming deletion of held volumes.
+The app detail view MUST show the images the app's running containers use and the images the app has pinned, let the operator remove each, and clear all of the app's pins in one action.
+It MUST offer to [discover](rule:i/image.discover) the app's images from its handlers in lenient mode, and show each discovered reference as potentially used, distinct from in use and pinned.
+When a handler's probe reports an error or is skipped, the console MUST show it beside the results.
+The console MUST let the operator pull and pin, for the app, every discovered reference not already present or pinned.
 
-> w[routes.volumes.delete-confirm]
-> Destructive volume actions — confirming permanent deletion of a held volume, and deleting a managed, snapshot, or bind site volume — must present a confirmation dialog before the request is issued. The dialog must state the concrete consequence: that held volume deletion removes the underlying data permanently, that managed site volume deletion places the data in the held state awaiting operator confirmation, that snapshot site volume deletion permanently removes the snapshot's data while leaving the source volume untouched, and that bind site volume deletion only drops the reference and leaves the host path untouched.
+Before removing an image, the console MUST ask the operator to confirm, stating that removal fails while the image is in use.
+The console MUST NOT offer to force an image's removal, nor to pull a reference the operator supplies.
 
-> w[routes.volumes.held-count]
-> The navbar's held-volumes badge must reflect the current count of held volumes without requiring a page reload, both when new held volumes are created and when the operator confirms their deletion.
+## Volumes
 
-> w[routes.restarts]
-> The web interface must expose container restart history at `/restarts`, listing [restart records](rule:i/restart.record) most recent first with their app, instance, time, initiator, and exit status.
-> The list must be filterable by app, and deliberate restarts must be visually distinguishable from recovery ones, since only recovery restarts count towards the crash-loop rate.
-> The route must also present the crash-loop rate threshold and window, and allow an operator to change them.
+Before the console deletes a volume or confirms the deletion of a held volume, it MUST ask the operator to confirm, stating the consequence for that kind of volume:
 
-> w[routes.certificates]
-> The web interface must expose TLS certificate management at `/certificates`, with the following sections:
->
-> - **Per-hostname policies**: list, add (binding a hostname or wildcard to ACME-DNS via a configured provider, or to the Canopy-only policy), and clear.
-> - **Hostnames**: for each hostname, the strategy responsible for it and when it falls through to the next, per [tls.hostname.list](rule:i/tls.hostname.list), with Canopy certificates shown alongside the others.
-> - **Settings**: view and edit the ACME contact email and certificate profile used for issuance.
-> - **Stored certificates**: list grouped by the certificate's label, surfacing state, origin, issuer, expiry, and serial; certificates within fourteen days of expiry and self-signed certificates must be visually flagged.
->   A certificate obtained through the CSR flow surfaces the hostnames the request was made for wherever they differ from the certificate's own primary SAN, and carries the same visual flagging as the two cases above, naming the missed hostnames, when the issued certificate does not cover all of them.
->   Beginning a CSR takes one or more hostnames, each a hostname or a `*.<suffix>` wildcard, as [tls.cert.csr.begin](rule:i/tls.cert.csr.begin) accepts.
->   An active manual or CSR-derived certificate within fourteen days of expiry, or past it, offers to [renew](rule:r/tls.csr.renew) it: this begins a CSR pre-filled with the certificate's SAN DNS names, editable, alongside the hostnames it currently serves.
->   Where the certificate already has a pending renewal, it leads to that renewal instead, and a pending renewal names the certificate it renews.
-> - **DNS providers**: list (without credentials), add (Route 53), and delete (refused while a policy references the provider).
->
-> Private key material, ACME account keys, and DNS-provider credentials must never be returned to the client.
+| action | consequence |
+| --- | --- |
+| confirming deletion of a held volume | its data is removed permanently |
+| deleting a managed site volume | its data is held, awaiting the operator's confirmation |
+| deleting a snapshot site volume | the snapshot's data is removed permanently, and its source volume is untouched |
+| deleting a bind site volume | only the reference is dropped, and the host path is untouched |
 
-> w[sessions.events]
-> The web interface must emit `WebSessionStarted`, `WebSessionStopped`, and `WebSessionModeChanged` events on the event feed when a WebTransport session is established, closed, or reports a new [safety mode](rule:w/sessions.safety-mode). Clients must use these events, together with the OI events `ShellStarted`, `ShellExited`, `ForwardStarted`, and `ForwardStopped`, to keep the connected-clients view up to date without polling.
+The console MUST show the number of held volumes wherever the operator is, and keep it current without a reload.
+
+## Restart history
+
+The console MUST list [restart records](rule:i/restart.record), most recent first, with their app, instance, time, initiator and exit status, and let the operator filter them by app.
+It MUST distinguish deliberate restarts from recovery restarts.
+It MUST show the crash-loop rate threshold and window, and let the operator change them.
+
+## Certificates
+
+The console MUST let the operator manage per-hostname certificate policies, the ACME contact email and certificate profile, stored certificates, and DNS providers.
+For each hostname, it MUST show the strategy responsible for it and when that strategy falls through to the next, as [hostname listing](rule:i/tls.hostname.list) reports, with Canopy certificates among the others.
+
+The console MUST group stored certificates by label and show each one's state, origin, issuer, expiry and serial.
+It MUST flag a self-signed certificate, and one that expires within fourteen days.
+For a certificate obtained through a certificate signing request, the console MUST show the hostnames requested where they differ from the certificate's primary subject alternative name, and MUST flag the certificate, naming the missed hostnames, when it does not cover them all.
+
+A certificate signing request the console begins MUST take one or more hostnames, each a hostname or a `*.<suffix>` wildcard, as [beginning a request](rule:i/tls.cert.csr.begin) accepts.
+For an active manual or request-derived certificate that expires within fourteen days or has expired, the console MUST offer to [renew](rule:r/tls.csr.renew) it.
+Renewing begins a certificate signing request pre-filled, editably, with the certificate's DNS subject alternative names and the hostnames it currently serves.
+Where the certificate already has a pending renewal, the console MUST lead to that renewal instead, and MUST name the certificate a pending renewal renews.
+
+## Canopy access
+
+The console MUST show whether Canopy access is enabled, and let the operator turn it on or off.
+It MUST show the offer that would serve the next request, with its agent, endpoint and time offered, or that no client is offering one.
+It MUST show the outcome and time of the most recent status report, with its error when it failed, and each app reported to Canopy with its type.
+
+The console MUST NOT offer to register or withdraw an offer, to relay a request, or to force a status report.
+
+> [!NOTE]
+> Offers come from the client that carries the requests, not from an operator.
+> A control relaying an arbitrary request would give any operator the full authority of that client's Canopy identity.
+
+## Connected clients
+
+The console MUST show the open web sessions, shell sessions and port forwards, and the recently active actors, that [`/connected-clients/list`](serving.md#connected-clients) reports.
+Each entry MUST show its actor and when it connected or opened, with the app for a shell or forward.
+A web session entry MUST also show its `last_seen` and its safety mode.
+The console MUST keep the view current from the `WebSessionStarted`, `WebSessionStopped`, `WebSessionModeChanged`, `ShellStarted`, `ShellExited`, `ForwardStarted` and `ForwardStopped` events, without polling.

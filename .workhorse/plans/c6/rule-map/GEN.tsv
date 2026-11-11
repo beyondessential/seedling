@@ -1,0 +1,8 @@
+r/generation.definition	GEN#generation-numbers
+r/generation.bumps	GEN#generation-numbers
+r/generation.monotonic	GEN#generation-numbers
+r/generation.history	GEN#history-entries
+r/generation.script-storage	GEN#bundle-storage
+r/generation.reconstruction	GEN#reconstruction
+r/generation.previous	GEN#reconstruction
+r/generation.deregister	GEN#lineage

@@ -1,0 +1,15 @@
+r/barrier.replay.positional	SUSP#positional-replay
+r/rt.signal	SUSP#side-effecting-calls
+r/rt.write	SUSP#side-effecting-calls
+r/rt.exec	SUSP#side-effecting-calls
+r/barrier.suspension	SUSP#barriers
+r/barrier.condition	SUSP#barriers
+r/barrier.deadline	SUSP#deadlines
+r/barrier.suspension.poll-backoff	SUSP#re-evaluation-cadence
+r/barrier.resume	SUSP#barriers
+r/barrier.replay	SUSP#replay
+r/barrier.replay.anchor	SUSP#barrier-anchoring
+r/barrier.satisfaction.recorded	SUSP#barrier-anchoring
+r/barrier.replay.abandoned	SUSP#abandoned-replay
+r/barrier.replay.determinism	SUSP#replay
+r/barrier.replay.rt-stop	SUSP#rtstop

@@ -12,13 +12,14 @@ Applies to how the [runtime](../overview.md#runtime) orders workloads on a [host
 
 An [app](../overview.md#app)'s standing against the other apps on its host, set by an [operator](../overview.md#operator).
 
-## App priority
+## Priority setting
 
 Each installed app MUST have an app priority of `high`, `normal` or `low`.
 An app's priority MUST default to `normal`.
 Only an operator sets an app's priority, [through the Operator Interface](rule:i/app.priority.set); an app's definition does not declare it.
 
-App priority orders apps against each other under contention, and MUST NOT limit what an app may consume when capacity is free.
+App priority orders apps against each other under contention.
+The runtime MUST NOT use it to limit what an app may consume when capacity is free.
 
 The runtime MUST store an app's priority durably.
 When an app is uninstalled, the runtime MUST discard its stored priority, so that a later install starts at `normal`.

@@ -1,0 +1,16 @@
+r/history.persist.partial-update	HIST#durability
+r/history.persistence	HIST#durability
+r/history.storage	HIST#durability
+r/history.world	HIST#world-observation-history
+r/history.world.entries	HIST#observations
+r/history.world.source	HIST#observations
+r/history.world.state-derivation	LCY#derivation
+r/history.world.ordering	HIST#observations
+r/history.operations	HIST#autonomous-operations-log
+r/history.operations.entries	HIST#autonomous-operations
+r/history.operations.provenance	HIST#provenance
+r/history.operations.interrupted	HIST#autonomous-operations
+r/history.operations.rate-limiting	HIST#autonomous-operations
+r/history.action-log	HIST#action-execution-log
+r/history.action-log.entries	HIST#action-calls
+r/history.action-log.replay	HIST#action-calls

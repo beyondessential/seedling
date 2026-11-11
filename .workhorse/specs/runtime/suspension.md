@@ -16,10 +16,6 @@ A call in an action closure that waits for resource instances to reach a [lifecy
 
 One run of an action closure from its beginning, which ends when the closure suspends on a barrier, returns or throws.
 
-### Replay
-
-A pass over a closure whose earlier passes have committed entries to the action log, during which calls already recorded are matched to their entries rather than performed again.
-
 ### Anchoring entry
 
 The action log entry of the call that produced the `Started` a barrier is called on.
@@ -36,12 +32,12 @@ When a suspended barrier's condition is satisfied, the runtime MUST resume the c
 
 ### Deadlines
 
-A barrier MAY have a deadline, measured from when the barrier began to wait.
+A barrier's deadline is measured from when the barrier began to wait.
 If a barrier's condition is not satisfied when its deadline passes, the runtime MUST throw from the barrier call within the closure.
-A barrier without a deadline, as for `.ready_eventually()` and `.terminated_eventually()`, MUST wait until its condition is satisfied or the operation is [cancelled](operations.md#cancellation).
+The runtime MUST hold a barrier without a deadline, as for `.ready_eventually()` and `.terminated_eventually()`, until its condition is satisfied or the operation is [cancelled](operations.md#cancellation).
 
 The runtime MUST evaluate a barrier's condition before its deadline.
-A barrier whose condition is satisfied MUST succeed even if its deadline has passed.
+The runtime MUST let a barrier whose condition is satisfied succeed even if its deadline has passed.
 
 > [!NOTE]
 > The action log can lag the world.
@@ -63,6 +59,8 @@ The interval between re-evaluations SHOULD follow the longest time any of the op
 > A short interval keeps quick barriers responsive, and a long one bounds the cost of re-running a closure throughout an operation that waits for hours.
 
 ## Replay
+
+A replay is a pass over a closure whose earlier passes have committed entries to the action log, in which calls already recorded are matched to their entries rather than performed again.
 
 If the runtime restarts while an operation is in progress and decides to [replay it](operations.md#interrupted-operations), it MUST:
 
@@ -122,8 +120,8 @@ The runtime MUST record when each barrier began to wait, and MUST keep that time
 | `rt.exec` | the target instance and the command's exit code | the command, its arguments and its options |
 
 The runtime MUST commit each such entry no later than the end of the pass that made the call.
-Once an entry is committed, a replay MUST NOT repeat the call's effect.
-A replayed `rt.exec` MUST return the exit code its entry records.
+Once an entry is committed, the runtime MUST NOT repeat the call's effect on a replay.
+On a replay, the runtime MUST return from `rt.exec` the exit code the entry records.
 
 > [!NOTE]
 > A host that stops after a call's effect and before the end of the pass replays the call and repeats its effect.
@@ -138,7 +136,7 @@ When it starts, the runtime MUST tear down the [dynamic resources](rule:l/app.re
 Where the replay does not then start, for any reason, the runtime MUST tear down the resources it spared and forget their records before it goes on serving.
 
 The runtime MUST forget only the records of resources it has torn down.
-A record it could not read, or whose resource it could not tear down or could not confirm was gone, MUST stay recorded.
+The runtime MUST keep a record it could not read, and a record whose resource it could not tear down or could not confirm was gone.
 
 > [!NOTE]
 > A resource spared for a replay that never happens is recorded against an operation nothing will claim, and the next start spares it again on the same reasoning.

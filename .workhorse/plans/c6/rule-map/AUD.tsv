@@ -1,0 +1,7 @@
+r/audit.log	AUD#storage
+r/audit.log.path	AUD#storage
+r/audit.log.format	AUD#entries
+r/audit.log.events	AUD#entries
+r/audit.log.generations	AUD#generations
+r/audit.log.rotation	AUD#rotation
+r/audit.log.resilience	AUD#write-failures

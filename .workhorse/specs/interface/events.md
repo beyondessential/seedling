@@ -113,9 +113,9 @@ In `ResourceStateChanged`, `resource_type` is the resource's kind in lower case,
 
 | `type` | members | emitted |
 | --- | --- | --- |
-| `HeldVolumeCreated` | `held_id`, `app`, `volume_name` (string), `reason` (string) | as [held volumes](rule:r/actuate.volume.hold.events) specifies |
-| `HeldVolumeDeleted` | `held_id` | as [held volumes](rule:r/actuate.volume.hold.events) specifies |
-| `HeldVolumeRestored` | `held_id`, `site_name` (string) | as [held volumes](rule:r/actuate.volume.hold.events) specifies |
+| `HeldVolumeCreated` | `held_id`, `app`, `volume_name` (string), `reason` (string) | as [held volumes](../runtime/actuation.md#held-volumes) specifies |
+| `HeldVolumeDeleted` | `held_id` | as [held volumes](../runtime/actuation.md#held-volumes) specifies |
+| `HeldVolumeRestored` | `held_id`, `site_name` (string) | as [held volumes](../runtime/actuation.md#held-volumes) specifies |
 | `SiteVolumeCreated` | `name`, `kind` (string), `host_path` (string, optional) | as [site volume events](rule:r/volume.site.lifecycle.events) specifies |
 | `SiteVolumeDeleted` | `name`, `kind` (string), `held_id` (optional) | as [site volume events](rule:r/volume.site.lifecycle.events) specifies |
 | `SiteVolumeSnapshotted` | `name`, `source` (volume target) | as [snapshot events](rule:r/volume.site.snapshot.events) specifies |

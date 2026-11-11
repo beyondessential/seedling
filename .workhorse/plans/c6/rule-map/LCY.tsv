@@ -1,0 +1,10 @@
+r/lifecycle.states	LCY#lifecycle-states
+r/lifecycle.transitions	LCY#transitions
+r/lifecycle.derivation	LCY#derivation
+r/lifecycle.container	LCY#containers
+r/lifecycle.container.unhealthy-transition	LCY#containers
+r/lifecycle.service	LCY#services
+r/lifecycle.service.routing-pool	LCY#routing-pool
+r/lifecycle.ingress	LCY#ingresses
+r/lifecycle.volume	LCY#volumes
+r/lifecycle.external-volume	LCY#external-volumes

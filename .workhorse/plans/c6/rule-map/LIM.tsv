@@ -1,0 +1,7 @@
+r/engine.limits	LIM#limits
+r/engine.limits.operations	LIM#limits
+r/engine.limits.call-depth	LIM#limits
+r/engine.limits.expr-depth	LIM#limits
+r/engine.limits.string-size	LIM#limits
+r/engine.limits.array-size	LIM#limits
+r/engine.limits.map-size	LIM#limits
