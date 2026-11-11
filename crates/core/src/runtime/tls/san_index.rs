@@ -138,6 +138,17 @@ impl SanIndex {
             }
         }
 
+        // Before the unindexed ones are added, which are reported as they are
+        // parsed: one report per unreadable certificate per load.
+        for (id, entry) in &entries {
+            if entry.self_issued.is_none() {
+                tracing::warn!(
+                    cert_id = id,
+                    "stored certificate could not be parsed; it can never be served"
+                );
+            }
+        }
+
         let unindexed: Vec<&TlsCertificate> = certificates
             .iter()
             .filter(|c| c.state == TlsCertState::Active && !entries.contains_key(&c.id))
@@ -155,15 +166,6 @@ impl SanIndex {
                 "active certificate is missing from the SAN index; parsing it directly"
             );
             entries.insert(cert.id, Entry::of(parse_reporting(cert.id, pem).as_ref()));
-        }
-
-        for (id, entry) in &entries {
-            if entry.self_issued.is_none() {
-                tracing::warn!(
-                    cert_id = id,
-                    "stored certificate could not be parsed; it can never be served"
-                );
-            }
         }
 
         Ok(Self::from_entries(entries))
