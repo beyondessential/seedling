@@ -150,3 +150,10 @@ Suggestion: definition_source_moved subject; cert_acquisition_failed flaps per h
 Nit: "broken" undefined; TRD requester list; "within one evaluation"; operation fault clearing on failed completion; volume Scheduled vs Ready; ACTU backend wording; schedules outside RCN steps; GEN restates OPS; AUTO repeats.
 
 Round 3 total: 13 critical, ~66 suggestion, ~57 nit. Closing round by the user's call: every finding decided and fixed in one pass, no round 4.
+
+### Round 3 resolution
+
+All findings decided and applied by six fixers split by file; follow-ups across files applied by me (FLT rows `host_constant_undetermined`, `schedules_unreadable`, `teardown_identities_unreadable`; mapping-target wording; OPS install trigger; AUTO provenance linked to RCN; PRX fallback to the ingress's own port; RFC 6761 row).
+Reverted my own L5 wording ("determined at each evaluation"), which contradicted the settled hold-until-restart rule.
+Code divergences in round2-divergences.md (Round 3) and filed on D6 in two parts.
+Open with the user: pods binding an external service's port.

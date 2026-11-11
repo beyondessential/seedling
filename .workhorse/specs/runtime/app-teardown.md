@@ -27,7 +27,7 @@ The runtime MAY use a name prefix to enumerate candidates, and MUST then match e
 > Names are not prefix-free: one app's name may be a prefix of another's.
 
 If the runtime cannot read an app's recorded identities, it MUST NOT advance the app's teardown until it can.
-While it cannot read them, the runtime MUST hold an [`instance_identity_unreadable`](faults.md#workload-faults) fault.
+While it cannot read them, the runtime MUST hold a [`teardown_identities_unreadable`](faults.md#app-faults) fault.
 
 The runtime MUST NOT take an app's lack of recorded identities, on its own, as evidence that its teardown has finished.
 Where the runtime has no recorded identities for an app, it MUST enumerate the resources on the host that may belong to the app, and MUST rule out each one that exactly matches a recorded identity of another app.

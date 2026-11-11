@@ -116,3 +116,54 @@
 - crates/core/src/reserved.rs: drop the backup-snap- site-volume prefix; delete system/leftover_snapshots.rs and its call in daemon main (sweep dropped from the spec).
 - ACTU hold order (volume_store.rs hold_inner): commit the held record before the move.
 - CLI: no commands for /volumes/app/list, /volumes/external/list, /volumes/external/declared.
+
+# Round 3 code divergences (for D6)
+
+## Interface and transport
+- oi/auth.rs and oi/handler/key_mgmt.rs: record revoked fingerprints (new migration); the authorized_keys import skips them.
+- protocol/src/client.rs request and open_subscription_within: end the opening line with a line feed; check web/src/wt.rs forwarding.
+- oi/server.rs handle_bidi_stream: read the opening line before refusing at the stream limit; reset a forward data stream with code 0 instead of server_busy.
+- oi/handler/apps.rs unstop_resource: stop's three kinds only; undeclared resource → not_found; no ResourceUnstopped when nothing was stopped. Definition update drops stops on undeclared resources.
+- apps.rs /apps/scale: unreadable earlier scale gives previous_scale null (Option in protocol events.rs), not a failed request; database errors in scale, stop and unstop → internal, not script_error.
+- oi/handler/images.rs discover: a proposed script failing evaluation → script_error, not not_found.
+- ctl/src/main.rs (~310): unreadable known_hosts refuses to connect and leaves the file untouched.
+- oi/shells/volume_session.rs: refuse mounts whose sanitised display names clash; a failed held-volume list → internal (internal_error is not a code).
+- oi/handler/restarts.rs set_settings: neither member → requirements_invalid; database errors → internal.
+- protocol/src/events.rs: redirect_preserve_path on the three attachment events; ResourceStateChanged.resource_name Option; events from a replayed operation carry no actor.
+- oi/handler/ingresses.rs: request member redirect_preserve_path (console Ingresses.tsx and ctl ingresses.rs send preserve_path); discovery_status lists only providers the runtime runs.
+- web/frontend Ingresses.tsx: offer deletion of a stale discovered site ingress.
+
+## Site resources
+- oi/handler/volumes.rs delete_site_volume: refuse while a mapping targets it (one step with the delete); absent volume → not_found. map/remap: refuse a missing target with requirements_invalid. list_held: sort by app, volume_name, id.
+- runtime/site_services/resolver.rs: an answer with no records in either family counts towards the threshold; unresolvable after 5 unanswered lookups regardless of kept answers; status emits failed_families and the new last_attempt_failed, sorted by host.
+- runtime/site_services/resolve.rs resolve_endpoint: IPv6 literal unroutable without IPv6 egress; undetermined egress treated as no egress.
+- oi/handler/services.rs validate_remote_host: also reject .localhost names, ::, 0.0.0.0, ::ffff:127.0.0.0/104.
+- system/reconcile/site_proxy.rs pod_first_port: a udp attachment uses UDP bindings and never HTTP route bindings.
+
+## TLS and apps
+- runtime/tls/serve.rs fall_through: withhold proxy ordering for hostnames on no chain (ACME DNS-01, Tailscale) while still allowing when undecided.
+- oi/handler/tls.rs issue_acme_dns: refuse Tailscale hostnames; retry, retry blocks and issue_acme_dns refuse non-hostnames and match ignoring ASCII case; list_hostnames for an unregistered app → not_found.
+- runtime/tls.rs KeyType and tls/validate.rs validate_upload: detect ecdsa_p256, ecdsa_p384, ecdsa_p521, ed25519, rsa; refuse others.
+- Persisted queue (when added): parameters encrypted. Replay re-binds operation volumes under the persisted <key>_volume name (check lifecycle.rs resolve_action_volume_params).
+- App teardown: hold teardown_identities_unreadable while recorded identities cannot be read.
+
+## Language
+- oi/handler/actions/install.rs invoke_install: no install action → schedule the start action with trigger install.
+- runtime/barrier/runtime.rs effective_scale: drop the .max(1) floor. resolve_volume_write_target: throw for a readonly() Volume.
+- defs/app/action.rs on_action: throw for name start with params.
+- oi/handler/actions/lifecycle.rs OperationVolumeWriter::write: create and seed a missing named volume first.
+- defs.rs available_threads and read_mem_total_bytes, sysconst.rs, daemon main: file host_constant_undetermined; undetermined memory or node name fails the evaluation (no 1-byte or empty fallback).
+
+## Runtime
+- system/reconcile/proxy.rs find_upstream_port and site_proxy.rs: fallback route upstream is the lowest Service Port the service is viewed on via http(port) (store it on HttpServiceDef in defs/service.rs), else the ingress's own port; TLS, DTLS and non-terminating ingresses use the ingress's own port.
+- reconcile/rules.rs build_ingress_rules and reconcile/proxy.rs: DTLS ingresses redirect and route UDP only.
+- system/translate/proxy.rs instance_ipv6: guarantee service address uniqueness and disjointness from pod prefixes and infrastructure addresses.
+- Reconciler: record each autonomous operation before performing it and skip it if the record fails; desired state follows the install phase; skip instances whose history cannot be read (no event, no barrier decision).
+- runtime/definition/faults.rs sync_source_moved: empty subject. script_error not filed on update requests. operation_failed and operation_cancelled clear only on a later successful completion.
+- reconcile/state.rs: cert_acquisition_failed clears only when every hostname is served; description lists failing hostnames.
+- reconcile/routes.rs: backend_healthy only when every port's pool is non-empty.
+- reconcile/pods.rs: crash_loop also stops the supervisor's restart-on-failure.
+- runtime/schedules.rs check_due_schedules: unparseable last fire time does not fire and files schedule_unreadable; a failed list files schedules_unreadable.
+- runtime/canopy.rs: activeFaults null when undetermined; cached server_id stored with the offering client's key fingerprint (canopy/store.rs).
+- runtime/history.rs delete_instance: clear faults with events before deleting.
+- runtime/audit.rs: an audit log that cannot be opened files audit_log_unavailable and retries.

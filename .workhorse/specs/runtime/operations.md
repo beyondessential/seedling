@@ -49,7 +49,7 @@ Admission for an app that is being uninstalled is governed by [app teardown](app
 | event | operation | trigger | source generation | target generation |
 | --- | --- | --- | --- | --- |
 | the runtime starts | the [start action](../language/action.md#start-action), for each installed app with no interrupted operation | `boot` | current | current |
-| an install operation completes successfully | the start action | `install` | current | current |
+| an install operation completes successfully, or the app moves to `Installed` without an install operation | the start action | `install` | current | current |
 | the runtime starts with an interrupted operation | the interrupted operation, [replayed](#interrupted-operations) | `replay` | as persisted | as persisted |
 | a parameter change | the changed parameter's `on_change` handler | `param_change` | before the change | produced by the change |
 | an operator request | the named action, or `install` | `operator` | current | current |

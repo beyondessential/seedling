@@ -48,7 +48,7 @@ Signed off on `runtime/reconciliation.md` and `overview.md`.
 - [x] Update `AGENTS.md`, add `.workhorse/rules.md`, repoint docs
 - [x] cargo build, clippy, tests; CI scripts pass locally
 - [x] Pause for the whole-spec review loop
-- [ ] Whole-spec review loop (below)
+- [x] Whole-spec review loop (below), closed after round 3
 
 ## Gaps
 
