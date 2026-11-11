@@ -42,7 +42,7 @@ An answer from a strategy's issuing authority declining to issue for the hostnam
 
 ## Default chain
 
-The [runtime](../../overview.md#runtime) MUST give a managed hostname that no [policy](certificates.md#policy) matches the default chain:
+The [runtime](../../overview.md#runtime) MUST give the default chain to every managed hostname that no [policy](certificates.md#policy) matches, except one that takes a [Tailscale certificate](certificates.md#tailscale-certificates):
 
 - for an [internal name](certificates.md#internal-name), `internal_ca` alone;
 - for any other hostname that [Canopy applies to](canopy.md#applicability-and-availability), `canopy` then `acme_http01`;
@@ -53,6 +53,7 @@ A certificate from the internal CA MUST be obtained without contacting any exter
 
 The [Canopy-only policy](canopy.md#canopy-only-policy) gives a hostname the chain `canopy` alone.
 An ACME DNS-01 policy puts a hostname on no chain.
+A hostname that takes a Tailscale certificate is on no chain, whatever policy matches it.
 
 A stored certificate covering the hostname is not a step in a chain.
 It serves for as long as [certificate selection](certificates.md#certificate-selection) picks it, and the chain runs when it needs replacing.
@@ -66,7 +67,7 @@ A change in which strategies are available, such as an offer connecting, an app 
 > [!NOTE]
 > Replacing a working certificate early spends the issuing authority's capacity for no gain, and leaves no fallback if the new source then fails.
 
-The runtime MUST start a cycle in the same way at the renewal point of a certificate it cannot renew by itself, such as a `manual` upload, and MUST keep serving that certificate until a replacement outranks it.
+Where the certificate being replaced is one the runtime cannot renew by itself, such as a `manual` upload, the runtime MUST keep serving that certificate until a replacement outranks it.
 
 If the runtime cannot read the certificate the ingress proxy holds for a hostname, it MUST NOT treat the hostname as having no certificate, and MUST NOT start a cycle on that account.
 An operator retry MUST start a cycle regardless.
@@ -93,7 +94,7 @@ Each strategy MUST become responsible at the moment its predecessor's fall-throu
 
 When a strategy refuses a hostname that has a certificate to replace, the next strategy MUST become responsible at once, without waiting for the fall-through point.
 
-Only a refusal the strategy's issuing authority gave MUST count.
+The runtime MUST treat as a refusal only an answer the strategy's issuing authority gave.
 A failure, a timeout, an authority that could not be reached, and a strategy that could not be asked MUST NOT be treated as a refusal, and the responsible strategy MUST be tried again until its fall-through point.
 
 ## Hostnames with no certificate
@@ -121,6 +122,9 @@ An operator retry of the hostname, per [retries](certificates.md#retry-blocks-an
 The ingress proxy MUST NOT order or renew a certificate through `acme_http01` for a hostname unless `acme_http01` is the responsible strategy, or no strategy precedes it in the hostname's chain.
 The proxy's own renewal schedule therefore MUST NOT start a cycle, and the proxy MUST NOT give a hostname whose chain begins with `canopy` an HTTP-01 certificate while Canopy is its responsible strategy.
 
+The ingress proxy MUST NOT order a certificate for a hostname on [no chain](#default-chain).
+Such a hostname is served the runtime-managed certificate a [lookup](certificates.md#serving) answers with, once the runtime holds one.
+
 The runtime MUST NOT take a certificate the proxy holds out of service to enforce this.
 For a hostname whose proxy-held certificate needs holding back, the runtime MUST instead set the proxy's renewal to begin no earlier than the moment the strategies before `acme_http01` reach their fall-through points.
 
@@ -129,7 +133,7 @@ Where no fall-through point says when `acme_http01` becomes responsible, as for 
 > [!NOTE]
 > The proxy cannot be told never to renew, so the least window it accepts is the bound.
 
-For a hostname the proxy holds no certificate for, the runtime MUST withhold the proxy's own ordering while a strategy before `acme_http01` is responsible.
+For a hostname the proxy holds no certificate for, the runtime MUST withhold the proxy's own ordering while a strategy before `acme_http01` is responsible, and at all times for a hostname on no chain.
 If the runtime cannot decide whether to withhold, it MUST let the proxy order.
 
 > [!NOTE]

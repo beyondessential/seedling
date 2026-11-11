@@ -184,6 +184,8 @@ The runtime MUST file and clear the faults below against `_system`, with an empt
 | `ipv6_egress_undetermined` | whether the host has [IPv6 egress](nat64.md#ipv6-egress) cannot be determined | the determination succeeds | condition |
 | `ipv4_egress_undetermined` | whether the host has [IPv4 egress](../language/constants.md#host-constants) cannot be determined | the determination succeeds | condition |
 | `timezone_undetermined` | the host's [local time zone](../language/constants.md#host-constants) cannot be determined | the determination succeeds | condition |
+| `host_constant_undetermined` | the value of `AVAILABLE_THREADS`, `AVAILABLE_MEMORY`, `HAS_SNAPSHOTS` or `NODE_NAME` cannot be [determined](../language/constants.md#determining-host-constants); the description names each such constant | every one of them is determined | condition |
+| `schedules_unreadable` | the runtime cannot read the [schedule records](scheduled-actions.md#schedule-records) at all | the runtime next reads them | condition |
 | `operation_state_unreadable` | the runtime cannot read the [persisted operation, its cancel, or the persisted queue](operations.md#unreadable-operation-state) | the read succeeds | condition |
 | `resolver_failed` | starting the resolver fails or does not finish in time | an iteration finds the resolver running, or the resolver is stopped because no app is installed or installing | condition |
 | `caddy_failed` | bringing up the proxy fails or does not finish in time, or a [proxy upgrade](proxy.md#proxy-upgrades) is rejected | for a failed bring-up, an iteration finds the proxy healthy; for a rejected upgrade, an upgrade succeeds; in either case, the proxy is stopped because no app is installed or installing | condition |

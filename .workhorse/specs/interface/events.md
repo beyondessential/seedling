@@ -22,14 +22,20 @@ Every event MUST carry these members:
 | `timestamp` | string | when the event occurred, as an [RFC 3339](https://www.rfc-editor.org/rfc/rfc3339) timestamp |
 
 When a request on the Operator Interface causes an event, the event MUST carry an `actor` member holding the [actor](wire.md#actor-attribution) resolved from that request.
-The events of an operation with the [trigger](../runtime/operations.md#initiating-events) `install` or `param_change` MUST carry the actor of the request that installed the app or changed the parameter.
-An event the runtime causes on its own, such as an operation with the trigger `boot` or `schedule`, MUST NOT carry `actor`.
+The events of an operation with the [trigger](../runtime/operations.md#initiating-events) `install` or `param_change` MUST carry the actor of the request that installed the app or changed the parameter, up to any replay that resumes the operation.
+
+An event the runtime causes on its own MUST NOT carry `actor`.
+The events the runtime causes on its own include:
+
+- the events of an operation with the trigger `boot` or `schedule`;
+- the events an operation emits after the runtime resumes it by [replay](../runtime/suspension.md#replay), whatever its trigger;
+- the events a [discovery provider](../runtime/site-resources.md#discovery-provider)'s poll causes, including a poll that [`/ingresses/site/discovery/refresh`](site-ingresses.md#discovery-refresh) started.
 
 A client MUST ignore members it does not recognise, and SHOULD ignore events whose `type` it does not recognise.
 
 ## Common members
 
-Each member in the table below has the same type and meaning in every event type that carries it.
+Each member in the table below has the same type and meaning in every event type this spec lists that carries it.
 
 | member | type | meaning |
 | --- | --- | --- |
@@ -67,11 +73,12 @@ A member marked "optional" is absent where it has no value.
 | `AppPriorityChanged` | `app`, `priority` (string), `previous_priority` (string) | as [priority change](app-control.md#app-priority) specifies |
 | `ParamSet` | `app`, `name`, `previous_value` (string, optional), `new_value` (string, optional), `redacted` (`true`, optional), `generation`, `previous_generation` | as [setting a parameter](params.md#parameter-set) specifies |
 | `ParamUnset` | `app`, `name`, `previous_value` (string, optional), `redacted` (`true`, optional), `generation`, `previous_generation` | as [unsetting a parameter](params.md#parameter-unset) specifies |
-| `ScaleChanged` | `app`, `deployment`, `scale`, `previous_scale`, `bounds_low`, `bounds_high` (integers) | when a deployment's scale changes, by [operator request](app-control.md#scaling) or [autonomously](../runtime/autonomous.md#scale) |
+| `ScaleChanged` | `app`, `deployment`, `scale` (integer), `previous_scale` (integer or null), `bounds_low`, `bounds_high` (integers) | when a deployment's scale changes, by [operator request](app-control.md#scaling) or [autonomously](../runtime/autonomous.md#scale) |
 | `DeploymentRestarted` | `app`, `deployment`, `restart_id` (string) | as [deployment restart](app-control.md#deployment-restart) specifies |
 | `ResourceStopped` | `app`, `kind` (string), `name` | as [stopping a resource](app-control.md#resource-stop) specifies |
 | `ResourceUnstopped` | `app`, `kind` (string), `name` | as [unstopping a resource](app-control.md#resource-stop) specifies |
 
+`previous_scale` in `ScaleChanged` is the deployment's effective scale before the change, and `null` where it cannot be read.
 `restart_id` in `DeploymentRestarted` is the restart's identifier, as [deployment restart](app-control.md#deployment-restart) defines it.
 `definition` in `AppUpdated` is the [definition provenance](definitions.md#provenance-reporting) of the new definition.
 In `AppUpdated`, `previous_value` and `new_value` MUST be `null` for an unset value and for a secret parameter.
@@ -95,10 +102,11 @@ In `ParamSet` and `ParamUnset`, a secret parameter's event MUST carry `redacted`
 | --- | --- | --- |
 | `FaultFiled` | `id`, `app`, `resource_type`, `resource_name`, `instance_id`, `kind`, `description` | when a fault is filed |
 | `FaultCleared` | `id`, `app`, `kind` | when a fault is cleared |
-| `ResourceStateChanged` | `app`, `resource_type` (string), `resource_name` (string), `instance_id` (string), `state` (string) | when a resource instance's derived lifecycle state changes |
-| `InstanceHealthChanged` | `app`, `resource_type` (string), `resource_name` (string), `instance_id` (string), `health` (string or null) | as [app description](apps.md#resources) specifies |
+| `ResourceStateChanged` | `app`, `resource_type` (string), `resource_name` (string or null), `instance_id` (string), `state` (string) | when a resource instance's derived lifecycle state changes |
+| `InstanceHealthChanged` | `app`, `resource_type` (string), `resource_name` (string or null), `instance_id` (string), `health` (string or null) | as [app description](apps.md#resources) specifies |
 
 `FaultFiled` carries the members of a [fault record](faults.md#fault-records), and its `timestamp` is the record's.
+In `ResourceStateChanged` and `InstanceHealthChanged`, `resource_name` is the resource's name, and `null` for an [anonymous resource](../language/app.md#anonymous-resource).
 In `ResourceStateChanged`, `resource_type` is the resource's [type name](wire.md#resource-type-names), and `state` is the instance's new [lifecycle state](../overview.md#lifecycle-state), named as the lifecycle states are.
 In `InstanceHealthChanged`, `resource_type` is the resource's type name, and `health` is the instance's new `health`, as [app description](apps.md#resources) reports it.
 
@@ -142,9 +150,9 @@ In `InstanceHealthChanged`, `resource_type` is the resource's type name, and `he
 | `SiteIngressCreated` | `name`, `hostname` (string), `source` (string), `discovered_provider` (string, optional), `tls_provider` (string), `description` (optional) | as [site ingress events](../runtime/site-resources.md#attachments) specifies |
 | `SiteIngressUpdated` | `name`, `hostname` (string), `tls_provider` (string), `description` (optional) | as [site ingress events](../runtime/site-resources.md#attachments) specifies |
 | `SiteIngressDeleted` | `name`, `source` (string) | as [site ingress events](../runtime/site-resources.md#attachments) specifies |
-| `SiteIngressAttachmentAdded` | `name`, `port` (integer), `protocol` (string), `target_kind` (string), `target_app` (string, optional), `target_service` (string, optional), `redirect_url` (string, optional), `redirect_code` (integer, optional) | as [site ingress events](../runtime/site-resources.md#attachments) specifies |
+| `SiteIngressAttachmentAdded` | `name`, `port` (integer), `protocol` (string), `target_kind` (string), `target_app` (string, optional), `target_service` (string, optional), `redirect_url` (string, optional), `redirect_code` (integer, optional), `redirect_preserve_path` (boolean, optional) | as [site ingress events](../runtime/site-resources.md#attachments) specifies |
 | `SiteIngressAttachmentUpdated` | as `SiteIngressAttachmentAdded` | as [site ingress events](../runtime/site-resources.md#attachments) specifies |
-| `SiteIngressAttachmentRemoved` | `name`, `port` (integer), `protocol` (string), `target_kind` (string), `target_app` (string, optional), `target_service` (string, optional), `redirect_url` (string, optional), `redirect_code` (integer, optional) | as [site ingress events](../runtime/site-resources.md#attachments) specifies |
+| `SiteIngressAttachmentRemoved` | `name`, `port` (integer), `protocol` (string), `target_kind` (string), `target_app` (string, optional), `target_service` (string, optional), `redirect_url` (string, optional), `redirect_code` (integer, optional), `redirect_preserve_path` (boolean, optional) | as [site ingress events](../runtime/site-resources.md#attachments) specifies |
 | `TemplateCreated` | `name` | as [template creation](templates.md#creation) specifies |
 | `TemplateUpdated` | `name` | as [template update](templates.md#update) specifies |
 | `TemplateRemoved` | `name` | as [template removal](templates.md#removal) specifies |
@@ -154,7 +162,8 @@ In `SiteVolumeCreated`, `kind` is `"managed"` or `"bind"`, and `host_path` is pr
 In `SiteVolumeDeleted`, `kind` is `"managed"`, `"bind"` or `"snapshot"`, and `held_id` is present where the deletion made a held volume.
 In the site ingress events, `source` is `"manual"` or `"discovered"`, `discovered_provider` is present for a discovered ingress, and `tls_provider` is `"acme"`, `"tailscale"`, `"internal"` or `"none"`.
 In the attachment events, `target_kind` is `"forward"` or `"redirect"`.
-A forward attachment's event carries `target_app` and `target_service`, and a redirect attachment's event carries `redirect_url` and `redirect_code`.
+A forward attachment's event carries `target_app` and `target_service`, and a redirect attachment's event carries `redirect_url`, `redirect_code` and `redirect_preserve_path`.
+`redirect_preserve_path` is whether the redirect target keeps the request's path and query, as [attachments](../runtime/site-resources.md#attachments) specifies.
 
 ### Server events
 

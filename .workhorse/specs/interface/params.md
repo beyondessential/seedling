@@ -24,7 +24,7 @@ A parameter with no stored value is unset.
 
 Every evaluation of an app's definition MUST be given the app's stored parameter values.
 
-The runtime MUST store the value of a parameter whose effective [secret flag](../language/parameter.md#secret-parameters) is true in [protected storage](../runtime/secrets.md#storage), whether `/apps/params/set`, `/apps/params/unset` or [`/apps/update`](apps.md#update) writes it.
+The runtime MUST store the value of a parameter whose effective [secret flag](../language/parameter.md#secret-parameters) is true in [protected storage](../runtime/secrets.md#storage), whether `/apps/params/set` or [`/apps/update`](apps.md#update) writes it.
 The events a change causes withhold parameter values as [SEC](../runtime/secrets.md#generation-history) specifies.
 
 A client MAY set a value for an unknown parameter.
@@ -58,7 +58,8 @@ Registering an app and reloading a stored app run no validators.
 
 The result is `{ "schedule": "accepted" | "not_scheduled", "generation": <integer> }`, where `generation` is the app's current [generation](../overview.md#generation) once the request completes.
 
-The server MUST refuse the request with `not_found` if the app is not registered.
+The server MUST refuse the request with `requirements_invalid` if `name` breaks the naming rules.
+It MUST refuse it with `not_found` if the app is not registered.
 It MUST refuse it with `operation_in_progress` if a lifecycle operation is running or queued for the app, an install of the app is in progress, or another change to the app is being applied.
 
 If `value` equals the parameter's stored value, the request is a no-op: the server MUST change nothing and MUST return `not_scheduled` with the app's current generation.
@@ -83,11 +84,11 @@ If the server cannot admit the handler once the change is committed, it MUST ref
 | parameter | type | required | meaning |
 | --- | --- | --- | --- |
 | `app` | string | yes | the app's name |
-| `name` | string | yes | the parameter's name |
+| `name` | string | yes | the parameter's name, following the naming rules |
 
 The result has the same shape as `/apps/params/set`'s.
 
-The server MUST refuse the request with `not_found` or `operation_in_progress` on the same terms as `/apps/params/set`.
+The server MUST refuse the request with `requirements_invalid`, `not_found` or `operation_in_progress` on the same terms as `/apps/params/set`.
 
 If the parameter has no stored value, the request is a no-op: the server MUST change nothing and MUST return `not_scheduled` with the app's current generation.
 
@@ -114,7 +115,8 @@ Without a proposed definition, the server MUST evaluate the app's current one.
 A parameter that `proposed_params` does not list keeps its stored value.
 
 The server MUST refuse the request with `not_found` if the app is not registered.
-The server MUST refuse a proposed definition on the same terms as [`/apps/update`](apps.md#update) would, with the same error, before evaluating anything.
+The server MUST refuse a proposed definition that cannot be fetched, breaks the bundle rules, or does not support the running Seedling version, with the error [`/apps/update`](apps.md#update) would give, before evaluating anything.
+The server MUST NOT refuse the request because the evaluated definition, proposed or current, fails to parse or evaluate.
 
 The result has these members.
 
@@ -122,10 +124,10 @@ The result has these members.
 | --- | --- | --- |
 | `diff` | array | one entry per resource added, removed or modified |
 | `on_change_would_fire` | array of strings | in ascending order, the parameters whose `on_change` handler the server would schedule if the change were committed, as [parameter set](#parameter-set) specifies |
-| `errors` | array of strings | the evaluation errors, if the proposed definition fails to evaluate |
+| `errors` | array of strings | the parse or evaluation errors, if the evaluated definition fails to parse or evaluate |
 | `rejections` | array | one `{ "name": <string>, "reason": <string> }` for each parameter whose validator rejects the proposed values |
 
-If the proposed definition fails to evaluate, the result MUST carry `errors` and no other member.
+If the evaluated definition fails to parse or evaluate, the result MUST carry `errors` and no other member.
 Otherwise `errors` MUST be empty.
 If the request carries neither a proposed definition nor `proposed_params`, every array in the result MUST be empty.
 

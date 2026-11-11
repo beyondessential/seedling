@@ -22,7 +22,7 @@ The number of instances a Deployment is held at: the scale an operator chose for
 
 ## Operation provenance
 
-The runtime MUST record each autonomous operation, with its [operation provenance](history.md#operation-provenance), in the [autonomous operations log](../overview.md#autonomous-operations-log) before performing it.
+The runtime records each autonomous operation, with its [operation provenance](history.md#operation-provenance), before performing it, as [reconciliation](reconciliation.md#reconciliation-loop) specifies.
 
 ## Restarts
 

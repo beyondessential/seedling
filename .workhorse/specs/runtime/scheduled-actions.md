@@ -23,6 +23,7 @@ The runtime SHOULD treat a schedule with no recorded fire time as having last fi
 
 If the runtime cannot read a schedule's record, or cannot parse its last fire time, it MUST NOT fire the schedule.
 While it cannot, the runtime MUST hold a [`schedule_unreadable`](faults.md#app-faults) fault against the schedule's action.
+While the runtime cannot read the schedule records at all, it MUST NOT fire any schedule, and MUST hold a [`schedules_unreadable`](faults.md#host-faults) fault.
 
 The runtime MUST fire a due schedule only for an app in the `Installed` [install phase](../overview.md#install-phase), and MUST skip it for an app that is `NotInstalled`, `Installing` or `Uninstalling`.
 

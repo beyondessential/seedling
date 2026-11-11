@@ -29,7 +29,7 @@ The server MUST refuse a request whose `name` breaks the [name rules](../languag
 | `tls_provider` | string | the [TLS provisioning mode](../runtime/site-resources.md#tls-provisioning-modes), `"acme"`, `"tailscale"`, `"internal"` or `"none"` |
 | `stale` | boolean | whether the site ingress is stale |
 | `created_at` | string | when the site ingress was created, as an [RFC 3339](https://www.rfc-editor.org/rfc/rfc3339) timestamp |
-| `attachments` | array of objects | the site ingress's attachments, ordered by port and then by protocol in ascending byte order |
+| `attachments` | array of objects | the site ingress's attachments, ordered by port in ascending order and then by protocol in ascending byte order |
 
 Each member of `attachments` is an object with these members.
 
@@ -153,8 +153,7 @@ The server MUST refuse a redirect whose `protocol` is `"tcp"` or `"udp"` with `r
 The server MUST accept a forward target whose app or service does not exist.
 Such an attachment raises the [`site_ingress_target_missing`](../runtime/faults.md#ingress-and-service-faults) fault until its target exists.
 
-Where `redirect_preserve_path` is `true`, the runtime MUST answer with a `Location` of `redirect_url` with any trailing `/` removed, followed by the request's path and query string.
-Where it is `false`, the runtime MUST answer with a `Location` of `redirect_url` as given.
+A redirect target keeps the request's path and query where `redirect_preserve_path` is `true`, and answers with the `Location` that [attachments](../runtime/site-resources.md#attachments) specifies.
 
 If the site ingress has no attachment on the `(port, protocol)`, the runtime MUST add one, and the server MUST emit a `SiteIngressAttachmentAdded` event.
 If it has one, the runtime MUST replace that attachment's target in one step, and the server MUST emit a `SiteIngressAttachmentUpdated` event.
@@ -181,18 +180,21 @@ The attachment methods apply to manual and discovered site ingresses alike.
 ## Discovery status
 
 `/ingresses/site/discovery/status` takes no parameters.
-Its result is `{ "providers": [ ... ] }`, with one object for each discovery provider the runtime runs.
+Its result is `{ "providers": [ ... ] }`, with one object for each discovery provider the runtime runs, ordered by `name` in ascending byte order.
 
 | member | type | meaning |
 | --- | --- | --- |
 | `name` | string | the provider's name, `"tailscale"` for the [Tailscale discovery provider](../runtime/site-resources.md#tailscale-discovery) |
-| `healthy` | boolean or null | `true` when the provider's most recent poll reached it and it reported a running identity, `false` when that poll did not, and `null` before the provider's first poll |
+| `healthy` | boolean or null | whether the provider's most recent poll was healthy, and `null` before the provider's first poll |
 | `last_poll_at` | string | when the most recent poll finished, as an RFC 3339 timestamp, absent before the first poll |
 | `last_error` | string | why the most recent poll was not healthy, absent where it was healthy or no poll has finished |
 | `identity` | object | the identity the most recent poll reported, absent where it reported none |
 | `ingresses` | array of objects | the site ingresses the provider maintains, ordered by name in ascending byte order |
 
-A client MUST NOT report a provider whose `healthy` is `null` as unhealthy.
+A poll is healthy when the provider reads the host configuration it discovers from, and that configuration reports an identity for which the provider maintains a site ingress.
+For the Tailscale discovery provider, that configuration is the status of the host's Tailscale node, and the identity of a healthy poll has `backend_running` `true`.
+
+A client SHOULD NOT report a provider whose `healthy` is `null` as unhealthy.
 
 For the Tailscale discovery provider, `identity` has these members.
 
@@ -219,6 +221,7 @@ The method emits no event.
 `/ingresses/site/discovery/refresh` takes no parameters.
 On receiving it, the runtime MUST start a poll of every discovery provider it runs, without waiting for the provider's next scheduled poll.
 A poll already in progress when the request arrives MUST NOT stand in for that poll.
+The server MUST refuse the request with `requirements_invalid` if the runtime runs no discovery provider.
 
 The server MUST answer without waiting for the poll to finish, and the result is `{ "refreshed": true }`.
 A client learns the poll's outcome from [discovery status](#discovery-status).

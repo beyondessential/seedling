@@ -31,7 +31,9 @@ The console MUST let the operator list the authorised client keys, authorise a k
 It MUST let the operator list, add and remove the hostnames on the container registry allowlist.
 
 The console MUST let the operator list manual and discovered site ingresses, each kind apart from the other.
-It MUST let the operator create, update and delete manual site ingresses, and attach and detach their forward and redirect targets.
+It MUST let the operator create, update and delete manual site ingresses.
+It MUST let the operator attach and detach forward and redirect targets on manual and discovered site ingresses.
+It MUST offer to delete each discovered site ingress that is [stale](../runtime/site-resources.md#sources).
 It MUST show the status of each ingress discovery provider.
 While ingress discovery is unhealthy, the console MUST warn the operator.
 

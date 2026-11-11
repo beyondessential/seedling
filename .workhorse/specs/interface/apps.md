@@ -26,7 +26,7 @@ Its parameters are `app`, the app's name, and the members of a [definition sourc
 The server MUST refuse the request with `requirements_invalid` if `app` breaks the [naming rules](../language/overview.md#names), is a [reserved name](../runtime/identity.md#reserved-names), or names an app already registered.
 The server MUST refuse a definition that cannot be fetched, breaks the bundle rules, or does not support the running Seedling version, with the error [definitions](definitions.md) gives for it.
 
-Otherwise the server MUST register the app with the status `not_installed` and the [generation](../overview.md#generation) 1, recorded with a `register` [history entry](#generation-history), and MUST emit an `AppRegistered` [event](events.md#event-types).
+Otherwise the server MUST register the app with the status `not_installed` and the [generation](../overview.md#generation) 1, recorded with a `register` [history entry](#generation-history), and MUST emit an `AppRegistered` [event](events.md#app-events).
 The result is `{ "generation": 1 }`.
 
 The server MUST register an app whose definition fails to parse or evaluate, and MUST file a [`script_error`](../runtime/faults.md#app-faults) fault against it.
@@ -152,7 +152,7 @@ The server MUST refuse it with `not_found` if the app is not registered.
 | `actions` | array | its [actions](#actions) |
 | `current_operation` | object | present only while an operation runs for the app, as [current operation](#current-operation) specifies |
 
-If the server cannot read the state a member reports, it MUST refuse the request with `internal`, rather than report the member empty, absent or `null`, except where this specification gives the member a value for that case.
+If the server cannot read the state a member reports, it MUST refuse the request with `internal`, rather than report the member empty, absent or `null`, except where a member's description gives it a value for that case.
 
 ### Resources
 
@@ -196,12 +196,12 @@ Whenever an instance's `health` changes, the runtime MUST emit an `InstanceHealt
 | kind | members |
 | --- | --- |
 | `service` | `http` (boolean), `exported` (boolean), `export_description` (string or null), `description` (string or null), and the [proxy settings](#proxy-settings) `balance` and `routes` |
-| `ingress` | `service` (string), `hostname` (string), `port` (integer), `tls` (boolean), `dtls` (boolean), `http_terminate` (`"http1"`, `"http2"` or null), `redirect` (`{ "port": <integer>, "code": <integer> }` or null), `description` |
-| `deployment` | `container`, `pod`, `scale` (`{ "low": <integer>, "high": <integer> }`), `on_update` (`"rolling"` or `"replace"`), `on_terminate` (`"recreate"`), `priority` (string), `description` |
-| `job` | `container`, `pod`, `deadline` (seconds, or null), `description` |
-| `volume` | `readonly` (boolean), `tmpfs` (boolean), `writes` (object of path to contents), `exported` (boolean), `export_description` (string or null), `description` |
-| `external_volume` | `description` |
-| `external_service` | `description` |
+| `ingress` | `service` (string), `hostname` (string), `port` (integer), `tls` (boolean), `dtls` (boolean), `http_terminate` (`"http1"`, `"http2"` or null), `redirect` (`{ "port": <integer>, "code": <integer> }` or null), `description` (string or null) |
+| `deployment` | `container`, `pod`, `scale` (`{ "low": <integer>, "high": <integer> }`), `on_update` (`"rolling"` or `"replace"`), `on_terminate` (`"recreate"`), `priority` (string), `description` (string or null) |
+| `job` | `container`, `pod`, `deadline` (seconds, or null), `description` (string or null) |
+| `volume` | `readonly` (boolean), `tmpfs` (boolean), `writes` (object of path to contents), `exported` (boolean), `export_description` (string or null), `description` (string or null) |
+| `external_volume` | `description` (string or null) |
+| `external_service` | `description` (string or null) |
 
 A `container` object has these members.
 
@@ -221,6 +221,8 @@ A `container` object has these members.
 | `healthcheck` | object or null | `kind` (`"command"`), `cmd` (array of strings), `interval_secs`, `timeout_secs`, `retries`, `start_period_secs`, and `on_failure` (`"replace"` or `"monitor"`) |
 | `stop_signal` | string or null | the stop signal |
 | `stop_timeout_secs` | integer or null | the stop timeout |
+
+`on_exit` MUST be `"default"` when the definition sets no exit strategy for the container.
 
 A `pod` object has the members `service_mounts`, each `"<service>:<port>"`; `http_bindings`, each `"<pod port> -> <service> <prefix>"`; and `tcp_bindings` and `udp_bindings`, each `"<pod port> -> <service>:<port>"`.
 Each is an array of strings in ascending order.
@@ -392,4 +394,4 @@ The server MUST refuse the request with `not_found` if the app is not registered
 | `outcome` | string or null | `pending`, `succeeded`, `cancelled` or `failed` for a triggered operation, `null` where none was triggered |
 | `error` | string | present when `outcome` is `failed` and a cause was recorded: a short description of it |
 
-The server MUST withhold both values of an entry whose parameter is secret under the current definition, or whose value was held in secret storage when the change was recorded.
+The server MUST withhold both values of an entry whose parameter is secret under the current definition, or either of whose values was protected when the change was recorded.

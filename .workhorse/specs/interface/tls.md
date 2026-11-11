@@ -31,6 +31,9 @@ A hostname, in these methods, is a string of at most 253 characters made of labe
 Each label is 1 to 63 ASCII letters, digits and hyphens, and neither starts nor ends with a hyphen.
 A hostname contains at least one ASCII letter.
 
+The runtime MUST refuse with `requirements_invalid` a request to [`/tls/certificates/issue-acme-dns`](#operator-driven-issuance), [`/tls/certificates/retry`](#operator-driven-issuance), [`/tls/retry-blocks/set`](#retry-blocks) or [`/tls/retry-blocks/clear`](#retry-blocks) whose `hostname` is not a hostname.
+The runtime MUST match the `hostname` of a retry or a retry block against [managed hostnames](../runtime/tls/certificates.md#managed-hostname) ignoring ASCII case.
+
 Every timestamp in a request or result of these methods is an integer count of seconds since 1970-01-01T00:00:00Z, leap seconds excluded.
 
 The runtime MUST NOT return a private key, an ACME account key or a DNS provider's `config` from any Operator Interface method.
@@ -133,7 +136,7 @@ Its result is `{ certificates }`, an array with one object per stored certificat
 | `pending_renewal` | integer or null | the id of this certificate's pending renewal |
 | `state` | string | the row's [certificate state](../runtime/tls/certificates.md#certificate-states): `csr_pending`, `active`, `superseded` or `revoked` |
 | `origin` | string | `manual`, `csr`, `acme_dns`, `tailscale` or `canopy` |
-| `key_type` | string | the private key's algorithm, such as `ecdsa_p256` |
+| `key_type` | string | the private key's algorithm: `ecdsa_p256`, `ecdsa_p384`, `ecdsa_p521`, `ed25519` or `rsa` |
 | `issuer` | string or null | the leaf's issuer |
 | `not_before` | integer or null | the leaf's `notBefore` |
 | `not_after` | integer or null | the leaf's `notAfter` |
@@ -180,7 +183,7 @@ It MUST store the chain with the leaf first.
 The runtime MUST refuse the upload with `requirements_invalid`, naming the failed check in the message, when:
 
 - `cert_pem` holds no `CERTIFICATE` block, or a `CERTIFICATE` block in it cannot be parsed;
-- `key_pem` cannot be parsed;
+- `key_pem` cannot be parsed, or holds a key of an algorithm that `key_type` has no value for;
 - no certificate in `cert_pem` has a SubjectPublicKeyInfo matching the public key of `key_pem`;
 - the leaf has no DNS names in its SAN extension;
 - the leaf's `notAfter` has passed.
@@ -200,8 +203,12 @@ The result is an object with these members.
 | `warnings` | array of strings | `self_signed` when the leaf is [self-issued](../runtime/tls/certificates.md#operator-supplied-certificates), and `not_yet_valid` when its `notBefore` is in the future |
 
 `/tls/certificates/delete` takes `id` and removes that stored certificate.
+The runtime MUST remove a row in any state, a `csr_pending` row included, together with its private key, in one atomic step.
 The result is `{ "ok": true }`.
 If no stored certificate has that id, the runtime MUST refuse the request with `not_found`.
+
+> [!NOTE]
+> A [`csr/upload-cert`](#certificate-signing-requests) request for a row deleted while it is handled is refused, since the row has left state `csr_pending`.
 
 ## Certificate signing requests
 
@@ -279,7 +286,7 @@ It MUST be logged as an [issuance attempt](#issuance-attempts) triggered by `man
 The issued certificate MUST retire the certificates it replaces in full.
 
 The result is `{ cert_id, not_after }`, the new certificate's id and `notAfter`.
-The runtime MUST refuse the request with `requirements_invalid`, with a message naming the cause, when the hostname has no `acme_dns` policy, when a [retry block](#retry-blocks) is set for it, or when no contact email is configured.
+The runtime MUST refuse the request with `requirements_invalid`, with a message naming the cause, when the hostname has no `acme_dns` policy, when it takes a [Tailscale certificate](../runtime/tls/certificates.md#tailscale-certificates), when a [retry block](#retry-blocks) is set for it, or when no contact email is configured.
 If an issuance for the hostname is running, whether reconciliation or an operator started it, the runtime MUST refuse the request with `operation_in_progress`, as [issuance](../runtime/tls/certificates.md#issuance) requires.
 The runtime MUST answer with `internal` when the issuance fails.
 A message for a failed issuance MUST name the stage that failed.
@@ -295,6 +302,7 @@ A retry request recorded before the runtime stops MUST be acted on after it rest
 
 `/tls/hostnames/list` returns the per-hostname rollup of [hostname state](../runtime/tls/certificates.md#hostname-state).
 It takes `app`, optional, an app name.
+If `app` names no registered app, the runtime MUST refuse the request with `not_found`.
 Its result is `{ hostnames }`, an array with one object per hostname in the rollup's scope, ordered by hostname.
 When `app` is given, the array MUST hold only the hostnames that app declares, and each `apps` member MUST name only that app.
 

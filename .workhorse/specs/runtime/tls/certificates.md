@@ -29,7 +29,9 @@ A hostname declared by an ingress that terminates TLS, DTLS or HTTPS, per [ingre
 ### Internal name
 
 A hostname that is an IP address literal, has a single label, or is `localhost`, `local` or `internal` or ends in one of those labels.
-No public CA issues certificates for an internal name.
+
+> [!NOTE]
+> Public certificate authorities do not issue certificates for internal names.
 
 ### Strategy
 
@@ -408,7 +410,7 @@ Every managed hostname has a certificate status, one of these values.
 | --- | --- |
 | `blocked` | a [retry block](#retry-blocks-and-retries) is set for the hostname |
 | `expired` | no usable certificate is served for the hostname, and its [selected](#certificate-selection) or proxy-held certificate is past its `notAfter` |
-| `error` | the latest attempt to obtain a certificate for the hostname failed and the runtime is waiting to try again, or the runtime cannot attempt one until a condition changes, such as a missing contact email or Canopy being unable to be asked about the hostname |
+| `error` | the latest attempt to obtain a certificate for the hostname failed and the runtime is waiting to try again, or the runtime cannot attempt one until a condition changes, as when the contact email is missing or Canopy cannot be asked about it |
 | `pending` | an acquisition is in progress for the hostname |
 | `active` | a usable certificate is served for the hostname |
 | `none` | no usable certificate is served for the hostname, and no acquisition is in progress |

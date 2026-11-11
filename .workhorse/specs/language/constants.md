@@ -68,8 +68,7 @@ While the runtime cannot determine the host's local time zone, `TIMEZONE` MUST b
 
 ### Determining host constants
 
-The runtime MUST determine `AVAILABLE_THREADS`, `AVAILABLE_MEMORY`, `HAS_SNAPSHOTS` and `NODE_NAME` at each evaluation of a script.
-The runtime MUST determine the other host constants when it starts, and MUST NOT change a determined value of one of them while it runs.
+The runtime MUST determine the host constants when it starts, and MUST NOT change a determined value while it runs.
 
 While whether the host has IPv4 egress is undetermined, the runtime MUST file an [`ipv4_egress_undetermined`](../runtime/faults.md#host-faults) fault.
 While the host's local time zone is undetermined, the runtime MUST file a [`timezone_undetermined`](../runtime/faults.md#host-faults) fault.

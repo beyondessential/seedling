@@ -34,7 +34,9 @@ The runtime MUST generate the key pair for a Canopy certificate itself, and SHOU
 It MUST store the private key encrypted at rest with the [secret key](../secrets.md#secret-key) before the first request that uses it, and MUST send Canopy only a CSR.
 
 The runtime MUST reuse a hostname's key for every request until Canopy reports the key condemned or its certificate revoked.
-Asking again with the same key returns the order Canopy already holds, and opens no new one.
+
+> [!NOTE]
+> Asking again with the same key returns the order Canopy already holds, and opens no new one.
 
 ## Requests
 
@@ -71,9 +73,20 @@ After a refusal, a failed order or a rejected CSR, the runtime MUST NOT ask agai
 
 ## Answers
 
+An answer Canopy gives with a success status is a JSON object, of which the runtime reads these members.
+
+| member | type | meaning |
+| --- | --- | --- |
+| `state` | string | the order's state: `pending`, `issued`, `failed` or `revoked` |
+| `usable` | boolean | whether `chain` can be served |
+| `revoked` | boolean | whether the certificate has been revoked |
+| `key_must_be_replaced` | boolean | whether the key is condemned, so that a new key is needed before asking again |
+| `chain` | string or null | the certificate chain in PEM, once Canopy holds one |
+| `last_error` | string or null | why Canopy's last attempt to issue failed, if one did |
+
 The runtime MUST classify each answer to a request as follows.
 
-An answer Canopy gave with a success status:
+An answer Canopy gave with a success status, by its members:
 
 | answer | classification |
 | --- | --- |
@@ -128,8 +141,17 @@ The runtime MUST store it, and retire the certificates it [supersedes](certifica
 
 ## Revocation
 
-The runtime learns of a revocation from an answer to a request, and from the certificates Canopy lists as held for the server in the response to each report.
-A listed certificate MUST be matched to a stored Canopy certificate by its name, ignoring ASCII case, and by its key's [fingerprint](../../overview.md#fingerprint).
+The runtime learns of a revocation from an answer to a request, and from the certificates Canopy lists as held for the server in the [response to each report](../canopy-reporting.md#report-response).
+That list is the response's `certificates` member, an array of objects of which the runtime reads these members.
+
+| member | type | meaning |
+| --- | --- | --- |
+| `name` | string | the hostname the certificate covers |
+| `key_fingerprint` | string | the [fingerprint](../../overview.md#fingerprint) of the certified key |
+| `revoked` | boolean | whether the certificate has been revoked |
+| `key_must_be_replaced` | boolean | whether the certified key is condemned |
+
+The runtime MUST match a listed certificate to a stored Canopy certificate when `name` equals the stored certificate's hostname and `key_fingerprint` equals the fingerprint of its key, each ignoring ASCII case.
 A listed certificate with `revoked` or `key_must_be_replaced` true condemns the stored certificate it matches.
 
 When a Canopy certificate is condemned, the runtime MUST stop serving it at once and MUST destroy its key, whether or not the tick has room for further requests.
