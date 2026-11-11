@@ -28,7 +28,7 @@ Batches 1 and 2, folded into the specs; code changes filed on D6.
 - An unmapped external service has no target, so its traffic is dropped or rejected (confirmed).
 - Tailscale certificates are specified in TLS (`#tailscale-certificates`); SITE links there.
 - Stored certificates' `key_type` names the key's algorithm; only `csr/begin` is limited to P-256 (the rewrite had widened that restriction).
-- `/tls/certificates/attempts/list` limit is 1 to 500; hostname status precedence is `blocked`, `expired`, `error`, `pending`, `active`, `default`.
+- `/tls/certificates/attempts/list` limit is 1 to 500; hostname status precedence is `blocked`, `expired`, `error`, `pending`, `active`, `none`.
 - The `tailscale` policy kind is removed; `canopy_unavailable` is dropped from the error codes.
 - The relay selects its offer once a slot is held; `/canopy/offer` on a connection that cannot relay stays `not_found`.
 - CNR keeps `uninstalling` on the wire; an ingress is Ready once the proxy configuration including it is applied.

@@ -30,12 +30,12 @@ The preserved data of a volume the runtime would otherwise have deleted, kept un
 
 ## Deployment and Job instances
 
-Starting a Deployment or Job instance MUST ensure that the instance's pod network exists, ensure that the container image is present on the host, and start the container under process supervision.
+When starting a Deployment or Job instance, the runtime MUST ensure that the instance's pod network exists, ensure that the container image is present on the host, and start the container under process supervision.
 The runtime MUST pull the image if it is not present, as [IMG](images.md#image-pulls) specifies.
 
 Before the container starts, the runtime MUST ensure that each anonymous volume the container mounts exists, and MUST apply that volume's declared file writes to it.
 
-Stopping a Deployment or Job instance MUST stop the supervised container process.
+When stopping a Deployment or Job instance, the runtime MUST stop the supervised container process.
 Once the process has stopped, the runtime MUST remove the instance's pod network and every anonymous volume created for the instance.
 
 ## Container hardening
@@ -100,7 +100,7 @@ The runtime MUST NOT stand a container-runtime volume in for a tmpfs volume.
 
 ## Volume creation and seeding
 
-Starting a Volume instance MUST create the volume's storage if it does not exist, then apply the volume's declared file writes to it.
+When starting a Volume instance, the runtime MUST create the volume's storage if it does not exist, then apply the volume's declared file writes to it.
 
 Creating a named non-tmpfs volume's storage and applying its declared writes MUST be one step.
 The part of the runtime that creates the storage MUST apply the declared writes.
@@ -125,7 +125,7 @@ A listing of [exported volumes](../language/volume.md#export) MUST report, for e
 
 ## Volume removal
 
-Stopping a Volume instance MUST remove the volume.
+When stopping a Volume instance, the runtime MUST remove the volume.
 For a tmpfs volume, the runtime MUST delete its directory.
 For a named non-tmpfs volume, the runtime MUST hold its data as a [held volume](#held-volume), and MUST NOT delete it.
 
@@ -147,7 +147,8 @@ If the volume has storage the runtime cannot hold, because the runtime does not 
 The runtime MUST NOT delete a held volume's data until an operator confirms its deletion.
 
 An operator MAY restore a held volume into a new managed site volume instead of confirming its deletion.
-The operator MAY name the new site volume, and the name MUST default to the held volume's recorded name.
+The operator MAY name the new site volume.
+If the operator names none, the runtime MUST use the held volume's recorded name.
 The runtime MUST reject a restore whose target name is [taken](site-resources.md#site-volume-names).
 The restored volume MUST be recorded as a managed site volume, whichever context the held volume came from.
 The runtime MUST remove the held volume's record once its data has been moved.

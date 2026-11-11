@@ -31,7 +31,8 @@ When a container instance in the desired state reaches the `Terminated` lifecycl
 ### Restart record
 
 The runtime MUST keep a durable record of every restart of a container instance.
-Each record MUST identify the instance, the app's generation when the record was made, the time of the restart, the exit status of the run that ended where the platform reports one, and whether the restart was a recovery restart or a deliberate restart.
+Each record MUST identify the instance, the app's generation when the record was made, the time of the restart, and whether the restart was a recovery restart or a deliberate restart.
+Where the platform reports the exit status of the run that ended, the record MUST also hold that exit status.
 
 The runtime MUST classify a restart as a recovery restart or a deliberate restart by its cause, whichever component performed it.
 

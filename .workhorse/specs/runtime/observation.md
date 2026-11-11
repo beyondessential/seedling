@@ -46,6 +46,7 @@ If a named non-tmpfs volume exists but its storage does not match the storage th
 
 > [!NOTE]
 > A plain directory found where the host is configured for filesystem subvolumes is a backend mismatch, as is the reverse.
+> A volume with a backend mismatch is replaced as [volume removal](actuation.md#volume-removal) specifies.
 
 ## Ingresses
 

@@ -56,7 +56,7 @@ A [stopped](../interface/app-control.md#resource-stop) singleton MUST count as p
 The active desired state of an app that is not installed, and has no lifecycle operation in progress, is empty.
 
 The runtime MUST NOT retire an instance of an app whose active desired state it does not know.
-That includes an app with a lifecycle operation in progress, an app that is installing or uninstalling, an app whose desired state could not be computed, and an app the runtime could not load.
+Such apps include an app with a lifecycle operation in progress, an app that is installing or uninstalling, an app whose desired state could not be computed, and an app the runtime could not load.
 
 ## Demoted instances
 

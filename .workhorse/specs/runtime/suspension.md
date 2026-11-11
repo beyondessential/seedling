@@ -28,7 +28,7 @@ When a suspended barrier's condition is satisfied, the runtime MUST resume the c
 ### Deadlines
 
 A barrier's [deadline](../language/rt.md#barriers) is measured from when the barrier began to wait.
-The runtime MUST evaluate a barrier's condition before its deadline.
+Each time it evaluates a barrier, the runtime MUST judge the barrier's condition before checking its deadline.
 
 > [!NOTE]
 > The action log can lag the world.

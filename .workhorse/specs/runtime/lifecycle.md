@@ -28,7 +28,9 @@ Each such instance MUST be in exactly one lifecycle state at any time.
 An instance's lifecycle state MUST advance only in the order `Pending`, `Scheduled`, `Running`, `Ready`, `Terminating`, `Terminated`, `Unscheduled`, except as this section permits.
 
 An instance MAY skip states.
-For example, a container that exits by itself moves from `Running` or `Ready` directly to `Terminated`, without passing through `Terminating`.
+
+> [!NOTE]
+> A container that exits by itself moves from `Running` or `Ready` directly to `Terminated`, without passing through `Terminating`.
 
 A container MAY return from `Ready` to `Running`, as [containers](#containers) specifies.
 A service MAY return from `Ready` to `Scheduled`, as [services](#services) specifies.
@@ -87,7 +89,7 @@ A backend with no declared healthcheck MUST count as healthy while it is running
 A backend whose declared healthcheck has not yet passed, such as one in its start period, MUST count as not healthy.
 
 > [!NOTE]
-> The pool prefers healthy backends and falls back to any running backend, so the runtime never serves less capacity than is running.
+> The pool prefers healthy backends and falls back to any running backend, so a service with a running backend always has a backend to send traffic to.
 
 ## Ingresses
 

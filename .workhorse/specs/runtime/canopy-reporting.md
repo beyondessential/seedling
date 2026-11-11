@@ -4,7 +4,7 @@ id: CNR
 
 # Canopy reporting
 
-Applies to the status reports the [runtime](../overview.md#runtime) sends Canopy about the Seedling daemon on a [host](../overview.md#host) and the [apps](../overview.md#app) it runs.
+Applies to the status reports the [runtime](../overview.md#runtime) sends [Canopy](../overview.md#canopy) about the Seedling daemon on a [host](../overview.md#host) and the [apps](../overview.md#app) it runs.
 
 ## Terminology
 
@@ -59,9 +59,10 @@ A report is a `POST` to `/status/<server_id>` with a JSON body:
 | `machine` | object | `health`, an array of the [machine checks](#machine-checks), and `detail`, the [machine detail](#machine-detail) |
 | `applications` | object | the [applications](#applications), keyed by app name |
 
-The runtime reports as the source `seedling`, distinct from any other agent on the host, so that its checks and the issues Canopy derives from them belong to it alone.
+> [!NOTE]
+> The source `seedling` sets the runtime's checks, and the issues Canopy derives from them, apart from those of any other agent on the host.
 
-Each check is an object with members `check`, its name, and `result`, one of `passed`, `warning`, `failed`, `skipped` or `broken`, followed by the detail members of that check.
+Each check is an object with members `check`, its name, `result`, one of `passed`, `warning`, `failed`, `skipped` or `broken`, and the detail members of that check.
 
 If the runtime cannot read the apps to report, the report MUST fail, and MUST NOT be sent without them.
 
@@ -101,7 +102,9 @@ A `broken` check MUST carry a `reason` detail member saying why.
 | `activeFaults` | integer | the number of active [faults](../overview.md#fault) |
 
 The report MUST NOT carry the host's name, the host's uptime, or the version of any app.
-Those describe the host, and the agent that owns them reports them.
+
+> [!NOTE]
+> The host's name, its uptime and its apps' versions describe the host, and are reported by the agent that owns them.
 
 ## Applications
 

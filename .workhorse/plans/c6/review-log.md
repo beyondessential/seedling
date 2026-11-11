@@ -116,3 +116,37 @@ Fixed in place: INGM and VOLM name-rule actors; INGM stale deletion actor; root 
 Critical: SVCM resolver-status misses one-family-failed-other-empty; EVT attachment events lack redirect_preserve_path.
 Suggestion: missing mapping target code differs (VOLM not_found vs SVCM requirements_invalid); discovery refresh events vs EVT actor rule; mapping targets that stop existing; reconciliation after mapping changes stated once; forward attachment service port; console attach on discovered ingresses and stale deletion; SVCM endpoints table cell; spec-leads-code items (already filed).
 Nit: web session_id vs EVT session_id; ordering wording; snapshot/promote storage failure internal; INGM healthy wording and refresh with no provider; more loopback forms.
+
+### TLS and interface A (found: 2 critical, 9 suggestion, 15 nit)
+
+Critical: start action never runs for an app with no install action; FLT files script_error on an update that APPS refuses without a fault.
+Suggestion: CHAIN default chain lacks the Tailscale exception; proxy behaviour for hostnames on no chain; issue-acme-dns on a Tailscale hostname; non-hostname and case matching in retry and blocks; PRM name refusal; TLSM key_type values; TCAN answer member tables; cancelling a queued operation; plan parse failures.
+Nit: history redaction wording; on_exit default; description types; hostnames list for an unregistered app; delete on a csr_pending row; ACI repeated line; refusal order; event links; self-reference; Canopy wording; CHAIN keyword actor; third-party behaviour as notes; PRM unset writes; CHAIN repeat; gaps precedence line.
+
+### Language (found: 2 critical, 9 suggestion, 10 nit)
+
+Critical: RT barrier floor of one at effective scale 0; ING "same port number" for HTTP-terminating ingresses.
+Suggestion: empty entrypoint and args; pods binding external service ports; undetermined host constants; repeated compress/balance/rate_limit; health check shell; start action params option; rt.write to missing or read-only storage; change handlers with three or more parameters; bundle metadata rejection.
+Nit: install params outliving the operation; ResourceType selection wording; Job timeout from Running; fallback route wording; volume supplier; tmpfs rewrite wording; demonstrative; required param wording; volume param actor; Kubernetes comparison.
+
+### Interface B (found: 3 critical, 10 suggestion, 3 nit)
+
+Fixed in place: WIRE audit link; TRN data directory link and actors; KEY term and actors; FLTS app filter; LOG links and actor; CTL actors and named methods; IMGM wording; EVT sentence split; RLY borrowed-term citations and body limit actors; FWD line feed and actor.
+Critical: revoked keys re-imported from authorized_keys on restart; opening line feed for streams the client keeps open; server_busy written onto a forward data stream.
+Suggestion: relay header character range; actor on replayed operations; EVT resource_name nullability; unstop codes and kinds and stops on removed resources; nullable previous_scale; multi-file proposed_script; "uninstalled" timing; unreadable known_hosts; service-level fault record row; server key algorithm; gitignore borrowed term.
+Nit: shell mount name collisions; empty restart settings.
+
+### Runtime A (found: 0 critical, 13 suggestion, 7 nit)
+
+Fixed in place: PRX proxy image wording; SITE actors, splits and links; ACTU actors; INFRA note and history; DNS actors; IDN Job identity wording; GC demonstrative; UPD links.
+Suggestion: DEPL bounds during update strategies; GC retirement clears faults with events; SITE empty answers, IPv6 literals without egress, undetermined egress; kept answers and retry interval; site volume deletion while mapped; tmpfs wipe at start (code); PRX and DNS clearing restatements; INFRA DTLS redirection row; service address assignment; DNS forwarding vs cache; PRX certificate storage; machine-id path; IMG repeated warm.
+Nit: tmpfs location and --data-dir; PRIO Critical wording; IMG pin equality; NAT64 start scope; SITE port with no endpoint; site redirect Location home; GC rt call list.
+
+### Runtime B (found: 2 critical, 13 suggestion, 9 nit)
+
+Fixed in place: FLT note continuation and subject wording; SCH note continuation; AUTO restart record split; CNR links and notes; LCY notes; SUSP barrier order; OBS link.
+Critical: RCN records autonomous operations after performing them; desired state not scoped by install phase.
+Suggestion: definition_source_moved subject; cert_acquisition_failed flaps per hostname; queued parameters unprotected; audit drop vs block; crash_loop and supervisor restarts; "operation" overloaded in RCN; unreadable identities stall teardown silently; unreadable instance history; unreadable last fire time; CNR undetermined members; cached server identifier across offers; service Ready per port; replayed volume bindings.
+Nit: "broken" undefined; TRD requester list; "within one evaluation"; operation fault clearing on failed completion; volume Scheduled vs Ready; ACTU backend wording; schedules outside RCN steps; GEN restates OPS; AUTO repeats.
+
+Round 3 total: 13 critical, ~66 suggestion, ~57 nit. Closing round by the user's call: every finding decided and fixed in one pass, no round 4.

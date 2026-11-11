@@ -36,8 +36,8 @@ The runtime MUST have the resolver running and healthy before it starts any work
 
 While any app is installed or installing, the runtime MUST check the resolver's health on each [reconciliation](reconciliation.md#reconciliation-loop) iteration.
 The resolver is healthy when its health endpoint answers successfully.
-It MUST restart a resolver that is not running.
-It SHOULD restart a running resolver only after its health check has failed on three consecutive iterations.
+The runtime MUST restart a resolver that is not running.
+The runtime SHOULD restart a running resolver only after its health check has failed on three consecutive iterations.
 The runtime MUST stop the resolver when no app is installed or installing.
 
 On an iteration that fails to bring the resolver up, or does not finish doing so, the runtime MUST file a [`resolver_failed`](faults.md#host-faults) fault.
@@ -72,12 +72,13 @@ The runtime MUST record on each resolver instance the configuration and address 
 
 If the running resolver's image differs from the image the runtime runs, or its recorded configuration or address differs from the current one or is absent, the runtime MUST replace it.
 The replacement MUST listen at the resolver address.
-Because one instance can hold the resolver address at a time, the runtime MUST stop the running resolver before starting the replacement.
+The runtime MUST stop the running resolver before starting the replacement.
 
 The runtime MUST persist which resolver instance is active, recording the replacement as active before starting it.
 A replacement interrupted at any point MUST be completed on a later iteration without operator action.
 
 > [!NOTE]
+> Only one instance can hold the resolver address at a time.
 > Resolution is unavailable to workloads between the running resolver stopping and the replacement starting.
 
 ## Container DNS

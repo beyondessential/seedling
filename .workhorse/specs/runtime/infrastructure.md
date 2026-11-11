@@ -82,7 +82,7 @@ It MUST allocate each instance's prefix and record the allocation.
 
 > [!NOTE]
 > A prefix derived from an instance's identity guarantees uniqueness only to a probability, however wide the derivation, and a derivation from a part of the identity that distinct instances share guarantees nothing.
-> Instances that carry no unique identifier of their own are the case that has collided.
+> Instances that carry no unique identifier of their own are where derived prefixes collide.
 
 ## Pod network cleanup
 
@@ -99,7 +99,9 @@ The runtime MUST NOT remove the networks of its own infrastructure containers du
 
 The mount endpoint MUST be the address `<host prefix>:fffe::1`, the same for every pod on the host.
 The runtime MUST resolve the hostname `localmount` to the mount endpoint in every pod that mounts a service.
-The mount endpoint need not be assigned to any network interface.
+
+> [!NOTE]
+> The mount endpoint is reached through translation, so no network interface needs to carry the address.
 
 The runtime MUST translate traffic from a pod's network prefix to the mount endpoint, at a port the pod mounts, directly to the address and pod-side port of a backend of the mounted service.
 The translation MUST NOT pass through the service's own address.

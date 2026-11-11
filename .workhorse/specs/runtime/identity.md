@@ -53,7 +53,7 @@ An anonymous resource MUST receive an identity that is stable for the resource's
 
 ## Job instances
 
-The instance ID of a Job instance is derived rather than random:
+The instance ID of a Job instance depends on where the Job is declared:
 
 | Job | instance ID |
 | --- | --- |
@@ -61,7 +61,8 @@ The instance ID of a Job instance is derived rather than random:
 | declared inside an action closure (dynamic) | the name-based UUID, version 5 per [RFC 9562](https://www.rfc-editor.org/rfc/rfc9562), with the [lifecycle operation](../overview.md#lifecycle-operation)'s ID as namespace and `job:<name>` as name |
 | the target of a shell `attach()` | a random UUID chosen when `attach()` is called |
 
-A dynamic Job instance therefore keeps its identity within one lifecycle operation, including across replay passes, while separate operations, and separate shell sessions, get distinct instances of the same Job.
+> [!NOTE]
+> A dynamic Job instance therefore keeps its identity within one lifecycle operation, including across replay passes, while separate operations, and separate shell sessions, get distinct instances of the same Job.
 
 ## Reserved names
 

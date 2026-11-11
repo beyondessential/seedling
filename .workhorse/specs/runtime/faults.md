@@ -18,7 +18,7 @@ The name of one way a thing can be faulty, such as `crash_loop`.
 
 ### Subject
 
-The thing a fault is about: an instance, a resource, an image reference, a hostname, or nothing more specific than the app.
+The thing a fault is about, such as an instance, a resource, an image reference, a hostname, or nothing more specific than the app.
 
 ### Condition fault
 
@@ -196,6 +196,7 @@ The runtime MUST file `app_priorities_unreadable` and `scaling_decisions_unreada
 
 > [!NOTE]
 > The runtime holds back the affected apps while either fault is active, as [unreadable priorities](priority.md#unreadable-priorities) and [unreadable scale](autonomous.md#unreadable-scale) specify.
+
 A withheld apply MUST neither file nor clear `routes_failed`, `nftables_failed` or `proxy_failed`.
 A `container_runtime_unavailable` fault MUST name the unavailable backend and state that no workloads will be actuated until it is reachable.
 A `resolver_failed` or `caddy_failed` fault MUST name the failure.

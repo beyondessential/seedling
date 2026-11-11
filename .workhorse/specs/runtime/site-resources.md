@@ -52,7 +52,7 @@ A site volume is one of three kinds:
 A site volume is mapped read-write or read-only.
 The runtime MUST mount a snapshot site volume read-only, whatever its mapping says.
 
-Site volumes MUST be created and deleted only through operator commands.
+The runtime MUST create and delete site volumes only on operator commands.
 The runtime MUST create a managed site volume's storage when the volume is created.
 
 When an operator deletes a managed site volume, the runtime MUST [hold](actuation.md#held-volumes) its data.
@@ -69,7 +69,7 @@ The runtime MUST reject, as an invalid request, every operation that would bring
 These operations are creating a site volume, snapshotting to one, promoting a snapshot into one, and [restoring a held volume](actuation.md#held-volumes) as one.
 The runtime MUST reject the operation before it touches any storage.
 
-A name is taken when a site volume is recorded under it, and when storage exists at the name without a record.
+A name is taken when a site volume is recorded under it, or when storage exists at the name without a record.
 Checking that a name is free and taking it MUST be one indivisible step, so that of two concurrent operations naming the same site volume, exactly one proceeds and the other is rejected.
 
 > [!NOTE]
@@ -149,7 +149,7 @@ The [`/services/site/resolver-status`](../interface/services.md#resolver-status)
 
 ### Site service lifecycle
 
-Site services MUST be created and deleted, and have endpoints added and removed, only through operator commands.
+The runtime MUST create and delete site services, and add and remove their endpoints, only on operator commands.
 
 The runtime MUST reject the deletion of a site service while an external service mapping targets it.
 Deleting a site service MUST remove it and its endpoints.
@@ -164,12 +164,14 @@ A site ingress has a name, a hostname, an optional description, a TLS provisioni
 ### Sources
 
 A site ingress is either manual or discovered.
-A manual site ingress MUST be created, updated and deleted only through operator commands.
-A discovered site ingress MUST be created, updated and deleted only by its discovery provider, and carries the provider's name and a provider key that stays the same when the hostname changes.
+The runtime MUST create, update and delete a manual site ingress only on operator commands.
+The runtime MUST create, update and delete a discovered site ingress only on its discovery provider's report.
+A discovered site ingress carries its provider's name and a provider key that stays the same when the hostname changes.
 
 The runtime MUST reject an operator command to delete a discovered site ingress while its discovery provider still reports it.
 When a discovery provider stops reporting a site ingress it created without reporting a different identity, the runtime MUST mark the site ingress stale and MUST NOT delete it.
-The runtime MUST NOT serve a stale site ingress, and MUST serve it again once its provider reports it.
+The runtime MUST NOT serve a stale site ingress.
+The runtime MUST serve it again once its provider reports it.
 
 Deleting a site ingress MUST delete its attachments.
 
@@ -179,7 +181,7 @@ Deleting a site ingress MUST delete its attachments.
 | --- | --- |
 | `acme` | issued by a public certificate authority over ACME |
 | `internal` | issued by the runtime's internal certificate authority |
-| `tailscale` | obtained from the discovery provider's own certificate facility; valid only on a site ingress discovered by `tailscale` |
+| `tailscale` | obtained from the discovery provider's own certificate facility; valid only on a site ingress discovered by the [Tailscale discovery provider](#tailscale-discovery) |
 | `none` | none; no attachment terminates TLS |
 
 An `http` or `http2` attachment on a site ingress whose mode is `none` is a [plaintext ingress](proxy.md#plaintext-ingresses).
@@ -191,7 +193,7 @@ An attachment is keyed by `(port, protocol)` within its site ingress, and its ta
 | target | effect |
 | --- | --- |
 | forward | traffic for the attachment's port and protocol is routed to a named service of a named app |
-| redirect | requests for the attachment's port and protocol are answered with a redirect to a configured URL, with a configured status code, optionally keeping the request path |
+| redirect | requests for the attachment's port and protocol are answered with a redirect to a configured URL, with a configured status code, optionally keeping the request's path and query |
 
 An attachment's protocol is one of:
 

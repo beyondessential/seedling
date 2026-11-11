@@ -259,7 +259,7 @@ The proxy MUST store the certificates it obtains where the runtime [observes cer
 
 ## Proxy upgrades
 
-If the image of the running proxy differs from the image the runtime runs, the runtime MUST replace the proxy with an instance of that image.
+If the image of the running proxy differs from the proxy image the runtime runs, the runtime MUST replace the proxy with an instance of that image.
 The runtime MUST start the replacement alongside the running proxy and apply the last successfully applied configuration to it.
 The runtime MUST direct traffic to the replacement only after the replacement has accepted that configuration.
 
