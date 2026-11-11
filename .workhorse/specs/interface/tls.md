@@ -338,6 +338,8 @@ Otherwise it MUST carry these members.
 | `blocked` | a retry block is set for the hostname |
 | `default` | none of the above: the hostname follows its chain with nothing serving it and nothing in progress |
 
+Where the meanings of several values hold at once, `status` MUST be the first of them in this order: `blocked`, `expired`, `error`, `pending`, `active`, `default`.
+
 The runtime MUST derive `status` from the same decision its issuance acts on, as [hostname state](../runtime/tls/certificates.md#hostname-state) requires.
 For a hostname with no runtime-held certificate, `status` MUST reflect a certificate the proxy holds for it, so that a proxy-held certificate past its `notAfter` reports `expired`.
 
@@ -395,7 +397,9 @@ The runtime MUST NOT derive `last_issuance` from an issuance attempt whose certi
 | member | type | required | meaning |
 | --- | --- | --- | --- |
 | `hostname` | string | no | return only attempts for this hostname |
-| `limit` | integer | no | the most entries to return, 100 if absent |
+| `limit` | integer | no | the most entries to return, from 1 to 500, 100 if absent |
+
+The runtime MUST refuse a `limit` below 1 or above 500 with `requirements_invalid`.
 
 Its result is `{ attempts }`, an array of objects with these members.
 
