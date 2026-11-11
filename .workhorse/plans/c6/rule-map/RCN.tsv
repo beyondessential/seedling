@@ -2,7 +2,7 @@ r/reconciliation.loop	RCN#reconciliation-loop
 r/reconciliation.convergence	RCN#reconciliation-loop
 r/reconciliation.idempotency	RCN#reconciliation-loop
 r/reconciliation.liveness	RCN#reconciliation-loop
-r/reconciliation.absolute-state	RCN#absolute-state
+r/reconciliation.absolute-state	RCN#applying-absolute-state
 r/desired-state.definition	RCN#desired-state
 r/desired-state.steady	RCN#desired-state
 r/desired-state.during-operation	RCN#desired-state

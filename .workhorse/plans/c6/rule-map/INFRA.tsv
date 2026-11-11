@@ -2,12 +2,12 @@ r/infra.pod.subnet	INFRA#pod-networks
 r/infra.key.file-permissions	INFRA#file-permissions
 r/infra.db.file-permissions	INFRA#file-permissions
 r/infra.db.busy-timeout	INFRA#database
-r/infra.node.prefix	INFRA#host-prefix
+r/infra.node.prefix	INFRA#host-prefix-derivation
 r/infra.node.degraded	INFRA#unavailable-backends
 r/infra.pod.network	INFRA#pod-networks
 r/infra.pod.network.cleanup	INFRA#pod-network-cleanup
-r/infra.pod.mount	INFRA#mount-endpoint
+r/infra.pod.mount	INFRA#mount-endpoint-addressing
 r/infra.dataplane.output-nat	INFRA#host-originated-traffic
 r/infra.dataplane.service-dnat	INFRA#service-translation
-r/infra.dataplane.mount-dnat	INFRA#mount-endpoint
+r/infra.dataplane.mount-dnat	INFRA#mount-endpoint-addressing
 r/infra.dataplane.forward-policy	INFRA#forwarding-policy

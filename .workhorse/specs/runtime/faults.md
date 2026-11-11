@@ -142,7 +142,7 @@ The runtime MUST file and clear the faults below against the app owning the ingr
 
 An `ingress_conflict` fault MUST identify the other party and the hostname and port.
 A `proxy_apply_failed` fault MUST carry the most recent apply error.
-A withheld apply, as [RCN](reconciliation.md#absolute-state) specifies, MUST neither file nor clear `proxy_apply_failed`.
+A withheld apply, as [RCN](reconciliation.md#applying-absolute-state) specifies, MUST neither file nor clear `proxy_apply_failed`.
 A site service fault MUST name the failing endpoints, and an unroutable one MUST state whether each needs NAT64 or IPv6 egress.
 
 ## Certificate faults

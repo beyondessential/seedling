@@ -50,7 +50,7 @@ The runtime MUST keep its database in the file `seedling.db` in its [data direct
 The runtime MUST wait for a database write that is blocked by a concurrent writer, rather than failing it immediately.
 It SHOULD wait at least five seconds before failing such a write.
 
-## Host prefix
+## Host prefix derivation
 
 The runtime MUST derive the host prefix from the host's machine identifier, read from `/etc/machine-id` with surrounding whitespace removed.
 The prefix MUST be `fd5e:` followed by the first four bytes of the SHA-256 ([FIPS 180-4](https://csrc.nist.gov/pubs/fips/180-4/upd1/final)) digest of that identifier, as a /48:
@@ -91,7 +91,7 @@ If a listing cannot be read, the runtime MUST NOT remove any pod network on the 
 
 The runtime MUST NOT remove the networks of its own infrastructure containers during this cleanup.
 
-## Mount endpoint
+## Mount endpoint addressing
 
 The mount endpoint MUST be the address `<host prefix>:fffe::1`, the same for every pod on the host.
 The runtime MUST resolve the hostname `localmount` to the mount endpoint in every pod that mounts a service.

@@ -55,7 +55,7 @@ Performing an operation whose effect is already in place MUST NOT produce an err
 An operation MUST NOT block the loop to wait on an external condition, such as a process exiting.
 It MUST instead return control to the loop, and a later iteration MUST re-evaluate the condition.
 
-## Absolute state
+## Applying absolute state
 
 An installed app's contribution to absolute state MUST be withdrawn only by a [lifecycle](../overview.md#lifecycle-state) transition of that app.
 A failure to compute the contribution MUST NOT withdraw it.

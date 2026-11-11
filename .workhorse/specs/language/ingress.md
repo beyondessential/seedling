@@ -10,7 +10,7 @@ Applies to the BSL `Ingress` type, through which an app exposes one of its servi
 
 | term | meaning |
 | --- | --- |
-| TLS | Transport Layer Security, as defined by [RFC 8446](https://www.rfc-editor.org/rfc/rfc8446) |
+| TLS | Transport Layer Security, as defined by [RFC 9846](https://www.rfc-editor.org/rfc/rfc9846) |
 | DTLS | Datagram Transport Layer Security, as defined by [RFC 9147](https://www.rfc-editor.org/rfc/rfc9147) |
 | HTTPS | HTTP over TLS, as defined by [RFC 9110](https://www.rfc-editor.org/rfc/rfc9110) §4.2.2 |
 | HTTP/1.1 | as defined by [RFC 9112](https://www.rfc-editor.org/rfc/rfc9112) |

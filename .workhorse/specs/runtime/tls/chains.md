@@ -89,7 +89,7 @@ The last strategy in a chain has no fall-through point.
 
 Each strategy MUST become responsible at the moment its predecessor's fall-through point passed, not at the moment the runtime notices.
 
-## Refusal
+## Refusal handling
 
 When a strategy refuses a hostname that has a certificate to replace, the next strategy MUST become responsible at once, without waiting for the fall-through point.
 

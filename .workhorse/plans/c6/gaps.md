@@ -241,3 +241,20 @@ Spec leads code:
 - OBS: certificate reported valid if the file exists (no expiry check); observation marked recorded before its write.
 Moves: rt default deadlines to RT (already done there); OI certificate status vocabulary differs from observed statuses (TLS/TLSM to reconcile).
 Glossary: Action closure, Dynamic resource, App phase (OPS); Barrier (SUSP/RT); Effective scale (AUTO).
+
+### Interface A (OI TRN WIRE STS APPS DEFN CTL PRM)
+Open:
+- WIRE: malformed actor silently replaced by a synthesised one: refuse with requirements_invalid (rec.), or keep.
+- WIRE: unparseable/oversized request -> not_found: switch to requirements_invalid?
+- STS: unreadable values reported as null (confirm representation).
+- APPS: resource `type` externalvolume vs def.kind external_volume vs plan ExternalVolume: unify?
+- APPS: container env in /apps/show and plan diffs can carry plaintext secret params: redact? (security)
+Spec leads code:
+- TRN: bootstrap authorized_keys fingerprints imported without normalising (uppercase/prefixed never match).
+- WIRE: control request over 64 KiB with no newline loses its actor (affects pushed bundles via web); /forwards/start error responses lack trailing newline; `deregistering` code defined but unused (dropped).
+- STS: active_faults falls back to 0, failed inspect read as stopped, app status falls back to degraded (spec: null).
+- APPS: /apps/show defaults unreadable state to empty/null and status to Degraded (spec: internal); unknown_params returned decrypted from secret storage (security); next_fire_at null whenever no schedule rows; removal maps db failure to not_found and only logs purge failures; update/param changes read params via a function returning empty on error.
+- CTL: database failures reported as script_error; PRM handlers as not_found (spec: internal).
+- PRM: plan with no input omits errors (spec: empty array).
+Standards: RFC 9000, 9001, 9846 (TLS 1.3, obsoletes 8446), 7250, 7301, 9221, 8259, 3339, 5280, 8410, 4648, 1952, FIPS 180-4, OCI Image, OCI Distribution, SemVer 2.0.0.
+Glossary: Fingerprint (TRN).

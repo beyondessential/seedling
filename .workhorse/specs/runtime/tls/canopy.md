@@ -106,7 +106,7 @@ The runtime MUST act on each classification:
 
 - issued: store the certificate, as [accepting a certificate](#accepting-a-certificate) specifies;
 - pending: record the order as open;
-- refusal: record the refusal and its reason, and apply it to the chain as [refusal](chains.md#refusal) specifies when Canopy is the responsible strategy;
+- refusal: record the refusal and its reason, and apply it to the chain as [refusal handling](chains.md#refusal-handling) specifies when Canopy is the responsible strategy;
 - order failed, or CSR rejected: record the reason, and ask again no sooner than the after-failure interval;
 - unavailable: record the reason, and ask again on the next report tick;
 - revoked: proceed as [revocation](#revocation) specifies.
