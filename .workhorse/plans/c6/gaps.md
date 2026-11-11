@@ -150,7 +150,6 @@ Glossary: Data directory (ACTU); Site volume, Site ingress (SITE).
 Open:
 - TPL/APPS: template instantiation whose script fails: code registers + files script_error; app.register says refuse and don't register.
 - TLSM: attempts/list limit uncapped, negative = unbounded: cap (200?), or refuse non-positive.
-- TLSM: manual upload always reports key_type ecdsa_p256: restrict uploads to P-256, or detect.
 - TLSM: dead `tailscale` policy strategy rendered but forbidden by schema: remove, or allow.
 - TLSM: hostname view status precedence when several conditions hold: specify, or meanings only.
 - RLY: canopy_unavailable listed in WIRE but never returned: drop, or use.

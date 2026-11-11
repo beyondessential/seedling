@@ -141,7 +141,7 @@ Its result is `{ certificates }`, an array with one object per stored certificat
 | `pending_renewal` | integer or null | the id of this certificate's pending renewal |
 | `state` | string | `csr_pending`, `active`, `superseded`, `failed` or `revoked` |
 | `origin` | string | `manual`, `csr`, `acme_dns`, `tailscale` or `canopy` |
-| `key_type` | string | the private key's algorithm; `ecdsa_p256` is the only value |
+| `key_type` | string | the private key's algorithm, such as `ecdsa_p256` |
 | `issuer` | string or null | the leaf's issuer |
 | `not_before` | integer or null | the leaf's `notBefore` |
 | `not_after` | integer or null | the leaf's `notAfter` |
@@ -191,6 +191,7 @@ The runtime MUST refuse the upload with `requirements_invalid`, naming the faile
 - the public key of `key_pem` differs from the leaf's SubjectPublicKeyInfo.
 
 On success, the runtime MUST store the certificate in state `active` with origin `manual`, and the private key encrypted at rest under the secret key.
+The stored certificate's `key_type` MUST name the algorithm of the uploaded key.
 The certificate MUST bind to the hostnames it covers as [certificate selection](../runtime/tls/certificates.md#certificate-selection) specifies, with no per-hostname step.
 It MUST retire the certificates it replaces in full, as [supersession](../runtime/tls/certificates.md#supersession) specifies.
 
