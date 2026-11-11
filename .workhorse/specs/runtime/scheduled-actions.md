@@ -36,7 +36,3 @@ The runtime MUST record a queued fire when its operation leaves the queue and st
 
 The runtime MUST fire a due schedule once, however many of its boundaries passed since it last fired.
 Once it has fired, the runtime evaluates the next boundary from the new fire time.
-
-## Start action
-
-The runtime MUST throw at definition evaluation from an `on_schedule` call on the start action.

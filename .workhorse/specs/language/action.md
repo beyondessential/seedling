@@ -76,8 +76,8 @@ If validation fails, `invoke` MUST throw without running the closure.
 An exception the invoked closure throws MUST propagate to the caller of `invoke`.
 
 `invoke` called while no action closure is running MUST throw.
-`invoke` on an action already on the operation's call stack, directly or through other invocations, MUST throw before the closure runs.
-The error MUST name the chain of actions that forms the cycle.
+`invoke` on an action already on the operation's [call stack](../runtime/operations.md#cycles), directly or through other invocations, MUST throw before the closure runs.
+The error MUST name each action on the stack, in call order, followed by the action being invoked.
 
 ## Param delivery
 
@@ -85,7 +85,7 @@ The runtime MUST pass an action's, shell's or install action's closure the param
 If the invoker supplies no params, the param map MUST be empty.
 
 Param keys ending in `_volume` or `_filename` are reserved for the runtime.
-The runtime MUST reject any invocation, by an operator or by `invoke`, whose supplied params include a reserved key.
+The runtime MUST reject any invocation, by an operator, by a shell request or by `invoke`, whose supplied params include a reserved key.
 The runtime MUST insert reserved keys only as [operation volume params](../runtime/operations.md#operation-scoped-volumes) specify.
 
 > [!NOTE]
@@ -154,7 +154,7 @@ That generator's default output MUST be 32 random bytes written as 64 lowercase 
 ### Volume params
 
 The `volume` kind MUST be accepted in the param schemas of actions and shells.
-It MUST throw in the install action's param schema and in a [parameter's kind](parameter.md#schema).
+It MUST throw in the install action's param schema, and a [parameter's kind](parameter.md#schema) does not accept it.
 
 The runtime MUST reject an invocation whose `volume` param names a site volume that does not exist.
 When it dispatches the invocation, the runtime MUST bind the named site volume for the operation, as [operation volume params](../runtime/operations.md#operation-scoped-volumes) specify.

@@ -54,8 +54,8 @@ A script MAY change a setting only through the definition method the table names
 | --- | --- | --- |
 | Linux capabilities | all dropped | [`cap_add`](../language/container.md#privileges) adds a named capability back |
 | privilege escalation | disabled | none |
-| root filesystem | read-only, with a writable tmpfs mounted at `/tmp` | [`writable_rootfs`](../language/container.md#privileges) makes it writable, and no tmpfs is mounted at `/tmp` |
-| process limit | 256 processes | [`pids_limit`](../language/container.md#resource-limits) sets another limit |
+| root filesystem | the default [`writable_rootfs`](../language/container.md#privileges) gives | `writable_rootfs` makes it writable, and no tmpfs is mounted at `/tmp` |
+| process limit | the default [`pids_limit`](../language/container.md#resource-limits) gives | `pids_limit` sets another limit |
 | open file limit | 65536, soft and hard | none |
 
 A container whose definition [names a user](../language/container.md#privileges) MUST be started as that user.
@@ -200,6 +200,8 @@ A restore event MUST identify the held volume consumed and the name of the site 
 Every host path the runtime creates, writes, moves or deletes on behalf of a definition or an operator command MUST be confined to the root that owns it.
 Content written into a volume is confined to that volume's root.
 A volume's own storage is confined to the directory holding volumes of its kind: in the data directory for a non-tmpfs volume, and in the tmpfs location for a tmpfs volume.
+
+The runtime MUST create each file a [declared file write](../language/volume.md#declared-file-writes) writes with permissions no broader than `0640`.
 
 Confinement MUST cover every component of a path.
 The runtime MUST resolve a parent directory it creates on the way to a write under the same confinement as the write.

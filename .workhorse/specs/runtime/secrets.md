@@ -46,6 +46,7 @@ The runtime MUST decrypt protected history values before giving them to a caller
 ## Redaction
 
 The runtime MUST NOT return the value of a secret parameter to a caller of the [Operator Interface](../overview.md#operator-interface).
+The runtime MUST NOT write a secret parameter's value to its logs, or emit it in an [event](../interface/events.md).
 It MUST NOT return a value recorded in the generation history if the parameter is secret now, or if the value was protected when it was recorded.
 A response withholding a value MUST say so with a machine-readable marker, so that a client can tell an unset value from a withheld one, as [describing an app](../interface/apps.md#parameters) and the [generation history](../interface/apps.md#generation-history) define.
 

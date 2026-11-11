@@ -325,9 +325,6 @@ Each balancing field of a route MUST take the route's value if the route set it,
 A route's rate limit MUST be the route's declaration if it made one, otherwise the Service's declaration if it made one, otherwise no limit.
 A declaration of `rate_limit(false)` resolves to no limit, so a route declaring it is not limited even where its Service declared a limit.
 
-A limit declared on a Service MUST be one budget, shared by every route that inherits it.
-A limit declared on a route MUST be that route's own budget.
-
 ### Header resolution
 
 Header operations MUST resolve per header name, independently within each direction.

@@ -22,7 +22,7 @@ If the app has an active `script_error` [fault](../overview.md#fault), the serve
 
 The server MUST reject with `not_found` a `name` that names one of the app's shells, a `name` of `"start"`, and a `name` that names no action the app declares.
 
-A `params` key ending in `_volume` or `_filename` is [reserved](../runtime/operations.md#reserved-parameter-keys), and the server MUST reject a request carrying one with `requirements_invalid`.
+A `params` key ending in `_volume` or `_filename` is [reserved](../language/action.md#param-delivery), and the server MUST reject a request carrying one with `requirements_invalid`.
 Where the action declares parameters, the server MUST validate the submitted values and fill in defaults as for [install parameters](#install-parameters) before the operation is scheduled.
 The value of a declared parameter MUST be a JSON string, and the server MUST reject a value of any other type with `requirements_invalid` rather than treat the parameter as absent.
 If a declared parameter of kind `volume` names a site volume that does not exist, the server MUST reject the request with `not_found`.

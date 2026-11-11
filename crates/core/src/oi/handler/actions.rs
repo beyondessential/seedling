@@ -122,7 +122,7 @@ fn validation_error_to_oi(e: ParamValidationError) -> OiError {
 }
 
 // spec: ACN#param-delivery
-// spec: OPS#reserved-parameter-keys
+// spec: ACN#param-delivery
 fn validate_action_params(
     params: &serde_json::Map<String, serde_json::Value>,
 ) -> Result<(), OiError> {
@@ -285,7 +285,7 @@ pub(crate) fn invoke_action(
 mod tests {
     use super::*;
 
-    // spec: ACN#param-delivery, OPS#reserved-parameter-keys
+    // spec: ACN#param-delivery
     #[test]
     fn rejects_reserved_volume_suffix() {
         let mut params = serde_json::Map::new();
@@ -294,7 +294,7 @@ mod tests {
         assert!(matches!(err.code, ErrorCode::RequirementsInvalid));
     }
 
-    // spec: ACN#param-delivery, OPS#reserved-parameter-keys
+    // spec: ACN#param-delivery
     #[test]
     fn rejects_reserved_filename_suffix() {
         let mut params = serde_json::Map::new();
@@ -371,7 +371,7 @@ mod tests {
         assert!(message.contains("lifecycle action"), "message: {message}");
     }
 
-    // spec: OPS#reserved-parameter-keys
+    // spec: ACN#param-delivery
     #[test]
     fn invoke_with_reserved_param_key_is_rejected() {
         let oi = TestOi::with_app("demo");

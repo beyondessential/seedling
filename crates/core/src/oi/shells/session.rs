@@ -137,7 +137,7 @@ pub(crate) async fn open_shell_session(
     let submitted_params = params.params.unwrap_or_default();
 
     // spec: SHL#opening-an-app-shell
-    // spec: OPS#reserved-parameter-keys
+    // spec: ACN#param-delivery
     if let Some(reserved) = submitted_params
         .keys()
         .find(|k| k.ends_with("_volume") || k.ends_with("_filename"))

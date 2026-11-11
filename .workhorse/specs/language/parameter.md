@@ -46,7 +46,7 @@ Calling a schema method again MUST replace the value it set before.
 | `description(description: string)` | a human-readable description | none |
 | `secret(secret: bool)` | whether the value is [secret](#secret-parameters) | implied by `kind` |
 
-`kind` MUST accept `"text"`, `"multiline"`, `"email"`, `"password"`, `"weak-password"` and `"random"`, each with the meaning the [install parameter kinds](action.md#param-schemas) give it.
+`kind` MUST accept `"text"`, `"multiline"`, `"email"`, `"password"`, `"weak-password"` and `"random"`, each with the meaning [param kinds](action.md#param-kinds) give it.
 `kind` MUST throw when given `"volume"`, which only action and shell parameters accept, or any value it does not define.
 
 ## Secret parameters
@@ -56,7 +56,6 @@ A parameter whose kind is `"password"` or `"weak-password"` MUST be secret unles
 A script MAY call `secret` before or after `kind`, and an explicit `secret` call MUST take precedence over the kind in either direction.
 
 The runtime MUST protect a secret parameter's value as [secret storage](../runtime/secrets.md#storage) and [redaction](../runtime/secrets.md#redaction) specify.
-The runtime MUST NOT write a secret parameter's value to its logs, or emit it in an [event](../interface/events.md).
 
 ## Change handlers
 

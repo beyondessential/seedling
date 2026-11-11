@@ -84,7 +84,7 @@ impl CustomType for Action {
         builder
             .with_name("Action")
             // spec: ACN#scheduled-actions
-            // spec: SCHED#start-action
+            // spec: ACN#start-action
             .with_fn(
                 "on_schedule",
                 |this: &mut Self, expr: &str| -> Result<Self, Box<EvalAltResult>> {

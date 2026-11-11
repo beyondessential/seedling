@@ -165,12 +165,6 @@ The runtime MUST NOT let a script choose the generated name, and the name MUST N
 Where the runtime needs a closure to use a particular file within a bound volume, it MAY pass the file name as the parameter `<key>_filename`.
 A script handed `<key>_filename` MUST use that file name.
 
-### Reserved parameter keys
-
-Parameter keys ending in `_volume` or `_filename` are reserved to the runtime.
-The runtime MUST reject a parameter map containing a reserved key, whether an operator, a shell request or an `Action.invoke` call supplied it.
-The runtime MUST insert reserved keys only as [operation-scoped volumes](#operation-scoped-volumes) describes.
-
 ## Action composition
 
 A script MAY run another action from within an action closure by calling [`Action.invoke(params?)`](../language/action.md#action-invocation) on a handle from [`app.action(name)`](../language/action.md#action-handles), `app.on_action()` or `app.on_start()`.
@@ -180,15 +174,13 @@ A barrier in the invoked closure is a barrier of the calling operation.
 
 ### Cycles
 
-The runtime MUST throw from an `Action.invoke` call whose action is already on the operation's call stack, before the invoked closure runs.
+An `Action.invoke` call whose action is already on the operation's call stack throws, as [action invocation](../language/action.md#action-invocation) specifies.
 The call stack begins with the operation's own action.
 The runtime MUST identify the actions on the stack by name.
-The thrown error MUST name each action on the stack, in call order, followed by the action being invoked.
 
 ### Sub-action parameters
 
-Before the invoked closure runs, the runtime MUST validate the supplied parameters against the invoked action's declared schema by the rules for an [operator invocation](../interface/actions.md#invoking-an-action): rejecting reserved keys, enforcing required parameters, applying defaults, and resolving `volume` parameters.
-The runtime MUST throw a validation failure before the invoked closure runs.
+The supplied parameters are validated before the invoked closure runs, as [action invocation](../language/action.md#action-invocation) specifies.
 
 On replay, the runtime MUST run a call already recorded in the [action log](history.md#action-calls) with the parameters its entry holds, and MUST NOT validate them again.
 If the entry at the call's position records a different action than the one being invoked, the runtime MUST fail the replay as a [divergence](suspension.md#positional-replay).

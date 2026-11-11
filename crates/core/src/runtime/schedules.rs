@@ -351,7 +351,7 @@ mod tests {
         );
     }
 
-    // spec: SCHED#start-action
+    // spec: ACN#start-action
     #[test]
     fn on_schedule_rejects_start_action() {
         use crate::defs::action::Action;

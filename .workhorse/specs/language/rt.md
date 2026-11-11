@@ -18,7 +18,7 @@ The argument naming the resources a runtime handle method acts on.
 
 ### Barrier
 
-A method of `Started` that waits for that `Started`'s resources to reach a [lifecycle state](../overview.md#lifecycle-state).
+A call in an action closure that waits for resources to reach a [lifecycle state](../overview.md#lifecycle-state): a state method of a [`Started`](#started), or [`rt.stop`](#stopping-resources).
 
 ## Handle availability
 

@@ -4,13 +4,9 @@ id: SUSP
 
 # Suspension and replay
 
-Applies to how the [runtime](../overview.md#runtime) suspends a [lifecycle operation](../overview.md#lifecycle-operation)'s action closure on a barrier, and replays it from the [action log](history.md#action-execution-log) to resume it or to recover it after a restart.
+Applies to how the [runtime](../overview.md#runtime) suspends a [lifecycle operation](../overview.md#lifecycle-operation)'s action closure on a [barrier](../language/rt.md#barrier), and replays it from the [action log](history.md#action-execution-log) to resume it or to recover it after a restart.
 
 ## Terminology
-
-### Barrier
-
-A call in an action closure that waits for resource instances to reach a [lifecycle state](../overview.md#lifecycle-state): a [state method](../language/rt.md#barriers) on a `Started`, or [`rt.stop`](#rtstop).
 
 ### Pass
 
@@ -25,19 +21,14 @@ The action log entry of the call that produced the `Started` a barrier is called
 When an action closure reaches a barrier whose condition is not satisfied, the runtime MUST suspend the closure.
 To the script, the barrier call blocks.
 
-A barrier's condition names resource instances and a required lifecycle state.
-The condition is satisfied when every named instance has reached or passed the required state, as derived from the [world observation history](lifecycle.md#derivation).
+A barrier's condition, as [barriers](../language/rt.md#barriers) specify it, is judged against the lifecycle states derived from the [world observation history](lifecycle.md#derivation).
 
 When a suspended barrier's condition is satisfied, the runtime MUST resume the closure, which continues from the point immediately after the barrier call.
 
 ### Deadlines
 
-A barrier's deadline is measured from when the barrier began to wait.
-If a barrier's condition is not satisfied when its deadline passes, the runtime MUST throw from the barrier call within the closure.
-The runtime MUST hold a barrier without a deadline, as for `.ready_eventually()` and `.terminated_eventually()`, until its condition is satisfied or the operation is [cancelled](operations.md#cancellation).
-
+A barrier's [deadline](../language/rt.md#barriers) is measured from when the barrier began to wait.
 The runtime MUST evaluate a barrier's condition before its deadline.
-The runtime MUST let a barrier whose condition is satisfied succeed even if its deadline has passed.
 
 > [!NOTE]
 > The action log can lag the world.
