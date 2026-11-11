@@ -194,7 +194,7 @@ An attachment is keyed by `(port, protocol)` within its site ingress, and its ta
 | forward | traffic for the attachment's port and protocol is routed to a named service of a named app |
 | redirect | requests for the attachment's port and protocol are answered with a redirect to a configured URL, with a configured status code, optionally keeping the request path |
 
-An attachment's protocols are those an app's [ingress](rule:l/ingress.protocol) may declare.
+An attachment's protocols are those an app's [ingress](rule:l/ingress.termination) may declare.
 An attachment takes its hostname and TLS provisioning mode from its site ingress.
 A site ingress MAY carry several attachments that differ in `(port, protocol)`.
 
