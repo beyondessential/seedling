@@ -185,6 +185,10 @@ impl ChainEnv {
     }
 }
 
+/// How many of the most recent attempts a [`Snapshot`] loads, across every
+/// hostname.
+const SNAPSHOT_ATTEMPTS: i64 = 1000;
+
 /// Snapshot of every DB row that drives a hostname's decision. Loaded
 /// once per OI rollup or coordinator run; reused across hostnames.
 #[derive(Debug, Clone)]
@@ -239,9 +243,8 @@ impl Snapshot {
     /// no such facts says so with [`ChainEnv::none`], and the chain decisions of
     /// that snapshot are not to be acted on.
     pub fn load(db: &Db, env: ChainEnv) -> rusqlite::Result<Self> {
-        let attempts = store::list_attempts(db, None, 1000)?;
-        let attempted: BTreeSet<i64> = attempts.iter().filter_map(|a| a.cert_id).collect();
-        let certificates = store::list_active_certificates_and(db, &attempted)?;
+        let attempts = store::list_attempts(db, None, SNAPSHOT_ATTEMPTS)?;
+        let certificates = store::list_active_certificates_and_attempted(db, SNAPSHOT_ATTEMPTS)?;
         let index = SanIndex::load_active(db, &certificates)?;
         Ok(Self {
             policies: store::list_policies(db)?,

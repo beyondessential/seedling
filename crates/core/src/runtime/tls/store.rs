@@ -4,8 +4,6 @@
 //! storage boundary; in-memory representations carry plaintext only when
 //! actively in use.
 
-use std::collections::BTreeSet;
-
 use jiff::Timestamp;
 use rusqlite::{OptionalExtension, params};
 use secrecy::{ExposeSecret, SecretString};
@@ -420,19 +418,29 @@ pub fn get_certificate(db: &Db, id: i64) -> rusqlite::Result<Option<TlsCertifica
         .optional()
 }
 
-/// The active certificates, and those with an id in `also` whatever their
-/// state, newest first.
-pub fn list_active_certificates_and(
+/// The active certificates, and those produced by the newest `attempt_limit`
+/// attempts whatever their state, newest first.
+///
+/// The attempts are selected the same way [`list_attempts`] selects them with
+/// no hostname, so a caller loading both with the same limit gets every
+/// certificate its attempts name. Selected inside the query rather than passed
+/// in as ids, so the statement is the same on every call and stays cached.
+pub fn list_active_certificates_and_attempted(
     db: &Db,
-    also: &BTreeSet<i64>,
+    attempt_limit: i64,
 ) -> rusqlite::Result<Vec<TlsCertificate>> {
-    let placeholders = vec!["?"; also.len()].join(", ");
-    let mut stmt = db.conn.prepare(&format!(
+    let mut stmt = db.conn.prepare_cached(&format!(
         "SELECT {CERT_COLUMNS} FROM tls_certificates
-         WHERE state = 'active' OR id IN ({placeholders})
+         WHERE state = 'active'
+            OR id IN (
+                SELECT cert_id FROM (
+                    SELECT cert_id FROM tls_cert_attempts ORDER BY id DESC LIMIT ?1
+                )
+                WHERE cert_id IS NOT NULL
+            )
          ORDER BY id DESC"
     ))?;
-    stmt.query_map(rusqlite::params_from_iter(also), row_to_certificate)?
+    stmt.query_map([attempt_limit], row_to_certificate)?
         .collect()
 }
 
