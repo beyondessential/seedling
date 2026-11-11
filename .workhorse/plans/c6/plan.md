@@ -66,7 +66,7 @@ Round 1:
 
 - [ ] Fidelity pass against the original specs (`git show 96eb265f^:docs/spec/{language,runtime,interface,web}.md`), one agent per area, using `rule-map/` to find where each rule went: restore constraints the rewrite tightened, loosened, dropped or invented; intent questions to the user
 - [ ] Cross-spec structure: the moves listed in gaps.md, duplicated definitions (Barrier in RT and SUSP), restatements that should link their home
-- [ ] Repoint code citations of PRIO, AUTO and other generic specs to LINUX where the cited code is Linux-specific
+- [x] Cite LINUX beside the generic spec where code is the Linux realisation (systemd units, slices, OOM adjustment, journal, forwarding, Podman socket, idle command, state directory)
 - [ ] Checks, build, tests
 
 Later rounds: fresh-eyes review per area against the spec-voice checklist, contradictions between specs, and information architecture.
