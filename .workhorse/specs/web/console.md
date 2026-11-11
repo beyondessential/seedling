@@ -33,6 +33,7 @@ It MUST let the operator list, add and remove the hostnames on the container reg
 The console MUST let the operator list manual and discovered site ingresses, each kind apart from the other.
 It MUST let the operator create, update and delete manual site ingresses, and attach and detach their forward and redirect targets.
 It MUST show the status of each ingress discovery provider.
+While ingress discovery is unhealthy, the console MUST warn the operator.
 
 The console MUST let the operator list, create and delete site volumes of the managed, bind and snapshot kinds.
 It MUST list the volumes apps export.
@@ -41,7 +42,6 @@ It MUST list held volumes, and let the operator confirm a held volume's deletion
 
 The console MUST show the operator the error of each request that fails.
 It MUST NOT present a read that failed as an empty result.
-While ingress discovery is unhealthy, the console MUST warn the operator.
 
 ## Signing in
 

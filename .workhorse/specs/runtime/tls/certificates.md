@@ -168,7 +168,7 @@ Obtaining one MUST pass the same [retry gate](#retry-blocks-and-retries) as any 
 For a hostname under an ACME DNS-01 policy, the runtime MUST renew the hostname's certificate once it reaches its renewal point.
 A renewal MUST replace the earlier certificate without interrupting service: until the new certificate is stored, the earlier one MUST go on being served, and handshakes in progress MUST NOT fail because of the replacement.
 
-When a hostname under an ACME DNS-01 policy is served a certificate of any other origin, including a `manual` or `csr` certificate, the runtime MUST start ACME DNS-01 issuance for it once that certificate reaches its renewal point.
+When a hostname under an ACME DNS-01 policy is served a certificate of any other origin, including a `manual` or `csr` certificate, and the hostname does not take a [Tailscale certificate](#tailscale-certificates), the runtime MUST start ACME DNS-01 issuance for it once that certificate reaches its renewal point.
 
 After issuing a certificate, the runtime SHOULD fetch its renewal information if the directory offers it.
 While the runtime uses renewal information for a certificate, it MUST fetch it again on the schedule of RFC 9773 §4.3.
