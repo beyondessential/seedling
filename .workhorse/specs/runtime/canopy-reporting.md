@@ -149,19 +149,16 @@ That list is addressed to the agent that owns backups on a host, and the runtime
 
 ## Report failure fault
 
-If a report fails while Canopy access is enabled and an offer is live, the runtime MUST file a fault of kind `canopy_report_failed` carrying the failure, attributed to the daemon rather than to an installed app, and MUST log the failure.
-Successive failures MUST be one fault, carrying the latest failure.
-The runtime MUST clear the fault when a report succeeds, and as soon as access is disabled or the last offer ends.
+If a report fails while Canopy access is enabled and an offer is live, the runtime MUST file a [`canopy_report_failed`](faults.md#reporting-faults) fault, and MUST log the failure.
 
 ## Missing offers
 
-While Canopy access is enabled and no offer has been live for 15 minutes, the runtime MUST hold an app-level fault of kind `canopy_offer_absent` against each app relying on Canopy, saying when an offer was last live, or that none ever has been.
+While Canopy access is enabled and no offer has been live for 15 minutes, the runtime MUST hold a [`canopy_offer_absent`](faults.md#app-faults) fault against each app relying on Canopy.
 The runtime MUST log each such fault when it files it.
 
 The 15 minutes MUST run from the latest of the last moment an offer was live, the moment the runtime started, the moment Canopy access was last enabled, and the moment the app came to rely on Canopy.
 The runtime MUST record durably the last moment an offer was live, and MUST keep that record accurate to within one report tick when the runtime stops without warning.
 
-The runtime MUST clear the fault when an offer becomes live, when Canopy access is disabled, when the app stops relying on Canopy, or when the app is deregistered.
 A restart MUST NOT clear the fault.
 
 > [!NOTE]

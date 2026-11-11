@@ -44,3 +44,4 @@ Fixed by me: WIRE shell stderr description; APPS uninstall reduced to a link to 
 Accepted code-derived details: recorded in gaps.md "Decided in the review loop".
 Code checks filed on D6.
 Asked the user: Faulted vs Degraded; shell attach timing; rt.write on mapped external volumes.
+Settled by the user: withholding faults decide faulted; blocking shell.attach with ShellExit; rt.write to mapped external volumes unless read-only.

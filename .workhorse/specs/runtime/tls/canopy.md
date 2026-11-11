@@ -11,15 +11,8 @@ Applies to the Canopy [strategy](certificates.md#strategy), by which the [runtim
 | term | meaning |
 | --- | --- |
 | certificate signing request (CSR) | a PKCS #10 certification request, per [RFC 2986](https://www.rfc-editor.org/rfc/rfc2986) |
-| subject public key info (SPKI) | the public key structure of [RFC 5280](https://www.rfc-editor.org/rfc/rfc5280) §4.1.2.7 |
 | problem details | the HTTP error body of [RFC 9457](https://www.rfc-editor.org/rfc/rfc9457) |
 | base64 | the encoding of [RFC 4648](https://www.rfc-editor.org/rfc/rfc4648) §4 |
-
-## Terminology
-
-### Key fingerprint
-
-The lowercase hexadecimal SHA-256 digest of a key's DER-encoded SPKI, by which Canopy names a key.
 
 ## Applicability and availability
 
@@ -132,7 +125,7 @@ The runtime MUST store it, and retire what it [supersedes](certificates.md#super
 ## Revocation
 
 The runtime learns of a revocation from an answer to a request, and from the certificates Canopy lists as held for the server in the response to each report.
-A listed certificate MUST be matched to a stored Canopy certificate by its name, ignoring ASCII case, and by its key fingerprint.
+A listed certificate MUST be matched to a stored Canopy certificate by its name, ignoring ASCII case, and by its key's [fingerprint](../../overview.md#fingerprint).
 A listed certificate with `revoked` or `key_must_be_replaced` true condemns the stored certificate it matches.
 
 When a Canopy certificate is condemned, the runtime MUST stop serving it at once and MUST destroy its key, whether or not the tick has room for further requests.

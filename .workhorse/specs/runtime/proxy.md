@@ -226,8 +226,7 @@ A failure to bring the proxy up MUST NOT prevent the runtime from starting: the 
 While any app is installed, the runtime MUST check the proxy's health on each [reconciliation](reconciliation.md#reconciliation-loop) iteration and restart it if it is not running or not healthy.
 The runtime MUST stop the proxy when no app is installed or installing.
 
-On an iteration that fails to bring the proxy up, the runtime MUST file a system [fault](../overview.md#fault) of kind `caddy_failed` naming the failure.
-The runtime MUST clear that fault on an iteration that finds the proxy healthy.
+On an iteration that fails to bring the proxy up, the runtime MUST file a [`caddy_failed`](faults.md#host-faults) fault.
 
 ## Proxy image
 

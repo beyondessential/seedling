@@ -41,8 +41,7 @@ Each host holds a registry allowlist, which operators edit through the [Operator
 A new host's allowlist MUST hold `docker.io` and `ghcr.io`.
 
 Each time the runtime evaluates an app's definition, it MUST compare the registry of every Deployment and Job image against the allowlist.
-While any image's registry is absent from the allowlist, the runtime MUST keep one [fault](../overview.md#fault) of kind `disallowed_registry` filed against the app, naming each disallowed registry.
-The runtime MUST clear that fault when an evaluation finds every image's registry in the allowlist.
+While any image's registry is absent from the allowlist, the runtime MUST hold a [`disallowed_registry`](../runtime/faults.md#app-faults) fault against the app.
 If the runtime cannot read the allowlist, it MUST NOT file or clear the fault.
 
 ## Command and arguments

@@ -80,12 +80,12 @@ A [`/shells/resize`](#resizing-a-terminal) received before the terminal exists M
 A session stopped before its job runs MUST end without the job having started, and the server MUST remove every container and network the session had created.
 A session stopped while the shell's script runs MUST end only once the script has stopped, so that the script creates nothing after the session has ended.
 
-A session that fails after its handshake response, for example because the shell's script fails, the script calls `shell.error`, the image cannot be pulled or the job cannot be started, MUST end with an `exit_code` of `-1`.
+A session that fails after its handshake response, for example because the shell's script fails, before or after its attachment ends, the script calls `shell.error`, the image cannot be pulled or the job cannot be started, MUST end with an `exit_code` of `-1`.
 The server MUST write the reason for such a failure to the stderr stream before closing it.
 
 ## Session end
 
-A session ends when any of the following occurs:
+A session's [attachment](../language/action.md#shell-control) to its job ends when any of the following occurs:
 
 - the session's job exits;
 - the client finishes its sending side of the session stream;
@@ -93,8 +93,12 @@ A session ends when any of the following occurs:
 - the connection is lost;
 - an operator stops the session with `/shells/stop`.
 
+When the attachment ends, the server MUST terminate the job if it is still running, and MUST finish the stdout stream.
+The shell's script then runs on until it returns, and the session ends when it does.
+A session an operator stops MUST end only once the script has stopped, whether the attachment has ended or not.
+
 When a session ends, the server MUST write the exit frame `{ "exit_code": <integer> }` to the session stream and then finish its sending side of the session stream.
-The server MUST finish the stdout and stderr streams when the session ends.
+The server MUST finish the stderr stream when the session ends.
 
 Where the job exited with a status, `exit_code` MUST be that status.
 Where the job was terminated by a signal, `exit_code` MUST be negative.

@@ -38,7 +38,11 @@ The strategies are Canopy, defined in [TCAN](canopy.md); ACME HTTP-01 and the pr
 
 ### Policy
 
-An [operator](../../overview.md#operator)'s binding of a hostname or hostname pattern to a strategy.
+An [operator](../../overview.md#operator)'s binding of a hostname or [hostname pattern](#hostname-pattern) to a strategy.
+
+### Hostname pattern
+
+An exact hostname, the catch-all `*`, or `*.` followed by a hostname, matched against hostnames as [policy matching](#policies) defines.
 
 ### Runtime-managed certificate
 
@@ -48,9 +52,13 @@ A certificate, with its private key, that the runtime stores and serves to the i
 
 A certificate the ingress proxy obtained itself through ACME HTTP-01 or its internal CA.
 
+### Primary SAN
+
+The first DNS name in the SAN extension of a certificate's leaf.
+
 ### Certificate label
 
-The hostname a runtime-managed certificate is stored under: for an operator upload, the first DNS name in its SAN set; for any other certificate, the hostname it was obtained for.
+The hostname a runtime-managed certificate is stored under: for an operator upload, its [primary SAN](#primary-san); for any other certificate, the hostname it was obtained for.
 
 ### Renewal point
 
@@ -150,9 +158,7 @@ The runtime MUST generate a new key pair for each issuance, and SHOULD generate 
 
 The runtime SHOULD NOT run two ACME orders at once.
 
-If an issuance fails, the runtime MUST file a fault of kind `cert_issue_failed` against the hostname, carrying the failure, and MUST log it.
-The runtime MUST NOT file a second such fault for a hostname that already has one.
-It MUST clear the fault when an issuance for the hostname succeeds.
+If an issuance fails, the runtime MUST file a [`cert_issue_failed`](../faults.md#certificate-faults) fault, and MUST log it.
 
 ## Tailscale certificates
 

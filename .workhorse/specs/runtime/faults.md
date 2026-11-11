@@ -91,10 +91,13 @@ An `image_pull_failed` fault MUST name the image reference.
 An `external_volume_not_mapped` fault MUST name the external volume, and the runtime MUST NOT start the instance while the mapping is missing.
 
 A `crash_loop` fault MUST state which of its two triggers filed it.
-While a `crash_loop` fault is active, the runtime MUST NOT restart the instance autonomously.
 
 A `health_check_replace_failed` fault MUST identify the failed replacement and the unhealthy original.
-While it is active, the runtime MUST NOT start further replacements for the Deployment.
+
+### Withholding faults
+
+A withholding fault is one under which the runtime stops acting on its subject until the fault clears: `external_volume_not_mapped`, `crash_loop` and `health_check_replace_failed`.
+An app holding one is [`faulted`](../interface/apps.md#status-derivation) rather than `degraded`.
 
 ## Volume faults
 
@@ -113,7 +116,7 @@ The runtime MUST file and clear the faults below against the app, with an empty 
 | kind | subject | filed when | clears when | shape |
 | --- | --- | --- | --- | --- |
 | `script_error` | none | the app's definition fails to evaluate, at registration, on an update, on a parameter change, on a change to the registry allowlist, when an undetermined [host constant](../language/constants.md#determining-host-constants) is determined, or when the runtime starts | the definition next evaluates | condition |
-| `disallowed_registry` | none | an image a Deployment or Job declares is from a registry outside the [allowlist](../language/container.md#registry-allowlist) | no declared image is outside the allowlist | condition |
+| `disallowed_registry` | none | an image a Deployment or Job declares is from a registry outside the [allowlist](../language/container.md#registry-allowlist) | an evaluation finds no declared image outside the allowlist | condition |
 | `registry_error` | none | the runtime cannot compute the app's desired state | the runtime next computes it | condition |
 | `operation_failed` | none | a [lifecycle operation](../overview.md#lifecycle-operation) for the app fails, or its action closure does not compile | a later lifecycle operation for the app completes | event |
 | `operation_cancelled` | none | a lifecycle operation for the app is cancelled | a later lifecycle operation for the app completes | event |
@@ -124,6 +127,10 @@ The runtime MUST file and clear the faults below against the app, with an empty 
 | `definition_recheck_failed` | none | 5 consecutive [re-checks](definition-recheck.md#back-off) of the app's definition fail | a re-check succeeds, or the app's definition is replaced | condition |
 | `schedule_params_invalid` | the action | a schedule of the action comes due and its run [fails param validation](../language/action.md#scheduled-actions) | a later scheduled run of the action passes validation, or the definition no longer schedules the action | event |
 | `canopy_offer_absent` | none | the app [relies on Canopy](canopy-reporting.md#missing-offers) and no offer has been live for 15 minutes | an offer is live, Canopy access is disabled, or the app stops relying on Canopy | condition |
+
+An `operation_failed` fault MUST carry the failure.
+A `disallowed_registry` fault MUST name each disallowed registry.
+A `canopy_offer_absent` fault MUST say when an offer was last live, or that none ever has been.
 
 A `definition_source_moved` fault MUST identify the reference and both digests.
 A re-check that fails MUST neither file nor clear it.
@@ -159,6 +166,7 @@ A site service fault MUST name the failing endpoints, and an unroutable one MUST
 | `canopy_certificate_failed` | the ingress's app | the ingress | the ingress's certificate cannot be obtained or replaced through Canopy, [as TCAN specifies](tls/canopy.md#faults) | a usable certificate replaces the one in doubt | condition |
 
 A `cert_acquisition_failed` fault MUST identify the hostname and the most recent acquisition error.
+A `cert_issue_failed` fault MUST carry the failure.
 If the runtime cannot read whether a certificate is held for a hostname, it MUST neither file nor clear `cert_acquisition_failed` for that hostname.
 
 ## Host faults
@@ -167,7 +175,7 @@ The runtime MUST file and clear the faults below against `_system`, with an empt
 
 | kind | filed when | clears when | shape |
 | --- | --- | --- | --- |
-| `container_runtime_unavailable` | the runtime is running without a working container runtime or process supervisor | the runtime is running with both | condition |
+| `container_runtime_unavailable` | the runtime is running without a working container runtime or process supervisor | the runtime has started with both reachable | condition |
 | `app_priorities_unreadable` | the runtime cannot read the stored app priorities | the runtime next reads them | condition |
 | `scaling_decisions_unreadable` | the runtime cannot read the stored operator scaling decisions | the runtime next reads them | condition |
 | `slice_sync_failed` | applying the [resource-control groups](priority.md#resource-control-groups) has failed 5 consecutive times | the groups are next applied | condition |
@@ -178,8 +186,8 @@ The runtime MUST file and clear the faults below against `_system`, with an empt
 | `ipv4_egress_undetermined` | whether the host has [IPv4 egress](../language/constants.md#host-constants) cannot be determined | the determination succeeds | condition |
 | `timezone_undetermined` | the host's [local time zone](../language/constants.md#host-constants) cannot be determined | the determination succeeds | condition |
 | `operation_state_unreadable` | the runtime cannot read the [persisted operation, its cancel, or the persisted queue](operations.md#unreadable-operation-state) | the read succeeds | condition |
-| `resolver_failed` | starting the resolver fails or does not finish in time | the resolver next starts | condition |
-| `caddy_failed` | bringing up the proxy fails or does not finish in time | the proxy is next brought up | condition |
+| `resolver_failed` | starting the resolver fails or does not finish in time | an iteration finds the resolver running | condition |
+| `caddy_failed` | bringing up the proxy fails or does not finish in time, or a [proxy upgrade](proxy.md#proxy-upgrades) is rejected | an iteration finds the proxy healthy | condition |
 | `routes_failed` | applying the host's routes fails | the routes are next applied | condition |
 | `nftables_failed` | applying the host's packet-filtering rules fails | the rules are next applied | condition |
 | `proxy_failed` | applying the proxy configuration fails | a proxy configuration is next applied | condition |
@@ -188,6 +196,8 @@ The runtime MUST file and clear the faults below against `_system`, with an empt
 
 The runtime MUST file `app_priorities_unreadable` and `scaling_decisions_unreadable` on the first failed read, since the runtime holds reconciliation while either persists.
 A withheld apply MUST neither file nor clear `routes_failed`, `nftables_failed` or `proxy_failed`.
+A `container_runtime_unavailable` fault MUST name the unavailable backend and state that no workloads will be actuated until the runtime is restarted with working backends.
+A `resolver_failed` or `caddy_failed` fault MUST name the failure.
 
 ## Reporting faults
 
@@ -199,4 +209,6 @@ The runtime MUST file and clear the faults below against `seedling`, with an emp
 | `audit_lag` | the audit log writer falls behind and drops events | an operator clears it | event |
 | `audit_log_unavailable` | the runtime cannot open the [audit log](audit-log.md#write-failures) | the runtime opens it | condition |
 
+A `canopy_report_failed` fault MUST carry the latest failure.
 An `audit_lag` fault MUST state how many events were dropped.
+An `audit_log_unavailable` fault MUST state how many events went unwritten while it was active.

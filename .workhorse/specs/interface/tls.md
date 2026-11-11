@@ -25,14 +25,6 @@ Applies to the [Operator Interface](../overview.md#operator-interface) methods t
 
 A certificate with its private key, or a pending CSR with its private key, held by the [runtime](../overview.md#runtime) under an integer id.
 
-### Primary SAN
-
-The first DNS name in the SAN extension of a certificate's leaf.
-
-### Hostname pattern
-
-An exact hostname, the catch-all `*`, or `*.` followed by a hostname, matched against hostnames as [policy matching](../runtime/tls/certificates.md#policies) defines.
-
 ## Conventions
 
 A hostname, in these methods, is a string of at most 253 characters made of labels separated by dots.
@@ -90,7 +82,7 @@ If a policy references the provider, the runtime MUST refuse the request with `r
 
 ## Policies
 
-A policy binds a [hostname pattern](#hostname-pattern) to a strategy for obtaining certificates.
+A policy binds a [hostname pattern](../runtime/tls/certificates.md#hostname-pattern) to a strategy for obtaining certificates.
 A hostname that no policy matches follows the default chain of [the default chain](../runtime/tls/chains.md#default-chain).
 A policy takes effect as [the policy rules](../runtime/tls/certificates.md#policies) specify.
 
@@ -152,7 +144,7 @@ Its result is `{ certificates }`, an array with one object per stored certificat
 | `created_at` | integer | when the row was created |
 | `updated_at` | integer | when the row was last written |
 
-For an operator upload, `hostname` MUST be the certificate's [primary SAN](#primary-san).
+For an operator upload, `hostname` MUST be the certificate's [primary SAN](../runtime/tls/certificates.md#primary-san).
 For a certificate the runtime issued, it MUST be the hostname the runtime issued for.
 For a CSR awaiting its certificate, it MUST be the first requested hostname.
 The hostnames a certificate serves MUST be decided by [SAN coverage](../runtime/tls/certificates.md#coverage) alone, never by `hostname`.

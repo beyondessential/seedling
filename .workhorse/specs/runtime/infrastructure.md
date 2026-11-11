@@ -32,9 +32,7 @@ If the container runtime or the process supervisor cannot be reached when the ru
 It MUST still bring up the [Operator Interface](../overview.md#operator-interface), the database and the reconciliation loop.
 
 While either backend is unavailable, the runtime MUST NOT actuate workloads, or infrastructure that depends on the unavailable backend.
-On each reconciliation iteration while either is unavailable, the runtime MUST file a system [fault](../overview.md#fault) of kind `container_runtime_unavailable`.
-The fault's description MUST name the unavailable backend and state that no workloads will be actuated until the runtime is restarted with working backends.
-The runtime MUST clear that fault once it has started with both backends reachable.
+On each reconciliation iteration while either is unavailable, the runtime MUST file a [`container_runtime_unavailable`](faults.md#host-faults) fault.
 
 The runtime MAY remain without the backends until it is restarted.
 

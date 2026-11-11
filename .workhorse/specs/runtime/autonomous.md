@@ -106,7 +106,7 @@ An action that addresses a Deployment addresses all of it.
 
 If the runtime cannot read the record of operator-chosen scale, it MUST NOT substitute a declared bound.
 It MUST NOT actuate in that iteration any app whose effective scale it could not read, so that the instances already running keep running.
-It MUST hold a fault of kind `scaling_decisions_unreadable` for as long as the record cannot be read, and MUST clear it on the next iteration that reads it.
+It MUST hold a [`scaling_decisions_unreadable`](faults.md#host-faults) fault for as long as the record cannot be read.
 
 The runtime MUST throw from an `rt.*` call that resolves a named Deployment whose effective scale it cannot read.
 The runtime MUST report a Deployment's scale as unavailable to an operator who asks for it while it cannot be read.
@@ -134,7 +134,7 @@ The runtime MUST NOT start a replacement for an instance of a Deployment that de
 ### Replacement guard
 
 The runtime MUST require a fresh instance brought up by a [rolling update](update-strategies.md#rolling-updates) or by a health-check replacement to become healthy within its grace window of `start_period + retries × interval`, from its declared healthcheck.
-If it does not, the runtime MUST stop it, file a [`health_check_replace_failed` fault](faults.md#workload-faults), and start no further fresh instances of the Deployment, by rolling update or by replacement, until the app's generation changes or an operator clears the fault.
+If it does not, the runtime MUST stop it, file a [`health_check_replace_failed` fault](faults.md#workload-faults), and start no further fresh instances of the Deployment, by rolling update or by replacement, while the fault is active.
 The runtime MUST keep the instance it was to replace running in degraded mode.
 
 The runtime MUST apply the guard to every Deployment that declares a healthcheck, whatever its `on_failure` policy.

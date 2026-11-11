@@ -21,9 +21,8 @@ In an iteration where an instance's observation failed, the runtime MUST NOT sto
 
 A state that is observed but not recognised is evidence that the thing exists, and the runtime MUST NOT treat it as absence.
 
-When an instance's observation has failed on 3 consecutive iterations, the runtime MUST file a fault of kind `observe_failed` against the instance.
+When an instance's observation has failed on 3 consecutive iterations, the runtime MUST file an [`observe_failed`](faults.md#workload-faults) fault.
 The runtime MUST NOT file it for a single failed observation.
-The runtime MUST clear the fault when an observation of the instance next succeeds.
 
 ## Containers
 

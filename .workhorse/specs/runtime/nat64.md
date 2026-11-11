@@ -43,8 +43,8 @@ If the resolver answers without such an address, NAT64 MUST be active.
 
 A lookup that fails or receives no answer leaves detection undetermined.
 The runtime MUST NOT report an undetermined detection as the network providing or lacking NAT64.
-While detection is undetermined, NAT64 MUST be active, and the runtime MUST file a system [fault](../overview.md#fault) of kind `nat64_detection_failed`.
-The runtime MUST retry detection on each later reconciliation iteration until it succeeds, and MUST then clear that fault.
+While detection is undetermined, NAT64 MUST be active, and the runtime MUST file a [`nat64_detection_failed`](faults.md#host-faults) fault.
+The runtime MUST retry detection on each later reconciliation iteration until it succeeds.
 A detection that succeeds after the runtime has started MUST NOT change whether NAT64 is active until the runtime next starts.
 
 > [!NOTE]
@@ -67,14 +67,12 @@ The runtime MUST NOT tear the translator down when it shuts down.
 > [!NOTE]
 > Workload containers keep running across a restart of the runtime, and depend on the translator to reach IPv4 destinations.
 
-If the translator cannot be set up while NAT64 is active, the runtime MUST report an error and file a system [fault](../overview.md#fault) of kind `nat64_setup_failed`.
+If the translator cannot be set up while NAT64 is active, the runtime MUST report an error and file a [`nat64_setup_failed`](faults.md#host-faults) fault.
 It MUST NOT start workload containers until set-up succeeds, and MUST retry set-up on each later reconciliation iteration.
-The runtime MUST clear that fault when set-up succeeds.
 
 A teardown that cannot establish whether the translator is installed has failed.
 The runtime MUST NOT report the translator removed while it remains installed.
-After a failed teardown, the runtime MUST file a system fault of kind `nat64_teardown_failed`, and MUST attempt the teardown again on each iteration while no app is installed.
-The runtime MUST clear that fault when a teardown succeeds or the translator is next set up.
+After a failed teardown, the runtime MUST file a [`nat64_teardown_failed`](faults.md#host-faults) fault, and MUST attempt the teardown again on each iteration while no app is installed.
 
 ## IPv6 egress
 
@@ -82,8 +80,8 @@ When it starts, the runtime MUST determine whether the host has IPv6 egress to t
 The host has IPv6 egress when it has a default IPv6 unicast route (`::/0`) and an interface other than loopback carries a globally routable IPv6 address, which excludes unique local and link-local addresses.
 The determination MUST rest only on the host's routing and address state, and MUST NOT depend on DNS resolution or on sending traffic.
 If that state cannot be read, the determination is undetermined, and the runtime MUST NOT report it as the host having or lacking IPv6 egress.
-While it is undetermined, the resolver MUST synthesise as for a host without IPv6 egress, and the runtime MUST file a system fault of kind `ipv6_egress_undetermined`.
-The runtime MUST retry the determination on each later reconciliation iteration until it succeeds, and MUST then clear that fault.
+While it is undetermined, the resolver MUST synthesise as for a host without IPv6 egress, and the runtime MUST file an [`ipv6_egress_undetermined`](faults.md#host-faults) fault.
+The runtime MUST retry the determination on each later reconciliation iteration until it succeeds.
 
 The runtime MUST record the first determined outcome, and MUST NOT change it while it runs.
 

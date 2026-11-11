@@ -84,8 +84,7 @@ When an operation ends, the runtime MUST return the app's [desired state](reconc
 
 Where a generation bump initiated the operation, the runtime MUST record the operation's outcome on that generation's [history entry](generation.md#history-entries).
 
-When an operation fails, the runtime MUST file a fault of kind `operation_failed` against the app.
-When an operation for an app completes successfully, the runtime MUST clear the app's `operation_failed` and `operation_cancelled` faults.
+When an operation fails, the runtime MUST file an [`operation_failed`](faults.md#app-faults) fault.
 
 ## Persistence
 
@@ -105,15 +104,15 @@ The runtime MUST replay an interrupted install only if the app is registered, th
 The runtime MUST replay any other interrupted operation only if the app is registered, the persisted parameters can be read, and the app is `Installed`.
 
 Where the runtime does not replay an interrupted operation, it MUST clear the persisted operation and give back the resources it [spared for the replay](suspension.md#abandoned-replay).
-Where the operation not replayed was an install of an app in `Installing`, the runtime MUST file a fault of kind `install_interrupted` against the app and recover the app as a [stuck install](#stuck-install-recovery).
+Where the operation not replayed was an install of an app in `Installing`, the runtime MUST file an [`install_interrupted`](faults.md#app-faults) fault and recover the app as a [stuck install](#stuck-install-recovery).
 
 If the runtime cannot read whether an interrupted operation exists, it MUST NOT perform stuck-install recovery or [startup cleanup](suspension.md#abandoned-replay), since both act on that operation's absence.
 
 ### Unreadable operation state
 
-If the runtime cannot read the persisted operation, whether a cancel was persisted for it, or the persisted queue, it MUST file a system [fault](../overview.md#fault) of kind `operation_state_unreadable`.
+If the runtime cannot read the persisted operation, whether a cancel was persisted for it, or the persisted queue, it MUST file an [`operation_state_unreadable`](faults.md#host-faults) fault.
 Until the read succeeds, the runtime MUST NOT start any lifecycle operation, and MUST retry the read on each reconciliation iteration.
-Once the read succeeds, the runtime MUST decide replay and restore its queue as on starting, and MUST clear the fault.
+Once the read succeeds, the runtime MUST decide replay and restore its queue as on starting.
 
 ## Stuck-install recovery
 
@@ -137,7 +136,7 @@ The runtime MUST stop a cancelled operation at the next barrier or `rt.*` call i
 
 The runtime MUST end a cancelled operation in an outcome distinct from success and from failure.
 The runtime MUST clean up after a cancelled operation as after a failed one, tearing down its [dynamic resources](../language/app.md#dynamic-resource-lifetime) and clearing its persisted record.
-The runtime MUST file a fault of kind `operation_cancelled` against the app, distinct from `operation_failed`.
+The runtime MUST file an [`operation_cancelled`](faults.md#app-faults) fault, not an `operation_failed` one.
 
 ### Cancel persistence
 

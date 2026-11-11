@@ -83,7 +83,6 @@ The server MUST discard the persisted values when the install operation ends, wh
 
 When an install operation completes successfully, the runtime MUST move the app from `Installing` to `Installed`.
 When an install operation fails or is cancelled, the runtime MUST move the app from `Installing` to `NotInstalled`.
-When an install operation fails, the runtime MUST file an `operation_failed` fault carrying the failure.
 
 ## Uninstall
 

@@ -202,16 +202,35 @@ How a shell session relates to lifecycle operations is specified by [shell sessi
 
 A shell control is a `ShellControl` value with two methods.
 
-`shell.attach(job: Job)` designates the [job](job.md#instances) the session runs, and returns no value.
+`shell.attach(job: Job)` starts the [job](job.md#instances), connects the operator's input and output to it, and returns a [`ShellExit`](#shellexit) once the attachment ends.
 `shell.attach` given anything other than a Job MUST throw.
 A second `shell.attach` within one run of the closure MUST throw.
 
+The attachment MUST end when the job's process exits, when the operator closes the session, or when the connection is lost.
+When it ends other than by the job's process exiting, the runtime MUST stop the job.
+
+The closure MAY go on using the runtime handle after `shell.attach` returns, without the operator's input and output.
+The session MUST last until the closure returns.
+If the closure returns without having called `shell.attach`, or fails, the runtime MUST end the session with an error, reported to the operator while the connection holds.
+
 `shell.error(message: string)` ends the session with an error carrying `message`, and MUST throw to end the closure.
 
-Once the closure returns having called `shell.attach`, the runtime MUST start the designated job and connect the operator's input and output to it.
-The session MUST last until the operator closes it or the connection is lost.
-If the closure returns without calling `shell.attach`, or fails, the runtime MUST end the session with an error to the operator.
-If the closure called `shell.error`, that error MUST carry `message`.
+> [!NOTE]
+> A shell is a scripted procedure with an interactive step: the closure can prepare what the operator needs before attaching, and act on how the session went once it has ended.
+
+### ShellExit
+
+A `ShellExit` is an opaque value standing for how a shell's attachment ended.
+
+| method | returns |
+| --- | --- |
+| `exited()` | `true` if the job's process exited, `false` if the attachment ended first |
+| `exit_code()` | the job's exit status, as [`Executed`](rt.md#executed) defines it, or the unit value `()` if the process did not exit |
+| `success()` | `true` if the process exited with status 0, `false` otherwise |
+| `ensure_success()` | no value |
+
+`ensure_success()` MUST throw unless the process exited with status 0.
+Its error MUST carry the exit status, or state that the process did not exit.
 
 ## Scheduled actions
 
@@ -222,7 +241,7 @@ An `expr` that is not a valid [schedule expression](#schedule-expressions) MUST 
 
 Each time a schedule comes due, the runtime MUST run its action as [scheduled actions](../runtime/scheduled-actions.md) specify.
 The runtime MUST validate a scheduled run against the action's [param schema](#param-schemas) as an invocation that supplies no params, so that each declared param takes its `default_value`.
-If that validation fails, the runtime MUST NOT run the closure, and MUST file a [fault](../overview.md#fault) of kind `schedule_params_invalid` against the app, with the action's name as its subject.
+If that validation fails, the runtime MUST NOT run the closure, and MUST file a [`schedule_params_invalid`](../runtime/faults.md#app-faults) fault.
 
 ### Schedule expressions
 

@@ -138,9 +138,9 @@ A string `contents` MUST be written as its UTF-8 bytes, and a [`File`](bundle.md
 
 - a named Volume;
 - an anonymous Volume created in the running operation;
-- an ExternalVolume bound for the running operation, as [operation-scoped external volumes](volume.md#external-volumes) specify.
+- an ExternalVolume that [resolves](volume.md#external-volumes) to storage, through the running operation's bindings or the host's mappings.
 
-Any other `target`, including an ExternalVolume with no binding for the operation, MUST make `rt.write` throw.
+Any other `target` MUST make `rt.write` throw, including an ExternalVolume that resolves to nothing, and one whose mapping is read-only.
 `path` MUST be validated as a [volume write path](volume.md#write-paths) is, and an invalid `path` MUST make `rt.write` throw.
 
 The runtime MUST NOT write the file again when a container using the volume restarts.

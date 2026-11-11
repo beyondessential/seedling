@@ -39,8 +39,7 @@ It MUST restart a resolver that is not running.
 It SHOULD restart a running resolver only after its health check has failed on three consecutive iterations.
 The runtime MUST stop the resolver when no app is installed or installing.
 
-On an iteration that fails to bring the resolver up, or does not finish doing so, the runtime MUST file a system [fault](../overview.md#fault) of kind `resolver_failed` naming the failure.
-The runtime MUST clear that fault on an iteration that finds the resolver running.
+On an iteration that fails to bring the resolver up, or does not finish doing so, the runtime MUST file a [`resolver_failed`](faults.md#host-faults) fault.
 
 ## Upstreams
 

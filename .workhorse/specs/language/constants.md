@@ -66,9 +66,9 @@ While the runtime cannot determine the host's local time zone, `TIMEZONE` MUST b
 
 The runtime MUST determine the host constants when it starts, and MUST NOT change a determined value while it runs.
 
-While whether the host has IPv4 egress is undetermined, the runtime MUST file a system [fault](../overview.md#fault) of kind `ipv4_egress_undetermined`.
-While the host's local time zone is undetermined, the runtime MUST file a system fault of kind `timezone_undetermined`.
-The runtime MUST retry an undetermined value on each later reconciliation iteration until it is determined, and MUST then clear its fault.
+While whether the host has IPv4 egress is undetermined, the runtime MUST file an [`ipv4_egress_undetermined`](../runtime/faults.md#host-faults) fault.
+While the host's local time zone is undetermined, the runtime MUST file a [`timezone_undetermined`](../runtime/faults.md#host-faults) fault.
+The runtime MUST retry an undetermined value on each later reconciliation iteration until it is determined.
 When an undetermined value of `HOST_HAS_IPV4`, `HOST_HAS_IPV6` or `TIMEZONE` is determined, the runtime MUST re-evaluate the definition of every installed app.
 
 > [!NOTE]

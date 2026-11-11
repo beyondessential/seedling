@@ -29,7 +29,7 @@ The server MUST refuse a definition that cannot be fetched, breaks the bundle ru
 Otherwise the server MUST register the app with the status `not_installed` and the [generation](../overview.md#generation) 1, recorded with a `register` [history entry](#generation-history), and MUST emit an `AppRegistered` [event](events.md#event-types).
 The result is `{ "generation": 1 }`.
 
-The server MUST register an app whose definition fails to parse or evaluate, and MUST file a `script_error` fault against it.
+The server MUST register an app whose definition fails to parse or evaluate, and MUST file a [`script_error`](../runtime/faults.md#app-faults) fault against it.
 
 A registration that fails for any reason MUST leave nothing observable behind.
 The app MUST NOT appear in listings, MUST NOT reappear after the daemon restarts, and a later registration under the same name MUST NOT be refused as a duplicate.
@@ -71,7 +71,7 @@ Every piece of state derived from the definition MUST stay as it was, so that a 
 > [!NOTE]
 > State derived from the definition includes held volume data, clamped scaling decisions, port forwards to the app's services, and action schedules.
 
-On success the server MUST clear any active `script_error` fault for the app, and MUST record the new definition and the parameter change together in a single generation bump, with a `script_update` history entry.
+On success the server MUST record the new definition and the parameter change together in a single generation bump, with a `script_update` history entry.
 
 If the update changes a parameter, the app is installed, and the new definition registers an `on_change` handler for the parameter that the change's [transition](../language/parameter.md#change-handlers) triggers, the server MUST schedule the handler as a [lifecycle operation](../overview.md#lifecycle-operation).
 The handler MUST run under the new definition, with `old` being the previous generation.
@@ -79,7 +79,7 @@ An update that changes no parameter MUST NOT schedule a handler.
 
 ## Uninstall
 
-`/apps/uninstall` tears down every resource of an installed app, as [ACN](actions.md#uninstall) specifies.
+`/apps/uninstall` tears down every resource of an installed app, as [ACI](actions.md#uninstall) specifies.
 
 ## Removal
 
@@ -116,8 +116,8 @@ An app's status is the first of these that applies:
 2. `installing`: an install of the app is in progress.
 3. `operating`: the lifecycle operation running on the host is one of the app's; a queued operation does not count.
 4. `not_installed`: the app is not installed.
-5. `faulted`: at least one active fault is filed against the app.
-6. `degraded`: at least one of the app's resources is not at its desired [lifecycle state](../overview.md#lifecycle-state).
+5. `faulted`: at least one active [withholding fault](../runtime/faults.md#withholding-faults) is filed against the app.
+6. `degraded`: at least one active fault is filed against the app, or at least one of the app's resources is not at its desired [lifecycle state](../overview.md#lifecycle-state).
 7. `running`: none of the above.
 
 A resource's desired lifecycle state is `Ready`, except that a [stopped](app-control.md#resource-stop) resource, and a deployment whose effective scale is zero, are desired at `Unscheduled`.

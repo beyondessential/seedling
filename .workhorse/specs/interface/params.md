@@ -67,7 +67,7 @@ Otherwise the server MUST validate the proposed values before it persists anythi
 It MUST then store the value and bump the app's generation, with a `param_set` [history entry](apps.md#generation-history), as one durable change.
 
 The server MUST then evaluate the app's definition with its new values.
-If the evaluation fails, the server MUST file a `script_error` fault against the app, and the request still succeeds.
+If the evaluation fails, the server MUST file a [`script_error`](../runtime/faults.md#app-faults) fault against the app, and the request still succeeds.
 
 If the app is installed and its definition registers an `on_change` handler for the parameter that the change's [transition](../language/parameter.md#change-handlers) triggers, the server MUST schedule the handler as a [lifecycle operation](../overview.md#lifecycle-operation) and return `accepted`.
 A handler queued behind another app's operation is accepted.

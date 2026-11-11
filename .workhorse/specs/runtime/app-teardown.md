@@ -30,7 +30,7 @@ If the runtime cannot read an app's recorded identities, it MUST NOT advance the
 
 An app having no recorded identities MUST NOT on its own be taken as evidence that its teardown has finished.
 Where the runtime has no recorded identities for an app and cannot rule out that resources of the app remain on the host, it MUST NOT declare the app uninstalled.
-In that case the runtime MUST hold a [fault](../overview.md#fault) of kind `uninstall_unidentifiable_units` against the app, and MUST clear it when the app's teardown completes or the app is deregistered.
+In that case the runtime MUST hold an [`uninstall_unidentifiable_units`](faults.md#app-faults) fault.
 
 ## Uninstall admission
 

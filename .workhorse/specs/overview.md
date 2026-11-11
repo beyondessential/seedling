@@ -38,7 +38,7 @@ The key words MUST, MUST NOT, REQUIRED, SHALL, SHALL NOT, SHOULD, SHOULD NOT, RE
 | [RFC 8032](https://www.rfc-editor.org/rfc/rfc8032) | Ed25519, under [KEY](interface/keys.md) |
 | [RFC 8410](https://www.rfc-editor.org/rfc/rfc8410) | Ed25519 keys in PKIX, under [KEY](interface/keys.md), [TRN](interface/transport.md) |
 | [RFC 5958](https://www.rfc-editor.org/rfc/rfc5958) | private key encoding, under [KEY](interface/keys.md), [TLSM](interface/tls.md) |
-| [RFC 5280](https://www.rfc-editor.org/rfc/rfc5280) | X.509 certificates and SubjectPublicKeyInfo, under [TRN](interface/transport.md), [TLS](runtime/tls/certificates.md), [TLSM](interface/tls.md), [TCAN](runtime/tls/canopy.md) |
+| [RFC 5280](https://www.rfc-editor.org/rfc/rfc5280) | X.509 certificates and SubjectPublicKeyInfo, under [TRN](interface/transport.md), [TLS](runtime/tls/certificates.md), [TLSM](interface/tls.md) |
 | [RFC 2986](https://www.rfc-editor.org/rfc/rfc2986) | certificate signing requests, under [TLS](runtime/tls/certificates.md), [TLSM](interface/tls.md), [TCAN](runtime/tls/canopy.md) |
 | [RFC 7468](https://www.rfc-editor.org/rfc/rfc7468) | PEM encoding, under [TLS](runtime/tls/certificates.md), [TLSM](interface/tls.md) |
 | [RFC 9525](https://www.rfc-editor.org/rfc/rfc9525) | service identity and wildcard matching, under [TLS](runtime/tls/certificates.md) |
@@ -153,7 +153,7 @@ Defined in [BSL](language/overview.md#resource-graph).
 
 ### Static resource
 
-A resource declared when an app's script is evaluated, outside any action.
+A resource declared when an app's script is evaluated outside every closure the runtime runs as a lifecycle operation.
 Defined in [APP](language/app.md#static-resource).
 
 ### Action context
@@ -229,7 +229,7 @@ Defined in [LCY](runtime/lifecycle.md).
 ### Install phase
 
 Where an app stands in being installed: `NotInstalled`, `Installing`, `Installed` or `Uninstalling`.
-An install moves an app through `Installing` to `Installed`, as [ACN](interface/actions.md#install) specifies, and an uninstall through `Uninstalling` back to `NotInstalled`, as [TRD](runtime/app-teardown.md) specifies.
+An install moves an app through `Installing` to `Installed`, as [ACI](interface/actions.md#install) specifies, and an uninstall through `Uninstalling` back to `NotInstalled`, as [TRD](runtime/app-teardown.md) specifies.
 
 ### Lifecycle operation
 
