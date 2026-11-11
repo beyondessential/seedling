@@ -678,7 +678,7 @@ pub(crate) fn csr_begin(state: &OiState, params: CsrBeginParams) -> HandlerResul
             // generated, outside any transaction, so it is checked again as
             // part of the insert: a renewal begun or the certificate retired in
             // between would otherwise go unnoticed.
-            store::atomically(db, || {
+            db.atomically(|db| {
                 if let Some(id) = renews {
                     match store::renewal_target(db, id)? {
                         store::RenewalTarget::Renewable(_) => {}
