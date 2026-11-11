@@ -244,6 +244,9 @@ fn begin_csr_for(oi: &TestOi, hostnames: &[&str]) -> (i64, String) {
     )
 }
 
+/// The listing's entry for row `id`. A missing row panics at the caller, so the
+/// failing line shows which certificate was looked for.
+#[track_caller]
 fn cert_row(oi: &TestOi, id: i64) -> serde_json::Value {
     let listed = oi.call("/tls/certificates/list", json!({})).unwrap();
     listed["certificates"]
@@ -251,7 +254,7 @@ fn cert_row(oi: &TestOi, id: i64) -> serde_json::Value {
         .unwrap()
         .iter()
         .find(|c| c["id"] == json!(id))
-        .unwrap_or_else(|| panic!("certificate {id} is in the listing"))
+        .expect("the certificate is in the listing")
         .clone()
 }
 
