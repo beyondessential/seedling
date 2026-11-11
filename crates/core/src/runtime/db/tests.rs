@@ -13,7 +13,7 @@ fn open_in_memory_succeeds() {
             |r| r.get(0),
         )
         .expect("schema_version should exist");
-    assert_eq!(version, 66);
+    assert_eq!(version, 67);
 }
 
 // r[verify history.persistence]
@@ -45,7 +45,7 @@ fn params_table_exists() {
             |r| r.get(0),
         )
         .expect("schema_version should exist");
-    assert_eq!(version, 66);
+    assert_eq!(version, 67);
 }
 
 // i[verify app.persist]
@@ -359,5 +359,53 @@ fn canopy_migration_keeps_policies_certificates_and_attempt_links() {
             )
             .is_err(),
         "a Canopy policy carries no DNS provider"
+    );
+}
+
+/// Every stored certificate is indexed by the migration. One whose PEM will not
+/// parse is indexed as covering nothing rather than stopping the upgrade, and a
+/// row with no certificate yet is left out.
+// r[verify tls.cert.serve]
+#[test]
+fn san_index_migration_indexes_every_stored_certificate() {
+    let db = Db::open_in_memory_through(66).expect("open at v66");
+    let pem = crate::runtime::tls::test_support::self_signed_pem(&["Example.com", "*.example.com"]);
+    db.conn
+        .execute(
+            "INSERT INTO tls_certificates
+                 (id, hostname, state, cert_pem, key_ciphertext, key_type, created_at, updated_at, origin)
+                 VALUES (1, 'example.com', 'superseded', ?1, x'01', 'ecdsa_p256', 1, 1, 'manual'),
+                        (2, 'broken.example.com', 'active', 'not a certificate', x'01', 'ecdsa_p256', 1, 1, 'manual'),
+                        (3, 'pending.example.com', 'csr_pending', NULL, x'01', 'ecdsa_p256', 1, 1, 'csr')",
+            [&pem],
+        )
+        .expect("seed v66 data");
+
+    db.finish_migrations().expect("migrate to the latest");
+
+    let index: Vec<(i64, Option<bool>)> = db
+        .conn
+        .prepare("SELECT cert_id, self_issued FROM tls_cert_index ORDER BY cert_id")
+        .unwrap()
+        .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))
+        .unwrap()
+        .collect::<Result<_, _>>()
+        .unwrap();
+    assert_eq!(index, vec![(1, Some(true)), (2, None)]);
+
+    let sans: Vec<(i64, String)> = db
+        .conn
+        .prepare("SELECT cert_id, san FROM tls_cert_sans ORDER BY cert_id, san")
+        .unwrap()
+        .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))
+        .unwrap()
+        .collect::<Result<_, _>>()
+        .unwrap();
+    assert_eq!(
+        sans,
+        vec![
+            (1, "*.example.com".to_owned()),
+            (1, "example.com".to_owned()),
+        ]
     );
 }

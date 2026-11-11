@@ -12,7 +12,7 @@ use super::{
     AcmeAccount, AttemptOutcome, AttemptTrigger, DnsProviderEntry, DnsProviderKind,
     DnsProviderSummary, KeyType, RetryBlockSource, TlsCertAttempt, TlsCertForceRetry,
     TlsCertOrigin, TlsCertRetryBlock, TlsCertState, TlsCertificate, TlsChainRow, TlsPolicy,
-    TlsPolicyRow, TlsSettings, chain, pattern_matches, pattern_specificity,
+    TlsPolicyRow, TlsSettings, chain, pattern_matches, pattern_specificity, san_index,
 };
 use crate::runtime::{db::Db, secrets::Cipher};
 
@@ -348,7 +348,22 @@ pub struct NewCertificate<'a> {
     pub renews: Option<i64>,
 }
 
+/// Store a certificate row, indexing its SANs in the same step.
+///
+/// A PEM whose SANs cannot be read is refused, as [`san_index::index_stored`]
+/// explains, and nothing is stored.
+// r[impl tls.cert.serve]
 pub fn insert_certificate(db: &Db, new: NewCertificate<'_>) -> rusqlite::Result<i64> {
+    db.atomically(|db| {
+        let id = insert_certificate_row(db, &new)?;
+        if let Some(pem) = new.cert_pem {
+            san_index::index_stored(&db.conn, id, pem)?;
+        }
+        Ok(id)
+    })
+}
+
+fn insert_certificate_row(db: &Db, new: &NewCertificate<'_>) -> rusqlite::Result<i64> {
     let now = now_secs();
     let requested = new
         .requested_hostnames
@@ -403,6 +418,32 @@ pub fn get_certificate(db: &Db, id: i64) -> rusqlite::Result<Option<TlsCertifica
         .optional()
 }
 
+/// The active certificates, and those produced by the newest `attempt_limit`
+/// attempts whatever their state, newest first.
+///
+/// The attempts are selected the same way [`list_attempts`] selects them with
+/// no hostname, so a caller loading both with the same limit gets every
+/// certificate its attempts name. Selected inside the query rather than passed
+/// in as ids, so the statement is the same on every call and stays cached.
+pub fn list_active_certificates_and_attempted(
+    db: &Db,
+    attempt_limit: i64,
+) -> rusqlite::Result<Vec<TlsCertificate>> {
+    let mut stmt = db.conn.prepare_cached(&format!(
+        "SELECT {CERT_COLUMNS} FROM tls_certificates
+         WHERE state = 'active'
+            OR id IN (
+                SELECT cert_id FROM (
+                    SELECT cert_id FROM tls_cert_attempts ORDER BY id DESC LIMIT ?1
+                )
+                WHERE cert_id IS NOT NULL
+            )
+         ORDER BY id DESC"
+    ))?;
+    stmt.query_map([attempt_limit], row_to_certificate)?
+        .collect()
+}
+
 pub fn list_certificates(db: &Db) -> rusqlite::Result<Vec<TlsCertificate>> {
     let mut stmt = db.conn.prepare(&format!(
         "SELECT {CERT_COLUMNS} FROM tls_certificates ORDER BY id DESC"
@@ -419,18 +460,16 @@ pub fn list_certificates(db: &Db) -> rusqlite::Result<Vec<TlsCertificate>> {
 /// only a claim about a certificate, and a row whose label outran its
 /// certificate was served for a name it could not carry.
 ///
-/// Candidates are ranked rather than the first cover returned, because the
-/// tie-breaks cannot be expressed in SQL: whether a SAN matches exactly is only
-/// knowable once the certificate is parsed. Walking newest-first lets the scan
-/// stop at an unbeatable rank, which is the ordinary case — a current,
-/// CA-issued certificate naming the hostname — so the whole table is only read
-/// when nothing better exists, and the rows read carry just what ranking needs
-/// rather than every stored PEM and encrypted key.
+/// Candidates come from the [SAN index](super::san_index): the certificates
+/// naming the hostname or the wildcard over it. Which of the two a candidate
+/// matched is all ranking needs of its SAN set, so candidates are ranked
+/// without parsing any of them, and a hostname no certificate names costs no
+/// parse at all.
 ///
-/// A miss still costs a pass over the active set. Bounding that needs an index
-/// over SAN entries rather than over labels, which is its own piece of work: a
-/// label is a certificate's primary SAN, so filtering candidates by label would
-/// skip exactly the multi-name certificates this rule exists to serve.
+/// The index is not trusted with the answer. The winner is parsed and ranked
+/// again from its own PEM, and served only when that agrees. A candidate whose
+/// PEM disagrees has its index entry rewritten from the PEM, and the next one
+/// is tried.
 ///
 /// Rows outside their validity window are excluded at either end, but a row
 /// with no recorded expiry is kept: unparsed and expired are not the same
@@ -443,64 +482,63 @@ pub fn find_active_for_hostname(
     hostname: &str,
 ) -> rusqlite::Result<Option<TlsCertificate>> {
     let now = now_secs();
-    let mut best: Option<(super::resolve::Rank, i64)> = None;
-    {
-        // Cached: this runs per certificate-serving lookup.
-        let mut stmt = db.conn.prepare_cached(
-            "SELECT id, cert_pem, self_signed, created_at, not_after
-             FROM tls_certificates
-             WHERE state = 'active'
-               AND (not_before IS NULL OR not_before <= ?1)
-               AND (not_after IS NULL OR not_after > ?1)
-             ORDER BY created_at DESC, id DESC",
-        )?;
-        let mut rows = stmt.query([now])?;
-        while let Some(row) = rows.next()? {
-            let id: i64 = row.get(0)?;
-            let Some(pem): Option<String> = row.get(1)? else {
-                continue;
-            };
-            let created_at: i64 = row.get(3)?;
-            let not_after: Option<i64> = row.get(4)?;
-            let facts = match super::parse::leaf_facts(&pem) {
-                Ok(facts) => facts,
-                // Unreadable is not "does not cover", and the row is active,
-                // so nothing else will report that it can never be served.
-                Err(e) => {
-                    tracing::warn!(
-                        cert_id = id,
-                        error = %e,
-                        "stored certificate could not be parsed; skipping it when resolving a \
-                         hostname"
-                    );
-                    continue;
-                }
-            };
-            if let Some(rank) = super::resolve::rank(
-                &facts.san_dns_names,
+    let mut ranked: Vec<_> = san_index::servable_candidates(db, hostname, now)?
+        .into_iter()
+        .filter_map(|c| {
+            let rank = super::resolve::rank(
+                &c.sans,
                 hostname,
-                facts.self_issued,
-                not_after,
-                created_at,
-                id,
+                c.self_issued,
+                c.not_after,
+                c.created_at,
+                c.id,
                 now,
-            ) && best.as_ref().is_none_or(|(best_rank, _)| rank > *best_rank)
-            {
-                // Newest-first, so an unbeatable rank cannot be improved on by
-                // anything still to come: stop rather than parse the rest.
-                let done = rank.is_best_possible();
-                best = Some((rank, id));
-                if done {
-                    break;
-                }
-            }
-        }
-    }
+            )?;
+            Some((rank, c))
+        })
+        .collect();
+    ranked.sort_by(|(a, _), (b, _)| b.cmp(a));
 
-    match best {
-        Some((_, id)) => get_certificate(db, id),
-        None => Ok(None),
+    for (indexed_rank, candidate) in ranked {
+        let Some(cert) = get_certificate(db, candidate.id)? else {
+            continue;
+        };
+        let Some(pem) = cert.cert_pem.as_deref() else {
+            continue;
+        };
+        let facts = match super::parse::leaf_facts(pem) {
+            Ok(facts) => facts,
+            Err(e) => {
+                tracing::error!(
+                    cert_id = cert.id,
+                    error = %e,
+                    "SAN index lists a certificate that could not be parsed; indexing it as \
+                     covering nothing"
+                );
+                san_index::repair(db, cert.id, None);
+                continue;
+            }
+        };
+        let confirmed = super::resolve::rank(
+            &facts.san_dns_names,
+            hostname,
+            facts.self_issued,
+            candidate.not_after,
+            candidate.created_at,
+            candidate.id,
+            now,
+        );
+        if confirmed == Some(indexed_rank) {
+            return Ok(Some(cert));
+        }
+        tracing::error!(
+            cert_id = cert.id,
+            hostname,
+            "SAN index disagreed with the certificate's own PEM; rewriting its entry"
+        );
+        san_index::repair(db, cert.id, Some(&facts));
     }
+    Ok(None)
 }
 
 /// Store a new certificate and retire what it replaces, atomically.
@@ -576,6 +614,7 @@ pub fn activate_pending_csr(
     if updated == 0 {
         return Ok(false);
     }
+    san_index::index_stored(&db.conn, id, cert_pem)?;
     supersede_other_active_for_hostname(db, id)?;
     tx.commit()?;
     Ok(true)
@@ -666,7 +705,7 @@ pub fn pending_renewal_of(db: &Db, id: i64) -> rusqlite::Result<Option<i64>> {
 
 /// A non-SQL failure surfaced through `rusqlite::Error`, as the provider
 /// accessors in this module already do for cipher failures.
-fn unreadable(message: String) -> rusqlite::Error {
+pub(super) fn unreadable(message: String) -> rusqlite::Error {
     rusqlite::Error::ToSqlConversionFailure(message.into())
 }
 
@@ -1677,6 +1716,7 @@ pub fn activate_canopy_chain(
         if updated == 0 {
             return Ok(false);
         }
+        san_index::index_stored(&db.conn, id, cert_pem)?;
         supersede_other_active_for_hostname(db, id)?;
         Ok(true)
     })
