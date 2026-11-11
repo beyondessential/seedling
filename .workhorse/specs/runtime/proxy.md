@@ -85,6 +85,7 @@ A prefix none of whose binding pods has a running instance MUST still be emitted
 If no pod binds any prefix of the service, the runtime MUST emit a fallback route.
 Its single upstream MUST be the service's address, through the service's [routing pool](lifecycle.md#routing-pool), at the [Service Port](../language/service.md#service-ports) on which the service is viewed as an [HTTP service](../language/http-service.md#declaration).
 Where the service is viewed as an HTTP service on several Service Ports, the fallback route's upstream MUST be at the lowest-numbered of them.
+Where the service is not viewed as an HTTP service on any Service Port, the fallback route's upstream MUST be at the ingress's own port.
 
 The runtime MUST emit each redirect route the service declares, whether or not any pod binds a prefix of the service.
 A redirect route MUST NOT displace the fallback route.

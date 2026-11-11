@@ -43,8 +43,9 @@ The runtime MUST record every restart, however quickly an instance is restarting
 
 ## Instance retirement
 
-Retiring a resource instance deletes its instance record together with its observations, its faults and its autonomous operations log entries.
-The runtime MUST retire an instance in one atomic step, leaving none of those records behind if any of them is deleted.
+Retiring a resource instance clears its active faults and then deletes its records.
+The runtime MUST clear each active fault of the instance, emitting an event for each, as [FLT](faults.md#filing-and-clearing) specifies for a removed instance, before deleting any of the instance's records.
+The runtime MUST delete the instance record together with its observations, its fault records and its autonomous operations log entries in one atomic step, leaving none of those records behind if any of them is deleted.
 
 ## Unscheduled instances
 
@@ -72,7 +73,7 @@ A failure to read the instance's observation history MUST NOT count as the insta
 When an action starts a scaled group, the runtime MUST leave out of the group every instance whose observation history shows it torn down, and MUST allocate a fresh instance in place of each one left out.
 An instance is torn down when its lifecycle state is `Unscheduled`, or when its most recent observation is one that moves an instance to `Unscheduled`.
 
-When an action stops, queries, signals or warms a deployment, the runtime MUST address the instances the deployment has, whether torn down or not.
+For any `rt` call addressing a Deployment other than one starting it, the runtime MUST address every instance the Deployment has, whether torn down or not.
 
 In steady state, the runtime MUST keep each scaled instance in its group, whatever its containers have done.
 

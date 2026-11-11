@@ -45,7 +45,9 @@ Paths below are relative to the Canopy base URL the offering client resolves.
 
 Reports are addressed to the Canopy server identifier the offering client's identity is enrolled as.
 The runtime MUST resolve it with a `GET` to `/servers/self`, taking the `server_id` member of the answer.
-The runtime MUST cache the identifier durably and use the cached value while it has one.
+The runtime MUST cache the identifier durably, together with the [fingerprint](../overview.md#fingerprint) of the key the offering client it was resolved through authenticated with.
+The runtime MUST use the cached identifier only while the selected [offer](../interface/canopy-relay.md#offer-selection)'s offering client authenticated with that key.
+When the selected offer's offering client authenticated with a different key, the runtime MUST discard the cached identifier, so that the next report resolves it again.
 If sending a report fails for any reason, the runtime MUST discard the cached identifier, so that the next report resolves it again.
 
 ## Report payload
@@ -96,10 +98,12 @@ A `broken` check MUST carry a `reason` detail member saying why.
 | --- | --- | --- |
 | `seedlingVersion` | string | the running Seedling version |
 | `seedlingUptimeSecs` | integer | seconds since the daemon started |
-| `appsTotal` | integer | the number of registered apps |
-| `appsByStatus` | object | the number of apps in each status, keyed by status name |
-| `activeOperations` | integer | the number of [lifecycle operations](../overview.md#lifecycle-operation) in progress |
-| `activeFaults` | integer | the number of active [faults](../overview.md#fault) |
+| `appsTotal` | integer or null | the number of registered apps |
+| `appsByStatus` | object or null | the number of apps in each status, keyed by status name |
+| `activeOperations` | integer or null | the number of [lifecycle operations](../overview.md#lifecycle-operation) in progress |
+| `activeFaults` | integer or null | the number of active [faults](../overview.md#fault) |
+
+The runtime MUST report a member it cannot determine as `null`, and MUST NOT report it as 0.
 
 The report MUST NOT carry the host's name, the host's uptime, or the version of any app.
 

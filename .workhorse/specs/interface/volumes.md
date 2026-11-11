@@ -38,7 +38,7 @@ Every event a method below emits carries the request's [actor](wire.md#actor-att
 
 ### Listing held volumes
 
-`/volumes/held/list` takes no parameters, and its result is an array with one record for each held volume on the host.
+`/volumes/held/list` takes no parameters, and its result is an array with one record for each held volume on the host, ordered by `app`, then `volume_name`, then `id`, each in ascending byte order.
 
 | member | type | meaning |
 | --- | --- | --- |
@@ -102,7 +102,7 @@ On success the result is `{ "created": true }`, and the server MUST emit a `Site
 
 ### Listing site volumes
 
-`/volumes/site/list` takes no parameters, and its result is an array with one record for each site volume on the host, in ascending order of name.
+`/volumes/site/list` takes no parameters, and its result is an array with one record for each site volume on the host, ordered by name in ascending byte order.
 
 | member | type | meaning |
 | --- | --- | --- |
@@ -121,6 +121,8 @@ On success the result is `{ "created": true }`, and the server MUST emit a `Site
 | `name` | string | yes | the site volume's name |
 
 The server MUST reject a `name` that names no site volume with `not_found`.
+The server MUST reject the request with `requirements_invalid` while an [external volume mapping](#external-volume-mappings) targets the site volume, as [site volumes](../runtime/site-resources.md#site-volumes) requires, and its `message` MUST name such a mapping's app and external name.
+The runtime MUST check for mappings and delete the site volume as one indivisible step, so that no mapping is left targeting a deleted site volume.
 If the site volume's data cannot be held, or a snapshot site volume's storage cannot be deleted, the server MUST answer with `internal`.
 
 On success the result is `{ "deleted": true }`.
@@ -141,6 +143,7 @@ The server MUST reject a `source` naming no site volume, or naming an app volume
 The server MUST reject a `source` naming a bind or snapshot site volume with `requirements_invalid`.
 The server MUST reject a `source` whose volume is not stored as a BTRFS subvolume with `requirements_invalid`.
 The server MUST reject a `name` that is reserved or taken with `requirements_invalid`.
+If the snapshot's storage cannot be created, the server MUST answer with `internal`.
 
 On success the result is `{ "created": true, "name": <string> }`, giving the snapshot site volume's name.
 The server MUST emit a `SiteVolumeSnapshotted` event, whose `source` is the [volume reference](#volume-reference) of the volume snapshotted.
@@ -158,6 +161,7 @@ The server MUST reject a `source` that names no site volume with `not_found`.
 The server MUST reject a `source` that names a site volume other than a snapshot with `requirements_invalid`.
 On a host whose data directory is not on BTRFS, the server MUST reject the request with `requirements_invalid`.
 The server MUST reject a `name` that is reserved or taken with `requirements_invalid`.
+If the new site volume's storage cannot be created, the server MUST answer with `internal`.
 
 On success the result is `{ "promoted": true, "name": <string> }`, giving the new site volume's name.
 The server MUST emit a `SiteVolumePromoted` event, whose `source` is the snapshot site volume's name.
@@ -166,7 +170,7 @@ The server MUST emit a `SiteVolumePromoted` event, whose `source` is the snapsho
 
 ### Listing exported volumes
 
-`/volumes/exported/list` takes no parameters, and its result is an array with one record for each [exported](../language/volume.md#export) volume declared by the current definition of a registered app, in ascending order of app name and then of volume name.
+`/volumes/exported/list` takes no parameters, and its result is an array with one record for each [exported](../language/volume.md#export) volume declared by the current definition of a registered app, ordered by app name and then by volume name, each in ascending byte order.
 
 | member | type | meaning |
 | --- | --- | --- |
@@ -177,7 +181,7 @@ The server MUST emit a `SiteVolumePromoted` event, whose `source` is the snapsho
 
 ### Listing app volumes
 
-`/volumes/app/list` takes no parameters, and its result is an array with one record for each named non-tmpfs volume declared by the current definition of a registered app, exported or not, in ascending order of app name and then of volume name.
+`/volumes/app/list` takes no parameters, and its result is an array with one record for each named non-tmpfs volume declared by the current definition of a registered app, exported or not, ordered by app name and then by volume name, each in ascending byte order.
 
 | member | type | meaning |
 | --- | --- | --- |
@@ -191,11 +195,9 @@ The server MUST emit a `SiteVolumePromoted` event, whose `source` is the snapsho
 An external volume mapping binds the [external volume](../overview.md#external-volume) an app knows by `external_name` to a target, as [external mappings](../runtime/site-resources.md#external-mappings) specifies.
 A mapping's target is a volume reference of kind `"site"` or `"app"`.
 
-The server MUST reject a `"site"` target that names no site volume with `not_found`.
-The server MUST reject an `"app"` target with `not_found` if its app is not registered or its app's current definition declares no volume of that name.
+The server MUST reject a `"site"` target that names no site volume with `requirements_invalid`.
+The server MUST reject an `"app"` target with `requirements_invalid` if its app is not registered or its app's current definition declares no volume of that name.
 The server MUST reject an `"app"` target whose volume is not exported with `requirements_invalid`.
-
-After each mapping it creates, changes or removes, the runtime SHOULD begin a [reconciliation loop](../runtime/reconciliation.md#reconciliation-loop) iteration without waiting for the next one to fall due.
 
 ### Mapping an external volume
 
@@ -246,7 +248,7 @@ On success the result is `{ "unmapped": true }`, and the server MUST emit an `Ex
 | --- | --- | --- | --- |
 | `app` | string | no | restricts the list to that app's mappings |
 
-The result is an array with one record for each mapping, in ascending order of app name and then of external name.
+The result is an array with one record for each mapping, ordered by app name and then by external name, each in ascending byte order.
 
 | member | type | meaning |
 | --- | --- | --- |
@@ -257,7 +259,7 @@ The result is an array with one record for each mapping, in ascending order of a
 
 ### Listing declared external volumes
 
-`/volumes/external/declared` takes no parameters, and its result is an array with one record for each external volume declared by the current definition of a registered app, in ascending order of app name and then of external volume name.
+`/volumes/external/declared` takes no parameters, and its result is an array with one record for each external volume declared by the current definition of a registered app, ordered by app name and then by external volume name, each in ascending byte order.
 
 | member | type | meaning |
 | --- | --- | --- |

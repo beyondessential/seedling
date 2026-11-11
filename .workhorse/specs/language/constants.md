@@ -36,7 +36,7 @@ A later evaluation MAY see a different value.
 
 `AVAILABLE_THREADS` and `AVAILABLE_MEMORY` MUST each be greater than zero.
 While the number of compute threads available to the app is undetermined, `AVAILABLE_THREADS` MUST be 1.
-If the memory available to the app is undetermined, the evaluation MUST fail.
+If the memory available to the app is undetermined, the runtime MUST fail the evaluation.
 
 > [!NOTE]
 > `AVAILABLE_THREADS` approximates the number of cores on the host, and `AVAILABLE_MEMORY` approximates its total memory.
@@ -61,7 +61,7 @@ If the host's routes cannot be read, whether the host has IPv4 egress is undeter
 
 `NODE_NAME` has no defined format.
 It MAY be empty where the host's identity has no meaning, such as when a script is validated outside a running daemon.
-If the name of the host is undetermined while the host's identity has meaning, the evaluation MUST fail.
+If the name of the host is undetermined, the runtime MUST fail the evaluation.
 
 `TIMEZONE` MUST NOT be empty.
 While the runtime cannot determine the host's local time zone, `TIMEZONE` MUST be `UTC`.

@@ -32,7 +32,7 @@ If the change triggers a [lifecycle operation](../overview.md#lifecycle-operatio
 
 An app's generations MUST be strictly increasing from its registration until its deregistration.
 A failed lifecycle operation MUST NOT roll back the generation that triggered it.
-The runtime MUST instead record the failure as the operation's outcome in that generation's history entry.
+The runtime records the failure as [completion](operations.md#completion) specifies.
 
 ## History entries
 

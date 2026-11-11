@@ -47,6 +47,8 @@ The `script` array MUST name at least one file.
 It MUST NOT name the same file twice once its entries are normalised, and MUST NOT name `seedling.toml`.
 Each file it names MUST be present in the bundle and MUST be valid UTF-8.
 
+When an app is registered with a definition or updated to one, the server MUST refuse a definition whose metadata file breaks these rules with [`bundle_invalid`](../interface/wire.md#error-codes), as [bundle rules](../interface/definitions.md#bundle-rules) specifies.
+
 ## Seedling version requirement
 
 A Seedling version requirement is a string of one or more comparator sets separated by `||`.
