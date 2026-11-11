@@ -29,7 +29,6 @@ enum Keep {
 
 /// Remove every snapshot-prefixed site-volume path that no site volume is
 /// recorded for.
-// spec: SITE#leftover-backup-snapshots
 pub async fn sweep(db: &DbHandle, store: &VolumeStore) {
     let candidates = match store.list_sites_with_prefix(SNAPSHOT_NAME_PREFIX) {
         Ok(candidates) => candidates,
@@ -106,7 +105,6 @@ mod tests {
     use super::*;
     use crate::runtime::site_volumes::{SiteVolumeDef, SiteVolumeKind};
 
-    // spec: SITE#leftover-backup-snapshots
     // spec: IDN#reserved-names
     #[tokio::test]
     async fn removes_only_unrecorded_snapshot_storage() {

@@ -93,12 +93,6 @@ On a host whose data directory is not on BTRFS, the runtime MUST reject a promot
 
 The runtime MUST emit an event when it promotes a snapshot, identifying the new managed site volume and the source snapshot.
 
-### Leftover backup snapshots
-
-Site-volume storage whose name begins `backup-snap-` and for which no site volume is recorded is a leftover backup snapshot.
-When it starts, the runtime MUST delete every leftover backup snapshot.
-The runtime MUST leave in place storage recorded as a site volume, and storage whose ownership it cannot determine.
-
 ## External mappings
 
 An operator maps an app's external volume to a site volume or an app's exported volume, and an app's external service to a site service or another app's service.

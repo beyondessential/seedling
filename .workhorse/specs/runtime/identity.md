@@ -69,7 +69,6 @@ The runtime grants itself these names in namespaces operators also use:
 
 | namespace | reserved | held for |
 | --- | --- | --- |
-| site volume names | every name beginning `backup-snap-` | [leftover backup snapshots](site-resources.md#leftover-backup-snapshots) |
 | site ingress names | `tailscale` | the site ingress of the [Tailscale discovery provider](site-resources.md#tailscale-discovery) |
 | app names | `infra` | the [resource-control group](priority.md#resource-control-groups) of the runtime's infrastructure |
 | app names | `seedling` | faults about the runtime's own reporting, as [FLT](faults.md#fault-records) specifies |
@@ -79,4 +78,4 @@ The runtime MUST reject every operation that would bring a site volume, site ing
 The runtime MUST NOT reject an update, rename or deletion of an object because its name is reserved.
 
 A component that deletes, disables or replaces objects it considers its own MUST identify them by the ownership the runtime recorded, whatever they are named.
-The leftover snapshot sweep MUST NOT delete a recorded site volume, and a discovery provider MUST NOT disable or replace a manual site ingress.
+A discovery provider MUST NOT disable or replace a manual site ingress.

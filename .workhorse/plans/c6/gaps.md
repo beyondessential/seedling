@@ -64,6 +64,8 @@ Round 1 fidelity pass: details the rewrite took from the code where the original
 - App status: `faulted` while a withholding fault (`external_volume_not_mapped`, `crash_loop`, `health_check_replace_failed`) is active; any other fault gives `degraded`.
 - `shell.attach` blocks until the attachment ends and returns a `ShellExit`; the closure runs on afterwards, and the session ends when it returns.
 - `rt.write` writes to any external volume that resolves to storage, unless its mapping is read-only.
+- The `backup-snap-` startup sweep and its reserved prefix are dropped: nothing in the system creates that storage.
+- The `/volumes/*`, `/services/*` and `/ingresses/site/*` methods get interface specs on this card (VOLM, SVCM, INGM), from the code's contracts under WIRE's rules.
 - Linux: default routes from the main routing table, and globally routable IPv6 as `2000::/3`, settled in LINUX; the generic NAT64 and CONST definitions keep the original's wording.
 
 ## Open decisions

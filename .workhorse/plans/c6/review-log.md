@@ -105,3 +105,4 @@ All decided findings applied by the reviewing agents; code divergences collected
 Also by me: ACME HTTP-01 challenges answered ahead of an ingress redirect (ING, PRX); root glossary action context includes shell closures; WIRE operation_in_progress covers a running issuance; the web relay refuses /canopy/offer and /canopy/withdraw; OBS keys warm_certs on a usable served certificate.
 Accepted from agents: INFRA host-originated redirection covers IPv4 too, matching the new ingress redirection section; re-check hourly floor counts from the last successful re-check, so failures still back off from 15 minutes; registry_error split into desired_state_unreadable and instance_identity_unreadable.
 Waiting on the user: backup-snap- sweep; interface specs for 38 unspecced OI methods.
+User settled: backup-snap sweep dropped; VOLM, SVCM, INGM interface specs written on this card.
