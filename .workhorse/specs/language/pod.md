@@ -36,3 +36,7 @@ A script binds a port of the pod to a service with these methods, where `port` i
 The runtime MUST route traffic of the bound protocol arriving at the route or Service Port to `port` on the pod, and its replies back.
 
 Binding a pod to a route declared as a redirect throws, as [redirect route constraints](http-service.md#redirect-route-constraints) specifies.
+Binding a pod to a route or Service Port of an [external service](service.md#external-services) MUST throw.
+
+> [!NOTE]
+> The endpoint an operator maps is an external service's only target, so no pod of the app can become a backend the operator does not see.

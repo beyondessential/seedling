@@ -157,3 +157,5 @@ All findings decided and applied by six fixers split by file; follow-ups across 
 Reverted my own L5 wording ("determined at each evaluation"), which contradicted the settled hold-until-restart rule.
 Code divergences in round2-divergences.md (Round 3) and filed on D6 in two parts.
 Open with the user: pods binding an external service's port.
+
+The open question on pods binding an external service was settled by the user: binding throws (POD#port-bindings, SVC#external-services).

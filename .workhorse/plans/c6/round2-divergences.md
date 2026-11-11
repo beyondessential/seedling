@@ -167,3 +167,7 @@
 - runtime/canopy.rs: activeFaults null when undetermined; cached server_id stored with the offering client's key fingerprint (canopy/store.rs).
 - runtime/history.rs delete_instance: clear faults with events before deleting.
 - runtime/audit.rs: an audit log that cannot be opened files audit_log_unavailable and retries.
+
+## External service bindings (after round 3)
+
+- POD#port-bindings: binding a pod to a route or Service Port of an external service MUST throw. The code accepts the binding.

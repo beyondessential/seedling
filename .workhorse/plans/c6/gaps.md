@@ -70,9 +70,11 @@ Round 1 fidelity pass: details the rewrite took from the code where the original
 
 - Round 3 (closing round, by the user's call): revoked keys never re-imported from `authorized_keys`; every opening line ends with a line feed; forward data streams reset at the stream limit; `/apps/action/cancel` cannot withdraw a queued operation; uploaded TLS keys limited to `ecdsa_p256`, `ecdsa_p384`, `ecdsa_p521`, `ed25519`, `rsa`; a site forward attachment's port is the first binding of the target service (Deployments then Jobs, name byte order); the fallback route's upstream is the lowest Service Port viewed through `http()`, else the ingress's own port; mappings whose target stops existing are kept and behave as unmapped; site volumes cannot be deleted while mapped; a failed DNS family's kept answer still routes; `crash_loop` stops supervisor restarts too; audit entries MAY be dropped under `audit_lag`; host constants stay determined at start, undetermined ones retried, with `host_constant_undetermined`.
 
+- Binding a pod to a route or Service Port of an external service throws; the operator's mapping is its only target (POD#port-bindings, decided by the user after round 3).
+
 ## Open decisions
 
-- Pods binding an external service's port: throw, fallback target while unmapped, or join the mapped endpoint (SVC#external-services). Waiting on the user.
+None.
 
 ## Spec leads or contradicts code
 
