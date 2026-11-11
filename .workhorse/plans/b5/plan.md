@@ -24,7 +24,7 @@ Both guards rebuild rows with the same derivation the write paths use. They catc
 - A certificate whose PEM will not parse gets an index row with `self_issued` NULL and no SANs, so it isn't retried forever.
 - A trigger `AFTER UPDATE OF cert_pem` (only when the value changes) deletes the certificate's index row. That turns a stale index into a missing one, which the sweep can see. The activate paths update the PEM and then index inside one transaction.
 - The unindexed sweep is an anti-join: certificates with a PEM and no index row. It parses nothing when the index is right. It runs at startup and every five minutes.
-- `Snapshot::load` already reads every certificate row, so it parses any active certificate missing from the index on the spot (logged as an error) instead of waiting for the sweep.
+- `Snapshot::load` already reads every active certificate row, so it parses any active certificate missing from the index on the spot (logged as an error) instead of waiting for the sweep.
 - If the SAN derivation ever changes, a migration clears every marker and this sweep reindexes everything.
 
 **Full re-parse (backstop).**
@@ -53,7 +53,7 @@ The open comment on the card: `Coordinator::run` loads a snapshot per hostname p
 - `Snapshot::load` reads the SAN table (candidates by key, plus self-issuance) instead of parsing every certificate. `find_active_for_hostname` and `staged_start_for_hostname` in `state.rs` take their candidates from it.
 - The certificate the answer rests on (the winner, or the earliest staged cover) is confirmed against its PEM. Each parse is memoised for the life of the snapshot, so one certificate is parsed at most once per load.
 - The snapshot ranks with the index's self-issuance, not the stored `self_signed` column, which is stale on older rows (`parse.rs`, `LeafFacts::self_issued`). After this the two matchers agree.
-- Not covered: `Snapshot::load` still reads every certificate row, PEMs included. Parsing goes; the read stays. Stopping the read would mean loading the snapshot once per tick, which was considered and not taken.
+- `Snapshot::load` reads only the active certificates and those its loaded attempts produced (the rollup reports the last successful attempt's certificate as last issued, even once superseded), not every certificate ever stored. Its read grows with active certificates and recent attempts, not with history.
 - `env::runtime_holdings` keeps its cross-tick `LeafFactsCache`. It already parses each certificate once per PEM, not once per tick.
 
 ## Steps

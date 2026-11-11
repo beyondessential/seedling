@@ -190,6 +190,14 @@ impl ChainEnv {
 #[derive(Debug, Clone)]
 pub struct Snapshot {
     pub policies: Vec<TlsPolicyRow>,
+    /// The active certificates, and those the loaded [`attempts`](Self::attempts)
+    /// produced whatever their state, newest first.
+    ///
+    /// Not the whole store: history is never pruned, and a snapshot is loaded
+    /// per hostname by the issuance coordinator, so reading every row would
+    /// grow every load with the age of the install. A decision needs the
+    /// active certificates, and the rollup the certificate a hostname's last
+    /// successful attempt produced, which may since have been superseded.
     pub certificates: Vec<TlsCertificate>,
     /// All recent attempts, newest first. The decision logic only needs
     /// the latest entry per hostname; bulk-loading keeps the OI rollup a
@@ -231,12 +239,14 @@ impl Snapshot {
     /// no such facts says so with [`ChainEnv::none`], and the chain decisions of
     /// that snapshot are not to be acted on.
     pub fn load(db: &Db, env: ChainEnv) -> rusqlite::Result<Self> {
-        let certificates = store::list_certificates(db)?;
+        let attempts = store::list_attempts(db, None, 1000)?;
+        let attempted: BTreeSet<i64> = attempts.iter().filter_map(|a| a.cert_id).collect();
+        let certificates = store::list_active_certificates_and(db, &attempted)?;
         let index = SanIndex::load_active(db, &certificates)?;
         Ok(Self {
             policies: store::list_policies(db)?,
             certificates,
-            attempts: store::list_attempts(db, None, 1000)?,
+            attempts,
             retry_blocks: store::list_retry_blocks(db)?,
             force_retries: store::list_force_retries(db)?,
             chain_rows: store::list_chain_rows(db)?,
@@ -2310,7 +2320,7 @@ mod tests {
         .unwrap()
     }
 
-    /// The snapshot reads every certificate row anyway, so one missing from
+    /// The snapshot reads every active certificate row anyway, so one missing from
     /// the index is parsed there rather than going unseen until the sweep.
     // r[verify tls.cert.serve]
     #[test]
@@ -2401,5 +2411,33 @@ mod tests {
                 .map(|c| c.id),
             Some(ca_issued)
         );
+    }
+
+    /// History is never pruned, so a snapshot loads what a decision or the
+    /// rollup can use rather than every certificate ever stored: the active
+    /// ones, and whatever a loaded attempt produced, which the rollup reports
+    /// as last issued even once it has been superseded.
+    #[test]
+    fn a_snapshot_loads_active_certificates_and_those_attempts_produced() {
+        let db = Db::open_in_memory().unwrap();
+        let forgotten = store_cert(&db, &["example.com"]);
+        let issued = store_cert(&db, &["example.com"]);
+        let attempt = store::insert_attempt(&db, "example.com", AttemptTrigger::Manual).unwrap();
+        store::finalize_attempt(&db, attempt, AttemptOutcome::Success, Some(issued), None).unwrap();
+        let current = store_cert(&db, &["example.com"]);
+        db.conn
+            .execute(
+                "UPDATE tls_certificates SET state = 'superseded' WHERE id IN (?1, ?2)",
+                [forgotten, issued],
+            )
+            .unwrap();
+
+        let snap = Snapshot::load(&db, ChainEnv::none()).unwrap();
+        let loaded: Vec<i64> = snap.certificates.iter().map(|c| c.id).collect();
+        assert_eq!(loaded, vec![current, issued]);
+
+        let state = compute_state(&snap, "example.com");
+        assert_eq!(state.active_cert.map(|c| c.id), Some(current));
+        assert_eq!(state.last_success_cert.map(|c| c.id), Some(issued));
     }
 }

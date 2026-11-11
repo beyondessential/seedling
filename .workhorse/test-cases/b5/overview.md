@@ -11,6 +11,7 @@ Scenarios for resolving certificates through the SAN index and for the sweeps th
 - [x] The control-plane snapshot passes over an index row the PEM contradicts, like the serving lookup does
 - [x] The snapshot finds an active certificate missing from the index
 - [x] The snapshot and the serving lookup both rank by self-issuance read from the certificate, not the stored column
+- [x] The snapshot loads the active certificates and those its attempts produced, not every certificate ever stored, and still reports a superseded certificate as last issued
 - [x] Index keys agree with SAN coverage for exact, wildcard and malformed names (verifies spec: tls.cert.validation.san-coverage)
 
 ## Writes and migration

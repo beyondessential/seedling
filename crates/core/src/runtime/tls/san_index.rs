@@ -113,8 +113,8 @@ impl SanIndex {
     ///
     /// An active certificate with a PEM and no entry is parsed here, so the
     /// snapshot's answer does not wait on the sweep: the snapshot reads every
-    /// certificate row anyway, and finding the unindexed ones among them costs
-    /// no parse when there are none.
+    /// active certificate row anyway, and finding the unindexed ones among them
+    /// costs no parse when there are none.
     pub fn load_active(db: &Db, certificates: &[TlsCertificate]) -> rusqlite::Result<Self> {
         let mut entries: BTreeMap<i64, Entry> = BTreeMap::new();
         {

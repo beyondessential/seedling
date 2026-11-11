@@ -4,6 +4,8 @@
 //! storage boundary; in-memory representations carry plaintext only when
 //! actively in use.
 
+use std::collections::BTreeSet;
+
 use jiff::Timestamp;
 use rusqlite::{OptionalExtension, params};
 use secrecy::{ExposeSecret, SecretString};
@@ -416,6 +418,22 @@ pub fn get_certificate(db: &Db, id: i64) -> rusqlite::Result<Option<TlsCertifica
             row_to_certificate,
         )
         .optional()
+}
+
+/// The active certificates, and those with an id in `also` whatever their
+/// state, newest first.
+pub fn list_active_certificates_and(
+    db: &Db,
+    also: &BTreeSet<i64>,
+) -> rusqlite::Result<Vec<TlsCertificate>> {
+    let placeholders = vec!["?"; also.len()].join(", ");
+    let mut stmt = db.conn.prepare(&format!(
+        "SELECT {CERT_COLUMNS} FROM tls_certificates
+         WHERE state = 'active' OR id IN ({placeholders})
+         ORDER BY id DESC"
+    ))?;
+    stmt.query_map(rusqlite::params_from_iter(also), row_to_certificate)?
+        .collect()
 }
 
 pub fn list_certificates(db: &Db) -> rusqlite::Result<Vec<TlsCertificate>> {
