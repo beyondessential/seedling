@@ -662,6 +662,187 @@ fn a_csr_may_request_a_wildcard() {
     }
 }
 
+/// The DNS names a CSR requests, in the order it carries them.
+fn csr_sans(csr_pem: &str) -> Vec<String> {
+    let csr = CertificateSigningRequestParams::from_pem(csr_pem).expect("parse csr");
+    csr.params
+        .subject_alt_names
+        .iter()
+        .map(|san| match san {
+            rcgen::SanType::DnsName(name) => name.as_str().to_owned(),
+            other => panic!("unexpected SAN {other:?}"),
+        })
+        .collect()
+}
+
+/// Begin a CSR for `requested`, have the CA sign `issued` for it, and upload
+/// the result, returning the active row's id.
+fn csr_certificate(oi: &TestOi, requested: &[&str], issued: &[&str]) -> i64 {
+    let (id, csr_pem) = begin_csr_for(oi, requested);
+    oi.call(
+        "/tls/certificates/csr/upload-cert",
+        json!({ "id": id, "cert_pem": ca_signed_for_csr(&csr_pem, issued, |_| {}) }),
+    )
+    .expect("csr upload succeeds");
+    id
+}
+
+/// A CSR the CA widened is renewed for what it issued, and the renewal retires
+/// it even though the CA labelled the two differently.
+// i[verify tls.cert.csr.begin]
+// i[verify tls.cert.list]
+// r[verify tls.csr.renew]
+// r[verify tls.cert.supersede]
+#[test]
+fn a_renewal_requests_what_the_ca_issued_and_retires_what_it_renews() {
+    let oi = TestOi::new();
+    let old_id = csr_certificate(&oi, &["a.doma.in"], &["*.doma.in"]);
+    assert_eq!(cert_row(&oi, old_id)["san_dns_names"], json!(["*.doma.in"]));
+
+    let begun = oi
+        .call("/tls/certificates/csr/begin", json!({ "renews": old_id }))
+        .expect("an active CSR certificate is renewable");
+    let renewal_id = begun["id"].as_i64().unwrap();
+    assert_eq!(csr_sans(begun["csr_pem"].as_str().unwrap()), ["*.doma.in"]);
+
+    let renewal = cert_row(&oi, renewal_id);
+    assert_eq!(renewal["state"], "csr_pending");
+    assert_eq!(renewal["renews"], json!(old_id));
+    assert_eq!(renewal["requested_hostnames"], json!(["*.doma.in"]));
+    assert_eq!(renewal["san_dns_names"], json!(null));
+    assert_eq!(cert_row(&oi, old_id)["pending_renewal"], json!(renewal_id));
+
+    // The CA puts the apex first this time, so the renewal's label is not the
+    // old certificate's.
+    let csr_pem = begun["csr_pem"].as_str().unwrap();
+    oi.call(
+        "/tls/certificates/csr/upload-cert",
+        json!({
+            "id": renewal_id,
+            "cert_pem": ca_signed_for_csr(csr_pem, &["doma.in", "*.doma.in"], |_| {}),
+        }),
+    )
+    .expect("renewal upload succeeds");
+
+    let renewed = cert_row(&oi, renewal_id);
+    assert_eq!(renewed["state"], "active");
+    assert_eq!(renewed["hostname"], "doma.in");
+    let old = cert_row(&oi, old_id);
+    assert_eq!(old["hostname"], "*.doma.in");
+    assert_eq!(old["state"], "superseded");
+    assert_eq!(old["pending_renewal"], json!(null));
+}
+
+/// A manual upload is renewed the same way, and names the operator gives
+/// replace the seeded set.
+// i[verify tls.cert.csr.begin]
+// r[verify tls.csr.renew]
+#[test]
+fn a_manual_certificate_is_renewed_for_the_names_given() {
+    let oi = TestOi::new();
+    let (pem, key) = self_signed("shop.example.com");
+    let manual_id = oi
+        .call(
+            "/tls/certificates/upload-manual",
+            json!({ "cert_pem": pem, "key_pem": key }),
+        )
+        .unwrap()["id"]
+        .as_i64()
+        .unwrap();
+
+    let begun = oi
+        .call(
+            "/tls/certificates/csr/begin",
+            json!({ "renews": manual_id, "hostnames": ["shop.example.com", "www.shop.example.com"] }),
+        )
+        .expect("an active manual certificate is renewable");
+    assert_eq!(
+        csr_sans(begun["csr_pem"].as_str().unwrap()),
+        ["shop.example.com", "www.shop.example.com"]
+    );
+    assert_eq!(
+        cert_row(&oi, begun["id"].as_i64().unwrap())["renews"],
+        json!(manual_id)
+    );
+}
+
+// i[verify tls.cert.csr.begin]
+// r[verify tls.csr.renew]
+#[test]
+fn a_renewal_is_refused_for_what_cannot_be_renewed() {
+    let oi = TestOi::new();
+
+    let (code, _) = oi
+        .call("/tls/certificates/csr/begin", json!({}))
+        .unwrap_err();
+    assert_eq!(code, "requirements_invalid");
+
+    let (code, _) = oi
+        .call("/tls/certificates/csr/begin", json!({ "renews": 999 }))
+        .unwrap_err();
+    assert_eq!(code, "not_found");
+
+    // A pending CSR has no certificate to renew.
+    let (pending_id, _) = begin_csr(&oi, "pending.example.com");
+    let (code, msg) = oi
+        .call(
+            "/tls/certificates/csr/begin",
+            json!({ "renews": pending_id }),
+        )
+        .unwrap_err();
+    assert_eq!(code, "requirements_invalid");
+    assert!(msg.contains("csr_pending"), "{msg}");
+
+    // One pending renewal at a time, and the refusal names it.
+    let active_id = csr_certificate(&oi, &["app.example.com"], &["app.example.com"]);
+    let first = oi
+        .call(
+            "/tls/certificates/csr/begin",
+            json!({ "renews": active_id }),
+        )
+        .unwrap()["id"]
+        .as_i64()
+        .unwrap();
+    let (code, msg) = oi
+        .call(
+            "/tls/certificates/csr/begin",
+            json!({ "renews": active_id, "hostnames": ["app.example.com"] }),
+        )
+        .unwrap_err();
+    assert_eq!(code, "requirements_invalid");
+    assert!(msg.contains(&format!("CSR {first}")), "{msg}");
+
+    // Cancelling it frees the certificate for another.
+    oi.call("/tls/certificates/csr/cancel", json!({ "id": first }))
+        .unwrap();
+    oi.call(
+        "/tls/certificates/csr/begin",
+        json!({ "renews": active_id }),
+    )
+    .expect("a cancelled renewal no longer blocks another");
+}
+
+/// Deleting the certificate a renewal renews leaves the renewal to finish as
+/// an ordinary CSR.
+// r[verify tls.csr.renew]
+#[test]
+fn a_renewal_outlives_the_certificate_it_renews() {
+    let oi = TestOi::new();
+    let old_id = csr_certificate(&oi, &["app.example.com"], &["app.example.com"]);
+    let renewal_id = oi
+        .call("/tls/certificates/csr/begin", json!({ "renews": old_id }))
+        .unwrap()["id"]
+        .as_i64()
+        .unwrap();
+
+    oi.call("/tls/certificates/delete", json!({ "id": old_id }))
+        .expect("the renewed certificate can be deleted");
+
+    let renewal = cert_row(&oi, renewal_id);
+    assert_eq!(renewal["state"], "csr_pending");
+    assert_eq!(renewal["renews"], json!(null));
+}
+
 // i[verify tls.cert.csr.begin]
 // i[verify tls.cert.csr.get]
 // i[verify tls.cert.csr.upload-cert]
@@ -1221,6 +1402,7 @@ fn a_canopy_certificate_is_in_the_hostname_view_like_any_other() {
                 },
                 note: None,
                 acme_account_id: None,
+                renews: None,
             },
         )
         .unwrap();
@@ -1275,6 +1457,7 @@ fn the_last_issuance_is_kinded_by_the_certificate_it_produced() {
                     },
                     note: None,
                     acme_account_id: None,
+                    renews: None,
                 },
             )?;
             let attempt =

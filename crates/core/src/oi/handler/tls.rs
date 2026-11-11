@@ -10,7 +10,7 @@
 //!
 //! Manual cert upload and the CSR flow are added in phases 3/4.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::sync::Arc;
 
 use secrecy::SecretString;
@@ -23,7 +23,7 @@ use super::HandlerResult;
 use crate::oi::state::OiState;
 use crate::runtime::tls::{
     AttemptOutcome, DnsProviderKind, KeyType, RetryBlockSource, TlsCertOrigin, TlsCertState,
-    TlsPolicy,
+    TlsCertificate, TlsPolicy,
     chain::{self, Strategy},
     keypair, parse, state,
     state::NextSource,
@@ -298,38 +298,52 @@ pub(crate) fn clear_policy(state: &OiState, params: HostnameParams) -> HandlerRe
 // i[tls.cert.list]
 pub(crate) fn list_certificates(state: &OiState) -> HandlerResult {
     let rows = state.db.call(store::list_certificates).map_err(db_error)?;
+    // Each certificate's pending renewal, read off the same listing rather
+    // than asked for row by row.
+    // r[impl tls.csr.renew]
+    let pending_renewals: HashMap<i64, i64> = rows
+        .iter()
+        .filter(|c| c.state == TlsCertState::CsrPending)
+        .filter_map(|c| c.renews.map(|renewed| (renewed, c.id)))
+        .collect();
     let result: Vec<Value> = rows
         .into_iter()
         .map(|c| {
+            // `null` where there is no certificate yet, or where the stored PEM
+            // will not parse, which is not the same as "covers nothing".
+            let san_dns_names = c.cert_pem.as_deref().and_then(|pem| {
+                parse::leaf_san_dns_names(pem)
+                    .inspect_err(|e| {
+                        // Null here reads as "no flag" to the operator, same
+                        // as a met request, so the reason has to be said
+                        // somewhere.
+                        tracing::warn!(
+                            cert_id = c.id,
+                            error = %e,
+                            "stored certificate could not be parsed; cannot report its SAN set \
+                             or whether it covers the hostnames its CSR requested"
+                        );
+                    })
+                    .ok()
+            });
             // Which of the hostnames its CSR asked for the stored certificate
             // does not cover. Decided here so the RFC 6125 rule has one
             // implementation rather than one per client. `null` where there is
             // nothing to decide — no request, no certificate yet — or where the
-            // stored PEM will not parse, which is not the same as "covers none".
+            // stored PEM will not parse.
             // r[impl tls.csr.flow]
-            let requested_not_covered =
-                match (c.requested_hostnames.as_deref(), c.cert_pem.as_deref()) {
-                    (Some(requested), Some(pem)) => match parse::not_covered(pem, requested) {
-                        Ok(missed) => Some(missed),
-                        // Null here reads as "no flag" to the operator, same as a
-                        // met request, so the reason has to be said somewhere.
-                        Err(e) => {
-                            tracing::warn!(
-                                cert_id = c.id,
-                                error = %e,
-                                "stored certificate could not be parsed; cannot report whether it \
-                                 covers the hostnames its CSR requested"
-                            );
-                            None
-                        }
-                    },
-                    _ => None,
-                };
+            let requested_not_covered = match (c.requested_hostnames.as_deref(), &san_dns_names) {
+                (Some(requested), Some(sans)) => Some(parse::sans_not_covering(sans, requested)),
+                _ => None,
+            };
             json!({
                 "id": c.id,
                 "hostname": c.hostname,
+                "san_dns_names": san_dns_names,
                 "requested_hostnames": c.requested_hostnames,
                 "requested_not_covered": requested_not_covered,
+                "renews": c.renews,
+                "pending_renewal": pending_renewals.get(&c.id),
                 "state": c.state.as_str(),
                 "origin": c.origin.as_str(),
                 "key_type": c.key_type.as_str(),
@@ -471,6 +485,7 @@ pub(crate) fn upload_manual(state: &OiState, params: UploadManualParams) -> Hand
                     metadata,
                     note: note_for_insert.as_deref(),
                     acme_account_id: None,
+                    renews: None,
                 },
             )
         })
@@ -525,8 +540,12 @@ pub(crate) fn delete_certificate(state: &OiState, params: CertIdParams) -> Handl
 #[derive(Deserialize)]
 pub(crate) struct CsrBeginParams {
     /// The names the certificate is requested for, in the order the CSR
-    /// carries them.
-    pub hostnames: Vec<String>,
+    /// carries them. Required unless `renews` is given.
+    #[serde(default)]
+    pub hostnames: Option<Vec<String>>,
+    /// The certificate this CSR renews.
+    #[serde(default)]
+    pub renews: Option<i64>,
     /// Optional key type. Defaults to `ecdsa_p256`, the only kind
     /// currently supported.
     #[serde(default)]
@@ -596,9 +615,33 @@ fn csr_hostname_set(hostnames: Vec<String>) -> Result<Vec<String>, OiError> {
 pub(crate) fn csr_begin(state: &OiState, params: CsrBeginParams) -> HandlerResult {
     let CsrBeginParams {
         hostnames,
+        renews,
         key_type,
     } = params;
-    let hostnames = csr_hostname_set(hostnames)?;
+    // r[impl tls.csr.renew]
+    let renewed = match renews {
+        Some(id) => {
+            let target = state
+                .db
+                .call(move |db| store::renewal_target(db, id))
+                .map_err(db_error)?;
+            match target {
+                store::RenewalTarget::Renewable(cert) => Some(cert),
+                refused => return Err(renewal_refused(id, refused)),
+            }
+        }
+        None => None,
+    };
+    let hostnames = match (hostnames, renewed) {
+        (Some(hostnames), _) => csr_hostname_set(hostnames)?,
+        (None, Some(cert)) => csr_hostname_set(renewal_seed(&cert)?)?,
+        (None, None) => {
+            return Err(OiError::new(
+                ErrorCode::RequirementsInvalid,
+                "hostnames is required unless renews is given",
+            ));
+        }
+    };
     let key_type = match key_type.as_deref() {
         None | Some("ecdsa_p256") => KeyType::EcdsaP256,
         Some(other) => {
@@ -628,37 +671,105 @@ pub(crate) fn csr_begin(state: &OiState, params: CsrBeginParams) -> HandlerResul
     })?;
 
     let csr_pem_for_insert = csr.pem.clone();
-    let id = state
+    let inserted = state
         .db
         .call(move |db| {
-            let names: Vec<&str> = hostnames.iter().map(String::as_str).collect();
-            store::insert_certificate(
-                db,
-                store::NewCertificate {
-                    // Until a certificate arrives the row has no primary SAN
-                    // of its own, so the first requested name stands in as
-                    // its label. The upload replaces it with the SAN the
-                    // signed certificate actually carries.
-                    hostname: names[0],
-                    requested_hostnames: Some(&names),
-                    state: TlsCertState::CsrPending,
-                    origin: TlsCertOrigin::Csr,
-                    cert_pem: None,
-                    csr_pem: Some(&csr_pem_for_insert),
-                    key_ciphertext: &key_ciphertext,
-                    key_type,
-                    metadata: CertMetadata::default(),
-                    note: None,
-                    acme_account_id: None,
-                },
-            )
+            // The renewed certificate was checked before the keypair was
+            // generated, outside any transaction, so it is checked again as
+            // part of the insert: a renewal begun or the certificate retired in
+            // between would otherwise go unnoticed.
+            store::atomically(db, || {
+                if let Some(id) = renews {
+                    match store::renewal_target(db, id)? {
+                        store::RenewalTarget::Renewable(_) => {}
+                        refused => return Ok(Err((id, refused))),
+                    }
+                }
+                let names: Vec<&str> = hostnames.iter().map(String::as_str).collect();
+                store::insert_certificate(
+                    db,
+                    store::NewCertificate {
+                        // Until a certificate arrives the row has no primary SAN
+                        // of its own, so the first requested name stands in as
+                        // its label. The upload replaces it with the SAN the
+                        // signed certificate actually carries.
+                        hostname: names[0],
+                        requested_hostnames: Some(&names),
+                        state: TlsCertState::CsrPending,
+                        origin: TlsCertOrigin::Csr,
+                        cert_pem: None,
+                        csr_pem: Some(&csr_pem_for_insert),
+                        key_ciphertext: &key_ciphertext,
+                        key_type,
+                        metadata: CertMetadata::default(),
+                        note: None,
+                        acme_account_id: None,
+                        renews,
+                    },
+                )
+                .map(Ok)
+            })
         })
         .map_err(db_error)?;
+    let id = inserted.map_err(|(renewed, refused)| renewal_refused(renewed, refused))?;
 
     Ok(json!({
         "id": id,
         "csr_pem": csr.pem,
     }))
+}
+
+/// Why certificate `id` cannot be renewed, as the operator is told it.
+// r[impl tls.csr.renew]
+fn renewal_refused(id: i64, refused: store::RenewalTarget) -> OiError {
+    match refused {
+        store::RenewalTarget::NotFound => {
+            OiError::not_found(format!("certificate not found: {id}"))
+        }
+        store::RenewalTarget::NotRenewable(cert_state, origin) => OiError::new(
+            ErrorCode::RequirementsInvalid,
+            format!(
+                "certificate {id} is a {} {} certificate; only an active manual or CSR-derived \
+                 certificate is renewed by CSR",
+                cert_state.as_str(),
+                origin.as_str()
+            ),
+        ),
+        store::RenewalTarget::Pending(pending) => OiError::new(
+            ErrorCode::RequirementsInvalid,
+            format!(
+                "certificate {id} already has a pending renewal, CSR {pending}; upload or cancel \
+                 it first"
+            ),
+        ),
+        store::RenewalTarget::Renewable(_) => OiError::new(
+            ErrorCode::Internal,
+            format!("certificate {id} is renewable but its renewal was refused"),
+        ),
+    }
+}
+
+/// The names a renewal requests when the operator names none: the renewed
+/// certificate's own SAN set, which is what its CA signed, rather than what its
+/// CSR asked for.
+// r[impl tls.csr.renew]
+fn renewal_seed(cert: &TlsCertificate) -> Result<Vec<String>, OiError> {
+    let id = cert.id;
+    let unseedable = |why: String| {
+        OiError::new(
+            ErrorCode::Internal,
+            format!("cannot renew certificate {id} from its SAN set ({why}); name the hostnames"),
+        )
+    };
+    let pem = cert
+        .cert_pem
+        .as_deref()
+        .ok_or_else(|| unseedable("no certificate is stored".to_owned()))?;
+    let sans = parse::leaf_san_dns_names(pem).map_err(|e| unseedable(e.to_string()))?;
+    if sans.is_empty() {
+        return Err(unseedable("it carries no DNS names".to_owned()));
+    }
+    Ok(sans)
 }
 
 /// Re-fetch the PEM CSR for a pending row. Returns `not_found` when the

@@ -124,10 +124,12 @@ fn compute_desired(
     if not_after - now > EXPIRY_WINDOW_SECS {
         return None;
     }
+    // r[impl tls.csr.renew]
     let description = format!(
-        "certificate for {} (strategy: {strategy}) expires at unix={not_after}; \
-         the runtime cannot autonomously renew this cert — upload a replacement",
-        target.hostname
+        "certificate {} for {} (strategy: {strategy}) expires at unix={not_after}; \
+         the runtime cannot autonomously renew this cert — renew it with \
+         `seedling-ctl tls certs csr renew {}` or upload a replacement",
+        cert.id, target.hostname, cert.id
     );
     Some(DesiredFault {
         app: target.app.clone(),
@@ -169,6 +171,7 @@ mod tests {
                 },
                 note: None,
                 acme_account_id: None,
+                renews: None,
             },
         )
         .unwrap()
@@ -195,12 +198,13 @@ mod tests {
     }
 
     // r[verify tls.fault.expiring]
+    // r[verify tls.csr.renew]
     #[test]
     fn files_fault_for_manual_cert_within_window() {
         let (db, _) = fresh_db();
         let now = Timestamp::now().as_second();
         // 7 days remaining → within 14-day window.
-        insert_cert(
+        let id = insert_cert(
             &db,
             "foo.example.com",
             TlsCertOrigin::Manual,
@@ -209,6 +213,21 @@ mod tests {
 
         sweep(&db, &[target("alpha", "foo.example.com")]).unwrap();
         assert_eq!(active_count(&db, FAULT_KIND), 1);
+        let fault = faults::list_active_faults(&db, None).unwrap().remove(0);
+        assert!(
+            fault
+                .description
+                .contains(&format!("certificate {id} for foo.example.com")),
+            "{}",
+            fault.description
+        );
+        assert!(
+            fault
+                .description
+                .contains(&format!("seedling-ctl tls certs csr renew {id}")),
+            "{}",
+            fault.description
+        );
     }
 
     #[test]

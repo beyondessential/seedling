@@ -134,6 +134,11 @@ pub struct TlsCertificate {
     pub ari_polled_at: Option<i64>,
     pub created_at: i64,
     pub updated_at: i64,
+    /// For a CSR begun as a renewal: the certificate it renews, which its
+    /// upload retires when it replaces it in full. `None` once that
+    /// certificate is deleted.
+    // r[impl tls.csr.renew]
+    pub renews: Option<i64>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

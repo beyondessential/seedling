@@ -821,6 +821,13 @@ export interface TlsCertificate {
   /** The requested hostnames the stored certificate does not cover. Null when
    * there is nothing to decide, or when the runtime could not tell. */
   requested_not_covered: string[] | null;
+  /** The DNS names in the stored certificate's SAN set. Null when there is no
+   * certificate yet, or when the runtime could not parse it. */
+  san_dns_names: string[] | null;
+  /** For a CSR begun as a renewal, the certificate it renews. */
+  renews: number | null;
+  /** The id of this certificate's renewal CSR while it is pending. */
+  pending_renewal: number | null;
   state: TlsCertState;
   origin: TlsCertOrigin;
   key_type: TlsKeyType;

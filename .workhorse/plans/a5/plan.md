@@ -10,3 +10,13 @@
 - CLI: `tls certs csr renew <id> [--hostname ...]`, calling `csr/begin` with `renews`.
 - Web: the Renew action reuses `CsrBeginDialog`, pre-filled from `san_dns_names`. The hostnames the certificate serves come from `tls.hostname.list` rows whose `active_cert.id` matches.
 - `cert_expiring_soon` description names the certificate id and the renew command.
+
+## Build steps
+
+- [x] Migration v66: `renews` column with `ON DELETE SET NULL`, partial unique index on pending renewals
+- [x] Store: `renews` on `NewCertificate`/`TlsCertificate`; pending-renewal lookup; supersession takes the renewed row as a candidate
+- [x] OI: `csr.begin` accepts `renews` and seeds from the SAN set; `cert.list` reports `san_dns_names`, `renews`, `pending_renewal`
+- [x] Expiring fault names the certificate and the renew command
+- [x] CLI: `tls certs csr renew <id>`
+- [x] Web: Renew action within the expiry window, pre-filled dialog with served hostnames, pending renewal shown
+- [x] Tests and docs

@@ -68,6 +68,17 @@ pub(super) enum CsrCommand {
         #[arg(long, default_value = "ecdsa-p256")]
         key_type: String,
     },
+    /// Begin a CSR renewing an active manual or CSR-derived certificate.
+    /// Requests the certificate's own SAN set unless hostnames are given.
+    Renew {
+        /// The certificate to renew.
+        id: i64,
+        /// Hostnames to request instead of the certificate's SAN set.
+        hostnames: Vec<String>,
+        /// Key type. Currently only `ecdsa-p256` is supported.
+        #[arg(long, default_value = "ecdsa-p256")]
+        key_type: String,
+    },
     /// Re-fetch the PEM CSR for a pending request.
     Get { id: i64 },
     /// Upload the externally-signed cert for a pending CSR. The
@@ -453,6 +464,14 @@ async fn dispatch_csr(client: &OiClient, cmd: CsrCommand) {
                     .await,
             );
         }
+        CsrCommand::Renew {
+            id,
+            hostnames,
+            key_type,
+        } => {
+            let params = csr_renew_params(id, &hostnames, &key_type);
+            print_result(client.request("/tls/certificates/csr/begin", params).await);
+        }
         CsrCommand::Get { id } => {
             print_result(
                 client
@@ -485,6 +504,16 @@ async fn dispatch_csr(client: &OiClient, cmd: CsrCommand) {
             );
         }
     }
+}
+
+/// Parameters for a CSR renewing certificate `id`. With no hostnames given,
+/// none are sent, so the runtime requests the certificate's own SAN set.
+fn csr_renew_params(id: i64, hostnames: &[String], key_type: &str) -> Value {
+    let mut params = json!({ "renews": id, "key_type": key_type.replace('-', "_") });
+    if !hostnames.is_empty() {
+        params["hostnames"] = json!(hostnames);
+    }
+    params
 }
 
 /// Whether stdin has already been read to EOF by [`read_pem_arg`].
@@ -567,6 +596,19 @@ mod tests {
     struct TestCli {
         #[command(subcommand)]
         cmd: ConfigCommand,
+    }
+
+    // r[verify tls.csr.renew]
+    #[test]
+    fn a_renewal_leaves_the_names_to_the_runtime_unless_given() {
+        assert_eq!(
+            csr_renew_params(7, &[], "ecdsa-p256"),
+            json!({ "renews": 7, "key_type": "ecdsa_p256" })
+        );
+        assert_eq!(
+            csr_renew_params(7, &["a.example.com".to_owned()], "ecdsa-p256"),
+            json!({ "renews": 7, "key_type": "ecdsa_p256", "hostnames": ["a.example.com"] })
+        );
     }
 
     #[test]
