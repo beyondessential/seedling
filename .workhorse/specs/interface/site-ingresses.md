@@ -12,8 +12,7 @@ The runtime MUST store each change a method below makes durably before the serve
 The server MUST attach the request's [actor](wire.md#actor-attribution) to every event a request emits.
 Each event is recorded in the audit log as [AUD](../runtime/audit-log.md#entries) specifies, and a method that emits no event records no audit entry.
 
-A site ingress name MUST follow the [name rules](../language/overview.md#names).
-The server MUST refuse a request whose `name` breaks them with `requirements_invalid`.
+The server MUST refuse a request whose `name` breaks the [name rules](../language/overview.md#names) with `requirements_invalid`.
 
 ## Site ingress records
 
@@ -116,7 +115,7 @@ A change of TLS provisioning mode takes effect on the site ingress's attachments
 
 The server MUST refuse the request with `not_found` if no site ingress has that name.
 The server MUST refuse the request with `requirements_invalid` if the site ingress is discovered and its discovery provider still reports it.
-A discovered site ingress that is stale MAY be deleted.
+An operator MAY delete a discovered site ingress that is stale.
 
 On success the result is `{ "deleted": true }`.
 The server MUST emit a `SiteIngressAttachmentRemoved` event for each attachment the deletion removes, and a `SiteIngressDeleted` event whose `source` is the deleted site ingress's source.

@@ -107,3 +107,12 @@ Accepted from agents: INFRA host-originated redirection covers IPv4 too, matchin
 Waiting on the user: backup-snap- sweep; interface specs for 38 unspecced OI methods.
 User settled: backup-snap sweep dropped; VOLM, SVCM, INGM interface specs written on this card.
 VOLM, SVCM, INGM written. Accepted: zero-endpoint site services; loopback endpoints refused; external volume mappings need not name a declared slot (dynamic external volumes).
+
+## Round 3
+
+### New specs, web, root (found: 2 critical, 8 suggestion, 5 nit)
+
+Fixed in place: INGM and VOLM name-rule actors; INGM stale deletion actor; root Site service glossary entry; RFC 3339 rows.
+Critical: SVCM resolver-status misses one-family-failed-other-empty; EVT attachment events lack redirect_preserve_path.
+Suggestion: missing mapping target code differs (VOLM not_found vs SVCM requirements_invalid); discovery refresh events vs EVT actor rule; mapping targets that stop existing; reconciliation after mapping changes stated once; forward attachment service port; console attach on discovered ingresses and stale deletion; SVCM endpoints table cell; spec-leads-code items (already filed).
+Nit: web session_id vs EVT session_id; ordering wording; snapshot/promote storage failure internal; INGM healthy wording and refresh with no provider; more loopback forms.

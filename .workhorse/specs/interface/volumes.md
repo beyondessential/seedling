@@ -27,7 +27,7 @@ The text form of a site or app volume reference: `_site/<name>` for the site vol
 
 ## Requests
 
-Every app, volume, site volume and external volume name a method below takes MUST follow the [name rules](../language/overview.md#names), and the server MUST reject one that does not with `requirements_invalid`.
+The server MUST reject with `requirements_invalid` every app, volume, site volume and external volume name a method below takes that breaks the [name rules](../language/overview.md#names).
 A held volume's identifier is a UUID in its hyphenated text form, and the server MUST reject an identifier that is not with `requirements_invalid`.
 
 A request the server answers with an error MUST leave the host's held volumes, site volumes and external volume mappings, their records and their storage, as they were before the request.
