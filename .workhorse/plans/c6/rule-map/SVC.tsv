@@ -1,0 +1,6 @@
+l/service.type	SVC#declaration
+l/service.port	SVC#service-ports
+l/service.routing	SVC#routing
+l/service.exported	SVC#export
+l/service.external	SVC#external-services
+l/service.external.action-context	SVC#external-services

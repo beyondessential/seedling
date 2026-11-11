@@ -1,0 +1,8 @@
+r/infra.nat64.mode	NAT64#mode
+r/infra.nat64.detection	NAT64#detection
+r/infra.nat64.translator	NAT64#translator
+r/infra.nat64.translator.lifecycle	NAT64#translator-lifecycle
+r/infra.nat64.forwarding	NAT64#translator
+r/infra.nat64.dns64	NAT64#dns64
+r/infra.nat64.ipv6-egress	NAT64#ipv6-egress
+r/infra.nat64.dns64.force-translation	NAT64#dns64

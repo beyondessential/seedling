@@ -2,105 +2,144 @@
 id: SUSP
 ---
 
-# Action closure suspension and replay
+# Suspension and replay
 
-## Reconciliation
+Applies to how the [runtime](../overview.md#runtime) suspends a [lifecycle operation](../overview.md#lifecycle-operation)'s action closure on a barrier, and replays it from the [action log](rule:r/history.action-log) to resume it or to recover it after a restart.
 
-<!-- from runtime: Reconciliation -->
+## Terminology
 
-> r[barrier.replay.positional]
-> The action execution log is positional: a replayed call is matched to the committed entry at its own position in the closure's call sequence, never to any entry elsewhere in the log that happens to look similar.
-> "At most once" for a call is therefore per call site: two identical calls at different points in a closure are two calls, and a call whose arguments resolve differently between passes is still the same call.
-> A replay whose committed entry does not correspond to the call being made must fail rather than guess.
+### Barrier
 
-## Action Execution Log
+A call in an action closure that waits for resource instances to reach a [lifecycle state](../overview.md#lifecycle-state): a [state method](rule:l/rt.started.state-methods) on a `Started`, or [`rt.stop`](#rtstop).
 
-<!-- from runtime: Persistent History / Action Execution Log -->
+### Pass
 
-> r[rt.signal]
-> The runtime persists each [`rt.signal`](rule:l/rt.signal) invocation to the action execution log so the call is not re-delivered when an interrupted operation replays. The persisted entry records the target instances and the signal name. On replay, the runtime treats a signal entry as already delivered and does not re-issue it; this is the at-most-once-across-replays guarantee from `l[rt.signal]`.
+One run of an action closure from its beginning, which ends when the closure suspends on a barrier, returns or throws.
 
-> r[rt.write]
-> The runtime persists each [`rt.write`](rule:l/rt.write) invocation to the action execution log. The persisted entry records the target volume and the write path; the file contents are not stored in the log. On replay, the runtime treats a write entry at the same call site as already applied and does not re-execute it; this is the at-most-once-across-replays guarantee from `l[rt.write]`.
->
-> The runtime resolves the target volume to a host filesystem mountpoint using the same mechanism the actuator uses to apply static `Volume.write` content, then writes under the [confinement every path the runtime owns is held to](rule:r/storage.confinement), so a malicious or buggy path cannot escape the volume's root.
+### Replay
 
-> r[rt.exec]
-> The runtime persists each [`rt.exec`](rule:l/rt.exec) invocation to the action execution log. The persisted entry records the target container instance and the exit code. The argv and any options (e.g. env) are not stored in the log; only the outcome is needed for replay correctness. On replay, the runtime treats an exec entry at the same call site as already executed and recovers the exit code from the entry rather than re-running the command; this is the at-most-once-across-replays guarantee from `l[rt.exec]`.
->
-> The runtime executes the command inside the target's running container via the container runtime (e.g. `podman exec`), inheriting the container's namespaces, working directory, user, and environment. Stdout and stderr are forwarded to the container-log sink for the target instance. The runtime blocks the action closure until the command exits, then returns control with the exit code attached to the `Executed` value.
+A pass over a closure whose earlier passes have committed entries to the action log, during which calls already recorded are matched to their entries rather than performed again.
 
-## Action Closure Suspension
+### Anchoring entry
 
-<!-- from runtime: Action Closure Suspension -->
+The action log entry of the call that produced the `Started` a barrier is called on.
 
-> r[barrier.suspension]
-> When an action closure calls a barrier method (`.scheduled()`, `.running()`, `.ready()`, `.ready_eventually()`, `.terminated()`, `.terminated_eventually()`) on a `Started` value, the closure must be suspended.
-> Execution appears to block from the script's perspective.
+## Barriers
 
-> r[barrier.condition]
-> A barrier condition specifies which resource instances must reach which lifecycle state.
-> The barrier is satisfied when all specified resources have reached (or passed) the required state, as determined by the [world observation history](rule:r/history.world.state-derivation).
+When an action closure reaches a barrier whose condition is not satisfied, the runtime MUST suspend the closure.
+To the script, the barrier call blocks.
 
-> r[barrier.deadline]
-> Each barrier has an optional deadline.
-> When a deadline is set and the barrier condition is not satisfied within it, the barrier must throw an exception within the action closure.
-> When the deadline is absent (as it is for `.terminated_eventually()` and `.ready_eventually()`), the barrier waits indefinitely; it resumes only when the condition becomes satisfied or when the operation is [cancelled](rule:r/operation.cancel).
-> The condition check takes precedence over the deadline: a barrier whose condition is currently satisfied resumes successfully even if the deadline has elapsed since the original suspension. Otherwise, a short-lived resource that completed during a replay window where the satisfied flag never landed in the action log could be spuriously timed out on the next replay.
+A barrier's condition names resource instances and a required lifecycle state.
+The condition is satisfied when every named instance has reached or passed the required state, as derived from the [world observation history](rule:r/history.world.state-derivation).
 
-> r[barrier.suspension.poll-backoff]
-> The cadence at which the runtime re-evaluates a suspended barrier (replaying the action closure up to the suspend point) may vary with how long the barrier has been waiting.
-> Short initial cadence keeps quick barriers responsive; longer cadence for protracted waits bounds the aggregate replay cost of multi-hour operations.
-> The exact schedule is not prescribed by this spec.
+When a suspended barrier's condition is satisfied, the runtime MUST resume the closure, which continues from the point immediately after the barrier call.
 
-> r[barrier.resume]
-> When a barrier condition is satisfied, the runtime must resume the suspended action closure.
-> The closure continues from the point immediately after the barrier call.
+### Deadlines
+
+A barrier MAY have a deadline, measured from when the barrier began to wait.
+If a barrier's condition is not satisfied when its deadline passes, the runtime MUST throw from the barrier call within the closure.
+A barrier without a deadline, as for `.ready_eventually()` and `.terminated_eventually()`, MUST wait until its condition is satisfied or the operation is [cancelled](operations.md#cancellation).
+
+The runtime MUST evaluate a barrier's condition before its deadline.
+A barrier whose condition is satisfied MUST succeed even if its deadline has passed.
+
+> [!NOTE]
+> The action log can lag the world.
+> A short-lived resource can complete during a pass whose record of the barrier's satisfaction never reaches the log, and checking the deadline first would time out a barrier whose resources have reached the required state.
+
+### Re-evaluation cadence
+
+The runtime MUST re-evaluate a suspended barrier's condition repeatedly until it is satisfied, its deadline passes, or the operation is cancelled.
+The interval between re-evaluations SHOULD follow the longest time any of the operation's barriers has been recorded as waiting:
+
+| wait | interval |
+| --- | --- |
+| up to 2 minutes | 2 seconds |
+| 2 minutes to 1 hour | rising linearly from 2 to 30 seconds |
+| 1 hour to 6 hours | rising linearly from 30 to 300 seconds |
+| over 6 hours | 300 seconds |
+
+> [!NOTE]
+> A short interval keeps quick barriers responsive, and a long one bounds the cost of re-running a closure throughout an operation that waits for hours.
 
 ## Replay
 
-<!-- from runtime: Action Closure Suspension / Replay -->
+If the runtime restarts while an operation is in progress and decides to [replay it](operations.md#interrupted-operations), it MUST:
 
-> r[barrier.replay]
-> If the runtime restarts while a lifecycle operation is in progress, the operation must be replayed:
->
-> 1. The BSL script is re-evaluated to reconstruct the AppDef.
-> 2. The [action execution log](rule:r/history.action-log) is read from persistent storage.
-> 3. The action closure is re-executed from the beginning.
-> 4. `rt.*` calls that are already recorded in the log are idempotent: they produce the same desired state mutations but do not duplicate real-world operations.
-> 5. Barrier calls whose conditions are already satisfied (according to the current world observation history) return immediately.
-> 6. Execution fast-forwards to the first unsatisfied barrier, where it suspends normally.
+1. Evaluate the app's definition to reconstruct the operation's [resource graph](../overview.md#resource-graph).
+2. Read the operation's action log from durable storage.
+3. Run the action closure from its beginning.
+4. Match each `rt.*` call already recorded in the log to its entry, applying the same desired-state changes without repeating the call's effect on the host.
+5. Return at once from each barrier whose condition is already satisfied.
+6. Suspend at the first barrier whose condition is not satisfied, as on any other pass.
 
-> r[barrier.replay.anchor]
-> A barrier is anchored to the log entry of the call that produced the `Started` it was called on.
-> Whether the barrier has already been satisfied is decided from that entry alone, never from another entry that happens to record the same resources and the same required state.
-> A call's entry holds a record for each barrier asserted on it, under that barrier's position among them, counted in the order the closure asserts them.
-> A barrier is identified by that position and not by what it waits for: its resources are not usable for the purpose, since a replica may be added or retired between passes and it is still the same barrier, and neither is its required state, since nothing stops a closure asserting the same state twice on one call.
-> A barrier on a group that a [Collection](rule:l/collection.interface) method has narrowed is a barrier on that call like any other, and holds its own record there.
-> Resources and required state do not identify a barrier: distinct calls within one closure can resolve to the same resource set, and [`rt.stop`](rule:r/barrier.replay.rt-stop) records the same terminal state that a later `.terminated()` barrier waits for.
-> A barrier whose anchoring entry records no satisfied barrier for its required state is decided against the [world observation history](rule:r/history.world.state-derivation).
+The runtime MAY resume a suspended operation by a replay at any time, and not only after a restart.
 
-> r[barrier.satisfaction.recorded]
-> That a barrier's condition was met is recorded against that barrier's own record on its [anchoring entry](rule:r/barrier.replay.anchor), whether it was met on the pass that first reached the barrier or on a later one.
-> Each barrier likewise records when its own wait began, and that start stands until the barrier is satisfied: re-recording it on each pass would restart the wait it measures, and the [deadline](rule:r/barrier.deadline) could never expire.
-> Recording against the barrier rather than against the call is what lets a `Started` carry several: `s.running()` then `s.ready()` neither take each other's passing for their own nor displace the start the other is timed from.
->
-> A barrier still recorded as waiting counts toward the [poll cadence](rule:r/barrier.suspension.poll-backoff) for as long as the record stands.
-> A barrier that has passed but was never recorded as passed therefore goes on lengthening the cadence of every barrier after it, so an operation whose first barrier waited a long time re-polls the next one slowly even though it is ready to proceed.
+A script's action closures MUST NOT have side effects other than through `rt.*` calls.
+Given the same resource graph and parameters, a closure MUST make the same sequence of `rt.*` calls up to any barrier.
 
-> r[barrier.replay.abandoned]
-> Startup cleanup of resources left by a previous run must spare the resources recorded against the operation it is about to replay, so the replay can adopt them.
-> Where the replay does not then start, for any reason, those resources must be torn down and their records forgotten before the runtime goes on serving.
->
-> A resource spared for a replay that never happens is recorded against an operation no live operation will ever claim, and the next start spares it again on the same reasoning, so nothing reclaims it for as long as the node lives.
-> Sparing a resource is therefore a promise, and every path that declines to replay owes it.
->
-> Only resources actually torn down may be forgotten: a record the runtime could not read or act on must stay on the books, since dropping it would report a teardown that did not happen.
+### Positional replay
 
-> r[barrier.replay.determinism]
-> BSL action closures must not have side effects beyond `rt.*` calls.
-> Re-execution of a closure given the same AppDef and parameters must produce the same sequence of `rt.*` calls up to any given barrier point.
+The runtime MUST match a call made during a replay to the committed entry at the call's own position in the closure's sequence of calls, and never to an entry elsewhere in the log.
+Two identical calls at different points in a closure are two calls, and a call whose resolved arguments differ between passes is still the same call.
 
-> r[barrier.replay.rt-stop]
-> The `rt.stop()` method also blocks (until resources terminate).
-> It must participate in the same suspension and replay mechanism as barrier methods.
+The runtime MUST fail the replay if the entry at a call's position records a different kind of call, or records an argument that is a literal in the script and differs from the call's.
+The runtime MUST NOT compare arguments that may legitimately resolve differently between passes, such as the set of instances a call addresses.
+
+### Barrier anchoring
+
+The runtime MUST decide whether a barrier has already been satisfied from its anchoring entry alone, and never from another entry that records the same resources and required state.
+
+An entry MUST hold a record for each barrier asserted on its call, identified by the barrier's position among them in the order the closure asserts them.
+The runtime MUST NOT identify a barrier by its resources or its required state.
+A barrier on a `Started` that a [Collection](rule:l/collection.interface) method has narrowed is a barrier on the original call, with its own record on that call's entry.
+
+> [!NOTE]
+> A replica can be added or retired between passes and the barrier is still the same one, and a closure can assert the same state twice on one call.
+> Distinct calls can resolve to the same resource set, and `rt.stop` records the same terminal state a later `.terminated()` waits for.
+
+Where its anchoring entry records no satisfied barrier at its position, the runtime MUST decide the barrier against the world observation history.
+
+The runtime MUST record that a barrier's condition was met against the barrier's own record, whether the condition was met on the pass that first reached the barrier or on a later one.
+The runtime MUST record when each barrier began to wait, and MUST keep that time until the barrier is satisfied.
+
+> [!NOTE]
+> Recording the start again on each pass would restart the wait, so the deadline could never pass.
+> A barrier that passed without being recorded as passed goes on counting as waiting, and slows the re-evaluation of every barrier after it.
+
+## rt.stop
+
+[`rt.stop`](rule:l/rt.stop) is a barrier: the runtime MUST suspend the closure until every resource it names has terminated, under the same deadline, recording and replay rules as any other barrier.
+
+## Side-effecting calls
+
+[`rt.signal`](rule:l/rt.signal), [`rt.write`](rule:l/rt.write) and [`rt.exec`](rule:l/rt.exec) act on the host directly, and the runtime MUST record each call in the action log.
+
+| call | entry records | entry omits |
+| --- | --- | --- |
+| `rt.signal` | the instances signalled and the signal's name | |
+| `rt.write` | the target volume and the path written | the contents written |
+| `rt.exec` | the target instance and the command's exit code | the command, its arguments and its options |
+
+The runtime MUST commit each such entry no later than the end of the pass that made the call.
+Once an entry is committed, a replay MUST NOT repeat the call's effect.
+A replayed `rt.exec` MUST return the exit code its entry records.
+
+> [!NOTE]
+> A host that stops after a call's effect and before the end of the pass replays the call and repeats its effect.
+
+The runtime MUST run an `rt.exec` command inside the target's running container, with the container's namespaces, working directory, user and environment, and MUST block the closure until the command exits.
+
+The runtime MUST resolve an `rt.write` target to the volume's storage on the host as for a static `Volume.write`, and MUST write under the [confinement](rule:r/storage.confinement) that holds every path the runtime owns.
+
+## Abandoned replay
+
+When it starts, the runtime MUST tear down the [dynamic resources](rule:l/app.resources.dynamic) that previous runs recorded, except those recorded against the operation it is about to replay, which the replay adopts.
+Where the replay does not then start, for any reason, the runtime MUST tear down the resources it spared and forget their records before it goes on serving.
+
+The runtime MUST forget only the records of resources it has torn down.
+A record it could not read, or whose resource it could not tear down or could not confirm was gone, MUST stay recorded.
+
+> [!NOTE]
+> A resource spared for a replay that never happens is recorded against an operation nothing will claim, and the next start spares it again on the same reasoning.
+> Dropping a record whose teardown did not happen leaves a resource running with no record, no fault and nothing to reclaim it.

@@ -1,0 +1,13 @@
+l/app.var	APP#the-app-variable
+l/app.type	APP#the-app-variable
+l/app.constructor	APP#the-app-variable
+l/app.methods	APP#the-app-variable
+l/app.resources	APP#named-resources
+l/app.resources.static	APP#static-resource
+l/app.resources.dynamic	APP#dynamic-resource-lifetime
+l/app.resources.context.named	APP#named-resources
+l/app.resources.context.immutable	APP#static-resource-immutability
+l/app.resources.context.anonymous	APP#anonymous-resources
+l/app.resources.names	APP#named-resources
+l/app.description	APP#app-description
+l/app.canopy-type	APP#canopy-type

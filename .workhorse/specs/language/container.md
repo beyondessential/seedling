@@ -4,117 +4,132 @@ id: CTR
 
 # Containers
 
-## Container
+Applies to the BSL `Container` interface: the builder methods and semantics every container workload shares.
 
-<!-- from language: Container -->
+## Borrowed terms
 
-> l[container.interface]
-> Container is an interface (you can't obtain a `Container`-typed value) for the common builder methods, instance methods, and semantics of container workload definitions.
+| term | meaning |
+| --- | --- |
+| entrypoint, command arguments | the `Entrypoint` and `Cmd` of an image's configuration, as defined by the [OCI Image Format Specification](https://github.com/opencontainers/image-spec/blob/main/config.md) |
+| capability | a Linux capability, as defined by [capabilities(7)](https://man7.org/linux/man-pages/man7/capabilities.7.html) |
+| signal | a POSIX signal, as defined by [signal(7)](https://man7.org/linux/man-pages/man7/signal.7.html) |
 
-> l[container.image]
-> The `container.image(uri: string)` builder method sets the container image reference.
-> Image references must be fully qualified: `registry/path:tag` or `registry/path@algorithm:hex`.
-> The registry component is the hostname (with optional port) before the first `/` and must contain at least one `.` or a `:` to distinguish it from a path component.
-> A tag or digest must be present; bare `registry/path` references without a version specifier are rejected.
->
-> A container without an `image` set may be inoperable.
+## Container interface
 
-> l[container.image.registry-allowlist]
-> After BSL evaluation, every image reference is checked against the operator-configured registry allowlist.
-> If an image's registry is not in the allowlist, a fault of kind `disallowed_registry` is filed for the app.
-> The fault is cleared when the app is re-evaluated and all image registries pass the check.
-> The default allowlist contains `docker.io` and `ghcr.io`.
+`Container` is an interface, and no value has the type `Container`.
+[Deployments](deployment.md) and [Jobs](job.md) implement it, through the [Pod](pod.md) interface.
+Every method in this spec is a [builder method](rule:l/bsl.builder) available on each type that implements `Container`.
 
-> l[container.command]
-> The `container.command(name: string)` or `container.command(entrypoint: string[])` builder method overrides the container's entrypoint (the executable to run).
-> The `command(name: string)` form is equivalent to `command([name])`.
->
-> This follows the [Kubernetes `command:` field](https://kubernetes.io/docs/tasks/inject-data-application/define-command-argument-container/) convention, which maps to `--entrypoint` in Docker/Podman — not to the positional arguments after the image name.
+## Image
 
-> l[container.arg]
-> The `container.arg(var: string)` or `container.arg(vars: string[])` builder method appends arguments passed to the container's entrypoint (overriding the image's default `CMD`).
-> The `arg(var: string)` form is equivalent to `arg([var])`.
->
-> This follows the [Kubernetes `args:` field](https://kubernetes.io/docs/tasks/inject-data-application/define-command-argument-container/) convention, which maps to the positional arguments after the image name in Docker/Podman.
+`container.image(uri: string)` sets the container's image reference.
+A reference MUST have the form `registry/path`, followed by `:tag`, `@digest`, or both, and any other reference MUST throw.
 
-> l[container.env]
-> The `container.env(name: string, value: string)` or `container.env(#{ name: string, value: string }[])` builder method inserts variables into the environment of the container.
-> The `env(name: string, value: string)` form is equivalent to `env(#{ name: name, value: value })`.
->
-> Environment variables set with the same name as previous variables override the earlier ones. That is, `.env("MANUKA", "honey").env("MANUKA", "branch")` is equivalent to `.env("MANUKA", "branch")`.
+| part | form |
+| --- | --- |
+| `registry` | the text before the first `/`, containing at least one `.` or `:` |
+| `path` | one or more segments separated by `/`, each non-empty and of lowercase ASCII letters, digits, `.`, `_` and `-` |
+| `tag` | the text after the last `:` following `registry/`, non-empty and of ASCII letters, digits, `.`, `_` and `-` |
+| `digest` | `algorithm:hex`, where `algorithm` is non-empty and of lowercase ASCII letters and digits, and `hex` is at least 32 lowercase hexadecimal digits |
 
-> l[container.env.validation]
-> Environment variable names must be non-empty, consist only of ASCII letters, digits, and underscores, and must not start with a digit.
->
-> The following environment variable names are forbidden and must cause the method to throw:
-> `PATH`, `LD_PRELOAD`, `LD_LIBRARY_PATH`, `LD_AUDIT`, `LD_DEBUG`, `LD_PROFILE`.
->
-> Environment variable values must not contain null bytes. If a value contains a null byte, the method must throw.
+A reference with neither a tag nor a digest MUST throw.
 
-> l[container.mount-volume]
-> The `container.mount(mountpoint: string, volume: Volume)` builder method binds a [volume](rule:l/volume.type) into the filesystem of the container at a given `mountpoint`.
-> An [External Volume](rule:l/volume.external) can also be used.
->
-> Mounts bound to a mountpoint identical to a previous mount override the earlier one.
->
-> The `mountpoint` argument must be a unix-style path.
+## Registry allowlist
 
-> l[container.mount-volume.validation]
-> The `mountpoint` must be an absolute path (starting with `/`).
->
-> The following mountpoints are forbidden and must cause the method to throw: `/`, `/proc`, `/sys`, `/dev`, `/etc`, `/bin`, `/sbin`, `/lib`, `/lib64`, `/usr`, `/boot`, `/run`.
-> A mountpoint whose canonicalised form (after resolving `.` and `..` segments and collapsing repeated `/` separators, without touching the filesystem) equals any forbidden path is also rejected.
->
-> The mountpoint must not contain null bytes. If it does, the method must throw.
+Each host holds a registry allowlist, which operators edit through the [Operator Interface](../overview.md#operator-interface).
+A new host's allowlist MUST hold `docker.io` and `ghcr.io`.
 
-> l[container.on-exit]
-> The `container.on_exit(strategy: OnExit)` builder method defines the strategy used when the command exits.
-> The default is [`OnExit.Restart`](rule:l/const.on-exit.restart) for Deployments and [`OnExit.Terminate`](rule:l/const.on-exit.terminate) for Jobs.
+Each time the runtime evaluates an app's definition, it MUST compare the registry of every Deployment and Job image against the allowlist.
+While any image's registry is absent from the allowlist, the runtime MUST keep one [fault](../overview.md#fault) of kind `disallowed_registry` filed against the app, naming each disallowed registry.
+The runtime MUST clear that fault when an evaluation finds every image's registry in the allowlist.
+If the runtime cannot read the allowlist, it MUST NOT file or clear the fault.
 
-> l[container.memory]
-> The `container.memory(limit: string)` builder method sets the memory limit for the container.
-> The `limit` must be a positive integer followed by a unit suffix: `k` (kibibytes), `m` (mebibytes), or `g` (gibibytes). The suffix is case-insensitive.
-> If no memory limit is set, the container has no memory constraint.
+## Command and arguments
 
-> l[container.cpus]
-> The `container.cpus(limit: float)` builder method sets the CPU limit for the container.
-> The `limit` must be a positive number. Fractional values are permitted (e.g. `0.5` for half a CPU core).
-> If no CPU limit is set, the container has no CPU constraint.
+`container.command(entrypoint: array)` sets the container's [entrypoint](#borrowed-terms) to `entrypoint`, replacing the image's.
+`container.command(name: string)` is equivalent to `command([name])`.
 
-> l[container.cap-add]
-> The `container.cap_add(capability: string)` builder method adds a Linux capability to the container.
-> Containers run with all capabilities dropped by default; this method selectively re-grants individual capabilities.
-> The `capability` must be a valid Linux capability name (e.g. `"NET_RAW"`, `"NET_BIND_SERVICE"`). The name is case-insensitive and is normalised to uppercase.
+`container.arg(vars: array)` appends `vars` to the container's [command arguments](#borrowed-terms).
+`container.arg(var: string)` is equivalent to `arg([var])`.
+A container on which `arg` is called at least once MUST be run with the appended arguments in place of the image's.
 
-> l[container.writable-rootfs]
-> The `container.writable_rootfs()` builder method opts the container out of the default read-only root filesystem.
-> By default, the container's root filesystem is mounted read-only; a writable tmpfs is provided at `/tmp`.
+An array element that is not a string MUST throw.
 
-> l[container.pids-limit]
-> The `container.pids_limit(limit: int)` builder method sets the maximum number of simultaneous PIDs permitted in the container.
-> The `limit` must be a positive integer.
-> The default PID limit is 256.
+## Environment
 
-> l[container.workdir]
-> The `container.workdir(path: string)` builder method sets the working directory of the container process.
-> The `path` must be an absolute path.
-> If not set, the working directory is determined by the container image.
+`container.env(name: string, value: string)` sets the environment variable `name` to `value`.
+`container.env(entries: array)` sets one variable for each entry, a map of the form `#{ name: string, value: string }`.
+An entry missing `name` or `value`, or carrying any other key, MUST throw.
 
-> l[container.user]
-> The `container.user(spec: string)` builder method sets the user, and optionally the group, that the container process runs as.
-> The `spec` is passed to the container runtime, which accepts a numeric id, a `uid:gid` pair, or a name defined in the image.
-> It must be non-empty and contain no whitespace.
-> If not set, the user is determined by the container image.
->
-> Setting this is how a script runs a workload as a non-root user without depending on the image's entrypoint to drop privileges itself, which [actuate.container.hardening](rule:r/actuate.container.hardening) prevents some tools from doing.
+Setting a variable already set MUST replace its value.
 
-> l[container.stop-signal]
-> The `container.stop_signal(name: string)` builder method declares the POSIX signal sent to the container's main process when the runtime stops the container.
-> Accepted forms are the canonical `"SIGFOO"` (e.g. `"SIGINT"`, `"SIGQUIT"`, `"SIGTERM"`) and the bare `"FOO"` shorthand; unknown signal names must be rejected at script-evaluation time.
-> When unset, the default signal applied by the runtime is `SIGTERM`.
-> Use cases: stateful workloads whose semantics require a specific signal — for example, PostgreSQL maps `SIGINT` to "fast shutdown" and `SIGTERM` to "smart shutdown" (which waits for clients to disconnect and may exceed the stop deadline).
+A name MUST be non-empty, MUST consist of ASCII letters, digits and `_`, and MUST NOT begin with a digit.
+The names `PATH`, `LD_PRELOAD`, `LD_LIBRARY_PATH`, `LD_AUDIT`, `LD_DEBUG` and `LD_PROFILE` MUST throw.
+A value containing a NUL character MUST throw.
 
-> l[container.stop-timeout]
-> The `container.stop_timeout(seconds: int)` builder method sets how long the runtime waits between sending the stop signal and sending `SIGKILL`.
-> `seconds` must be a positive integer.
-> When unset, the runtime applies its default (currently 90 seconds, matching systemd's `TimeoutStopSec` default).
+## Volume mounts
+
+`container.mount(mountpoint: string, volume: Volume)` mounts a [volume](volume.md) into the container's filesystem at `mountpoint`.
+`container.mount(mountpoint: string, volume: ExternalVolume)` mounts an [External Volume](volume.md#external-volumes) in the same way.
+A mount at a mountpoint already mounted MUST replace the earlier mount.
+
+A `mountpoint` MUST be an absolute path beginning with `/`, and MUST NOT contain a NUL character.
+A mountpoint whose canonical form is `/`, `/proc`, `/sys`, `/dev`, `/etc`, `/bin`, `/sbin`, `/lib`, `/lib64`, `/usr`, `/boot` or `/run` MUST throw.
+The canonical form resolves `.` and `..` segments and collapses repeated `/`, without reference to any filesystem.
+
+## Exit strategy
+
+`container.on_exit(strategy: OnExit)` sets the strategy the runtime follows when the container's command exits.
+The default is [`OnExit.Restart`](rule:l/const.on-exit.restart) for a Deployment and [`OnExit.Terminate`](rule:l/const.on-exit.terminate) for a Job.
+
+## Resource limits
+
+`container.memory(limit: string)` sets the container's memory limit.
+A `limit` MUST be a decimal integer of at least 1, without leading zeros, followed by one unit suffix.
+The suffixes are `k` for kibibytes, `m` for mebibytes and `g` for gibibytes, in either case.
+Any other `limit` MUST throw.
+
+`container.cpus(limit: float)` sets the container's CPU limit, in CPU cores.
+A `limit` MUST be finite and greater than zero, and MAY be fractional.
+
+A container with no memory limit or no CPU limit is not constrained in that resource.
+
+`container.pids_limit(limit: number)` sets the most processes the container may hold at once.
+A `limit` MUST be an integer from 1 to 4294967295.
+The default is 256.
+
+## Privileges
+
+The runtime starts every container with the restricted privileges [container hardening](rule:r/actuate.container.hardening) specifies.
+
+`container.cap_add(capability: string)` grants the container one [capability](#borrowed-terms).
+A `capability` MUST be one of `AUDIT_CONTROL`, `AUDIT_READ`, `AUDIT_WRITE`, `BLOCK_SUSPEND`, `BPF`, `CHECKPOINT_RESTORE`, `CHOWN`, `DAC_OVERRIDE`, `DAC_READ_SEARCH`, `FOWNER`, `FSETID`, `IPC_LOCK`, `IPC_OWNER`, `KILL`, `LEASE`, `LINUX_IMMUTABLE`, `MAC_ADMIN`, `MAC_OVERRIDE`, `MKNOD`, `NET_ADMIN`, `NET_BIND_SERVICE`, `NET_BROADCAST`, `NET_RAW`, `PERFMON`, `SETFCAP`, `SETGID`, `SETPCAP`, `SETUID`, `SYS_ADMIN`, `SYS_BOOT`, `SYS_CHROOT`, `SYS_MODULE`, `SYS_NICE`, `SYS_PACCT`, `SYS_PTRACE`, `SYS_RAWIO`, `SYS_RESOURCE`, `SYS_TIME`, `SYS_TTY_CONFIG`, `SYSLOG` or `WAKE_ALARM`, compared case-insensitively, and any other name MUST throw.
+Granting a capability already granted has no further effect.
+
+`container.writable_rootfs()` makes the container's root filesystem writable.
+A container on which it is never called MUST have a read-only root filesystem, with a writable temporary filesystem at `/tmp`.
+
+`container.user(spec: string)` sets the user, and optionally the group, the container's process runs as.
+A `spec` is a numeric user id, a `uid:gid` pair, or a name defined in the image.
+Leading and trailing whitespace MUST be removed from `spec`, and a `spec` that is then empty or contains whitespace MUST throw.
+A container on which `user` is never called runs as the user its image names.
+
+> [!NOTE]
+> A container that must run as a non-root user needs `user`, since [container user](rule:r/actuate.container.user) prevents an entrypoint from dropping privileges itself.
+
+## Working directory
+
+`container.workdir(path: string)` sets the working directory of the container's process.
+A `path` not beginning with `/` MUST throw.
+A container on which `workdir` is never called uses the working directory its image names.
+
+## Stopping
+
+`container.stop_signal(name: string)` sets the [signal](#borrowed-terms) the runtime sends to the container's main process to stop it.
+A `name` MUST be one of `HUP`, `INT`, `QUIT`, `ILL`, `TRAP`, `ABRT`, `BUS`, `FPE`, `KILL`, `USR1`, `SEGV`, `USR2`, `PIPE`, `ALRM`, `TERM`, `STKFLT`, `CHLD`, `CONT`, `STOP`, `TSTP`, `TTIN`, `TTOU`, `URG`, `XCPU`, `XFSZ`, `VTALRM`, `PROF`, `WINCH`, `IO`, `POLL`, `PWR` or `SYS`, optionally prefixed with `SIG`.
+A `name` MUST be compared case-insensitively, ignoring leading and trailing whitespace, and any other name MUST throw.
+If a container sets no stop signal, the runtime MUST send `SIGTERM`.
+
+`container.stop_timeout(seconds: number)` sets how long the runtime waits after sending the stop signal before sending `SIGKILL`.
+A `seconds` MUST be an integer from 1 to 4294967295.
+If a container sets no stop timeout, the runtime SHOULD wait 90 seconds.

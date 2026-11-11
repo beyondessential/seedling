@@ -4,139 +4,184 @@ id: OPS
 
 # Lifecycle operations
 
-## Lifecycle Operations
+Applies to the [lifecycle operations](../overview.md#lifecycle-operation) through which an [app](../overview.md#app)'s action closures direct the [runtime](../overview.md#runtime), and to the shell sessions that run beside them.
 
-<!-- from runtime: Lifecycle Operations -->
+## Terminology
 
-> r[operation.lifecycle]
-> A lifecycle operation is the top-level unit of scripted orchestration.
-> It is a single execution (possibly interrupted and replayed) of an action closure.
+### Source generation
 
-> r[operation.lifecycle.single]
-> At most one lifecycle operation may be in progress across all applications on a node at any time.
+The [generation](../overview.md#generation) current immediately before the change that initiated an operation.
 
-> r[operation.lifecycle.single.intra-app]
-> If a lifecycle operation is requested for an application that already has one in progress, the request must be rejected immediately.
+### Target generation
 
-> r[operation.lifecycle.single.inter-app]
-> If a lifecycle operation is requested for an application while a different application's operation is in progress, the request must be queued.
-> There may be at most one queued operation per application.
-> If an operation is already queued for that application, the new request must be rejected.
-> Queued operations are started in request order once the current operation completes.
+The generation whose definition and parameter values an operation runs against.
 
-> r[operation.lifecycle.events]
-> Lifecycle operations are initiated by these events:
->
-> - **Normal boot** (prior state exists, no interrupted operation): the `start` action.
-> - **Boot, interrupted operation exists**: replay of the interrupted operation. This includes installs that were in progress when the runtime stopped; an app persisted in the `Installing` status must have its install replayed from the persisted params and action log.
-> - **Param change**: the `on_change` handler registered on the parameter that changed, when the change matches one of the [transitions](rule:l/param.on-change.transitions) in the language spec, the app is installed, and a handler is registered.
-> - **Operator request**: a named action, including `install`.
-> - **Schedule**: a BSL `on_schedule` cron expression fires.
+### Operation-scoped volume binding
 
-> r[operation.lifecycle.param-change]
-> A param change is a lifecycle operation.
-> It is subject to the same [concurrency restrictions](rule:r/operation.lifecycle.single) as all other lifecycle operations.
-> Only one parameter may be changed at a time, including one changed alongside a definition update.
->
-> Checking that no other operation holds the app and admitting the change's `on_change` handler are one decision with respect to admitting any other operation for the app, so none is admitted after the change is committed and before its handler.
+A volume name the runtime binds to a host path for the duration of one operation, so that the operation's action closure can resolve it.
 
-> r[operation.lifecycle.generations]
-> Every lifecycle operation record must carry a *source generation* and a *target generation*.
->
-> - For an operation triggered by a [generation bump](rule:r/generation.bumps) (param change, script update), the source generation is the generation that was current immediately before the bump, and the target generation is the new generation produced by the bump.
-> - For an operation not triggered by a generation bump (operator-invoked actions, `start`, replay), the source and target generations are equal — the current generation at the time of dispatch.
->
-> Replay of an interrupted operation must reconstruct the AppDef using the operation's stored target generation, and `old` (when applicable) using the source generation.
-> This must hold even if further generations have been committed in the meantime; the operation always sees the world it was scheduled for.
+## Operation
 
-> r[operation.lifecycle.completion]
-> When a lifecycle operation completes (the action closure returns), the full [desired state](rule:r/desired-state.steady) — derived from the AppDef at the app's current generation — takes effect and the reconciler maintains it autonomously.
-> The operation's outcome is recorded in the [generation history](rule:r/generation.history) entry that triggered it (when applicable).
+A lifecycle operation is one run of one action closure, together with every [replay](suspension.md#replay) of that closure after an interruption.
+An operation ends when its action closure returns, throws, or is [cancelled](#cancellation).
 
-> r[operation.cancel]
-> The runtime must expose a way for operators to cancel an in-progress lifecycle operation.
->
-> When cancellation is requested, the runtime must wake any currently-suspended barrier — including deadline-less barriers such as [`.terminated_eventually()`](rule:l/rt.started.terminated-eventually) — so that the cancel takes effect within the same observation cycle rather than waiting for the next poll or deadline.
->
-> A cancelled operation reaches a terminal state distinct from success and from failure. Cleanup (dynamic resource teardown, current-operation clearing) must run as for a failed operation, and the outcome must be recorded so operators can tell a cancel apart from an ordinary failure after the fact.
+## Concurrency
 
-> r[operation.cancel.persistence]
-> A cancel request must persist across a runtime restart. When the daemon crashes after the cancel was accepted but before the operation observed it, the replay must resume into a pre-cancelled state so the operation terminates at its next barrier rather than re-executing work the operator has already asked to abandon.
->
-> The persisted cancel flag is scoped to a single `operation_id`. A later operation — whether resumed after completion of the current one or spawned fresh — must not inherit a cancel from a stale row.
+The runtime MUST NOT have more than one lifecycle operation in progress on a host at any time.
 
-> r[operation.cancel.stuck-recovery]
-> An app whose persisted phase is `Installing` but for which no `current_operation` row matches must be recoverable: the operator must always have a path to an actionable state.
->
-> The runtime must implement this in two places. On daemon startup, after loading apps and the persisted current operation, any app stuck in `Installing` with no matching current_operation must be transitioned to `Uninstalling`. The cancel-action endpoint must, when called on an app in this state, perform the same transition and return success rather than failing with "no active operation".
->
-> The transition target is `Uninstalling` rather than `NotInstalled` because a partially-installed app may already have running containers or units from `rt.start()` calls the previous operation made before its interruption. The reconciler skips `NotInstalled` apps, so a direct revert would strand those resources. `Uninstalling` engages the normal teardown path; the reconciler converges to `NotInstalled` once the teardown completes.
->
-> Stuck states arise from a previous run whose cancel cleanup cleared `current_operation` but whose phase-revert persist was interrupted by crash or restart, or from a daemon that died between persisting the phase and persisting the operation row.
+If an operation is requested for an app that already has one in progress, the runtime MUST reject the request at once.
 
-> r[operation.params]
-> When a lifecycle operation is dispatched with params, the params must be persisted alongside the operation record. On replay, the persisted params must be restored and passed to the action closure.
-> Params may contain secret values, so the persisted form must be encrypted with the same cipher used for stored secret params.
->
-> Shell sessions do not persist params; shells are not replayable.
+If an operation is requested for an app while another app's operation is in progress, the runtime MUST queue the request.
+The runtime MUST NOT hold more than one queued operation for an app, and MUST reject a request for an app that already has one queued.
+The runtime MUST start queued operations in the order they were requested, each once the operation in progress ends.
 
-## Operation Volume Params
+Admission for an app that is being uninstalled is governed by [app teardown](rule:r/app.uninstall.exclusive).
 
-<!-- from runtime: Lifecycle Operations / Operation Volume Params -->
+## Initiating events
 
-Some operations must hand a writable or read-only path to an action closure without giving that path a stable, app-visible name, such as the site volume an operator supplies for a `volume` action param. The runtime uses reserved param keys and operation-scoped volume bindings to do this in a collision-free way.
+| event | operation | trigger | source generation | target generation |
+| --- | --- | --- | --- | --- |
+| the runtime starts with no interrupted operation | the start action, for each installed app | `boot` | current | current |
+| the runtime starts with an interrupted operation | the interrupted operation, [replayed](#interrupted-operations) | `replay` | as persisted | as persisted |
+| a parameter change | the changed parameter's `on_change` handler | `param_change` | before the change | produced by the change |
+| an operator request | the named action, or `install` | `operator` | current | current |
+| a schedule falls due | the [scheduled action](scheduled-actions.md) | `schedule` | current | current |
 
-> r[operation.volume-param]
-> When an internal operation hands a volume to an action closure, it must not use a fixed name hard-coded in the BSL script. Instead, for each logical binding the operation wants to provide, the runtime must:
->
-> 1. Generate a fresh name that is unique for the operation — typically `seedling-op-<operation-id>-<logical-key>`. The name must not appear anywhere in the operator-provided param map.
-> 2. Register that name in the operation-scoped volume binding table (see [volume.external.dynamic](rule:l/volume.external.dynamic)), mapping it to the actual filesystem path and the intended `read_only` flag. The binding lives for the duration of the operation and is removed when the operation ends.
-> 3. Insert a param named `<logical-key>_volume` into the `param` map delivered to the action closure, whose value is the generated name.
->
-> The action closure resolves the volume by reading the param, then calling `app.external_volume(param["<logical-key>_volume"])`.
->
-> Because the generated name is produced by the runtime, not chosen by the script, different operations cannot collide with each other and cannot collide with operator-configured static external volume mappings.
+The runtime MUST initiate an operation for a parameter change only when the app is installed, a handler is registered for the parameter, and the change matches one of the handler's [transitions](rule:l/param.on-change.transitions).
+A parameter changed alongside a definition update is a parameter change.
 
-> r[operation.volume-param.filename]
-> An operation may additionally instruct an action closure to read or write a specific filename under an injected volume. It must not rely on a fixed filename known only to the runtime: instead, for each `<logical-key>_volume` param it adds, the runtime may add a companion param named `<logical-key>_filename` whose value is the filename the action closure must use.
->
-> This keeps the filename an implementation detail of the runtime — the runtime may rename it or change its structure without requiring every app's BSL script to be rewritten.
+The runtime MUST record the source and target generations of every operation.
+For an operation that a [generation bump](rule:r/generation.bumps) initiated, the runtime MUST record as the source generation the generation current immediately before the bump, and as the target generation the generation the bump produced.
+For any other operation, the runtime MUST record the generation current when the operation is dispatched as both.
 
-> r[operation.volume-param.reserved]
-> Param keys ending in `_volume` or `_filename` are reserved. The runtime must reject operator-provided params whose keys end in either suffix (see [action.invoke](rule:i/action.invoke) and [action.params](rule:l/action.params)). Only the runtime may insert such keys, and only as described in [operation.volume-param](rule:r/operation.volume-param) and [operation.volume-param.filename](rule:r/operation.volume-param.filename).
+The runtime MUST run an operation against the definition and parameter values of its target generation, and MUST pass an `on_change` handler `old` reconstructed from the source generation.
+The runtime MUST do so on every replay, including where later generations have been committed since the operation was dispatched.
+If the runtime cannot reconstruct a generation the operation needs, it MUST fail the operation rather than run it against another state.
 
-## Action Composition
+## Parameter changes
 
-<!-- from runtime: Lifecycle Operations / Action Composition -->
+The runtime MUST refuse a parameter change for an app that has an operation in progress or queued, or another change being applied.
+The runtime MUST accept a change only if it sets or unsets exactly one parameter, including a change made alongside a definition update.
 
-> r[operation.composition]
-> An action closure may invoke other actions by calling [`Action.invoke(params?)`](rule:l/action.call) on an Action handle obtained from [`app.action(name)`](rule:l/action.lookup) or returned by `app.on_action()` / `app.on_start()`.
-> The invoked action's closure runs inline within the calling operation, sharing its `rt`, its operation_id, and its action log.
-> Barriers within the invoked action are barriers of the overall operation.
+The runtime MUST make checking that nothing holds the app and admitting the change's handler one decision with respect to admitting any other operation for the app.
+The runtime MUST NOT admit another operation for the app after the change is committed and before its handler is admitted.
 
-> r[operation.composition.cycles]
-> The runtime must reject cycles in action invocation before the called closure runs.
-> A `.call()` whose action name is already on the current call stack — directly (the action calling itself) or transitively (any earlier frame on the stack) — must throw.
-> The check uses the action name; renaming a captured closure does not bypass it.
-> The thrown error must name the offending chain, e.g. `start → foo → bar` for the `bar.call()` that closes the cycle, so the operator can identify the script bug.
+## Completion
 
-> r[operation.composition.params]
-> The runtime applies the called action's declared param schema to the supplied `params` map before invoking the closure, using the same validation rules as operator invocation: required-field enforcement, default application, [reserved-key](rule:l/action.params) rejection, and `kind: "volume"` resolution against the [operation-scoped volume bindings](rule:r/operation.volume-param). Validation errors throw before the closure runs.
-> The result of validation must be deterministic across replays so that the action log entry recorded for the call (see [history.action-log.entries](rule:r/history.action-log.entries)) faithfully describes what the closure observed.
+When an operation ends, the runtime MUST return the app's [desired state](rule:r/desired-state.steady) to the whole resource graph at the app's current generation, and maintain it without direction.
 
-> r[operation.composition.params.replay]
-> A sub-action call already recorded in the action log is replayed with the params its entry holds, and is not validated again.
-> Validation answers to the world as it stands — it resolves `kind: "volume"` params against the [operation-scoped volume bindings](rule:r/operation.volume-param) and applies the action's declared schema as the current definition declares it — so re-running it would let a call that was committed with valid params stop replaying because an operator deleted the referenced site volume or an update changed the schema.
-> A recorded call whose entry names a different action than the one the closure is now calling is a [replay divergence](rule:r/barrier.replay.positional), not a call to replay.
+Where a generation bump initiated the operation, the runtime MUST record the operation's outcome on that generation's [history entry](rule:r/generation.history).
 
-## Shell Sessions
+When an operation fails, the runtime MUST file a fault of kind `operation_failed` against the app.
+When an operation for an app completes successfully, the runtime MUST clear the app's `operation_failed` and `operation_cancelled` faults.
 
-<!-- from runtime: Lifecycle Operations / Shell Sessions -->
+## Persistence
 
-> r[operation.shell]
-> Shell actions are not lifecycle operations.
-> They may run concurrently with a lifecycle operation and with other shell sessions.
+Before an operation's action closure first runs, the runtime MUST persist durably the operation's identifier, app, action, source and target generations, and parameters.
+If the runtime cannot persist them, it MUST NOT run the closure.
 
-> r[operation.shell.resources]
-> Resources created within a shell session are dynamic.
-> They are cleaned up when the session ends.
+The runtime MUST encrypt the persisted parameters with the cipher it uses for [stored secret parameters](rule:r/secret.storage).
+On replay, the runtime MUST pass the action closure the persisted parameters.
+
+The runtime MUST clear the persisted operation when the operation ends.
+
+## Interrupted operations
+
+When the runtime starts, it MUST read the persisted operation, if any, and decide whether to replay it before the reconciliation loop first runs.
+
+The runtime MUST replay an interrupted install only if the app is registered, the persisted parameters can be read, and the app is `Installing` or `NotInstalled`.
+The runtime MUST replay any other interrupted operation only if the app is registered, the persisted parameters can be read, and the app is `Installed`.
+
+Where the runtime does not replay an interrupted operation, it MUST clear the persisted operation and give back the resources it [spared for the replay](suspension.md#abandoned-replay).
+Where the operation not replayed was an install of an app in `Installing`, the runtime MUST file a fault of kind `install_interrupted` against the app and recover the app as a [stuck install](#stuck-install-recovery).
+
+If the runtime cannot read whether an interrupted operation exists, it MUST NOT perform stuck-install recovery or [startup cleanup](suspension.md#abandoned-replay), since both act on that operation's absence.
+
+## Stuck-install recovery
+
+The runtime MUST always give an operator a path out of an `Installing` phase that no operation holds.
+
+When it starts, after deciding whether to replay, the runtime MUST move to `Uninstalling` every app that is `Installing` with no operation being replayed for it.
+It MUST likewise move to `Uninstalling` every app that is `NotInstalled` while resource instances are still recorded for it.
+
+The runtime MUST answer a cancel request for an app that is `Installing` with no operation in progress by moving the app to `Uninstalling`, and the request MUST succeed.
+
+> [!NOTE]
+> A partly installed app can already have running resources, and reconciliation leaves the resources of a `NotInstalled` app alone.
+> Moving the app to `Uninstalling` tears those resources down, and the app reaches `NotInstalled` once teardown completes.
+
+## Cancellation
+
+The runtime MUST let an operator [cancel](rule:i/action.cancel) the operation in progress for an app.
+
+When a cancel is requested, the runtime MUST wake the operation if it is suspended on a [barrier](suspension.md#barriers), including a barrier with no deadline, so the cancel takes effect without waiting for the barrier's next re-evaluation or deadline.
+The runtime MUST stop a cancelled operation at the next barrier or `rt.*` call it reaches.
+
+The runtime MUST end a cancelled operation in an outcome distinct from success and from failure.
+The runtime MUST clean up after a cancelled operation as after a failed one, tearing down its [dynamic resources](rule:l/app.resources.dynamic) and clearing its persisted record.
+The runtime MUST file a fault of kind `operation_cancelled` against the app, distinct from `operation_failed`.
+
+### Cancel persistence
+
+The runtime MUST persist an accepted cancel request durably against the identifier of the operation it cancels.
+When the runtime replays an operation whose cancel was persisted, it MUST begin the replay cancelled, so that the operation ends at its first barrier or `rt.*` call without repeating work.
+If the runtime cannot read whether a cancel was persisted for the operation it is about to replay, it MUST NOT replay the operation as though no cancel had been requested.
+
+The runtime MUST apply a persisted cancel only to the operation it was requested for.
+The runtime MUST NOT let a later operation inherit it, whether that operation was dequeued after it or started afresh.
+
+## Operation-scoped volumes
+
+The runtime hands a volume to an action closure, such as the site volume an operator names for a `volume` action parameter, through an operation-scoped volume binding.
+
+For each volume it hands over, the runtime MUST generate a name, bind it to the host path and access mode for the duration of the operation, and pass the name to the closure as the parameter `<key>_volume`, where `<key>` is the binding's logical key.
+The runtime MUST remove the binding when the operation ends.
+A script resolves the volume with `app.external_volume(param["<key>_volume"])`.
+
+The runtime MUST NOT let a script choose the generated name, and the name MUST NOT appear among the parameters the operation was requested with.
+
+> [!NOTE]
+> A script reads the generated name from its parameter and never constructs it, so the form of the name is not part of the contract.
+
+Where the runtime needs a closure to use a particular file within a bound volume, it MAY pass the file name as the parameter `<key>_filename`.
+A script handed `<key>_filename` MUST use that file name.
+
+### Reserved parameter keys
+
+Parameter keys ending in `_volume` or `_filename` are reserved to the runtime.
+The runtime MUST reject a parameter map containing a reserved key, whether an operator, a shell request or an `Action.invoke` call supplied it.
+The runtime MUST insert reserved keys only as [operation-scoped volumes](#operation-scoped-volumes) describes.
+
+## Action composition
+
+A script MAY run another action from within an action closure by calling [`Action.invoke(params?)`](rule:l/action.call) on a handle from [`app.action(name)`](rule:l/action.lookup), `app.on_action()` or `app.on_start()`.
+
+The runtime MUST run the invoked action's closure inline, within the calling operation, sharing its `rt`, its operation identifier and its action log.
+A barrier in the invoked closure is a barrier of the calling operation.
+
+### Cycles
+
+The runtime MUST throw from an `Action.invoke` call whose action is already on the operation's call stack, before the invoked closure runs.
+The call stack begins with the operation's own action.
+The runtime MUST identify the actions on the stack by name.
+The thrown error MUST name each action on the stack, in call order, followed by the action being invoked.
+
+### Sub-action parameters
+
+Before the invoked closure runs, the runtime MUST validate the supplied parameters against the invoked action's declared schema by the rules for an [operator invocation](rule:i/action.invoke): rejecting reserved keys, enforcing required parameters, applying defaults, and resolving `volume` parameters.
+The runtime MUST throw a validation failure before the invoked closure runs.
+
+On replay, the runtime MUST run a call already recorded in the [action log](rule:r/history.action-log.entries) with the parameters its entry holds, and MUST NOT validate them again.
+If the entry at the call's position records a different action than the one being invoked, the runtime MUST fail the replay as a [divergence](suspension.md#positional-replay).
+
+> [!NOTE]
+> Validation consults the world as it stands: the site volumes that exist and the schema the current definition declares.
+> Validating a recorded call again would stop an operation replaying because an operator deleted the volume it named or an update changed the schema after the call was committed.
+
+## Shell sessions
+
+A shell session is not a lifecycle operation.
+The runtime MUST allow a shell session to run beside a lifecycle operation and beside other shell sessions.
+
+Resources a shell session creates are dynamic, and the runtime MUST clean them up when the session ends.
+The runtime MUST NOT persist a shell session's parameters, and MUST NOT replay a session after a restart.

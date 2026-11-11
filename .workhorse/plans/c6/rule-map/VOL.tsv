@@ -1,0 +1,9 @@
+l/volume.type	VOL#declaration
+l/volume.readonly	VOL#storage-options
+l/volume.tmpfs	VOL#storage-options
+l/volume.write	VOL#declared-file-writes
+l/volume.write-dir	VOL#declared-file-writes
+l/volume.write.validation	VOL#write-paths
+l/volume.exported	VOL#export
+l/volume.external	VOL#external-volumes
+l/volume.external.dynamic	VOL#external-volumes

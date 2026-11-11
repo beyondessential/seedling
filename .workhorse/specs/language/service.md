@@ -4,49 +4,59 @@ id: SVC
 
 # Services
 
-## Service
+Applies to services: network endpoints that an [app](../overview.md#app) declares, or that an [operator](../overview.md#operator) supplies to it, through which its workloads and operators reach one another.
 
-<!-- from language: Service -->
+## Terminology
 
-> l[service.type]
-> A Service is a network endpoint that operators and other resources can access.
-> 
-> Services are defined using the `app.service(name: string)` method, which returns a [builder](rule:l/bsl.builder).
+### Service port
 
-> l[service.port]
-> A Service Port is a particular port on a Service.
->
-> Service Ports are defined using the `service.port(port: number)` instance method, which returns a `ServicePort`.
->
-> The port number is "endpoint-side": connecting to the Service at that port number reaches the configured Service Port, but that might be _mapped_ to a different port number "pod-side".
+A port of a service at which a client connects to the service.
 
-> l[service.routing]
-> Services accept TCP and UDP traffic as long as they have places to route it to.
-> If there is no target for some traffic, it is dropped or rejected (implementation-defined).
-> If there are multiple targets for the same traffic, it is distributed round-robin.
-> HTTP traffic reaching the Service through an Ingress is distributed by the proxy under the route's [balancing policy](rule:l/service.balance), which is round-robin unless the app selects otherwise.
+### External service
 
-## HTTP Service
+A service an app declares by name and whose endpoint an operator supplies.
 
-<!-- from language: Service / HTTP Service -->
+## Declaration
 
-> l[service.exported]
-> `service.exported(options?: #{ description?: string })` is a builder method which marks the service as exported. Exported services are advertised to the control plane and operators.
->
-> Only named static services can be exported. Calling `exported()` on an anonymous service must throw.
+`app.service(name: string)` MUST return a `Service` [builder](overview.md#builder) for the named service.
+Anonymous services are specified in [APP](app.md#anonymous-resources).
 
-## External Service
+## Service ports
 
-<!-- from language: Service / External Service -->
+`service.port(port: number)` is an [instance method](overview.md#instance-method) that MUST return a `ServicePort` for the service port numbered `port`.
+`port` follows the [port rules](overview.md#ports).
 
-> l[service.external]
-> An External Service is a Service provided by the Seedling control plane to a BSL script, at a particular name.
->
-> External Services are defined using the `app.external_service(name: string)` method, which returns an `ExternalService`.
->
-> External Services can't be modified or configured further, only [mounted](rule:l/container.mount-service) or [bound](rule:l/pod.bind) like any other Service. The concrete endpoint the slot resolves to is supplied by the operator via a mapping; see the runtime spec [service.external.mapping.events](rule:r/service.external.mapping.events) for the mapping lifecycle.
+A service port's number is the port at which a client connects to the service.
+A [pod binding](rule:l/pod.tcp) MAY attach it to a pod port with a different number.
 
-> l[service.external.action-context]
-> In the action context, `app.external_service(name)` returns a reference to the static External Service of that name, and throws if there is none, as [app.resources.context.named](rule:l/app.resources.context.named) requires of every named resource.
-> The reference is immutable like any other static resource: `description`, `balance` and `http` throw on it, however the handle was obtained.
-> No External Service is created in the action context, so the set of slots an operator maps is the set the static script declares.
+## Routing
+
+The runtime MUST deliver TCP and UDP traffic addressed to a service port to a target bound to that port.
+If a service port has no target, the runtime MUST drop or reject traffic addressed to it.
+Where a service port has several targets, the runtime SHOULD distribute traffic among them round-robin.
+
+The runtime MUST distribute HTTP traffic that reaches a service through an [ingress](rule:l/ingress.type) under the service's [balancing policy](rule:l/service.balance).
+
+## Export
+
+`service.exported()` and `service.exported(options: map)` are builder methods that MUST mark the service as exported.
+`options` MAY hold `description`, a string describing the service to operators.
+
+Only a named static service can be exported.
+`exported` MUST throw when called on an anonymous service.
+
+The runtime MUST list each exported service to operators, with its export description where it has one.
+
+## External services
+
+`app.external_service(name: string)` MUST return an `ExternalService` for the named external service.
+An `ExternalService` MUST offer the methods `port`, `http`, `balance` and `description`, with the meanings they have on a `Service`.
+A script MAY [mount](rule:l/pod.mount-serviceport) or bind an external service's ports as for any service.
+
+The runtime MUST route traffic for an external service to the endpoint an operator has mapped to it.
+An external service with no mapping has no target.
+Changes to the mapping are specified in [external service mappings](rule:r/service.external.mapping.events).
+
+In the [action context](app.md#action-context), `app.external_service(name)` MUST return a reference to the static external service of that name, and MUST throw if there is none, as for every [named resource](app.md#named-resources).
+The reference is immutable like every static resource, so `description`, `balance` and `http` MUST throw on it.
+The external services an app declares are therefore exactly those its static context declares.

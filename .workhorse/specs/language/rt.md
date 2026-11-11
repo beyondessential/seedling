@@ -4,209 +4,203 @@ id: RT
 
 # The runtime handle
 
-## Runtime Instance
+Applies to the runtime handle through which an [action closure](action.md#action-closure) acts on its [app](../overview.md#app)'s resources, and to the values its methods return.
 
-<!-- from language: Runtime Instance -->
+## Terminology
 
-The Runtime Instance is a handle to the Seedling runtime for an application.
-It's how the script actually controls the containers in the "outside world".
+### Runtime handle
 
-This spec defines the semantics of the Runtime Instance as far as BSL is concerned; the exact implementation and control plane semantics are defined in other places, and must not be relied upon by BSL scripts.
+The value, of type `RuntimeInstance`, through which an action closure directs the [runtime](../overview.md#runtime) to act on its app's [resources](../overview.md#resource).
 
-> l[rt.var]
-> `rt` is a variable available within actions (usually as the first argument of the closure).
+### Selection
 
-> l[rt.type]
-> The `rt` variable is of type `RuntimeInstance`.
+The argument naming the resources a runtime handle method acts on.
 
-> l[rt.constructor]
-> The `rt` type is not constructible within a BSL.
+### Barrier
 
-> l[rt.methods]
-> All the methods of `rt` are defined in this spec.
+A method of `Started` that waits for that `Started`'s resources to reach a [lifecycle state](../overview.md#lifecycle-state).
 
-> l[rt.lifecyle]
-> - _Pending_: the resource is active in the runtime state, but not yet scheduled.
-> - _Scheduled_: the resource is set up "in the world" (on the node or cluster).
-> - _Running_: the resource is running, but may not yet be ready.
-> - _Ready_: the resource is ready to be used.
-> - _Terminating_: termination has been initiated by the runtime.
-> - _Terminated_: the resource has terminated.
-> - _Unscheduled_: the resource has been cleaned up.
->
-> It's the runtime's concern as to how the scheduling and other lifecycle actions and events work for each resource type.
->
-> Note that a resource can transition directly from _Running_ or _Ready_ to _Terminated_, for example when it exits on its own.
+## Handle availability
+
+The runtime MUST pass a runtime handle as the first argument of every action closure.
+Scripts conventionally name it `rt`.
+The runtime MUST NOT expose any way for a script to construct a `RuntimeInstance`.
+
+## Selections
+
+A selection is one of these values, holding the resources listed:
+
+| value | resources |
+| --- | --- |
+| an `App` | the app's named resources |
+| a [Collection](rule:l/collection.interface) | the Collection's resources |
+| a `Started` | the resources the `Started` holds |
+| a resource handle, named or anonymous | that resource |
+| an array of selections | every resource of every element |
+
+A runtime handle method MUST act only on the deployments, jobs, services and ingresses of a selection, and MUST ignore its other resources.
+A selection that is an `Action`, or any value not in the table, MUST make the method throw.
 
 ## Workload control
 
-<!-- from language: Runtime Instance / Workload control -->
+### Starting resources
 
-> l[rt.start]
-> The `rt.start(resources: Collection)` method schedules the resources in the Collection. It returns a [Started](rule:l/rt.started).
->
-> Action handles are not valid arguments to `rt.start`: actions are not resources and `rt.start` does not invoke their closures. Use [`Action.invoke(params?)`](rule:l/action.call) to invoke an action from a dynamic context. Passing an Action (or a Collection containing one) to `rt.start` must throw.
+`rt.start(selection)` MUST place every resource of the selection in the app's [desired state](../overview.md#desired-state), and returns a [`Started`](#started) over those resources.
 
-> l[rt.stop]
-> The `rt.stop(resources: Collection, deadline?: number)` method unschedules the resources in the Collection and blocks until all terminate.
-> `deadline` is interpreted the same as for [Started](rule:l/rt.started.state-methods).
+### Stopping resources
 
-> l[rt.query]
-> The `rt.query(resources: Collection)` method returns a [Started](rule:l/rt.started) _without_ scheduling the resources.
+`rt.stop(selection)` and `rt.stop(selection, deadline: number)` MUST remove every resource of the selection from the app's desired state, then wait until all of them have reached Terminated, and return no value.
+`deadline` is read as for [barriers](#barriers), with the default given there for `rt.stop`.
+If the deadline passes first, `rt.stop` MUST throw.
+While it waits, the action closure is suspended as [suspension](rule:r/barrier.replay.rt-stop) specifies.
 
-> l[rt.restart]
-> The `rt.restart(deployment: Deployment)` method triggers a restart of all running instances of the named Deployment, following its configured update strategy ([on_update](rule:l/deployment.on-update)).
-> It does not change the deployment's definition or generation, and returns no value.
-> Triggering semantics and durability are specified in [deployment.restart](rule:i/deployment.restart) at the interface level.
+### Querying resources
 
-> l[rt.warm-certs]
-> The `rt.warm_certs(resources: Collection)` method selects all TLS-terminating [Ingresses](rule:l/ingress.type) from the given Collection and ensures their TLS certificates are provisioned and cached, without yet routing traffic to those ingresses.
-> Non-ingress resources and ingresses without TLS termination in the collection are ignored.
->
-> It returns a [Started](rule:l/rt.started). Calling `.ready()` on the returned `Started` blocks until certificates are valid for every selected ingress.
-> If certificate provisioning cannot complete for one or more selected ingresses (for example, ACME issuance fails persistently), a fault is filed and the barrier throws when its deadline expires.
->
-> If the selection contains no TLS-terminating ingresses, the returned `Started` is immediately satisfied.
->
-> Calling `rt.warm_certs(app)` from within an [`on_change`](rule:l/param.on-change) handler warms exactly the ingresses that exist in the new generation. Ingresses present in the previous generation but not the new one are not warmed.
+`rt.query(selection)` returns a `Started` over the selection's resources, and MUST NOT change the desired state.
 
-> l[rt.warm-images]
-> The `rt.warm_images(resources: Collection)` method selects all [Deployment](rule:l/deployment.type) and [Job](rule:l/job.type) resources from the given Collection, extracts their container image references, and ensures those images are present in local container storage, without starting the containers.
-> Non-container resources, and container resources that have no image reference declared, are ignored.
->
-> Each distinct image reference in the selection is _pinned_ to the calling app: a pinned image is protected from autonomous image removal until a running container is observed using it (at which point the pin is cleared automatically) or an operator clears the pin explicitly. Pins are not automatically re-established when a workload that was using an image stops; a subsequent `rt.warm_images` call is required to re-pin.
->
-> It returns a [Started](rule:l/rt.started). Calling `.ready()` on the returned `Started` blocks until every selected image is present locally.
-> If an image pull fails persistently, a fault is filed and the barrier throws when its deadline expires.
->
-> If the selection contains no images to warm, the returned `Started` is immediately satisfied.
->
-> Anonymous container resources are supported: `rt.warm_images(app.job().image("registry/foo:1.2.3"))` warms the single image reference of a dynamic job without ever starting it, which is the idiomatic way to pre-load a future version of an image ahead of a deploy.
+### Deployment restart
 
-> l[rt.signal]
-> The `rt.signal(target: Collection, signal: string)` method delivers the named POSIX signal to PID 1 of every running container instance in the selected Collection.
->
-> The `signal` argument accepts the canonical `"SIGFOO"` form or its bare `"FOO"` shorthand; unknown signal names are a script-evaluation error.
->
-> Selection rules:
->
-> - Container instances that are not running are silently skipped (no error). This makes `rt.signal` safe to use against deployments where some replicas may be in transient states.
-> - Non-container resources in the collection are ignored.
-> - An empty selection is an error — typically a sign that the caller's collection expression resolved to nothing.
->
-> The call is _at-most-once_ across replays: when the runtime restarts mid-operation and replays the action closure, a previously-delivered signal is not re-sent.
->
-> Typical use cases: `SIGHUP` to reload configuration without restart (postgres, nginx), `SIGUSR1` to trigger log rotation, `SIGTERM`/`SIGINT` for cooperative shutdown when the deployment's `stop_signal` is not what the action wants for this one-off invocation.
+`rt.restart(deployment: Deployment)` MUST restart every running instance of the named deployment, following its [update strategy](rule:l/deployment.on-update), and returns no value.
+It MUST NOT change the deployment's definition or the app's [generation](../overview.md#generation).
+An anonymous deployment, or any value other than a Deployment, MUST make `rt.restart` throw.
+Each call MUST restart the deployment at most once, including when the action closure is [replayed](rule:r/barrier.replay).
+Restart semantics are specified by [deployment restart](rule:i/deployment.restart).
 
-> l[rt.exec]
-> The `rt.exec(target, args: array<string>)` and `rt.exec(target, args: array<string>, options: map)` methods run a command inside an existing running container.
->
-> The `target` argument is one of:
->
-> - a `Started` handle (typically the return value of `rt.start(...)` earlier in the same action),
-> - a named `Deployment` (the runtime resolves it to its currently-running instance),
-> - a named `Job` (the runtime resolves it to its currently-running instance).
->
-> The target must resolve to exactly one running container; otherwise calling `rt.exec` is a script error. Jobs and Deployments with the potential for more than one instance (e.g. `Deployment.scale(2)` or `Deployment.scale(1..3)`) are rejected without consulting the registry — the upper bound of the scale range must be `1`.
->
-> `args` is the command and its arguments (argv). It must be a non-empty array of strings.
->
-> The optional `options` map currently supports:
->
-> - `env: #{ KEY: "value", ... }` — extra environment variables for the command, layered on top of the container's environment. Keys must be valid environment-variable names (POSIX `[A-Za-z_][A-Za-z0-9_]*`).
->
-> Other option keys are reserved for future extension and currently rejected.
->
-> `rt.exec` does NOT capture stdout or stderr; both streams are forwarded to the runtime's container-log sink for the target container.
->
-> The call is _at-most-once_ across replays: when the runtime restarts mid-operation and replays the action closure, a previously-completed `rt.exec` is not re-executed; the recorded exit code is recovered from the action log.
->
-> Calling `rt.exec` outside an action closure is a script error.
+### Certificate warming
 
-> l[rt.executed.type]
-> `Executed` is an opaque type returned by `rt.exec`. It carries the exit code of the command and offers methods to inspect it.
->
-> Discarding the returned `Executed` without calling any of its methods is supported and is the natural way to "fire and forget" a command whose result the script does not care about.
+`rt.warm_certs(selection)` MUST start provisioning a certificate for every TLS-terminating [ingress](rule:l/ingress.type) of the selection, and returns a `Started` over those ingresses.
+It MUST ignore every other resource of the selection.
+It MUST NOT route traffic to an ingress.
 
-> l[rt.executed.exit-code]
-> `Executed.exit_code()` returns the integer exit code of the command. A non-zero value indicates the command failed; the exact mapping (0..255 for normal exits, larger values for signal-terminated processes) follows the host convention.
+On a `Started` returned by `rt.warm_certs`, `ready()` and `ready_eventually()` MUST wait until every ingress it holds has a valid certificate, instead of waiting for the Ready state.
+Such a `Started` holding no ingress MUST satisfy them at once.
 
-> l[rt.executed.success]
-> `Executed.success()` returns `true` when the command exited with code `0`, `false` otherwise. Equivalent to `executed.exit_code() == 0`.
+> [!NOTE]
+> In a [change handler](rule:l/param.on-change), `app` is the app at the new generation, so `rt.warm_certs(app)` warms the ingresses of the new generation and none that only the previous one declared.
 
-> l[rt.executed.ensure-success]
-> `Executed.ensure_success()` throws a script error when the command exited non-zero. The error message includes the exit code. It is the most concise way to assert that a command succeeded; the matching pattern is `rt.exec(...).ensure_success()`.
+### Image warming
 
-> l[rt.write]
-> The `rt.write(target: Volume | ExternalVolume, path: string, contents: string | File)` method writes a file into the given volume at action runtime, parallel to the static `Volume.write`.
-> A [`File`](rule:l/file.type) is written byte for byte as it is held in the bundle.
->
-> The target may be:
->
-> - a named (static) `Volume` declared at the top level,
-> - an anonymous `Volume` created earlier in the same action closure, or
-> - an `ExternalVolume`, including those resolved from operation-scoped volume bindings (see `l[action.params.volume]`).
->
-> The path must be absolute, must not escape the volume root after canonicalisation, and must not resolve to the volume root; these are the same validation rules as `l[volume.write.validation]`.
->
-> Unlike static `Volume.write`, `rt.write` does NOT reapply on container restart. It is a point-in-time write at action time. For tmpfs volumes that means the contents are erased on the next container start; this is allowed and is the user's responsibility to reason about.
->
-> The call is _at-most-once_ across replays: when the runtime restarts mid-operation and replays the action closure, a previously-completed `rt.write` is not re-executed.
->
-> Calling `rt.write` outside an action closure is a script error.
+`rt.warm_images(selection)` MUST make present in the host's local image storage the image of every [deployment](rule:l/deployment.type) and [job](rule:l/job.type) of the selection that declares one, without starting any container, and returns a `Started` over those resources.
+It MUST ignore every other resource of the selection.
+The runtime MUST [pin](rule:r/image.pin) each distinct image reference warmed to the app.
+
+On a `Started` returned by `rt.warm_images`, `ready()` and `ready_eventually()` MUST wait until every image it covers is present locally, instead of waiting for the Ready state.
+Such a `Started` covering no image MUST satisfy them at once.
+
+> [!NOTE]
+> A selection can hold an anonymous job that is never started: `rt.warm_images(app.job().image("registry/foo:1.2.3"))` pre-loads an image ahead of the deploy that uses it.
+
+### Signal delivery
+
+`rt.signal(selection, signal: string)` MUST deliver the named signal to the main process of every running container instance of every deployment and job of the selection, including every replica, and returns no value.
+`signal` MUST be accepted in the forms a [stop signal](rule:l/container.stop-signal) accepts, and an unrecognised name MUST make `rt.signal` throw.
+The runtime MUST skip container instances that are not running.
+A selection holding no deployment or job MUST make `rt.signal` throw.
+If delivery to a running instance fails, `rt.signal` MUST throw.
+Each call MUST deliver its signal at most once, including when the action closure is replayed.
+
+### Command execution
+
+`rt.exec(target, args: array)` and `rt.exec(target, args: array, options: map)` run a command inside a running container, wait for it to exit, and return an [`Executed`](#executed).
+
+`target` is one of:
+
+- a `Started` holding exactly one deployment or job instance;
+- a named Deployment whose declared scale has an upper bound of 1;
+- a named Job.
+
+Any other `target` MUST make `rt.exec` throw.
+A Deployment whose declared scale has an upper bound above 1 MUST make `rt.exec` throw, whatever number of instances exist.
+A `target` that does not resolve to exactly one running container MUST make `rt.exec` throw.
+
+`args` is the command and its arguments, and MUST be a non-empty array of strings.
+Any other `args` MUST make `rt.exec` throw.
+
+`options` MAY carry `env`, a map from environment variable names to string values, added to the container's environment for the command.
+Each name MUST match `[A-Za-z_][A-Za-z0-9_]*`.
+An `options` map carrying any other key, an `env` that is not a map, an invalid name, or a value that is not a string MUST make `rt.exec` throw.
+
+The runtime MUST NOT return the command's standard output or standard error to the script.
+The runtime SHOULD record them with the target container's logs.
+Each call MUST run its command at most once, including when the action closure is replayed, and a replayed call MUST return the exit status recorded when it ran.
+`rt.exec` called while no action closure is running MUST throw.
+
+### Volume writes
+
+`rt.write(target, path: string, contents: string)` and `rt.write(target, path: string, contents: File)` write a file into a volume, and return no value.
+A string `contents` MUST be written as its UTF-8 bytes, and a [`File`](rule:l/file.type) byte for byte as the bundle holds it.
+
+`target` is one of:
+
+- a named Volume;
+- an anonymous Volume created in the running operation;
+- an ExternalVolume bound for the running operation, as [operation-scoped external volumes](rule:l/volume.external.dynamic) specify.
+
+Any other `target`, including an ExternalVolume with no binding for the operation, MUST make `rt.write` throw.
+`path` MUST be validated as a [volume write path](rule:l/volume.write.validation) is, and an invalid `path` MUST make `rt.write` throw.
+
+The runtime MUST NOT write the file again when a container using the volume restarts.
+Each call MUST write at most once, including when the action closure is replayed.
+`rt.write` called while no action closure is running MUST throw.
+
+> [!NOTE]
+> A file written into a tmpfs volume is gone the next time a container using the volume starts.
 
 ## Waiting on resource state
 
-<!-- from language: Runtime Instance / Waiting on resource state -->
+### Started
 
-> l[rt.started.type]
-> `Started` is an opaque type representing some resources that have been started.
->
-> `Started` implements [Collection](rule:l/collection.interface), except that all the resources returned by Collection's methods return `Started`s corresponding to the resources, instead of the original resources.
+A `Started` is an opaque value standing for a group of resources a runtime handle method returned.
+A `Started` MUST offer the [Collection](rule:l/collection.interface) methods `one`, `only`, `except` and `select`, each returning a `Started` over the resources it selects instead of the resources themselves.
+`one()` on a `Started` holding no resources MUST return unit.
+A `Started` returned by a Collection method MUST keep the barriers of the `Started` it came from.
 
-> l[rt.started.state-methods]
-> `Started` has a number of methods of the form `started.<state>(deadline?: number)` which block until all resources have entered the state `<state>` (one of `scheduled`, `running`, `ready`, `terminated`).
->
-> The argument `deadline` must be a positive integer number of seconds; if it's zero or absent, the default deadline for that state is used (see [default deadlines](rule:l/rt.started.default-deadlines)).
->
-> If the deadline is reached before the method returns, an exception is thrown.
->
-> A `Started` holding no resources has nothing to wait on, so these methods return at once.
-> This is how a group narrowed by a [Collection](rule:l/collection.interface) method down to nothing behaves, and narrowing to nothing is an ordinary outcome of `except` or `select`: a barrier that instead waited forever would hang an action over a selection the author wrote deliberately.
+### Barriers
 
-> l[rt.started.default-deadlines]
-> The default deadlines for `started.<state>()` barriers with no explicit `deadline` argument are:
->
-> - `scheduled`, `running`, `ready`: short (on the order of tens of seconds), because these barriers guard correctness signals — a resource that has not reached these states in that window usually indicates a cluster-level problem rather than a slow workload.
-> - `terminated`: long (on the order of hours), because `terminated` is routinely called on Jobs that run for extended periods.
->
-> Every default deadline is a positive non-zero number of seconds. The exact values are set by the control plane and are not specified here.
->
-> Callers with an unbounded wait requirement use [`started.terminated_eventually()`](rule:l/rt.started.terminated-eventually) or [`started.ready_eventually()`](rule:l/rt.started.ready-eventually) instead of passing a very large deadline.
+`Started` has these barriers, each waiting until every resource it holds has reached the lifecycle state named, or a [later one](rule:r/lifecycle.transitions):
 
-> l[rt.started.terminated]
-> The `started.terminated()` state method returns a [Termination](rule:l/rt.termination.type).
+| barrier | state | default deadline in seconds | returns |
+| --- | --- | --- | --- |
+| `scheduled()`, `scheduled(deadline)` | Scheduled | 30 | the `Started` |
+| `running()`, `running(deadline)` | Running | 30 | the `Started` |
+| `ready()`, `ready(deadline)` | Ready | 30 | the `Started` |
+| `terminated()`, `terminated(deadline)` | Terminated | 21600 | a [`Termination`](#termination) |
+| `ready_eventually()` | Ready | none | the `Started` |
+| `terminated_eventually()` | Terminated | none | a `Termination` |
 
-> l[rt.started.terminated-eventually]
-> `started.terminated_eventually()` behaves like [`started.terminated()`](rule:l/rt.started.terminated), but has no deadline: it blocks until all resources reach `terminated` or the operation is [cancelled](rule:r/operation.cancel).
->
-> Use this for jobs with genuinely unbounded duration (e.g. large backups, bulk restores) where any finite deadline is either too short to be safe or too long to be useful as a failure signal.
+The default deadline of `rt.stop` is 30 seconds.
 
-> l[rt.started.ready-eventually]
-> `started.ready_eventually()` behaves like `started.ready()`, but has no deadline: it blocks until all resources reach `ready` or the operation is cancelled.
->
-> Typical use: ingress cert provisioning via an external CA (e.g. Let's Encrypt) whose completion time is bounded only by the CA's rate limiting.
+`deadline` is an integer number of seconds.
+A positive `deadline` MUST be used as given, zero MUST select the default, and a negative `deadline` MUST make the barrier throw.
 
-> l[rt.termination.type]
-> `Termination` is an opaque type representing the termination state of a resource.
+A barrier on a `Started` holding no resources MUST return at once.
+A barrier whose condition holds MUST return, even if its deadline has passed.
+If the deadline passes while the condition does not hold, the barrier MUST throw.
+A barrier with no deadline MUST wait until its condition holds or the operation is [cancelled](rule:r/operation.cancel).
+While a barrier waits, the action closure is suspended as [suspension](rule:r/barrier.suspension) specifies.
 
-> l[rt.termination.ensure-success]
-> The `termination.ensure_success()` method throws if the resource terminated without succeeding.
->
-> For a container-backed resource (Deployment, Job), "succeeded" means the container's process exited with status 0. Any non-zero exit status — including termination by signal — is considered a failure. When the runtime observes the container's exit code directly, that observation is authoritative. When the exit code is unobservable (for example because the container was auto-removed before the runtime could inspect it), the runtime may fall back to secondary signals: a systemd-level unit failure counts as a failure; otherwise the run is treated as a success provided the instance reached a terminal lifecycle state.
->
-> When a [Started](rule:l/rt.started.type) group holds multiple resources, all of them must have succeeded; otherwise `ensure_success()` throws.
->
-> For other resource kinds with no natural exit code (Service, Ingress, Volume), termination itself is success.
+### Termination
 
-<!-- TODO: more Termination methods -->
+A `Termination` is an opaque value standing for how the resources of a `Started` ended.
+
+`termination.ensure_success()` returns no value, and MUST throw unless every resource the `Termination` covers succeeded.
+The error SHOULD name the resources that did not succeed.
+
+A deployment or job instance succeeded if its most recent run exited with status 0.
+If the runtime did not observe that run's exit status, the run failed if the host's process supervisor reported it as failed, and succeeded otherwise once the run has ended.
+Any other resource succeeded once it reached Terminated.
+A resource whose outcome the runtime cannot determine MUST count as not having succeeded.
+
+### Executed
+
+An `Executed` is an opaque value standing for a command `rt.exec` ran.
+
+| method | returns |
+| --- | --- |
+| `exit_code()` | the command's exit status, an integer |
+| `success()` | `true` if the exit status is 0, `false` otherwise |
+| `ensure_success()` | no value |
+
+An exit status MUST be the command's exit code, from 0 to 255, or 128 plus the signal number for a command a signal ended.
+`ensure_success()` MUST throw if the exit status is not 0.
+Its error MUST carry the exit status, and SHOULD name the container instance the command ran in.

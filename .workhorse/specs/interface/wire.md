@@ -4,135 +4,193 @@ id: WIRE
 
 # Streams and wire format
 
-## Streams
+Applies to how requests, responses and session data are carried on the streams and datagrams of an OI [connection](transport.md#connection).
 
-<!-- from interface: Streams -->
+## Borrowed terms
 
-> i[stream.control]
-> Each request/response cycle uses one client-initiated bidirectional QUIC stream.
-> The client writes the request JSON and half-closes its write-end.
-> The server writes the response JSON and closes the stream.
-> The stream boundary is the message boundary; no additional length framing is used.
+| term | meaning |
+| --- | --- |
+| bidirectional stream, unidirectional stream | QUIC streams, as defined in [RFC 9000](https://www.rfc-editor.org/rfc/rfc9000) section 2 |
+| client-initiated, server-initiated | which end opened a stream, as defined in RFC 9000 section 2.1 |
+| finish | to end the sending part of a stream normally, with a STREAM frame carrying the FIN bit, as defined in RFC 9000 section 3.1 |
+| reset | to end a stream abruptly, with RESET_STREAM or STOP_SENDING, as defined in RFC 9000 section 3 |
+| datagram | a QUIC DATAGRAM frame's payload, as defined in [RFC 9221](https://www.rfc-editor.org/rfc/rfc9221) |
+| JSON object, JSON value | as defined in [RFC 8259](https://www.rfc-editor.org/rfc/rfc8259) |
 
-> i[stream.shell]
-> Each shell session uses three QUIC streams:
->
-> - One client-initiated bidirectional stream (the _session stream_): carries the `/shells/start` handshake and, after the handshake, raw stdin bytes from client to server. The server uses its write-end to deliver the handshake response and a final exit frame when the session ends.
-> - One server-initiated unidirectional stream for stdout bytes.
-> - One server-initiated unidirectional stream for stderr bytes.
->
-> Both ends relay stdin and output independently: output waiting to be delivered never holds up stdin, nor the server noticing that the session has ended.
+## Terminology
 
-> i[stream.shell.framing]
-> The server-to-client direction of the session stream carries newline-delimited JSON: the `/shells/start` response first, then the exit frame when the session ends.
-> Every frame ends with a newline, so a client reading line by line sees each frame as soon as it is written rather than when the stream closes.
-> A request that fails before the session opens is answered with an error response in place of the handshake response, and nothing follows it.
-> After a handshake response the exit frame is the only frame.
-> The client-to-server direction carries a single newline-terminated JSON request followed by raw stdin bytes for the remainder of the stream's lifetime.
+### Opening line
 
-> i[stream.forward]
-> Each tunneled TCP connection within a port forward uses one client-initiated bidirectional QUIC stream.
-> Both directions carry raw TCP bytes after an initial newline-terminated JSON header line: `{ "forward": "<forward_id>" }`.
-> Each direction of the stream is finished when the matching direction of the tunneled TCP connection is, and the stream is reset when the tunneled connection fails, as [forward.tunnel.tcp](rule:i/forward.tunnel.tcp) describes.
+The JSON object, encoded on a single line, with which a bidirectional stream begins.
 
-> i[datagram.forward]
-> Each tunneled UDP datagram within a port forward is carried as a QUIC datagram (RFC 9221).
-> Every datagram begins with a 2-byte big-endian `forward_key` followed immediately by the UDP payload.
-> QUIC datagrams are path-MTU constrained; payloads that exceed the limit are dropped and reported via a status message (see [forward.status](rule:i/forward.status)).
+### Control request
 
-> i[stream.dispatch]
-> All client-initiated bidirectional streams begin with a newline-terminated JSON object.
-> If that object contains a `"method"` key it is dispatched as a control request per [stream.control](rule:i/stream.control).
-> If it contains a `"forward"` key it is dispatched as a port forward data stream per [stream.forward](rule:i/stream.forward).
+A [method](overview.md#method) call answered with one response, after which its stream ends.
 
-> i[stream.dispatch.server]
-> All server-initiated bidirectional streams likewise begin with a newline-terminated JSON object, dispatched on the key it carries.
-> The only key defined is `"canopy"`, which dispatches the stream as a Canopy relay request per [stream.canopy](rule:i/stream.canopy).
-> A client that does not recognise the key must reset the stream rather than close it normally, so the server can distinguish an unsupported stream kind from an empty response.
->
-> Server-initiated unidirectional streams are not covered by this rule: each is opened in response to a specific request and its content is defined by that request.
+### Subscription request
 
-> i[stream.canopy]
-> Each relayed Canopy request uses one server-initiated bidirectional QUIC stream.
-> Both directions carry a newline-terminated JSON header line followed by raw body bytes for the remainder of the stream's lifetime; the stream's end is the body's end, and no additional length framing is used.
-> The server writes the request header and body then half-closes its write-end; the client writes the response header and body then closes the stream.
+A method call whose response is followed by data on a server-initiated unidirectional stream.
 
-> i[stream.subscribe]
-> A subscription-style request — one whose success causes the server to open a server-initiated unidirectional stream carrying the subscribed data — is answered on the bidirectional stream exactly as any other control request, before any unidirectional stream is opened.
-> A response carrying an error terminates the request: the server opens no unidirectional stream, and the connection remains usable for further requests.
-> The response is bounded by the close of the bidirectional stream, as for any other control request per [stream.control](rule:i/stream.control), and not by a newline: a client must read the bidirectional stream to its end before parsing, and the subsequent data arrives on the unidirectional stream rather than on this one.
-> Clients must therefore read and classify the response envelope before waiting for the unidirectional stream, must treat closure of the bidirectional stream without a response envelope as an error, must surface the error envelope's `code` and `message` to their caller rather than discarding them, and must not wait indefinitely for a unidirectional stream that a server which answered successfully may still fail to open.
-> The subscription-style requests are [events.subscribe](rule:i/event.subscribe) and [logs.stream](rule:i/logs.stream).
+### Session request
 
-> i[stream.events]
-> After a client sends a `/events/subscribe` request, the server opens one server-initiated unidirectional QUIC stream per connection and pushes events as newline-delimited JSON objects for the duration of the connection.
+A method call whose stream stays open after its response, to carry the session the call opened.
 
-> i[stream.logs]
-> After a client sends a `/logs/stream` request, the server opens one server-initiated unidirectional QUIC stream and pushes log entries as newline-delimited JSON objects. When follow mode is not requested, the stream closes after historical entries are exhausted. When follow mode is requested, the stream remains open and new entries are pushed as they appear until the client drops the connection.
+### Actor
 
-> i[stream.concurrency-limit]
-> The server enforces a configurable upper bound on the number of concurrently active request/response streams across all connections.
-> Long-lived sessions (forwards, shells, event subscriptions, log streams) release the permit after initial dispatch and do not count against the limit for their lifetime; the limit exists to bound the memory used by concurrent request body reads.
-> When the limit is reached, the server immediately replies with a `server_busy` error and closes the stream.
-> The limit is configurable at startup; the default value is 64.
+The person or system on whose behalf a client makes a request.
 
-## Wire Format
+## Stream dispatch
 
-<!-- from interface: Wire Format -->
+A client MUST begin every bidirectional stream it opens with an opening line.
+The opening line ends at the first line feed (0x0A) or, where nothing follows the JSON object, at the end of the stream.
+An opening line that further data follows MUST end with a line feed, and MUST NOT exceed 65,536 bytes including it.
 
-> i[wire.request]
-> Every control request has the form:
-> ```json
-> { "method": "<string>", "params": { } }
-> ```
+If the opening line has a `forward` member, the server MUST treat the stream as a [port forward data stream](#port-forward-data).
+Otherwise the server MUST treat the stream as a call of the method its `method` member names.
 
-> i[wire.actor]
-> Every control request must include a top-level `actor` object identifying the human or system principal that initiated the request:
-> ```json
-> { "method": "<string>", "actor": { "kind": "<string>", "id": "<string>", "display": "<string>", "session": "<string>" }, "params": { } }
-> ```
-> All fields within `actor` are optional strings.
-> `kind` identifies the authentication mechanism (e.g. `"ctl"`, `"password"`, `"tailscale"`, `"dev"`).
-> `id` is a stable identifier for the principal (e.g. an email address or key fingerprint).
-> `display` is a human-readable label.
-> `session` is an opaque per-session correlator.
->
-> When the `actor` field is absent, the server synthesises one from the client's mTLS identity as a fallback: `kind` is `"ctl"`, `id` is the client's SPKI fingerprint, and `display` is the label stored in the authorized keys table for that fingerprint (or the fingerprint itself if no label is stored).
->
-> The resolved actor is included in all events emitted as a result of the request and recorded in the audit log.
+The server MUST begin every server-initiated bidirectional stream with an opening line too, and the member it carries names the stream's kind.
+A `canopy` member names a [Canopy relay stream](#canopy-relay-streams), and no other kind is defined.
+A client MUST reset a server-initiated bidirectional stream whose kind it does not recognise, so that the server can tell an unsupported kind from an empty answer.
 
-> i[wire.response.ok]
-> A successful response has the form:
-> ```json
-> { "result": { } }
-> ```
+A server-initiated unidirectional stream carries no opening line.
+Its content is defined by the request that caused the server to open it.
 
-> i[wire.response.error]
-> An error response has the form:
-> ```json
-> { "error": { "code": "<string>", "message": "<string>" } }
-> ```
+## Control requests
 
-> i[wire.error-codes]
-> The following error code values are defined:
->
-> | Code | Meaning |
-> |---|---|
-> | `not_found` | The referenced app, action, shell, session, or param does not exist. |
-> | `not_installed` | The app is `NotInstalled` and the requested operation requires it to be installed. |
-> | `already_installed` | `/apps/install/invoke` was called but the app is already `Installed` or `Uninstalling`. |
-> | `install_in_progress` | `/apps/install/invoke` was called but an install for this app is already running. |
-> | `operation_in_progress` | A lifecycle operation is running or queued for the app, or a change to it is being applied, and the request conflicts with it; `message` names which. |
-> | `already_queued` | An operation is already queued for this app. |
-> | `requirements_invalid` | Install requirements failed validation; per-field errors are included in `message`. |
-> | `script_error` | The BSL script failed to parse or evaluate; detail is included in `message`. |
-> | `validation_failed` | A parameter [validator](rule:i/param.validation) rejected the proposed values; each rejecting parameter and its reason are included in `message`. |
-> | `bundle_invalid` | A definition bundle breaks the [bundle rules](rule:i/definition.bundle.limits); the offending path or field is included in `message`. |
-> | `unsupported_seedling` | A definition does not [support](rule:i/definition.bundle.seedling-versions) the running Seedling version. |
-> | `fetch_failed` | A definition could not be [fetched](rule:i/definition.fetch); the cause is included in `message`. |
-> | `registry_not_allowed` | The registry named by a definition reference is not on the [registry allowlist](rule:i/registry.list). |
-> | `deregistering` | The app is in the `Deregistering` state. |
-> | `server_busy` | The server's stream concurrency limit has been reached; the client should retry after a delay. |
-> | `internal` | An unexpected server-side failure (for example a database error) prevented the request from completing. |
-> | `canopy_disabled` | Canopy access is turned off for this instance; the request was refused for that reason alone. |
-> | `canopy_unavailable` | Canopy access is enabled but no provider is currently offering it, or the offering client could not reach Canopy. |
+A client MUST write a request as one JSON object and then finish its side of the stream.
+The request MAY be followed by a line feed.
+
+| member | type | required | meaning |
+| --- | --- | --- | --- |
+| `method` | string | yes | the method to call |
+| `actor` | object | no | the [actor](#actor) the request is made for |
+| `params` | object | no | the method's parameters |
+
+A method that defines parameters MUST refuse a request whose `params` is absent or does not match the method's parameter shape, with `requirements_invalid`.
+A method that defines no parameters MUST ignore `params`.
+
+The server MUST accept a request of up to 4,194,304 bytes.
+The server MUST answer an unknown method with `not_found`.
+The server MUST answer a request it cannot parse as a request object, including one longer than it accepts, with `not_found`.
+
+The server MUST write its response as one JSON object and then finish the stream.
+The end of the stream ends the response, and no length prefix or line feed delimits it.
+A client SHOULD accept a response of up to 4,194,304 bytes.
+
+A successful response MUST have the form `{ "result": <value> }`, where the value is the JSON value the method defines.
+An error response MUST have the form `{ "error": { "code": <string>, "message": <string> } }`, where `code` is one of the [error codes](#error-codes) and `message` describes the failure for a person.
+
+A failed request MUST leave the connection usable for further requests.
+
+## Actor attribution
+
+| member | type | required | meaning |
+| --- | --- | --- | --- |
+| `kind` | string | no | the means by which the actor was authenticated, such as `ctl`, `password`, `tailscale` or `dev` |
+| `id` | string | no | a stable identifier for the actor, such as an email address or a key fingerprint |
+| `display` | string | no | a label for the actor, for a person to read |
+| `session` | string | no | an opaque identifier for the actor's session |
+
+The actor is the client's assertion, and the server MUST record it as the client supplied it.
+
+If a request has no `actor` member, the server MUST attribute it to an actor whose `kind` is `ctl`, whose `id` is the [fingerprint](transport.md#fingerprint) of the client's key, and whose `display` is that key's label in the [authorised key set](transport.md#authorised-key-set), or the fingerprint where the key has no label.
+That actor has no `session`.
+
+The server MUST attach the actor of a request to every [event](rule:i/event.types) the request causes, and to the [audit log](rule:r/audit.log) entries it records for the request.
+
+## Error codes
+
+| code | meaning |
+| --- | --- |
+| `not_found` | the method, or the app, resource, action, generation, shell session, port forward or other object the request names, does not exist, or the request cannot be parsed |
+| `not_installed` | the request needs the app installed, and it is not |
+| `already_installed` | an install was requested for an app that is installed or uninstalling |
+| `install_in_progress` | an install was requested for an app whose install is running |
+| `operation_in_progress` | the request conflicts with a lifecycle operation running or queued for the app, or with a change to the app being applied; `message` names which |
+| `already_queued` | a lifecycle operation is already queued for the app |
+| `requirements_invalid` | the request's parameters are missing, malformed or out of range; `message` names each offending field |
+| `script_error` | a definition failed to parse or evaluate; `message` gives the error |
+| `validation_failed` | a [parameter validator](params.md#validation) rejected the proposed values; `message` names each rejecting parameter and its reason |
+| `bundle_invalid` | a definition bundle breaks the [bundle rules](definitions.md#bundle-rules); `message` names the offending path or field |
+| `unsupported_seedling` | a definition does not [support](definitions.md#seedling-version-support) the running Seedling version |
+| `fetch_failed` | a definition could not be [fetched](definitions.md#fetching); `message` gives the cause |
+| `registry_not_allowed` | the registry a reference names is not on the [registry allowlist](rule:i/registry.list) |
+| `server_busy` | the server's [stream limit](#stream-limit) was reached |
+| `internal` | a failure inside the server, such as a storage error, kept the request from completing |
+| `canopy_disabled` | Canopy access is turned off on the host, and the request was refused for that reason alone |
+| `canopy_unavailable` | Canopy access is enabled, but no client is offering it or the offering client could not reach Canopy |
+
+## Subscription requests
+
+`/events/subscribe` and `/logs/stream` are subscription requests.
+
+The server MUST answer a subscription request on its bidirectional stream exactly as it answers a control request, before it opens any unidirectional stream for it.
+If the response is an error, the server MUST NOT open a unidirectional stream for the request.
+
+A client MUST read the bidirectional stream to its end and classify the response before it waits for the unidirectional stream.
+A client MUST treat a bidirectional stream that ends without a response as an error.
+A client MUST report an error response's `code` and `message` to its caller.
+A client MUST NOT wait without limit for the unidirectional stream after a successful response, since the server can fail to open it.
+
+After a successful `/events/subscribe`, the server MUST open one unidirectional stream and write [events](rule:i/event.subscribe) to it as JSON objects, each followed by a line feed, for as long as the connection lasts.
+After a successful `/logs/stream`, the server MUST open one unidirectional stream and write [log entries](rule:i/logs.stream) to it as JSON objects, each followed by a line feed.
+Without follow mode the server MUST finish the stream once it has written the entries the request selects.
+In follow mode the server MUST keep the stream open and write new entries as they appear, until the connection ends.
+
+## Session requests
+
+`/shells/start`, `/volumes/shell` and `/forwards/start` are session requests.
+
+The server MUST write the response to a session request as one JSON object followed by a line feed, and MUST keep the stream open after a successful response.
+Every later frame the server writes on the stream MUST be a JSON object followed by a line feed, as the method defines it.
+A session request that fails before its session opens MUST be answered with an error response, after which the server MUST finish the stream.
+
+### Shell sessions
+
+A shell session uses three streams:
+
+- the client-initiated bidirectional stream the request arrived on, the session stream;
+- a server-initiated unidirectional stream carrying the shell's standard output;
+- a server-initiated unidirectional stream carrying the shell's standard error.
+
+On the session stream, the client MUST write the request's opening line and then the shell's standard input as raw bytes, for the rest of the stream's life.
+The server MUST write the [handshake response](rule:i/shell.open) on the session stream and, when the session ends, the [exit frame](rule:i/shell.exit), and nothing else.
+
+Each end MUST relay standard input and output independently.
+Output waiting to be delivered MUST NOT hold up standard input, nor delay the server noticing that the session has ended.
+
+## Port forward data
+
+Each TCP connection tunnelled through a port forward uses one client-initiated bidirectional stream.
+Its opening line MUST be `{ "forward": "<forward_id>" }`, naming the forward the [`/forwards/start`](rule:i/forward.request) response gave.
+After the opening line, each direction carries the tunnelled connection's bytes unchanged.
+Each direction of the stream MUST be finished when the matching direction of the tunnelled connection ends, and the stream MUST be reset when the tunnelled connection fails, as [TCP tunnelling](rule:i/forward.tunnel.tcp) specifies.
+
+Each UDP datagram tunnelled through a port forward is carried as one QUIC datagram.
+A datagram MUST begin with the forward's 16-bit `forward_key`, in network byte order, immediately followed by the UDP payload.
+The server MUST ignore a datagram shorter than 2 bytes, and one whose key names no forward of the connection.
+A payload too large for the path's datagram limit is dropped, and reported as a [forward status](rule:i/forward.status) message.
+
+## Canopy relay streams
+
+Each request relayed to Canopy uses one server-initiated bidirectional stream.
+Each direction carries a header line, a JSON object followed by a line feed, then the body as raw bytes to the end of the stream, with no length prefix.
+A header line MUST NOT exceed 65,536 bytes including its line feed.
+
+The server MUST write the request's header line and body and then finish its side of the stream.
+The client MUST write the response's header line and body and then finish its side.
+The header lines' members are defined by the [Canopy relay](rule:i/canopy.relay).
+
+## Stream limit
+
+The server MUST limit the number of client-initiated bidirectional streams it serves at once, across all connections.
+The limit defaults to 64, and the daemon's `--max-streams` option sets it.
+
+The server MUST count a stream against the limit from when the stream opens.
+The server MUST stop counting a port forward data stream, a subscription request or a session request once it has dispatched the stream.
+If a stream opens while the limit is reached, the server MUST answer it at once with a `server_busy` error response and finish it, whatever the stream's kind.
+A client SHOULD retry a request refused with `server_busy` after a delay.
+
+> [!NOTE]
+> The limit bounds the memory held by request bodies being read.
+> Long-lived streams leave the count once dispatched, so open sessions do not starve control requests.

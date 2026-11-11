@@ -4,96 +4,103 @@ id: PARAM
 
 # Parameters
 
-## Parameter
+Applies to parameters: named string values that an [operator](../overview.md#operator) sets for an [app](../overview.md#app), and that its [script](overview.md#script) declares, reads, validates and reacts to.
 
-<!-- from language: Parameter -->
+## Terminology
 
-> l[param.type]
-> A Parameter is a value provided by the Seedling control plane to a BSL script, at a particular name.
->
-> Parameters are defined using the `app.param(name: string)` method, which returns a `Param`.
+### Parameter
 
-> l[param.is-set]
-> `param.is_set()` returns `true` if the operator has stored a value for this parameter, `false` otherwise.
+A named string value that an operator may store for an app, declared by the app's script.
 
-> l[param.value]
-> `param.value()` returns the parameter's current string value.
-> If no value has been stored but a [default](rule:l/param.schema.default-value) has been declared on the `Param`, the default is returned.
-> If no value has been stored and no default is declared, it throws.
->
-> `param.is_set()` is not affected by the default: it remains `false` while the default is the effective value, so scripts can distinguish "operator-provided" from "defaulted".
+### Stored value
 
-> l[param.on-change]
-> `param.on_change(fn: closure)` registers a handler that is called when the parameter's value changes.
->
-> The `fn` closure may take up to two arguments: the [Runtime Instance](rule:l/rt.var) (typically named `rt`) and the previous `App` instance (typically named `old`).
+The value an operator has stored for a parameter, where there is one.
 
-> l[param.on-change.old]
-> The `old` argument is an `App` value that reflects the state at the previous [generation](rule:r/generation.definition): the previous generation's definition, evaluated with the parameter values as they were before the change.
-> When the change arrives together with a new definition, the handler is the one registered by the new definition, and `old` is the previous definition at the previous values.
->
-> `old.param(name).is_set()` and `old.param(name).value()` return results consistent with the prior parameter state.
-> Static resources defined in the script, and actions, are accessible via `old` and reflect their prior definitions. This is useful for resources whose shape depends on parameter values.
->
-> Calling resource-definition methods on `old` (that would create or mutate resources) has no effect on the current app; `old` is a read-only view of the previous generation.
+## Declaration
 
-> l[param.on-change.transitions]
-> The handler is invoked as a [lifecycle operation](rule:r/operation.lifecycle) when the effective value of the parameter transitions between states. For this purpose the value of a parameter is always `Option<Value>`: either unset (`None`) or set to some string (`Some(s)`).
->
-> The handler is invoked on any of the following transitions:
->
-> - `None` → `Some(s)`: the parameter was unset and has now been set.
-> - `Some(s₁)` → `Some(s₂)` where `s₁ ≠ s₂`: the value has changed.
-> - `Some(s)` → `None`: the parameter has been unset.
->
-> Within the closure, `old.param(name).is_set()` reflects the prior half of the transition, and `app.param(name).is_set()` reflects the new half.
+`app.param(name: string)` MUST return a `Param` for the parameter `name`.
+It MUST throw if `name` breaks the [name rules](overview.md#names).
+Calls with the same name MUST return a `Param` for the same parameter.
 
-> l[param.on-change.not-on-install]
-> The handler is not invoked during the initial install of an application, because there is no prior generation to compare against.
+## Values
 
-> l[param.on-change.constraints]
-> `on_change` may only be called at the top level of the script (statically). Calling it from within an action closure must throw.
-> Calling `on_change` more than once on the same parameter must throw.
+`param.is_set()` MUST return `true` if the parameter has a stored value, and `false` otherwise.
 
-> l[param.schema]
-> A `Param` returned by `app.param()` may have schema metadata attached to it using builder methods. These methods return the same `Param` so calls can be chained.
->
-> Schema metadata describes how the parameter should be presented and validated in management interfaces. Defaults: `kind` is `"text"`, `required` is `false`, `default_value` is absent, `description` is absent, `secret` is `false` (unless implied by `kind`).
+`param.value()` MUST return the parameter's stored value.
+If the parameter has no stored value and a default is declared, `param.value()` MUST return the default.
+If the parameter has neither, `param.value()` MUST throw.
 
-> l[param.schema.kind]
-> `param.kind(kind: string)` sets the kind of the parameter. Valid values are the same as for [Install Action params](rule:l/action.install.requirements): `"text"`, `"multiline"`, `"email"`, `"password"`, `"weak-password"`. Providing an unknown kind must throw.
+`param.is_set()` MUST return `false` while a default is in effect, so that a script can tell an operator's value from a default.
 
-> l[param.schema.required]
-> `param.required(required: bool)` sets whether the parameter is required.
+## Schema
 
-> l[param.schema.default-value]
-> `param.default_value(value: string)` sets the default value for the parameter.
+A script MAY attach schema metadata to a `Param` through the builder methods below.
+The metadata governs how operator interfaces present and check the parameter.
+Calling a schema method again MUST replace the value it set before.
 
-> l[param.schema.description]
-> `param.description(description: string)` sets the human-readable description for the parameter.
+| method | sets | default |
+| --- | --- | --- |
+| `kind(kind: string)` | how the parameter is presented and checked | `"text"` |
+| `required(required: bool)` | whether the parameter needs a value | `false` |
+| `default_value(value: string)` | the value [`value()`](#values) returns when none is stored | none |
+| `description(description: string)` | a human-readable description | none |
+| `secret(secret: bool)` | whether the value is [secret](#secret-parameters) | implied by `kind` |
 
-> l[param.schema.secret]
-> `param.secret(secret: bool)` marks the parameter as sensitive. When `true`, the parameter's value must be stored with confidentiality at rest, must never be returned to API clients or emitted in events, and must not appear in logs.
+`kind` MUST accept `"text"`, `"multiline"`, `"email"`, `"password"`, `"weak-password"` and `"random"`, each with the meaning the [install parameter kinds](rule:l/action.install.requirements) give it.
+`kind` MUST throw when given `"volume"`, which only action and shell parameters accept, or any value it does not define.
 
-> l[param.schema.secret-from-kind]
-> Parameters with `kind` `"password"` or `"weak-password"` are implicitly secret: their `secret` flag is treated as `true` unless explicitly overridden with `param.secret(false)`.
-> The `secret` builder may be called after `kind` to override this implication in either direction.
+## Secret parameters
 
-> l[param.validate]
-> `param.validate(fn: closure)` attaches a validator to the parameter, which decides whether a proposed value is acceptable.
-> The closure takes two arguments: the parameter's proposed value, and an object map from each set parameter's name to its proposed value.
-> Returning accepts the value.
-> Throwing rejects it, and the thrown value is the reason reported for the rejection; any exception raised within the closure rejects the value, whether thrown deliberately or not.
-> When the runtime runs validators, and what a rejection refuses, is defined in [param.validation](rule:i/param.validation).
+A parameter is secret when its `secret` flag is `true`.
+A parameter whose kind is `"password"` or `"weak-password"` MUST be secret unless the script sets `secret(false)`.
+A script MAY call `secret` before or after `kind`, and an explicit `secret` call MUST take precedence over the kind in either direction.
 
-> l[param.validate.unset]
-> A validator runs only while its parameter is set.
-> An unset parameter always passes, and [required](rule:l/param.schema.required) is what governs whether a value must be present.
+The runtime MUST protect a secret parameter's value as [secret storage](rule:r/secret.storage) and [redaction](rule:r/secret.redaction) specify.
+The runtime MUST NOT write a secret parameter's value to its logs.
 
-> l[param.validate.pure]
-> A validator is given no [runtime instance](rule:l/rt.var) and its result is its only effect.
-> Defining a resource within a validator throws.
+## Change handlers
 
-> l[param.validate.constraints]
-> `validate` may only be called at the top level of the script (statically). Calling it from within an action closure must throw.
-> Calling `validate` more than once on the same parameter must throw.
+`param.on_change(fn: closure)` MUST register `fn` as the parameter's change handler, and returns no value.
+`on_change` MUST throw when called in the [action context](app.md#action-context).
+Calling `on_change` a second time for the same parameter MUST throw.
+
+The runtime MUST invoke the change handler as a [lifecycle operation](../overview.md#lifecycle-operation) whenever the parameter's stored value changes in one of these ways:
+
+- the parameter had no stored value and is given one;
+- the parameter's stored value is replaced by a different value;
+- the parameter's stored value is removed.
+
+Storing the value the parameter already holds is not a change.
+The runtime MUST NOT invoke the handler during the app's initial install.
+
+The runtime MUST call `fn` with two arguments: the [runtime instance](rule:l/rt.var), and an `App` named here `old`.
+A script MUST therefore pass a closure that takes two parameters.
+
+`old` MUST reflect the previous [generation](../overview.md#generation): the previous generation's definition, evaluated with the parameter values held before the change.
+When the change arrives together with a new definition, the runtime MUST invoke the handler the new definition registers, and `old` MUST reflect the previous definition at the previous values.
+Within the handler, `old.param(name)` MUST report the parameter's state before the change, and `app.param(name)` its state after.
+The static resources and actions reachable through `old` MUST reflect their definitions in the previous generation.
+
+`old` is a read-only view.
+Calling a resource method on `old` MUST NOT affect the app.
+
+If the runtime cannot reconstruct the previous generation, it MUST NOT invoke the handler with an `old` that does not reflect that generation.
+
+## Validators
+
+`param.validate(fn: closure)` MUST attach `fn` as the parameter's validator, and MUST return the `Param`.
+`validate` MUST throw when called in the action context.
+Calling `validate` a second time for the same parameter MUST throw.
+
+The runtime MUST call a validator with two arguments: the parameter's proposed value, and an object map from the name of each parameter that would be set to its proposed value.
+A validator that returns accepts the value.
+A validator that raises a script error rejects the value, whether the script threw deliberately or not.
+Where the script threw a value, that value MUST be the reason reported for the rejection.
+
+The runtime MUST run a validator only while its parameter would be set.
+A parameter that would be unset passes, and its `required` flag governs whether it needs a value.
+
+The runtime MUST NOT give a validator a runtime instance.
+Declaring a resource within a validator MUST throw.
+
+When the runtime runs validators, and which request a rejection refuses, is specified in [parameter validation](rule:i/param.validation).

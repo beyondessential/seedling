@@ -2,134 +2,409 @@
 id: WEB
 ---
 
-# Web interface serving
+# Web interface server
 
-## Preamble
+Applies to the service that delivers the [console](console.md#console) to browsers and relays its requests to a [host](../overview.md#host)'s [Operator Interface](../overview.md#operator-interface).
 
-<!-- from web: None -->
+## Borrowed terms
 
-The Seedling Web Interface is a browser-based operator surface for a running Seedling instance.
-It exposes the same capabilities as the CLI through a graphical interface, making the full OI surface accessible to human operators without requiring a terminal.
+| term | meaning |
+| --- | --- |
+| secure context | An environment in which a browser exposes features such as WebTransport, as defined by [Secure Contexts](https://www.w3.org/TR/secure-contexts/). |
+| WebTransport session | A session between a browser and a server carrying streams, as defined by [WebTransport](https://www.w3.org/TR/webtransport/) over [WebTransport over HTTP/3](https://datatracker.ietf.org/doc/draft-ietf-webtrans-http3/). |
+| bidirectional stream, unidirectional stream | A stream within a WebTransport session carrying data in both directions, or from its opener only, as defined by [WebTransport](https://www.w3.org/TR/webtransport/). |
+| `serverCertificateHashes` | The WebTransport option through which a page names the hashes of the certificates it accepts in place of certificate authority validation, as defined by [WebTransport](https://www.w3.org/TR/webtransport/#web-transport-configuration). |
+| encoded-word | A MIME encoding of non-ASCII text in a header value, as defined by [RFC 2047](https://www.rfc-editor.org/rfc/rfc2047). |
+| PHC string | A self-describing encoding of a password hash and its parameters, as defined by the [PHC string format](https://github.com/P-H-C/phc-string-format/blob/master/phc-sf-spec.md). |
 
-Absent specification bugs, anything not defined here is either defined in another spec document or is implicitly not allowed.
+## Terminology
 
-## Transport
+### Web interface
 
-<!-- from web: Transport -->
+The service that serves the console to browsers and relays their requests to a host's daemon.
 
-> w[transport.webtransport]
-> The web interface proxies OI requests over WebTransport.
-> The wire format over WebTransport streams is identical to the OI wire format defined in the interface spec: each request/response cycle uses one client-initiated bidirectional stream carrying newline-terminated JSON.
-> The web interface injects the caller's actor (see [wire.actor](rule:i/wire.actor)) into each proxied request.
+### Web session
 
-> w[transport.http]
-> The web interface provides a plain-HTTP endpoint for SPA delivery and the `POST /connect` handshake.
-> This endpoint is designed to sit behind a TLS-terminating reverse proxy in non-loopback deployments.
-> Browsers treat loopback origins as secure contexts, so TLS is not required for local development.
+One WebTransport session between a client and the web interface, from its acceptance until it closes or is reaped.
 
-> w[transport.http.security-headers]
-> Every response from the plain-HTTP endpoint carries a baseline set of browser security headers:
->
-> - A Content Security Policy that denies framing, forbids plugin/object content, and restricts scripts to same-origin. The policy must still permit the SPA to load its own styles (which the UI toolkit injects inline at runtime) and `data:` images and fonts. It must permit WebTransport sessions to the WebTransport endpoint, named as a precise origin (the request's host on the WebTransport port) rather than a scheme wildcard.
-> - An explicit anti-clickjacking header denying framing, for agents that predate Content Security Policy `frame-ancestors`.
-> - Content-type sniffing disabled.
-> - A permissions policy that denies access to browser features the interface does not use.
-> - Cross-origin isolation headers that require embedded resources to be same-origin (or to explicitly opt in) and sever the opener relationship with cross-origin windows; the console embeds no third-party content.
->
-> Transport-security headers (such as HSTS) are owned by the TLS-terminating reverse proxy, not this endpoint.
+### Session token
 
-> w[daemon.connect-retry]
-> If the initial connection to the seedling daemon fails at startup, the web interface must retry with exponential backoff rather than exiting.
-> The retry interval starts at one second and doubles on each attempt up to a maximum of thirty seconds.
-> Each failed attempt must produce a warning log message.
-> The web interface keeps retrying indefinitely until a connection is established and verified.
+A credential the web interface issues on a successful `/connect`, which a client presents on a later `/connect` in place of the credential it first used.
 
-> w[daemon.pin]
-> The web interface verifies the daemon by pinning its SPKI fingerprint.
-> The expected fingerprint may be supplied directly, or read from a file that the daemon publishes (see [transport.server-identity.published](rule:i/transport.server-identity.published)).
-> When read from a file, the fingerprint is resolved on each connection attempt, so a daemon that has not yet written the file does not cause the web interface to fail at startup — it retries per [daemon.connect-retry](rule:w/daemon.connect-retry) until the file appears.
+### WebTransport token
+
+A short-lived, single-use credential embedded in the URL of a web session, binding that session to the actor resolved by `/connect`.
+
+## Configuration
+
+The web interface MUST accept the following command-line options.
+
+| option | meaning | default |
+| --- | --- | --- |
+| `--interface <name>,…` | Network interfaces whose addresses both listeners bind | none |
+| `--listen <address>` | A socket address both listeners bind; repeatable | none |
+| `--http-port <port>` | The HTTP port for addresses taken from `--interface` | `7894` |
+| `--wt-interface <name>,…` | Network interfaces whose addresses the WebTransport listener binds, in place of the shared ones | none |
+| `--wt-listen <address>` | A socket address the WebTransport listener binds, in place of the shared ones; repeatable | none |
+| `--wt-port <port>` | The WebTransport port for addresses taken from an interface | `7893` |
+| `--trust-tailscale-headers` | Authenticate by [Tailscale identity](#tailscale-identity) | off |
+| `--dev-no-auth` | Enable the [development bypass](#development-bypass) | off |
+| `--daemon-addr <address>` | The socket address of the daemon's Operator Interface | `[::1]:7891` |
+| `--daemon-fingerprint <hex>` | The daemon's SPKI fingerprint to pin | none |
+| `--daemon-fingerprint-file <path>` | A file holding the daemon's SPKI fingerprint to pin | none |
+| `--key-file <path>` | The web interface's persistent client key | a file in the user's state directory |
+| `--config <path>` | The configuration file | none |
+
+`--http-port` and `--wt-port` MUST be rejected together with `--listen`.
+`--daemon-fingerprint` and `--daemon-fingerprint-file` MUST be rejected together.
+
+The configuration file is TOML ([TOML](https://toml.io/en/v1.0.0)).
+Its `[auth]` table holds these keys, each optional.
+
+| key | type | meaning | default |
+| --- | --- | --- | --- |
+| `password_hash` | string | An Argon2id PHC string of the operator password; password login is disabled while it is unset | none |
+| `session_lifetime_secs` | integer | The lifetime of a session token, in seconds | `86400` |
+
+A configuration file that cannot be read or parsed MUST stop the web interface from starting.
+A missing `[auth]` table MUST take the same defaults as an empty one.
+
+## Listen addresses
+
+The web interface MUST serve an HTTP endpoint over TCP and a WebTransport endpoint over UDP.
+
+Each listener binds a set of socket addresses.
+An address given explicitly carries its own port.
+An address taken from an interface name pairs each address of that interface with the listener's port.
+When neither addresses nor interfaces are configured for a listener, it MUST bind `127.0.0.1` on its port.
+The WebTransport listener MUST use the shared `--interface` and `--listen` configuration unless `--wt-interface` or `--wt-listen` is given, in which case it MUST use those alone.
+
+An interface name that matches no interface on the host contributes no addresses, and the web interface SHOULD log a warning naming it.
+If a listener's configuration resolves to no address, the web interface MUST NOT start.
+A failure to bind any resolved address MUST stop the web interface.
+
+Every address the WebTransport listener binds MUST share one port.
+The web interface MUST NOT start if they do not.
+That port is the one the web interface advertises in each `wt_url` and in its [content security policy](#security-headers).
+
+> [!NOTE]
+> WebTransport cannot be carried by a reverse proxy that terminates HTTP.
+> A deployment that fronts the HTTP endpoint with such a proxy on loopback binds the WebTransport listener separately, on an address browsers reach directly.
+
+## Daemon connection
+
+The web interface MUST connect to the daemon's Operator Interface as a client, as [TRN](../interface/transport.md) specifies.
+It MUST authenticate with a persistent client key, generating it on first start, so that an operator authorises the web interface once.
+It SHOULD log the key's fingerprint when it starts.
+
+The web interface MUST verify the daemon by pinning its [SPKI fingerprint](rule:i/transport.server-identity).
+The fingerprint MAY be given directly, or as the path of a file holding it, such as the [file the daemon publishes](rule:i/transport.server-identity.published).
+The web interface MUST NOT start when it is given neither.
+When given a file, the web interface MUST read it afresh on every connection attempt and ignore surrounding whitespace.
+A file that is absent, unreadable or holds only whitespace MUST count as a failed attempt.
+
+A connection attempt succeeds only once the daemon has answered a request on the connection.
+An error response counts as an answer.
+
+> [!NOTE]
+> In TLS 1.3 the server verifies the client's certificate after the client considers the handshake complete, so a daemon that does not authorise the web interface's key is detected only by the first request.
+
+If an attempt fails, the web interface MUST try again, waiting one second before the second attempt and doubling the wait after each further failure, up to thirty seconds.
+It MUST log a warning for each failed attempt, and MUST keep trying until an attempt succeeds rather than exit.
+
+When a request finds the daemon connection broken, the web interface MUST open a replacement, verified as at startup, and use it for that request and those after it.
+Requests that found the same broken connection MUST share one replacement attempt.
+The web interface MUST NOT close any daemon connection other than the one found broken.
+
+Requests the web interface makes on its own behalf MUST carry its own [actor](rule:i/wire.actor), with `kind` `web`, `id` the first eight hexadecimal digits of its client key's fingerprint, and `display` `seedling-web`.
+
+## Console delivery
+
+The HTTP endpoint MUST serve the console, [`POST /connect`](#authentication), and `GET /healthz`.
+`GET /healthz` MUST answer `200 OK` with the JSON body `{"status":"ok"}`.
+
+The web interface MUST serve the console's files for `GET` requests to their paths.
+A request for a path under `/assets/` that names no file MUST be answered `404 Not Found`.
+Any other request for a path that names no file MUST be answered with the console's entry point, `index.html`, so that the console handles its own routes.
+Each file MUST be served with the `Content-Type` its file extension implies.
+
+A file under `/assets/` MUST be served with `Cache-Control: public, max-age=31536000, immutable` ([RFC 9111](https://www.rfc-editor.org/rfc/rfc9111), [RFC 8246](https://www.rfc-editor.org/rfc/rfc8246)).
+A file's path under `/assets/` MUST change whenever its content changes.
+Every other file, including the entry point, MUST be served with `Cache-Control: no-cache, no-store, must-revalidate`.
+
+A browser reaches WebTransport only from a secure context.
+A deployment that serves the console other than over loopback MUST serve it to browsers through a reverse proxy that terminates TLS.
+
+> [!NOTE]
+> A browser treats `http://127.0.0.1` and `http://localhost` as potentially trustworthy origins, which is what lets the console run over plain HTTP on loopback.
+
+## Security headers
+
+Every response from the HTTP endpoint MUST carry these headers.
+
+| header | required content |
+| --- | --- |
+| `Content-Security-Policy` | `default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'`, followed by the `connect-src` directive below |
+| `X-Frame-Options` | `DENY` |
+| `X-Content-Type-Options` | `nosniff` |
+| `Permissions-Policy` | `accelerometer=(), autoplay=(), camera=(), display-capture=(), encrypted-media=(), fullscreen=(), geolocation=(), gyroscope=(), magnetometer=(), microphone=(), midi=(), payment=(), usb=()` |
+| `Cross-Origin-Embedder-Policy` | `require-corp` |
+| `Cross-Origin-Opener-Policy` | `same-origin` |
+| `Cross-Origin-Resource-Policy` | `same-origin` |
+
+The policy's `connect-src` directive MUST be `connect-src 'self' https://<host>:<port>`, where `<host>` is the host the request names in its `Host` header without its port, and `<port>` is the WebTransport listener's advertised port.
+An IPv6 literal MUST keep its brackets.
+For a request without a `Host` header the directive MUST be `connect-src 'self'`.
+The policy MUST NOT name the WebTransport endpoint by a scheme alone.
+
+The headers are defined by [Content Security Policy Level 3](https://www.w3.org/TR/CSP3/), [RFC 7034](https://www.rfc-editor.org/rfc/rfc7034) (`X-Frame-Options`), [Fetch](https://fetch.spec.whatwg.org/) (`X-Content-Type-Options`, `Cross-Origin-Resource-Policy`), [Permissions Policy](https://www.w3.org/TR/permissions-policy/), and [HTML](https://html.spec.whatwg.org/) (`Cross-Origin-Embedder-Policy`, `Cross-Origin-Opener-Policy`).
+
+> [!NOTE]
+> The console's interface toolkit injects style elements at run time, which is why the policy admits inline styles.
+> `X-Frame-Options` covers browsers that predate `frame-ancestors`.
 
 ## Authentication
 
-<!-- from web: Authentication -->
+`POST /connect` authenticates a client and issues what it needs to open a web session.
+Its body MUST be a JSON object ([RFC 8259](https://www.rfc-editor.org/rfc/rfc8259)), sent as `application/json`, with these members.
 
-> w[auth.connect]
-> `POST /connect` is the single entry point for authentication and WebTransport session initiation.
-> The request body is a JSON object containing zero or one credential field: `token` (a previously issued session token), or `password` (a plaintext password for initial login).
-> The server checks for a valid credential in the following order: Tailscale identity headers (if trusted, see [auth.tailscale](rule:w/auth.tailscale)), dev bypass (see [auth.dev](rule:w/auth.dev)), Bearer token from the `token` field, password from the `password` field.
-> On success, the response is a JSON object with the following fields:
->
-> - `token`: a session token the client must present on subsequent `POST /connect` calls.
-> - `actor`: the resolved actor identity — an object with `kind`, `id`, and `display` string fields.
-> - `wt_url`: a fully-qualified URL the client must use to open the WebTransport session. The URL includes a short-lived single-use token (see [wt.token](rule:w/wt.token)).
->   The URL must name a port the WebTransport endpoint is actually bound to, for every supported combination of listen configuration; a default port must not be advertised in place of a configured one.
-> - `cert_hashes`: an array of one or two SHA-256 hashes (hex-encoded) of the WebTransport endpoint's current certificate(s), for use with `serverCertificateHashes`.
->
-> On failure, the response is HTTP 401 with a JSON body:
-> ```json
-> { "auth_required": "password" }
-> ```
-> The `auth_required` field names the credential type the client must collect and supply in a subsequent `POST /connect` call.
+| member | type | required | meaning |
+| --- | --- | --- | --- |
+| `token` | string | no | A session token from an earlier `/connect` |
+| `password` | string | no | The operator password |
 
-> w[auth.tailscale]
-> When the web interface is explicitly configured to trust Tailscale identity headers, requests carrying those headers are authenticated without a password and the Tailscale user identity is used as the actor.
-> The user's display name is decoded from any MIME encoded-word (RFC 2047) form the proxy uses to carry non-ASCII names in an ASCII header; a value that is not so encoded is used as-is.
-> The web interface must not honour Tailscale identity headers unless this trust is explicitly enabled by the operator.
-> This mode is intended for deployments where the plain-HTTP endpoint is fronted by Tailscale Serve, which injects identity headers and enforces network-level access control.
+The web interface MUST try these credential sources in order, and authenticate the request by the first that succeeds:
 
-> w[auth.password]
-> Password-based authentication is supported.
-> The configured password is validated using Argon2id.
-> On success a session token is issued and returned in the `POST /connect` response.
-> Session tokens have a bounded lifetime; the lifetime must be configurable.
+1. [Tailscale identity](#tailscale-identity), when trusted.
+2. The [development bypass](#development-bypass), when enabled.
+3. The `token` member.
+4. The `password` member, checked as [password login](#password-login) specifies.
 
-> w[auth.dev]
-> The web interface may be configured to bypass all authentication.
-> This mode must be rejected at startup if any configured bind address is not a loopback address.
+The web interface MUST resolve an [actor](rule:i/wire.actor) for the request from the source that authenticated it.
 
-## WebTransport Session
+| source | `kind` | `id` | `display` | `session` |
+| --- | --- | --- | --- | --- |
+| Tailscale identity | `tailscale` | the `Tailscale-User-Login` value | the decoded `Tailscale-User-Name` value, or the login when that header is absent | new |
+| development bypass | `dev` | `dev` | `dev` | new |
+| session token | as issued | as issued | as issued | as issued |
+| password | `password` | `admin` | `admin` | new |
 
-<!-- from web: WebTransport Session -->
+A new `session` value MUST be unique to the `/connect` call that creates it.
 
-> w[wt.cert]
-> The WebTransport endpoint uses a self-signed ECDSA-P256 certificate.
-> The certificate validity period must not exceed 14 days.
-> The SHA-256 hash of the current certificate is included in every successful `POST /connect` response so the client can open WebTransport using `serverCertificateHashes` without requiring CA trust.
+On success, the web interface MUST answer `200 OK` with a JSON object of these members.
 
-> w[wt.cert.rotation]
-> The web interface rotates the WebTransport certificate before it expires.
-> During rotation the web interface maintains an overlap window of at least 24 hours during which both the expiring certificate and the new certificate are accepted.
-> The hashes of both certificates are included in `POST /connect` responses during the overlap window.
-> Clients that reconnect after a rotation automatically receive the new hash by calling `POST /connect` again.
-> Rotation changes the certificate the listener presents to new sessions without releasing the listener's address, and established sessions continue across it.
+| member | type | meaning |
+| --- | --- | --- |
+| `token` | string | A new session token for the resolved actor |
+| `actor` | object | The resolved actor |
+| `wt_url` | string | The URL at which the client opens its web session, as [session establishment](#session-establishment) specifies |
+| `cert_hashes` | array of string | The SHA-256 hashes of the WebTransport certificates, as the [WebTransport certificate](#webtransport-certificate) section specifies |
 
-> w[wt.token]
-> The `wt_url` returned by `POST /connect` embeds a short-lived single-use token.
-> The WebTransport handshake is rejected if the token is absent, expired, or has already been consumed.
-> Tokens exist solely to bridge the gap between `POST /connect` and the WebTransport handshake; they carry no long-term session state.
+The web interface MUST issue a new session token on every successful `/connect`, including one authenticated by a session token.
+A session token MUST be unpredictable.
+A session token MUST stop authenticating once the configured session lifetime has passed since it was issued.
 
-> w[wt.actor]
-> The web interface resolves the caller's actor identity during `POST /connect` and associates it with the WebTransport session.
-> Every OI request proxied through the session carries that actor.
-> The actor does not change for the lifetime of a WebTransport session.
+If no source authenticates the request, the web interface MUST answer `401 Unauthorized` ([RFC 9110](https://www.rfc-editor.org/rfc/rfc9110)) with the body `{"auth_required":"password"}`.
+`auth_required` names the credential the client collects from the operator for its next `/connect`.
 
-## SPA Delivery
+### Password login
 
-<!-- from web: SPA Delivery -->
+The web interface MUST verify a password against the configured `password_hash` as Argon2id ([RFC 9106](https://www.rfc-editor.org/rfc/rfc9106)), with the parameters its PHC string carries.
+While no `password_hash` is configured, the web interface MUST NOT authenticate any password.
+If the configured value is not a valid PHC string, the web interface MUST NOT authenticate any password, and SHOULD log a warning.
 
-> w[spa.delivery]
-> The web interface serves a static single-page application from the plain-HTTP endpoint.
-> The SPA must be loaded from a secure context — either a loopback address or a TLS-terminating reverse proxy — so that the browser permits WebTransport connections.
-> Static assets are served with long-lived cache headers; the entry point (`index.html`) must not be cached beyond the current deployment.
+### Tailscale identity
 
-## Bind Configuration
+The web interface MUST NOT read Tailscale identity headers unless `--trust-tailscale-headers` is given.
+When it is, a request whose `Tailscale-User-Login` header holds a visible ASCII value MUST authenticate as that Tailscale user.
+A request without that header falls through to the next credential source.
 
-<!-- from web: Bind Configuration -->
+The web interface MUST decode a `Tailscale-User-Name` value made of encoded-words, and MUST use a value that is not so encoded, or does not decode, as it stands.
 
-> w[bind]
-> The web interface may be configured to listen on one or more addresses.
-> The plain-HTTP listener and the WebTransport listener use independent ports.
-> The WebTransport listener may be configured to bind a different set of addresses than the HTTP listener: WebTransport cannot be carried by an HTTP-terminating reverse proxy, so a deployment that fronts the HTTP listener with such a proxy bound to loopback must still be able to expose the WebTransport listener directly to clients.
-> When the WebTransport addresses are not separately configured, both listeners share the same set of addresses.
-> When no addresses are explicitly configured, both listeners bind to a loopback address only.
-> Failure to bind any configured address at startup is a fatal error.
+An operator MUST NOT enable this trust unless every request reaching the HTTP endpoint passes through [Tailscale Serve](https://tailscale.com/kb/1312/serve).
+
+> [!NOTE]
+> Tailscale Serve sets these headers on the requests it proxies and strips them from incoming requests, so a request that bypasses it can carry any identity.
+
+### Development bypass
+
+When `--dev-no-auth` is given, every `/connect` request MUST authenticate.
+The web interface MUST NOT start with `--dev-no-auth` if any address either listener binds is not a loopback address.
+
+## WebTransport certificate
+
+The WebTransport endpoint MUST present a self-signed certificate that meets the [custom certificate requirements](https://www.w3.org/TR/webtransport/#custom-certificate-requirements) of WebTransport.
+Its key MUST be an ECDSA key on the P-256 curve ([FIPS 186-5](https://csrc.nist.gov/pubs/fips/186-5/final)).
+
+> [!NOTE]
+> P-256 is the one key algorithm WebTransport requires every browser to accept for certificate hashes.
+
+Each entry of `cert_hashes` MUST be the SHA-256 hash ([FIPS 180-4](https://csrc.nist.gov/pubs/fips/180-4/upd1/final)) of a certificate's DER encoding, as lowercase hexadecimal.
+`cert_hashes` MUST hold the hash of the certificate the endpoint presents, and MAY hold one more.
+
+The web interface MUST stop presenting a certificate before its validity period ends, and present a new one to new sessions in its place.
+From at least 24 hours before it begins presenting a new certificate, the web interface MUST include that certificate's hash in `cert_hashes`.
+Changing the presented certificate MUST NOT release the endpoint's addresses or end established web sessions.
+
+## Session establishment
+
+`wt_url` MUST have the form `https://<host>:<port>/wt?t=<token>`.
+`<host>` is the host the `/connect` request names in its `Host` header without its port, keeping the brackets of an IPv6 literal, or `localhost` when the request has no `Host` header.
+`<port>` is the WebTransport listener's advertised port, and `<token>` a new WebTransport token.
+
+A WebTransport token MUST be unpredictable and MUST expire 30 seconds after it is issued.
+A client MUST open a web session at `wt_url` with `serverCertificateHashes` set to the hashes in `cert_hashes`.
+
+The web interface MUST answer a session request whose path is not `/wt` with `404 Not Found`.
+It MUST answer `403 Forbidden` to a session request whose `t` query parameter is absent, names no WebTransport token, or names one that has expired or been presented before.
+Presenting a WebTransport token MUST consume it.
+
+The web interface MUST bind each web session to the actor the `/connect` call that issued its token resolved.
+That actor MUST NOT change for the lifetime of the web session.
+
+## Request relay
+
+A client MUST send each request on its own bidirectional stream of its web session.
+The stream MUST begin with a request object as [WIRE](../interface/wire.md) defines, terminated by a newline or by the end of the client's direction of the stream.
+
+The web interface MUST NOT relay a request line longer than 4 MiB (4,194,304 bytes), or one that is not a JSON object.
+It MUST abandon the stream of such a request without a response.
+
+The web interface MUST set the request's top-level `actor` to the web session's actor, replacing any actor the client supplied.
+
+The web interface handles these methods itself.
+
+| method | handling |
+| --- | --- |
+| `/connected-clients/heartbeat` | [Session tracking](#session-tracking) |
+| `/connected-clients/list` | [Connected clients](#connected-clients) |
+| `/events/subscribe` | [Event relay](#event-relay) |
+| `/logs/stream` | Subscription, below |
+| `/shells/start`, `/volumes/shell` | [Shell relay](#shell-relay) |
+
+For any other method, the web interface MUST open a bidirectional stream to the daemon on its shared connection and write the request to it, followed by a newline.
+It MUST then relay the rest of the client's stream to the daemon, and the daemon's stream to the client, each unchanged, and finish each direction when its source ends.
+
+For `/events/subscribe` and `/logs/stream`, the web interface MUST answer on the client's stream with a response envelope followed by a newline.
+After a successful response it MUST write the subscribed records to the same stream as newline-delimited JSON objects.
+After an error response it MUST finish the stream.
+
+The web interface MUST relay each log stream over a daemon connection of its own, and MUST close that connection when the stream ends.
+When the daemon refuses a log stream, the web interface MUST relay the daemon's error `code` and `message`.
+When the daemon ends a log stream, the web interface MUST finish the client's stream.
+
+The web interface returns these error codes in addition to those [WIRE](rule:i/wire.error-codes) defines.
+
+| code | meaning |
+| --- | --- |
+| `daemon_unavailable` | The web interface could not open a stream or connection to the daemon |
+| `protocol_error` | The daemon's response to a shell request could not be read |
+
+## Event relay
+
+The web interface MUST hold one subscription to the daemon's [event feed](../interface/events.md) and relay its events to every client subscribed through it.
+It MUST relay the events it originates, as [session tracking](#session-tracking) defines, on the same feed.
+
+When its subscription ends or fails, the web interface MUST subscribe again.
+It MUST wait one second after a subscription that ended cleanly, and otherwise double the previous wait, up to thirty seconds.
+
+A client subscribing through the web interface MUST first receive the most recent events the web interface relayed, up to 200, and then live events from that point on.
+Each event MUST reach a subscriber once, in the order the web interface relayed it, with no gap or overlap between the replayed and the live events.
+
+The web interface MUST relay the daemon's `EventsDropped` events unchanged.
+When a subscriber falls behind the web interface's own feed and the web interface skips events for it, the web interface MUST write an `EventsDropped` event to that subscriber, with the meaning [event gap](rule:i/event.gap) gives it.
+When the web interface subscribes to the daemon again after losing a subscription, it MUST relay an `EventsDropped` event without a `skipped` member to every subscriber.
+
+## Shell relay
+
+This section applies to `/shells/start` ([SHL](rule:i/shell.open)) and `/volumes/shell` ([SHL](rule:i/volumes.shell)) requests.
+
+The web interface MUST open a bidirectional stream to the daemon on its shared connection and write the request to it.
+It MUST relay the daemon's first line to the client unchanged, whether a handshake response or an error envelope.
+After an error envelope it MUST finish the client's stream.
+If the daemon's first line cannot be read, or exceeds 64 KiB, the web interface MUST answer the client with a `protocol_error` envelope.
+
+After a handshake response, the web interface MUST open two unidirectional streams to the client, one carrying the shell's stdout and one its stderr.
+Each MUST begin with eight bytes holding the handshake response's `stdout_stream_id` or `stderr_stream_id`, as an unsigned big-endian integer, followed by the bytes of the daemon's corresponding stream.
+Output streams open at the same time on one web session MUST begin with different eight bytes.
+A client MUST route each incoming unidirectional stream to its shell by those eight bytes, and MUST accept a stream that arrives before it has read the handshake response.
+
+The web interface MUST relay the bytes the client writes after its request to the daemon unchanged, and finish the daemon stream when the client's direction ends.
+It MUST relay the daemon's [exit frame](rule:i/shell.exit) to the client and then finish the client's stream.
+If the daemon's stream ends without a complete, newline-terminated exit frame, the web interface MUST stop the shell with [`/shells/stop`](rule:i/shell.stop).
+
+The web interface MUST take a shell's output streams from the daemon connection that carried its handshake.
+When the web interface replaces its daemon connection, shells started on the old connection end, and the old connection's closing MUST NOT affect shells started on the new one.
+
+## Session tracking
+
+On accepting a web session, the web interface MUST record it with a new session id, its `connected_at` time, a `last_seen` time equal to `connected_at`, its actor, and the safety mode `read`.
+
+A client reports that its web session is alive with `/connected-clients/heartbeat`, whose params have one optional member.
+
+| member | type | meaning |
+| --- | --- | --- |
+| `safety_mode` | string | The client's current [safety mode](console.md#safety-mode) |
+
+The web interface MUST set the session's `last_seen` to the time it handles the heartbeat.
+A `safety_mode` of `write` or `dangerous` MUST be recorded as such, and any other value present MUST be recorded as `read`.
+A heartbeat without `safety_mode` MUST leave the recorded mode unchanged.
+The recorded safety mode MUST NOT affect how the web interface handles any request.
+
+The web interface MUST answer a heartbeat with a result of these members, followed by a newline.
+
+| member | type | meaning |
+| --- | --- | --- |
+| `alive` | boolean | Whether the session was still recorded |
+| `now` | string | The time the heartbeat was handled, as an [RFC 3339](https://www.rfc-editor.org/rfc/rfc3339) timestamp |
+| `session_id` | string | The web session's id |
+
+A client MUST send a heartbeat at least once every 200 seconds while its web session is open.
+It SHOULD send one as soon as the session opens, and another as soon as its safety mode changes.
+
+A web session is stale once ten minutes have passed since its `last_seen`.
+The web interface MUST stop recording a stale web session, and SHOULD do so within a minute of it becoming stale.
+A heartbeat for a session no longer recorded MUST NOT record it again.
+
+The web interface MUST emit these events on the feed it relays.
+
+| `type` | when | additional members |
+| --- | --- | --- |
+| `WebSessionStarted` | A web session is accepted | `session_id`, `safety_mode` |
+| `WebSessionModeChanged` | A heartbeat changes a session's recorded safety mode | `session_id`, `safety_mode` |
+| `WebSessionStopped` | A web session closes or is reaped as stale | `session_id` |
+
+Each event carries `type` and an RFC 3339 `timestamp`, and no `actor`.
+The web interface MUST emit exactly one `WebSessionStopped` event for each web session.
+
+## Connected clients
+
+`/connected-clients/list {}` returns a result with these members.
+
+| member | type | meaning |
+| --- | --- | --- |
+| `web` | array of object | Every recorded web session |
+| `shells` | array of object | The daemon's [shell records](rule:i/shell.list) |
+| `forwards` | array of object | The daemon's [port forwards](rule:i/forward.list) |
+| `actors` | array of object | The actors recently active on the host |
+
+Each `web` entry has these members.
+
+| member | type | meaning |
+| --- | --- | --- |
+| `id` | string | The session id |
+| `connected_at` | string | When the session was accepted, as an RFC 3339 timestamp |
+| `last_seen` | string | The session's `last_seen`, as an RFC 3339 timestamp |
+| `actor_kind`, `actor_id`, `actor_display` | string or null | The session actor's `kind`, `id` and `display` |
+| `safety_mode` | string | The recorded safety mode |
+
+If the web interface cannot read the shells or the forwards from the daemon, it MUST NOT report them as an empty array.
+
+`actors` MUST hold one entry for each pair of non-empty actor `kind` and `id` carried by an event on the relayed feed in the past ten minutes.
+
+| member | type | meaning |
+| --- | --- | --- |
+| `actor_kind`, `actor_id` | string | The actor's `kind` and `id` |
+| `actor_display` | string or null | The `display` of the most recent such event that carried one |
+| `last_seen` | string | The `timestamp` of the most recent such event, as an RFC 3339 timestamp |
+| `last_action` | string | A short human-readable summary of that event |

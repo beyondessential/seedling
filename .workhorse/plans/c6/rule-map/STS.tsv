@@ -1,0 +1,3 @@
+i/status.infra	STS#infrastructure-status
+i/status.ping	STS#liveness
+i/status.get	STS#server-status

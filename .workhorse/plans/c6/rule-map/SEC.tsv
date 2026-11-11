@@ -1,0 +1,5 @@
+r/secret.key	SEC#secret-key
+r/secret.storage	SEC#storage
+r/secret.history	SEC#generation-history
+r/secret.redaction	SEC#redaction
+r/secret.migration	SEC#migration

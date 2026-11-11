@@ -4,49 +4,71 @@ id: IDN
 
 # Resource identity
 
-## Fault Handling
+Applies to how the [runtime](../overview.md#runtime) identifies resource instances, and to the names it reserves for itself in namespaces [operators](../overview.md#operator) also use.
 
-<!-- from runtime: Fault Handling -->
+## Terminology
 
-> r[namespace.reserved]
-> The runtime grants itself names inside namespaces operators also use: site-volume names beginning `backup-snap-`, and the site-ingress name `tailscale`.
-> Creating a site volume or site ingress under a reserved name is rejected; the restriction applies to creation only, so an object that predates the reservation can still be renamed or removed.
-> Reservation alone is not sufficient: a component that deletes or disables objects it believes are its own must identify them by what the runtime recorded — a registered site volume is never deleted by the [leftover snapshot sweep](rule:r/volume.site.leftover-snapshots), and a manually created site ingress is never disabled or replaced by a discovery provider — regardless of what the object is named.
+### Instance ID
 
-## Resource Identity
+A 128-bit identifier that the runtime assigns to one resource instance and never changes.
 
-<!-- from runtime: Resource Identity -->
+### Display name
 
-> r[identity.stable]
-> The runtime must assign a stable identity to each resource instance.
-> The identity must be consistent across reconciliation ticks and runtime restarts.
+The human-readable name of a resource instance, used where the instance appears on the host and to operators.
 
-> r[identity.components]
-> A resource identity consists of:
->
-> - An opaque instance ID, assigned once at creation and never changed. For most resource types the ID is randomly generated; see [Job instance identity](rule:r/identity.job) for the exception.
-> - The application name.
-> - The resource type.
-> - The resource name (if not anonymous).
-> - Whether the instance is a singleton or one of a scaled group.
+## Instance identity
 
-> r[identity.scaled]
-> Scaled resources (e.g. a Deployment with `scale(N)`) produce N instances.
-> Each instance must have a distinct, stable opaque identifier so the runtime can track
-> instances independently across restarts and scaling events.
-> Instance identifiers must not imply ordering or position; a random value must be used
-> so that removing one instance does not make the remaining identifiers appear discontinuous.
-> A human-readable display name for each instance is derived at creation time from the
-> instance ID and stored stably alongside the identity.
+The runtime MUST assign each resource instance an identity that stays the same across iterations of the [reconciliation loop](reconciliation.md#reconciliation-loop) and across runtime restarts.
+An instance's identity consists of:
 
-> r[identity.anonymous]
-> Anonymous resources (those without a name) must receive a runtime-assigned identity that is stable for the lifetime of the resource but does not conflict with named resources.
+| member | meaning |
+| --- | --- |
+| instance ID | assigned when the instance is created and never changed |
+| app | the name of the [app](../overview.md#app) the instance belongs to |
+| resource type | the kind of [resource](../overview.md#resource) the instance realises |
+| resource name | the resource's name, absent for an anonymous resource |
+| variant | singleton, or one of a scaled group |
 
-> r[identity.job]
-> Job instances have a deterministic identity scheme rather than a randomly-generated one, because concurrent executions of the same Job definition must be distinguishable without persisting state across restarts.
->
-> - **Static Jobs** (defined in the top-level BSL scope) have a fixed all-zero instance ID. Their display name includes the all-zero suffix (e.g. `myapp-worker-00000000`). There is at most one static instance per Job name; the identity is fully deterministic.
-> - **Dynamic Jobs** (defined inside an action closure) have an instance ID derived from the lifecycle operation's `OperationId` and the Job's name via a deterministic UUID v5 derivation: `UUID_v5(operation_id, "job:{name}")`. This gives a stable identity within one operation execution (including across barrier replay passes) while ensuring that distinct operation invocations produce distinct container names, allowing concurrent action runs involving the same Job name to coexist without collision.
+The runtime MUST derive an instance's display name when it creates the instance, and MUST store it with the identity.
+A stored display name MUST NOT change.
+Where a display name carries a suffix derived from the instance ID, the suffix MUST be the first eight hexadecimal digits of the instance ID.
 
-> r[identity.job.shell]
-> A Job used as the target of a shell `attach()` call receives a fresh randomly-generated instance ID chosen at the moment `attach()` is called, independent of any lifecycle operation ID. This allows multiple concurrent shell sessions to run against the same Job definition without collision.
+The runtime MUST match an instance by its recorded identity, never by the shape of its display name or of any name derived from it.
+
+## Scaled instances
+
+A scaled resource, such as a Deployment with `scale(N)`, has N instances.
+Each instance MUST have its own instance ID, chosen at random, so that identifiers imply no order or position.
+
+## Anonymous instances
+
+An anonymous resource MUST receive an identity that is stable for the resource's lifetime and cannot equal the identity of a named resource.
+
+## Job instances
+
+The instance ID of a Job instance is derived rather than random:
+
+| Job | instance ID |
+| --- | --- |
+| declared at the top level of a definition (static) | the nil UUID, so a static Job has at most one instance and its display name ends in `00000000` |
+| declared inside an action closure (dynamic) | the name-based UUID, version 5 per [RFC 9562](https://www.rfc-editor.org/rfc/rfc9562), with the [lifecycle operation](../overview.md#lifecycle-operation)'s ID as namespace and `job:<name>` as name |
+| the target of a shell `attach()` | a random UUID chosen when `attach()` is called |
+
+A dynamic Job instance therefore keeps its identity within one lifecycle operation, including across replay passes, while separate operations, and separate shell sessions, get distinct instances of the same Job.
+
+## Reserved names
+
+The runtime grants itself these names in namespaces operators also use:
+
+| namespace | reserved | held for |
+| --- | --- | --- |
+| site volume names | every name beginning `backup-snap-` | [leftover backup snapshots](site-resources.md#leftover-backup-snapshots) |
+| site ingress names | `tailscale` | the site ingress of the [Tailscale discovery provider](site-resources.md#tailscale-discovery) |
+| app names | `infra` | the [resource-control group](priority.md#resource-control-groups) of the runtime's infrastructure |
+| app names | `seedling` | faults about the runtime's own reporting, as [FLT](faults.md#fault-records) specifies |
+
+The runtime MUST reject the creation of a site volume, site ingress or app under a reserved name.
+The runtime MUST NOT reject an update, rename or deletion of an object because its name is reserved.
+
+A component that deletes, disables or replaces objects it considers its own MUST identify them by what the runtime recorded, whatever they are named.
+The leftover snapshot sweep MUST NOT delete a recorded site volume, and a discovery provider MUST NOT disable or replace a manual site ingress.

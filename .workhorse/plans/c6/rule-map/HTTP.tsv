@@ -1,0 +1,11 @@
+l/service.http	HTTP#declaration
+l/service.http.route	HTTP#routes
+l/service.http.route.redirect	HTTP#route-redirects
+l/service.http.compress	HTTP#compression
+l/service.http.compress.fields	HTTP#compression
+l/service.http.proxy-settings.resolution	HTTP#resolution
+l/service.balance	HTTP#balancing
+l/service.http.rate-limit	HTTP#rate-limiting
+l/service.http.rate-limit.fields	HTTP#rate-limiting
+l/service.http.headers	HTTP#header-operations
+l/service.http.headers.fields	HTTP#header-operations

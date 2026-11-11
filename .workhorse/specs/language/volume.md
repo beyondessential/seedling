@@ -4,64 +4,74 @@ id: VOL
 
 # Volumes
 
-## Volume
+Applies to the BSL `Volume` and `ExternalVolume` types, the directories of data an app mounts into its containers.
 
-<!-- from language: Volume -->
+## Terminology
 
-> l[volume.type]
-> A Volume is a directory containing data.
->
-> Volumes are defined using the `app.volume(name?: string)` method, which returns a [builder](rule:l/bsl.builder). The `name` argument is optional: if it's not provided, the volume is anonymous.
->
-> Volumes can be [mounted](rule:l/container.mount-volume) to a container's filesystem.
+### Volume
 
-> l[volume.readonly]
-> `volume.readonly()` is a builder method which declares this volume to be read-only.
-> A read-only volume cannot be written to.
+A [resource](../overview.md#resource) holding a directory of data that containers mount.
 
-> l[volume.tmpfs]
-> `volume.tmpfs()` is a builder method which declares this volume to be backed by tmpfs (a RAM-based filesystem).
-> The contents of a tmpfs volume do not survive a host reboot.
+### External volume
 
-> l[volume.write]
-> `volume.write(path: string, contents: string | File)` is an instance method which writes some data to the volume at `path`.
-> A [`File`](rule:l/file.type) is written byte for byte as it is held in the bundle.
-> Any existing content at `path` is discarded or shadowed.
+A volume supplied to an app by the runtime under a name, rather than declared and owned by the app.
 
-> l[volume.write-dir]
-> `volume.write_dir(path: string, dir: Directory)` is an instance method which writes every file in a [`Directory`](rule:l/app.dir) into the volume beneath `path`.
-> Each file keeps its path relative to the directory, and is written byte for byte as it is held in the bundle.
-> `path` is validated as for [volume.write](rule:l/volume.write.validation), except that it may resolve to the volume root.
-> The writes are declared file writes in the same way as those of `volume.write`, and are applied and reapplied alike.
+### Declared file write
 
-> l[volume.write.validation]
-> The `path` argument must be an absolute path (starting with `/`), must not contain null bytes, and must not escape the volume root after canonicalisation (resolving `.` and `..` segments without touching the filesystem). A path that resolves to `/` itself is also forbidden.
->
-> If validation fails, the method must throw.
->
-> At the runtime level, files written into volumes must be created with restrictive permissions (no more than 0640).
+A file a script declares to be written into a volume, as a path within the volume and the bytes to write there.
 
-> l[volume.exported]
-> `volume.exported(options?: #{ description?: string })` is a builder method which marks the volume as exported. Exported volumes are advertised to the control plane and operators.
->
-> Only named static volumes can be exported. Calling `exported()` on an anonymous volume must throw.
+## Declaration
 
-## External Volume
+A script declares a volume with `app.volume(name: string)`, or an anonymous volume with `app.volume()`, each of which returns a `Volume` [builder](rule:l/bsl.builder).
+A container mounts a volume as [volume mounts](container.md#volume-mounts) specifies.
 
-<!-- from language: Volume / External Volume -->
+## Storage options
 
-> l[volume.external]
-> An External Volume is a Volume provided by the Seedling control plane to a BSL script, at a particular name.
->
-> External Volumes are defined using the `app.external_volume(name: string)` method, which returns an `ExternalVolume`.
->
-> External Volumes can't be modified or configured further, only [mounted](rule:l/container.mount-volume).
+`volume.readonly()` declares the volume read-only.
+The runtime MUST mount a read-only volume read-only into every container that mounts it.
 
-> l[volume.external.dynamic]
-> When `app.external_volume(name)` is called within an action closure, the runtime checks operation-scoped volume bindings first, then falls back to the static external volume mapping table. Operation-scoped bindings are injected by the runtime for specific internal operations and are not operator-configurable.
->
-> If the name resolves to an operation-scoped binding, the returned `ExternalVolume` references the bound path for the duration of the operation. The binding is removed when the operation ends.
->
-> If the name does not match any operation-scoped binding, the lookup falls back to the static external volume mapping table as for any other external volume reference.
->
-> The names used for operation-scoped bindings are not fixed strings: they are generated per invocation by the runtime and delivered to the action closure in reserved params. See [operation.volume-param](rule:r/operation.volume-param).
+`volume.tmpfs()` declares the volume memory-backed.
+The runtime MUST hold a tmpfs volume's contents in memory only.
+A tmpfs volume's contents do not survive a restart of the host.
+
+## Declared file writes
+
+`volume.write(path: string, contents: string)` and `volume.write(path: string, contents: File)` declare a file write of `contents` at `path`.
+A [`File`](rule:l/file.type) MUST be written byte for byte as the bundle holds it, and a string as its UTF-8 encoding.
+
+`volume.write_dir(path: string, dir: Directory)` declares one file write for each file in the [`Directory`](rule:l/app.dir), at that file's path relative to the directory, beneath `path`.
+Each file MUST be written byte for byte as the bundle holds it.
+
+When the runtime applies declared file writes, it MUST apply them in the order the script declared them, and each MUST replace whatever its path held.
+When the runtime applies declared file writes is specified by [actuation](rule:r/actuate.volume.start).
+The runtime MUST create each written file with permissions no broader than `0640`.
+
+### Write paths
+
+A `path` MUST begin with `/`, and MUST NOT contain a NUL character.
+A `path` whose canonical form lies outside the volume's root MUST throw.
+The canonical form resolves `.` and `..` segments, without reference to any filesystem.
+A `write` path whose canonical form is the volume's root MUST throw.
+A `write_dir` path MAY resolve to the volume's root.
+
+## Export
+
+`volume.exported()` and `volume.exported(options: #{ description?: string })` mark the volume as exported.
+The runtime MUST list exported volumes to operators, each with the `description` given.
+An `options` map with any other key MUST throw.
+`exported` called on an anonymous volume MUST throw.
+
+## External volumes
+
+A script declares an [external volume](#external-volume) with `app.external_volume(name: string)`, which returns an `ExternalVolume`.
+An `ExternalVolume` has no builder methods other than [`description`](rule:l/bsl.resource.description).
+A container mounts an external volume as [volume mounts](container.md#volume-mounts) specifies.
+
+The runtime MUST resolve an external volume's name against the bindings of the [lifecycle operation](../overview.md#lifecycle-operation) in progress, if any, and then against the host's external volume mappings.
+An operation's bindings are made by the runtime for that operation, and are not configurable by operators.
+A name resolved against an operation's binding MUST refer to the bound storage until the operation ends, and to nothing after it.
+
+> [!NOTE]
+> An operation's binding names are generated for each invocation and reach the action closure in reserved parameters, as [operation volume parameters](rule:r/operation.volume-param) specifies.
+
+An external volume that resolves to nothing is handled as [an unmapped external volume](rule:r/fault.external-volume-unmapped) specifies.

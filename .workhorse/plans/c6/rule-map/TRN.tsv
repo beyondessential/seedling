@@ -1,0 +1,7 @@
+i/transport.quic	TRN#connection
+i/transport.alpn	TRN#connection
+i/transport.server-identity	TRN#server-identity
+i/transport.server-identity.published	TRN#server-identity
+i/transport.listen	TRN#listen-addresses
+i/transport.fingerprint-probe	TRN#fingerprint-probe
+i/transport.client-auth	TRN#client-authentication

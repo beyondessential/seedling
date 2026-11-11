@@ -4,13 +4,27 @@ id: OI
 
 # Operator Interface
 
-## Preamble
+Applies to the [Operator Interface](../overview.md#operator-interface) as a whole: the roles at its two ends and the reach of its authority over a [host](../overview.md#host).
 
-<!-- from interface: None -->
+## Terminology
 
-The Seedling Operator Interface (OI) is the channel through which external actors observe and control a running Seedling instance.
+### Server
 
-Its consumers are human operators (via CLI or UI), agentic operators, and automation pipelines.
-The OI is the exclusive mechanism for registering applications, transitioning them out of the uninstalled state, invoking lifecycle actions, changing parameter values, opening interactive shell sessions, and receiving the fault and event feed.
+The endpoint of the OI that the Seedling daemon on a host serves.
 
-Absent specification bugs, anything that is not defined here is either defined in another spec document (the language spec, the runtime spec), or is implicitly not allowed.
+### Client
+
+A program that connects to a server to observe or control the host on behalf of an [operator](../overview.md#operator).
+
+### Method
+
+A named request a client makes of a server, such as `/apps/show`.
+
+## Operator direction
+
+While the daemon runs, the [runtime](../overview.md#runtime) MUST accept direction from operators only through the OI.
+Direction includes registering, installing, uninstalling and removing [apps](../overview.md#app), invoking lifecycle actions, changing parameter values, and opening shell sessions.
+
+> [!NOTE]
+> The runtime also acts without being asked, as other specifications direct, for example when an app declares a schedule for an action.
+> Configuration the daemon reads as it starts, such as its listen addresses and the bootstrap file of authorised keys in [TRN](transport.md), is not direction in this sense.

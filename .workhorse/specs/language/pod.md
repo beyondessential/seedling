@@ -4,35 +4,34 @@ id: POD
 
 # Pods
 
-## Pod
+Applies to the BSL `Pod` interface: the builder methods and semantics every workload with its own network namespace shares.
 
-<!-- from language: Pod -->
+## Pod interface
 
-> l[pod.interface]
-> Pod is an interface (you can't obtain a `Pod`-typed value) for the common builder methods, instance methods, and semantics of pod definitions.
->
-> - Container has an image, a filesystem namespace, and runs the command;
-> - Pod has a network namespace, and holds the Container.
->
-> Not all things that implement Container implement Pod, but all things that implement Pod also implement Container. (Non-normative: this is not true of the current version of the spec, but the distinction is here for future expansions.)
+`Pod` is an interface, and no value has the type `Pod`.
+A pod has its own network namespace and holds one container.
+Every type that implements `Pod` also implements [`Container`](container.md).
+[Deployments](deployment.md) and [Jobs](job.md) implement `Pod`.
+Every method in this spec is a [builder method](rule:l/bsl.builder) available on each type that implements `Pod`.
 
-> l[pod.mount-serviceport]
-> The `pod.mount(svc: ServicePort)` builder method binds a ServicePort into the network of the pod. This makes the Service reachable at the declared port number from within the container, without the application needing to perform service discovery. The address at which the service is reachable is implementation-defined.
+## Service mounts
 
-> l[pod.http]
-> The `pod.http(port: number, svc: HttpServiceRoute)` or `pod.http(port: number, svc: HttpService)` builder method attaches a `port` of the pod to an [HTTP Service Route](rule:l/service.http.route).
-> The `http(port, svc: HttpService)` form is equivalent to `http(port, svc.route("/"))`.
->
-> HTTP traffic to the HTTP Service Route will be routed to (and back from) the port on the pod.
+`pod.mount(svc: ServicePort)` makes the [Service Port](rule:l/service.port) `svc` reachable from inside the pod.
+The runtime MUST make a mounted Service Port reachable at the hostname `localmount`, on the Service Port's port number, as [pod service mounts](rule:r/infra.pod.mount) specifies.
 
-> l[pod.tcp]
-> The `pod.tcp(port: number, svc: ServicePort)` or `pod.tcp(port: number, svc: Service)` builder method attaches a `port` of the pod to a [Service Port](rule:l/service.port).
-> The `tcp(port, svc: Service)` form is equivalent to `tcp(port, svc.port(port))`.
->
-> TCP traffic to the Service Port will be routed to (and back from) the port on the pod.
+## Port bindings
 
-> l[pod.udp]
-> The `pod.udp(port: number, svc: ServicePort)` or `pod.udp(port: number, svc: Service)` builder method attaches a `port` of the pod to a [Service Port](rule:l/service.port).
-> The `udp(port, svc: Service)` form is equivalent to `udp(port, svc.port(port))`.
->
-> UDP traffic to the Service Port will be routed to (and back from) the port on the pod.
+A script binds a port of the pod to a service with these methods, where `port` is a [port number](rule:l/bsl.port) inside the pod:
+
+| method | binds `port` to | equivalent to |
+| --- | --- | --- |
+| `pod.http(port: number, svc: HttpServiceRoute)` | the [route](http-service.md#routes) `svc` | |
+| `pod.http(port: number, svc: HttpService)` | the route `/` of `svc` | `http(port, svc.route("/"))` |
+| `pod.tcp(port: number, svc: ServicePort)` | the Service Port `svc`, for TCP | |
+| `pod.tcp(port: number, svc: Service)` | port `port` of `svc`, for TCP | `tcp(port, svc.port(port))` |
+| `pod.udp(port: number, svc: ServicePort)` | the Service Port `svc`, for UDP | |
+| `pod.udp(port: number, svc: Service)` | port `port` of `svc`, for UDP | `udp(port, svc.port(port))` |
+
+The runtime MUST route traffic of the bound protocol arriving at the route or Service Port to `port` on the pod, and its replies back.
+
+Binding a pod to a route declared as a [redirect](http-service.md#redirect-route-constraints) MUST throw.

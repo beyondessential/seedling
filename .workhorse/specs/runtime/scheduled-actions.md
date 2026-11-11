@@ -4,30 +4,43 @@ id: SCHED
 
 # Scheduled actions
 
-## Scheduled Actions
+Applies to the firing of the actions an [app](../overview.md#app) declares with [`on_schedule`](rule:l/action.schedule).
 
-<!-- from runtime: Scheduled Actions -->
+## Schedule records
 
-> r[schedule.tick]
-> The reconciliation loop must check for due scheduled actions at least once per minute. This check is performed as part of the normal reconciliation tick.
+The runtime MUST hold a durable record for each schedule an app declares, made up of the app, the action, the cron expression, and the time the schedule last fired.
 
-> r[schedule.fire]
-> For each `(app, action, cronexpr)` tuple, the runtime computes the next fire time from the stored `last_fired_at` and the cron expression. If the next fire time falls within the last 59 seconds, the action is fired as a lifecycle operation with an empty param map and the `"schedule"` trigger.
+When it evaluates an app's definition successfully, the runtime MUST add a record for each declared schedule it lacks, keeping the last fire time of the records it already has.
+It MUST delete each of the app's records whose action and cron expression the definition no longer declares.
+The runtime MUST NOT change the app's records on the strength of a definition that fails to evaluate.
 
-> r[schedule.fire.installed-only]
-> Schedules must only fire for apps in the `Installed` [phase](rule:r/lifecycle.app). Schedules attached to apps that are `NotInstalled`, `Installing`, or `Uninstalling` must be skipped. This prevents a permanently-failing app's schedule from monopolising the per-app scheduler slot and blocking operator updates: a script with a faulty install whose every cancel is followed by a fresh schedule fire would otherwise be unable to ever accept a corrected script.
+## Firing
 
-> r[schedule.state]
-> The runtime stores `(app_name, action_name, cronexpr, last_fired_at)` tuples durably. `last_fired_at` is updated on each successful fire.
+The runtime MUST check for due schedules at least once a minute, as part of the [reconciliation loop](rule:r/reconciliation.loop).
 
-> r[schedule.catch-up]
-> If the runtime detects that a scheduled fire time has already passed (for example because the daemon was not running at the moment of the scheduled fire), the schedule fires exactly once to catch up, regardless of how many scheduled boundaries were missed. The schedule's `last_fired_at` is then set to the catch-up fire time, so subsequent cron boundaries are evaluated from there.
+A schedule is due when the first boundary of its cron expression after its last fire time is at or before the time of the check.
+The runtime SHOULD treat a schedule with no recorded fire time as having last fired five minutes before the check.
 
-> r[schedule.prune]
-> When a BSL script is evaluated, the runtime must prune schedule state rows that no longer match any `(action, cronexpr)` pair declared in the script.
+The runtime MUST fire a due schedule only for an app in the `Installed` phase, and MUST skip it for an app that is `NotInstalled`, `Installing` or `Uninstalling`.
 
-> r[schedule.audit]
-> Scheduled action fires must be recorded in the audit log as lifecycle operations with the `"schedule"` trigger.
+> [!NOTE]
+> A schedule that fired for an app whose install keeps failing would hold the app's one operation slot and keep a corrected definition from ever being applied.
 
-> r[schedule.start-reject]
-> Calling `on_schedule` on the Start Action (action name `"start"`) must throw at script evaluation time.
+The runtime MUST fire a due schedule by requesting its action as a [lifecycle operation](../overview.md#lifecycle-operation) with an empty parameter map and the trigger `schedule`, subject to the [concurrency rules](operations.md#concurrency).
+A request that is rejected leaves the schedule due, and a later check requests it again.
+
+## Fire times
+
+The runtime MUST record a fire, by setting the schedule's last fire time to the time of the check, when the operation it requested starts, and MUST NOT record it before then.
+The runtime MUST record a queued fire when its operation leaves the queue and starts.
+
+The runtime MUST fire a due schedule once, however many of its boundaries passed since it last fired.
+Once it has fired, the runtime evaluates the next boundary from the new fire time.
+
+> [!NOTE]
+> A queued request exists only in memory.
+> Recording its fire before it starts would lose it on a restart while the record says it fired, leaving nothing to catch up.
+
+## Start action
+
+The runtime MUST throw at definition evaluation from an `on_schedule` call on the start action.

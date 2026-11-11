@@ -2,80 +2,114 @@
 id: CLI
 ---
 
-# Client behaviour
+# Reference client
 
-## Client Behaviour
+Applies to the [CLI](#cli), the reference command-line client of the [Operator Interface](../overview.md#operator-interface).
 
-<!-- from interface: Client Behaviour -->
+## Terminology
 
-> i[ctl.graceful-shutdown]
-> Long-running sessions must shut down gracefully on the appropriate termination signal:
->
-> - **Shell sessions:** the terminal is in raw mode, so SIGINT (`Ctrl+C`) and all other control characters flow through the stdin relay to the remote shell naturally — no special handling is needed. Only SIGTERM triggers client-side shutdown: the client sends ETX (`0x03`) over the session stream's stdin direction, then waits up to five seconds for the session to end normally. If the session does not end within that window the client closes the connection.
-> - **Port forwards:** on SIGINT or SIGTERM the client closes the control stream and exits.
-> - **Event subscriptions:** on SIGINT or SIGTERM the client closes the connection and exits.
+### CLI
 
-> i[ctl.subscribe.reconnect]
-> When the event stream or connection is lost, the client must automatically reconnect and re-subscribe.
-> Reconnection attempts use exponential backoff starting at one second, doubling up to a maximum interval of thirty seconds.
-> If no connection can be established within five minutes of continuous retrying the client must exit with an error.
+`seedling-ctl`, the command-line program through which an [operator](../overview.md#operator) uses the Operator Interface.
+Commands in this spec are written without the program name: `apps create` is `seedling-ctl apps create`.
 
-> i[ctl.logs.display]
-> By default the CLI formats log entries as human-readable text: each line shows the
-> timestamp, unit name, and message. When `--json` is passed, entries are printed as
-> raw JSON objects (one per line) exactly as received from the server.
+## Shutdown
 
-> i[ctl.logs.follow-interrupt]
-> In follow mode, the client must exit cleanly on SIGINT or SIGTERM by closing the
-> connection.
+The CLI MUST put the local terminal into raw mode for a shell session, and MUST restore it when the session ends.
+In raw mode, the CLI MUST pass SIGINT and every other control character typed at the terminal to the remote shell as input.
+On SIGTERM during a shell session, the CLI MUST send ETX (`0x03`) on the session stream's stdin direction, then wait up to five seconds for the session to end.
+If the session has not ended by then, the CLI MUST close the connection and exit with status 130.
+When a shell session ends, the CLI MUST exit with the session's exit code.
 
-> i[ctl.forward.stats]
-> While a port forward is active, the client must track:
->
-> - Total bytes relayed in each direction (client-to-service and service-to-client).
-> - For TCP forwards: the number of connections opened and currently active.
-> - For UDP forwards: the number of datagrams relayed in each direction.
->
-> On exit, the client prints a summary of these counters to stderr.
+On SIGINT or SIGTERM during a [port forward](#port-forward-statistics), the CLI MUST close the forward's control stream and exit.
 
-> i[ctl.action.params]
-> The CLI accepts action params as positional arguments after the action name: `ctl apps action <app> <name> [key[=value]]...`.
-> A bare key (no `=`) maps to `key: true`. A `key=value` pair maps to `key: "value"`.
+On SIGINT or SIGTERM during an event subscription, or while following logs, the CLI MUST close the connection and exit.
 
-> i[ctl.action.cancel]
-> The CLI exposes `ctl apps cancel-action <app>` as a thin wrapper over [action.cancel](rule:i/action.cancel).
+## Event subscription
 
-> i[ctl.shell.params]
-> The CLI accepts shell params with the same syntax: `ctl apps shell <app> <name> [key[=value]]...`.
+When the event stream or its connection is lost, the CLI MUST reconnect and subscribe again.
+The CLI MUST wait between connection attempts, starting at one second and doubling after each failed attempt up to thirty seconds.
+After a successful connection, the next wait MUST start again at one second.
+If no connection succeeds within five minutes of the stream being lost, the CLI MUST exit with a non-zero status.
+If the server refuses the subscription, the CLI MUST exit with a non-zero status without retrying.
 
-> i[ctl.install.params]
-> The CLI accepts install params as positional arguments: `ctl apps install <app> [key=value]...`.
-> Install params carry values typed by the application's parameter schema rather than free-form JSON, so every argument must be a `key=value` pair.
-> An argument without `=` must be reported as an error naming that argument, and no request may be sent.
+## Log display
 
-> i[ctl.definition.source]
-> `ctl apps create`, `ctl apps update`, `ctl templates create`, and `ctl templates update` take the definition as one of:
->
-> - a path to a file, pushed as a script;
-> - a path to a folder, pushed as a bundle;
-> - a GitHub URL naming a folder at a branch, tag, or commit, which the CLI resolves to a commit and downloads, then pushes as a bundle with that URL and commit as its reported origin, so the host needs no access to GitHub;
-> - `--ref <reference>`, which has the daemon [fetch](rule:i/definition.fetch) it.
+`apps logs` SHOULD print one line per log entry, holding the entry's timestamp, its most specific source name, and its message.
+The source name SHOULD be the first the entry carries of its instance, resource, app and infrastructure component.
+An entry recording a runtime call SHOULD be marked by `>` between its source name and its message, and an entry carrying a script position SHOULD end with that position in parentheses.
 
-> i[ctl.definition.folder]
-> When pushing a folder, the CLI leaves out version-control metadata directories and whatever the folder's `.seedignore` file excludes, if it has one, using gitignore pattern syntax.
-> A symlink or other non-regular file that is not left out is reported as an error naming it, and no request is sent.
+With `--json`, the CLI MUST print each entry exactly as received, one per line.
+The CLI MUST print a line that is not a JSON object exactly as received.
 
-> i[ctl.definition.param]
-> `ctl apps update` accepts one parameter change alongside the definition, as `--set name=value` or `--unset name`.
+## Port forward statistics
 
-> i[ctl.definition.export]
-> `ctl apps export <app> <folder> [--generation <n>]` writes the app's definition bundle at that generation, or the current one, into a new folder, reproducing the bundle's files exactly.
-> A folder that already exists and is not empty is reported as an error, and nothing is written.
+While a port forward is active, the CLI MUST count the bytes relayed in each direction.
+For a TCP forward, it MUST count the connections opened and the connections active.
+For a UDP forward, it MUST count the datagrams relayed in each direction, and the datagrams dropped for exceeding the path MTU.
+When the forward ends, the CLI MUST print a summary of these counts to standard error.
 
-> i[ctl.registries.tags]
-> `ctl registries tags <repository>` lists a repository's tags, as a thin wrapper over [definition.tags](rule:i/definition.tags).
+## Action, shell and install parameters
 
-> i[ctl.canopy]
-> The CLI exposes the operator-facing side of the Canopy relay: `ctl canopy status`, `ctl canopy enable`, and `ctl canopy disable`, as thin wrappers over [canopy.status](rule:i/canopy.status) and [canopy.settings](rule:i/canopy.settings).
-> Registering and withdrawing offers is not exposed: those are made by the client that carries the requests, not by an operator.
-> Nor is issuing a request: the relay exists to carry what the runtime itself needs, and an interface for relaying an arbitrary request would hand every authorised operator the full authority of the carrying client's Canopy identity.
+`apps action <app> <name> [key[=value]]...` invokes an action, and `apps shell <app> <name> [key[=value]]...` opens a shell, with the parameters given after the name.
+In both, a `key=value` argument MUST become the parameter `key` with the string value `value`, split at the first `=`.
+A bare `key` MUST become the parameter `key` with the value `true`.
+
+`apps install <app> [key=value]...` invokes the install action with the parameters given after the app.
+Install parameters carry values typed by the app's parameter schema, so each argument MUST be a `key=value` pair.
+If an argument holds no `=`, the CLI MUST report an error naming that argument and send no request.
+
+`apps cancel-action <app>` MUST [cancel](rule:i/action.cancel) the app's lifecycle operation.
+
+## Definition sources
+
+`apps create <app> <source>` and `apps update <app> <source>` MUST each take a definition.
+`templates create <name> <source>` MUST take a definition, and `templates update <name> --source <source>` MAY take one, leaving the template's definition unchanged when none is given.
+In each, `--ref <reference>` MAY stand in place of the source, and the two MUST NOT be combined.
+
+The CLI MUST send a definition as [definition sources](rule:i/definition.source) define, by the form of the source.
+
+| source | sent as |
+| --- | --- |
+| a path to a file | the file's text as `script`, or as `body` for a template |
+| a path to a folder | the folder as `bundle`, read as [Definition folders](#definition-folders) specifies |
+| `https://github.com/<owner>/<repo>/tree/<ref>/<folder>` | the named folder at the named branch, tag or commit as `bundle` |
+| `--ref <reference>` | the reference as `reference`, for the server to fetch |
+
+For a GitHub URL, the CLI MUST resolve the branch, tag or commit to a commit, download the folder at that commit itself, and send `origin` with `url` set to the URL as given and `revision` set to the commit's id.
+The host then needs no access to GitHub.
+Where the URL's path could split into a ref and a folder in several ways, the CLI MUST try the shortest ref first.
+The CLI MAY authenticate to GitHub with the token in the `GITHUB_TOKEN` environment variable.
+The CLI MUST report an error and send no request when the folder holds no files, or when the downloaded archive holds an entry that is not a regular file or directory or that lies outside the folder.
+
+## Definition folders
+
+When reading a folder, the CLI MUST leave out `.git` and `.jj` directories, and anything a `.seedignore` file in the folder or one of its subfolders excludes, read as gitignore patterns.
+If a symlink or other non-regular file is not left out, the CLI MUST report an error naming it and send no request.
+
+## Parameter change on update
+
+`apps update` MUST accept one parameter change alongside the definition, as `--set name=value` or `--unset name`, and MUST NOT accept both.
+The CLI MUST send the change as `param`, an object whose `name` is the parameter's name and whose `value` is the new value, or `null` for `--unset`.
+If `--set` is given an argument without `=`, the CLI MUST report an error and send no request.
+
+## Definition export
+
+`apps export <app> <folder> [--generation <n>]` MUST write the app's [definition bundle](../overview.md#definition-bundle) at generation `n`, or at the current generation, into `folder`, reproducing the bundle's files exactly.
+If `folder` exists and is not empty, the CLI MUST report an error and write nothing.
+If a path in the bundle is absolute, or has an empty or `..` segment, the CLI MUST report an error and write nothing.
+
+## Registry tags
+
+`registries tags <repository>` MUST list a repository's tags as [definition.tags](rule:i/definition.tags) does.
+
+## Canopy access
+
+`canopy status` MUST show the [Canopy access status](rule:i/canopy.status).
+`canopy enable` and `canopy disable` MUST turn Canopy access on and off through the [Canopy settings](rule:i/canopy.settings).
+
+The CLI MUST NOT offer commands that register or withdraw a Canopy offer, or that relay a request to Canopy.
+
+> [!NOTE]
+> An offer is made by the client that carries the requests, over its own connection, and an operator has no such connection to present.
+> A command relaying an arbitrary request would give every authorised operator the full authority of the offering client's Canopy identity.

@@ -1,0 +1,9 @@
+r/actuate.image.retry	IMG#image-pulls
+r/actuate.image.warm	IMG#image-warming
+r/image.pin	IMG#pins
+r/image.pin.expiry	IMG#pin-expiry
+r/image.pin.update-reconcile	IMG#pin-reconciliation
+r/image.track	IMG#image-usage-tracking
+r/image.gc	IMG#image-garbage-collection
+r/image.discover	IMG#image-discovery
+r/image.discover.params	IMG#probe-parameters

@@ -1,0 +1,16 @@
+r/fault.definition	FLT#fault-records
+r/fault.detection	FLT#filing-and-clearing
+r/fault.image-pull	FLT#workload-faults
+r/fault.container-start	FLT#workload-faults
+r/fault.crash-loop	FLT#workload-faults
+r/fault.external-volume-unmapped	FLT#workload-faults
+r/fault.cert-acquisition	FLT#certificate-faults
+r/fault.proxy-apply-failed	FLT#ingress-and-service-faults
+r/fault.healthcheck	FLT#workload-faults
+r/fault.healthcheck-replace-failed	FLT#workload-faults
+r/fault.service-degraded	FLT#ingress-and-service-faults
+r/fault.definition-source-moved	FLT#app-faults
+r/fault.definition-unsupported	FLT#app-faults
+r/fault.lifecycle	FLT#filing-and-clearing
+r/fault.surfacing	FLT#fault-records
+r/fault.non-blocking	FLT#filing-and-clearing

@@ -4,50 +4,135 @@ id: CHAIN
 
 # TLS strategy chains
 
-## Strategy chains
+Applies to the order in which [strategies](certificates.md#strategy) are made responsible for a [managed hostname](certificates.md#managed-hostname)'s certificate, and when responsibility passes from one to the next.
 
-<!-- from runtime: TLS Certificate Strategy / Strategy chains -->
+## Terminology
 
-A strategy chain is the ordered list of strategies that may supply a hostname's certificate.
-The default chain is defined by [tls.strategy.default](rule:r/tls.strategy.default).
-An operator policy names a chain of one.
+### Strategy chain
 
-> r[tls.chain.cycle]
-> A chain runs in cycles.
-> A cycle starts when a hostname has no usable certificate, and when the certificate serving it, of whatever origin, reaches its renewal point: the start of the CA's suggested renewal window when it supplied one, otherwise the moment a third of the certificate's lifetime remains.
-> A usable certificate is one inside its validity window that has not been revoked.
-> A hostname holding a usable certificate that has not reached its renewal point is left alone, whatever its chain would now resolve to.
-> A change in what is available — an offer connecting, an app gaining a Canopy type, a policy being set — does not start a cycle on its own, since replacing a working certificate early spends the issuing authority's capacity for no gain and leaves no fallback if the new source then fails.
-> A stored certificate that the runtime cannot renew by itself, such as a manual upload, starts a cycle at its renewal point in the same way.
-> It keeps serving until a replacement outranks it.
+The ordered list of strategies that may supply a hostname's certificate.
 
-> r[tls.chain.ladder]
-> Within a cycle the chain's strategies are tried in order, and the strategy currently responsible keeps working on the hostname until it succeeds, refuses, or reaches its fall-through point.
-> The first strategy is responsible from the start of the cycle.
-> A strategy's fall-through point is halfway between the moment it became responsible and the expiry of the certificate being replaced, and the next strategy becomes responsible at that point.
-> With a renewal point two thirds of the way through a certificate's lifetime, the first strategy falls through at five sixths and the second at eleven twelfths.
-> The last strategy in a chain has no fall-through point.
-> The rule is the same for every chain, so that adding a strategy to one does not require a new schedule.
+### Usable certificate
 
-> r[tls.chain.refusal]
-> A strategy that refuses a hostname that has a certificate to replace passes it to the next strategy at once, without waiting for its fall-through point.
-> A hostname with no certificate to replace is the exception, covered by [tls.chain.no-certificate](rule:r/tls.chain.no-certificate).
-> Only a refusal the strategy's authority has actually given counts.
-> A failure, a timeout, an authority that could not be reached, and a strategy that could not be asked are none of them a refusal, and are retried until the fall-through point, since reading "could not determine" as "no" would move a hostname off a strategy that is merely briefly unavailable.
+A certificate inside its validity window that has not been revoked.
 
-> r[tls.chain.no-certificate]
-> A hostname with no certificate to replace, because it has never had one or because its last one has expired, does not wait for a fall-through point, because there is no expiry to measure one from.
-> A certificate revoked by its issuer is not in this case: it is still the certificate being replaced, and [tls.canopy.revoked](rule:r/tls.canopy.revoked) applies.
-> A strategy that is available for it and refuses or fails keeps being asked, at the cadence of the after-failure debounce, and the hostname does not pass to the next strategy.
-> A strategy that is not available — for Canopy, no live offer — is skipped at once, and the next strategy becomes responsible.
-> A hostname that has an open order with a strategy stays with it until the order resolves, so an offer disappearing while an order is pending does not abandon the order.
+### Cycle
 
-> r[tls.chain.return]
-> A hostname that passed to a later strategy stays with it until the next cycle starts, and the first strategy is tried again then.
-> An operator retry of the hostname, per [tls.cert.force-retry](rule:r/tls.cert.force-retry), starts a cycle at once.
+One run of a hostname's strategy chain, from the moment its certificate needs replacing until a replacement arrives.
 
-> r[tls.chain.proxy-gate]
-> The proxy must not order or renew a certificate through HTTP-01 for a hostname unless HTTP-01 is the strategy responsible for it, or the hostname's chain has no earlier strategy.
-> The proxy's own renewal timing therefore cannot start a cycle, and a hostname whose first strategy is Canopy does not receive an HTTP-01 certificate ahead of Canopy.
-> A certificate the proxy already holds is never taken out of service to enforce this.
-> Where no clock says when HTTP-01 becomes responsible, as for a hostname under the Canopy-only policy, the proxy is held back to the last moments before the certificate it holds expires, and not beyond.
+### Responsible strategy
+
+The strategy in a hostname's chain that is working on the hostname's certificate during a cycle.
+
+### Fall-through point
+
+The moment responsibility passes from a strategy to the next one in its chain.
+
+### Refusal
+
+An answer from a strategy's issuing authority declining to issue for the hostname.
+
+## Strategy identifiers
+
+| identifier | strategy |
+| --- | --- |
+| `canopy` | Canopy, per [TCAN](canopy.md) |
+| `acme_http01` | a public certificate the ingress proxy obtains through ACME HTTP-01 |
+| `internal_ca` | a certificate from the ingress proxy's internal CA |
+
+## Default chain
+
+The [runtime](../../overview.md#runtime) MUST give a managed hostname that no [policy](certificates.md#policy) matches the default chain:
+
+- for an [internal name](certificates.md#internal-name), `internal_ca` alone;
+- for any other hostname that [Canopy applies to](canopy.md#applicability-and-availability), `canopy` then `acme_http01`;
+- for any other hostname, `acme_http01` alone.
+
+The runtime MUST NOT ask Canopy about an internal name.
+A certificate from the internal CA MUST be obtained without contacting any external authority.
+
+The [Canopy-only policy](canopy.md#canopy-only-policy) gives a hostname the chain `canopy` alone.
+An ACME DNS-01 policy puts a hostname on no chain.
+
+A stored certificate covering the hostname is not a step in a chain.
+It serves for as long as [certificate selection](certificates.md#certificate-selection) picks it, and the chain runs when it needs replacing.
+
+## Cycles
+
+A cycle MUST start for a hostname when it has no usable certificate, and when the certificate serving it, of whatever origin, reaches its [renewal point](certificates.md#renewal-point).
+A hostname whose serving certificate is usable and has not reached its renewal point MUST be left alone, whatever its chain would now resolve to.
+A change in which strategies are available, such as an offer connecting, an app gaining a Canopy type or a policy being set, MUST NOT start a cycle.
+
+> [!NOTE]
+> Replacing a working certificate early spends the issuing authority's capacity for no gain, and leaves no fallback if the new source then fails.
+
+A certificate the runtime cannot renew by itself, such as a `manual` upload, MUST start a cycle at its renewal point in the same way, and MUST keep serving until a replacement outranks it.
+
+If the runtime cannot read what the ingress proxy holds for a hostname, it MUST NOT treat the hostname as having no certificate, and MUST NOT start a cycle on that account.
+An operator retry MUST start a cycle regardless.
+
+The runtime MUST record durably, for a hostname in a cycle, any position the clock does not determine: a refusal, a revocation, and an open order.
+After a restart, the runtime MUST resume each hostname at the position its record and the clock give.
+
+## Fall-through
+
+Within a cycle the chain's strategies are made responsible in order, starting with the first.
+The responsible strategy MUST keep working on the hostname until it succeeds, refuses, or reaches its fall-through point.
+
+A strategy's fall-through point is halfway between the moment it became responsible and the expiry of the certificate being replaced.
+At that point the next strategy MUST become responsible.
+The last strategy in a chain has no fall-through point.
+
+> [!NOTE]
+> With a renewal point two thirds of the way through a certificate's validity window, the first strategy falls through at five sixths of the window and the second at eleven twelfths.
+> The rule is the same for every chain, so adding a strategy to a chain needs no new schedule.
+
+Each strategy MUST become responsible at the moment its predecessor's fall-through point passed, not at the moment the runtime notices.
+
+## Refusal
+
+When a strategy refuses a hostname that has a certificate to replace, the next strategy MUST become responsible at once, without waiting for the fall-through point.
+
+Only a refusal the strategy's issuing authority gave MUST count.
+A failure, a timeout, an authority that could not be reached, and a strategy that could not be asked MUST NOT be treated as a refusal, and the responsible strategy MUST be tried again until its fall-through point.
+
+## Hostnames with no certificate
+
+A hostname has no certificate to replace when it has never had one, or when its last one has expired.
+Such a hostname MUST NOT wait for a fall-through point.
+
+A certificate revoked by its issuer, while its `notAfter` lies ahead, MUST still count as the certificate being replaced, and [Canopy revocation](canopy.md#revocation) applies.
+
+For a hostname with no certificate to replace:
+
+- a strategy that is available for it and refuses or fails MUST be asked again no sooner than the [after-failure interval](certificates.md#after-failure-interval), and the hostname MUST NOT pass to the next strategy;
+- a strategy that is not available for it MUST be skipped at once, and the next strategy made responsible;
+- a hostname with an order open with a strategy MUST stay with that strategy until the order resolves, even if the strategy stops being available meanwhile.
+
+Canopy is not available for a hostname while no offer is live, except as the only strategy in its chain.
+
+## Return to the first strategy
+
+A hostname that passed to a later strategy MUST stay with it until the next cycle starts, and the first strategy MUST be responsible again then.
+An operator retry of the hostname, per [retries](certificates.md#retry-blocks-and-retries), MUST start a cycle at once, from the first strategy.
+
+## Proxy strategies
+
+The ingress proxy MUST NOT order or renew a certificate through `acme_http01` for a hostname unless `acme_http01` is the responsible strategy, or no strategy precedes it in the hostname's chain.
+The proxy's own renewal schedule therefore MUST NOT start a cycle, and a hostname whose chain begins with `canopy` MUST NOT receive an HTTP-01 certificate before Canopy's fall-through point.
+
+The runtime MUST NOT take a certificate the proxy holds out of service to enforce this.
+For a hostname whose proxy-held certificate must be held back, the runtime MUST instead set the proxy's renewal to begin no earlier than the moment the strategies before `acme_http01` reach their fall-through points.
+
+Where no fall-through point says when `acme_http01` becomes responsible, as for a hostname under the Canopy-only policy, the runtime MUST hold the proxy's renewal back until one ten-thousandth of the held certificate's validity window remains, and no further.
+
+> [!NOTE]
+> The proxy cannot be told never to renew, so the least window it accepts is the bound.
+
+For a hostname the proxy holds no certificate for, the runtime MUST withhold the proxy's own ordering while a strategy before `acme_http01` is responsible.
+If the runtime cannot decide whether to withhold, it MUST let the proxy order.
+
+> [!NOTE]
+> Letting the proxy order early costs one certificate ordered sooner than the chain would like; withholding wrongly leaves the hostname served nothing.
+
+A hostname whose only covering certificate is staged to begin later MUST NOT have the proxy held back while it waits, since that certificate cannot be served before it begins.

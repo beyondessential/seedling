@@ -77,7 +77,7 @@ An exception the invoked closure throws MUST propagate to the caller of `invoke`
 `invoke` on an action already on the operation's call stack, directly or through other invocations, MUST throw before the closure runs.
 The error SHOULD name the chain of actions that forms the cycle.
 
-## Param map
+## Param delivery
 
 The runtime MUST pass an action's, shell's or install action's closure the params its invoker supplied, after validation against its param schema, as the param map.
 If the invoker supplies no params, the param map MUST be empty.

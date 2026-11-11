@@ -4,48 +4,51 @@ id: UPD
 
 # Update strategies
 
-## Update Strategies
+Applies to how the [runtime](../overview.md#runtime) replaces running Deployment and Job instances whose configuration no longer matches the app's [resource graph](../overview.md#resource-graph).
 
-<!-- from runtime: Update Strategies -->
+## Terminology
 
-> r[update.spec-hash]
-> Each running container carries a spec hash that captures its full configuration at start time.
-> The reconciler must compare the observed spec hash of each running instance against the desired spec hash derived from the current definition.
-> An instance whose observed hash differs from the desired hash (or whose hash is absent) is _stale_.
+### Spec hash
 
-> r[update.rolling]
-> When a Deployment's update strategy is Rolling and stale instances are detected, the reconciler must rotate instances incrementally:
->
-> 1. Temporarily increase the effective instance count by one beyond the current scale.
-> 2. Start a new instance with the current definition in the additional slot.
-> 3. Wait until the new instance is running and healthy before proceeding.
-> 4. Stop one stale instance.
-> 5. Repeat from step 2 until no stale instances remain.
-> 6. Return the effective instance count to the declared scale.
->
-> At no point during a rolling update may the number of healthy instances drop below the Deployment's scale lower bound,
-> except when all instances are stale and no healthy replacement exists yet (the initial ramp-up).
+A digest of a container's full configuration, recorded on the container when it starts.
 
-> r[update.rolling.over-provision]
-> The temporary over-provisioning required by a rolling update must be reflected in the desired state computation
-> so that the additional instance is not treated as excess by the scaling machinery.
-> The reconciler must track which deployments have an active rolling update and feed this into the effective scale calculation.
+### Stale instance
 
-> r[update.rolling.restart-resume]
-> A rolling update must resume correctly after a runtime restart.
-> Because the runtime re-derives rollout state from observed spec hashes on each tick, no explicit rollout-in-progress flag is required in persistent storage.
-> If the runtime restarts mid-rollout, it must observe the running containers, detect any remaining stale instances, and continue the rotation from where it left off.
+A running instance whose recorded spec hash differs from the spec hash its current definition yields, or which carries no spec hash.
 
-> r[update.rolling.reboot-resume]
-> After a full node reboot (no containers surviving), all instances are missing.
-> The reconciler must start all instances with the current definition.
-> Because no stale containers exist, no rolling update coordination is needed and the deployment converges directly to the desired state.
+## Stale instances
 
-> r[update.replace]
-> When a Deployment's update strategy is Replace and stale instances are detected, the reconciler must stop all stale instances before starting replacements.
-> This may temporarily violate the Deployment's scale lower bound.
-> New instances are started only after all stale instances have been fully stopped.
+On each iteration of the [reconciliation loop](reconciliation.md#reconciliation-loop), the runtime MUST compare the observed spec hash of each running Deployment and Job instance with the spec hash derived from its current definition.
 
-> r[update.jobs]
-> Jobs do not participate in rolling or replace update coordination.
-> A stale Job instance is stopped and restarted immediately.
+The runtime MUST derive the progress of an update from the observed spec hashes on each iteration.
+After a runtime restart, the runtime MUST observe the running containers, find the remaining stale instances, and continue the update from where it stopped.
+
+After the host restarts with no containers surviving, every instance is missing rather than stale, and the runtime MUST start each with its current definition.
+
+## Rolling updates
+
+When a Deployment's [update strategy](rule:l/deployment.on-update) is rolling and it has stale instances, the runtime MUST replace them one at a time:
+
+1. Raise the Deployment's effective instance count by one above its current scale.
+2. Start an instance with the current definition in the added slot.
+3. Wait until that instance is running and healthy.
+4. Stop one stale instance.
+5. Repeat from step 2 until no stale instance remains.
+6. Return the effective instance count to the Deployment's scale.
+
+An instance without a [healthcheck](rule:l/deployment.healthcheck) is healthy once it is running.
+
+The added instance MUST be part of the [desired state](../overview.md#desired-state), so that scaling does not treat it as excess.
+
+During a rolling update, the number of healthy instances MUST NOT fall below the Deployment's lower scale bound, except while every instance is stale and no replacement is yet healthy.
+
+## Replace updates
+
+When a Deployment's update strategy is replace and it has stale instances, the runtime MUST stop every stale instance before starting any replacement.
+A replacement MUST NOT start until every stale instance has fully stopped.
+A replace update MAY take the Deployment below its lower scale bound.
+
+## Jobs
+
+A Job takes no part in rolling or replace updates.
+The runtime MUST stop a stale Job instance and start it again with its current definition.

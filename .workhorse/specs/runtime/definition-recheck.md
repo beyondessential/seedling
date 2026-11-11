@@ -4,22 +4,32 @@ id: RCK
 
 # Definition re-checks
 
-## Definition Sources
+Applies to the [runtime](../overview.md#runtime)'s periodic check of whether the registry tag an [app](../overview.md#app)'s definition was fetched from now selects a different definition.
 
-<!-- from runtime: Definition Sources -->
+## Resolution
 
-> r[definition.recheck]
-> For every app whose definition was fetched from a reference naming a tag, the runtime periodically re-resolves that reference, selecting the definition manifest in the same way as a [fetch](rule:i/definition.fetch.select), and compares the selected digest with the one the app is running.
-> A re-check reads only manifests: it does not download the bundle, change the app, or install anything.
-> A definition fetched by digest, and a pushed definition, are never re-checked.
-> A re-check honours the [registry allowlist](rule:i/definition.fetch.access), and one it may not make counts as a failed re-check.
+For every app whose definition was [fetched](rule:i/definition.fetch) from a reference naming a tag, the runtime MUST periodically re-check that reference.
+A re-check MUST resolve the reference and select a definition manifest in the same way as a [fetch](rule:i/definition.fetch.select), and MUST compare the selected digest with the digest of the definition the app is running.
+A re-check MUST read only manifests.
+It MUST NOT download the bundle, change the app, or install anything.
 
-> r[definition.recheck.cadence]
-> Re-checks are infrequent, since a tag moves rarely and acting on a move is the operator's decision.
-> Their timing is spread across hosts, so a fleet does not re-resolve against a registry at the same moment.
-> The exact schedule is not prescribed by this spec.
+The runtime MUST NOT re-check a definition fetched by digest, or a pushed definition.
 
-> r[definition.recheck.backoff]
-> Consecutive failed re-checks for an app are spaced by an increasing delay up to a bounded maximum, so that an unreachable registry is not contacted on every cycle.
-> However long an app's re-checks have been failing, waiting the maximum delay is sufficient for another attempt, and a successful re-check resets the delay.
-> One app's failing re-checks do not delay another's.
+A re-check MUST honour the [registry allowlist](rule:i/definition.fetch.access).
+A re-check the allowlist does not permit MUST count as a failed re-check.
+
+The outcome of a re-check is reported by the [definition source moved fault](rule:r/fault.definition-source-moved).
+
+## Schedule
+
+The runtime SHOULD re-check each app every six hours.
+The runtime SHOULD delay each app's first re-check, and each re-check after a success, by a further random interval of up to a tenth of the six hours, so that hosts started together do not re-resolve against a registry at the same moment.
+
+## Back-off
+
+The runtime MUST space an app's consecutive failed re-checks by a delay that grows with each failure, up to a bounded maximum.
+The runtime SHOULD begin that delay at 15 minutes, double it with each consecutive failure, and cap it at 24 hours.
+However long an app's re-checks have been failing, the runtime MUST make another attempt once the maximum delay has passed since the last failure.
+A successful re-check MUST reset the delay.
+
+One app's failed or slow re-checks MUST NOT delay another app's re-checks.

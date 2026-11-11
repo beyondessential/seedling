@@ -1,0 +1,7 @@
+r/update.spec-hash	UPD#stale-instances
+r/update.rolling	UPD#rolling-updates
+r/update.rolling.over-provision	UPD#rolling-updates
+r/update.rolling.restart-resume	UPD#stale-instances
+r/update.rolling.reboot-resume	UPD#stale-instances
+r/update.replace	UPD#replace-updates
+r/update.jobs	UPD#jobs

@@ -4,81 +4,116 @@ id: LCY
 
 # Resource lifecycle
 
-## States
+Applies to the [lifecycle states](../overview.md#lifecycle-state) of [resource](../overview.md#resource) instances and how the [runtime](../overview.md#runtime) derives them.
 
-<!-- from runtime: Lifecycle / States -->
+## Lifecycle states
 
-> r[lifecycle.states]
-> Every resource instance tracked by the runtime is in exactly one lifecycle state at any time:
->
-> - **Pending**: the resource is in the desired state but no action has been taken to realise it.
-> - **Scheduled**: the resource's underlying primitives have been created but are not yet operational.
-> - **Running**: the resource is operational but has not yet been confirmed ready.
-> - **Ready**: the resource is operational and has passed any applicable readiness criteria.
-> - **Terminating**: the runtime has initiated termination but the resource has not yet stopped.
-> - **Terminated**: the resource has stopped.
-> - **Unscheduled**: the resource's underlying primitives have been cleaned up.
+A resource instance's lifecycle state is one of the following.
 
-> r[lifecycle.transitions]
-> The normal transition order is Pending → Scheduled → Running → Ready → Terminating → Terminated → Unscheduled.
->
-> A resource may skip states: for example, a container that exits on its own transitions directly from Running (or Ready) to Terminated, without passing through Terminating.
+| state | meaning |
+| --- | --- |
+| `Pending` | The instance is in the [desired state](../overview.md#desired-state), and nothing has yet been done to realise it. |
+| `Scheduled` | The instance's underlying primitives exist, and it is not yet operational. |
+| `Running` | The instance is operational, and has not yet been confirmed ready. |
+| `Ready` | The instance is operational, and meets the readiness criteria that apply to its kind. |
+| `Terminating` | The runtime has initiated the instance's termination, and the instance has not yet stopped. |
+| `Terminated` | The instance has stopped. |
+| `Unscheduled` | The instance's underlying primitives have been cleaned up. |
 
-> r[lifecycle.derivation]
-> Lifecycle states must be derived from the [world observation history](rule:r/history.world), not maintained as an independent state machine.
-> The runtime must be able to re-derive the current lifecycle state of any resource from its observation history at any time.
+Lifecycle states apply to instances of deployments, jobs, services, ingresses, volumes and external volumes.
+Each such instance MUST be in exactly one lifecycle state at any time.
 
-## Resource Lifecycle Semantics
+## Transitions
 
-<!-- from runtime: Lifecycle / Resource Lifecycle Semantics -->
+An instance's lifecycle state MUST advance only in the order `Pending`, `Scheduled`, `Running`, `Ready`, `Terminating`, `Terminated`, `Unscheduled`, except as this section permits.
 
-> r[lifecycle.container]
-> For container resources (Deployments, Jobs):
->
-> - **Scheduled**: the container image pull has been initiated and/or the container has been created.
-> - **Running**: the container process is executing.
-> - **Ready**: the container is running and, if a [healthcheck](rule:l/deployment.healthcheck) is declared, it is currently passing.
-> - **Terminated**: the container process has exited (with an exit code).
->
-> A container with no declared healthcheck becomes Ready as soon as it is Running. A container with a declared healthcheck remains in Running until the first passing observation is recorded.
+An instance MAY skip states.
+For example, a container that exits by itself moves from `Running` or `Ready` directly to `Terminated`, without passing through `Terminating`.
 
-> r[lifecycle.container.unhealthy-transition]
-> A container observed as unhealthy must transition from Ready back to Running.
-> A subsequent healthy observation must transition it forward to Ready again.
-> These transitions are derived from the [world observation history](rule:r/history.world) in the same manner as all other lifecycle state derivations and must not require an independent state machine.
+A container MAY return from `Ready` to `Running`, as [containers](#containers) specifies.
 
-> r[lifecycle.service]
-> For Service resources:
->
-> - **Scheduled**: the internal network plumbing exists.
-> - **Ready**: at least one backend is in the routing pool and traffic can be routed.
-> - **Terminated**: the network plumbing has been torn down.
+An instance in `Terminated` or `Unscheduled` that is observed being set up or running again MUST begin a new cycle from `Pending`.
 
-> r[lifecycle.service.routing-pool]
-> The routing pool for a Service is the set of backend pod instances eligible to receive traffic. The runtime selects the pool from the running backends as follows:
->
-> - A backend pod enters the pool only after it has been observed [healthy](rule:l/deployment.healthcheck) at least once. Pods still in start-period or that have never been observed healthy are not in the pool. A pod with no declared healthcheck is treated as healthy as soon as it is Running.
-> - Once in the pool, a backend that is observed unhealthy is removed from the pool **only if** at least one other backend in the same Service is currently healthy. If no healthy alternative exists, all running backends remain in the pool (degraded mode) and the runtime files a fault per [fault.service-degraded](rule:r/fault.service-degraded).
-> - When all backends are stopped, the pool is empty and the Service is no longer Ready.
->
-> The intent is "prefer healthy, fall back to anything running": a single-server platform should never reduce serving capacity below what's currently available, but should always prefer healthy capacity when it exists.
+## Derivation
 
-> r[lifecycle.ingress]
-> For Ingress resources:
->
-> - **Scheduled**: the ingress configuration has been submitted.
-> - **Ready**: the ingress is accepting external traffic and certificates are valid.
-> - **Terminated**: the ingress configuration has been removed.
+The runtime MUST derive each instance's lifecycle state, and the time of its last transition, from the instance's [world observation history](history.md#world-observation-history) alone.
+The runtime MUST be able to re-derive any instance's current lifecycle state from that history at any time.
+The runtime MUST NOT keep a lifecycle state that cannot be re-derived from the history.
 
-> r[lifecycle.volume]
-> For Volume resources:
->
-> - **Scheduled**: the volume directory exists and any declared writes have been applied.
-> - **Ready**: the volume is available for mounting.
-> - **Terminated**: the volume has been removed.
+A failure to read an instance's observation history MUST NOT be treated as an empty history.
 
-> r[lifecycle.external-volume]
-> For External Volume resources, the lifecycle is managed entirely by the runtime:
->
-> - **Ready**: immediately upon reconciliation, since the resource is a declaration only. The presence or absence of a mapping is tracked via faults, not lifecycle state.
-> - **Unscheduled**: immediately upon uninstall.
+## Containers
+
+The lifecycle states of a deployment or job instance have these meanings.
+
+| state | meaning |
+| --- | --- |
+| `Scheduled` | The container's image pull has started, or the container has been created. |
+| `Running` | The container's process is executing. |
+| `Ready` | The container is running and, if it declares a [healthcheck](rule:l/deployment.healthcheck), the healthcheck is passing. |
+| `Terminated` | The container's process has exited, with an exit code. |
+| `Unscheduled` | The container has been removed. |
+
+A container with no declared healthcheck MUST become `Ready` as soon as it is `Running`.
+A container with a declared healthcheck MUST stay `Running` until a passing healthcheck is observed.
+
+A `Ready` container observed unhealthy MUST return to `Running`.
+A later healthy observation MUST return it to `Ready`.
+
+## Services
+
+The lifecycle states of a service instance have these meanings.
+
+| state | meaning |
+| --- | --- |
+| `Scheduled` | The service's network plumbing exists. |
+| `Ready` | At least one backend is in the service's [routing pool](#routing-pool), and traffic can be routed. |
+| `Terminated` | The service's network plumbing has been torn down. |
+| `Unscheduled` | The service's network plumbing has been cleaned up. |
+
+A service whose routing pool becomes empty MUST leave `Ready`.
+
+## Routing pool
+
+A service's routing pool for one of its ports is the set of running backends that receive that port's traffic.
+
+The runtime MUST compose each pool from the backends running at the time, as follows.
+If at least one running backend is currently observed healthy, the pool MUST hold exactly the running backends currently observed healthy.
+Otherwise, the pool MUST hold every running backend, and the runtime MUST file the [service degraded fault](rule:r/fault.service-degraded).
+
+A backend with no declared healthcheck MUST count as healthy while it is running.
+A backend whose declared healthcheck has not yet passed, such as one in its start period, MUST count as not healthy.
+
+> [!NOTE]
+> The pool prefers healthy backends and falls back to any running backend, so the runtime never serves less capacity than is running.
+
+## Ingresses
+
+The lifecycle states of an ingress instance have these meanings.
+
+| state | meaning |
+| --- | --- |
+| `Scheduled` | The ingress's configuration has been submitted to the proxy. |
+| `Ready` | Proxy configuration including the ingress has been applied. |
+| `Terminated` | The ingress's configuration has been removed. |
+| `Unscheduled` | The ingress's configuration has been cleaned up. |
+
+## Volumes
+
+The lifecycle states of a volume instance have these meanings.
+
+| state | meaning |
+| --- | --- |
+| `Scheduled` | The volume exists on the host, and any declared writes have been applied. |
+| `Ready` | The volume is available for mounting. |
+| `Terminated` | The volume has been removed. |
+| `Unscheduled` | The volume has been cleaned up. |
+
+## External volumes
+
+The runtime manages an external volume's lifecycle state entirely itself.
+An external volume MUST be `Ready` as soon as the desired state holds it `Ready`, and `Unscheduled` as soon as the desired state holds it `Unscheduled`.
+An external volume's lifecycle state MUST NOT depend on whether a mapping exists for it.
+
+> [!NOTE]
+> A missing mapping is reported by the [external volume unmapped fault](rule:r/fault.external-volume-unmapped).

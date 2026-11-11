@@ -377,7 +377,7 @@ Otherwise it MUST carry these members.
 
 The runtime MUST NOT derive `last_issuance` from an issuance attempt whose certificate is no longer stored.
 
-`next_issuance_source` MUST be `null` exactly when `next_issuance_at` is `null`, except for `immediate`, and otherwise one of these values.
+`next_issuance_source` MUST be `null` when the runtime expects no issuance, and otherwise one of these values.
 
 | value | meaning |
 | --- | --- |

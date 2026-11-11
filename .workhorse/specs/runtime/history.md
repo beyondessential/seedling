@@ -2,102 +2,95 @@
 id: HIST
 ---
 
-# Persistent history
+# Runtime history
 
-## Reconciliation
+Applies to the records the [runtime](../overview.md#runtime) keeps of what it has observed on a [host](../overview.md#host) and what it has done there.
 
-<!-- from runtime: Reconciliation -->
+## Terminology
 
-> r[history.persist.partial-update]
-> A writer that updates a row shared with another writer must not reset columns it does not own.
-> This holds as columns are added: a write that names its own columns explicitly must continue to leave the rest untouched when the row gains a new one.
+### World observation history
 
-## Persistent History
+The timeline of observations the runtime has recorded about each resource instance.
 
-<!-- from runtime: Persistent History -->
+### Autonomous operations log
 
-> r[history.persistence]
-> All history records must be stored durably and must survive runtime restarts, including unexpected termination and node power loss.
+The record of the operations the runtime has performed on a host without direction from an action closure.
 
-> r[history.storage]
-> The storage mechanism must support transactional writes and efficient queries by resource identity and time range.
+### Action execution log
 
-## World Observation History
+The record, in order, of the runtime calls each [lifecycle operation](../overview.md#lifecycle-operation)'s action closure has made.
 
-<!-- from runtime: Persistent History / World Observation History -->
+### Provenance
 
-> r[history.world]
-> The world observation history is a timeline of observations per resource instance.
-> Each entry is a timestamped, structured record of something the runtime observed about the real world.
+The observations and the rule that caused the runtime to perform an autonomous operation.
 
-> r[history.world.entries]
-> Each observation entry must contain:
->
-> - A timestamp.
-> - The resource identity (type, name, and instance identifier if scaled).
-> - The observation kind (e.g. container status, exit event, health check result, network reachability).
-> - The observed value or payload.
+## Durability
 
-> r[history.world.source]
-> Observations come from the runtime's interaction with the underlying system.
-> The runtime must not fabricate observations; every entry must correspond to a real check or event.
+The runtime MUST store the world observation history, the autonomous operations log and the action execution log durably.
+Every record MUST survive a restart of the runtime, including one after unexpected termination or loss of power to the host.
+A write that changes several records together MUST be atomic.
 
-> r[history.world.state-derivation]
-> The runtime must be able to derive a resource's current [lifecycle state](rule:r/lifecycle.states) and the time of its last state transition from the world observation history alone.
+A writer that updates a stored record that another writer also updates MUST change only the fields it owns.
+It MUST leave every other field as it was, including fields added to the record after the writer was written.
 
-> r[history.world.ordering]
-> When multiple observations are emitted within the same tick they may share a timestamp. Queries that return observations for derivation must use a stable secondary ordering — insertion order — so that consumers see them in the order they were emitted, not in storage-engine-defined order.
-> Without this, lifecycle derivation becomes non-deterministic for any resource that produces multiple observations per tick (e.g. a container that observes both `stop_sent` and `container_removed` in the same reconciliation pass).
+## Observations
 
-## Autonomous Operations Log
+The runtime MUST record each observation in the world observation history against the [resource instance](identity.md) it concerns.
 
-<!-- from runtime: Persistent History / Autonomous Operations Log -->
+| member | meaning |
+| --- | --- |
+| time | when the runtime recorded the observation |
+| instance | the identity of the resource instance observed: its resource type, its name, and its instance identifier |
+| kind | the kind of observation, such as a container's status, a process exit, a healthcheck result or network reachability |
+| payload | the observed value |
 
-> r[history.operations]
-> The autonomous operations log records operations the reconciler performed without direction from an action closure.
+Every observation MUST correspond to a check the runtime made, an event it received, or an action it took on the host.
+The runtime MUST NOT record an observation it has not made.
 
-> r[history.operations.entries]
-> Each autonomous operation entry must contain:
->
-> - A timestamp.
-> - The resource identity affected.
-> - The operation performed (e.g. start container, rebuild ingress config).
-> - The provenance.
-> - The outcome (success or failure, and details if failure).
+Observations recorded in one iteration of the [reconciliation loop](reconciliation.md#reconciliation-loop) MAY share a time.
+The runtime MUST order an instance's observations by time, and observations with equal times in the order it recorded them.
 
-> r[history.operations.provenance]
-> Every autonomous operation must record its provenance: the specific observation(s) that triggered it and the rule that applied.
->
-> Examples of provenance:
-> - "Container exited (observation at T), OnTerminate policy is Recreate."
-> - "Observed 1 running instance, scale requires 2."
-> - "Ingress controller unreachable (observation at T), rebuilding configuration."
+> [!NOTE]
+> [Lifecycle derivation](lifecycle.md#derivation) is sensitive to the order of observations, so an order left to storage would make it non-deterministic for an instance with several observations in one iteration.
 
-> r[history.operations.interrupted]
-> An entry whose operation was still in progress when the runtime stopped is completed when the runtime next starts, before the reconciler performs any operation, with an outcome recording that it was interrupted.
-> An interrupted operation's real outcome is unknown, so the entry records it as neither a success nor a failure.
+## Autonomous operations
 
-> r[history.operations.rate-limiting]
-> The runtime must use the autonomous operations log to detect repeated operations on the same resource and apply backoff.
-> The backoff strategy must prevent tight loops (e.g. a container that exits immediately after starting must not be restarted indefinitely at full speed).
+The runtime MUST record each operation it performs without direction from an action closure in the autonomous operations log.
 
-## Action Execution Log
+| member | meaning |
+| --- | --- |
+| time | when the runtime recorded the operation |
+| instance | the resource instance the operation affected |
+| operation | the operation performed, such as starting a container or rebuilding ingress configuration |
+| provenance | the operation's provenance |
+| outcome | success, failure with details, or interrupted; absent while the operation is in progress |
 
-<!-- from runtime: Persistent History / Action Execution Log -->
+An entry's provenance MUST identify the observations that triggered the operation and the rule that applied.
 
-> r[history.action-log]
-> The action execution log records the progress of a [lifecycle operation](rule:r/operation.lifecycle) through its action closure.
+> [!NOTE]
+> Examples of provenance: "Container exited (observation at T), OnTerminate policy is Recreate."; "Observed 1 running instance, scale requires 2."; "Ingress controller unreachable (observation at T), rebuilding configuration."
 
-> r[history.action-log.entries]
-> Each action execution log entry must contain:
->
-> - A timestamp.
-> - The lifecycle operation identity.
-> - The `rt.*` call that was made (e.g. start, stop, warm_certs), and on which resources.
-> - The barrier condition, if a barrier was reached (which resources, which state, what deadline).
-> - Whether the barrier has been satisfied.
->
-> The runtime must additionally emit a `SubActionInvoked` entry immediately before each [`Action.invoke()`](rule:l/action.call) runs the called closure. The entry records the called action's name and the validated params map. On replay, the entry is treated as already-emitted: the runtime re-enters the FnPtr but recovers the params from the log rather than re-validating, so a schema change between operation start and replay does not desync the call. The `SubActionInvoked` entries are exposed in `apps history` so operators can inspect the nested call chain.
+When the runtime starts, it MUST complete every entry still in progress with the outcome interrupted, before it performs any autonomous operation.
+The runtime MUST NOT record an interrupted operation as a success or as a failure, since its real outcome is unknown.
 
-> r[history.action-log.replay]
-> The action execution log must contain enough information to replay an interrupted lifecycle operation from the beginning and fast-forward to the interruption point.
+The runtime MUST detect repeated operations of one kind on one resource instance from the autonomous operations log, and MUST back off between them.
+The delay between repetitions MUST grow with each repetition, up to a bounded maximum.
+The back-off MUST prevent a tight loop, such as restarting at full speed a container that exits immediately after starting.
+
+## Action calls
+
+The runtime MUST record in the action execution log each runtime call a lifecycle operation's action closure makes, in the order the closure makes them.
+
+| member | meaning |
+| --- | --- |
+| time | when the runtime recorded the call |
+| operation | the identity of the lifecycle operation |
+| position | the call's position in the closure's sequence of calls |
+| call | the `rt` method called, such as `start`, `stop` or `warm_certs`, and the resources it named |
+| barriers | each [barrier](rule:r/barrier.suspension) the call reached: its resources, the lifecycle state it requires, and its deadline |
+| satisfied | for each barrier, whether it has been satisfied |
+
+Before [`Action.invoke()`](rule:l/action.call) runs the called closure, the runtime MUST record an entry for the invocation holding the called action's name and its validated parameter map.
+Replay of that entry is specified by [composition replay](rule:r/operation.composition.params.replay).
+
+The action execution log MUST hold enough to [replay](rule:r/barrier.replay) an interrupted lifecycle operation from its beginning and fast-forward to the point of interruption.

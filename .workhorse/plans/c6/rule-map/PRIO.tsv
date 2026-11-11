@@ -1,0 +1,6 @@
+r/priority.app	PRIO#app-priority
+r/priority.settings	PRIO#app-priority
+r/priority.kill-order	PRIO#kill-order
+r/priority.scheduling	PRIO#contended-capacity
+r/priority.groups-owned	PRIO#resource-control-groups
+r/priority.actuation	PRIO#resource-control-groups

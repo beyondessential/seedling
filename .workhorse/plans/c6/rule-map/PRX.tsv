@@ -1,0 +1,15 @@
+r/service.http.route.routing	PRX#route-emission
+r/service.http.route.redirect	PRX#redirect-routes
+r/service.http.route.compression	PRX#compression
+r/service.http.route.balancing	PRX#balancing
+r/service.http.route.rate-limiting	PRX#rate-limiting
+r/service.http.route.headers	PRX#header-operations
+r/service.http.route.proxy-settings.visibility	PRX#settings-inspection
+r/ingress.persistent-connections	PRX#persistent-connections
+r/infra.proxy.startup	PRX#proxy-lifecycle
+r/infra.proxy.image.modules	PRX#proxy-image
+r/infra.proxy.image.config	PRX#proxy-image
+r/infra.proxy.image.cert-cache	PRX#proxy-image
+r/infra.proxy.upgrade	PRX#proxy-upgrades
+r/infra.proxy.upgrade.cache	PRX#proxy-upgrades
+r/infra.proxy.upgrade.rollback	PRX#proxy-upgrades

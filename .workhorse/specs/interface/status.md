@@ -4,32 +4,40 @@ id: STS
 
 # Host status
 
-## Status
+Applies to the methods that report whether the [server](overview.md#server) is reachable and the overall state of its [host](../overview.md#host).
 
-<!-- from interface: Status -->
+## Liveness
 
-> i[status.infra]
-> `/infra/status` returns the running state of infrastructure components managed by the Seedling daemon.
-> The response contains the following fields:
->
-> - `proxy`: `"running"` if at least one proxy container slot is running, otherwise `"stopped"`.
-> - `resolver`: `"running"` if at least one resolver container slot is running, otherwise `"stopped"`.
+`/server/ping` takes no parameters and MUST return `{}`.
+The server MUST answer it without consulting the container engine or any app's state, and it MUST NOT fail except when the transport does.
 
-> i[status.ping]
-> `/server/ping` is a trivial liveness probe. It accepts no params, returns an empty object `{}`, and must never fail except on transport errors. Clients use it to confirm the daemon is reachable without incurring the cost of `/server/status`.
+## Server status
 
-> i[status.get]
-> `/server/status` returns a summary of the running Seedling instance.
-> It must always succeed and must not perform any expensive computation.
-> The response contains the following fields:
->
-> - `version`: the Seedling version string.
-> - `hostname`: the hostname of the machine running the Seedling instance.
-> - `uptime_secs`: the number of seconds since the Seedling process started.
-> - `spki_fingerprint`: the SHA-256 fingerprint (hex-encoded) of the server's raw public key, allowing clients to verify or record the identity of the instance they are connected to.
-> - `apps_total`: total number of registered apps.
-> - `apps_by_status`: an object map of status name to count, covering only statuses with a non-zero count.
-> - `active_operations`: number of lifecycle operations currently in progress.
-> - `active_faults`: number of currently active faults across all apps.
-> - `active_shells`: number of open shell sessions.
-> - `active_forwards`: number of active port forwards.
+`/server/status` takes no parameters and returns an object with these members.
+
+| member | type | meaning |
+| --- | --- | --- |
+| `version` | string | the running Seedling version, a [Semantic Versioning 2.0.0](https://semver.org/spec/v2.0.0.html) version |
+| `hostname` | string | the host's name |
+| `uptime_secs` | integer | the number of whole seconds since the daemon started |
+| `spki_fingerprint` | string | the [fingerprint](transport.md#fingerprint) of the server's key |
+| `apps_total` | integer or null | the number of registered apps |
+| `apps_by_status` | object or null | for each [app status](apps.md#app-status) at least one app holds, the number of apps holding it, keyed by status |
+| `active_operations` | integer or null | the number of lifecycle operations in progress; a queued operation is not in progress |
+| `active_faults` | integer or null | the number of active [faults](../overview.md#fault) on the host |
+| `active_shells` | integer | the number of open shell sessions |
+| `active_forwards` | integer | the number of active port forwards |
+
+The server MUST answer `/server/status` without consulting the container engine, and MUST NOT fail it except when the transport does.
+A member the server cannot determine MUST be `null`, and MUST NOT be reported as zero or as an empty object.
+
+## Infrastructure status
+
+`/infra/status` takes no parameters and returns an object with these members.
+
+| member | type | meaning |
+| --- | --- | --- |
+| `proxy` | string or null | `"running"` if at least one instance of the host's [reverse proxy](../runtime/proxy.md) is running, otherwise `"stopped"` |
+| `resolver` | string or null | `"running"` if at least one instance of the host's [resolver](../runtime/resolver.md) is running, otherwise `"stopped"` |
+
+A member whose state the server cannot determine MUST be `null`, and MUST NOT be reported as `"stopped"`.

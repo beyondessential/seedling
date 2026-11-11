@@ -4,62 +4,110 @@ id: TRN
 
 # Transport
 
-## Transport
+Applies to the connections between a [client](overview.md#client) and a [server](overview.md#server): the transport, how each end proves its identity, and where the server listens.
 
-<!-- from interface: Transport -->
+## Borrowed terms
 
-> i[transport.quic]
-> The OI uses QUIC as its wire transport protocol.
+| term | meaning |
+| --- | --- |
+| connection | a QUIC connection, as defined in [RFC 9000](https://www.rfc-editor.org/rfc/rfc9000) |
+| handshake | the TLS 1.3 handshake carried in QUIC, as defined in [RFC 9001](https://www.rfc-editor.org/rfc/rfc9001) and [RFC 9846](https://www.rfc-editor.org/rfc/rfc9846) |
+| ALPN identifier | an application protocol name negotiated in the handshake, as defined in [RFC 7301](https://www.rfc-editor.org/rfc/rfc7301) |
+| raw public key | a public key presented in the handshake in place of a certificate, as defined in [RFC 7250](https://www.rfc-editor.org/rfc/rfc7250) |
+| SubjectPublicKeyInfo | the DER-encoded public key structure defined in [RFC 5280](https://www.rfc-editor.org/rfc/rfc5280) section 4.1 |
 
-> i[transport.alpn]
-> The TLS handshake negotiates an Application-Layer Protocol Negotiation (ALPN) identifier.
-> Both client and server must offer the same identifier; a connection where the peer does not offer the expected identifier is rejected at the TLS layer.
-> The current identifier is `bes.seedling/1`. Future incompatible protocol revisions are introduced by adding a new identifier; the negotiation result selects the variant.
+## Terminology
 
-> i[transport.server-identity]
-> The server authenticates using an RFC 7250 raw public key (SPKI).
-> The server's key pair is generated at first startup and persisted to the data directory so that clients can pin the SPKI fingerprint across restarts.
-> Clients verify the server by its SPKI fingerprint; certificate chain validation is not used.
+### Fingerprint
 
-> i[transport.server-identity.published]
-> On startup the server writes its SPKI fingerprint, hex-encoded, to `$data_dir/oi.fingerprint`.
-> This allows a co-located process to pin the server identity without performing a fingerprint probe or reading logs.
+The SHA-256 digest ([FIPS 180-4](https://csrc.nist.gov/pubs/fips/180-4/upd1/final)) of a key's DER-encoded SubjectPublicKeyInfo, written as 64 lowercase hexadecimal digits.
 
-> i[transport.listen]
-> The server may be configured to listen on one or more addresses at startup.
-> All configured addresses share the same server identity (key pair and SPKI fingerprint) and the same authorized key set.
-> When no addresses are explicitly configured, the server listens on a single loopback address on the default port.
-> A configured address that cannot be resolved at startup is a startup failure.
-> The server must not start serving on the subset that did resolve, and must not start with no listeners at all: a management plane that is silently absent is indistinguishable from one that is present but unreachable.
+### Authorised key set
 
-> i[transport.fingerprint-probe]
-> When a client connects to a server whose fingerprint is not yet in its known-hosts store, it must
-> first capture the server's SPKI fingerprint without revealing its real identity to the server.
-> The probe connection must present a raw public key as its mTLS client certificate, but the key
-> used must be a freshly-generated, single-use key that is discarded immediately after the probe.
-> The server will reject the probe connection (the ephemeral key is not authorised), but the
-> server's SPKI fingerprint is captured during the TLS handshake before that rejection occurs.
-> After capturing the fingerprint the client must confirm it with the user before proceeding with
-> an authenticated connection using the real client identity.
-> The probe connection must be structurally indistinguishable from a normal authenticated
-> connection: a network observer or the server itself cannot determine whether a given connection
-> is a probe or a real session.
+The fingerprints of the client keys a server accepts, each with a label.
 
-> i[transport.client-auth]
-> Every client connection must present a raw public key (RFC 7250 SPKI) as its mTLS certificate.
-> The server maintains a set of authorized client SPKI fingerprints in persistent storage.
-> A connection whose client certificate fingerprint is not in the authorized set is rejected at the TLS layer.
->
-> On startup the server reads `$data_dir/authorized_keys` and imports any entries not already in
-> persistent storage. Each non-comment line in that file has the form:
-> ```
-> <sha256-hex-fingerprint> <label>
-> ```
-> This file is the initial bootstrap mechanism: an operator with write access to the data directory
-> can authorize a client key without requiring a prior authenticated connection.
->
-> Authorization holds for the life of a connection, not only at its handshake. When a key leaves the
-> authorized set, the server must close every connection that was authenticated with it, ending the
-> event streams, shell sessions and port forwards carried on them. A revoked client cannot
-> reconnect, so revoking a key cuts off the machine holding it rather than waiting for its session
-> to end on its own.
+## Connection
+
+A client and a server MUST communicate over QUIC version 1, secured with TLS 1.3 as RFC 9001 specifies.
+
+Both ends MUST offer the ALPN identifier `bes.seedling/1`, and MUST abort the handshake if the other end does not offer it.
+A revision of this protocol that an implementation of the current revision cannot interoperate with MUST use a different ALPN identifier.
+
+The server MUST support the QUIC datagram extension ([RFC 9221](https://www.rfc-editor.org/rfc/rfc9221)).
+A client that forwards UDP traffic MUST support it too.
+
+The server SHOULD keep an idle connection open for as long as its client remains reachable, by sending keep-alive packets often enough that the connection does not reach its idle timeout.
+
+> [!NOTE]
+> Event subscriptions and port forwards hold a connection open through long quiet periods.
+> The reference server sends a keep-alive every 10 seconds and uses an idle timeout of 30 seconds.
+
+## Server identity
+
+The server MUST authenticate itself with a raw public key.
+A client MUST verify the server by comparing the fingerprint of the key it presents with a fingerprint the client already trusts, and MUST abort the handshake if they differ.
+A client MUST NOT rely on certificate chain validation to authenticate a server.
+
+A client MUST support Ed25519 keys as [RFC 8410](https://www.rfc-editor.org/rfc/rfc8410) encodes them.
+
+The server MUST generate its key pair the first time it starts, and MUST persist the private key in the file `oi.key` in its data directory.
+On every later start the server MUST use the key in that file, so its fingerprint stays the same across restarts.
+The key file is subject to the [private key file permissions](rule:r/infra.key.file-permissions).
+
+Each time it starts, the server MUST write its fingerprint, followed by a line feed, to the file `oi.fingerprint` in its data directory.
+A failure to write that file MUST NOT stop the server serving.
+
+> [!NOTE]
+> The published fingerprint lets a process on the same host, such as the web console, pin the server without a fingerprint probe.
+
+## Listen addresses
+
+The server MUST listen on every address it is configured with, and on no other.
+Every address MUST present the same server key and accept the same authorised key set.
+
+The daemon's `--listen` option names a socket address to listen on, and MAY be given more than once.
+The `--interface` option names network interfaces, separated by commas; each contributes every IPv4 and IPv6 address the interface holds, at the port the `--port` option gives.
+The default port is 7891.
+With neither `--listen` nor `--interface` given, the server MUST listen on the IPv6 loopback address `::1` alone, at that port.
+
+If a named interface does not exist or holds no address when the daemon starts, the daemon MUST fail to start.
+It MUST NOT serve on the addresses that did resolve, and MUST NOT start with no listener at all.
+
+> [!NOTE]
+> An interface that has not come up yet looks the same as one that resolved to nothing.
+> A daemon that started without its listener would report itself ready while no operator could reach it.
+
+## Client authentication
+
+A client MUST present a raw public key as its client certificate on every connection.
+The server MUST support Ed25519 client keys.
+The server MUST abort the handshake of a client whose key's fingerprint is not in its authorised key set.
+
+> [!NOTE]
+> In QUIC a client can see its own handshake complete before the server has verified the client's key.
+> The server's refusal then arrives as the connection closing.
+
+The server MUST store its authorised key set durably.
+
+Each time it starts, the server MUST read the file `authorized_keys` in its data directory, if the file exists, and add to its authorised key set every entry not already in it.
+An entry already in the set MUST keep the label it has.
+Each line of the file, with surrounding whitespace removed, is blank, a comment beginning with `#`, or an entry.
+An entry is a fingerprint, then optionally a single space and a label running to the end of the line.
+An entry without a label MUST be given the label `bootstrap`.
+
+The server MUST accept a fingerprint an operator supplies in upper or lower case, optionally prefixed `sha256:` or `SHA256:`, and MUST compare it with the fingerprints it computes in its lowercase form.
+The server MUST refuse an operator-supplied fingerprint that is not 64 hexadecimal digits once any prefix is removed, rather than store a value no key can match.
+
+Authorisation MUST hold for the life of a connection, not only at its handshake.
+When a fingerprint leaves the authorised key set, the server MUST close every connection authenticated with that key, with application error code 0 and the reason `key revoked`.
+Closing the connection ends every event subscription, shell session and port forward carried on it.
+
+## Fingerprint probe
+
+A client that does not yet trust any fingerprint for a server MAY learn the server's fingerprint with a probe connection.
+
+A probe connection MUST present a freshly generated key that the client uses for no other connection and discards once the probe ends.
+It MUST offer the same ALPN identifier and the same connection parameters as an authenticated connection, so that it differs from one only in the key it presents.
+The client MUST record the fingerprint of the key the server presents during the probe's handshake, whether or not the server then refuses the connection.
+
+The client MUST ask the operator to confirm the recorded fingerprint before it opens an authenticated connection with it.

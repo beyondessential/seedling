@@ -4,52 +4,53 @@ id: LOG
 
 # Log streaming
 
-## Log Streaming
+Applies to the [Operator Interface](../overview.md#operator-interface) method through which an operator reads the logs of an [app](../overview.md#app)'s workloads or of the host's infrastructure.
 
-<!-- from interface: Log Streaming -->
+## Log stream request
 
-> i[logs.stream]
-> `/logs/stream` opens a log stream for the specified target. The server acknowledges
-> the request on the bidirectional stream and then delivers log entries on a
-> server-initiated unidirectional stream as defined in [stream.logs](rule:i/stream.logs).
+`/logs/stream` is a [subscription request](rule:i/stream.subscribe): the server answers on the request's stream, then delivers log entries on a server-initiated unidirectional stream as [log stream framing](rule:i/stream.logs) specifies.
+On success the result is `{}`.
 
-> i[logs.target]
-> Exactly one of the following target selectors must be present in the request params:
->
-> - `app` (string) — stream logs from workload containers belonging to the named app.
->   May be combined with `resource` (string) to restrict to a single resource name,
->   and further with `instance` (string) to restrict to a single instance display-name
->   suffix.
-> - `infra` (string) — stream logs from an infrastructure component. Accepted values
->   are `"proxy"` and `"resolver"`.
->
-> Providing both `app` and `infra`, or neither, is an error (`requirements_invalid`).
-> Providing `resource` or `instance` without `app` is an error.
-> Providing `instance` without `resource` is an error.
+| member | type | required | meaning |
+| --- | --- | --- | --- |
+| `app` | string | one of `app` or `infra` | selects the logs of that app's workload containers |
+| `resource` | string | no | with `app`, restricts the logs to the resource of that name |
+| `instance` | string | no | with `app` and `resource`, restricts the logs to the instance with that display name |
+| `infra` | string | one of `app` or `infra` | selects the logs of an infrastructure component, `"proxy"` or `"resolver"` |
+| `follow` | boolean | no, default `false` | keeps the stream open for new entries once the history is delivered |
+| `tail` | integer | no, default `100` | the number of most recent entries to deliver before any new ones |
 
-> i[logs.follow]
-> The boolean param `follow` (default `false`) controls whether the stream remains
-> open after historical entries are exhausted. When `true`, new log entries are pushed
-> as they are written.
+The server MUST reject with `requirements_invalid` a request that carries both `app` and `infra`, or neither.
+The server MUST reject with `requirements_invalid` a request that carries `resource` or `instance` without `app`, or `instance` without `resource`.
+The server MUST reject an `infra` other than `"proxy"` or `"resolver"` with `requirements_invalid`.
+The server MUST reject a request naming an app that is not registered with `not_found`.
 
-> i[logs.tail]
-> The integer param `tail` (default `100`) controls how many historical log entries
-> are delivered before switching to live entries (or closing the stream when follow
-> is `false`). A value of `0` skips history entirely.
+## Entry selection
 
-> i[logs.entry]
-> Each log entry is a JSON object with at least the following fields:
->
-> | Field | Type | Description |
-> |---|---|---|
-> | `timestamp` | string (RFC 3339, microsecond precision) | When the entry was recorded |
-> | `message` | string | The log line content |
-> | `unit` | string | The process supervision unit that produced the entry |
-> | `stream` | string | `"stdout"` or `"stderr"` |
->
-> For workload container logs the entry additionally includes `app` (string),
-> `resource_kind` (string), `resource` (string), and `instance` (string).
-> For infrastructure logs the entry includes `infra` (string).
+The server MUST first deliver the last `tail` entries that match the request, oldest first, or every matching entry where fewer exist.
+A `tail` of `0` MUST deliver no history.
+When `follow` is `false`, the server MUST finish the stream once the history is delivered.
+When `follow` is `true`, the server MUST then deliver each new matching entry as it is written, until the client closes the connection.
 
-> i[logs.not-found]
-> If the `app` named in the request is not registered, the server returns `not_found`.
+The server MUST match `resource` and `instance` exactly against the entry's `resource` and `instance`.
+An app's log stream MUST include the app's [breadcrumbs](../runtime/actuation.md#breadcrumb) interleaved in time order with its container output.
+
+## Log entries
+
+Each log entry is a JSON object.
+
+| member | type | present | meaning |
+| --- | --- | --- | --- |
+| `timestamp` | string | always | when the entry was recorded, as an [RFC 3339](https://www.rfc-editor.org/rfc/rfc3339) timestamp to the microsecond |
+| `message` | string | always | the log line |
+| `unit` | string | always | the process supervision unit that produced the entry |
+| `stream` | string | always | `"stderr"` for an entry logged at error priority or higher, otherwise `"stdout"` |
+| `app` | string | app entries | the app's name |
+| `resource_kind` | string | app entries naming a resource | the resource's kind, in lower case |
+| `resource` | string | app entries naming a resource | the resource's name |
+| `instance` | string | app entries naming an instance | the instance's display name |
+| `infra` | string | infrastructure entries | `"proxy"` or `"resolver"` |
+| `rt_call` | string | breadcrumbs | the `rt.*` method the breadcrumb records, or `unit_create` or `replay` |
+| `script_pos` | string | breadcrumbs, where known | the script position of the call |
+
+A client MUST ignore members it does not recognise.
