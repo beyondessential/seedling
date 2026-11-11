@@ -130,3 +130,74 @@ Spec leads code:
 Moves: ACTU ingress serving sections (actuate.ingress.plaintext/port-scope/warm-certs) belong in PRX; TLS/TCAN/CNR/FLTS/CTR/APPS/PRM fault restatements should link FLT rows.
 Standards: RFC 9000, 9110 (ACTU); RFC 1035, 3596, 6146, 6052, 9110 (SITE); RFC 9562 (IDN).
 Glossary: Data directory (ACTU); Site volume, Site ingress (SITE).
+
+### Interface C (TPL TLSM RLY CLI)
+Open:
+- TPL: /templates/update with origin but no definition silently drops origin: refuse with requirements_invalid (rec.), or ignore.
+- TPL/APPS: template instantiation whose script fails: code registers + files script_error; app.register says refuse and don't register.
+- TLSM: issue-acme-dns precondition failures reported as internal: keep, or requirements_invalid.
+- TLSM: dns-providers/upsert doesn't validate config against provider kind.
+- TLSM: attempts/list limit uncapped, negative = unbounded: cap (200?), or refuse non-positive.
+- TLSM: manual upload always reports key_type ecdsa_p256: restrict uploads to P-256, or detect.
+- TLSM: dead `tailscale` policy strategy rendered but forbidden by schema: remove, or allow.
+- TLSM: hostname view status precedence when several conditions hold: specify, or meanings only.
+- RLY: canopy_unavailable listed in WIRE but never returned: drop, or use.
+- RLY: offer chosen before waiting for a slot (may go to an ended offer): re-select, or accept.
+- RLY: /canopy/offer outside a relay-capable connection refused as unknown method (not_found): dedicated code?
+- CLI: templates update --source vs positional source elsewhere: align, or keep.
+Spec leads code:
+- TLSM: database failures map to not_found (spec: internal).
+Moves: EVT lacks Template* events (kept in TPL); hostname pattern / primary SAN belong in TLS runtime; ACME directory (LE production) belongs in r/tls.strategy.acme-dns; hostname syntax could move to OI/WIRE; "failed read is internal, never not_found" belongs in WIRE error codes; ACME account keys never returned is not stated in TLSM.
+Standards: RFC 3339 (TPL); RFC 8555, 9773, 2986, 5280, 7468, 5958 (TLSM); RFC 9110, 9112, 9000, 3339 (RLY).
+Glossary: Canopy (defined in RLY for now).
+
+### Web (WEB UI)
+Open:
+- WEB: interface name matching no interface: skip with warning (current spec), or fatal.
+- WEB: /connected-clients/list when shells/forwards can't be read: fail with daemon_unavailable, or null member.
+- WEB: auth_required "password" even when password login disabled: keep, add a none value, or unspecified.
+- WEB: heartbeat returning alive:false after reap: console reconnects, or server re-records.
+- UI: dangerous tier for destructive controls: MUST with fault-clearing exception named, or SHOULD.
+Spec leads code:
+- WEB: HTTP resolving to no address must stop startup (code runs without listener).
+- WEB: session path must be exactly /wt (code: prefix match).
+- WEB: --wt-port with --wt-listen uses 7893.
+- WEB: debug builds trust any daemon without a fingerprint (spec: must not start).
+- WEB: connected-clients returns [] on failed shells/forwards read.
+Moves: daemon_unavailable/protocol_error could join WIRE error codes; WebSession* events to EVT.
+Standards: WebTransport (W3C CR), draft-ietf-webtrans-http3, Secure Contexts, RFC 9110, 9111, 8246, CSP3, RFC 7034, Fetch, HTML, Permissions Policy, RFC 2047, 9106, PHC string format, FIPS 180-4, 186-5, RFC 8259, 3339, TOML 1.0.0, Tailscale Serve headers.
+Glossary: Web interface (WEB), Actor (i/wire.actor), Console, Safety mode (UI).
+
+### Runtime A (LIM GEN TRD RCK LCY HIST AUD GC RUN)
+Open:
+- LIM: --script-max-call-depth 0: help says unlimited, engine treats as no calls: fix help, or make 0 unlimited.
+- TRD: /apps/uninstall has no interface spec; app install phases (NotInstalled/Installing/Installed/Uninstalling) have no home spec; SCHED links nonexistent r/lifecycle.app.
+- RCK: persistently failing re-checks only log: add a fault after N, or accept.
+- LCY: sole backend in start period receives traffic (code) vs not (old spec).
+- LCY: ingress Ready requires a valid certificate (old spec) or just proxy config applied (code; spec follows code).
+- HIST: "provenance" clashes with definition provenance: rename "operation provenance", or keep.
+- HIST: external volumes get observations never made: carve out declaration-only resources, or stop deriving their state from observations.
+- AUD: failure to open the log at startup disables auditing for the run: retry+fault, or fatal.
+- GC: third retirement case (terminal observation present) may be obsolete and may retire a live later cycle: drop, or keep.
+Spec leads code:
+- GEN: failed decrypt during reconstruction treated as unset (spec: fail).
+- TRD: deregistration that cannot discard state only warns (can leak external volume mappings to the next same-named app).
+- LCY: service never leaves Ready when its pool empties; unreadable observation history derives Pending and emits a false state-change event.
+- HIST: provenance observation ids always empty; should_back_off never called; autonomous operation runs when its log entry write fails.
+- AUD: parent dir permissions reset to 0750 on every open.
+- GC: unreadable history makes an instance eligible for retirement.
+Moves: history.persist.partial-update belongs in INFRA database section (kept in HIST#durability); audit.log.generations field semantics better in EVT; EVT missing template, site/held volume, external mapping, priority, restart, stop/unstop events; FLT should list audit_lag, uninstall_unidentifiable_units; RT rt.lifecyle should link LCY.
+Standards: JSON Lines, RFC 8259 (AUD).
+Glossary: World observation history, Autonomous operations log, Action execution log, Provenance (HIST); Generation history (GEN); Resource instance (IDN).
+
+### Runtime TLS (TLS CHAIN TCAN CNR)
+Open:
+- TLS: Canopy report fault under `seedling`, cert_issue_failed under `_system`, neither reserved: reserve both, or a non-app fault scope. (Joins FLT/IDN items.)
+- TLS: tailscale policy: specify in TLS, or leave in SITE.
+- CNR: report status `uninstalling` vs OI `Deregistering`: keep (on the wire), or rename.
+Spec leads code:
+- TLS: ARI renewal info fetched only at issuance (RFC 9773 §4.3 requires re-fetch).
+- TLS: `replaces` names the active certificate of any origin, including non-ACME (RFC 9773 §5); treat as bug.
+Moves: TLSM stale claims (manual strategy, directory_url, manual issuance clears retry block, set_by auto) — check TLSM rewrite agrees; APP app.canopy-type link should point at CNR.
+Standards: RFC 8555, 9773, draft-ietf-acme-profiles, RFC 9525, 5280, 2986, 7468, 6066 (TLS); RFC 9457, 4648 (TCAN).
+Glossary: Managed hostname, Strategy, Policy, Runtime-managed certificate (TLS); Canopy (TCAN/RLY); Report tick (CNR).

@@ -1,0 +1,14 @@
+i/forward.request	FWD#requesting-a-forward
+i/forward.relay.resilience	FWD#relay-resilience
+i/forward.mtu	FWD#udp-tunnelling
+i/forward.tunnel.tcp	FWD#tcp-tunnelling
+i/forward.tunnel.udp	FWD#udp-tunnelling
+i/forward.key-exhaustion	FWD#forward-keys
+i/forward.status	FWD#status-messages
+i/forward.lifetime	FWD#forward-lifetime
+i/forward.script-update	FWD#forward-lifetime
+i/forward.start	FWD#forward-events
+i/forward.record	FWD#listing-forwards
+i/forward.list	FWD#listing-forwards
+i/forward.stop	FWD#stopping-a-forward
+i/forward.concurrent	FWD#concurrency

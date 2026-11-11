@@ -33,25 +33,24 @@ When a container instance in the desired state reaches the `Terminated` lifecycl
 The runtime MUST keep a durable record of every restart of a container instance.
 Each record MUST identify the instance, the app's generation when the record was made, the time of the restart, the exit status of the run that ended where the platform reports one, and whether the restart was a recovery restart or a deliberate restart.
 
-The cause MUST record why the restart happened, and not which component performed it.
+The runtime MUST record as the cause why the restart happened, and not which component performed it.
 
 > [!NOTE]
 > On a platform with a service supervisor the supervisor performs recovery restarts and the runtime deliberate ones, while on a platform without one the runtime performs both.
 > A record of the actor would mean different things on different platforms.
 
-The runtime MUST record a restart even when the instance restarted and returned to running between two observations.
-The number of restarts recorded MUST NOT depend on how often the runtime observes.
+The runtime MUST record a restart even when the instance restarted and returned to running between two observations, so that the number recorded does not depend on how often the runtime observes.
 
 ### Crash-loop detection
 
 When the number of recovery restarts recorded for an instance within the restart window reaches the restart threshold, the runtime MUST file a [`crash_loop` fault](rule:r/fault.crash-loop) against the instance.
-Deliberate restarts MUST NOT count towards the threshold.
+The runtime MUST NOT count deliberate restarts towards the threshold.
 
 > [!NOTE]
 > Counting deliberate restarts would make every rolling update read as a burst of crashes.
 > The rate catches a container that crashes a few times a day indefinitely without ever exhausting a supervisor's start limit.
 
-An operator MUST be able to read and set the threshold and the window through the [restart settings](rule:i/restart.settings), and a change MUST take effect without restarting the runtime.
+The runtime MUST let an operator read and set the threshold and the window through the [restart settings](rule:i/restart.settings), and MUST apply a change without restarting.
 
 | setting | default |
 | --- | --- |
@@ -65,7 +64,7 @@ The runtime SHOULD configure the supervisor to wait 5 seconds between attempts, 
 
 While the supervisor is bringing an instance up, whether for its first start or in the pause before an automatic restart, the runtime MUST NOT tear the instance down or start it again.
 The runtime MUST distinguish a unit the supervisor reports as starting from one it reports as started, and MUST treat only a started unit with no running container as broken.
-A unit the supervisor is bringing up MUST NOT give rise to a unit-failure fault.
+The runtime MUST NOT file a unit-failure fault for a unit the supervisor is bringing up.
 The runtime MUST NOT hold back from replacing a unit whose specification no longer matches the app's definition.
 
 > [!NOTE]
@@ -109,8 +108,8 @@ If the runtime cannot read the record of operator-chosen scale, it MUST NOT subs
 It MUST NOT actuate in that iteration any app whose effective scale it could not read, so that the instances already running keep running.
 It MUST hold a fault of kind `scaling_decisions_unreadable` for as long as the record cannot be read, and MUST clear it on the next iteration that reads it.
 
-An `rt.*` call that resolves a named Deployment whose effective scale cannot be read MUST throw.
-An operator who asks for a Deployment's scale while it cannot be read MUST be told the figure is unavailable.
+The runtime MUST throw from an `rt.*` call that resolves a named Deployment whose effective scale it cannot read.
+The runtime MUST report a Deployment's scale as unavailable to an operator who asks for it while it cannot be read.
 
 > [!NOTE]
 > The lower bound is the smallest answer the question could have.
@@ -134,9 +133,9 @@ The runtime MUST NOT start a replacement for an instance of a Deployment that de
 
 ### Replacement guard
 
-A fresh instance brought up by a [rolling update](rule:r/update.rolling) or by a health-check replacement MUST become healthy within its grace window of `start_period + retries × interval`, from its declared healthcheck.
+The runtime MUST require a fresh instance brought up by a [rolling update](rule:r/update.rolling) or by a health-check replacement to become healthy within its grace window of `start_period + retries × interval`, from its declared healthcheck.
 If it does not, the runtime MUST stop it, file a [`health_check_replace_failed` fault](rule:r/fault.healthcheck-replace-failed), and start no further fresh instances of the Deployment, by rolling update or by replacement, until the app's generation changes or an operator clears the fault.
-The instance it was to replace MUST keep running in degraded mode.
+The runtime MUST keep the instance it was to replace running in degraded mode.
 
 The runtime MUST apply the guard to every Deployment that declares a healthcheck, whatever its `on_failure` policy.
 

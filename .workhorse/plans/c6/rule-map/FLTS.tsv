@@ -1,0 +1,7 @@
+i/fault.record	FLTS#fault-records
+i/fault.list	FLTS#listing-faults
+i/fault.derived	FLTS#listing-faults
+i/fault.clear-app	FLTS#clearing-faults
+i/restart.record	FLTS#restart-records
+i/restart.list	FLTS#listing-restarts
+i/restart.settings	FLTS#crash-loop-settings

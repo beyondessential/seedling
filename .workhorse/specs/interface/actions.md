@@ -6,7 +6,7 @@ id: ACI
 
 Applies to the [Operator Interface](../overview.md#operator-interface) methods that invoke an [app](../overview.md#app)'s install and actions, and that cancel a [lifecycle operation](../overview.md#lifecycle-operation).
 
-## Action invocation
+## Invoking an action
 
 `/apps/action/invoke` schedules one of an app's actions as a lifecycle operation.
 
@@ -60,7 +60,7 @@ If the app declares no install action, `params` MUST be absent or empty, and the
 The server MUST then move the app to `Installed` at once and answer `{ "schedule": "accepted" }`, with no `operation_id`.
 
 If the app declares an install action, the server MUST validate `params` as [install parameters](#install-parameters) specifies and schedule the install as a lifecycle operation named `install` with the trigger `"operator"`.
-Scheduling, its rejections and its result are as for [action invocation](#action-invocation).
+Scheduling, its rejections and its result are as for [action invocation](#invoking-an-action).
 
 The app MUST be `Installing` from the time its install operation starts, whether the operation was accepted at once or started later from the queue.
 A queued install MUST leave the app `NotInstalled` until the install starts.

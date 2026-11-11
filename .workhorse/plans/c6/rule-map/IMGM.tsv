@@ -1,0 +1,9 @@
+i/registry.list	IMGM#registry-allowlist
+i/registry.add	IMGM#registry-allowlist
+i/registry.remove	IMGM#registry-allowlist
+i/image.list	IMGM#listing-images
+i/image.pull	IMGM#pulling-an-image
+i/image.remove	IMGM#removing-an-image
+i/image.pin.list	IMGM#image-pins
+i/image.pin.clear	IMGM#image-pins
+i/image.discover	IMGM#image-discovery
