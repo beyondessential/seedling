@@ -80,13 +80,13 @@ The runtime MUST file and clear the faults below against the app the instance be
 | `stop_failed` | the instance | stopping the instance fails | a later stop of the instance succeeds, or the instance is observed running | event |
 | `observe_failed` | the instance | observing the instance fails on 3 consecutive iterations of the reconciliation loop | an observation of the instance succeeds | condition |
 | `instance_identity_unreadable` | the instance | the runtime cannot read the instance's recorded [identity](identity.md) when starting it | the instance starts | event |
-| `external_volume_not_mapped` | the instance | the instance mounts an external volume that has no mapping | the instance starts | condition |
+| `external_volume_not_mapped` | the instance | the instance mounts an external volume that has no mapping, or whose mapping's target does not exist | the instance starts | condition |
 | `crash_loop` | the instance | the instance's restart rate reaches the [configured threshold](autonomous.md#crash-loop-detection), or its supervisor has [given up restarting it](autonomous.md#restart-pacing) | the instance has stayed running, with no recovery restart, for the [restart window](autonomous.md#crash-loop-detection), or an operator clears it | latched |
 | `health_check_failed` | the instance | the instance has a [healthcheck](../language/deployment.md#health-checks) and has been unhealthy without a break for longer than `start_period` plus `retries` × `interval` | the instance is observed healthy, or is unscheduled | condition |
 | `health_check_replace_failed` | the Deployment | the [replacement guard](autonomous.md#replacement-guard) trips for the Deployment | the app's [generation](../overview.md#generation) changes, or an operator clears it | latched |
 
 An `image_pull_failed` fault MUST name the image reference.
-An `external_volume_not_mapped` fault MUST name the external volume, and the runtime MUST NOT start the instance while the mapping is missing.
+An `external_volume_not_mapped` fault MUST name the external volume, and the runtime MUST NOT start the instance while the external volume is unmapped or its mapping's target does not exist.
 
 A `crash_loop` fault MUST state which of its two triggers filed it.
 
@@ -145,7 +145,7 @@ The runtime MUST file and clear the faults below against the app owning the ingr
 | --- | --- | --- | --- | --- |
 | `ingress_conflict` | the app ingress or the site ingress | an app ingress and a site ingress attachment claim the same hostname and port, or a site ingress attachment is left out because another site ingress's attachment claims them, as [SITE](site-resources.md#ingress-conflicts) specifies, or an app ingress is left out because another app's ingress [claims](../language/ingress.md#claims-across-apps) them | the hostname and port are no longer in conflict | condition |
 | `proxy_apply_failed` | the app ingress or the site ingress | applying a proxy configuration that includes the ingress fails | a later proxy configuration is applied | condition |
-| `site_ingress_target_missing` | the site ingress attachment | a site ingress attachment forwards to an app service that does not exist | the attachment's target exists, or the attachment is removed | condition |
+| `site_ingress_target_missing` | the site ingress attachment | a site ingress attachment forwards to an app service that does not exist, or that no pod of its app binds | the attachment's target exists, or the attachment is removed | condition |
 | `service_degraded` | the service | the service's routing pool has [fallen back](lifecycle.md#routing-pool) to backends that are running but unhealthy | a backend in the pool is healthy, or the service is unscheduled | condition |
 | `site_service_endpoint_unresolvable` | the site service | an endpoint of the site service is [unresolvable](site-resources.md#endpoint-addressing) | no endpoint of the site service is unresolvable | condition |
 | `site_service_endpoint_unroutable` | the site service | an endpoint of the site service is [unroutable](site-resources.md#endpoint-addressing) | no endpoint of the site service is unroutable | condition |

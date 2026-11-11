@@ -82,6 +82,7 @@ The key words MUST, MUST NOT, REQUIRED, SHALL, SHALL NOT, SHOULD, SHOULD NOT, RE
 | [RFC 6146](https://www.rfc-editor.org/rfc/rfc6146) | stateful NAT64, under [NAT64](runtime/nat64.md), [CONST](language/constants.md), [SITE](runtime/site-resources.md) |
 | [RFC 6147](https://www.rfc-editor.org/rfc/rfc6147) | DNS64, under [NAT64](runtime/nat64.md), [CONST](language/constants.md) |
 | [RFC 6052](https://www.rfc-editor.org/rfc/rfc6052) | IPv4-embedded IPv6 addresses, under [NAT64](runtime/nat64.md), [SITE](runtime/site-resources.md) |
+| [RFC 6761](https://www.rfc-editor.org/rfc/rfc6761) | special-use domain names, under [SVCM](interface/services.md) |
 | [RFC 7050](https://www.rfc-editor.org/rfc/rfc7050) | NAT64 prefix discovery, under [NAT64](runtime/nat64.md) |
 | [RFC 6891](https://www.rfc-editor.org/rfc/rfc6891) | EDNS(0) payload sizes, under [FWD](interface/port-forwards.md) |
 | [RFC 5424](https://www.rfc-editor.org/rfc/rfc5424) | syslog severity levels, under [LOG](interface/logs.md) |

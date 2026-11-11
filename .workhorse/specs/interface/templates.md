@@ -24,6 +24,10 @@ It MUST NOT record a [generation](../overview.md#generation), parameter values o
 An app instantiated from a template MUST hold its own copy of the template's bundle.
 Updating or removing a template MUST NOT change any app instantiated from it.
 
+## Overlapping refusals
+
+Where several of the refusals in this specification apply to one request, the runtime MAY answer with any of them.
+
 ## Template names
 
 A template name MUST follow the rules for app names in [names](../language/overview.md#names).

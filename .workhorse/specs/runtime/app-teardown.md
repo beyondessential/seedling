@@ -27,6 +27,7 @@ The runtime MAY use a name prefix to enumerate candidates, and MUST then match e
 > Names are not prefix-free: one app's name may be a prefix of another's.
 
 If the runtime cannot read an app's recorded identities, it MUST NOT advance the app's teardown until it can.
+While it cannot read them, the runtime MUST hold an [`instance_identity_unreadable`](faults.md#workload-faults) fault.
 
 The runtime MUST NOT take an app's lack of recorded identities, on its own, as evidence that its teardown has finished.
 Where the runtime has no recorded identities for an app, it MUST enumerate the resources on the host that may belong to the app, and MUST rule out each one that exactly matches a recorded identity of another app.
@@ -39,7 +40,7 @@ An uninstall MUST bring every resource instance recorded for the app to [`Unsche
 The runtime MUST identify each instance it tears down by its recorded identity, as [uninstall scope](#uninstall-scope) specifies.
 
 Teardown completes when every resource instance recorded for the app is `Unscheduled`.
-When teardown completes, the runtime MUST move the app to `NotInstalled`, emit an `AppPhaseChanged` [event](../interface/events.md#event-types), and forget the app's recorded instances.
+When teardown completes, the runtime MUST move the app to `NotInstalled`, emit an `AppPhaseChanged` [event](../interface/events.md#app-events), and forget the app's recorded instances.
 
 ## Uninstall admission
 
@@ -53,12 +54,13 @@ If the runtime cannot determine whether an operation holds the app, it MUST reje
 > An action closure runs while its app is in the installed phase, so the phase does not distinguish an idle app from one running an action.
 
 The check and the app's departure from the installed phase MUST be indivisible with respect to admitting a lifecycle operation, so that no operation is admitted between them.
-Once an app has left the installed phase to be torn down, the runtime MUST NOT admit a lifecycle operation for it, whether an operator action, a parameter change's handler, a scheduled firing or an install requested it.
+Once an app has left the installed phase to be torn down, the runtime MUST NOT admit a lifecycle operation for it, whatever requested it.
 
 > [!NOTE]
 > A rule that each requester of an operation applies for itself holds only for the requesters that know it.
 > Admission is one decision, made where operations are admitted.
 
 > [!NOTE]
-> An operator who wants the uninstall to proceed [cancels](operations.md#cancellation) the operation and retries.
+> An operator who wants the uninstall to proceed [cancels](operations.md#cancellation) the running operation and retries.
+> A queued operation cannot be cancelled, so the operator waits for it to start, then cancels it.
 > Cancelling on the operator's behalf would need a bound on how long the uninstall waits for the closure to unwind, and an uninstall that stops waiting leaves the app half torn down.

@@ -222,7 +222,7 @@ A `container` object has these members.
 | `stop_signal` | string or null | the stop signal |
 | `stop_timeout_secs` | integer or null | the stop timeout |
 
-`on_exit` MUST be `"default"` when the definition sets no exit strategy for the container.
+`on_exit` MUST be `"default"` when the definition sets no [exit strategy](../language/container.md#exit-strategy) for the container.
 
 A `pod` object has the members `service_mounts`, each `"<service>:<port>"`; `http_bindings`, each `"<pod port> -> <service> <prefix>"`; and `tcp_bindings` and `udp_bindings`, each `"<pod port> -> <service>:<port>"`.
 Each is an array of strings in ascending order.
@@ -394,4 +394,4 @@ The server MUST refuse the request with `not_found` if the app is not registered
 | `outcome` | string or null | `pending`, `succeeded`, `cancelled` or `failed` for a triggered operation, `null` where none was triggered |
 | `error` | string | present when `outcome` is `failed` and a cause was recorded: a short description of it |
 
-The server MUST withhold both values of an entry whose parameter is secret under the current definition, or either of whose values was protected when the change was recorded.
+The server MUST withhold both values of an entry whose parameter is secret under the current definition, or either of whose values was [protected](../runtime/secrets.md#storage) when the change was recorded.

@@ -36,6 +36,7 @@ The runtime MUST NOT hold more than one queued operation for an app, and MUST re
 The runtime MUST start queued operations in the order they were requested, each once the operation in progress ends.
 
 The runtime MUST persist a queued request durably, with its app, action, trigger, source and target generations, and parameters, before it accepts the request.
+The runtime MUST protect a queued request's persisted parameters as it protects a persisted operation's, as [persistence](#persistence) specifies.
 If the runtime cannot persist the request, it MUST reject it.
 When the runtime starts, it MUST restore its queue from the persisted requests, in the order they were requested, after deciding whether to replay an interrupted operation.
 The runtime MUST discard a restored request whose app is no longer registered.
@@ -155,6 +156,9 @@ The runtime hands a volume to an action closure, such as the site volume an oper
 For each volume it hands over, the runtime MUST generate a name from the [reserved](identity.md#reserved-names) prefix `seedling-op-`, bind it to the host path and access mode for the duration of the operation, and pass the name to the closure as the parameter `<key>_volume`, where `<key>` is the binding's logical key.
 The runtime MUST generate a fresh name for each binding, and MUST NOT generate a name that another operation-scoped volume binding uses.
 The runtime MUST remove the binding when the operation ends.
+
+The `<key>_volume` parameter holding a binding's name MUST be among the operation's [persisted parameters](#persistence).
+On replay, the runtime MUST re-establish each binding under the name its persisted parameters hold.
 A script resolves the volume with `app.external_volume(param["<key>_volume"])`.
 
 The runtime MUST NOT let a script choose the generated name, and the name MUST NOT appear among the parameters the operation was requested with.
