@@ -13,3 +13,21 @@ For the user: host prefix derivation (originals conflict); restart record retent
 Restored: TLS serving lookup cost and content-free miss as MUST; hostname state shows the responsible strategy; CHAIN HTTP-01 withheld only while Canopy is responsible. Fixed by me: renewal of other-origin certificates excludes Tailscale hostnames (conflicted with the settled Tailscale section).
 
 For the user: contact-email gate; staged certificate counts as current; retry block refuses operator issuance; one ACME order at a time; pinned values (1 h after-failure, proxy hold-back, 500-char reasons, P-256 SHOULD); Canopy asks only on successful ticks plus pacing; proxy orders when undecidable; Canopy-only untyped fault; rejected CSR fault.
+
+### Fidelity: web and root
+
+Restored: plain HTTP endpoint; connect token/password client rules; Tailscale Serve trust as a note; safety mode in every heartbeat, MUST on change, pagehide heartbeat; UI surfaces enumerated as MUSTs; fault count, healthcheck and priority indicators; volume shell labels and read-write modes; shell sidebar; other-session flag placement and colour; route paths; certificates page contents and key-material ban; glossary: app registered, action closure covers change handlers, volume not necessarily persistent.
+
+For the user: oversized/non-object relay requests vs WIRE requirements_invalid; error surfacing widened (keep); CSP without Host vs wt_url localhost; actors display reading; TLSM ACME account keys (move); HSTS note.
+
+### Fidelity: interface B
+
+Restored: TRN fingerprint probe MUST; SHL root over read-only mounts; RLY stream reset on limits; IMGM pins cleared regardless of removal outcome; CLI VCS metadata dirs "such as"; CLI log display MUST; LOG resource_kind links WIRE type names.
+
+For the user: deregistering code dropped; log instance exact match; log stream member; key label default; EventsDropped.skipped optional; list results wrapped; image record shape; port-forward install gate; install gate widened to Uninstalling (SHL, ACI); volume shell ShellStarted name; shell stderr (fix WIRE description); stdout-write session end; UDP failure coalescing; 16 MiB request bodies; uninstall discards stops; registry remove not_found; log source name; nested .seedignore; fingerprint write failure; keep-alive; nullable previous_generation.
+
+### Fidelity: runtime B
+
+Restored: OPS operation volumes get fresh unique names; FLT faults not passed to scripts; health_check_failed clears on unschedule; cert_acquisition_failed identifies hostname and error; CNR re-resolves identity only on failures suggesting it is wrong; AUTO clamps on any re-evaluation; SUSP cadence MAY with example; GEN bundle sharing MUST; RCN no unbounded blocking; OBS fact at most once per run (check against decided "record again on change"); RCK infrequent and spread as MUST, 6 h as example.
+
+For the user: cancel at barrier or rt call; NotInstalled with recorded instances moved to Uninstalling; image_pull_failed threshold and subject; cert_acquisition_failed 180 s; faulted resources excluded from reconciliation (drop); code-derived fault kinds; rt.exec output MUST (RT); crash-loop defaults; clamping deletes scale; sub-action history; bundle on every history entry; re-check back-off values; first schedule fire; audit file mode; engine limit details; new lifecycle cycle; CNR additions.

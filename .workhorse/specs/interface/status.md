@@ -28,7 +28,8 @@ The server MUST answer it without consulting the container engine or any app's s
 | `active_shells` | integer | the number of open shell sessions |
 | `active_forwards` | integer | the number of active port forwards |
 
-The server MUST answer `/server/status` without consulting the container engine, and MUST NOT fail it except when the transport does.
+The server MUST NOT perform any expensive computation to answer `/server/status`, such as consulting the container engine.
+The server MUST NOT fail `/server/status` except when the transport does.
 A member the server cannot determine MUST be `null`, and MUST NOT be reported as zero or as an empty object.
 
 ## Infrastructure status
