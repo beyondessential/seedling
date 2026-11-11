@@ -453,7 +453,7 @@ pub struct ProxyConfig {
     /// adding routes (`rt.warm_certs`). Translated to
     /// `tls.certificates.automate` plus matching policy subjects so that Caddy
     /// acquires the certs eagerly, not lazily on first request.
-    // spec: ACTU#certificate-warming
+    // spec: RT#certificate-warming
     pub warm_cert_hostnames: std::collections::BTreeSet<String>,
     /// URL of the daemon's `get_certificate` endpoint. When set,
     /// emitted into the Caddy config as a `tls.certificates.get_certificate`
@@ -513,7 +513,7 @@ pub struct VirtualHost {
     /// The listener port the ingress behind this vhost was declared on. Two
     /// vhosts of one hostname on different ports are independent: a request is
     /// routed by the port it arrived on as well as the name it asked for.
-    // spec: ACTU#port-scope
+    // spec: PRX#port-scope
     pub port: u16,
     pub tls_acme: bool,
     /// If present, add an HTTP→HTTPS redirect server block.

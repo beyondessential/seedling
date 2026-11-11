@@ -982,7 +982,7 @@ fn stopped_deployment_scales_to_zero_unscheduling_existing_instances() {
 // from_log — non-lifecycle call kinds
 // -----------------------------------------------------------------------
 
-// spec: ACTU#certificate-warming
+// spec: RT#certificate-warming
 #[test]
 fn from_log_warm_certs_records_hostnames_without_touching_desired_state() {
     let ingress = ResourceInstance::new_singleton(

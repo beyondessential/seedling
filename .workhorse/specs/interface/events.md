@@ -107,7 +107,7 @@ In `ResourceStateChanged`, `resource_type` is the resource's [type name](wire.md
 | `CanopyOffered` | `offer_id`, `agent` (string), `endpoint` (string) | as [Canopy offers](canopy-relay.md#offers) specifies |
 | `CanopyWithdrawn` | `offer_id`, `reason` (string) | as [Canopy offer lifetime](canopy-relay.md#offer-lifetime) specifies |
 
-`reason` in `CanopyWithdrawn` is `"requested"`, `"disconnected"` or `"disabled"`.
+`reason` in `CanopyWithdrawn` is one of the reasons [offer lifetime](canopy-relay.md#offer-lifetime) defines.
 
 ### Site resource events
 

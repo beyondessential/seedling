@@ -18,7 +18,7 @@ use crate::system::types::{
 ///
 /// Reported rather than quietly resolved: dropping one side would silently
 /// serve an ingress on a protocol its author did not ask for.
-// spec: ACTU#plaintext-ingresses
+// spec: PRX#plaintext-ingresses
 pub(crate) fn conflicting_listener_ports(config: &ProxyConfig) -> Vec<u16> {
     let mut plaintext: BTreeSet<u16> = BTreeSet::new();
     let mut tls: BTreeSet<u16> = BTreeSet::new();
@@ -68,7 +68,7 @@ pub(crate) fn build_caddy_config(config: &ProxyConfig) -> Value {
     // silently — a request would still be answered, one connection at a time.
     let mut servers = serde_json::Map::new();
 
-    // spec: ACTU#port-scope
+    // spec: PRX#port-scope
     // One server per listener port. A server's routes match on host (and
     // path), never on the port the request arrived on, so a server spanning
     // several ports would answer every vhost on every one of them, and two
@@ -101,13 +101,13 @@ pub(crate) fn build_caddy_config(config: &ProxyConfig) -> Value {
     for &port in http_ports.iter().collect::<BTreeSet<_>>() {
         let mut routes: Vec<Value> = Vec::new();
 
-        // spec: ACTU#plaintext-ingresses
+        // spec: PRX#plaintext-ingresses
         // A vhost that terminates no TLS is served here, as plaintext, and is
         // absent from the TLS automation subjects below so no certificate is
         // requested for its hostname.
         for vh in &config.virtual_hosts {
             if let Some(redirect) = &vh.redirect {
-                // spec: ACTU#port-scope
+                // spec: PRX#port-scope
                 // Answers on the port the redirect names, which is not the
                 // port of the ingress that declared it.
                 if redirect.from_port == port {
@@ -119,7 +119,7 @@ pub(crate) fn build_caddy_config(config: &ProxyConfig) -> Value {
         }
 
         if !routes.is_empty() {
-            // spec: ACTU#plaintext-ingresses
+            // spec: PRX#plaintext-ingresses
             // The proxy turns TLS on for any server listening off its HTTP
             // port that matches hostnames, so left to itself it would answer
             // a plaintext ingress on `:8080`, or a redirect declared there,
@@ -162,7 +162,7 @@ pub(crate) fn build_caddy_config(config: &ProxyConfig) -> Value {
     let mut apps = json!({ "http": { "servers": servers } });
 
     if !all_subjects.is_empty() {
-        // spec: ACTU#certificate-warming
+        // spec: RT#certificate-warming
         // spec: CHAIN#default-chain
         // spec: TLS#serving
         // spec: ING#certificates

@@ -59,7 +59,7 @@ pub struct OperationProgress {
     /// routing traffic to them. Read by the proxy reconciler to emit
     /// `tls.certificates.automate` entries; not part of the standard desired
     /// state. Stored by ingress resource name.
-    // spec: ACTU#certificate-warming
+    // spec: RT#certificate-warming
     pub warm_cert_hostnames: BTreeSet<String>,
 }
 
@@ -119,7 +119,7 @@ impl OperationProgress {
                     }
                 }
                 CallKind::Query => {}
-                // spec: ACTU#certificate-warming
+                // spec: RT#certificate-warming
                 // WarmCerts records intent in a separate map; it does not put
                 // resources into the standard desired state, so the reconciler
                 // will not actuate them as fully Ready (which would route

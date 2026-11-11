@@ -15,6 +15,8 @@ Applies to the proxy through which the [runtime](../overview.md#runtime) serves 
 | content coding | An encoding applied to a representation, named by `Content-Encoding`, [RFC 9110 §8.4](https://www.rfc-editor.org/rfc/rfc9110#section-8.4). |
 | persistent connection | An HTTP/1.1 connection reused for successive requests, [RFC 9112 §9.3](https://www.rfc-editor.org/rfc/rfc9112#section-9.3). |
 | connection-specific field | A header field describing the connection rather than the message, such as `Connection` or `Keep-Alive`, [RFC 9110 §7.6.1](https://www.rfc-editor.org/rfc/rfc9110#section-7.6.1). |
+| QUIC | The UDP-based transport that carries HTTP/3, [RFC 9000](https://www.rfc-editor.org/rfc/rfc9000). |
+| redirect | An HTTP response with a 3xx status code, [RFC 9110 §15.4](https://www.rfc-editor.org/rfc/rfc9110#section-15.4). |
 
 ## Terminology
 
@@ -37,6 +39,31 @@ The proxied route at `/` through which a service is served when no pod binds any
 ### Normalised path
 
 A request path with duplicate `/` separators collapsed, dot segments removed as in [RFC 3986 §5.2.4](https://www.rfc-editor.org/rfc/rfc3986#section-5.2.4), percent-encoding decoded, and letter case folded.
+
+## Ingress serving
+
+### Port scope
+
+The runtime MUST serve an ingress on the port it was declared on and on no other.
+The runtime MUST route a request to an ingress's target only when the request arrives on that ingress's port, whatever hostname the request names.
+
+Two ingresses for the same hostname on different ports MUST be served independently, each port serving the routes of the ingress declared on it.
+A redirect an ingress declares MUST answer only on the port it names.
+
+### Plaintext ingresses
+
+Whether an ingress terminates TLS is independent of whether it terminates HTTP.
+An ingress that terminates HTTP without terminating TLS is a plaintext ingress.
+
+The runtime MUST serve a plaintext ingress as HTTP without TLS on its port, routing matching requests to the ingress's target.
+For a plaintext ingress, the runtime MUST NOT request or provision a certificate for the hostname, MUST NOT accept QUIC connections, and MUST NOT answer requests with a redirect the ingress does not itself declare.
+
+The runtime MUST forward to an ingress only the transport protocols the ingress serves.
+A plaintext HTTP ingress therefore MUST NOT cause UDP traffic on its port to be forwarded.
+
+A hostname MAY carry plaintext and TLS-terminating ingresses on different ports.
+The runtime MUST serve each from a listener matching its own termination.
+A TLS-terminating ingress on a hostname MUST NOT cause a plaintext ingress on the same hostname to be dropped or served only over TLS.
 
 ## Route emission
 

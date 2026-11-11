@@ -261,7 +261,7 @@ pub fn build_proxy_config(
     }
 }
 
-// spec: ACTU#plaintext-ingresses
+// spec: PRX#plaintext-ingresses
 fn register_listeners(set: &mut BTreeSet<ProxyListener>, ingress: &IngressDef) {
     // An ingress serves HTTPS only when it terminates TLS *and* HTTP. HTTP
     // termination alone does not imply TLS: a site-ingress attachment whose
@@ -293,8 +293,8 @@ fn register_listeners(set: &mut BTreeSet<ProxyListener>, ingress: &IngressDef) {
     }
 }
 
-// spec: ACTU#port-scope
-// spec: ACTU#plaintext-ingresses
+// spec: PRX#port-scope
+// spec: PRX#plaintext-ingresses
 // Vhosts are keyed by `(hostname, port, tls)`, not by hostname alone. The port
 // keeps two ingresses for one hostname apart: merged by name, a public site
 // and an admin endpoint on another port would share one route list and the
@@ -336,7 +336,7 @@ fn ensure_vhost<'a>(
 /// `OperationProgress.warm_cert_hostnames` sets. Hostnames already present as a
 /// vhost (i.e. routed) are skipped — Caddy's vhost-driven acquisition handles
 /// those, and adding them to `automate` is redundant.
-// spec: ACTU#certificate-warming
+// spec: RT#certificate-warming
 pub fn augment_with_warm_certs(config: &mut ProxyConfig, warm_hostnames: BTreeSet<String>) {
     let already_routed: BTreeSet<&str> = config
         .virtual_hosts
@@ -566,7 +566,7 @@ mod tests {
             .any(|l| l.port == port && l.proto == proto)
     }
 
-    // spec: ACTU#plaintext-ingresses
+    // spec: PRX#plaintext-ingresses
     #[test]
     fn plaintext_http_ingress_listens_for_http() {
         // The shape a site-ingress attachment produces when its parent's TLS
@@ -584,7 +584,7 @@ mod tests {
         );
     }
 
-    // spec: ACTU#plaintext-ingresses
+    // spec: PRX#plaintext-ingresses
     #[test]
     fn plaintext_http_ingress_takes_no_quic_listener() {
         let cfg = build_proxy_config(&[(ing("clinic.local", 80, false, true), upstream(80))], &[]);
@@ -594,7 +594,7 @@ mod tests {
         );
     }
 
-    // spec: ACTU#plaintext-ingresses
+    // spec: PRX#plaintext-ingresses
     #[test]
     fn tls_http_ingress_still_listens_for_https_and_quic() {
         let cfg = build_proxy_config(
@@ -606,7 +606,7 @@ mod tests {
         assert!(!has(&cfg, 443, ProxyListenerProto::Http));
     }
 
-    // spec: ACTU#plaintext-ingresses
+    // spec: PRX#plaintext-ingresses
     #[test]
     fn tls_passthrough_ingress_takes_no_quic_listener() {
         // `Terminate.Tls + Output.Tcp`: terminates TLS but not HTTP, so it
@@ -618,7 +618,7 @@ mod tests {
         assert!(!has(&cfg, 5432, ProxyListenerProto::Quic));
     }
 
-    // spec: ACTU#port-scope
+    // spec: PRX#port-scope
     #[test]
     fn one_hostname_on_two_ports_yields_one_vhost_per_port() {
         // A public site on :80 and an admin endpoint on :8080 under one
@@ -640,7 +640,7 @@ mod tests {
         }
     }
 
-    // spec: ACTU#plaintext-ingresses
+    // spec: PRX#plaintext-ingresses
     #[test]
     fn plaintext_and_tls_ingresses_on_one_hostname_stay_separate() {
         // One hostname, plaintext on :80 and TLS-terminating on :443. Keying

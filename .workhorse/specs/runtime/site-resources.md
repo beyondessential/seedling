@@ -183,7 +183,7 @@ Deleting a site ingress MUST delete its attachments.
 | `tailscale` | obtained from the discovery provider's own certificate facility; valid only on a site ingress discovered by `tailscale` |
 | `none` | none; every attachment is plaintext |
 
-An attachment on a site ingress whose mode is `none` is a [plaintext ingress](actuation.md#plaintext-ingresses).
+An attachment on a site ingress whose mode is `none` is a [plaintext ingress](proxy.md#plaintext-ingresses).
 
 ### Attachments
 

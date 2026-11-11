@@ -304,7 +304,7 @@ pub(super) struct ProxyBuildResult {
 /// pairs. Filters out non-TLS ingresses and ingresses already covered by a
 /// routed vhost (since Caddy will acquire those via the standard server-block
 /// driven path).
-// spec: ACTU#certificate-warming
+// spec: RT#certificate-warming
 pub(super) fn warm_cert_targets(
     apps: &[AppSnapshot],
     registry: &dyn InstanceRegistry,
@@ -395,7 +395,7 @@ pub(super) fn compute_proxy_config(
         all_l4_routes.extend(build.l4_routes);
         observations.extend(build.observations);
         ready_observations.extend(build.ready_observations);
-        // spec: ACTU#certificate-warming
+        // spec: RT#certificate-warming
         // Translate ingress resource *names* in OperationProgress to ingress
         // *hostnames* by looking them up in the AppDef. Ignore non-TLS
         // ingresses; Caddy can't pre-warm a cert without TLS configured.

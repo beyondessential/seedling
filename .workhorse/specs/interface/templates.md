@@ -72,7 +72,7 @@ The result is an object with these members.
 | `created_at` | string | when the template was stored, as an [RFC 3339](https://www.rfc-editor.org/rfc/rfc3339) timestamp |
 
 If a template with the given name already exists, the runtime MUST refuse the request with `requirements_invalid` and store nothing.
-On success, the runtime MUST emit a `TemplateCreated` event.
+On success, the runtime MUST emit a `TemplateCreated` [event](events.md#site-resource-events).
 
 ## Listing
 
@@ -200,14 +200,3 @@ The result is an object with these members.
 | `generation` | integer | the new app's generation |
 
 On success, the runtime MUST emit the `AppRegistered` event that registration emits, followed by a `TemplateInstantiated` event.
-
-## Events
-
-The runtime MUST emit these events on the [event feed](events.md#event-types), each carrying the members every event carries and the members below.
-
-| `type` | members |
-| --- | --- |
-| `TemplateCreated` | `name` |
-| `TemplateUpdated` | `name` |
-| `TemplateRemoved` | `name` |
-| `TemplateInstantiated` | `template`, `app` |

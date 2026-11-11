@@ -43,7 +43,7 @@ A [`File`](bundle.md#bundle-files) MUST be written byte for byte as the bundle h
 Each file MUST be written byte for byte as the bundle holds it.
 
 When the runtime applies declared file writes, it MUST apply them in the order the script declared them, and each MUST replace whatever its path held.
-When the runtime applies declared file writes, and the permissions of the files they create, are specified by [actuation](../runtime/actuation.md#volume-creation-and-seeding).
+When the runtime applies declared file writes is specified by [actuation](../runtime/actuation.md#volume-creation-and-seeding), and the permissions of the files they create by [storage confinement](../runtime/actuation.md#storage-confinement).
 
 ### Write paths
 

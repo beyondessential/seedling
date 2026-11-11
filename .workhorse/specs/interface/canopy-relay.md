@@ -44,7 +44,7 @@ An offer that has been registered and has not ended.
 
 The runtime MUST record `agent`, `endpoint` and `via` for display to operators, and MUST NOT vary its behaviour on their values.
 The result is `{ offer_id }`, an opaque string identifying the offer.
-On success, the runtime MUST emit a `CanopyOffered` event carrying `offer_id`, `agent` and `endpoint`.
+On success, the runtime MUST emit a `CanopyOffered` [event](events.md#session-events).
 
 An offer belongs to the connection that made it.
 The runtime MUST accept `/canopy/offer` and `/canopy/withdraw` only on a connection over which it can open relay streams.
@@ -52,7 +52,7 @@ The runtime MUST accept `/canopy/offer` and `/canopy/withdraw` only on a connect
 ## Offer lifetime
 
 An offer MUST end when the connection that made it is lost, when the offering client withdraws it, or when Canopy access is [disabled](#disabled-access).
-When an offer ends, the runtime MUST emit a `CanopyWithdrawn` event carrying `offer_id` and `reason`.
+When an offer ends, the runtime MUST emit a `CanopyWithdrawn` event, whose `reason` gives the cause.
 
 | `reason` | cause |
 | --- | --- |

@@ -27,7 +27,7 @@ The key words MUST, MUST NOT, REQUIRED, SHALL, SHALL NOT, SHOULD, SHOULD NOT, RE
 | [OCI Distribution Specification](https://github.com/opencontainers/distribution-spec) | registries and fetching definitions, under [DEFN](interface/definitions.md), [IMGM](interface/images.md) |
 | [capabilities(7)](https://man7.org/linux/man-pages/man7/capabilities.7.html) | container capabilities, under [CTR](language/container.md) |
 | [signal(7)](https://man7.org/linux/man-pages/man7/signal.7.html) | stop signals, under [CTR](language/container.md) |
-| [RFC 9000](https://www.rfc-editor.org/rfc/rfc9000) | QUIC, under [TRN](interface/transport.md), [WIRE](interface/wire.md), [SHL](interface/shells.md), [FWD](interface/port-forwards.md), [RLY](interface/canopy-relay.md), [ACTU](runtime/actuation.md) |
+| [RFC 9000](https://www.rfc-editor.org/rfc/rfc9000) | QUIC, under [TRN](interface/transport.md), [WIRE](interface/wire.md), [SHL](interface/shells.md), [FWD](interface/port-forwards.md), [RLY](interface/canopy-relay.md), [PRX](runtime/proxy.md) |
 | [RFC 9001](https://www.rfc-editor.org/rfc/rfc9001) | TLS over QUIC, under [TRN](interface/transport.md) |
 | [RFC 9221](https://www.rfc-editor.org/rfc/rfc9221) | QUIC datagrams, under [TRN](interface/transport.md), [WIRE](interface/wire.md), [FWD](interface/port-forwards.md) |
 | [RFC 9846](https://www.rfc-editor.org/rfc/rfc9846) | TLS 1.3, under [TRN](interface/transport.md), [ING](language/ingress.md) |
@@ -56,7 +56,7 @@ The key words MUST, MUST NOT, REQUIRED, SHALL, SHALL NOT, SHOULD, SHOULD NOT, RE
 | [JSON Lines](https://jsonlines.org/) | the audit log format, under [AUD](runtime/audit-log.md) |
 | [RFC 3339](https://www.rfc-editor.org/rfc/rfc3339) | timestamps, under [APPS](interface/apps.md), [EVT](interface/events.md), [FLTS](interface/faults.md), [FWD](interface/port-forwards.md), [IMGM](interface/images.md), [LOG](interface/logs.md), [RLY](interface/canopy-relay.md), [SHL](interface/shells.md), [TPL](interface/templates.md), [WEB](web/serving.md) |
 | [RFC 9562](https://www.rfc-editor.org/rfc/rfc9562) | UUIDs, under [IDN](runtime/identity.md) |
-| [RFC 9110](https://www.rfc-editor.org/rfc/rfc9110) | HTTP semantics, under [HTTP](language/http-service.md), [ING](language/ingress.md), [PRX](runtime/proxy.md), [SITE](runtime/site-resources.md), [RLY](interface/canopy-relay.md), [WEB](web/serving.md), [ACTU](runtime/actuation.md) |
+| [RFC 9110](https://www.rfc-editor.org/rfc/rfc9110) | HTTP semantics, under [HTTP](language/http-service.md), [ING](language/ingress.md), [PRX](runtime/proxy.md), [SITE](runtime/site-resources.md), [RLY](interface/canopy-relay.md), [WEB](web/serving.md) |
 | [RFC 9111](https://www.rfc-editor.org/rfc/rfc9111) | HTTP caching, under [WEB](web/serving.md) |
 | [RFC 9112](https://www.rfc-editor.org/rfc/rfc9112) | HTTP/1.1, under [ING](language/ingress.md), [PRX](runtime/proxy.md), [RLY](interface/canopy-relay.md) |
 | [RFC 9113](https://www.rfc-editor.org/rfc/rfc9113) | HTTP/2, under [ING](language/ingress.md), [PRX](runtime/proxy.md) |

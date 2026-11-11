@@ -355,7 +355,7 @@ struct AppSnapshot {
     phase_handle: Arc<Mutex<AppPhase>>,
     /// Hostnames whose certs should be pre-warmed. Captured from the in-flight
     /// `OperationProgress`, if any.
-    // spec: ACTU#certificate-warming
+    // spec: RT#certificate-warming
     warm_cert_hostnames: std::collections::BTreeSet<String>,
     /// Generation number of the app definition this snapshot was taken from.
     /// Used to detect operator-pushed updates that should reset transient

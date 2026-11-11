@@ -145,7 +145,7 @@ fn tls_acme_subjects_appear_in_automation() {
     assert_eq!(subjects[0], "secure.example.com");
 }
 
-// spec: ACTU#certificate-warming
+// spec: RT#certificate-warming
 #[test]
 fn warm_cert_only_emits_certificates_automate_and_policy() {
     let mut config = ProxyConfig::default();
@@ -168,7 +168,7 @@ fn warm_cert_only_emits_certificates_automate_and_policy() {
     assert_eq!(automate[0], "warm.example.com");
 }
 
-// spec: ACTU#certificate-warming
+// spec: RT#certificate-warming
 #[test]
 fn warm_cert_skipped_when_already_routed() {
     let mut config = ProxyConfig {
@@ -706,7 +706,7 @@ fn service_upstream(port: u16) -> crate::system::translate::proxy::ServiceUpstre
     }
 }
 
-// spec: ACTU#plaintext-ingresses
+// spec: PRX#plaintext-ingresses
 #[test]
 fn plaintext_only_config_requests_no_certificate() {
     let config = ProxyConfig {
@@ -729,7 +729,7 @@ fn plaintext_only_config_requests_no_certificate() {
     );
 }
 
-// spec: ACTU#plaintext-ingresses
+// spec: PRX#plaintext-ingresses
 #[test]
 fn plaintext_vhost_gets_no_redirect_route() {
     let config = ProxyConfig {
@@ -752,7 +752,7 @@ fn plaintext_vhost_gets_no_redirect_route() {
     );
 }
 
-// spec: ACTU#plaintext-ingresses
+// spec: PRX#plaintext-ingresses
 #[test]
 fn plaintext_ingress_is_served_end_to_end() {
     // Translate then render, so this covers the whole path a `.local` host
@@ -786,7 +786,7 @@ fn plaintext_ingress_is_served_end_to_end() {
     );
 }
 
-// spec: ACTU#plaintext-ingresses
+// spec: PRX#plaintext-ingresses
 #[test]
 fn mixed_termination_on_one_hostname_serves_each_from_its_own_listener() {
     let mut secure = plaintext_ingress("clinic.local", 443);
@@ -1309,7 +1309,7 @@ fn ipv6_clients_are_counted_per_64_and_ipv4_per_address() {
     assert!(zone["ipv4_prefix"].is_null());
 }
 
-// spec: ACTU#plaintext-ingresses
+// spec: PRX#plaintext-ingresses
 // Caddy refuses a config where two servers bind one address, and the admin
 // POST is all-or-nothing — so a single conflicting pair used to invalidate
 // every route and cert policy on the node, not just the offending ingress.
@@ -1338,7 +1338,7 @@ fn a_port_declared_as_both_plaintext_and_tls_is_reported() {
     assert_eq!(conflicting_listener_ports(&config), vec![8443]);
 }
 
-// spec: ACTU#plaintext-ingresses
+// spec: PRX#plaintext-ingresses
 #[test]
 fn distinct_ports_per_protocol_do_not_conflict() {
     use crate::system::caddy::config::conflicting_listener_ports;
@@ -2053,7 +2053,7 @@ fn a_ratio_for_a_hostname_the_proxy_does_not_serve_is_ignored() {
     assert!(policies[0]["renewal_window_ratio"].is_null());
 }
 
-// spec: ACTU#port-scope
+// spec: PRX#port-scope
 // Two ingresses for one hostname on different ports used to merge into one
 // route list, so the public site answered on the admin port and the admin
 // service was unreachable.
@@ -2094,7 +2094,7 @@ fn same_hostname_on_two_ports_keeps_each_ingress_apart() {
     assert!(dial("seedling_http_8080").contains(":4000"), "{json}");
 }
 
-// spec: ACTU#port-scope
+// spec: PRX#port-scope
 #[test]
 fn tls_ingresses_on_two_ports_get_their_own_servers() {
     let mut a = https_vhost("x.example.com", "[fd5e::1]:3000");
@@ -2134,7 +2134,7 @@ fn tls_ingresses_on_two_ports_get_their_own_servers() {
     }
 }
 
-// spec: ACTU#port-scope
+// spec: PRX#port-scope
 #[test]
 fn a_redirect_answers_only_on_the_port_it_names() {
     let mut vhost = https_vhost("x.example.com", "[fd5e::1]:3000");
@@ -2200,7 +2200,7 @@ fn old_cached_vhosts_without_a_port_replay_on_every_port_of_their_class() {
     );
 }
 
-// spec: ACTU#plaintext-ingresses
+// spec: PRX#plaintext-ingresses
 // The proxy makes any server off its HTTP port TLS unless told not to, so a
 // plaintext ingress on :8080 answered plain HTTP clients with an error.
 #[test]
@@ -2227,7 +2227,7 @@ fn plaintext_servers_on_any_port_opt_out_of_automatic_https() {
     }
 }
 
-// spec: ACTU#plaintext-ingresses
+// spec: PRX#plaintext-ingresses
 #[test]
 fn tls_servers_keep_automatic_https() {
     let mut vhost = https_vhost("x.example.com", "[fd5e::1]:3000");

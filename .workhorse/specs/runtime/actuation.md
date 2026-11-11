@@ -4,14 +4,7 @@ id: ACTU
 
 # Actuation
 
-Applies to how the [runtime](../overview.md#runtime) realises resource instances on the [host](../overview.md#host): workload containers, their logs, ingress serving, volume storage and held volumes.
-
-## Borrowed terms
-
-| term | meaning |
-| --- | --- |
-| QUIC | the UDP-based transport defined by [RFC 9000](https://www.rfc-editor.org/rfc/rfc9000), which carries HTTP/3 |
-| redirect | an HTTP response with a 3xx status code, as defined by [RFC 9110](https://www.rfc-editor.org/rfc/rfc9110) section 15.4 |
+Applies to how the [runtime](../overview.md#runtime) realises resource instances on the [host](../overview.md#host): workload containers, their logs, volume storage and held volumes.
 
 ## Terminology
 
@@ -91,40 +84,6 @@ A log query at any granularity MUST return breadcrumbs and container output toge
 The runtime MUST write a call's breadcrumb when the call first executes, and MUST NOT write it again when the call is replayed.
 The runtime MUST write one `replay` breadcrumb at the start of each replay pass.
 
-## Ingress serving
-
-### Port scope
-
-The runtime MUST serve an ingress on the port it was declared on and on no other.
-The runtime MUST route a request to an ingress's target only when the request arrives on that ingress's port, whatever hostname the request names.
-
-Two ingresses for the same hostname on different ports MUST be served independently, each port serving the routes of the ingress declared on it.
-A redirect an ingress declares MUST answer only on the port it names.
-
-### Plaintext ingresses
-
-Whether an ingress terminates TLS is independent of whether it terminates HTTP.
-An ingress that terminates HTTP without terminating TLS is a plaintext ingress.
-
-The runtime MUST serve a plaintext ingress as HTTP without TLS on its port, routing matching requests to the ingress's target.
-For a plaintext ingress, the runtime MUST NOT request or provision a certificate for the hostname, MUST NOT accept QUIC connections, and MUST NOT answer requests with a redirect the ingress does not itself declare.
-
-The runtime MUST forward to an ingress only the transport protocols the ingress serves.
-A plaintext HTTP ingress therefore MUST NOT cause UDP traffic on its port to be forwarded.
-
-A hostname MAY carry plaintext and TLS-terminating ingresses on different ports.
-The runtime MUST serve each from a listener matching its own termination.
-A TLS-terminating ingress on a hostname MUST NOT cause a plaintext ingress on the same hostname to be dropped or served only over TLS.
-
-### Certificate warming
-
-When an action closure calls [`rt.warm_certs`](../language/rt.md#certificate-warming) with a selection containing TLS-terminating ingresses, the runtime MUST begin acquiring certificates for those ingresses' hostnames.
-The runtime MUST NOT route live traffic to those ingresses as a result of the call.
-A certificate acquired this way MUST be the one served when the same ingress is later started.
-
-The runtime MUST record each `rt.warm_certs` call in the [action execution log](history.md#action-execution-log).
-A repeated call with the same selection MUST observe the existing certificate state and return at once when every certificate is valid, without beginning acquisition again.
-
 ## Volume storage
 
 The runtime MUST store each named non-tmpfs volume as a directory in the data directory and bind-mount it into the containers that use it.
@@ -201,11 +160,11 @@ Every host path the runtime creates, writes, moves or deletes on behalf of a def
 Content written into a volume is confined to that volume's root.
 A volume's own storage is confined to the directory holding volumes of its kind: in the data directory for a non-tmpfs volume, and in the tmpfs location for a tmpfs volume.
 
-The runtime MUST create each file a [declared file write](../language/volume.md#declared-file-writes) writes with permissions no broader than `0640`.
-
 Confinement MUST cover every component of a path.
 The runtime MUST resolve a parent directory it creates on the way to a write under the same confinement as the write.
 The runtime MUST refuse a path that escapes its root, and MUST create nothing along the way to it.
+
+The runtime MUST create each file a [declared file write](../language/volume.md#declared-file-writes) writes with permissions no broader than `0640`.
 
 Storage whose own path is a symbolic link is not owned by the runtime.
 The runtime MUST refuse to create, hold or delete such a path, with an error naming it.

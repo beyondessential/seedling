@@ -48,7 +48,7 @@ pub enum CallKind {
     Query,
     /// `rt.warm_certs(...)` — pre-provision TLS certificates without routing
     /// traffic. Records intent without affecting the standard desired state.
-    // spec: ACTU#certificate-warming
+    // spec: RT#certificate-warming
     WarmCerts,
     /// `rt.warm_images(...)` — pre-pull container images without running them,
     /// pinning the references for autonomous-GC exemption. The image refs are
