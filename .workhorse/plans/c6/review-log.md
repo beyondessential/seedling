@@ -61,3 +61,24 @@ Fixed in place: CNR statuses use the APPS names (no `Deregistering`); actors on 
 Critical: canopy_offer_absent shape vs restart; service leaving Ready has no target state; OBS says certificates decide ingress Ready (contradicts LCY); cancelled outcome missing from history and events; container_runtime_unavailable clears only on restart.
 Suggestion: teardown process unspecified; stuck uninstall exit; crash_loop clears between crashes; unreadable priorities behaviour home and scope; failed scheduled validation and refire; CNR identifier discard condition; action-call table incomplete; replay literal arguments; "lifecycle transition of that app"; registry_error two shapes; audit write failures; re-check "infrequently".
 Nit: empty RUN; start-action hold stated thrice; side effects beyond rt.*; uninstalling apps and shared infrastructure; CNR resource field; OBS sentence; old reconstruction twice.
+
+### Web and root (found: 1 critical, 13 suggestion, 7 nit)
+
+Fixed in place: WEB actors, borrowed terms, relay wording to WIRE terms, shell relay stream names; UI Deployment health checks and links; glossary entries aligned with defining specs and pointed at sections; external documents rows completed for LINUX, RFC 1035/1123 split.
+Critical: UI shows health check state no OI method or event reports.
+Suggestion: CSP host-source cannot carry a bracketed IPv6 literal; closing a shell needs dangerous vs volume shells in every mode; key-material ban belongs to the server; web key file name and rules; subscription back-off reset; shell relay stream end without exit frame; /connect bad body answer; option conflicts per listener; daemon reconnect failure; /forwards/start through the relay; response framing; restart record "initiator"; web session count.
+Nit: WebSession events in EVT; TOML version pin; untestable "within the app"; duplicated PRIO note; Tailscale header charset; actor members nullable.
+
+### Interface B (found: 1 critical, 18 suggestion, 5 nit)
+
+Fixed in place: WIRE actors and FWD links; TRN note; KEY fingerprint link; CLI wording and LINUX link for the state path; LOG framing link; EVT links and terms; CTL effective scale link; IMGM registry link; RLY shapes and terms; FWD borrowed EDNS(0); SHL install phase links.
+Critical: 38 OI methods have no interface spec (held, site, app, exported and external volumes; site, app, exported and external services; site ingresses and discovery).
+Suggestion: EVT "as X specifies" where X never mentions the event; restart operation_id vs lifecycle operation; EVT same-name members differ; shell signal exit_code and CLI mapping; in-use image removal code; image pull allowlist; RLY non-relaying connections code; volume shell preparation code; FLTS _system listing and unregistered apps; fault subject mapping in records; forward end and lifetime; actor on install and param_change triggers; fingerprint input rules twice; CLI server trust (known_hosts) unspecified; discovery handler names and param key collisions; CTL gating for scale/restart/priority/unstop; datagram for a TCP forward key.
+Nit: actor null in forwards and shells; duplicated stream-end and 64 KiB rules; LOG tail range and platform terms; volume reference home; ServerBusy reasons, forward key exhaustion, RFC 6891 row, unparseable request code.
+
+### Language (found: 3 critical, 17 suggestion, 5 nit)
+
+Fixed in place: BSL overview sentence split; link targets (action closure term, builder term, runtime handle, OPS); "what" stand-ins; run-on sentences; volume external definition aligned with the glossary; absences removed.
+Critical: ACI refuses a name that names a shell (contradicts separate namespaces); app.external_volume in the action context unspecified; command without args drops the image's args (unstated).
+Suggestion: change handler vs NotInstalled; validator context vs named resources; action-context behaviour of declarations, Param builders, Service.http/ingress; tmpfs note in RT; compress defaults vs resolution; routes per service or per port; route prefix characters; redirect-or-bound wording; default content types list; ingress redirect codes vs route redirect codes; redirect before a certificate and host port; ingress names; RT resources vs instances in Started, Termination and barriers; allowlist enforcement home; rt.exec env rules; "TLS-terminating ingress" term; optional empty params and kind validation; warm_certs repeat; zero interval/timeout meaning.
+Nit: zero-argument change handlers vs runtime handle; two homes for Action selection and redirect binding; "action context" vs "while an action closure is running"; UDP without tls(); mountpoint canonical form.
