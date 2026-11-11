@@ -133,4 +133,4 @@ If a container sets no stop signal, the runtime MUST send `SIGTERM`.
 
 `container.stop_timeout(seconds: number)` sets how long the runtime waits after sending the stop signal before sending `SIGKILL`.
 A `seconds` MUST be an integer from 1 to 4294967295.
-If a container sets no stop timeout, the runtime MUST wait 90 seconds.
+If a container sets no stop timeout, the runtime SHOULD wait 90 seconds.

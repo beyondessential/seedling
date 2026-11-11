@@ -14,7 +14,7 @@ Batches 1 and 2, folded into the specs; code changes filed on D6.
 - Resolver healthy before workloads stays MUST.
 - Start action runs after a successful install (trigger `install`) and at runtime start (`boot`); the app's desired state is held to what the start action has started until it ends.
 - Scheduled runs validate an empty invocation against the schema; failure files `schedule_params_invalid`.
-- `rt.stop` default deadline is the longest stop timeout of the stopped containers plus 30 s; CTR's 90 s default stop timeout is a MUST.
+- `rt.stop` default deadline is the longest stop timeout of the stopped containers plus 30 s. CTR's 90 s default stays SHOULD: it is an intended platform hedge, which systemd's default satisfies on Linux.
 - Queued operations are persisted and restored at startup.
 - An install that cannot be replayed is recovered as a stuck install.
 - A restart replacing a failed run is a recovery restart, whoever performs it.
@@ -27,7 +27,6 @@ Batches 1 and 2, folded into the specs; code changes filed on D6.
 ### PRX / INFRA / DNS / NAT64 / SEC
 - PRX: status for a route with no upstreams: name 502/503, or "an error status" (current).
 - INFRA: `container_runtime_unavailable` is never cleared in code; spec says cleared once started with both backends reachable.
-- DNS: host resolver `127.0.0.54` as a host requirement or a note.
 - SEC: name the encryption construction (XChaCha20-Poly1305, nonce prefix) or keep "authenticated encryption".
 
 ### ACN / RT
@@ -53,6 +52,20 @@ Batches 1 and 2, folded into the specs; code changes filed on D6.
 - RT: rt.signal delivery failure only logged and recorded as delivered (spec: throw); service/ingress-only selection does not throw.
 - RT: rt.exec on a non-running target not checked; output goes to the daemon log, not the container's.
 - RT: rt.restart not replay-protected (spec: at most once per call).
+
+## Platform hedges
+
+The generic specs hedge on purpose for platforms other than Linux, and these hedges are not gaps.
+A Linux platform spec, if written, resolves each one for Linux. Candidates collected so far:
+
+- CTR default stop timeout (systemd's 90 s default)
+- AUTO restart record and pacing (systemd as the supervisor, `Restart=` pacing, exit status from the unit)
+- RT unobserved exit status (unit result)
+- PRIO OOM protection (OOM score adjustment), resource-control groups (cgroup v2 slices)
+- ACTU journal fields (`SEEDLING_*` in the systemd journal)
+- DNS host resolver at `127.0.0.54` (systemd-resolved stub)
+- CONST `IDLE_CMD` (an image `sleep` accepting `infinity`)
+- KEY client key path (`$XDG_STATE_HOME`)
 
 ## Cross-spec moves
 
@@ -83,7 +96,6 @@ POSIX crontab (Issue 8), IANA tz database, SipHash, zxcvbn (ACN).
 ### Language A (BSL BND COL CONST APP PARAM SVC)
 Open:
 - CONST: failed egress probe reports false, undetected time zone UTC ("could not determine"): keep+document, block evaluation, or fault+fallback (rec.).
-- CONST: IDLE_CMD needs an image `sleep` accepting `infinity`: state image requirement, or runtime provides idle process.
 - CONST: host facts read once at daemon start; pick up network changes without restart?
 - COL: col(external_service) is empty though col(app) includes it: fix code to coerce to itself, or keep.
 - COL: anonymous resources of one type compare equal in only/except: own identity, or accept.
@@ -117,7 +129,6 @@ Glossary: Ingress (ING); External volume, Declared file write (VOL).
 
 ### Runtime C (ACTU IMG SITE PRIO UPD FLT IDN)
 Open:
-- ACTU: journal field names (SEEDLING_*) as contract (kept) or implementation detail; "system journal" vs "host log".
 - IMG: rt.query records images during a probe in code; spec says no-op: change code or spec.
 - FLT: /faults/clear rejects `_system` (invalid name) though spec lets operators clear `_system`/`seedling` faults: change endpoint, or auto-clear every `_system` kind.
 - FLT: reconciler_panic has no clear path (depends on above).
