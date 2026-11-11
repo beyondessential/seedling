@@ -4,84 +4,160 @@ id: IMGM
 
 # Image management
 
-## Registry Allowlist
+Applies to the [Operator Interface](../overview.md#operator-interface) methods through which an operator manages the registry allowlist and the container images held on a [host](../overview.md#host).
 
-<!-- from interface: Key Management / Registry Allowlist -->
+## Borrowed terms
 
-> i[registry.list]
-> `/registries/list` returns the current registry allowlist.
+| term | meaning |
+| --- | --- |
+| image reference, tag, digest | as defined by the [OCI Distribution Specification](https://github.com/opencontainers/distribution-spec/blob/main/spec.md) |
+| manifest, image index | as defined by the [OCI Image Format Specification](https://github.com/opencontainers/image-spec/blob/main/spec.md); an image index is also called a manifest list |
 
-> i[registry.add]
-> `/registries/add { registry }` adds a registry hostname to the allowlist.
-> Adding a registry that is already present is a no-op.
+## Registry allowlist
 
-> i[registry.remove]
-> `/registries/remove { registry }` removes a registry hostname from the allowlist.
-> All registered apps are re-evaluated after a registry is removed; any app whose images reference the removed registry will receive a `disallowed_registry` fault.
+The registry allowlist is the set of registry hosts from which the runtime accepts images and [definition bundles](rule:i/definition.fetch.access).
+An image's registry is the part of its reference before the first `/`.
+The runtime MUST compare a registry against the allowlist by exact string equality.
 
-## Image Management
+`/registries/list` takes no parameters, and its result is `{ "registries": [ ... ] }`, the allowlisted registries as strings in ascending order.
 
-<!-- from interface: Key Management / Image Management -->
+`/registries/add` adds a registry to the allowlist, and `/registries/remove` removes one.
 
-> i[image.list]
-> `/images/list {}` returns the set of locally-present container images.
-> Response `result` is an array of objects, each with fields:
->
-> - `image_id`: string, the image's content-addressable digest (e.g. `"sha256:..."`).
-> - `references`: array of strings; the tags and/or digest references that currently point at this image in local storage. May be empty for dangling images.
-> - `size_bytes`: integer.
-> - `created_at`: RFC 3339 timestamp, as reported by the container runtime.
-> - `last_used_at`: RFC 3339 timestamp — the last time the runtime observed this image being used by a running container, or the time the image was first recorded locally if it has never been in use.
-> - `in_use`: boolean; `true` when at least one running container currently uses this image.
-> - `pinned_by`: array of app names that currently pin at least one reference resolving to this image.
+| member | type | required | meaning |
+| --- | --- | --- | --- |
+| `registry` | string | yes | the registry host |
 
-> i[image.pull]
-> `/images/pull { reference, app? }` requests that the named image reference be pulled into local storage through the runtime's standard pull machinery (with retries and back-off).
-> `reference` must be a non-empty container image reference (e.g. `"ghcr.io/example/foo:1.2.3"`).
-> If `app` is provided, the app must be registered; the pulled reference is additionally [pinned](rule:r/image.pin) to that app.
-> Returns `{ "ok": true }` on accepted pull. Pull failures surface through the existing [image pull fault](rule:r/fault.image-pull) mechanism rather than the response.
+On success the result of either is `{ "ok": true }`.
+Adding a registry already on the allowlist MUST succeed and change nothing.
+The server MUST reject removing a registry that is not on the allowlist with `not_found`.
 
-> i[image.remove]
-> `/images/remove { reference, force? }` removes the named image from local storage.
-> If at least one running container currently uses the image, the request is rejected with `requirements_invalid` unless `force` is `true`.
-> Pins targeting `reference` are cleared regardless of outcome.
-> Returns `{ "ok": true }` on successful removal; `not_found` if no image resolves to `reference` in local storage.
+After either change, the runtime MUST re-evaluate every registered app, so that an app whose images reference a registry off the allowlist holds a `disallowed_registry` fault, and an app whose images all reference allowlisted registries holds none.
 
-> i[image.pin.list]
-> `/images/pins/list { app? }` returns the set of image pins.
-> When `app` is provided, only that app's pins are returned; otherwise pins for all apps are returned.
-> Response `result` is an array of objects with fields `app` (string), `reference` (string), `pinned_at` (RFC 3339 timestamp), and `expires_at` (RFC 3339 timestamp or `null`). When `expires_at` is set, the reconciler will delete the pin once it passes (see [`image.pin.expiry`](rule:r/image.pin.expiry)).
+## Listing images
 
-> i[image.pin.clear]
-> `/images/pins/clear { app, reference? }` clears pins for `app`.
-> When `reference` is provided, only the pin matching that reference is cleared (no-op if absent); otherwise all pins for the app are cleared.
-> Returns `{ "ok": true }`.
+`/images/list` takes no parameters, and its result is `{ "images": [ ... ] }`, one record for each container image held on the host.
 
-> i[image.discover]
-> `/apps/images/discover { app, action_params?, lenient? }` runs the probe execution mode defined in [`image.discover`](rule:r/image.discover) across every handler declared by the named app (`install`, the implicit `start` handler, every explicit action, every shell, and every `on_change` handler), then returns what those handlers might pull.
->
-> Params:
->
-> - `action_params`: optional object map of handler name → object map of param name → string value. Values supplied here override stored values and defaults for the named handler's probe.
-> - `lenient`: boolean, default `false`. When `true`, handlers with unresolved required parameters are reported as skipped and the probe continues; when `false`, the same condition is reported as an error and the other handlers still probe normally.
->
-> Response shape:
->
-> ```json
-> {
->   "per_handler": [
->     {
->       "name": "migrate",
->       "kind": "action",
->       "images": ["ghcr.io/example/foo:1.2.3"],
->       "error": null,
->       "skipped_reason": null
->     },
->     { "name": "install", "kind": "install", "images": [], "error": null, "skipped_reason": null },
->     { "name": "upgrade", "kind": "action", "images": [], "error": null, "skipped_reason": "requires params: old_version" }
->   ],
->   "all_images": ["ghcr.io/example/foo:1.2.3"]
-> }
-> ```
->
-> `kind` is one of `"install" | "start" | "action" | "shell" | "param_change"`. `error` is a human-readable message or `null`. `skipped_reason` is populated only in lenient mode when a handler was not probed. `all_images` is the deduplicated union of `images` across every handler with no `error` and no `skipped_reason`.
+| member | type | meaning |
+| --- | --- | --- |
+| `image_id` | string | the image's identifier, as the host's container storage reports it |
+| `tags` | array of strings | the tag references that resolve to the image |
+| `digests` | array of objects | the digest references that resolve to the image |
+| `manifest_digest` | string or null | the digest of the image's own manifest, where known |
+| `size_bytes` | integer | the image's size in bytes |
+| `created_at` | string | when the image was created, as an [RFC 3339](https://www.rfc-editor.org/rfc/rfc3339) timestamp |
+| `last_used_at` | string | the image's [last-used time](rule:r/image.track), or its first-recorded time where it has never been in use, as an RFC 3339 timestamp |
+| `in_use` | boolean | whether a running container uses the image |
+| `pinned_by` | array of strings | the apps holding a [pin](rule:r/image.pin) on a reference that resolves to the image |
+
+Each member of `digests` is:
+
+| member | type | meaning |
+| --- | --- | --- |
+| `reference` | string | the digest reference |
+| `kind` | string | `"manifest"` where the digest is `manifest_digest`, `"manifest_list"` where it is not, and `"unknown"` where `manifest_digest` is null |
+
+> [!NOTE]
+> An image pulled by a multi-architecture tag carries both its own manifest digest and the digest of the image index it was selected from.
+
+`tags` and `digests` MAY be empty, for an image no reference resolves to.
+In `pinned_by` each app MUST appear at most once.
+
+## Pulling an image
+
+`/images/pull` pulls an image reference into the host's container storage.
+
+| member | type | required | meaning |
+| --- | --- | --- | --- |
+| `reference` | string | yes | the image reference to pull |
+| `app` | string | no | an app to pin the reference to |
+
+The server MUST reject an empty `reference` with `requirements_invalid`.
+The server MUST reject an `app` that is not a valid app name with `requirements_invalid`, and one naming an app that is not registered with `not_found`.
+Where `app` is given, the runtime MUST pin `reference` to that app, whether or not the pull succeeds.
+
+The server MUST answer once the pull has finished.
+On success the result is `{ "ok": true }`.
+If the pull fails, the server MUST answer with an error response whose `message` carries the cause.
+
+## Removing an image
+
+`/images/remove` removes an image from the host's container storage.
+
+| member | type | required | meaning |
+| --- | --- | --- | --- |
+| `reference` | string | yes | a reference resolving to the image |
+| `force` | boolean | no, default `false` | removes the image even while a running container uses it |
+
+The server MUST reject an empty `reference` with `requirements_invalid`.
+Unless `force` is `true`, the server MUST reject the request with `requirements_invalid` while a running container uses the image.
+Unless the request is rejected, the runtime MUST clear every pin on `reference`, whether or not an image is removed.
+The server MUST reject a `reference` that resolves to no image on the host with `not_found`.
+On success the result is `{ "ok": true }`.
+
+## Image pins
+
+`/images/pins/list` lists image pins.
+
+| member | type | required | meaning |
+| --- | --- | --- | --- |
+| `app` | string | no | restricts the list to that app's pins |
+
+The server MUST reject an `app` that is not a valid app name with `requirements_invalid`.
+The result is `{ "pins": [ ... ] }`.
+
+| member | type | meaning |
+| --- | --- | --- |
+| `app` | string | the app holding the pin |
+| `reference` | string | the pinned image reference |
+| `pinned_at` | string | when the pin was made, as an [RFC 3339](https://www.rfc-editor.org/rfc/rfc3339) timestamp |
+| `expires_at` | string or null | when the pin [expires](rule:r/image.pin.expiry), as an RFC 3339 timestamp, or `null` where it does not |
+
+`/images/pins/clear` clears pins.
+
+| member | type | required | meaning |
+| --- | --- | --- | --- |
+| `app` | string | yes | the app whose pins to clear |
+| `reference` | string | no | clears only the pin on this reference |
+
+The server MUST reject an `app` that is not a valid app name with `requirements_invalid`.
+Without `reference`, the runtime MUST clear every pin of the app.
+Clearing a pin that does not exist MUST succeed and change nothing.
+On success the result is `{ "ok": true }`.
+
+## Image discovery
+
+`/apps/images/discover` runs the [probe](rule:r/image.discover) over every handler an app declares, and reports the images each might pull.
+The handlers are the install action, the start action, every other action, every shell and every `on_change` handler the app declares.
+
+| member | type | required | meaning |
+| --- | --- | --- | --- |
+| `app` | string | yes | the app's name |
+| `proposed_script` | string | no | script source to probe in place of the app's stored script |
+| `action_params` | object | no | parameter values per handler: handler name to an object of parameter name to string value |
+| `lenient` | boolean | no, default `false` | reports a handler with unresolved required parameters as skipped rather than as an error |
+
+The server MUST reject a request naming an app that is not registered with `not_found`.
+Where `proposed_script` is given, the runtime MUST evaluate it with the app's other bundle files and stored parameter values, and probe the result.
+The server MUST reject a script that fails to compile or evaluate with `script_error`.
+
+A value in `action_params` MUST take precedence over the handler's stored and default values, as [probe parameters](rule:r/image.discover.params) specifies.
+A handler with a required parameter that resolves to no value MUST NOT be probed.
+When `lenient` is `true`, such a handler MUST be reported with a `skipped_reason`; when `lenient` is `false`, it MUST be reported with an `error`.
+The other handlers MUST be probed either way.
+
+The result is:
+
+| member | type | meaning |
+| --- | --- | --- |
+| `per_handler` | array of objects | one entry for each handler |
+| `all_images` | array of strings | the distinct image references reported by handlers with neither `error` nor `skipped_reason`, in ascending order |
+
+Each `per_handler` entry is:
+
+| member | type | meaning |
+| --- | --- | --- |
+| `name` | string | the handler's name |
+| `kind` | string | `"install"`, `"start"`, `"action"`, `"shell"` or `"param_change"` |
+| `images` | array of strings | the image references the handler might pull |
+| `error` | string or null | why the handler could not be probed |
+| `skipped_reason` | string or null | why a lenient probe skipped the handler |

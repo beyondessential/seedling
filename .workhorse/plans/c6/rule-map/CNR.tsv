@@ -1,0 +1,11 @@
+r/canopy.settings.enabled	CNR#canopy-access
+r/canopy.report.schedule	CNR#report-schedule
+r/canopy.report.identity	CNR#server-identity
+r/canopy.report.checks	CNR#machine-checks
+r/canopy.report.checks.undeterminable	CNR#machine-checks
+r/canopy.report.extra	CNR#machine-detail
+r/canopy.report.fault	CNR#report-failure-fault
+r/canopy.report.backup-prompt	CNR#report-response
+r/canopy.offer.absent	CNR#missing-offers
+r/canopy.app.key	CNR#applications
+r/canopy.app.health	CNR#application-health

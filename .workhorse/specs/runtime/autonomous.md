@@ -4,118 +4,148 @@ id: AUTO
 
 # Autonomous reconciliation
 
-## Autonomous Reconciliation
+Applies to the operations the [runtime](../overview.md#runtime) performs without direction to hold an [app](../overview.md#app) at its [desired state](../overview.md#desired-state): restarting containers, detecting crash loops, settling completed Jobs, scaling Deployments, replacing unhealthy instances, and repairing ingress and network configuration.
 
-<!-- from runtime: Autonomous Reconciliation -->
+## Terminology
 
-> r[autonomous.restart]
-> When a container resource in the desired state reaches the Terminated lifecycle state and its `on_exit` or `on_terminate` policy requires recreation, the reconciler must start a replacement.
+### Recovery restart
 
-> r[autonomous.restart.record]
-> The runtime must keep a durable, per-instance record of container restarts. Each record identifies the instance it belongs to, the app generation in force when it was recorded, when the restart happened, the exit status of the run that ended where the platform reports one, and the restart's cause: whether it was recovery from an unexpected exit, or a restart the runtime performed deliberately.
->
-> The cause is a statement about why the restart happened, not about which component performed it. Who actions a restart is a platform detail — a platform with a service supervisor leaves recovery to it, and one without leaves the runtime to perform both kinds — so recording the actor would make the record mean different things on different platforms.
->
-> Recording must not depend on catching a state transition. A container that restarts and returns to running between two observations must still be recorded, so the count of restarts the runtime holds does not depend on how often it looks.
->
-> Rolling updates, [replacements](rule:r/autonomous.healthcheck-replace) and operator-requested restarts are recorded as deliberate and excluded from the crash-loop rate. Otherwise every rolling update reads as a crash burst.
+A restart of a container instance that brings it back after it exited unexpectedly.
 
-> r[autonomous.restart.rate]
-> Crash-loop detection is a function of the recorded restart rate: when the number of recovery restarts recorded for an instance within the configured window reaches the configured threshold, the reconciler must file a `crash_loop` fault against that instance (see [fault.crash-loop](rule:r/fault.crash-loop)).
->
-> This is the primary crash-loop trigger. It catches sub-threshold flapping — a container that crashes a few times a day forever, never exhausting the supervisor's own start limit inside its window — which is otherwise invisible to an operator.
+### Deliberate restart
 
-> r[autonomous.restart.rate.settings]
-> The restart-rate threshold and window must be operator-visible and operator-settable, and must take effect without restarting the runtime.
->
-> The default must be loose enough that a slow-failing container (one that takes seconds to crash) gets several chances, and tight enough to catch flapping on a human-meaningful timescale.
+A restart of a container instance that the runtime performs on purpose: a rolling update, a [health-check replacement](#health-check-replacement), or an operator-requested restart.
 
-> r[autonomous.restart.backoff]
-> Where the platform's supervisor actions restarts, per-unit restarts must be paced so that a crash-looping container does not exhaust the supervisor's start-rate limit before the reconciler has a chance to detect the problem. On Linux, container units must specify:
->
-> - A non-default `RestartSec` (no shorter than several seconds) so the unit does not retry at the systemd default cadence (~100ms).
-> - A `StartLimitIntervalSec` and `StartLimitBurst` that allow several attempts within a window measured in minutes, not seconds, before systemd gives up.
->
-> The exact values are an implementation concern — they need only be loose enough that a slow-failing container gets multiple chances, and tight enough that a permanently broken container reaches the start limit on a human-meaningful timescale. These are pacing parameters, not the definition of a crash loop; that is [autonomous.restart.rate](rule:r/autonomous.restart.rate).
+### Effective scale
 
-> r[autonomous.restart.backoff.undisturbed]
-> While the supervisor is itself bringing a unit up — its first start, or the pause before an automatic restart — the reconciler must neither tear the unit down nor start it again.
-> It must distinguish a unit the supervisor reports as starting from one the supervisor reports as fully started, and treat only the latter as evidence of a broken unit when no container is running under it.
-> A unit whose spec no longer matches the app's definition is exempt: replacing it is the point, and the supervisor has no view of the definition.
->
-> A unit the supervisor is pacing is not faulty, it is between attempts, so no unit-failure fault arises from this window.
->
-> Replacing a unit mid-backoff restarts the supervisor's restart accounting from zero, so the [start limit](rule:r/autonomous.restart.start-limit-hit) is never reached and the crash-loop escalation that depends on it never happens.
-> This is not a narrow race: a container that fails shortly after each start spends most of every restart cycle in this state, so a reconciler that acts on it replaces the unit on nearly every pass and the limit the backoff exists to reach recedes indefinitely.
+The number of instances a Deployment is held at: the scale an operator chose for it, clamped to its declared bounds, or the lower bound where no operator has chosen one.
 
-> r[autonomous.restart.start-limit-hit]
-> When a container unit reaches `failed/start-limit-hit` (systemd has refused further restarts because the unit exhausted [`StartLimitBurst`](rule:r/autonomous.restart.backoff)) the reconciler must:
->
-> - File a `crash_loop` fault scoped to the offending instance, distinct from `container_start_failed`. This is a secondary trigger: a unit the supervisor has given up on must produce the fault even when the recorded rate has not reached its threshold.
-> - Stop attempting to auto-recover the instance (no `reset_failed_unit` + restart cycle) until the fault is cleared. The expected recovery path is operator intervention — fixing the underlying cause, redeploying with new config, or explicitly clearing the fault.
-> - Clear the fault automatically if the instance is later observed healthy.
+## Provenance
 
-> r[autonomous.job-terminal]
-> A Job instance that has naturally reached the Terminated lifecycle state must not be restarted by the reconciler.
-> The reconciler must clean up any lingering container or unit state for such an instance but must not start a replacement.
-> This applies both while a lifecycle operation is in progress (the job completed during the operation) and in steady state.
-> A Job that the reconciler asked systemd to start in a prior tick and that the reconciler currently observes as gone counts as "naturally terminated" for the purposes of this rule, even when no `container_running` observation was ever recorded — short-lived jobs may complete and be auto-removed faster than the observer's poll interval, and forcing a re-start in that case would loop indefinitely.
+The runtime MUST record each autonomous operation, with its [provenance](rule:r/history.operations.provenance), in the autonomous operations log before performing it.
 
-> r[autonomous.job-terminal.defense]
-> The reconciler must remember which Job instances have completed within the current process lifetime.
-> If a remembered completed Job instance is subsequently observed running again (e.g. restarted externally), the reconciler must stop it.
+## Restarts
 
-> r[autonomous.scale]
-> When a Deployment resource's observed running instance count differs from its declared scale, the reconciler must start or stop instances to converge on the declared count.
+When a container instance in the desired state reaches the `Terminated` lifecycle state and its [`on_exit`](rule:l/container.on-exit) or [`on_terminate`](rule:l/deployment.on-terminate) strategy calls for it to be recreated, the runtime MUST start a replacement.
 
-> r[autonomous.healthcheck-replace]
-> When a Deployment instance with [`on_failure: "replace"`](rule:l/deployment.healthcheck.on-failure) is observed unhealthy, the reconciler must:
->
-> - Spawn a replacement instance for the same Deployment so that the unhealthy instance has a healthy sibling-in-progress.
-> - Inhibit any stop of the unhealthy instance while the replacement is starting; the unhealthy instance must keep its routing-pool membership in degraded mode (per [lifecycle.service.routing-pool](rule:r/lifecycle.service.routing-pool)) until the replacement is observed healthy.
-> - Once the replacement is observed healthy, retire the unhealthy instance through the normal scale-down path so the routing pool converges on the healthy backend.
->
-> Instances with `on_failure: "monitor"` must not trigger this behaviour. Their routing-pool membership still follows the prefer-healthy rule, but no replacement is spawned.
+### Restart record
 
-> r[autonomous.healthcheck-replace.guard]
-> A fresh instance brought up by either a [rolling update](rule:r/update.rolling) or by [autonomous.healthcheck-replace](rule:r/autonomous.healthcheck-replace) must itself become healthy within its declared `start_period + retries × interval`. If it does not, the reconciler must:
->
-> - Stop the failed instance so it does not accumulate a permanent footprint.
-> - File a fault per [fault.healthcheck-replace-failed](rule:r/fault.healthcheck-replace-failed).
-> - Refuse to spawn further replacement attempts for this Deployment — whether rolling-driven or healthcheck-driven — until the AppDef generation changes (i.e. the operator pushes new code) or the operator clears the fault.
->
-> The `on_failure` policy decides which deployments are replaced, not which are watched.
-> A deployment declaring `on_failure: monitor` is never bumped by a replacement, but a rolling update of it brings up a fresh instance like any other, and the guard must evaluate that instance.
-> Every deployment that declares a healthcheck therefore has a grace window, whatever its policy.
->
-> The pre-existing instance must continue to run in degraded mode (under its old spec hash if it was a rolling-update target). The runtime must not allow the guard to trigger an indefinite churn of replacement attempts; the guard exists precisely to bound the cost of a permanently-broken workload — whether the breakage was introduced by a script change or arose spontaneously.
+The runtime MUST keep a durable record of every restart of a container instance.
+Each record MUST identify the instance, the app's generation when the record was made, the time of the restart, the exit status of the run that ended where the platform reports one, and whether the restart was a recovery restart or a deliberate restart.
 
-> r[scaling.decision]
-> The runtime maintains a persistent record of operator-chosen scale for each Deployment that has been explicitly scaled.
-> When present, this record determines the effective scale used by the reconciler instead of the lower bound default.
+The cause MUST record why the restart happened, and not which component performed it.
 
-> r[scaling.decision.actions]
-> A named Deployment named by an action resolves to the replicas its effective scale calls for, the same number the reconciler resolves it to, rather than to the lower bound of its declared range.
-> An action that addresses a Deployment addresses the whole of it: a `rt.stop` that reached only part of a scaled deployment would report the workload stopped while the rest of it went on serving, which is the opposite of what a maintenance action that stops a deployment before acting on its data is for.
+> [!NOTE]
+> On a platform with a service supervisor the supervisor performs recovery restarts and the runtime deliberate ones, while on a platform without one the runtime performs both.
+> A record of the actor would mean different things on different platforms.
 
-> r[scaling.decision.unreadable]
-> Where the record of operator-chosen scale cannot be read, the runtime must not fall back to a declared bound: how many instances the operator asked for is unknown, not known to be the minimum.
-> The app must not be actuated for that pass, so whatever is already running keeps running, and the condition must be visible to an operator for as long as it lasts.
-> An operator asking what a deployment's scale is must be told the figure is unavailable rather than given the bound.
->
-> The lower bound is the floor of what an operator may choose, so using it here answers the question with the smallest answer it could have had.
-> A deployment scaled well above its floor is then converged down to it, tearing down instances on the strength of a question that was never answered, and building them back up on the next pass that can read the record.
+The runtime MUST record a restart even when the instance restarted and returned to running between two observations.
+The number of restarts recorded MUST NOT depend on how often the runtime observes.
 
-> r[scaling.clamp]
-> When an app's BSL script is re-evaluated (e.g. via an update), any stored scaling decision for a Deployment whose declared bounds have changed must be clamped to the new bounds.
-> If the stored value falls below the new lower bound it is raised; if it exceeds the new upper bound it is lowered.
-> Clamping is applied before the reconciler acts on the updated definition.
+### Crash-loop detection
 
-> r[autonomous.ingress]
-> When an Ingress resource's configuration in the ingress controller does not match the desired configuration, the reconciler must update or rebuild the configuration.
+When the number of recovery restarts recorded for an instance within the restart window reaches the restart threshold, the runtime MUST file a [`crash_loop` fault](rule:r/fault.crash-loop) against the instance.
+Deliberate restarts MUST NOT count towards the threshold.
 
-> r[autonomous.network]
-> When a Service resource's network plumbing is missing or misconfigured, the reconciler must recreate or repair it.
+> [!NOTE]
+> Counting deliberate restarts would make every rolling update read as a burst of crashes.
+> The rate catches a container that crashes a few times a day indefinitely without ever exhausting a supervisor's start limit.
 
-> r[autonomous.provenance-required]
-> Every autonomous operation must record [provenance](rule:r/history.operations.provenance) before execution.
+An operator MUST be able to read and set the threshold and the window through the [restart settings](rule:i/restart.settings), and a change MUST take effect without restarting the runtime.
+
+| setting | default |
+| --- | --- |
+| threshold | 5 recovery restarts |
+| window | 1800 seconds |
+
+### Restart pacing
+
+Where a supervisor performs recovery restarts, the runtime MUST configure it to pace them so that a crash-looping container does not exhaust the supervisor's start limit before the runtime can detect the loop.
+The runtime SHOULD configure the supervisor to wait 5 seconds between attempts, and to give up after 10 starts within 600 seconds.
+
+While the supervisor is bringing an instance up, whether for its first start or in the pause before an automatic restart, the runtime MUST NOT tear the instance down or start it again.
+The runtime MUST distinguish a unit the supervisor reports as starting from one it reports as started, and MUST treat only a started unit with no running container as broken.
+A unit the supervisor is bringing up MUST NOT give rise to a unit-failure fault.
+The runtime MUST NOT hold back from replacing a unit whose specification no longer matches the app's definition.
+
+> [!NOTE]
+> Replacing a unit while the supervisor paces it resets the supervisor's restart accounting, so the start limit is never reached.
+> A container that fails shortly after each start spends most of each cycle being paced, so a runtime that acts during that window replaces the unit on nearly every iteration.
+
+When the supervisor has given up restarting an instance because it reached its start limit, the runtime MUST file a [`crash_loop` fault](rule:r/fault.crash-loop) against the instance even if the recorded rate is below the threshold.
+
+While an instance has an active `crash_loop` fault, whichever condition filed it, the runtime MUST NOT restart the instance automatically.
+The runtime MUST still tear the instance down when it leaves the desired state.
+
+## Job completion
+
+The runtime MUST NOT restart a Job instance that has terminated of its own accord.
+It MUST clean up the instance's remaining container and unit state, and MUST NOT start a replacement, both during a lifecycle operation and in steady state.
+
+A Job instance that the runtime started on an earlier iteration and that a successful observation now shows to be gone has terminated of its own accord, even if it was never observed running.
+
+> [!NOTE]
+> A short-lived Job can run, exit and be removed between two observations.
+> Starting it again would repeat it indefinitely.
+
+The runtime MUST remember which Job instances have completed for as long as it runs.
+If a Job instance it remembers as completed is observed running again, the runtime MUST stop it.
+
+## Scale
+
+When the number of running instances of a Deployment differs from its effective scale, the runtime MUST start or stop instances to reach the effective scale.
+
+The runtime MUST keep a durable record of the scale an operator chooses for each Deployment the operator has scaled.
+
+When an action names a Deployment, the runtime MUST resolve it to the instances its effective scale calls for, the same set reconciliation holds it at.
+An action that addresses a Deployment addresses all of it.
+
+> [!NOTE]
+> An `rt.stop` that reached only the lower bound's worth of instances of a scaled Deployment would report the workload stopped while the rest went on serving.
+
+### Unreadable scale
+
+If the runtime cannot read the record of operator-chosen scale, it MUST NOT substitute a declared bound.
+It MUST NOT actuate in that iteration any app whose effective scale it could not read, so that the instances already running keep running.
+It MUST hold a fault of kind `scaling_decisions_unreadable` for as long as the record cannot be read, and MUST clear it on the next iteration that reads it.
+
+An `rt.*` call that resolves a named Deployment whose effective scale cannot be read MUST throw.
+An operator who asks for a Deployment's scale while it cannot be read MUST be told the figure is unavailable.
+
+> [!NOTE]
+> The lower bound is the smallest answer the question could have.
+> Converging a Deployment scaled above its floor to that bound tears down instances on the strength of an unanswered question, and rebuilds them once the record can be read.
+
+### Clamping
+
+When an app's definition is replaced and a Deployment's declared bounds change, the runtime MUST clamp the stored scale for that Deployment to the new bounds, raising it to a new lower bound or lowering it to a new upper bound.
+The runtime MUST delete the stored scale of a Deployment the definition no longer declares.
+The runtime MUST clamp before reconciliation acts on the new definition.
+
+## Health-check replacement
+
+When an instance of a Deployment whose healthcheck declares [`on_failure: "replace"`](rule:l/deployment.healthcheck.on-failure) is observed unhealthy, the runtime MUST:
+
+1. Start one instance beyond the Deployment's effective scale as a replacement.
+2. Keep the unhealthy instance running, in the [routing pool in degraded mode](rule:r/lifecycle.service.routing-pool), while the replacement starts.
+3. Once the replacement is observed healthy, retire the unhealthy instance through the normal scale-down path.
+
+The runtime MUST NOT start a replacement for an instance of a Deployment that declares `on_failure: "monitor"`.
+
+### Replacement guard
+
+A fresh instance brought up by a [rolling update](rule:r/update.rolling) or by a health-check replacement MUST become healthy within its grace window of `start_period + retries × interval`, from its declared healthcheck.
+If it does not, the runtime MUST stop it, file a [`health_check_replace_failed` fault](rule:r/fault.healthcheck-replace-failed), and start no further fresh instances of the Deployment, by rolling update or by replacement, until the app's generation changes or an operator clears the fault.
+The instance it was to replace MUST keep running in degraded mode.
+
+The runtime MUST apply the guard to every Deployment that declares a healthcheck, whatever its `on_failure` policy.
+
+> [!NOTE]
+> `on_failure` decides which Deployments are replaced, not which are watched: a rolling update of a `monitor` Deployment brings up a fresh instance like any other.
+> Without the guard, a workload that cannot become healthy churns through replacement instances indefinitely.
+
+## Ingress and network repair
+
+When an ingress's configuration in the proxy does not match its desired configuration, the runtime MUST update or rebuild the configuration.
+
+When a Service's network configuration is missing or wrong, the runtime MUST recreate or repair it.

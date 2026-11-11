@@ -129,7 +129,7 @@ Before the console deletes a volume or confirms the deletion of a held volume, i
 | deleting a snapshot site volume | the snapshot's data is removed permanently, and its source volume is untouched |
 | deleting a bind site volume | only the reference is dropped, and the host path is untouched |
 
-The console MUST show the number of held volumes wherever the operator is, and keep it current without a reload.
+The console MUST show the number of held volumes on every view, and keep it current without a reload.
 
 ## Restart history
 

@@ -110,3 +110,23 @@ Spec leads code:
 Moves: PRX rate-limit budget sentence should say a service-declared limit is shared by inheriting routes; ACTU hardening should link CTR for the PID default; 0640 write mode fits ACTU near storage confinement; SVC dead links to pod.bind/container.mount-service -> POD#service-mounts, POD#port-bindings.
 Standards: RFC 9110, 8878 (HTTP); RFC 8446, 9147, 9110, 9112, 9113, 9114, 1035, 1123 (ING); OCI image config, capabilities(7), signal(7) (CTR).
 Glossary: Ingress (ING); External volume, Declared file write (VOL).
+
+### Runtime C (ACTU IMG SITE PRIO UPD FLT IDN)
+Open:
+- ACTU: journal field names (SEEDLING_*) as contract (kept) or implementation detail; "system journal" vs "host log".
+- ACTU: hold renames data before writing its record; record write failure leaves data moved but invisible: needs a rule.
+- IMG: rt.query records images during a probe in code; spec says no-op: change code or spec.
+- FLT: /faults/clear rejects `_system` (invalid name) though spec lets operators clear `_system`/`seedling` faults: change endpoint, or auto-clear every `_system` kind.
+- FLT: reconciler_panic has no clear path (depends on above).
+- FLT: install_interrupted, audit_lag clear only by operator: keep, or clear install_interrupted on a later successful install.
+Spec leads code:
+- IMG: image_pull_failed filed on the first tick the image is missing (spec: after 5 consecutive failures).
+- IMG: image GC treats a failed pin lookup as not pinned and removes the image.
+- UPD: replace strategy does not wait for every stale instance to stop before starting replacements.
+- FLT: container_runtime_unavailable never cleared; volume_create_failed/volume_remove_failed/volume observe_failed no clear path, volume observation not thresholded; cert_issue_failed not cleared when hostname stops needing a cert.
+- FLT: image_pull_failed keyed by instance and cleared by description match (spec: by image reference); site_ingress_target_missing keyed by site ingress, matched by description substring (spec: by attachment); app-wide registry_error clear also clears instance-scoped ones.
+- FLT: health_check_replace_failed clears on an in-memory generation change (missed across restart); tailscale_unreachable never filed when the socket is unreachable.
+- IDN: app name `seedling` not reserved in code though the runtime files faults under it.
+Moves: ACTU ingress serving sections (actuate.ingress.plaintext/port-scope/warm-certs) belong in PRX; TLS/TCAN/CNR/FLTS/CTR/APPS/PRM fault restatements should link FLT rows.
+Standards: RFC 9000, 9110 (ACTU); RFC 1035, 3596, 6146, 6052, 9110 (SITE); RFC 9562 (IDN).
+Glossary: Data directory (ACTU); Site volume, Site ingress (SITE).
