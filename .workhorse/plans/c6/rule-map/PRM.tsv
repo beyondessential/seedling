@@ -1,0 +1,7 @@
+i/plan.dry-run	PRM#change-planning
+i/param.store	PRM#parameter-storage
+i/param.store.secret	PRM#parameter-storage
+i/param.set	PRM#parameter-set
+i/param.validation	PRM#validation
+i/param.unknown	PRM#parameter-storage
+i/param.unset	PRM#parameter-unset
