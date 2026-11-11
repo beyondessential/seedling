@@ -1,124 +1,26 @@
-The Seedling Web Interface is a browser-based operator surface for a running Seedling instance.
-It exposes the same capabilities as the CLI through a graphical interface, making the full OI surface accessible to human operators without requiring a terminal.
+---
+id: UI
+---
 
-Absent specification bugs, anything not defined here is either defined in another spec document or is implicitly not allowed.
+# Web console
 
-# Transport
+## Operator Capabilities
 
-> w[transport.webtransport]
-> The web interface proxies OI requests over WebTransport.
-> The wire format over WebTransport streams is identical to the OI wire format defined in the interface spec: each request/response cycle uses one client-initiated bidirectional stream carrying newline-terminated JSON.
-> The web interface injects the caller's actor (see [wire.actor](interface.md#i--wire.actor)) into each proxied request.
-
-> w[transport.http]
-> The web interface provides a plain-HTTP endpoint for SPA delivery and the `POST /connect` handshake.
-> This endpoint is designed to sit behind a TLS-terminating reverse proxy in non-loopback deployments.
-> Browsers treat loopback origins as secure contexts, so TLS is not required for local development.
-
-> w[transport.http.security-headers]
-> Every response from the plain-HTTP endpoint carries a baseline set of browser security headers:
->
-> - A Content Security Policy that denies framing, forbids plugin/object content, and restricts scripts to same-origin. The policy must still permit the SPA to load its own styles (which the UI toolkit injects inline at runtime) and `data:` images and fonts. It must permit WebTransport sessions to the WebTransport endpoint, named as a precise origin (the request's host on the WebTransport port) rather than a scheme wildcard.
-> - An explicit anti-clickjacking header denying framing, for agents that predate Content Security Policy `frame-ancestors`.
-> - Content-type sniffing disabled.
-> - A permissions policy that denies access to browser features the interface does not use.
-> - Cross-origin isolation headers that require embedded resources to be same-origin (or to explicitly opt in) and sever the opener relationship with cross-origin windows; the console embeds no third-party content.
->
-> Transport-security headers (such as HSTS) are owned by the TLS-terminating reverse proxy, not this endpoint.
-
-> w[daemon.connect-retry]
-> If the initial connection to the seedling daemon fails at startup, the web interface must retry with exponential backoff rather than exiting.
-> The retry interval starts at one second and doubles on each attempt up to a maximum of thirty seconds.
-> Each failed attempt must produce a warning log message.
-> The web interface keeps retrying indefinitely until a connection is established and verified.
-
-> w[daemon.pin]
-> The web interface verifies the daemon by pinning its SPKI fingerprint.
-> The expected fingerprint may be supplied directly, or read from a file that the daemon publishes (see [transport.server-identity.published](interface.md#i--transport.server-identity.published)).
-> When read from a file, the fingerprint is resolved on each connection attempt, so a daemon that has not yet written the file does not cause the web interface to fail at startup — it retries per [daemon.connect-retry](#w--daemon.connect-retry) until the file appears.
-
-# Authentication
-
-> w[auth.connect]
-> `POST /connect` is the single entry point for authentication and WebTransport session initiation.
-> The request body is a JSON object containing zero or one credential field: `token` (a previously issued session token), or `password` (a plaintext password for initial login).
-> The server checks for a valid credential in the following order: Tailscale identity headers (if trusted, see [auth.tailscale](#w--auth.tailscale)), dev bypass (see [auth.dev](#w--auth.dev)), Bearer token from the `token` field, password from the `password` field.
-> On success, the response is a JSON object with the following fields:
->
-> - `token`: a session token the client must present on subsequent `POST /connect` calls.
-> - `actor`: the resolved actor identity — an object with `kind`, `id`, and `display` string fields.
-> - `wt_url`: a fully-qualified URL the client must use to open the WebTransport session. The URL includes a short-lived single-use token (see [wt.token](#w--wt.token)).
->   The URL must name a port the WebTransport endpoint is actually bound to, for every supported combination of listen configuration; a default port must not be advertised in place of a configured one.
-> - `cert_hashes`: an array of one or two SHA-256 hashes (hex-encoded) of the WebTransport endpoint's current certificate(s), for use with `serverCertificateHashes`.
->
-> On failure, the response is HTTP 401 with a JSON body:
-> ```json
-> { "auth_required": "password" }
-> ```
-> The `auth_required` field names the credential type the client must collect and supply in a subsequent `POST /connect` call.
-
-> w[auth.tailscale]
-> When the web interface is explicitly configured to trust Tailscale identity headers, requests carrying those headers are authenticated without a password and the Tailscale user identity is used as the actor.
-> The user's display name is decoded from any MIME encoded-word (RFC 2047) form the proxy uses to carry non-ASCII names in an ASCII header; a value that is not so encoded is used as-is.
-> The web interface must not honour Tailscale identity headers unless this trust is explicitly enabled by the operator.
-> This mode is intended for deployments where the plain-HTTP endpoint is fronted by Tailscale Serve, which injects identity headers and enforces network-level access control.
-
-> w[auth.password]
-> Password-based authentication is supported.
-> The configured password is validated using Argon2id.
-> On success a session token is issued and returned in the `POST /connect` response.
-> Session tokens have a bounded lifetime; the lifetime must be configurable.
-
-> w[auth.dev]
-> The web interface may be configured to bypass all authentication.
-> This mode must be rejected at startup if any configured bind address is not a loopback address.
-
-# WebTransport Session
-
-> w[wt.cert]
-> The WebTransport endpoint uses a self-signed ECDSA-P256 certificate.
-> The certificate validity period must not exceed 14 days.
-> The SHA-256 hash of the current certificate is included in every successful `POST /connect` response so the client can open WebTransport using `serverCertificateHashes` without requiring CA trust.
-
-> w[wt.cert.rotation]
-> The web interface rotates the WebTransport certificate before it expires.
-> During rotation the web interface maintains an overlap window of at least 24 hours during which both the expiring certificate and the new certificate are accepted.
-> The hashes of both certificates are included in `POST /connect` responses during the overlap window.
-> Clients that reconnect after a rotation automatically receive the new hash by calling `POST /connect` again.
-> Rotation changes the certificate the listener presents to new sessions without releasing the listener's address, and established sessions continue across it.
-
-> w[wt.token]
-> The `wt_url` returned by `POST /connect` embeds a short-lived single-use token.
-> The WebTransport handshake is rejected if the token is absent, expired, or has already been consumed.
-> Tokens exist solely to bridge the gap between `POST /connect` and the WebTransport handshake; they carry no long-term session state.
-
-> w[wt.actor]
-> The web interface resolves the caller's actor identity during `POST /connect` and associates it with the WebTransport session.
-> Every OI request proxied through the session carries that actor.
-> The actor does not change for the lifetime of a WebTransport session.
-
-# SPA Delivery
-
-> w[spa.delivery]
-> The web interface serves a static single-page application from the plain-HTTP endpoint.
-> The SPA must be loaded from a secure context — either a loopback address or a TLS-terminating reverse proxy — so that the browser permits WebTransport connections.
-> Static assets are served with long-lived cache headers; the entry point (`index.html`) must not be cached beyond the current deployment.
-
-# Operator Capabilities
+<!-- from web: Operator Capabilities -->
 
 > w[routes.apps]
 > The web interface exposes the full app management surface of the OI:
 > listing registered apps and their statuses; showing detailed app status including resources, faults, params, install requirements, and actions; registering new apps with a BSL script; updating an app's BSL script or fetching its definition from a registry; deregistering apps; setting and unsetting parameters; scaling deployments; setting an app's priority; viewing generation history; planning proposed changes; invoking lifecycle actions; and invoking the install action with its requirements.
 
 > w[routes.apps.definition]
-> The app detail page must show where the app's current definition came from, following its [provenance](interface.md#i--definition.provenance): for a fetched definition, its reference and digest; for a pushed one, its content hash and who pushed it, together with any origin the client reported, marked as reported by the client.
+> The app detail page must show where the app's current definition came from, following its [provenance](rule:i/definition.provenance): for a fetched definition, its reference and digest; for a pushed one, its content hash and who pushed it, together with any origin the client reported, marked as reported by the client.
 
 > w[routes.apps.definition.fetch]
 > The app detail page must let the operator update the app's definition from a registry.
-> For an app whose definition was fetched, it lists the tags of the recorded reference's repository through [`/registries/tags`](interface.md#i--definition.tags) for the operator to pick from; the operator may instead enter a complete reference.
+> For an app whose definition was fetched, it lists the tags of the recorded reference's repository through [`/registries/tags`](rule:i/definition.tags) for the operator to pick from; the operator may instead enter a complete reference.
 > The operator may change one parameter alongside the new definition.
-> Before applying, the page shows the [planned change](interface.md#i--plan.dry-run), including any validator rejections, and a change that is rejected cannot be applied.
-> The update is issued as a single [`/apps/update`](interface.md#i--app.update) request.
+> Before applying, the page shows the [planned change](rule:i/plan.dry-run), including any validator rejections, and a change that is rejected cannot be applied.
+> The update is issued as a single [`/apps/update`](rule:i/app.update) request.
 > While the app has an active `definition_source_moved` fault, the page shows beside the provenance that the recorded tag has moved, and offers that tag as the one to update to.
 
 > w[routes.apps.definition.edit]
@@ -127,7 +29,7 @@ Absent specification bugs, anything not defined here is either defined in anothe
 > Applying is withheld until the definition's files have been read, since a bundle that has not arrived is not an empty one, and the reason is shown when they cannot be.
 
 > w[routes.apps.canopy-type]
-> The app detail page must show the app's [Canopy application type](language.md#l--app.canopy-type) when its definition declares one, beside the app's other declared details.
+> The app detail page must show the app's [Canopy application type](rule:l/app.canopy-type) when its definition declares one, beside the app's other declared details.
 
 > w[routes.apps.fault-count]
 > The apps table on the home route must surface, per app, how many active faults are currently filed against it.
@@ -135,7 +37,7 @@ Absent specification bugs, anything not defined here is either defined in anothe
 > The chip uses the error palette to align with the existing fault indicators elsewhere in the UI.
 
 > w[routes.apps.healthcheck-indicator]
-> When a container resource (Deployment or Job) has a declared [healthcheck](language.md#l--deployment.healthcheck), the app detail page must show a small indicator alongside the resource's lifecycle state.
+> When a container resource (Deployment or Job) has a declared [healthcheck](rule:l/deployment.healthcheck), the app detail page must show a small indicator alongside the resource's lifecycle state.
 > The indicator must convey:
 >
 > - that a healthcheck is declared,
@@ -146,16 +48,16 @@ Absent specification bugs, anything not defined here is either defined in anothe
 > Hovering or focusing the indicator must reveal the declared `kind`, `on_failure`, and (for `kind: "command"`) a truncated form of the `cmd`.
 
 > w[routes.apps.priority]
-> The app detail page must show the app's [app priority](interface.md#i--app.priority.set) and let the operator set it to any of the levels the OI accepts.
+> The app detail page must show the app's [app priority](rule:i/app.priority.set) and let the operator set it to any of the levels the OI accepts.
 > The apps table on the home route must surface an app whose priority is not `normal` with a chip in its status column, alongside the existing status and fault chips. An app at `normal` shows no chip, so the table draws the eye only where an operator has deliberately changed an app's standing.
 > The chip must distinguish a raised priority from a lowered one by colour, following the status palette used elsewhere in the UI.
 > A priority change takes effect on the running app without a redeploy, so the new value must be reflected in both the detail page and the apps table without requiring a page reload.
 
 > w[routes.apps.priority-indicator]
-> The app detail page must show, for each Deployment resource declaring a [priority](language.md#l--deployment.priority) other than `normal`, an indicator of the declared level alongside the resource's lifecycle state.
+> The app detail page must show, for each Deployment resource declaring a [priority](rule:l/deployment.priority) other than `normal`, an indicator of the declared level alongside the resource's lifecycle state.
 > The indicator must read as declared configuration rather than as a control: a Deployment's priority comes from the app's BSL definition, so changing it means changing that definition and installing it.
 > The indicator's colour must follow the same scale as the app priority chip, so a raised level reads the same way in both places.
-> The indicator must convey standing within the app rather than across apps: [kill order](runtime.md#r--priority.kill-order) is app-major, so a `Critical` Deployment in a `low`-priority app is shed before any workload of a `high`-priority one.
+> The indicator must convey standing within the app rather than across apps: [kill order](rule:r/priority.kill-order) is app-major, so a `Critical` Deployment in a `low`-priority app is shed before any workload of a `high`-priority one.
 
 > w[routes.logs]
 > The web interface exposes log streaming for app workload containers and infrastructure components.
@@ -169,13 +71,13 @@ Absent specification bugs, anything not defined here is either defined in anothe
 
 > w[routes.events.gap]
 > The web interface relays the OI feed's `EventsDropped` events unchanged.
-> When a client falls behind the web interface's own feed, the web interface writes an `EventsDropped` event to that client, with the meaning [event.gap](interface.md#i--event.gap) gives it.
+> When a client falls behind the web interface's own feed, the web interface writes an `EventsDropped` event to that client, with the meaning [event.gap](rule:i/event.gap) gives it.
 > When the web interface's own subscription to the OI feed is lost and later re-established, it writes an `EventsDropped` event to every client, without a `skipped` count, since the number of events in between is unknown.
 > On receiving `EventsDropped`, the client reads afresh every view the event feed keeps current.
 
 > w[routes.shells]
 > The web interface exposes interactive shell sessions, allowing operators to open a terminal session within an app's context directly from the browser.
-> See [shells.wire](#w--shells.wire), [shells.ui](#w--shells.ui), and [shells.resize](#w--shells.resize) for the wire protocol and UI details.
+> See [shells.wire](rule:w/shells.wire), [shells.ui](rule:w/shells.ui), and [shells.resize](rule:w/shells.resize) for the wire protocol and UI details.
 
 > w[shells.wire]
 > The browser opens a single WT bidirectional stream and writes one newline-terminated JSON request line `{"method":"/shells/start","params":{"app","name","rows","cols"}}`.
@@ -193,7 +95,7 @@ Absent specification bugs, anything not defined here is either defined in anothe
 
 > w[shells.exit]
 > When the daemon session ends, the gateway forwards the final `{"exit_code":N}\n` frame from the daemon's server-initiated bidi to the browser's bidi stream and closes the downstream half.
-> The browser reads this frame to surface the exit code in the UI per [shells.ui](#w--shells.ui).
+> The browser reads this frame to surface the exit code in the UI per [shells.ui](rule:w/shells.ui).
 
 > w[volumes.shell-ui]
 > Each site volume row in the Volumes page and each volume resource row in the App Detail page expose an "Open shell" button.
@@ -245,7 +147,7 @@ Absent specification bugs, anything not defined here is either defined in anothe
 > Both the images page and the app-detail images table must require confirmation before issuing an image remove, and the confirmation must state that remove fails if the image is currently in use.
 
 > w[routes.images.discover]
-> The app detail Images section must offer a "Discover from handlers" action that calls [`/apps/images/discover`](interface.md#i--image.discover) with `lenient: true`, merging the discovered image references into the displayed table as a third state — _potentially used_ — distinct from _in use_ and _pinned_.
+> The app detail Images section must offer a "Discover from handlers" action that calls [`/apps/images/discover`](rule:i/image.discover) with `lenient: true`, merging the discovered image references into the displayed table as a third state — _potentially used_ — distinct from _in use_ and _pinned_.
 > When any handler's probe reports an error or is skipped, that must be surfaced inline near the discover results so the operator can decide to re-run the probe with explicit param values.
 > A "Warm all discovered" button must enqueue a pull-and-pin for each discovered image reference that is not already present or pinned.
 
@@ -253,16 +155,16 @@ Absent specification bugs, anything not defined here is either defined in anothe
 > The web interface exposes site ingress management: listing manual and discovered ingresses separately; creating, updating, and deleting manual ingresses; attaching and detaching forward and redirect targets; and showing discovery provider status, including a warning while discovery is unhealthy. Failures of the underlying queries and mutations must be surfaced to the operator.
 
 > w[routes.sessions]
-> The web interface must provide a connected-clients view showing all active web UI sessions, open CLI shell sessions, and active port forwards. Each entry must show at minimum the client identity, the connected or opened timestamp, and — for shells and forwards — the associated app. Web UI session entries must additionally surface a `last_seen` timestamp updated by [sessions.heartbeat](#w--sessions.heartbeat) so operators can distinguish a fresh session from one waiting to age out.
+> The web interface must provide a connected-clients view showing all active web UI sessions, open CLI shell sessions, and active port forwards. Each entry must show at minimum the client identity, the connected or opened timestamp, and — for shells and forwards — the associated app. Web UI session entries must additionally surface a `last_seen` timestamp updated by [sessions.heartbeat](rule:w/sessions.heartbeat) so operators can distinguish a fresh session from one waiting to age out.
 
 > w[sessions.heartbeat]
-> The web interface must periodically send a heartbeat over the active WebTransport session at an interval no greater than one third of the [stale cutoff](#w--sessions.stale-cutoff) so a single missed heartbeat does not retire a still-connected session. The heartbeat is delivered as the OI method `/connected-clients/heartbeat` and updates the corresponding session's `last_seen` timestamp on the server. The heartbeat parameters carry the session's current [safety mode](#w--sessions.safety-mode); the server records the reported mode on the session so other operators can observe it via [`/connected-clients/list`](#w--routes.sessions). The browser must additionally attempt a best-effort heartbeat-or-close on `pagehide` so a deliberate tab close does not require waiting for the cutoff.
+> The web interface must periodically send a heartbeat over the active WebTransport session at an interval no greater than one third of the [stale cutoff](rule:w/sessions.stale-cutoff) so a single missed heartbeat does not retire a still-connected session. The heartbeat is delivered as the OI method `/connected-clients/heartbeat` and updates the corresponding session's `last_seen` timestamp on the server. The heartbeat parameters carry the session's current [safety mode](rule:w/sessions.safety-mode); the server records the reported mode on the session so other operators can observe it via [`/connected-clients/list`](rule:w/routes.sessions). The browser must additionally attempt a best-effort heartbeat-or-close on `pagehide` so a deliberate tab close does not require waiting for the cutoff.
 
 > w[sessions.safety-mode]
 > Each web session has a safety mode — one of `read`, `write`, or `dangerous` — chosen by the operator that controls which client-side actions are enabled. The web interface must:
 >
-> - Report the active mode in every [heartbeat](#w--sessions.heartbeat) and send a heartbeat immediately when the operator changes mode so peer sessions see the change without waiting for the next heartbeat tick.
-> - Surface the recorded mode for every web session in [`/connected-clients/list`](#w--routes.sessions) and as a field on the [`WebSessionStarted`](#w--sessions.events) event for new sessions; emit a `WebSessionModeChanged` event whenever a session's recorded mode changes.
+> - Report the active mode in every [heartbeat](rule:w/sessions.heartbeat) and send a heartbeat immediately when the operator changes mode so peer sessions see the change without waiting for the next heartbeat tick.
+> - Surface the recorded mode for every web session in [`/connected-clients/list`](rule:w/routes.sessions) and as a field on the [`WebSessionStarted`](rule:w/sessions.events) event for new sessions; emit a `WebSessionModeChanged` event whenever a session's recorded mode changes.
 > - Display each peer session's current mode alongside its other fields in the connected-clients view.
 > - Visually flag the session-count indicator and the local mode switcher whenever any *other* session is in `write` or `dangerous` mode, so an operator notices when a peer is performing mutations even if their own session is read-only. The flag must distinguish the highest peer tier (write vs dangerous) by colour, matching the safety-mode palette used elsewhere.
 >
@@ -284,7 +186,7 @@ Absent specification bugs, anything not defined here is either defined in anothe
 > The navbar's held-volumes badge must reflect the current count of held volumes without requiring a page reload, both when new held volumes are created and when the operator confirms their deletion.
 
 > w[routes.restarts]
-> The web interface must expose container restart history at `/restarts`, listing [restart records](interface.md#i--restart.record) most recent first with their app, instance, time, initiator, and exit status.
+> The web interface must expose container restart history at `/restarts`, listing [restart records](rule:i/restart.record) most recent first with their app, instance, time, initiator, and exit status.
 > The list must be filterable by app, and deliberate restarts must be visually distinguishable from recovery ones, since only recovery restarts count towards the crash-loop rate.
 > The route must also present the crash-loop rate threshold and window, and allow an operator to change them.
 
@@ -292,26 +194,16 @@ Absent specification bugs, anything not defined here is either defined in anothe
 > The web interface must expose TLS certificate management at `/certificates`, with the following sections:
 >
 > - **Per-hostname policies**: list, add (binding a hostname or wildcard to ACME-DNS via a configured provider, or to the Canopy-only policy), and clear.
-> - **Hostnames**: for each hostname, the strategy responsible for it and when it falls through to the next, per [tls.hostname.list](interface.md#i--tls.hostname.list), with Canopy certificates shown alongside the others.
+> - **Hostnames**: for each hostname, the strategy responsible for it and when it falls through to the next, per [tls.hostname.list](rule:i/tls.hostname.list), with Canopy certificates shown alongside the others.
 > - **Settings**: view and edit the ACME contact email and certificate profile used for issuance.
 > - **Stored certificates**: list grouped by the certificate's label, surfacing state, origin, issuer, expiry, and serial; certificates within fourteen days of expiry and self-signed certificates must be visually flagged.
 >   A certificate obtained through the CSR flow surfaces the hostnames the request was made for wherever they differ from the certificate's own primary SAN, and carries the same visual flagging as the two cases above, naming the missed hostnames, when the issued certificate does not cover all of them.
->   Beginning a CSR takes one or more hostnames, each a hostname or a `*.<suffix>` wildcard, as [tls.cert.csr.begin](interface.md#i--tls.cert.csr.begin) accepts.
->   An active manual or CSR-derived certificate within fourteen days of expiry, or past it, offers to [renew](runtime.md#r--tls.csr.renew) it: this begins a CSR pre-filled with the certificate's SAN DNS names, editable, alongside the hostnames it currently serves.
+>   Beginning a CSR takes one or more hostnames, each a hostname or a `*.<suffix>` wildcard, as [tls.cert.csr.begin](rule:i/tls.cert.csr.begin) accepts.
+>   An active manual or CSR-derived certificate within fourteen days of expiry, or past it, offers to [renew](rule:r/tls.csr.renew) it: this begins a CSR pre-filled with the certificate's SAN DNS names, editable, alongside the hostnames it currently serves.
 >   Where the certificate already has a pending renewal, it leads to that renewal instead, and a pending renewal names the certificate it renews.
 > - **DNS providers**: list (without credentials), add (Route 53), and delete (refused while a policy references the provider).
 >
 > Private key material, ACME account keys, and DNS-provider credentials must never be returned to the client.
 
 > w[sessions.events]
-> The web interface must emit `WebSessionStarted`, `WebSessionStopped`, and `WebSessionModeChanged` events on the event feed when a WebTransport session is established, closed, or reports a new [safety mode](#w--sessions.safety-mode). Clients must use these events, together with the OI events `ShellStarted`, `ShellExited`, `ForwardStarted`, and `ForwardStopped`, to keep the connected-clients view up to date without polling.
-
-# Bind Configuration
-
-> w[bind]
-> The web interface may be configured to listen on one or more addresses.
-> The plain-HTTP listener and the WebTransport listener use independent ports.
-> The WebTransport listener may be configured to bind a different set of addresses than the HTTP listener: WebTransport cannot be carried by an HTTP-terminating reverse proxy, so a deployment that fronts the HTTP listener with such a proxy bound to loopback must still be able to expose the WebTransport listener directly to clients.
-> When the WebTransport addresses are not separately configured, both listeners share the same set of addresses.
-> When no addresses are explicitly configured, both listeners bind to a loopback address only.
-> Failure to bind any configured address at startup is a fatal error.
+> The web interface must emit `WebSessionStarted`, `WebSessionStopped`, and `WebSessionModeChanged` events on the event feed when a WebTransport session is established, closed, or reports a new [safety mode](rule:w/sessions.safety-mode). Clients must use these events, together with the OI events `ShellStarted`, `ShellExited`, `ForwardStarted`, and `ForwardStopped`, to keep the connected-clients view up to date without polling.
