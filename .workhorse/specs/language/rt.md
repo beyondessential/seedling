@@ -171,7 +171,8 @@ A `Started` returned by a Collection method MUST keep the barriers of the `Start
 | `terminated_eventually()` | Terminated | none | a `Termination` |
 
 The runtime sets the value of each default deadline.
-A short default deadline MUST be on the order of tens of seconds, and a long one on the order of hours.
+A short default deadline MUST be on the order of tens of seconds.
+A long default deadline MUST be on the order of hours.
 Every default deadline MUST be a positive number of seconds.
 
 The default deadline of `rt.stop` is 30 seconds more than the longest [stop timeout](container.md#stopping) among the containers of the resources it stops, or 30 seconds where it stops no container.

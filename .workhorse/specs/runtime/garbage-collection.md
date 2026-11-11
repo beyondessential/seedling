@@ -19,6 +19,7 @@ A failure to delete one kind of record MUST NOT prevent the pass from deleting t
 | cleared fault retention | 604 800 seconds (7 days) | `--gc-retain-cleared-faults-secs` |
 | completed autonomous operation retention | 604 800 seconds (7 days) | `--gc-retain-completed-operations-secs` |
 | unscheduled instance retention | 600 seconds (10 minutes) | `--gc-retain-unscheduled-instances-secs` |
+| restart records kept per instance | 50 | `--gc-retain-restart-records` |
 
 An operator MAY override each setting with its daemon option when the daemon starts.
 
@@ -35,7 +36,7 @@ The runtime MUST delete every observation, autonomous operations log entry and [
 
 ## Restart records
 
-The runtime MUST keep the 50 most recent restart records of each resource instance, and MUST delete that instance's older ones.
+The runtime MUST keep the configured number of most recent restart records of each resource instance, and MUST delete that instance's older ones.
 The runtime MUST record every restart, however quickly an instance is restarting.
 The bound applies only to the records kept.
 

@@ -148,7 +148,7 @@ The runtime MUST remove every challenge record it published for an issuance once
 
 The runtime MUST generate a new key pair for each issuance, and SHOULD generate an ECDSA key on curve P-256.
 
-The runtime MUST NOT run two ACME orders at once.
+The runtime SHOULD NOT run two ACME orders at once.
 
 If an issuance fails, the runtime MUST file a fault of kind `cert_issue_failed` against the hostname, carrying the failure, and MUST log it.
 The runtime MUST NOT file a second such fault for a hostname that already has one.

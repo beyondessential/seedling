@@ -155,7 +155,7 @@ A shell session uses three streams:
 
 - the client-initiated bidirectional stream the request arrived on, the session stream;
 - a server-initiated unidirectional stream carrying the shell's standard output;
-- a server-initiated unidirectional stream carrying the shell's standard error.
+- a server-initiated unidirectional stream carrying the server's own diagnostics about the session, as [shell sessions](shells.md) specify.
 
 On the session stream, the client MUST write the request's opening line and then the shell's standard input as raw bytes, for the rest of the stream's life.
 The server MUST write the [handshake response](shells.md#opening-an-app-shell) on the session stream and, when the session ends, the [exit frame](shells.md#session-end), and nothing else.

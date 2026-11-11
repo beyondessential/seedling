@@ -41,7 +41,7 @@ A hostname contains at least one ASCII letter.
 
 Every timestamp in a request or result of these methods is an integer count of seconds since 1970-01-01T00:00:00Z, leap seconds excluded.
 
-The runtime MUST NOT return a private key or DNS provider credentials from any Operator Interface method.
+The runtime MUST NOT return a private key, an ACME account key or DNS provider credentials from any Operator Interface method.
 
 If the runtime cannot read or write its TLS state while handling a request, it MUST refuse the request with `internal`.
 It MUST NOT report such a failure as `not_found`.

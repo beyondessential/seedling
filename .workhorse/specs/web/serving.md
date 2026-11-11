@@ -154,7 +154,7 @@ Every response from the HTTP endpoint MUST carry these headers.
 
 The policy's `connect-src` directive MUST be `connect-src 'self' https://<host>:<port>`, where `<host>` is the host the request names in its `Host` header without its port, and `<port>` is the WebTransport listener's advertised port.
 An IPv6 literal MUST keep its brackets.
-For a request without a `Host` header the directive MUST be `connect-src 'self'`.
+For a request without a `Host` header, `<host>` MUST be `localhost`, as for the [`wt_url`](#session-establishment) the web interface then gives.
 The policy MUST NOT name the WebTransport endpoint by a scheme alone.
 
 The headers are defined by [Content Security Policy Level 3](https://www.w3.org/TR/CSP3/), [RFC 7034](https://www.rfc-editor.org/rfc/rfc7034) (`X-Frame-Options`), [Fetch](https://fetch.spec.whatwg.org/) (`X-Content-Type-Options`, `Cross-Origin-Resource-Policy`), [Permissions Policy](https://www.w3.org/TR/permissions-policy/), and [HTML](https://html.spec.whatwg.org/) (`Cross-Origin-Embedder-Policy`, `Cross-Origin-Opener-Policy`).
@@ -270,7 +270,7 @@ A client MUST send each request on its own bidirectional stream of its web sessi
 The stream MUST begin with a request object as [WIRE](../interface/wire.md) defines, terminated by a newline or by the end of the client's direction of the stream.
 
 The web interface MUST NOT relay a request line longer than 4 MiB (4,194,304 bytes), or one that is not a JSON object.
-It MUST abandon the stream of such a request without a response.
+It MUST answer such a request with `requirements_invalid`, as the server does.
 
 The web interface MUST set the request's top-level `actor` to the web session's actor, replacing any actor the client supplied.
 

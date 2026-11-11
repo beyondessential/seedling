@@ -97,7 +97,7 @@ The server MUST reject a request naming an app that is not registered with `not_
 The server MUST reject the request with `operation_in_progress` while the app is `Installing`, and with `not_installed` while it is `NotInstalled` or `Uninstalling`.
 The server MUST reject the request with `operation_in_progress` while [uninstall admission](../runtime/app-teardown.md#uninstall-admission) refuses it, with a `message` naming the action or change that holds the app.
 
-Otherwise the server MUST move the app to `Uninstalling`, emit an `AppPhaseChanged` [event](events.md#event-types), and answer `{}`.
+Otherwise the server MUST durably move the app to `Uninstalling` before it answers, emit an `AppPhaseChanged` [event](events.md#event-types), and answer `{}`.
 The runtime then tears the app down as [TRD](../runtime/app-teardown.md) specifies, and moves it to `NotInstalled` once teardown completes.
 
 ## Cancellation

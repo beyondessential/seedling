@@ -185,7 +185,7 @@ The session's working directory SHOULD be the mount point when one volume is mou
 
 A volume shell is a shell session in every other respect: its handshake response, streams, startup, end, `ShellStarted` and `ShellExited` events, listing, resizing and stopping are as for an app shell.
 The server MUST register a volume shell under the app name `"_volumes"`, which no app can hold, with the display names of its mounts joined by `", "` as its name.
-A volume shell's `ShellStarted` event MUST carry `app` `"_volumes"` and `name` `"volume-shell"`.
+A volume shell's `ShellStarted` event MUST carry `app` `"_volumes"` and the name it is registered under.
 
 ### Volume shell privileges
 

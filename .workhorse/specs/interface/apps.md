@@ -79,15 +79,7 @@ An update that changes no parameter MUST NOT schedule a handler.
 
 ## Uninstall
 
-`/apps/uninstall` takes an `app` parameter and tears down every resource of an installed app, returning it to `not_installed`.
-
-The server MUST refuse the request with `not_found` if the app is not registered.
-It MUST refuse it with `operation_in_progress` if an install of the app is in progress, or a lifecycle operation is running or queued for it, naming the operation.
-It MUST refuse it with `not_installed` if the app is not installed or is already uninstalling.
-
-On success the server MUST durably move the app to `uninstalling` before it answers, and MUST emit an `AppPhaseChanged` event.
-The runtime then tears the app down as [app teardown](../runtime/app-teardown.md) specifies, and the app becomes `not_installed` once teardown completes.
-The result is `{}`.
+`/apps/uninstall` tears down every resource of an installed app, as [ACN](actions.md#uninstall) specifies.
 
 ## Removal
 

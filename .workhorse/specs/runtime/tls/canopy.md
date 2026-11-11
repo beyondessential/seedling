@@ -157,6 +157,8 @@ Asking again about an open order MUST NOT add an entry.
 The runtime MUST hold a fault of kind `canopy_certificate_failed` against each ingress declaring a hostname while any of these holds:
 
 - Canopy is the responsible strategy for the hostname and cannot be asked about it;
+- the hostname is under the [Canopy-only policy](#canopy-only-policy) and Canopy cannot be asked about it;
+- the last answer Canopy gave for the hostname rejected the runtime's CSR;
 - the hostname's chain includes Canopy, a cycle is running, no usable certificate serves the hostname, and a reason is recorded for the responsible strategy's last failure;
 - a cycle replacing a certificate has reached the last strategy of a chain of more than one.
 

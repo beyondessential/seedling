@@ -199,11 +199,11 @@ A `config` with any other key MUST throw.
 
 A `try_duration` of zero disables retrying: a request that cannot reach its first-chosen backend fails at once, and `interval` is not consulted.
 
-If resolution yields an `interval` of zero and a non-zero `try_duration`, the runtime MUST use an `interval` of 0.25 for that route.
+If resolution yields an `interval` of zero and a non-zero `try_duration` for a route, evaluation of the definition MUST fail once the definition has evaluated, with an error naming the route.
 
 > [!NOTE]
 > A zero interval with a non-zero try duration retries without pause, spinning whenever every backend is unreachable.
-> A route can reach that pairing only by taking one value from its service and the other from itself, which no single declaration can see.
+> A route can reach that pairing only by taking one value from its service and the other from itself, which no single declaration can see, so the check waits until every declaration is in.
 
 How the runtime balances is specified by [route balancing](../runtime/proxy.md#balancing).
 

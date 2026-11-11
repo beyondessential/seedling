@@ -121,6 +121,11 @@ The runtime MUST read [log streams](../interface/logs.md) from the journal, sele
 
 The runtime MUST ensure that the host's IPv6 and IPv4 forwarding, as [NAT64](../runtime/nat64.md#translator) requires, are enabled through the `net.ipv6.conf.all.forwarding` and `net.ipv4.conf.all.forwarding` kernel settings.
 
+## Egress
+
+The default routes the runtime reads, for [IPv6 egress](../runtime/nat64.md#ipv6-egress) and for [`HOST_HAS_IPV4`](../language/constants.md#host-constants), MUST be those of the main routing table.
+A globally routable IPv6 address MUST be one within `2000::/3`.
+
 ## Idle command
 
 On Linux, [`IDLE_CMD`](../language/constants.md#idle-command) MUST be `["sleep", "infinity"]`.

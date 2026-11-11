@@ -79,7 +79,7 @@ The runtime MUST clear that fault when a teardown succeeds or the translator is 
 ## IPv6 egress
 
 When it starts, the runtime MUST determine whether the host has IPv6 egress to the internet.
-The host has IPv6 egress when its main routing table holds a default IPv6 unicast route (`::/0`) and a non-loopback interface carries an address within `2000::/3`.
+The host has IPv6 egress when it has a default IPv6 unicast route (`::/0`) and an interface other than loopback carries a globally routable IPv6 address, which excludes unique local and link-local addresses.
 The determination MUST rest only on the host's routing and address state, and MUST NOT depend on DNS resolution or on sending traffic.
 If that state cannot be read, the determination is undetermined, and the runtime MUST NOT report it as the host having or lacking IPv6 egress.
 While it is undetermined, the resolver MUST synthesise as for a host without IPv6 egress, and the runtime MUST file a system fault of kind `ipv6_egress_undetermined`.
