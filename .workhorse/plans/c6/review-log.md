@@ -106,3 +106,4 @@ Also by me: ACME HTTP-01 challenges answered ahead of an ingress redirect (ING, 
 Accepted from agents: INFRA host-originated redirection covers IPv4 too, matching the new ingress redirection section; re-check hourly floor counts from the last successful re-check, so failures still back off from 15 minutes; registry_error split into desired_state_unreadable and instance_identity_unreadable.
 Waiting on the user: backup-snap- sweep; interface specs for 38 unspecced OI methods.
 User settled: backup-snap sweep dropped; VOLM, SVCM, INGM interface specs written on this card.
+VOLM, SVCM, INGM written. Accepted: zero-endpoint site services; loopback endpoints refused; external volume mappings need not name a declared slot (dynamic external volumes).

@@ -101,3 +101,18 @@
 - remote_host: refuse loopback addresses (127.0.0.0/8, ::1) like localhost.
 - runtime/site_services/resolver.rs: unreadable system DNS configuration at startup never retries and records nothing (endpoints silently unresolved); refresh_due_hosts read failure only logs. Retry, and surface it.
 - CLI services site create cannot pass endpoints (needs an option now that the console flow is endpoint-less-first anyway).
+
+### VOLM (volumes), in oi/handler/volumes.rs unless stated
+- Held delete: unknown id → not_found, I/O failure → internal.
+- Held restore (system/volume_store.rs restore_held_to_site): a failure after the move strands data; an errored request leaves state unchanged; unknown id → not_found; must not emit SiteVolumeCreated.
+- Held list (volume_store.rs list_held): unparseable record → internal, not skipped.
+- Managed site volume create: host_path given → requirements_invalid.
+- Snapshot and promote without BTRFS, or a non-subvolume source → requirements_invalid (internal today).
+- Snapshot source: absent → not_found; bind or snapshot source → requirements_invalid; failed history read → internal (not "no volume").
+- Delete or promote of an absent site volume → not_found.
+- Records and storage: managed create, snapshot and promote write storage before the record (failed record write strands storage); site delete holds data before deleting the record.
+- External map: check app registered (not_found), target exists and app targets are exported, reject reserved seedling-op- names, duplicate mapping → requirements_invalid.
+- Remap and unmap: missing mapping → not_found; remap checks its target; unmap triggers reconciliation.
+- crates/core/src/reserved.rs: drop the backup-snap- site-volume prefix; delete system/leftover_snapshots.rs and its call in daemon main (sweep dropped from the spec).
+- ACTU hold order (volume_store.rs hold_inner): commit the held record before the move.
+- CLI: no commands for /volumes/app/list, /volumes/external/list, /volumes/external/declared.
