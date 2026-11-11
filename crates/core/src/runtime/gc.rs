@@ -216,32 +216,33 @@ pub fn gc_unscheduled_instances(
     let param_refs: Vec<&dyn rusqlite::types::ToSql> = params.iter().map(|p| &**p).collect();
 
     // r[impl gc.instances.atomic]
-    // One transaction across the selection and, per instance, every record
-    // held against it, so a mid-sequence error can't leave one of them in a
+    // One atomic section across the selection and every instance's deletion,
+    // so a mid-sequence error can't leave one of an instance's records in a
     // state the GC will never see again (observation history empty means the
     // selecting query stops matching the instance).
-    let tx = db.conn.unchecked_transaction()?;
-    let candidates: Vec<(String, String)> = tx
-        .prepare(&query)?
-        .query_map(param_refs.as_slice(), |row| Ok((row.get(0)?, row.get(1)?)))?
-        .collect::<Result<Vec<_>, _>>()?;
+    db.atomically(|db| {
+        let candidates: Vec<(String, String)> = db
+            .conn
+            .prepare(&query)?
+            .query_map(param_refs.as_slice(), |row| Ok((row.get(0)?, row.get(1)?)))?
+            .collect::<Result<Vec<_>, _>>()?;
 
-    let mut retired = Vec::new();
-    for (hex, app) in candidates {
-        // A row whose id does not parse cannot be matched against the desired
-        // state, so it is not known to be outside it.
-        let Some(id) = InstanceId::from_hex(&hex) else {
-            continue;
-        };
-        if !known.sweepable(&app, id) {
-            continue;
+        let mut retired = Vec::new();
+        for (hex, app) in candidates {
+            // A row whose id does not parse cannot be matched against the
+            // desired state, so it is not known to be outside it; one that does
+            // not parse back to the same text cannot be deleted by its id.
+            let Some(id) = InstanceId::from_hex(&hex).filter(|id| id.to_hex() == hex) else {
+                continue;
+            };
+            if !known.sweepable(&app, id) {
+                continue;
+            }
+            crate::runtime::history::delete_instance(db, id)?;
+            retired.push(id);
         }
-        crate::runtime::history::delete_instance_records(db, &hex)?;
-        retired.push(id);
-    }
-    tx.commit()?;
-
-    Ok(retired)
+        Ok(retired)
+    })
 }
 
 #[cfg(test)]

@@ -143,26 +143,21 @@ pub fn find_instances_for_group(
 // r[impl gc.instances.atomic]
 pub fn delete_instance(db: &Db, id: InstanceId) -> rusqlite::Result<()> {
     let hex = id.to_hex();
-    db.atomically(|db| delete_instance_records(db, &hex))
-}
-
-/// Delete every record held against the instance whose id is `hex`, for a
-/// caller that makes the deletion atomic.
-// r[impl gc.instances.atomic]
-pub(crate) fn delete_instance_records(db: &Db, hex: &str) -> rusqlite::Result<()> {
-    db.conn.execute(
-        "DELETE FROM world_observations WHERE instance_id = ?1",
-        params![hex],
-    )?;
-    db.conn
-        .execute("DELETE FROM faults WHERE instance_id = ?1", params![hex])?;
-    db.conn.execute(
-        "DELETE FROM autonomous_operations WHERE instance_id = ?1",
-        params![hex],
-    )?;
-    db.conn
-        .execute("DELETE FROM resource_instances WHERE id = ?1", params![hex])?;
-    Ok(())
+    db.atomically(|db| {
+        db.conn.execute(
+            "DELETE FROM world_observations WHERE instance_id = ?1",
+            params![hex],
+        )?;
+        db.conn
+            .execute("DELETE FROM faults WHERE instance_id = ?1", params![hex])?;
+        db.conn.execute(
+            "DELETE FROM autonomous_operations WHERE instance_id = ?1",
+            params![hex],
+        )?;
+        db.conn
+            .execute("DELETE FROM resource_instances WHERE id = ?1", params![hex])?;
+        Ok(())
+    })
 }
 
 /// Drop every registry row for `app`, once nothing of it is desired: its
