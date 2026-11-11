@@ -26,16 +26,13 @@ A `Deployment` implements the [Pod](pod.md) interface, and so the [Container](co
 A script sets a Deployment's scale with `deployment.scale(fixed: number)` or `deployment.scale(bounds: range)`.
 A Deployment on which `scale` is never called has a fixed scale of 1.
 
-`scale(fixed)` is equivalent to `scale(fixed..fixed)`.
+`scale(fixed)` is equivalent to `scale(fixed..=fixed)`.
 A `fixed` below 1 or above 10 MUST throw.
 
-`scale(bounds)` takes a range written `lower..upper`, and reads both `lower` and `upper` as inclusive bounds.
+`scale(bounds)` takes a Rhai range, with the meaning Rhai gives it: `lower..=upper` includes `upper`, and `lower..end` excludes `end`, so that its upper bound is `end - 1`.
 A `lower` below 0 or above 10 MUST throw.
-An `upper` below 1 or above 65535 MUST throw.
-A `lower` greater than `upper` MUST throw.
-
-> [!NOTE]
-> `scale(1..4)` allows one to four instances, although a Rhai range written `1..4` excludes 4.
+An upper bound below 1 or above 65535 MUST throw.
+A `lower` greater than the upper bound MUST throw, including a range written `lower..end` that holds no value.
 
 While a Deployment runs, the runtime MUST keep at least `lower` and at most `upper` of its instances running.
 An operator or the runtime MAY choose an instance count within the bounds.

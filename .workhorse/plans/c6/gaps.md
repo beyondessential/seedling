@@ -19,12 +19,13 @@ Batches 1 and 2, folded into the specs; code changes filed on D6.
 - An install that cannot be replayed is recovered as a stuck install.
 - A restart replacing a failed run is a recovery restart, whoever performs it.
 - `observe_failed` clears on the next successful observation; a fact is recorded again whenever it changes.
+- Proxy, resolver and NAT64 translator idle teardown are MUST, as the original specs and the code have it (the rewrite had softened them).
+- Deployment scale ranges take Rhai's meaning: `..` exclusive, `..=` inclusive.
 
 ## Open decisions
 
 ### PRX / INFRA / DNS / NAT64 / SEC
 - PRX: status for a route with no upstreams: name 502/503, or "an error status" (current).
-- PRX/DNS: proxy and resolver teardown on an idle host written as SHOULD.
 - INFRA: `container_runtime_unavailable` is never cleared in code; spec says cleared once started with both backends reachable.
 - DNS: host resolver `127.0.0.54` as a host requirement or a note.
 - SEC: name the encryption construction (XChaCha20-Poly1305, nonce prefix) or keep "authenticated encryption".
@@ -104,7 +105,6 @@ Glossary: Script (BSL), Action context (APP), Static resource (APP).
 Open:
 - ING: redirect() then tls() with a non-HTTPS pairing leaves a redirect on non-HTTPS: tls() throws, tls() clears, or check at end of evaluation.
 - ING: two apps declaring the same (hostname, port) ungoverned: drop both + fault, first-installed wins + fault, or refuse install.
-- DEP: scale(1..4) read as inclusive though Rhai `..` is exclusive; `..=` unsupported: keep+note, accept `..=` too, or only `..=`.
 - POD: two mounted Service Ports with the same port collide at localmount:<port>: second throws, or specify winner.
 Spec leads code:
 - JOB: `deadline` never enforced.
