@@ -94,7 +94,7 @@ In `ParamSet` and `ParamUnset`, a secret parameter's event MUST carry `redacted`
 | `ResourceStateChanged` | `app`, `resource_type` (string), `resource_name` (string), `instance_id` (string), `state` (string) | when a resource instance's derived lifecycle state changes |
 
 `FaultFiled` carries the members of a [fault record](faults.md#fault-records), except that the event's `timestamp` is the record's.
-In `ResourceStateChanged`, `resource_type` is the resource's kind in lower case, and `state` is the instance's new [lifecycle state](../overview.md#lifecycle-state), named as the lifecycle states are.
+In `ResourceStateChanged`, `resource_type` is the resource's [type name](wire.md#resource-type-names), and `state` is the instance's new [lifecycle state](../overview.md#lifecycle-state), named as the lifecycle states are.
 
 ### Session events
 

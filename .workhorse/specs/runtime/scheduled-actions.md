@@ -21,7 +21,7 @@ The runtime MUST check for due schedules at least once a minute, as part of the 
 A schedule is due when the first boundary of its cron expression after its last fire time is at or before the time of the check.
 The runtime SHOULD treat a schedule with no recorded fire time as having last fired five minutes before the check.
 
-The runtime MUST fire a due schedule only for an app in the `Installed` phase, and MUST skip it for an app that is `NotInstalled`, `Installing` or `Uninstalling`.
+The runtime MUST fire a due schedule only for an app in the `Installed` [install phase](../overview.md#install-phase), and MUST skip it for an app that is `NotInstalled`, `Installing` or `Uninstalling`.
 
 > [!NOTE]
 > A schedule that fired for an app whose install keeps failing would hold the app's one operation slot and keep a corrected definition from ever being applied.

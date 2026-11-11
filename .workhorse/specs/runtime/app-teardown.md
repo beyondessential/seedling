@@ -37,7 +37,7 @@ In that case the runtime MUST hold a [fault](../overview.md#fault) of kind `unin
 The runtime MUST reject an uninstall while a [lifecycle operation](../overview.md#lifecycle-operation) for the app is in progress or queued, or while a parameter or definition change to the app is being committed.
 The rejection MUST name the action, or the change, that holds the app.
 
-The runtime MUST decide whether an operation holds the app from its record of admitted operations, and not from the app's install phase.
+The runtime MUST decide whether an operation holds the app from its record of admitted operations, and not from the app's [install phase](../overview.md#install-phase).
 If the runtime cannot determine whether an operation holds the app, it MUST reject the uninstall.
 
 > [!NOTE]

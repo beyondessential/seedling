@@ -131,7 +131,7 @@ Each `diff` entry has these members.
 
 | member | type | meaning |
 | --- | --- | --- |
-| `resource_type` | string | the resource's kind: `Service`, `Ingress`, `Deployment`, `Job`, `Volume`, `ExternalVolume` or `ExternalService` |
+| `resource_type` | string | the resource's [type name](wire.md#resource-type-names) |
 | `resource_name` | string | the resource's name |
 | `change` | string | `"added"`, `"removed"` or `"modified"` |
 | `fields` | array of strings | for a `modified` entry, in ascending order, the members of the resource's [`def`](apps.md#resources) whose values differ |

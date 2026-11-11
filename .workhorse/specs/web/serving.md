@@ -204,8 +204,8 @@ The web interface MUST issue a new session token on every successful `/connect`,
 A session token MUST be unpredictable.
 A session token MUST stop authenticating once the configured session lifetime has passed since it was issued.
 
-If no source authenticates the request, the web interface MUST answer `401 Unauthorized` ([RFC 9110](https://www.rfc-editor.org/rfc/rfc9110)) with the body `{"auth_required":"password"}`.
-`auth_required` names the credential the client collects from the operator for its next `/connect`.
+If no source authenticates the request, the web interface MUST answer `401 Unauthorized` ([RFC 9110](https://www.rfc-editor.org/rfc/rfc9110)) with a body whose `auth_required` member names the credential the client collects from the operator for its next `/connect`.
+`auth_required` MUST be `"password"` while [password login](#password-login) can authenticate a password, and `"none"` otherwise, when no credential the operator could give would authenticate the request.
 
 ### Password login
 
@@ -365,6 +365,7 @@ It SHOULD send one as soon as the session opens, and another as soon as its safe
 A web session is stale once ten minutes have passed since its `last_seen`.
 The web interface MUST stop recording a stale web session, and SHOULD do so within a minute of it becoming stale.
 A heartbeat for a session no longer recorded MUST NOT record it again.
+A client answered with `alive` false MUST close that web session and open a new one.
 
 The web interface MUST emit these events on the feed it relays.
 

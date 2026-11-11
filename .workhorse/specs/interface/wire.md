@@ -99,6 +99,10 @@ That actor has no `session`.
 
 The server MUST attach the actor of a request to every [event](events.md#event-types) the request causes, and to the [audit log](../runtime/audit-log.md#storage) entries it records for the request.
 
+## Resource type names
+
+Wherever a message names a [resource type](../language/overview.md#resource-type), it MUST use one of `deployment`, `job`, `service`, `ingress`, `volume`, `external_volume` and `external_service`.
+
 ## Error codes
 
 | code | meaning |
@@ -114,7 +118,7 @@ The server MUST attach the actor of a request to every [event](events.md#event-t
 | `validation_failed` | a [parameter validator](params.md#validation) rejected the proposed values; `message` names each rejecting parameter and its reason |
 | `bundle_invalid` | a definition bundle breaks the [bundle rules](definitions.md#bundle-rules); `message` names the offending path or field |
 | `unsupported_seedling` | a definition does not [support](definitions.md#seedling-version-support) the running Seedling version |
-| `fetch_failed` | a definition could not be [fetched](definitions.md#fetching); `message` gives the cause |
+| `fetch_failed` | a definition could not be [fetched](definitions.md#fetching), or an image [pulled](images.md#pulling-an-image), from its registry; `message` gives the cause |
 | `registry_not_allowed` | the registry a reference names is not on the [registry allowlist](images.md#registry-allowlist) |
 | `server_busy` | the server's [stream limit](#stream-limit) was reached |
 | `internal` | a failure inside the server, such as a storage error, kept the request from completing |

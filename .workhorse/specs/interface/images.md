@@ -75,9 +75,12 @@ The server MUST reject an empty `reference` with `requirements_invalid`.
 The server MUST reject an `app` that is not a valid app name with `requirements_invalid`, and one naming an app that is not registered with `not_found`.
 Where `app` is given, the runtime MUST pin `reference` to that app, whether or not the pull succeeds.
 
-The server MUST answer once the pull has finished.
+The server MUST make one attempt at the pull, and MUST answer once it has finished.
 On success the result is `{ "ok": true }`.
-If the pull fails, the server MUST answer with an error response whose `message` carries the cause.
+If the pull fails, the server MUST answer with `fetch_failed`, whose `message` carries the cause.
+
+> [!NOTE]
+> The operator is waiting on the answer and can retry, while the runtime's own [image pulls](../runtime/images.md#image-pulls) retry by themselves.
 
 ## Removing an image
 

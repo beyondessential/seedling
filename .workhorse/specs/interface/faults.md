@@ -53,7 +53,7 @@ A restart record is a JSON object describing one restart of a resource instance'
 | `id` | integer | the record's identifier, increasing with each record |
 | `app` | string | the app the instance belongs to |
 | `instance_id` | string | the instance restarted |
-| `resource_type` | string or null | the instance's resource kind |
+| `resource_type` | string or null | the instance's resource [type name](wire.md#resource-type-names) |
 | `resource_name` | string or null | the instance's resource name |
 | `generation` | integer or null | the app's [generation](../overview.md#generation) at the time, or `null` where the app had none |
 | `timestamp` | string | when the restart happened, as an [RFC 3339](https://www.rfc-editor.org/rfc/rfc3339) timestamp |

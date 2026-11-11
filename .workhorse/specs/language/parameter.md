@@ -101,6 +101,9 @@ The runtime MUST run a validator only while its parameter would be set.
 A parameter that would be unset passes, and its `required` flag governs whether it needs a value.
 
 The runtime MUST NOT give a validator a runtime instance.
-Declaring a resource within a validator MUST throw.
+Within a validator, declaring a resource, calling a builder method on any resource, and calling any other method that changes the app MUST throw.
+
+> [!NOTE]
+> A validator only judges a proposed value, so a validator that could change the app would make the definition depend on which values were checked.
 
 When the runtime runs validators, and which request a rejection refuses, is specified in [parameter validation](../interface/params.md#validation).

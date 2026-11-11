@@ -44,7 +44,7 @@ The server MUST give every operation an `operation_id` that no other operation o
 
 ## Install
 
-`/apps/install/invoke` schedules an app's install.
+`/apps/install/invoke` schedules an app's install, which moves it through the [install phases](../overview.md#install-phase).
 
 | member | type | required | meaning |
 | --- | --- | --- | --- |
@@ -84,6 +84,21 @@ The server MUST discard the persisted values when the install operation ends, wh
 When an install operation completes successfully, the runtime MUST move the app from `Installing` to `Installed`.
 When an install operation fails or is cancelled, the runtime MUST move the app from `Installing` to `NotInstalled`.
 When an install operation fails, the runtime MUST file an `operation_failed` fault carrying the failure.
+
+## Uninstall
+
+`/apps/uninstall` starts tearing an app down.
+
+| member | type | required | meaning |
+| --- | --- | --- | --- |
+| `app` | string | yes | the app's name |
+
+The server MUST reject a request naming an app that is not registered with `not_found`.
+The server MUST reject the request with `operation_in_progress` while the app is `Installing`, and with `not_installed` while it is `NotInstalled` or `Uninstalling`.
+The server MUST reject the request with `operation_in_progress` while [uninstall admission](../runtime/app-teardown.md#uninstall-admission) refuses it, with a `message` naming the action or change that holds the app.
+
+Otherwise the server MUST move the app to `Uninstalling`, emit an `AppPhaseChanged` [event](events.md#event-types), and answer `{}`.
+The runtime then tears the app down as [TRD](../runtime/app-teardown.md) specifies, and moves it to `NotInstalled` once teardown completes.
 
 ## Cancellation
 

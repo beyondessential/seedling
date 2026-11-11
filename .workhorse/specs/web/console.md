@@ -26,14 +26,22 @@ The console MUST show the operator the error of each request that fails.
 It MUST NOT present a read that failed as an empty result.
 While ingress discovery is unhealthy, the console MUST warn the operator.
 
+## Signing in
+
+The console MUST ask the operator for a password when the web interface [asks for one](serving.md#authentication).
+When the web interface answers that no credential would authenticate, the console MUST show that sign-in is unavailable, and MUST NOT ask for a password.
+
 ## Guarded controls
 
 A console MUST start in the `read` safety mode.
 A console reloaded in the same browser tab MAY resume an elevation that has not expired.
 
 A control that changes host state MUST require at least the `write` mode.
-A control that removes, revokes, stops, cancels or clears something SHOULD require the `dangerous` mode.
+A control that removes, revokes, stops, cancels or clears something MUST require the `dangerous` mode, except a control that clears [faults](../overview.md#fault), which MUST require the `write` mode.
 A control that requires a mode above the console's current one MUST be disabled, and SHOULD show the mode it requires.
+
+> [!NOTE]
+> Clearing a fault removes only its record, and a fault whose condition still holds is filed again.
 
 Elevating to `dangerous` MUST require the operator's confirmation.
 An elevation to `write` or `dangerous` MUST revert to `read` no later than ten minutes after it began, and the console SHOULD show the time remaining.

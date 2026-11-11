@@ -169,7 +169,7 @@ Each entry of `resources` has these members.
 | member | type | meaning |
 | --- | --- | --- |
 | `name` | string | the resource's name |
-| `type` | string | `service`, `ingress`, `deployment`, `job`, `volume`, `externalvolume` or `externalservice` |
+| `type` | string | the resource's [type name](wire.md#resource-type-names) |
 | `def` | object | the resource's declared configuration, below |
 | `instances` | array | the resource's instances, below |
 | `faults` | array | the fault records of the active faults concerning the resource |

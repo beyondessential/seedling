@@ -64,7 +64,7 @@ If an argument holds no `=`, the CLI MUST report an error naming that argument a
 ## Definition sources
 
 `apps create <app> <source>` and `apps update <app> <source>` MUST each take a definition.
-`templates create <name> <source>` MUST take a definition, and `templates update <name> --source <source>` MAY take one, leaving the template's definition unchanged when none is given.
+`templates create <name> <source>` MUST take a definition, and `templates update <name> [<source>]` MAY take one, leaving the template's definition unchanged when none is given.
 In each, `--ref <reference>` MAY stand in place of the source, and the two MUST NOT be combined.
 
 The CLI MUST send a definition as [definition sources](definitions.md#definition-sources) define, by the form of the source.

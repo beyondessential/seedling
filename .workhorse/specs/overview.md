@@ -226,6 +226,11 @@ Defined in [RCN](runtime/reconciliation.md#desired-state).
 The stage a resource instance has reached between being wanted and being cleaned up.
 Defined in [LCY](runtime/lifecycle.md).
 
+### Install phase
+
+Where an app stands in being installed: `NotInstalled`, `Installing`, `Installed` or `Uninstalling`.
+An install moves an app through `Installing` to `Installed`, as [ACN](interface/actions.md#install) specifies, and an uninstall through `Uninstalling` back to `NotInstalled`, as [TRD](runtime/app-teardown.md) specifies.
+
 ### Lifecycle operation
 
 A single run of an action closure directing the runtime through a change to an app.

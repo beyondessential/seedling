@@ -41,12 +41,20 @@ Batches 1 and 2, folded into the specs; code changes filed on D6.
 - A demoted instance is retired once torn down (as for action-started groups) or with no observations.
 - Undetermined host constants fall back (`false`, `UTC`) with a fault and retry; on determination, every installed app is re-evaluated; determined values hold until restart.
 - LCY's routing pool already settles the start-period question.
+- `col(external_service)` returns the service (its branch was lost when the concept was removed and reintroduced); `col(app)` is the app's named resources; a collection holds each resource once, anonymous resources match only themselves by identity, and collections resolve when used (lazy by design, so a top-level `col(app)` covers later declarations).
+- Validators throw on any call that changes the app or its resources.
+- `templates update <name> [<source>]`.
+- An interface name matching no interface is skipped with a warning.
+- `auth_required` is `"none"` when no credential would authenticate, and the console says sign-in is unavailable; a client answered `alive: false` opens a new session.
+- Destructive console controls MUST require `dangerous`, except clearing faults (`write`).
+- "Install phase" is defined in the root glossary; `/apps/uninstall` is specified in ACN.
+- `fetch_failed` covers image pulls; operator pulls make one attempt.
+- Resource type names on the wire are snake_case, defined once in WIRE.
+- App registration and template instantiation register an app whose script fails, with `script_error` (already so in APPS).
 
 ## Open decisions
 
-### PRX / INFRA / DNS / NAT64 / SEC
-
-### ACN / RT
+None.
 
 ## Spec leads or contradicts code
 
@@ -111,10 +119,6 @@ POSIX crontab (Issue 8), IANA tz database, SipHash, zxcvbn (ACN).
 
 ### Language A (BSL BND COL CONST APP PARAM SVC)
 Open:
-- COL: col(external_service) is empty though col(app) includes it: fix code to coerce to itself, or keep.
-- COL: anonymous resources of one type compare equal in only/except: own identity, or accept.
-- COL: col([a,a]) duplicates; col(app) taken early includes later declarations: state sets resolved on use, or leave unstated.
-- PARAM: validators block only resource declaration: forbid all builder methods, or only declarations.
 Spec leads code:
 - PARAM: previous generation unbuildable -> handler runs with empty `old` (spec: MUST NOT run with a substitute).
 - PARAM: old.<type>(name) in a change handler returns the current generation's resource (spec: previous).
@@ -153,8 +157,6 @@ Glossary: Data directory (ACTU); Site volume, Site ingress (SITE).
 
 ### Interface C (TPL TLSM RLY CLI)
 Open:
-- TPL/APPS: template instantiation whose script fails: code registers + files script_error; app.register says refuse and don't register.
-- CLI: templates update --source vs positional source elsewhere: align, or keep.
 Spec leads code:
 - TLSM: database failures map to not_found (spec: internal).
 Moves: EVT lacks Template* events (kept in TPL); hostname pattern / primary SAN belong in TLS runtime; ACME directory (LE production) belongs in r/tls.strategy.acme-dns; hostname syntax could move to OI/WIRE; "failed read is internal, never not_found" belongs in WIRE error codes; ACME account keys never returned is not stated in TLSM.
@@ -163,10 +165,6 @@ Glossary: Canopy (defined in RLY for now).
 
 ### Web (WEB UI)
 Open:
-- WEB: interface name matching no interface: skip with warning (current spec), or fatal.
-- WEB: auth_required "password" even when password login disabled: keep, add a none value, or unspecified.
-- WEB: heartbeat returning alive:false after reap: console reconnects, or server re-records.
-- UI: dangerous tier for destructive controls: MUST with fault-clearing exception named, or SHOULD.
 Spec leads code:
 - WEB: HTTP resolving to no address must stop startup (code runs without listener).
 - WEB: session path must be exactly /wt (code: prefix match).
@@ -179,7 +177,6 @@ Glossary: Web interface (WEB), Actor (i/wire.actor), Console, Safety mode (UI).
 
 ### Runtime A (LIM GEN TRD RCK LCY HIST AUD GC RUN)
 Open:
-- TRD: /apps/uninstall has no interface spec; app install phases (NotInstalled/Installing/Installed/Uninstalling) have no home spec; SCHED links nonexistent r/lifecycle.app.
 Spec leads code:
 - GEN: failed decrypt during reconstruction treated as unset (spec: fail).
 - TRD: deregistration that cannot discard state only warns (can leak external volume mappings to the next same-named app).
@@ -202,8 +199,6 @@ Glossary: Managed hostname, Strategy, Policy, Runtime-managed certificate (TLS);
 
 ### Interface B (ACI SHL FWD LOG FLTS EVT KEY IMGM)
 Open:
-- IMGM: failed pull error code: not_found (code), internal, or new pull_failed.
-- IMGM: pull single attempt vs runtime's retrying pull path: restore retries, or keep.
 Spec leads code:
 - SHL: volume-shell failures send undefined codes shell_error/internal_error (spec: internal).
 - FWD: TCP relays outlive /forwards/stop and teardown; teardown only on /apps/update, not param change or uninstall; stream naming no live forward dropped silently (spec: reset).
@@ -217,7 +212,6 @@ Glossary: Install phase (ACI; also asked by TRD).
 
 ### Runtime B (OPS SCHED SUSP AUTO OBS)
 Open:
-- OPS/TRD/ACI: app phases have no defining rule: which spec owns them.
 Spec leads code:
 - OPS: operation record not persisted before running (only warns); failed reconstruction of `old` -> empty app; replay ignores target generation; failed persisted-operation read -> none (stuck sweep can tear down a live install); failed cancel-flag read -> not cancelled; generation outcome never recorded (record_outcome test-only), cancelled reported as OperationFailed; EVT trigger list has `boot`, lacks `replay`.
 - SCHED: queued fires never stamped, so they double-fire; unparseable last_fired_at -> never fired.
@@ -229,7 +223,6 @@ Glossary: Action closure, Dynamic resource, App phase (OPS); Barrier (SUSP/RT); 
 
 ### Interface A (OI TRN WIRE STS APPS DEFN CTL PRM)
 Open:
-- APPS: resource `type` externalvolume vs def.kind external_volume vs plan ExternalVolume: unify?
 Spec leads code:
 - TRN: bootstrap authorized_keys fingerprints imported without normalising (uppercase/prefixed never match).
 - WIRE: control request over 64 KiB with no newline loses its actor (affects pushed bundles via web); /forwards/start error responses lack trailing newline; `deregistering` code defined but unused (dropped).
