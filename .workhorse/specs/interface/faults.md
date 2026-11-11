@@ -33,7 +33,7 @@ For any other fault, all three MUST be `null`, and its `description` SHOULD name
 
 | member | type | required | meaning |
 | --- | --- | --- | --- |
-| `app` | string | no | restricts the list to that app's faults, or to those filed against `_system` or `seedling` |
+| `app` | string | no | restricts the list to the faults filed against that app name, which can be `_system` or `seedling` |
 
 The result is an array of [fault records](#fault-records).
 Without `app` the server MUST list every active fault on the host.

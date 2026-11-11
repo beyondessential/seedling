@@ -24,7 +24,7 @@ The result is an array of key records, oldest first.
 
 ## Authorising a key
 
-`/keys/authorise` adds a client key to the authorised set, or relabels a key already in it.
+`/keys/authorise` adds a client key to the [authorised key set](transport.md#authorised-key-set), or relabels a key already in it.
 
 | member | type | required | meaning |
 | --- | --- | --- | --- |
@@ -32,17 +32,17 @@ The result is an array of key records, oldest first.
 | `label` | string | no, default `"unnamed"` | the operator's label for the key |
 
 On success the result is `{}`.
-Relabelling a key MUST keep its `added_at`.
-An authorised key MUST be able to connect from the time the request succeeds.
+The server MUST keep the `added_at` of a key it relabels.
+The server MUST accept connections from an authorised key from the time the request succeeds.
 
 ## Revoking a key
 
-`/keys/revoke` removes a client key from the authorised set.
+`/keys/revoke` removes a client key from the authorised key set.
 
 | member | type | required | meaning |
 | --- | --- | --- | --- |
 | `fingerprint` | string | yes | the key's [fingerprint](#fingerprints) |
 
 On success the result is `{}`.
-The server MUST reject a fingerprint that is not in the authorised set with `not_found`.
-Revocation MUST take effect on connections already open, as [client authentication](transport.md#client-authentication) requires.
+The server MUST reject a fingerprint that is not in the authorised key set with `not_found`.
+The server MUST apply a revocation to connections already open, as [client authentication](transport.md#client-authentication) requires.

@@ -49,7 +49,7 @@ The server MUST reject a request naming a service the app does not declare, or a
 For a UDP forward, the server MUST open its relay toward the service before it responds, and MUST reject the request with `internal` if it cannot.
 A rejected request MUST create no forward.
 
-On success the server MUST write the response, followed by a newline, to the control stream.
+On success the server MUST write the response, followed by a line feed, to the control stream.
 The result is:
 
 | member | type | meaning |
@@ -63,13 +63,13 @@ After an error response the server MUST finish its sending side of the control s
 ## Forward keys
 
 The server MUST allocate a forward key to every forward, TCP and UDP alike, and the forward MUST hold it for its lifetime.
-Two live forwards on one connection MUST NOT hold the same key, so a connection can hold at most 65536 forwards at once.
+The server MUST NOT allocate one key to two live forwards on one connection, so a connection can hold at most 65536 forwards at once.
 The server MUST reuse the keys of forwards that have ended.
 If every key is held, the server MUST reject the request with `server_busy`.
 
 ## Status messages
 
-After its response, the server MAY write status messages to the control stream, each a JSON object followed by a newline.
+After its response, the server MAY write status messages to the control stream, each a JSON object followed by a line feed.
 
 ```json
 { "status": { "level": "<level>", "message": "<text>" } }

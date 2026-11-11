@@ -98,7 +98,7 @@ The server MUST refuse a request whose `actor` is not an object, or carries a me
 If a request has no `actor` member, the server MUST attribute it to an actor whose `kind` is `ctl`, whose `id` is the [fingerprint](transport.md#fingerprint) of the client's key, and whose `display` is that key's label in the [authorised key set](transport.md#authorised-key-set), or the fingerprint where the key has no label.
 That actor has no `session`.
 
-The server MUST attach the actor of a request to every [event](events.md#event-types) the request causes, and to the [audit log](../runtime/audit-log.md#storage) entries it records for the request.
+The server MUST attach the actor of a request to every [event](events.md#event-types) the request causes, and to the [audit log](../runtime/audit-log.md#entries) entries it records for the request.
 
 ## Resource type names
 

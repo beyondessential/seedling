@@ -26,7 +26,7 @@ On success the server MUST emit a `ScaleChanged` [event](events.md#app-events), 
 
 The runtime MUST store the scaling decision durably, and MUST use it for the deployment's [effective scale](../runtime/autonomous.md#effective-scale) after the daemon restarts.
 
-Uninstalling an app MUST discard every scaling decision stored for it.
+The runtime MUST discard every scaling decision stored for an app when it uninstalls the app.
 
 [`/apps/show`](apps.md#resources) reports, for each deployment, a `scale` object with these members.
 
@@ -59,7 +59,8 @@ The runtime MUST store the app priority durably.
 The runtime MUST apply the app priority's division of contended CPU and I/O to the app's running workloads without restarting or redeploying them.
 The app priority reaches a workload's place in the kill order as [priority setting](../runtime/priority.md#priority-setting) specifies.
 
-Uninstalling an app MUST discard its stored app priority, and an app with none stored has the priority `normal`.
+The runtime MUST discard an app's stored app priority when it uninstalls the app.
+An app with no stored app priority has the priority `normal`.
 
 `/apps/show` and each entry of `/apps/list` report the app's priority in a `priority` member.
 `/apps/show` reports, for each deployment, a `priority` member giving the [deployment priority](../language/deployment.md#priority) its definition declares, or `normal` where it declares none.
@@ -99,8 +100,8 @@ On success the server MUST emit a `DeploymentRestarted` event carrying the `rest
 The server MUST refuse any other `kind` with `requirements_invalid`.
 The server MUST refuse the request with `not_found` if the app is not registered or its current definition declares no resource of that kind and name.
 
-Stopping a deployment MUST bring its running instances to zero without changing its declared bounds or its stored scaling decision.
-Stopping a job or an ingress MUST unschedule it without removing its declaration.
+The runtime MUST bring a stopped deployment's running instances to zero without changing its declared bounds or its stored scaling decision.
+The runtime MUST unschedule a stopped job or ingress without removing its declaration.
 A stopped resource's desired [lifecycle state](../overview.md#lifecycle-state) is `Unscheduled`.
 
 The runtime MUST store the stop durably.
@@ -120,13 +121,13 @@ The server MUST refuse it with `not_found` if the app is not registered.
 The result is `{}`.
 The server MUST emit a `ResourceUnstopped` event for each stop it reverses.
 
-The server MUST refuse all three methods with `operation_in_progress` while a lifecycle operation is running or queued for the app, or a change to the app is being applied.
+The server MUST refuse `/apps/resource/stop`, `/apps/resource/unstop` and `/apps/unstop` with `operation_in_progress` while a [lifecycle operation](../overview.md#lifecycle-operation) is running or queued for the app, or a change to the app is being applied.
 
 > [!NOTE]
 > An operator cancels a running operation with [`/apps/action/cancel`](actions.md#cancellation), or waits for a queued one or a change to finish.
 > A change to the desired state made while an action closure drives the same resources would race it.
 
-Uninstalling an app MUST discard every stop recorded for it.
+The runtime MUST discard every stop recorded for an app when it uninstalls the app.
 
 `/apps/show` reports a `stopped` member on each resource, true when the resource is stopped, and a top-level `stopped_resources` array of `{ "kind": <string>, "name": <string> }` naming every stopped resource.
 Each entry of `/apps/list` reports a `has_stopped_resources` member, true when any of the app's resources is stopped.

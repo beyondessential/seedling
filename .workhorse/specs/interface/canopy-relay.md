@@ -10,9 +10,9 @@ Applies to the [Operator Interface](../overview.md#operator-interface) methods a
 
 | term | meaning |
 | --- | --- |
-| origin-form | the request-target form of a path and optional query, [RFC 9112](https://www.rfc-editor.org/rfc/rfc9112) §3.2.1 |
-| field line combination | joining the values of a repeated header field, [RFC 9110](https://www.rfc-editor.org/rfc/rfc9110) §5.3 |
-| bidirectional stream | a QUIC stream carrying data in both directions, [RFC 9000](https://www.rfc-editor.org/rfc/rfc9000) §2.1 |
+| origin-form | the request-target form of a path and optional query, [RFC 9112](https://www.rfc-editor.org/rfc/rfc9112) section 3.2.1 |
+| field line combination | joining the values of a repeated header field, [RFC 9110](https://www.rfc-editor.org/rfc/rfc9110) section 5.3 |
+| bidirectional stream | a QUIC stream carrying data in both directions, [RFC 9000](https://www.rfc-editor.org/rfc/rfc9000) section 2.1 |
 
 ## Terminology
 
@@ -129,7 +129,7 @@ An offering client MUST answer `unknown_offer` to a `canopy` value it cannot par
 
 ## Relay limits
 
-A relayed body, in either direction, MUST NOT exceed 16 MiB.
+The runtime MUST NOT relay a request body larger than 16 MiB, and an offering client MUST NOT relay a response body larger than 16 MiB.
 The runtime MUST stop reading a response body that exceeds 16 MiB, reset the stream, and fail the request.
 
 The runtime MUST reset a relay stream, and fail the request, if no complete response arrives within 60 seconds of the request being sent.

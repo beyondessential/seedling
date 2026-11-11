@@ -50,7 +50,7 @@ A client MUST NOT rely on certificate chain validation to authenticate a server.
 
 A client MUST support Ed25519 keys as [RFC 8410](https://www.rfc-editor.org/rfc/rfc8410) encodes them.
 
-The server MUST generate its key pair the first time it starts, and MUST persist the private key in the file `oi.key` in its data directory.
+The server MUST generate its key pair the first time it starts, and MUST persist the private key in the file `oi.key` in its [data directory](../overview.md#data-directory).
 On every later start the server MUST use the key in that file, so its fingerprint stays the same across restarts.
 The key file is subject to the [private key file permissions](../runtime/infrastructure.md#file-permissions).
 
@@ -63,10 +63,11 @@ A failure to write that file MUST NOT stop the server serving.
 ## Listen addresses
 
 The server MUST listen on every address it is configured with, and on no other.
-Every address MUST present the same server key and accept the same authorised key set.
+The server MUST present the same server key and accept the same authorised key set on every address.
 
 The daemon's `--listen` option names a socket address to listen on, and MAY be given more than once.
-The `--interface` option names network interfaces, separated by commas; each contributes every IPv4 and IPv6 address the interface holds, at the port the `--port` option gives.
+The `--interface` option names network interfaces, separated by commas.
+Each named interface contributes every IPv4 and IPv6 address it holds, at the port the `--port` option gives.
 The default port is 7891.
 With neither `--listen` nor `--interface` given, the server MUST listen on the IPv6 loopback address `::1` alone, at that port.
 
@@ -101,7 +102,7 @@ The server MUST accept an operator-supplied fingerprint with surrounding whitesp
 The server MUST store and compare an operator-supplied fingerprint as 64 lowercase hexadecimal digits.
 The server MUST refuse an operator-supplied fingerprint that is not 64 hexadecimal digits once surrounding whitespace and any prefix are removed.
 
-Authorisation MUST hold for the life of a connection, not only at its handshake.
+The server MUST enforce authorisation for the life of a connection, not only at its handshake.
 When a fingerprint leaves the authorised key set, the server MUST close every connection authenticated with that key, with application error code 0 and the reason `key revoked`.
 Closing the connection ends every event subscription, shell session and port forward carried on it.
 

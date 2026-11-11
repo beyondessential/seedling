@@ -94,7 +94,7 @@ If the pull fails, the server MUST answer with `fetch_failed`, whose `message` c
 
 The server MUST reject an empty `reference` with `requirements_invalid`.
 Unless `force` is `true`, the server MUST reject the request with `image_in_use` while a running container uses the image.
-Otherwise the runtime MUST clear every pin on `reference`, whether or not an image is then removed.
+Unless the server rejects the request with `image_in_use`, the runtime MUST clear every pin on `reference`, whether or not an image is then removed.
 The server MUST reject a `reference` that resolves to no image on the host with `not_found`.
 On success the result is `{ "ok": true }`.
 
@@ -146,7 +146,8 @@ The server MUST reject a script that fails to compile or evaluate with `script_e
 
 A value in `action_params` MUST take precedence over the handler's stored and default values, as [probe parameters](../runtime/images.md#probe-parameters) specifies.
 A handler with a required parameter that resolves to no value MUST NOT be probed.
-When `lenient` is `true`, such a handler MUST be reported with a `skipped_reason`; when `lenient` is `false`, it MUST be reported with an `error`.
+When `lenient` is `true`, the server MUST report such a handler with a `skipped_reason`.
+When `lenient` is `false`, the server MUST report it with an `error`.
 The other handlers MUST be probed either way.
 
 The result is:

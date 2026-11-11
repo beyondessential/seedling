@@ -153,7 +153,8 @@ In `InstanceHealthChanged`, `resource_type` is the resource's type name, and `he
 In `SiteVolumeCreated`, `kind` is `"managed"` or `"bind"`, and `host_path` is present for a bind site volume.
 In `SiteVolumeDeleted`, `kind` is `"managed"`, `"bind"` or `"snapshot"`, and `held_id` is present where the deletion made a held volume.
 In the site ingress events, `source` is `"manual"` or `"discovered"`, `discovered_provider` is present for a discovered ingress, and `tls_provider` is `"acme"`, `"tailscale"`, `"internal"` or `"none"`.
-In the attachment events, `target_kind` is `"forward"` or `"redirect"`; a forward carries `target_app` and `target_service`, and a redirect carries `redirect_url` and `redirect_code`.
+In the attachment events, `target_kind` is `"forward"` or `"redirect"`.
+A forward attachment's event carries `target_app` and `target_service`, and a redirect attachment's event carries `redirect_url` and `redirect_code`.
 
 ### Server events
 

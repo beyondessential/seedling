@@ -21,7 +21,7 @@ On success the result is `{}`.
 | --- | --- | --- | --- |
 | `app` | string | one of `app` or `infra` | selects the logs of that app's workload containers |
 | `resource` | string | no | with `app`, restricts the logs to the resource of that name |
-| `instance` | string | no | with `app` and `resource`, restricts the logs to the instance with that display name |
+| `instance` | string | no | with `app` and `resource`, restricts the logs to the instance with that [display name](../runtime/identity.md#display-name) |
 | `infra` | string | one of `app` or `infra` | selects the logs of an infrastructure component, `"proxy"` or `"resolver"` |
 | `follow` | boolean | no, default `false` | keeps the stream open for new entries once the history is delivered |
 | `tail` | integer, at least 0 | no, default `100` | the number of most recent entries to deliver before any new ones |
@@ -35,7 +35,7 @@ If the server cannot open the host's log store, it MUST answer with `internal`.
 ## Entry selection
 
 The server MUST first deliver the last `tail` entries that match the request, oldest first, or every matching entry where fewer exist.
-A `tail` of `0` MUST deliver no history.
+For a `tail` of `0`, the server MUST deliver no history.
 When `follow` is `false`, the server MUST finish the stream once the history is delivered.
 When `follow` is `true`, the server MUST then deliver each new matching entry as it is written, until the client closes the connection.
 
