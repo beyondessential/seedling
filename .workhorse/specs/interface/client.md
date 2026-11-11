@@ -6,6 +6,12 @@ id: CLI
 
 Applies to the [CLI](#cli), the reference command-line client of the [Operator Interface](../overview.md#operator-interface).
 
+## Borrowed terms
+
+| term | meaning |
+| --- | --- |
+| gitignore pattern | a pattern selecting files to leave out, as defined in [git's gitignore documentation](https://git-scm.com/docs/gitignore) |
+
 ## Terminology
 
 ### CLI
@@ -41,6 +47,8 @@ Before each connection, the CLI MUST learn the server's fingerprint with a [fing
 If the file has no entry for the endpoint, the CLI MUST show the fingerprint, MUST connect only if the operator confirms it, and MUST then add an entry for it.
 If the CLI cannot write the file, it SHOULD warn the operator and connect.
 If the entry differs from the probed fingerprint, the CLI MUST refuse to connect, MUST report both fingerprints and the file's path, and MUST leave the entry unchanged.
+If the file exists and cannot be read, the CLI MUST refuse to connect and MUST report the file's path.
+The CLI MUST NOT write to a file it could not read.
 
 ## Shutdown
 

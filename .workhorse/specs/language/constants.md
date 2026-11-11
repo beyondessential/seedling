@@ -35,7 +35,8 @@ A later evaluation MAY see a different value.
 | `TIMEZONE` | string | the IANA time zone name of the host's local time zone |
 
 `AVAILABLE_THREADS` and `AVAILABLE_MEMORY` MUST each be greater than zero.
-The runtime determines both values.
+While the number of compute threads available to the app is undetermined, `AVAILABLE_THREADS` MUST be 1.
+If the memory available to the app is undetermined, the evaluation MUST fail.
 
 > [!NOTE]
 > `AVAILABLE_THREADS` approximates the number of cores on the host, and `AVAILABLE_MEMORY` approximates its total memory.
@@ -56,20 +57,25 @@ If the host's routes cannot be read, whether the host has IPv4 egress is undeter
 > A `false` value does not mean IPv4-only workloads cannot reach IPv4 destinations, since NAT64 and DNS64 outside the host may still serve them.
 > A script needing to know whether they can combines `HOST_HAS_IPV4` with `NAT64_ACTIVE`.
 
+`HAS_SNAPSHOTS` MUST be `false` while whether the host's volume storage supports copy-on-write snapshots is undetermined.
+
 `NODE_NAME` has no defined format.
 It MAY be empty where the host's identity has no meaning, such as when a script is validated outside a running daemon.
+If the name of the host is undetermined while the host's identity has meaning, the evaluation MUST fail.
 
 `TIMEZONE` MUST NOT be empty.
 While the runtime cannot determine the host's local time zone, `TIMEZONE` MUST be `UTC`.
 
 ### Determining host constants
 
-The runtime MUST determine the host constants when it starts, and MUST NOT change a determined value while it runs.
+The runtime MUST determine `AVAILABLE_THREADS`, `AVAILABLE_MEMORY`, `HAS_SNAPSHOTS` and `NODE_NAME` at each evaluation of a script.
+The runtime MUST determine the other host constants when it starts, and MUST NOT change a determined value of one of them while it runs.
 
 While whether the host has IPv4 egress is undetermined, the runtime MUST file an [`ipv4_egress_undetermined`](../runtime/faults.md#host-faults) fault.
 While the host's local time zone is undetermined, the runtime MUST file a [`timezone_undetermined`](../runtime/faults.md#host-faults) fault.
+While the value of `AVAILABLE_THREADS`, `AVAILABLE_MEMORY`, `HAS_SNAPSHOTS` or `NODE_NAME` is undetermined, the runtime MUST file a [`host_constant_undetermined`](../runtime/faults.md#host-faults) fault naming each such constant.
 The runtime MUST retry an undetermined value on each later reconciliation iteration until it is determined.
-When an undetermined value of `HOST_HAS_IPV4`, `HOST_HAS_IPV6` or `TIMEZONE` is determined, the runtime MUST re-evaluate the definition of every installed app.
+When an undetermined value of `AVAILABLE_THREADS`, `AVAILABLE_MEMORY`, `HAS_SNAPSHOTS`, `NODE_NAME`, `HOST_HAS_IPV4`, `HOST_HAS_IPV6` or `TIMEZONE` is determined, the runtime MUST re-evaluate the definition of every installed app.
 
 > [!NOTE]
 > A change to the host's network or time zone after a value is determined reaches scripts when the runtime next starts.
@@ -109,10 +115,9 @@ Under `OnExit.RestartOnFailure`, the runtime MUST restart the container when its
 
 `ResourceType` is an enum whose variants are `Parameter`, `Service`, `Ingress`, `Deployment`, `Job`, `Volume`, `ExternalVolume`, `ExternalService` and `Action`.
 
-`ResourceType.Parameter` and `ResourceType.Action` name things that are not resources, so a [selection](collection.md#selection) by either MUST yield an empty collection.
+No resource matches `ResourceType.Parameter` or `ResourceType.Action` in a [selection](collection.md#selection)'s `types`.
 
 > [!NOTE]
-> `ResourceType.Action` identifies actions in the action log.
 > An action is invoked through [`Action.invoke`](action.md#action-invocation).
 
 ## Priority

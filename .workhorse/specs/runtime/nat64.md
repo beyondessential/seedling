@@ -59,8 +59,9 @@ The runtime MUST ensure that IPv6 and IPv4 forwarding are enabled on the host.
 ## Translator lifecycle
 
 While NAT64 is active, the translator MUST be operational before any workload container starts.
-The runtime MUST keep the translator set up while any app is installed or installing.
-The runtime MUST set the translator up when it starts, and again when an app begins installing after a period with none installed or installing.
+While NAT64 is active, the runtime MUST keep the translator set up whenever any app is installed or installing.
+While NAT64 is active, the runtime MUST set the translator up when it starts with an app installed or installing, and when an app begins installing after a period with none installed or installing.
+When it starts with no app installed or installing, the runtime MAY leave the translator torn down.
 The runtime MUST tear the translator down when no app is installed or installing.
 
 The runtime MUST NOT tear the translator down when it shuts down.

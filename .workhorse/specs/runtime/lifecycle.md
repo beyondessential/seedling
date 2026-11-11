@@ -44,6 +44,10 @@ The runtime MUST be able to re-derive any instance's current lifecycle state fro
 The runtime MUST NOT keep a lifecycle state that cannot be re-derived from the history.
 
 The runtime MUST NOT treat a failure to read an instance's observation history as an empty history.
+While the runtime cannot read an instance's observation history, the instance's lifecycle state is undetermined.
+The runtime MUST NOT decide a [barrier](../overview.md#barrier) on an instance whose lifecycle state is undetermined.
+The runtime MUST NOT emit a [`ResourceStateChanged`](../interface/events.md#fault-and-resource-events) event for an instance whose lifecycle state is undetermined.
+In an iteration of the [reconciliation loop](reconciliation.md#reconciliation-loop) in which an instance's lifecycle state is undetermined, the runtime MUST NOT act on that instance.
 
 ## Containers
 
@@ -70,12 +74,12 @@ The lifecycle states of a service instance have these meanings.
 | state | meaning |
 | --- | --- |
 | `Scheduled` | The service's network plumbing exists. |
-| `Ready` | At least one backend is in the service's [routing pool](#routing-pool), and traffic can be routed. |
+| `Ready` | Each of the service's ports has at least one backend in its [routing pool](#routing-pool), and traffic can be routed. |
 | `Terminated` | The service's network plumbing has been torn down. |
 | `Unscheduled` | The service's network plumbing has been cleaned up. |
 
-A service whose routing pool becomes empty MUST return to `Scheduled`.
-A later observation of a backend in its routing pool MUST return it to `Ready`.
+A `Ready` service any of whose routing pools becomes empty MUST return to `Scheduled`.
+A later observation of a backend in every one of its routing pools MUST return it to `Ready`.
 
 ## Routing pool
 
@@ -108,10 +112,11 @@ The lifecycle states of a volume instance have these meanings.
 
 | state | meaning |
 | --- | --- |
-| `Scheduled` | The volume exists on the host, and any declared writes have been applied. |
-| `Ready` | The volume is available for mounting. |
+| `Ready` | The volume exists on the host, any declared writes have been applied, and it is available for mounting. |
 | `Terminated` | The volume has been removed. |
 | `Unscheduled` | The volume has been cleaned up. |
+
+A volume MUST move to `Ready` as soon as it is observed to exist on the host, without stopping at `Scheduled`.
 
 ## External volumes
 

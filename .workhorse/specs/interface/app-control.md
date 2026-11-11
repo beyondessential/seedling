@@ -23,6 +23,8 @@ The server MUST accept the request for a registered app in any [install phase](.
 
 The result is `{ "scale": <integer>, "bounds": { "low": <integer>, "high": <integer> } }`, giving the scale stored and the deployment's declared bounds.
 On success the server MUST emit a `ScaleChanged` [event](events.md#app-events), carrying the scale stored and the deployment's effective scale before the request.
+If the effective scale before the request cannot be read, the server MUST still store the scaling decision and answer the request.
+The event's `previous_scale` MUST then be `null`.
 
 The runtime MUST store the scaling decision durably, and MUST use it for the deployment's [effective scale](../runtime/autonomous.md#effective-scale) after the daemon restarts.
 
@@ -109,8 +111,8 @@ The result is `{}`.
 On success the server MUST emit a `ResourceStopped` event naming the resource.
 
 `/apps/resource/unstop` takes the same parameters and reverses a stop of the resource they name.
-The server MUST refuse a `kind` that names no resource kind with `requirements_invalid`, and MUST refuse the request with `not_found` if the app is not registered.
-The server MUST refuse the request with `requirements_invalid` if the app's current definition declares no resource of that kind and name.
+The server MUST refuse a `kind` other than `deployment`, `job` or `ingress` with `requirements_invalid`.
+The server MUST refuse the request with `not_found` if the app is not registered or its current definition declares no resource of that kind and name.
 Unstopping a deployment restores its effective scale.
 The result is `{}`.
 When it reverses a stop, the server MUST emit a `ResourceUnstopped` event naming the resource.
@@ -128,6 +130,7 @@ The server MUST refuse `/apps/resource/stop`, `/apps/resource/unstop` and `/apps
 > A change to the desired state made while an action closure drives the same resources would race it.
 
 The runtime MUST discard every stop recorded for an app when it uninstalls the app.
+When an app's definition is updated, the runtime MUST discard every stop recorded for a resource the new definition does not declare.
 
 `/apps/show` reports a `stopped` member on each resource, true when the resource is stopped, and a top-level `stopped_resources` array of `{ "kind": <string>, "name": <string> }` naming every stopped resource.
 Each entry of `/apps/list` reports a `has_stopped_resources` member, true when any of the app's resources is stopped.

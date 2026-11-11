@@ -56,7 +56,7 @@ It SHOULD wait at least five seconds before failing such a write.
 
 ## Host prefix derivation
 
-The runtime MUST derive the host prefix from the host's machine identifier, read from `/etc/machine-id` with surrounding whitespace removed.
+The runtime MUST derive the host prefix from the host's machine identifier, as the [platform](../platform/linux.md#host-facilities) provides it.
 The prefix MUST be `fd5e:` followed by the first four bytes of the SHA-256 ([FIPS 180-4](https://csrc.nist.gov/pubs/fips/180-4/upd1/final)) digest of that identifier, as a /48:
 
 | bytes | value |
@@ -109,6 +109,12 @@ The runtime MUST scope each translation to the mounting pod's network prefix.
 Several pods MAY mount services at the same port, each reaching its own mounted service.
 Where a mounted service has several backends, the runtime MUST distribute new connections across them.
 
+## Service addresses
+
+The runtime MUST NOT give two services on a host the same address.
+A service's address MUST lie outside every pod network prefix.
+A service's address MUST differ from every address the runtime reserves for its own infrastructure, including the mount endpoint.
+
 ## Service translation
 
 The runtime MUST translate traffic addressed to a service's address and declared service port to the address and pod-side port of one of the service's backends.
@@ -125,7 +131,7 @@ The ingress ports and their protocols are:
 
 | source | port | protocols |
 | --- | --- | --- |
-| an app's [ingress](../language/ingress.md) | the port it declares | TCP, and UDP as well when the ingress terminates DTLS or HTTPS |
+| an app's [ingress](../language/ingress.md) | the port it declares | UDP for an ingress that terminates DTLS; TCP, and UDP as well, for one that terminates HTTPS; TCP otherwise |
 | an app ingress's [HTTP redirect](../language/ingress.md#redirect-to-https) | the port the redirect names | TCP |
 | a [site ingress attachment](site-resources.md#attachments) | the attachment's port | UDP for a `udp` attachment; otherwise TCP, and UDP as well for an `http` or `http2` attachment on a site ingress that terminates TLS |
 

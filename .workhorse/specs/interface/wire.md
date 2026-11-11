@@ -42,8 +42,9 @@ The person or system on whose behalf a client makes a request.
 ## Stream dispatch
 
 A client MUST begin every bidirectional stream it opens with an opening line.
-The opening line ends at the first line feed (0x0A) or, where nothing follows the JSON object, at the end of the stream.
-An opening line that further data follows MUST end with a line feed, and MUST NOT exceed 65,536 bytes including it.
+A client MUST end every opening line with a line feed (0x0A).
+The server MUST take the opening line to end at its first line feed.
+An opening line that further data follows MUST NOT exceed 65,536 bytes including its line feed.
 
 If the opening line has a `forward` member, the server MUST treat the stream as a [port forward data stream](#port-forward-data).
 Otherwise the server MUST treat the stream as a call of the method its `method` member names.
@@ -58,8 +59,7 @@ Its content is defined by the request that caused the server to open it.
 
 ## Control requests
 
-A client MUST write a request as one JSON object and then finish its side of the stream.
-The request MAY be followed by a line feed.
+A client MUST write a request as the stream's opening line and then finish its side of the stream.
 
 | member | type | required | meaning |
 | --- | --- | --- | --- |
@@ -130,6 +130,7 @@ Wherever a message names a [resource type](../language/overview.md#resource-type
 
 `/events/subscribe` and `/logs/stream` are subscription requests.
 
+A client MUST write a subscription request as the stream's opening line and then finish its side of the stream, as for a control request.
 The server MUST answer a subscription request on its bidirectional stream exactly as it answers a control request, before it opens any unidirectional stream for it.
 If the response is an error, the server MUST NOT open a unidirectional stream for the request.
 
@@ -192,7 +193,8 @@ The limit defaults to 64, and the daemon's `--max-streams` option sets it.
 
 The server MUST count a stream against the limit from when the stream opens.
 The server MUST stop counting a port forward data stream, a subscription request or a session request once it has dispatched the stream.
-If a stream opens while the limit is reached, the server MUST answer it at once with a `server_busy` error response and finish it, whatever the stream's kind.
+A port forward data stream that opens while the limit is reached is reset as [TCP tunnelling](port-forwards.md#tcp-tunnelling) specifies.
+If any other stream opens while the limit is reached, the server MUST answer it at once with a `server_busy` error response and finish it.
 A client SHOULD retry a request refused with `server_busy` after a delay.
 
 > [!NOTE]

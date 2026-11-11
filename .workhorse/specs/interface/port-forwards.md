@@ -104,6 +104,8 @@ If either side fails, including the server failing to connect to the service or 
 > A reset tells the other end that the transfer was cut short; a finished stream would let it take a truncated transfer for a complete one.
 > A connection that half-closes after sending its request still receives the whole response.
 
+If a forward data stream opens while the server's [stream limit](wire.md#stream-limit) is reached, the server MUST reset the stream and stop sending on it with application error code 0.
+
 ## UDP tunnelling
 
 A client carries each UDP datagram through a UDP forward as a [forward datagram](wire.md#port-forward-data), prefixed with the forward's key.
@@ -135,10 +137,10 @@ A port forward remains active until one of the following occurs:
 - the client finishes or resets its sending side of the control stream;
 - an operator stops the forward with [`/forwards/stop`](#stopping-a-forward);
 - the connection is lost;
-- the app is uninstalled or removed;
+- the app leaves `Installed`;
 - a new [resource graph](../overview.md#resource-graph) takes effect for the app that no longer declares the forward's service, or its port for the forward's `proto`.
 
-When an app is uninstalled or removed, the server MUST end every forward of that app.
+When an app leaves `Installed`, the server MUST end every forward of that app.
 When a new resource graph takes effect for an app, the server MUST end every forward of that app whose service or port the graph no longer declares, and MUST leave the app's other forwards active.
 A forward MUST NOT outlive a resource graph change that removes its port, including a change that takes effect while the forward is being established, in which case the request MUST be rejected with `not_found`.
 

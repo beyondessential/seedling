@@ -40,8 +40,7 @@ The runtime MUST restart a resolver that is not running.
 The runtime SHOULD restart a running resolver only after its health check has failed on three consecutive iterations.
 The runtime MUST stop the resolver when no app is installed or installing.
 
-On an iteration that fails to bring the resolver up, or does not finish doing so, the runtime MUST file a [`resolver_failed`](faults.md#host-faults) fault.
-When it stops the resolver because no app is installed or installing, the runtime MUST clear `resolver_failed`.
+On an iteration that fails to bring the resolver up, or does not finish doing so, the runtime MUST file a [`resolver_failed`](faults.md#host-faults) fault, and MUST clear it as that fault's row specifies.
 
 ## Upstreams
 
@@ -58,7 +57,7 @@ The system resolver's address is set by the [platform](../platform/linux.md#host
 
 ## Resolver configuration
 
-The resolver MUST forward every query to its upstreams.
+The resolver MUST answer every query from its upstreams, from its cache, or by [DNS64](nat64.md#dns64) synthesis.
 The resolver MUST cache responses.
 It MUST NOT serve a cached response beyond its TTL.
 It SHOULD NOT serve a cached response for more than 30 seconds.

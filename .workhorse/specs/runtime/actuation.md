@@ -10,7 +10,11 @@ Applies to how the [runtime](../overview.md#runtime) realises resource instances
 
 ### Data directory
 
-The host directory, named when the daemon starts, in which the runtime keeps its persistent state and the storage of named non-tmpfs volumes.
+The host directory, named by the daemon's `--data-dir` option, in which the runtime keeps its persistent state and the storage of named non-tmpfs volumes.
+
+### Tmpfs location
+
+The host directory, on a tmpfs filesystem, in which the runtime keeps the storage of tmpfs volumes.
 
 ### Workload container
 
@@ -90,7 +94,7 @@ The runtime MUST store each named non-tmpfs volume as a directory in the data di
 When the data directory is on a BTRFS filesystem, the runtime MUST create each named non-tmpfs volume as a BTRFS subvolume.
 The container runtime MAY manage anonymous non-tmpfs volumes.
 
-The runtime MUST store each tmpfs volume, named or anonymous, as a directory on a tmpfs filesystem on the host, and bind-mount it into the containers that use it.
+The runtime MUST store each tmpfs volume, named or anonymous, as a directory in the [tmpfs location](#tmpfs-location), and bind-mount it into the containers that use it.
 That directory MUST be the volume for every lifecycle step: starting creates and seeds it, observation reports it present or missing, and stopping removes it.
 The runtime MUST NOT stand a container-runtime volume in for a tmpfs volume.
 
@@ -131,7 +135,7 @@ For a named non-tmpfs volume, the runtime MUST hold its data as a [held volume](
 
 ## Held volumes
 
-A named non-tmpfs volume of an app is removed, and its data held as [volume removal](#volume-removal) requires, when the volume's name is removed from the app's definition, when the app is uninstalled, and when the volume's storage cannot be changed in place to the backend the definition requires.
+A named non-tmpfs volume of an app is removed, and its data held as [volume removal](#volume-removal) requires, when the volume's name is removed from the app's definition, when the app is uninstalled, and when the volume's storage cannot be changed in place to the [backend of the data directory](#volume-storage).
 If the app still declares a volume under the same name, the runtime MUST create a fresh volume and keep the held one beside it.
 
 The runtime MUST hold a managed [site volume](site-resources.md#site-volumes)'s data when an operator deletes it.

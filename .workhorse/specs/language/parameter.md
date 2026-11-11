@@ -75,6 +75,7 @@ The runtime MUST NOT invoke the handler while the app is in any other [install p
 
 A script MAY pass a closure taking up to two parameters.
 The runtime MUST call `fn` with as many of these arguments as it takes, in this order: the [runtime handle](rt.md#runtime-handle), then an `App` named here `old`.
+A closure declaring more than two parameters MUST fail when the runtime calls it.
 
 `old` MUST reflect the previous [generation](../overview.md#generation): the previous generation's definition, evaluated with the parameter values held before the change.
 When the change arrives together with a new definition, the runtime MUST invoke the handler the new definition registers, and `old` MUST reflect the previous definition at the previous values.

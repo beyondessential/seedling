@@ -48,7 +48,8 @@ Within one app, a workload with a lower [Deployment priority](../language/consta
 > A `Critical` Deployment in a `low` app is therefore shed before a `Normal` Deployment in a `high` app.
 
 The runtime's infrastructure containers MUST be shed last, after every app workload.
-Where the platform allows it, a `Critical` workload MUST be protected from the kernel's out-of-memory killer, and a `Low` workload MUST be its preferred victim, within the order above.
+Where the platform allows it, a `Critical` workload MUST be the kernel's least preferred out-of-memory victim within the order above.
+Where the platform allows it, a `Low` workload MUST be the kernel's most preferred out-of-memory victim within the order above.
 
 ## Contended capacity
 

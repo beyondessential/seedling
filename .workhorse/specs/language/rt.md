@@ -42,7 +42,7 @@ A runtime handle method MUST act only on the deployments, jobs, services and ing
 A selection that is an `Action`, or any value not in the table, MUST make the method throw.
 
 A runtime handle method MUST resolve each resource of a selection to its instances when the method is called.
-A named Deployment MUST resolve to as many instances as its current instance count under its [scale](deployment.md#scale), and to at least one where that count is 0.
+A named Deployment MUST resolve to as many instances as its current instance count under its [scale](deployment.md#scale).
 Every other resource MUST resolve to its one instance.
 
 ## Workload control
@@ -145,14 +145,17 @@ A string `contents` MUST be written as its UTF-8 bytes, and a [`File`](bundle.md
 - an ExternalVolume that [resolves](volume.md#external-volumes) to storage, through the running operation's bindings or the host's mappings.
 
 Any other `target` MUST make `rt.write` throw, including an ExternalVolume that resolves to nothing, and one whose mapping is read-only.
+A Volume declared [read-only](volume.md#storage-options) MUST make `rt.write` throw.
 `path` MUST be validated as a [volume write path](volume.md#write-paths) is, and an invalid `path` MUST make `rt.write` throw.
+
+If a named Volume's storage does not exist, the runtime MUST create it and apply its declared file writes, as [volume creation and seeding](../runtime/actuation.md#volume-creation-and-seeding) specifies, before writing the file.
 
 The runtime MUST NOT write the file again when a container using the volume restarts.
 Each call MUST write at most once, including when the action closure is replayed.
 `rt.write` MUST throw when called outside the action context.
 
 > [!NOTE]
-> A file written into a tmpfs volume is lost when the host restarts, and the runtime does not write it again, as it does a tmpfs volume's [declared file writes](volume.md#declared-file-writes).
+> A file written into a tmpfs volume is lost when the host restarts, and the runtime does not write it again, whereas it reapplies a tmpfs volume's [declared file writes](volume.md#declared-file-writes).
 
 ## Waiting on resource state
 

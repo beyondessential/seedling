@@ -49,8 +49,7 @@ It MUST throw if no static resource of that resource type and name exists.
 
 ## Static resource immutability
 
-In the action context, calling a builder method on a static resource MUST throw, whether the script obtained the handle within the closure or captured it from the static context.
-This applies to every builder method of every resource type.
+In the action context, calling a builder method of any resource type on a static resource MUST throw, whether the script obtained the handle within the closure or captured it from the static context.
 
 In the action context, `http` on a static Service or External Service MUST throw, and so MUST `ingress` on a static Service.
 The proxy setting methods `compress`, `balance`, `rate_limit`, `headers` and `redirect` MUST throw in the action context when called on an `HttpService` or `HttpServiceRoute` that views a static Service or External Service.

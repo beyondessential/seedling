@@ -64,7 +64,9 @@ Where a supervisor performs recovery restarts, the runtime MUST configure it to 
 The runtime SHOULD configure the supervisor to wait 5 seconds between attempts, and to give up after 10 starts within 600 seconds.
 
 While the supervisor is bringing an instance up, whether for its first start or in the pause before an automatic restart, the runtime MUST NOT tear the instance down or start it again.
-The runtime MUST distinguish a unit the supervisor reports as starting from one it reports as started, and MUST treat only a started unit with no running container as broken.
+The runtime MUST distinguish a unit the supervisor reports as starting from one it reports as started.
+The runtime MUST treat a unit the supervisor reports as started, with no running container, as failed.
+Unless the instance has an active `crash_loop` fault, the runtime MUST tear down a failed unit of an instance the desired state holds running, so that a later iteration starts the instance afresh.
 The runtime MUST NOT file a [`container_start_failed`](faults.md#workload-faults) fault for a unit the supervisor is bringing up.
 The runtime MUST NOT hold back from replacing a unit whose specification no longer matches the app's definition.
 
@@ -74,7 +76,7 @@ The runtime MUST NOT hold back from replacing a unit whose specification no long
 
 When the supervisor has given up restarting an instance because it reached its start limit, the runtime MUST file a [`crash_loop` fault](faults.md#workload-faults) against the instance even if the recorded rate is below the threshold.
 
-While an instance has an active `crash_loop` fault, whichever condition filed it, the runtime MUST NOT restart the instance automatically.
+While an instance has an active `crash_loop` fault, whichever condition filed it, the runtime MUST prevent every automatic restart of the instance, whether the runtime or a supervisor would perform it.
 The runtime MUST still tear the instance down when it leaves the desired state.
 
 ## Job completion
@@ -98,7 +100,6 @@ When the number of running instances of a Deployment differs from its effective 
 The runtime MUST keep a durable record of the scale an operator chooses for each Deployment the operator has scaled.
 
 When an action names a Deployment, the runtime MUST resolve it to the instances its effective scale calls for, the same set reconciliation holds it at.
-An action that addresses a Deployment addresses all of it.
 
 > [!NOTE]
 > An `rt.stop` that reached only the lower bound's worth of instances of a scaled Deployment would report the workload stopped while the rest went on serving.
@@ -128,7 +129,7 @@ When an instance of a Deployment whose healthcheck declares [`on_failure: "repla
 
 1. Start one instance beyond the Deployment's effective scale as a replacement.
 2. Keep the unhealthy instance running, in the [routing pool in degraded mode](lifecycle.md#routing-pool), while the replacement starts.
-3. Once the replacement is observed healthy, retire the unhealthy instance through the normal scale-down path.
+3. Once the replacement is observed healthy, retire the unhealthy instance as a [scale](#scale) reduction would.
 
 The runtime MUST NOT start a replacement for an instance of a Deployment that declares `on_failure: "monitor"`.
 

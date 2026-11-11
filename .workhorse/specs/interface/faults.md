@@ -24,6 +24,7 @@ A fault record is a JSON object.
 `resource_type`, `resource_name` and `instance_id` identify the fault's subject for display, and take no part in the fault's [identity](../runtime/faults.md#fault-records).
 For a fault about a resource instance, they MUST give the instance's resource [type name](wire.md#resource-type-names), its resource name and its instance ID.
 For a fault about an app's ingress, `resource_type` MUST be `ingress`, `resource_name` MUST be the ingress's name, and `instance_id` MUST be `null`.
+For a fault about an app's service as a whole, `resource_type` MUST be `service`, `resource_name` MUST be the service's name, and `instance_id` MUST be `null`.
 For a fault about a site ingress or a site service, `resource_type` MUST be `site_ingress` or `site_service`, `resource_name` MUST be its name, and `instance_id` MUST be `null`.
 For any other fault, all three MUST be `null`, and its `description` SHOULD name its subject.
 
@@ -97,4 +98,5 @@ The server MUST treat a `limit` below 1 as 1, and a `limit` above 1000 as 1000.
 `/restarts/settings/get` takes no parameters, and its result is the settings object.
 `/restarts/settings/set` takes either or both members, and its result is the whole settings object after the change.
 The server MUST leave an omitted member unchanged.
+The server MUST reject a request that gives neither member, including one whose `params` is `{}`, with `requirements_invalid`.
 The server MUST reject a `threshold` below 2 or a `window_secs` below 60 with `requirements_invalid`, and change neither setting.

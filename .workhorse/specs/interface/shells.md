@@ -83,12 +83,12 @@ A session's [attachment](../language/action.md#shell-control) to its job ends wh
 - the stdout stream cannot be written;
 - the connection is lost;
 - an operator stops the session with `/shells/stop`;
-- the app whose shell the session runs is uninstalled or removed.
+- the app whose shell the session runs leaves `Installed`.
 
 When the attachment ends, the server MUST terminate the job if it is still running, and MUST finish the stdout stream.
 The shell's script then runs on until it returns, and the session ends when it does.
 A session an operator stops MUST end only once the script has stopped, whether the attachment has ended or not.
-When an app is uninstalled or removed, the server MUST stop every session on the app's shells as `/shells/stop` does.
+When an app leaves `Installed`, the server MUST stop every session on the app's shells as `/shells/stop` does.
 
 When a session ends, the server MUST write the exit frame `{ "exit_code": <integer> }` to the session stream and then finish its sending side of the session stream.
 The server MUST finish the stderr stream when the session ends.
@@ -175,6 +175,7 @@ A site volume's display name is its `name`.
 An app volume's display name is `<app>.<volume>`.
 A held volume's display name is `held-<app>-<volume>`, naming the app and volume it was held from, or `held-<id>` where those are unknown.
 Before use, the server MUST replace each character of a display name that is not an ASCII letter, ASCII digit, `-` or `.` with `_`, and then remove leading and trailing `-` and `.` characters.
+The server MUST reject a request in which two volumes' display names are the same once replaced and trimmed this way, with `requirements_invalid`.
 
 The server MUST mount a snapshot site volume read-only.
 The server MUST mount every other volume read-write unless `read_only` is `true`.

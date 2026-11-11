@@ -45,10 +45,9 @@ The server SHOULD keep an idle connection open for as long as its client remains
 ## Server identity
 
 The server MUST authenticate itself with a raw public key.
+The server's key MUST be an Ed25519 key, encoded as [RFC 8410](https://www.rfc-editor.org/rfc/rfc8410) specifies.
 A client MUST verify the server by comparing the fingerprint of the key it presents with a fingerprint the client already trusts, and MUST abort the handshake if they differ.
 A client MUST NOT rely on certificate chain validation to authenticate a server.
-
-A client MUST support Ed25519 keys as [RFC 8410](https://www.rfc-editor.org/rfc/rfc8410) encodes them.
 
 The server MUST generate its key pair the first time it starts, and MUST persist the private key in the file `oi.key` in its [data directory](../overview.md#data-directory).
 On every later start the server MUST use the key in that file, so its fingerprint stays the same across restarts.
@@ -90,7 +89,9 @@ The server MUST abort the handshake of a client whose key's fingerprint is not i
 
 The server MUST store its authorised key set durably.
 
-Each time it starts, the server MUST read the file `authorized_keys` in its data directory, if the file exists, and add to its authorised key set every entry not already in it.
+The server MUST record durably the fingerprint of every key revoked through [key management](keys.md#revoking-a-key).
+
+Each time it starts, the server MUST read the file `authorized_keys` in its data directory, if the file exists, and add to its authorised key set every entry that is neither already in it nor recorded as revoked.
 An entry already in the set MUST keep the label it has.
 Each line of the file, with surrounding whitespace removed, is blank, a comment beginning with `#`, or an entry.
 An entry is a fingerprint, then optionally a single space and a label running to the end of the line.

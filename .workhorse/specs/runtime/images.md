@@ -41,14 +41,14 @@ When an action closure calls [`rt.warm_images`](../language/rt.md#image-warming)
 For each reference collected, the runtime MUST record a [pin](#pin) for the calling app, creating it if absent.
 
 The runtime MUST record each `rt.warm_images` call in the [action execution log](history.md#action-execution-log).
-A repeated call with the same selection MUST observe the images on the host and return at once when every selected image is present.
+On [replay](suspension.md#replay), an `rt.warm_images` call MUST observe the images on the host and return at once when every selected image is present.
 
 ## Pins
 
 A pin is keyed by app and image reference, and MAY carry an expiry time.
 While a pin exists, the runtime MUST NOT autonomously remove an image that the pin's reference resolves to.
 
-When the runtime observes a running container whose image reference matches a pin's, it MUST delete that pin, whichever app the container belongs to.
+When the runtime observes a running container whose image reference equals a pin's, it MUST delete that pin, whichever app the container belongs to.
 The runtime MUST NOT create a pin again when a workload stops using an image; only another `rt.warm_images` call pins it.
 An operator MAY delete any pin through the [Operator Interface](../overview.md#operator-interface).
 

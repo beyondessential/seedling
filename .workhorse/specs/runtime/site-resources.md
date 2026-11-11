@@ -58,6 +58,7 @@ The runtime MUST create a managed site volume's storage when the volume is creat
 When an operator deletes a managed site volume, the runtime MUST [hold](actuation.md#held-volumes) its data.
 When an operator deletes a snapshot site volume, the runtime MUST delete its storage.
 When an operator deletes a bind site volume, the runtime MUST forget the volume and MUST leave the host path untouched.
+The runtime MUST reject the deletion of a site volume while an external volume mapping targets it.
 
 The runtime MUST emit an [event](../interface/events.md) and record an [audit log](audit-log.md#entries) entry when an operator creates or deletes a site volume.
 A deletion event MUST identify the site volume's kind, and the held volume created when the deletion held the volume's data.
@@ -97,6 +98,12 @@ The runtime MUST emit an event when it promotes a snapshot, identifying the new 
 
 An operator maps an app's external volume to a site volume or an app's exported volume, and an app's external service to a site service or another app's service.
 
+A mapping's target exists while the site volume or site service it names exists, or while the app it names is registered and that app's current definition declares the volume or service it names, exported in the case of a volume.
+The runtime MUST keep a mapping whose target stops existing, as when the target's app is deregistered, the target volume or service leaves the target app's definition, or the target volume is no longer exported.
+While a mapping's target does not exist, the runtime MUST treat the mapped external volume or external service as unmapped.
+
+After each external volume or external service mapping is created, removed or retargeted, the runtime SHOULD begin a [reconciliation loop](reconciliation.md#reconciliation-loop) iteration without waiting for the next one to fall due.
+
 The runtime MUST emit an event and record an audit log entry when an external volume mapping or an external service mapping is created, removed, or retargeted.
 The event MUST identify the app, the external name, and the new target, or that the mapping was removed.
 A retargeting event MUST also identify the previous target.
@@ -104,7 +111,6 @@ A retargeting event MUST also identify the previous target.
 ## Site services
 
 A site service has a name, an optional description, and zero or more endpoints.
-A site service port with no endpoint has no target, as for an [unmapped external service](../language/service.md#external-services).
 Each endpoint has these members:
 
 | member | meaning |
@@ -116,6 +122,7 @@ Each endpoint has these members:
 
 The `(service_port, protocol)` pairs across a site service's endpoints are the ports the site service exposes.
 The runtime MUST distribute traffic for a site service's `(service_port, protocol)` across the `(remote_host, remote_port)` of every endpoint with that pair, as for any [service with several backends](../language/service.md#routing).
+An external service mapped to a site service that exposes none of the external service's ports has no target, as for an [unmapped external service](../language/service.md#external-services).
 
 ### Endpoint addressing
 
@@ -123,29 +130,34 @@ The runtime MUST route each endpoint as follows:
 
 | `remote_host` | routed |
 | --- | --- |
-| an IPv6 literal | natively, to that address |
+| an IPv6 literal, on a host with IPv6 egress | natively, to that address |
 | an IPv4 literal | through NAT64 |
 | a name with AAAA records, on a host with IPv6 egress | natively, to the AAAA addresses |
 | a name with A records and no usable AAAA records | through NAT64, to the A addresses |
 
 On a host without IPv6 egress, AAAA records are unusable.
 The runtime MUST route through NAT64 by embedding the IPv4 address in the Well-Known Prefix.
+While the host's [IPv6 egress](nat64.md#ipv6-egress) is undetermined, the runtime MUST route endpoints as for a host without IPv6 egress, as the resolver synthesises for one.
 
-The runtime MUST report an endpoint as unroutable when it needs NAT64 and NAT64 is not [active](nat64.md#active-nat64), or when its name has only AAAA records and the host has no IPv6 egress.
-The runtime MUST report an endpoint as unresolvable when resolving its name has failed 5 consecutive times.
+A lookup of a name is unanswered when it returned no records from either address family, whether a family's lookup failed or both returned no records.
+
+The runtime MUST report an endpoint as unroutable when it needs NAT64 and NAT64 is not [active](nat64.md#active-nat64), or when the host has no IPv6 egress and the endpoint is an IPv6 literal or a name with only AAAA records.
+The runtime MUST report an endpoint as unresolvable when 5 consecutive lookups of its name have been unanswered.
 An unroutable or unresolvable endpoint MUST raise the [site service faults](faults.md#ingress-and-service-faults) for its site service.
 An unroutable or unresolvable endpoint MUST NOT affect the routing of other endpoints, site services or apps.
 
 ### Partial DNS answers
 
 The runtime MUST resolve a name from the address families whose lookups succeeded.
-When the lookup for one family fails and the other returns records, the runtime MUST resolve the endpoint from those records.
-The runtime MUST keep the failed family's last answer.
-The runtime MUST look the name up again promptly, without waiting for the answer's lifetime to pass.
+When the lookup for one family fails and the other returns records, the runtime MUST resolve the endpoint from those records together with the failed family's last answer.
+The runtime MUST keep the failed family's last answer, and MUST route traffic to it as [endpoint addressing](#endpoint-addressing) specifies for a fresh answer.
 A failed lookup MUST NOT be recorded as the family having no records.
 
-A failure MUST count towards the unresolvable threshold only when no lookup returned records and at least one lookup failed.
-The [`/services/site/resolver-status`](../interface/services.md#resolver-status) method MUST name each family whose lookup is failing, for as long as it fails.
+After a lookup in which a family failed, the runtime MUST look the name up again within 10 seconds, whatever the lifetime of the records returned.
+The runtime SHOULD wait at least 5 seconds before that lookup.
+
+A partial answer is not an [unanswered](#endpoint-addressing) lookup, and ends any run of consecutive unanswered lookups.
+The [`/services/site/resolver-status`](../interface/services.md#resolver-status) method MUST name each family whose most recent lookup failed.
 
 ### Site service lifecycle
 
@@ -156,6 +168,8 @@ Deleting a site service MUST remove it and its endpoints.
 
 The runtime MUST emit an event and record an audit log entry when a site service is created or deleted, and when an endpoint is added or removed.
 An endpoint event MUST identify the site service and the endpoint's `(service_port, protocol, remote_host, remote_port)`.
+
+After each endpoint is added or removed, the runtime SHOULD begin a reconciliation loop iteration without waiting for the next one to fall due.
 
 ## Site ingresses
 
@@ -205,6 +219,18 @@ An attachment's protocol is one of:
 | `http2` | HTTP, over TLS unless the site ingress's mode is `none` | cleartext HTTP/2 |
 
 The runtime MUST serve a redirect target only on an `http` or `http2` attachment.
+
+A forward target's traffic reaches one service port of the target service, its forwarded port.
+The forwarded port MUST be the service port of the first binding of the target service that a pod of the target app makes.
+The runtime MUST look for that binding in the app's Deployments and then its Jobs, each in ascending byte order of name.
+Within a pod, the runtime MUST take the pod's [port bindings](../language/pod.md#port-bindings) of the attachment's transport, in the order the script made them, before the pod's HTTP route bindings.
+A `udp` attachment's transport is UDP, and every other attachment's is TCP.
+The runtime MUST NOT take an HTTP route binding for a `udp` attachment.
+The runtime MUST leave out of the proxy configuration a forward attachment whose target service no pod of the target app binds.
+
+Where a redirect target keeps the request's path and query, the runtime MUST answer with a `Location` of the configured URL with any trailing `/` removed, followed by the request-target as it arrived, without decoding or normalising it, as for a [redirect route](proxy.md#redirect-routes).
+Where it does not, the runtime MUST answer with a `Location` of the configured URL as given.
+
 An attachment takes its hostname and TLS provisioning mode from its site ingress.
 A site ingress MAY carry several attachments that differ in `(port, protocol)`.
 

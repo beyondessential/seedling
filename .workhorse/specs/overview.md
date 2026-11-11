@@ -19,6 +19,7 @@ The key words MUST, MUST NOT, REQUIRED, SHALL, SHALL NOT, SHOULD, SHOULD NOT, RE
 | [TOML 1.0.0](https://toml.io/en/v1.0.0) | the bundle metadata file and web interface configuration, under [BND](language/bundle.md), [WEB](web/serving.md) |
 | [Semantic Versioning 2.0.0](https://semver.org/spec/v2.0.0.html) | Seedling versions, under [BND](language/bundle.md), [STS](interface/status.md) |
 | [Cargo version requirement syntax](https://doc.rust-lang.org/cargo/reference/specifying-dependencies.html#version-requirement-syntax) | version requirements, under [BND](language/bundle.md) |
+| [gitignore](https://git-scm.com/docs/gitignore) | patterns in `.seedignore` files, under [CLI](interface/client.md) |
 | [POSIX `crontab`](https://pubs.opengroup.org/onlinepubs/9799919799/utilities/crontab.html), Issue 8 | schedule expressions, under [ACN](language/action.md) |
 | [IANA Time Zone Database](https://www.iana.org/time-zones) | time zone names, under [ACN](language/action.md), [CONST](language/constants.md) |
 | [SipHash](https://www.aumasson.jp/siphash/siphash.pdf) | the hash of schedule `H` fields, under [ACN](language/action.md) |

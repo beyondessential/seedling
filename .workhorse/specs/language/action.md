@@ -98,7 +98,7 @@ A param schema is an object map from param name to a param definition, which is 
 | key | type | default | meaning |
 | --- | --- | --- | --- |
 | `kind` | string | `"text"` | how the value is presented and validated, one of the [param kinds](#param-kinds) |
-| `required` | boolean | `true` | whether the invocation must supply a value |
+| `required` | boolean | `true` | whether the param needs a value |
 | `default_value` | string | none | the value taken when none is supplied |
 | `description` | string | none | free-form text telling operators the value's meaning or purpose |
 | `secret` | boolean | by kind | whether the value is sensitive |
@@ -155,7 +155,7 @@ That generator's default output MUST be 32 random bytes written as 64 lowercase 
 ### Volume params
 
 The `volume` kind MUST be accepted in the param schemas of actions and shells.
-A `volume` param in the install action's param schema MUST throw, and a [parameter's kind](parameter.md#schema) does not accept it.
+Declaring a `volume` param in the install action's param schema MUST throw, and a [parameter's kind](parameter.md#schema) does not accept it.
 
 The runtime MUST reject an invocation whose `volume` param names a site volume that does not exist.
 When it dispatches the invocation, the runtime MUST bind the named site volume for the operation, as [operation volume params](../runtime/operations.md#operation-scoped-volumes) specify.
@@ -164,7 +164,7 @@ If the binding cannot be made at dispatch, the runtime MUST fail the invocation 
 A closure obtains the bound volume with `app.external_volume(param["<name>_volume"])`, as [operation-scoped external volumes](volume.md#external-volumes) specify.
 
 > [!NOTE]
-> A volume binding lasts for one operation, while a parameter or an install param outlives it.
+> A volume binding lasts for one operation, while a parameter's value and the setup an install performs outlive it.
 > A script needing a permanent volume declares an external volume for the operator to map.
 
 ## Start action
@@ -173,10 +173,12 @@ The start action is the action named `start`, and brings the app up.
 A script declares it with `app.on_start(fn: closure)`, `app.on_start(fn: closure, options: map)` or `app.on_action("start", …)`, each of which returns its `Action` handle.
 The `options` of `app.on_start` MAY carry `description`, as for `app.on_action`.
 An `options` map passed to `app.on_start` carrying any other key MUST throw.
+An `options` map passed to `app.on_action("start", …)` carrying `params` MUST throw.
 `app.on_start` MUST throw when called in the action context.
 
-The runtime MUST run the start action as a lifecycle operation when an install operation for the app completes successfully.
-The runtime MUST also run it when the runtime starts with the app installed and no interrupted operation to replay for it.
+The runtime MUST run the start action as a lifecycle operation, with the trigger `install`, when an install operation for the app completes successfully.
+The runtime MUST run it with the trigger `install` when the app moves to `Installed` without an install operation.
+The runtime MUST also run it, with the trigger `boot`, when the runtime starts with the app installed and no interrupted operation to replay for it.
 Until the start action ends, the runtime holds the rest of the app's resources as [desired state](../runtime/reconciliation.md#desired-state) specifies.
 The start action's closure MUST receive an empty param map when the runtime runs it.
 If the script declares no start action, the runtime MUST run it as though its closure called `rt.start(app)`.
@@ -291,7 +293,6 @@ Every value in the install action's param map is a string.
 The runtime MUST run the install action only when an operator [installs the app](../interface/actions.md#install).
 The install action is not registered under a name, and neither `app.action` nor `invoke` can reach it.
 
-If the script declares no install action, installing the app MUST behave as though the install action's closure called `rt.start(app)`.
-That default MUST NOT run the start action's closure, which runs once the install completes.
+If the script declares no install action, installing the app MUST move it to `Installed` without an install operation, as [install](../interface/actions.md#install) specifies.
 
 Install param values MUST be held only for the duration of the install operation, and the runtime MUST discard them when it ends.

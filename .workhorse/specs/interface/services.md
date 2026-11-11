@@ -11,6 +11,8 @@ Applies to the [Operator Interface](../overview.md#operator-interface) methods t
 | term | meaning |
 | --- | --- |
 | IPv6 text form | the textual representation of an IPv6 address, as defined in [RFC 4291](https://www.rfc-editor.org/rfc/rfc4291) section 2.2 |
+| IPv4-mapped IPv6 address | an IPv6 address carrying an IPv4 address in its low 32 bits under the prefix `::ffff:0:0/96`, as defined in [RFC 4291](https://www.rfc-editor.org/rfc/rfc4291) section 2.5.5.2 |
+| `.localhost` name | a DNS name in the `localhost.` special-use domain, which resolves to a loopback address, as defined in [RFC 6761](https://www.rfc-editor.org/rfc/rfc6761) section 6.3 |
 
 ## Service targets
 
@@ -44,17 +46,17 @@ An endpoint is identified by all four members together.
 
 `remote_host` MUST be one of:
 
-- an IPv6 address in the IPv6 text form, with no enclosing brackets and no zone index, other than the loopback address `::1`;
-- an IPv4 address as four decimal numbers from 0 to 255 separated by dots, none with a leading zero, outside the loopback range `127.0.0.0/8`;
+- an IPv6 address in the IPv6 text form, with no enclosing brackets and no zone index, other than the loopback address `::1`, the unspecified address `::`, and an IPv4-mapped IPv6 address within `::ffff:127.0.0.0/104`;
+- an IPv4 address as four decimal numbers from 0 to 255 separated by dots, none with a leading zero, outside the loopback range `127.0.0.0/8` and other than the unspecified address `0.0.0.0`;
 - a DNS name.
 
 A DNS name, for `remote_host`, is a string of at most 253 characters made of labels separated by single dots, with no leading or trailing dot.
 Each label MUST be 1 to 63 characters of ASCII letters, ASCII digits and hyphens, and MUST NOT begin or end with a hyphen.
 The name MUST contain at least one ASCII letter.
-The name MUST NOT be `localhost`, compared case-insensitively.
+The name MUST NOT be `localhost` or a `.localhost` name, compared case-insensitively.
 
 > [!NOTE]
-> An endpoint is reached from a pod's network, where `localhost` or a loopback address would name the pod and not the operator's machine.
+> An endpoint is reached from a pod's network, where `localhost`, a `.localhost` name, a loopback address or an unspecified address would name the pod and not the operator's machine.
 > A name of digits and dots alone would be read as a malformed IPv4 address.
 
 How the runtime routes each form of `remote_host` is specified in [endpoint addressing](../runtime/site-resources.md#endpoint-addressing).
@@ -69,11 +71,11 @@ The server MUST refuse an endpoint object that breaks any rule above with `requi
 | --- | --- | --- | --- |
 | `name` | string | yes | the site service's name |
 | `description` | string | no | a description of the site service for operators |
-| `endpoints` | array of [endpoint objects](#endpoint-objects) | yes | the site service's endpoints |
+| `endpoints` | array of [endpoint objects](#endpoint-objects) | no, default empty | the site service's endpoints |
 
 The server MUST refuse a `name` that breaks the [name rules](../language/overview.md#names) with `requirements_invalid`.
 The server MUST refuse a `name` under which a site service exists with `requirements_invalid`.
-An absent `endpoints` MUST be treated as empty, and a site service MAY be created with [no endpoints](../runtime/site-resources.md#site-services).
+A site service MAY be created with [no endpoints](../runtime/site-resources.md#site-services).
 The server MUST refuse `endpoints` holding two identical endpoints with `requirements_invalid`.
 
 The runtime MUST store the site service and all its endpoints in one step, so that a refused or failed request leaves none of them stored.
@@ -92,7 +94,7 @@ Its result is an array with one record for each site service, ordered by name in
 | `name` | string | the site service's name |
 | `description` | string | the site service's description; absent where it has none |
 | `created_at` | string | when the site service was created, as an [RFC 3339](https://www.rfc-editor.org/rfc/rfc3339) timestamp |
-| `endpoints` | array of [endpoint objects](#endpoint-objects) | the site service's endpoints, ordered by `service_port`, then `protocol`, `remote_host` and `remote_port`, each in ascending order |
+| `endpoints` | array of [endpoint objects](#endpoint-objects) | the site service's endpoints, ordered by `service_port`, then `protocol`, `remote_host` and `remote_port`, the numbers in ascending order and the strings in ascending byte order |
 
 The method emits no event and records no audit entry.
 
@@ -140,19 +142,19 @@ The server MUST then emit a `SiteServiceEndpointRemoved` event carrying the requ
 
 `/services/site/resolver-status` reports the runtime's resolution of the DNS names that site service endpoints give as their `remote_host`.
 It takes no parameters.
-Its result is `{ "entries": [ ... ] }`, with one entry for each such DNS name that the runtime has looked up at least once.
+Its result is `{ "entries": [ ... ] }`, with one entry for each such DNS name that the runtime has looked up at least once, ordered by `host` in ascending byte order.
 
 | member | type | meaning |
 | --- | --- | --- |
 | `host` | string | the DNS name |
 | `aaaa` | array of strings | the IPv6 addresses the runtime holds for the name from AAAA records, each in the IPv6 text form |
 | `a` | array of strings | the IPv4 addresses the runtime holds for the name from A records, each in dotted decimal form |
-| `last_attempt_failed` | boolean | `true` where the most recent lookup of the name failed for both address families |
-| `degraded_family` | string or null | `"AAAA"` or `"A"` where the most recent lookup failed for that family and returned records for the other, and `null` otherwise |
+| `last_attempt_failed` | boolean | `true` where the most recent lookup of the name returned no records and at least one family's lookup failed |
+| `failed_families` | array of strings | the address families whose most recent lookup failed, each `"AAAA"` or `"A"`, in ascending byte order, and empty where none did |
 | `age_seconds` | integer | the whole seconds since the most recent lookup of the name |
 | `ttl_remaining_seconds` | integer | the whole seconds until the runtime's answer for the name expires and it looks the name up again |
 
-Where `degraded_family` names a family, that family's addresses are its last answer, as [partial DNS answers](../runtime/site-resources.md#partial-dns-answers) specifies.
+For each family `failed_families` names, `aaaa` or `a` holds that family's last answer, as [partial DNS answers](../runtime/site-resources.md#partial-dns-answers) specifies.
 A DNS name that an endpoint gives and that has no entry has not yet been looked up.
 
 The method emits no event and records no audit entry.

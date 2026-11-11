@@ -83,7 +83,8 @@ Its upstreams MUST be the addresses of the running instances of every pod bindin
 A prefix none of whose binding pods has a running instance MUST still be emitted, with no upstreams.
 
 If no pod binds any prefix of the service, the runtime MUST emit a fallback route.
-Its single upstream MUST be the service's address at the service's port, through the service's [routing pool](lifecycle.md#routing-pool).
+Its single upstream MUST be the service's address, through the service's [routing pool](lifecycle.md#routing-pool), at the [Service Port](../language/service.md#service-ports) on which the service is viewed as an [HTTP service](../language/http-service.md#declaration).
+Where the service is viewed as an HTTP service on several Service Ports, the fallback route's upstream MUST be at the lowest-numbered of them.
 
 The runtime MUST emit each redirect route the service declares, whether or not any pod binds a prefix of the service.
 A redirect route MUST NOT displace the fallback route.
@@ -235,8 +236,7 @@ While any app is installed or installing, the runtime MUST check the proxy's hea
 The proxy is healthy when it answers the runtime's health query on its administrative interface.
 The runtime MUST stop the proxy when no app is installed or installing.
 
-On an iteration that fails to bring the proxy up, or does not finish doing so, the runtime MUST file a [`caddy_failed`](faults.md#host-faults) fault.
-When it stops the proxy because no app is installed or installing, the runtime MUST clear `caddy_failed`.
+On an iteration that fails to bring the proxy up, or does not finish doing so, the runtime MUST file a [`caddy_failed`](faults.md#host-faults) fault, and MUST clear it as that fault's row specifies.
 
 ## Proxy image
 
@@ -251,7 +251,7 @@ Before a proxy image is published, and whenever the runtime's configuration outp
 It MUST also be checked, with the proxy's own validation, against configurations the runtime emits for every feature it can emit.
 That check MUST be shown to reject a configuration carrying a field the image does not accept.
 
-The proxy MUST store the certificates it obtains where the runtime [observes certificate status](observation.md#ingresses).
+The proxy MUST store the certificates it obtains where the runtime [reads them](observation.md#ingresses).
 
 > [!NOTE]
 > A proxy that obtains certificates but stores them elsewhere serves traffic correctly while the runtime reports that no certificate exists.
@@ -277,5 +277,4 @@ The runtime SHOULD also apply the persisted configuration to a proxy it starts a
 
 If the replacement rejects the persisted configuration, the runtime MUST abort the upgrade.
 It MUST stop the replacement, leave the running proxy active and serving, and not record the replacement as active.
-It MUST file the `caddy_failed` fault naming the rejection, and retry the upgrade on a later iteration.
-A `caddy_failed` fault filed for a rejected upgrade MUST clear only when an upgrade succeeds or the proxy is stopped, and MUST NOT clear because the running proxy is healthy.
+It MUST file the [`caddy_failed`](faults.md#host-faults) fault naming the rejection, and retry the upgrade on a later iteration.

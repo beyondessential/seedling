@@ -54,7 +54,7 @@ The runtime SHOULD log an error when it files a fault.
 
 The runtime MUST clear a fault no more broadly than it files it.
 An occurrence affecting one subject MUST NOT clear a fault held by another.
-Within one evaluation, the faults the runtime files and the faults it clears MUST NOT share a key.
+Within one iteration of the [reconciliation loop](reconciliation.md#reconciliation-loop), or one run of any other check that both files and clears faults, the faults the runtime files and the faults it clears MUST NOT share a key.
 
 The runtime MUST determine whether a condition fault holds from durable state and from observations, never from state held only in memory, so that a condition fault is active exactly while its condition holds, across runtime restarts.
 If the runtime cannot determine whether a fault's condition holds, it MUST neither file nor clear that fault.
@@ -94,7 +94,7 @@ A `health_check_replace_failed` fault MUST identify the failed replacement and t
 
 ### Withholding faults
 
-A withholding fault is one under which the runtime stops acting on its subject until the fault clears: `external_volume_not_mapped`, `crash_loop` ([no autonomous restart](autonomous.md#crash-loop-detection)) and `health_check_replace_failed` ([no further replacements](autonomous.md#replacement-guard)).
+A withholding fault is one under which the runtime stops acting on its subject until the fault clears: `external_volume_not_mapped`, `crash_loop` ([no automatic restart](autonomous.md#restart-pacing)) and `health_check_replace_failed` ([no further replacements](autonomous.md#replacement-guard)).
 An app holding one is [`faulted`](../interface/apps.md#status-derivation) rather than `degraded`.
 
 ## Volume faults
@@ -113,24 +113,25 @@ The runtime MUST file and clear the faults below against the app, with an empty 
 
 | kind | subject | filed when | clears when | shape |
 | --- | --- | --- | --- | --- |
-| `script_error` | none | the app's definition fails to evaluate, at registration, on an update, on a parameter change, on a change to the registry allowlist, when an undetermined [host constant](../language/constants.md#determining-host-constants) is determined, or when the runtime starts | the definition next evaluates | condition |
+| `script_error` | none | the app's stored definition fails to parse or evaluate outside an update request: at registration, on a parameter change, on a change to the registry allowlist, when an undetermined [host constant](../language/constants.md#determining-host-constants) is determined, or when the runtime starts | the definition next evaluates | condition |
 | `disallowed_registry` | none | an image a Deployment or Job declares is from a registry outside the [allowlist](../language/container.md#registry-allowlist) | an evaluation finds no declared image outside the allowlist | condition |
 | `desired_state_unreadable` | none | the runtime cannot compute the app's [desired state](reconciliation.md#desired-state) from its stored records | the runtime next computes it | condition |
-| `operation_failed` | none | a [lifecycle operation](../overview.md#lifecycle-operation) for the app fails, or its action closure does not compile | a later lifecycle operation for the app completes | event |
-| `operation_cancelled` | none | a lifecycle operation for the app is cancelled | a later lifecycle operation for the app completes | event |
+| `operation_failed` | none | a [lifecycle operation](../overview.md#lifecycle-operation) for the app fails, or its action closure does not compile | a later lifecycle operation for the app completes successfully | event |
+| `operation_cancelled` | none | a lifecycle operation for the app is cancelled | a later lifecycle operation for the app completes successfully | event |
 | `install_interrupted` | none | at startup, an interrupted install cannot be resumed because its parameter values are missing or cannot be decrypted | a later install of the app completes, or an operator clears it | latched |
 | `uninstall_unidentifiable_units` | none | an uninstall of an app with no recorded identities finds resources on the host that may belong to it, as [uninstall scope](app-teardown.md#uninstall-scope) specifies | the app's teardown completes, or an operator clears it | latched |
 | `definition_unsupported` | none | the running Seedling does not satisfy the app's [Seedling version requirement](../language/bundle.md#seedling-version-requirement) | the definition is replaced by one the running Seedling satisfies, or the runtime starts as a version that satisfies it | condition |
-| `definition_source_moved` | the digest the reference now selects | a successful [re-check](definition-recheck.md#resolution) finds that the reference in the app's fetched definition selects a digest other than the running one | a successful re-check selects the running digest again, or the app's definition is replaced | condition |
+| `definition_source_moved` | none | a successful [re-check](definition-recheck.md#resolution) finds that the reference in the app's fetched definition selects a digest other than the running one | a successful re-check selects the running digest again, or the app's definition is replaced | condition |
 | `definition_recheck_failed` | none | 5 consecutive [re-checks](definition-recheck.md#back-off) of the app's definition fail | a re-check succeeds, or the app's definition is replaced | condition |
 | `schedule_params_invalid` | the action | a schedule of the action comes due and its run [fails param validation](../language/action.md#scheduled-actions) | a later scheduled run of the action passes validation, or the definition no longer schedules the action | event |
+| `schedule_unreadable` | the action | the runtime cannot read the [record](scheduled-actions.md#schedule-records) of a schedule of the action, or cannot parse its last fire time | the runtime reads the record and parses its last fire time, or the definition no longer schedules the action | condition |
 | `canopy_offer_absent` | none | the app [relies on Canopy](canopy-reporting.md#missing-offers), Canopy access is enabled, and no offer has been live for the period [missing offers](canopy-reporting.md#missing-offers) specifies | an offer is live, Canopy access is disabled, or the app stops relying on Canopy | latched |
 
 An `operation_failed` fault MUST carry the failure.
 A `disallowed_registry` fault MUST name each disallowed registry.
 A `canopy_offer_absent` fault MUST say when an offer was last live, or that none ever has been.
 
-A `definition_source_moved` fault MUST identify the reference and both digests.
+A `definition_source_moved` fault's description MUST identify the reference, the digest the app runs, and the digest the reference now selects.
 A re-check that fails MUST neither file nor clear it.
 
 A `definition_unsupported` fault MUST identify the requirement and the running version.
@@ -158,14 +159,14 @@ A site service fault MUST name the failing endpoints, and an unroutable one MUST
 
 | kind | app | subject | filed when | clears when | shape |
 | --- | --- | --- | --- | --- | --- |
-| `cert_acquisition_failed` | the ingress's app | the ingress instance | no usable certificate has been observed [served](tls/certificates.md#served-certificate) for the ingress's hostname 180 seconds after it began to need one, while no acquisition is in progress for it | a usable certificate is observed served for the hostname | condition |
+| `cert_acquisition_failed` | the ingress's app | the ingress instance | for any hostname of the ingress, no usable certificate has been observed [served](tls/certificates.md#served-certificate) 180 seconds after the hostname began to need one, while no acquisition is in progress for it | a usable certificate is observed served for every hostname of the ingress | condition |
 | `cert_issue_failed` | `_system` | the hostname | issuing a certificate for the hostname through ACME with DNS validation or through Tailscale fails, or ACME issuance needs a contact email and none is set | a certificate for the hostname is issued, or no ingress needs one for it | event |
 | `cert_expiring_soon` | the ingress's app | the ingress | a certificate the runtime cannot renew itself, [as TLS specifies](tls/certificates.md#expiring-certificates), expires within 14 days | the certificate selected for the hostname is no longer one the runtime cannot renew and expiring within 14 days, or the ingress no longer exists | condition |
 | `canopy_certificate_failed` | the ingress's app | the ingress | the ingress's certificate cannot be obtained or replaced through Canopy, [as TCAN specifies](tls/canopy.md#faults) | none of the [conditions TCAN names](tls/canopy.md#faults) holds, or the ingress no longer exists | condition |
 
-A `cert_acquisition_failed` fault MUST identify the hostname and the most recent acquisition error.
+A `cert_acquisition_failed` fault MUST identify each failing hostname and its most recent acquisition error.
 A `cert_issue_failed` fault MUST carry the failure.
-If the runtime cannot read whether a usable certificate is served for a hostname, it MUST neither file nor clear `cert_acquisition_failed` for that hostname.
+If the runtime cannot read whether a usable certificate is served for a hostname, it MUST treat that hostname as neither failing nor served when it files or clears `cert_acquisition_failed`.
 
 ## Host faults
 
@@ -208,7 +209,7 @@ The runtime MUST file and clear the faults below against `seedling`, with an emp
 | kind | filed when | clears when | shape |
 | --- | --- | --- | --- |
 | `canopy_report_failed` | a [report](canopy-reporting.md#report-failure-fault) to Canopy fails while an offer is live | a later report succeeds, Canopy access is disabled, or no offer is live | condition |
-| `audit_lag` | the audit log writer falls behind and drops events | an operator clears it | event |
+| `audit_lag` | the runtime [drops audit log entries](audit-log.md#write-failures) because it fell behind in writing them | an operator clears it | event |
 | `audit_log_unavailable` | the runtime cannot open the [audit log](audit-log.md#write-failures), or cannot write an entry to it | the runtime next writes an entry | condition |
 
 A `canopy_report_failed` fault MUST carry the latest failure.

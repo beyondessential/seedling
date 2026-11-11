@@ -16,10 +16,13 @@ The runtime MUST NOT change the app's records on the strength of a definition th
 
 ## Firing
 
-The runtime MUST check for due schedules at least once a minute, as part of the [reconciliation loop](reconciliation.md#reconciliation-loop).
+The runtime MUST check for due schedules at least once a minute.
 
 A schedule is due when the first boundary of its cron expression after its last fire time is at or before the time of the check.
 The runtime SHOULD treat a schedule with no recorded fire time as having last fired five minutes before the check.
+
+If the runtime cannot read a schedule's record, or cannot parse its last fire time, it MUST NOT fire the schedule.
+While it cannot, the runtime MUST hold a [`schedule_unreadable`](faults.md#app-faults) fault against the schedule's action.
 
 The runtime MUST fire a due schedule only for an app in the `Installed` [install phase](../overview.md#install-phase), and MUST skip it for an app that is `NotInstalled`, `Installing` or `Uninstalling`.
 

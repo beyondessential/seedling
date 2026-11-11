@@ -12,6 +12,10 @@ Applies to the loop by which the [runtime](../overview.md#runtime) brings a [hos
 
 The condition of an app while no [lifecycle operation](../overview.md#lifecycle-operation) is in progress for it.
 
+### Autonomous operation
+
+An action the runtime performs on the host, without direction from an [action closure](operations.md#operation), to bring a resource instance towards its desired state.
+
 ### Absolute state
 
 Host state that the runtime rebuilds in full on each iteration and applies wholesale, so that applying it removes from the host anything absent from it.
@@ -23,8 +27,10 @@ Host state that the runtime rebuilds in full on each iteration and applies whole
 
 An app's [desired state](../overview.md#desired-state) is derived from its [resource graph](../overview.md#resource-graph) and, while a lifecycle operation is in progress for it, from that operation's progress.
 
-In steady state, an app's desired state MUST be its whole resource graph.
-The runtime MUST maintain that desired state without direction from an operator, as [autonomous reconciliation](autonomous.md) specifies.
+In steady state, the desired state of an app that is `Installing` or `Installed` MUST be its whole resource graph.
+In steady state, the desired state of an app that is `Uninstalling` MUST hold each of the app's recorded instances `Unscheduled`.
+An app that is `NotInstalled` MUST have no desired state.
+The runtime MUST maintain an app's steady-state desired state without direction from an operator, as [autonomous reconciliation](autonomous.md) specifies.
 
 While a lifecycle operation is in progress for an app, the app's desired state MUST consist of the resources the operation's [action closure](operations.md#operation) has [started](../language/rt.md#starting-resources) or [stopped](../language/rt.md#stopping-resources), each in the state the closure last put it in.
 The runtime MUST act only on resources in the desired state.
@@ -46,19 +52,21 @@ Each iteration MUST perform these steps, in order:
 1. Observe the host, as [observation](observation.md#observations) specifies.
 2. Record the observations in the [world observation history](history.md#world-observation-history).
 3. Derive each resource instance's [lifecycle state](../overview.md#lifecycle-state) from its observation history.
-4. Where a lifecycle operation is suspended on a [barrier](suspension.md#barriers) whose condition is now satisfied, resume the operation's action closure.
-5. Compute the operations needed to bring the derived lifecycle states to the desired state.
-6. For each such operation, decide from the [autonomous operations log](history.md#autonomous-operations-log) whether to perform it, back off, or file a [fault](../overview.md#fault).
-7. Perform the operations decided on in step 6.
-8. Record each operation performed, with its [operation provenance](history.md#operation-provenance), in the autonomous operations log.
+4. Where a lifecycle operation is suspended on a [barrier](suspension.md#barriers) whose condition is now satisfied, schedule the operation's action closure to resume, without waiting for it to run.
+5. Compute the [autonomous operations](#autonomous-operation) needed to bring the derived lifecycle states to the desired state.
+6. For each such autonomous operation, decide from the [autonomous operations log](history.md#autonomous-operations-log) whether to perform it, back off, or file a [fault](../overview.md#fault), and record each autonomous operation it decides to perform, with its [operation provenance](history.md#operation-provenance), in the autonomous operations log.
+7. Perform the autonomous operations recorded in step 6.
+8. Record the outcome of each autonomous operation performed on its entry in the autonomous operations log.
+
+The runtime MUST NOT perform an autonomous operation whose entry in the autonomous operations log it could not record.
 
 Given a desired state that does not change and a host that functions, successive iterations MUST converge on the desired state.
 
-Every operation the runtime performs in an iteration MUST be idempotent.
-Performing an operation whose effect is already in place MUST NOT produce an error or repeat a side effect.
+Every autonomous operation MUST be idempotent.
+Performing an autonomous operation whose effect is already in place MUST NOT produce an error or repeat a side effect.
 
-An operation MUST NOT block the loop for an unbounded or long time.
-An operation MUST NOT block the loop to wait on an external condition, such as a process exiting.
+An autonomous operation MUST NOT block the loop for an unbounded or long time.
+An autonomous operation MUST NOT block the loop to wait on an external condition, such as a process exiting.
 It MUST instead return control to the loop, and a later iteration MUST re-evaluate the condition.
 
 ## Applying absolute state

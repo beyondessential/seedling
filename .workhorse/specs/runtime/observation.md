@@ -42,10 +42,10 @@ The runtime MUST distinguish a unit the supervisor reports as starting, includin
 
 For a Volume instance, the runtime MUST observe whether the named volume exists.
 
-If a named non-tmpfs volume exists but its storage does not match the storage the host is configured to use, the runtime MUST report a backend mismatch and MUST NOT report the volume as present.
+If a named non-tmpfs volume exists but its storage is not of the backend of the [data directory](actuation.md#volume-storage), the runtime MUST report a backend mismatch and MUST NOT report the volume as present.
 
 > [!NOTE]
-> A plain directory found where the host is configured for filesystem subvolumes is a backend mismatch, as is the reverse.
+> A plain directory found where the data directory is on a BTRFS filesystem is a backend mismatch, as is a BTRFS subvolume found where it is not.
 > A volume with a backend mismatch is replaced as [volume removal](actuation.md#volume-removal) specifies.
 
 ## Ingresses
@@ -64,6 +64,6 @@ Within one run, the runtime MUST NOT record a fact again for an instance while i
 The runtime MUST record a fact again whenever it differs from the fact last recorded for the instance, including a healthcheck result that changes back to a value recorded earlier.
 
 When it builds a Service's routes, the runtime MUST record the Service's network as created.
-It MUST also record whether the Service's [routing pool](lifecycle.md#routing-pool) holds at least one backend at that time.
+It MUST also record whether each of the Service's [routing pools](lifecycle.md#routing-pool) holds at least one backend at that time.
 The runtime MUST record an ingress as configured and ready only after a proxy configuration that includes it has been [applied](reconciliation.md#applying-absolute-state) successfully.
 For a resource whose desired state is `Unscheduled`, the runtime MUST record that it was sent the stop, and the removal and cleanup of its network or ingress.

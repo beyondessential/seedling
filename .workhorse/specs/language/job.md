@@ -33,5 +33,5 @@ How the runtime identifies each instance, including one a shell starts, is speci
 `job.deadline(seconds: number)` sets how long a Job instance may run.
 A `seconds` below 1 MUST throw.
 
-The runtime MUST stop a Job instance that has been [Running](../overview.md#lifecycle-state) for `seconds` seconds.
+The runtime MUST stop a Job instance once `seconds` seconds have passed since it reached [Running](../overview.md#lifecycle-state).
 A Job on which `deadline` is never called runs until its container exits.

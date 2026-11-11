@@ -68,7 +68,7 @@ The runtime MUST pass a request to a pod with its path unchanged, including the 
 > `GET /api/books` served through `route("/api")` reaches the pod as `GET /api/books`.
 
 Where no pod binds a route of a Service, the runtime serves the Service through a [fallback route](../runtime/proxy.md#route-emission) at `/`.
-That fallback route MUST take the proxy settings declared on `route("/")`, as any other route takes its own.
+That fallback route MUST take the proxy settings declared on `route("/")`, as any route takes its own.
 
 ## Route redirects
 
@@ -321,6 +321,9 @@ How the runtime applies header operations is specified by [route headers](../run
 ## Resolution
 
 Each kind of proxy setting MUST resolve independently of the others, so that declaring one never disturbs another.
+
+A second `compress`, `balance` or `rate_limit` call on the same service or route MUST replace the first entirely.
+A field the second call does not name MUST NOT take its value from the first.
 
 ### Compression resolution
 

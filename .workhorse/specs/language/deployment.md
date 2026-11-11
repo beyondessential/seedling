@@ -34,7 +34,8 @@ A `lower` below 0 or above 10 MUST throw.
 An upper bound below 1 or above 65535 MUST throw.
 A `lower` greater than the upper bound MUST throw, including a range written `lower..end` that holds no value.
 
-While a Deployment runs, the runtime MUST keep at least `lower` and at most `upper` of its instances running.
+While a Deployment runs and no [rolling](../runtime/update-strategies.md#rolling-updates) or [replace](../runtime/update-strategies.md#replace-updates) update of it is in progress, the runtime MUST keep at least `lower` and at most `upper` of its instances running.
+During a rolling or replace update, the runtime MUST keep the Deployment's instance count as [UPD](../runtime/update-strategies.md) specifies.
 An operator or the runtime MAY choose an instance count within the bounds.
 Until one does, the instance count MUST be `lower`.
 
@@ -76,7 +77,7 @@ The runtime MUST treat a running instance with no health check as healthy.
 ### Command checks
 
 With `kind: "command"`, the runtime MUST run `cmd` inside the container as the probe.
-A string `cmd` MUST be run by the container's shell.
+A string `cmd` MUST be run as `/bin/sh -c` followed by `cmd` as a single argument.
 An array `cmd` MUST be run directly, its first element naming the executable.
 A probe passes when it exits with status zero, and fails otherwise.
 

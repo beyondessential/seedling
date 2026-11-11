@@ -100,7 +100,7 @@ The offering client MUST resolve `path` against its Canopy base URL, and MUST su
 
 In `headers`, and in the response header below, each member's name is a header field name in lower case and its value is the field's value.
 A field that appears more than once MUST be represented once, with its values joined in order by a comma and a space, as field line combination specifies.
-The runtime MUST fail a request carrying a header value that is not visible ASCII text, without relaying it.
+The runtime MUST fail a request carrying a header value that contains a byte other than horizontal tab (0x09) or 0x20 to 0x7E, without relaying it.
 
 > [!NOTE]
 > `Set-Cookie` cannot be combined this way, so the relay does not carry it faithfully.

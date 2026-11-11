@@ -14,7 +14,7 @@ A [resource](../overview.md#resource) holding a directory of data that container
 
 ### External volume
 
-A volume the host supplies to an app under a name the app declares.
+A volume the runtime supplies to an app under a name the app declares.
 
 ### Declared file write
 

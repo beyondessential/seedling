@@ -37,7 +37,8 @@ A `port` MUST be validated as a [port number](overview.md#ports).
 `ingress` called on an anonymous Service MUST throw, and MUST declare no ingress.
 A Service MAY have any number of ingresses.
 
-The runtime MUST deliver traffic arriving at an ingress's hostname and port to the ingress's Service, at the same port number.
+Where an ingress's [termination](#termination) is `Terminate.Tls` or `Terminate.Dtls`, or it declares none, the runtime MUST deliver traffic arriving at the ingress's hostname and port to the ingress's Service, at the same port number.
+The runtime MUST deliver traffic arriving at an ingress whose termination is `Terminate.Https` through the Service's routes, as [route emission](../runtime/proxy.md#route-emission) specifies.
 
 `ingress.service()` returns the Service the ingress was declared on.
 

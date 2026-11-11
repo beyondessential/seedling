@@ -142,6 +142,7 @@ The handlers are the install action, the start action, every other action, every
 
 The server MUST reject a request naming an app that is not registered with `not_found`.
 Where `proposed_script` is given, the runtime MUST evaluate it with the app's other bundle files and stored parameter values, and probe the result.
+The server MUST reject a `proposed_script` for an app whose script spans several files with `bundle_invalid`.
 The server MUST reject a script that fails to compile or evaluate with `script_error`.
 
 A value in `action_params` MUST take precedence over the handler's stored and default values, as [probe parameters](../runtime/images.md#probe-parameters) specifies.

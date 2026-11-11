@@ -54,10 +54,10 @@ A container whose entrypoint is set to an empty array MUST be run as though `com
 `container.arg(vars: array)` appends `vars` to the container's [command arguments](#borrowed-terms).
 `container.arg(var: string)` is equivalent to `arg([var])`.
 A container on which `arg` is called at least once MUST be run with the appended arguments in place of the image's.
-A container whose entrypoint is set and on which `arg` is never called MUST be run with no command arguments, discarding the image's.
+A container whose entrypoint is set to a non-empty array and on which `arg` is never called MUST be run with no command arguments, discarding the image's.
 
 > [!NOTE]
-> This follows the convention of Kubernetes, in which a container's `command` replaces the image's entrypoint and its default arguments together.
+> Setting `command` replaces the image's entrypoint and its default arguments together, so a script that sets it supplies any arguments with `arg`.
 
 An array element that is not a string MUST throw.
 

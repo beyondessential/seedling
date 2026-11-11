@@ -31,6 +31,7 @@ Applies to a [host](../overview.md#host) running Linux, settling for that platfo
 | system journal | the journal |
 | resource-control group | a slice, over cgroup v2 |
 | system resolver | systemd-resolved, at its extra stub listener `127.0.0.54:53` |
+| machine identifier | the contents of `/etc/machine-id`, with surrounding whitespace removed |
 
 The host MUST run systemd as its service manager, with the unified cgroup v2 hierarchy.
 Unless the resolver is given its upstreams, the host MUST run systemd-resolved with its extra stub listener on `127.0.0.54`, which is the resolver's [default upstream](../runtime/resolver.md#upstreams).
