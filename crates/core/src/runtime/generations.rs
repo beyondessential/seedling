@@ -281,29 +281,31 @@ fn insert_register_or_update(
     source: &Source,
     param: Option<(&ParamChange<'_>, &Cipher)>,
 ) -> rusqlite::Result<Generation> {
-    store_bundle(db, bundle)?;
-    let gen_n = next_generation_for(db, app)?;
-    db.conn.execute(
-        "INSERT INTO generations
-            (app, generation, created_at, kind, bundle_hash, provenance)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-        rusqlite::params![
-            app,
-            gen_n as i64,
-            now(),
-            kind.as_str(),
-            bundle.hash(),
-            source.to_db()
-        ],
-    )?;
-    if let Some((change, cipher)) = param {
-        write_param_change(db, app, gen_n, change, cipher)?;
-    }
-    db.conn.execute(
-        "UPDATE registered_apps SET current_generation = ?1 WHERE name = ?2",
-        rusqlite::params![gen_n as i64, app],
-    )?;
-    Ok(gen_n)
+    db.atomically(|db| {
+        store_bundle(db, bundle)?;
+        let gen_n = next_generation_for(db, app)?;
+        db.conn.execute(
+            "INSERT INTO generations
+                (app, generation, created_at, kind, bundle_hash, provenance)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            rusqlite::params![
+                app,
+                gen_n as i64,
+                now(),
+                kind.as_str(),
+                bundle.hash(),
+                source.to_db()
+            ],
+        )?;
+        if let Some((change, cipher)) = param {
+            write_param_change(db, app, gen_n, change, cipher)?;
+        }
+        db.conn.execute(
+            "UPDATE registered_apps SET current_generation = ?1 WHERE name = ?2",
+            rusqlite::params![gen_n as i64, app],
+        )?;
+        Ok(gen_n)
+    })
 }
 
 /// Bump the generation for the initial registration of an app.
@@ -413,20 +415,23 @@ pub fn bump_param_change(
     change: &ParamChange<'_>,
     cipher: &Cipher,
 ) -> rusqlite::Result<Generation> {
-    let hash = current_bundle_hash(db, app)?;
-    let gen_n = next_generation_for(db, app)?;
-    db.conn.execute(
-        "INSERT INTO generations
-            (app, generation, created_at, kind, bundle_hash)
-         VALUES (?1, ?2, ?3, ?4, ?5)",
-        rusqlite::params![app, gen_n as i64, now(), change.kind().as_str(), hash],
-    )?;
-    write_param_change(db, app, gen_n, change, cipher)?;
-    db.conn.execute(
-        "UPDATE registered_apps SET current_generation = ?1 WHERE name = ?2",
-        rusqlite::params![gen_n as i64, app],
-    )?;
-    Ok(gen_n)
+    // r[impl generation.bumps]
+    db.atomically(|db| {
+        let hash = current_bundle_hash(db, app)?;
+        let gen_n = next_generation_for(db, app)?;
+        db.conn.execute(
+            "INSERT INTO generations
+                (app, generation, created_at, kind, bundle_hash)
+             VALUES (?1, ?2, ?3, ?4, ?5)",
+            rusqlite::params![app, gen_n as i64, now(), change.kind().as_str(), hash],
+        )?;
+        write_param_change(db, app, gen_n, change, cipher)?;
+        db.conn.execute(
+            "UPDATE registered_apps SET current_generation = ?1 WHERE name = ?2",
+            rusqlite::params![gen_n as i64, app],
+        )?;
+        Ok(gen_n)
+    })
 }
 
 /// Attach a lifecycle operation id to a generation history entry, and mark its

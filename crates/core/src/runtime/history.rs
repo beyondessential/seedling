@@ -143,15 +143,21 @@ pub fn find_instances_for_group(
 // r[impl gc.instances.atomic]
 pub fn delete_instance(db: &Db, id: InstanceId) -> rusqlite::Result<()> {
     let hex = id.to_hex();
-    let tx = db.conn.unchecked_transaction()?;
-    tx.execute(
-        "DELETE FROM world_observations WHERE instance_id = ?1",
-        params![hex],
-    )?;
-    tx.execute("DELETE FROM faults WHERE instance_id = ?1", params![hex])?;
-    tx.execute("DELETE FROM resource_instances WHERE id = ?1", params![hex])?;
-    tx.commit()?;
-    Ok(())
+    db.atomically(|db| {
+        db.conn.execute(
+            "DELETE FROM world_observations WHERE instance_id = ?1",
+            params![hex],
+        )?;
+        db.conn
+            .execute("DELETE FROM faults WHERE instance_id = ?1", params![hex])?;
+        db.conn.execute(
+            "DELETE FROM autonomous_operations WHERE instance_id = ?1",
+            params![hex],
+        )?;
+        db.conn
+            .execute("DELETE FROM resource_instances WHERE id = ?1", params![hex])?;
+        Ok(())
+    })
 }
 
 /// Drop every registry row for `app`, once nothing of it is desired: its
@@ -400,6 +406,26 @@ pub fn complete_autonomous_operation(db: &Db, id: i64, outcome: &str) -> rusqlit
         params![outcome, now_ms(), id],
     )?;
     Ok(())
+}
+
+/// The outcome recorded for an operation that was in progress when the
+/// runtime stopped.
+pub const INTERRUPTED_OUTCOME: &str = "interrupted";
+
+/// Complete every autonomous operation still in progress as interrupted,
+/// returning how many there were.
+///
+/// Only an [`AutonomousOpHandle`](crate::runtime::autonomous_ops::AutonomousOpHandle)
+/// completes an operation, and none outlives the process, so this is called
+/// at startup before the reconciler records anything: an incomplete record
+/// then can only be one whose handle died with the previous run.
+// r[impl history.operations.interrupted]
+pub fn interrupt_incomplete_autonomous_operations(db: &Db) -> rusqlite::Result<usize> {
+    db.conn.execute(
+        "UPDATE autonomous_operations SET outcome = ?1, completed_at = ?2
+         WHERE completed_at IS NULL",
+        params![INTERRUPTED_OUTCOME, now_ms()],
+    )
 }
 
 pub fn query_autonomous_operations(

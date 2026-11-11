@@ -133,6 +133,48 @@ fn unset_param_removes_value_and_bumps_generation() {
     assert!(greeting["value"].is_null());
 }
 
+// r[verify generation.bumps]
+#[test]
+fn a_param_set_whose_bump_fails_stores_nothing() {
+    let oi = oi_with_params_app();
+    oi.state.db.call(|db| {
+        db.conn
+            .execute_batch(
+                "CREATE TRIGGER fail_bump BEFORE UPDATE OF current_generation ON registered_apps
+                 BEGIN SELECT RAISE(ABORT, 'injected'); END;",
+            )
+            .unwrap()
+    });
+
+    oi.call(
+        "/apps/params/set",
+        json!({ "app": "demo", "name": "greeting", "value": "hello" }),
+    )
+    .expect_err("injected failure");
+
+    let (stored, generations): (i64, i64) = oi.state.db.call(|db| {
+        let stored = db
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM params WHERE app_name = 'demo'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        let generations = db
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM generations WHERE app = 'demo'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        (stored, generations)
+    });
+    assert_eq!(stored, 0);
+    assert_eq!(generations, 1);
+}
+
 // i[verify param.unset]
 #[test]
 fn unset_never_set_param_is_a_noop() {

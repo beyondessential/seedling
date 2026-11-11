@@ -62,6 +62,11 @@ fn run_gc_cycle(db: &Db, config: &GcConfig) {
         Err(e) => error!(error = %e, "gc: completed operations cleanup failed"),
         _ => {}
     }
+    match gc_orphaned_operations(db) {
+        Ok(n) if n > 0 => debug!(rows = n, "gc: pruned orphaned operations"),
+        Err(e) => error!(error = %e, "gc: orphaned operations cleanup failed"),
+        _ => {}
+    }
     // r[impl gc.restarts]
     match crate::system::reconcile::gc_restart_records(db) {
         Ok(n) if n > 0 => debug!(rows = n, "gc: pruned restart records"),
@@ -115,6 +120,14 @@ fn gc_completed_operations(db: &Db, retain: Duration) -> rusqlite::Result<usize>
     db.conn.execute(
         "DELETE FROM autonomous_operations WHERE completed_at IS NOT NULL AND completed_at < ?1",
         rusqlite::params![cutoff],
+    )
+}
+
+// r[impl gc.autonomous-operations]
+fn gc_orphaned_operations(db: &Db) -> rusqlite::Result<usize> {
+    db.conn.execute(
+        "DELETE FROM autonomous_operations WHERE instance_id NOT IN (SELECT id FROM resource_instances)",
+        [],
     )
 }
 
@@ -203,43 +216,33 @@ pub fn gc_unscheduled_instances(
     let param_refs: Vec<&dyn rusqlite::types::ToSql> = params.iter().map(|p| &**p).collect();
 
     // r[impl gc.instances.atomic]
-    // One transaction across the selection and, per instance, observations +
-    // faults + the registry row, so a mid-sequence error can't leave one of
-    // the three in a state the GC will never see again (observation history
-    // empty means the selecting query stops matching the instance).
-    let tx = db.conn.unchecked_transaction()?;
-    let candidates: Vec<(String, String)> = tx
-        .prepare(&query)?
-        .query_map(param_refs.as_slice(), |row| Ok((row.get(0)?, row.get(1)?)))?
-        .collect::<Result<Vec<_>, _>>()?;
+    // One atomic section across the selection and every instance's deletion,
+    // so a mid-sequence error can't leave one of an instance's records in a
+    // state the GC will never see again (observation history empty means the
+    // selecting query stops matching the instance).
+    db.atomically(|db| {
+        let candidates: Vec<(String, String)> = db
+            .conn
+            .prepare(&query)?
+            .query_map(param_refs.as_slice(), |row| Ok((row.get(0)?, row.get(1)?)))?
+            .collect::<Result<Vec<_>, _>>()?;
 
-    let mut retired = Vec::new();
-    for (hex, app) in candidates {
-        // A row whose id does not parse cannot be matched against the desired
-        // state, so it is not known to be outside it.
-        let Some(id) = InstanceId::from_hex(&hex) else {
-            continue;
-        };
-        if !known.sweepable(&app, id) {
-            continue;
+        let mut retired = Vec::new();
+        for (hex, app) in candidates {
+            // A row whose id does not parse cannot be matched against the
+            // desired state, so it is not known to be outside it; one that does
+            // not parse back to the same text cannot be deleted by its id.
+            let Some(id) = InstanceId::from_hex(&hex).filter(|id| id.to_hex() == hex) else {
+                continue;
+            };
+            if !known.sweepable(&app, id) {
+                continue;
+            }
+            crate::runtime::history::delete_instance(db, id)?;
+            retired.push(id);
         }
-        tx.execute(
-            "DELETE FROM world_observations WHERE instance_id = ?1",
-            rusqlite::params![hex],
-        )?;
-        tx.execute(
-            "DELETE FROM faults WHERE instance_id = ?1",
-            rusqlite::params![hex],
-        )?;
-        tx.execute(
-            "DELETE FROM resource_instances WHERE id = ?1",
-            rusqlite::params![hex],
-        )?;
-        retired.push(id);
-    }
-    tx.commit()?;
-
-    Ok(retired)
+        Ok(retired)
+    })
 }
 
 #[cfg(test)]
@@ -517,6 +520,35 @@ mod tests {
         assert_eq!(remaining, 0);
     }
 
+    // r[verify gc.autonomous-operations]
+    #[test]
+    fn gc_orphaned_operations_removes_unreferenced() {
+        let db = Db::open_in_memory().unwrap();
+        let live = dep("app", "web");
+        let gone = dep("app", "db");
+        history::insert_instance(&db, &live).unwrap();
+        let prov = Provenance {
+            observation_ids: vec![],
+            rule: "test".into(),
+        };
+        history::insert_autonomous_operation(&db, live.id, "start", &prov).unwrap();
+        history::insert_autonomous_operation(&db, gone.id, "start", &prov).unwrap();
+
+        assert_eq!(gc_orphaned_operations(&db).unwrap(), 1);
+
+        assert_eq!(
+            history::query_autonomous_operations(&db, live.id)
+                .unwrap()
+                .len(),
+            1
+        );
+        assert!(
+            history::query_autonomous_operations(&db, gone.id)
+                .unwrap()
+                .is_empty()
+        );
+    }
+
     // r[verify gc.instances]
     // r[verify gc.instances.atomic]
     #[test]
@@ -540,9 +572,14 @@ mod tests {
             &serde_json::json!({}),
         )
         .unwrap();
-        // File a fault tied to this instance so we exercise the full atomic
-        // sweep across observations + faults + registry.
+        // File a fault and an autonomous operation tied to this instance so we
+        // exercise the full atomic sweep across every record held against it.
         let inst_hex = unscheduled.id.to_hex();
+        let prov = Provenance {
+            observation_ids: vec![],
+            rule: "test".into(),
+        };
+        history::insert_autonomous_operation(&db, unscheduled.id, "start", &prov).unwrap();
         crate::runtime::faults::file_fault(
             &db,
             &app_name("app"),
@@ -597,6 +634,12 @@ mod tests {
             )
             .unwrap();
         assert_eq!(fault_remaining, 0);
+
+        assert!(
+            history::query_autonomous_operations(&db, unscheduled.id)
+                .unwrap()
+                .is_empty()
+        );
     }
 
     #[test]

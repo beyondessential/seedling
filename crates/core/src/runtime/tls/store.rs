@@ -20,29 +20,6 @@ fn now_secs() -> i64 {
     Timestamp::now().as_second()
 }
 
-/// Run `f` so that everything it writes lands together or not at all.
-///
-/// A savepoint rather than a transaction, so it composes: a caller that has
-/// opened an atomic section of its own can call a function that opens another,
-/// where a second `BEGIN` would fail. Used on its own it is a transaction.
-pub fn atomically<T>(db: &Db, f: impl FnOnce() -> rusqlite::Result<T>) -> rusqlite::Result<T> {
-    db.conn.execute_batch("SAVEPOINT tls_atomic")?;
-    match f() {
-        Ok(value) => {
-            db.conn.execute_batch("RELEASE tls_atomic")?;
-            Ok(value)
-        }
-        Err(e) => {
-            // The failure to report is the one that sent us here, not any this
-            // cleanup meets.
-            let _ = db
-                .conn
-                .execute_batch("ROLLBACK TO tls_atomic; RELEASE tls_atomic");
-            Err(e)
-        }
-    }
-}
-
 // ---------------------------------------------------------------------------
 // DNS providers
 // ---------------------------------------------------------------------------
@@ -259,7 +236,7 @@ pub fn get_policy(db: &Db, hostname: &str) -> rusqlite::Result<Option<TlsPolicyR
 // r[impl tls.policy.apply]
 pub fn set_policy_acme_dns(db: &Db, hostname: &str, dns_provider: &str) -> rusqlite::Result<()> {
     let now = now_secs();
-    atomically(db, || {
+    db.atomically(|db| {
         db.conn.execute(
             "INSERT INTO tls_policies (hostname, strategy, dns_provider, cert_id, updated_at)
              VALUES (?1, 'acme_dns', ?2, NULL, ?3)
@@ -279,7 +256,7 @@ pub fn set_policy_acme_dns(db: &Db, hostname: &str, dns_provider: &str) -> rusql
 // r[impl tls.policy.apply]
 pub fn set_policy_canopy(db: &Db, hostname: &str) -> rusqlite::Result<()> {
     let now = now_secs();
-    atomically(db, || {
+    db.atomically(|db| {
         db.conn.execute(
             "INSERT INTO tls_policies (hostname, strategy, dns_provider, cert_id, updated_at)
              VALUES (?1, 'canopy', NULL, NULL, ?2)
@@ -321,7 +298,7 @@ fn forget_chains_under(db: &Db, pattern: &str) -> rusqlite::Result<()> {
 
 // r[impl tls.policy.apply]
 pub fn clear_policy(db: &Db, hostname: &str) -> rusqlite::Result<bool> {
-    atomically(db, || {
+    db.atomically(|db| {
         let n = db
             .conn
             .execute("DELETE FROM tls_policies WHERE hostname = ?1", [hostname])?;
@@ -619,7 +596,7 @@ pub enum CsrCancel {
 /// in all but name.
 // r[impl tls.csr.flow]
 pub fn cancel_pending_csr(db: &Db, id: i64) -> rusqlite::Result<CsrCancel> {
-    atomically(db, || {
+    db.atomically(|db| {
         let state: Option<String> = db
             .conn
             .query_row(
@@ -851,7 +828,7 @@ pub fn supersede_other_active_for_hostname(db: &Db, keep_id: i64) -> rusqlite::R
 }
 
 pub fn delete_certificate(db: &Db, id: i64) -> rusqlite::Result<bool> {
-    atomically(db, || {
+    db.atomically(|db| {
         let n = db
             .conn
             .execute("DELETE FROM tls_certificates WHERE id = ?1", [id])?;
@@ -1443,7 +1420,7 @@ pub fn put_chain_row(
 /// would have its outcome booked against it.
 // r[impl tls.canopy.attempts]
 pub fn clear_chain_row(db: &Db, hostname: &str) -> rusqlite::Result<bool> {
-    atomically(db, || {
+    db.atomically(|db| {
         if let Some(existing) = get_chain_row(db, hostname)?
             && existing.row.open_order_since.is_some()
             && let Some(id) = latest_pending_attempt(db, hostname)?
@@ -1477,7 +1454,7 @@ pub fn start_cycle_for_force_retry(
     replacing: chain::Identity,
     now: i64,
 ) -> rusqlite::Result<bool> {
-    atomically(db, || {
+    db.atomically(|db| {
         let queued = take_force_retry(db, hostname)?;
         if queued {
             put_chain_row(
@@ -1613,7 +1590,7 @@ pub fn activate_canopy_chain(
     cert_pem: &str,
     metadata: &CertMetadata,
 ) -> rusqlite::Result<bool> {
-    atomically(db, || {
+    db.atomically(|db| {
         let now = now_secs();
         let updated = db.conn.execute(
             "UPDATE tls_certificates SET

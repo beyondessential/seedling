@@ -382,9 +382,7 @@ impl<R: CertificateRelay> Engine<R> {
         let now = jiff::Timestamp::now().as_second();
         self.db
             .call(move |db| {
-                store::atomically(db, || {
-                    apply_revocation(db, &for_apply, cert_id, &reason, now)
-                })
+                db.atomically(|db| apply_revocation(db, &for_apply, cert_id, &reason, now))
             })
             .context(StorageSnafu)
     }
@@ -429,7 +427,7 @@ impl<R: CertificateRelay> Engine<R> {
         let now = jiff::Timestamp::now().as_second();
         self.db
             .call(move |db| {
-                store::atomically(db, || apply(db, &for_apply, key.id, &key.spki, answer, now))
+                db.atomically(|db| apply(db, &for_apply, key.id, &key.spki, answer, now))
             })
             .context(StorageSnafu)
     }

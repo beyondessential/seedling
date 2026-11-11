@@ -643,6 +643,19 @@ async fn main() {
     // Audit log — subscribe before anything emits events.
     let _audit_handle = audit::spawn_audit_task(args.audit_log, event_tx.subscribe(), db.clone());
 
+    // r[impl history.operations.interrupted]
+    // Before the reconciler starts, so no record it makes can be caught. Fatal
+    // like the other startup reads: once the reconciler is recording, the
+    // previous run's records can no longer be told apart from its own.
+    match db.call(seedling_core::runtime::history::interrupt_incomplete_autonomous_operations) {
+        Ok(0) => {}
+        Ok(n) => tracing::info!(
+            count = n,
+            "marked autonomous operations from the previous run as interrupted"
+        ),
+        Err(e) => fatal!("cannot mark interrupted autonomous operations: {e}"),
+    }
+
     // Periodic garbage collection of operational tables. The reconciler runs
     // the unscheduled-instance sweep, as only it knows the desired state.
     let instance_gc = InstanceGcConfig::from(&args.gc);
