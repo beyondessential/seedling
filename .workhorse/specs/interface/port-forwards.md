@@ -62,7 +62,7 @@ After an error response the server MUST finish its sending side of the control s
 ## Forward keys
 
 The server MUST allocate a forward key to every forward, TCP and UDP alike, and the forward MUST hold it for its lifetime.
-No two live forwards on one connection MUST hold the same key, so a connection can hold at most 65536 forwards at once.
+Two live forwards on one connection MUST NOT hold the same key, so a connection can hold at most 65536 forwards at once.
 The server MUST reuse the keys of forwards that have ended.
 If every key is held, the server MUST reject the request with `internal`.
 
@@ -124,7 +124,7 @@ A relay MUST distinguish a condition affecting one datagram from a condition aff
 A relay MUST drop and report a datagram that exceeds the maximum datagram size, and continue.
 A relay MUST relay a zero-length datagram.
 A relay MUST report a transient socket error, including an ICMP port-unreachable surfacing on a connected socket, and continue.
-Only the loss of the connection MUST end a relay.
+A relay MUST NOT end except when its forward ends or the connection is lost.
 The client MUST classify these conditions as the server does.
 A relay that has ended MUST NOT continue to be reported as active, and its end MUST be reported to the client that opened the forward.
 

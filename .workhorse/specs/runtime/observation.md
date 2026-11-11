@@ -12,17 +12,17 @@ On each iteration of the [reconciliation loop](rule:r/reconciliation.loop), the 
 
 ## Failed observation
 
-An attempt to observe an instance MUST either succeed in full or fail in full.
+The runtime MUST treat an attempt to observe an instance as succeeding in full or failing in full.
 The runtime MUST NOT report the partial results of a failed attempt as fact.
 A failed attempt yields no facts.
 
 The runtime MUST NOT treat a failed observation as evidence that an instance is absent.
-In an iteration where an instance's observation failed, the runtime MUST NOT stop the instance, detect it as terminated, or tear it down on the strength of that observation, and lifecycle derivation MUST keep the instance's last successfully observed state.
+In an iteration where an instance's observation failed, the runtime MUST NOT stop the instance, detect it as terminated, or tear it down on the strength of that observation, and MUST derive the instance's lifecycle state from its last successful observation.
 
 A state that is observed but not recognised is evidence that the thing exists, and the runtime MUST NOT treat it as absence.
 
 When an instance's observation has failed on 3 consecutive iterations, the runtime MUST file a fault of kind `observe_failed` against the instance.
-A single failed observation MUST NOT file it.
+The runtime MUST NOT file it for a single failed observation.
 The runtime MUST clear the fault when an observation of the instance next succeeds.
 
 ## Containers

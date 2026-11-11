@@ -4,91 +4,116 @@ id: CTL
 
 # App control
 
+Applies to the methods that adjust how a registered app runs without changing its definition: deployment scale, app priority, deployment restarts, and stopping resources.
+
 ## Scaling
 
-<!-- from interface: Scaling -->
+`/apps/scale` sets the scale of one deployment of an app.
 
-> i[scale.set]
-> `/apps/scale { app, deployment, scale }` sets the running scale of a single Deployment within an installed app.
-> `scale` is a non-negative integer. The value is clamped to the deployment's declared bounds; requests that would move outside the bounds succeed but stay at the boundary.
-> The app must be registered and the named deployment must exist in the current AppDef; otherwise `not_found` is returned.
-> On success, the response contains `scale` (the new scale value) and `bounds` with `low` and `high`.
+| parameter | type | required | meaning |
+| --- | --- | --- | --- |
+| `app` | string | yes | the app's name |
+| `deployment` | string | yes | the deployment's name |
+| `scale` | integer | yes | the number of instances wanted, from 0 to 65535 |
 
-> i[scale.decision-persistence]
-> The effective scale chosen by `/apps/scale` is stored durably and survives process restarts.
-> On startup, the stored decision is loaded and used as the effective scale for the deployment.
+The server MUST refuse the request with `not_found` if the app is not registered or its current definition declares no deployment of that name.
+The server MUST clamp `scale` to the deployment's declared scale bounds, and a request outside them succeeds at the nearer bound.
 
-> i[scale.reset-on-uninstall]
-> When an app is uninstalled, all stored scaling decisions for that app are discarded.
-> After reinstallation, each Deployment's effective scale reverts to its declared lower bound.
+The result is `{ "scale": <integer>, "bounds": { "low": <integer>, "high": <integer> } }`, giving the scale stored and the deployment's declared bounds.
 
-> i[scale.describe]
-> `/apps/show` includes, for each Deployment resource, a `scale` object with fields `low` (lower bound), `high` (upper bound), and `current` (the effective scale).
-> `current` is the stored scaling decision clamped to the declared bounds, or the lower bound if no decision has been stored.
-> Where the decision cannot be read, `current` is null, per [scaling.decision.unreadable](rule:r/scaling.decision.unreadable); `low` and `high` come from the app definition and are still reported.
-> A null must not be read as a scale: a client adjusting a deployment by one instance has nothing to adjust from, and must say the figure is unavailable rather than counting from zero or from a bound.
+The runtime MUST store the scaling decision durably, and MUST use it as the deployment's effective scale after the daemon restarts.
 
-## App Priority
+Uninstalling an app MUST discard every scaling decision stored for it.
+A deployment with no stored decision has its declared lower bound as its effective scale.
 
-<!-- from interface: App Priority -->
+[`/apps/show`](apps.md#resources) reports, for each deployment, a `scale` object with these members.
 
-> i[app.priority.set]
-> `/apps/priority { app, priority }` sets the [app priority](rule:r/priority.app) of an installed app.
-> `priority` is one of `high`, `normal`, or `low`; any other value returns `requirements_invalid` and leaves the stored priority untouched.
-> The app must be registered; otherwise `not_found` is returned.
-> The change takes effect on the app's running workloads without a restart or redeploy, and is stored durably, per [priority.settings](rule:r/priority.settings).
-> On success, the response contains `priority` (the new value).
+| member | type | meaning |
+| --- | --- | --- |
+| `low` | integer | the declared lower bound |
+| `high` | integer | the declared upper bound |
+| `current` | integer or null | the effective scale: the stored decision clamped to the declared bounds, or the lower bound where no decision is stored |
 
-> i[app.priority.reset-on-uninstall]
-> When an app is uninstalled, its stored app priority is discarded.
-> After reinstallation the app priority reverts to `normal`.
+If the stored decision cannot be read, `current` MUST be `null`, as [unreadable scaling decisions](rule:r/scaling.decision.unreadable) requires, and `low` and `high` are still reported.
+A client MUST NOT take a `null` `current` as a scale.
+A client adjusting a deployment by a step MUST report the scale as unavailable rather than count from zero or from a bound.
 
-> i[app.priority.describe]
-> `/apps/show` includes a top-level `priority` field carrying the app's current app priority, and `/apps/list` includes a `priority` field on each app summary.
-> `/apps/show` includes, for each Deployment resource, a `priority` field carrying the [priority](rule:l/deployment.priority) declared for it in the current AppDef, defaulting to `normal` where the definition declares none.
+## App priority
 
-> i[app.canopy.describe]
-> `/apps/show` includes a top-level `canopy_type` field carrying the [Canopy application type](rule:l/app.canopy-type) the app's definition declares, or `null` when it declares none.
+`/apps/priority` sets an app's [app priority](rule:r/priority.app).
 
-## Deployment Restart
+| parameter | type | required | meaning |
+| --- | --- | --- | --- |
+| `app` | string | yes | the app's name |
+| `priority` | string | yes | `high`, `normal` or `low` |
 
-<!-- from interface: Deployment Restart -->
+The server MUST refuse any other `priority` with `requirements_invalid`, leaving the stored priority as it was.
+The server MUST refuse the request with `not_found` if the app is not registered.
+The result is `{ "priority": <string> }`, giving the priority stored.
 
-> i[deployment.restart]
-> `/apps/restart { app, deployment }` triggers a restart of all running instances of the named Deployment within the installed app, following its configured update strategy (`on_update`: rolling or replace).
-> The app must be registered and the named deployment must exist in the current AppDef; otherwise `not_found` is returned.
-> A restart does not change the deployment's definition or generation. Running instances are replaced with fresh containers carrying the same configuration.
-> The restart is durable: if the process restarts before the reconciler finishes, the replacement will resume on the next startup.
-> On success, the response is `{ operation_id }` where `operation_id` is a unique string identifying this restart operation.
+The runtime MUST store the app priority durably, and MUST apply it to the app's running workloads without restarting or redeploying them, as [priority settings](rule:r/priority.settings) specifies.
 
-## Resource Stop / Unstop
+Uninstalling an app MUST discard its stored app priority, and an app with none stored has the priority `normal`.
 
-<!-- from interface: Resource Stop / Unstop -->
+`/apps/show` and each entry of `/apps/list` report the app's priority in a `priority` member.
+`/apps/show` reports, for each deployment, a `priority` member giving the [deployment priority](rule:l/deployment.priority) its definition declares, or `normal` where it declares none.
+If the stored app priority cannot be read, the server MUST refuse `/apps/show` and `/apps/list` with `internal`, and MUST NOT report `normal` in its place.
 
-> i[resource.stop]
-> `/apps/resource/stop { app, kind, name }` turns off a named resource within an installed app without changing its declared configuration.
-> `kind` must be one of `deployment`, `job`, or `ingress`; any other kind returns `requirements_invalid`.
-> The app must be registered and the named resource must exist in the current AppDef; otherwise `not_found` is returned.
-> Stopping a deployment scales its running instances to zero without modifying the declared scale bounds; unstopping later restores the declared effective scale.
-> Stopping a job or ingress marks it as unscheduled without removing its definition.
-> A stopped state is durable and survives process restarts.
-> On success, the response is `{}`.
+## Deployment restart
 
-> i[resource.unstop]
-> `/apps/resource/unstop { app, kind, name }` reverses a previous stop for the named resource.
-> If the resource was not stopped, this is a no-op and returns `{}`.
-> On success, the response is `{}`.
+`/apps/restart` replaces every running instance of one deployment with a fresh instance of the same configuration.
 
-> i[resource.unstop-all]
-> `/apps/unstop { app }` unstops all resources for the named app in one call.
-> If no resources are stopped, this is a no-op and returns `{}`.
-> On success, the response is `{}`.
+| parameter | type | required | meaning |
+| --- | --- | --- | --- |
+| `app` | string | yes | the app's name |
+| `deployment` | string | yes | the deployment's name |
 
-> i[resource.stop.no-active-op]
-> All three stop/unstop endpoints (`/apps/resource/stop`, `/apps/resource/unstop`, `/apps/unstop`) reject with `operation_in_progress` when a lifecycle operation is active or queued for the target app, or a change to it is being applied.
-> The operator cancels an active operation first via [action.cancel](rule:i/action.cancel), or waits for a queued one or a change to finish; desired-state mutations must not race with a running action closure.
+The server MUST refuse the request with `not_found` if the app is not registered or its current definition declares no deployment of that name.
 
-> i[resource.stop.status]
-> `/apps/show` includes a `stopped` boolean field on each resource that has been stopped via `/apps/resource/stop`.
-> The top-level response includes a `stopped_resources` array of `{ kind, name }` objects listing every resource currently stopped for the app.
-> `/apps/list` includes a `has_stopped_resources` boolean field on each app summary indicating whether any resources are currently stopped.
+The runtime MUST replace the instances following the deployment's [update strategy](../runtime/update-strategies.md).
+A restart MUST NOT change the app's definition or generation.
+
+The runtime MUST record the restart durably before answering, so that a restart the daemon had not finished when it stopped is resumed when it starts again.
+
+The result is `{ "operation_id": <string> }`, where `operation_id` identifies this restart and is never reused.
+
+## Resource stop
+
+`/apps/resource/stop` turns off one resource of an app without changing its declared configuration.
+
+| parameter | type | required | meaning |
+| --- | --- | --- | --- |
+| `app` | string | yes | the app's name |
+| `kind` | string | yes | `deployment`, `job` or `ingress` |
+| `name` | string | yes | the resource's name |
+
+The server MUST refuse any other `kind` with `requirements_invalid`.
+The server MUST refuse the request with `not_found` if the app is not registered or its current definition declares no resource of that kind and name.
+
+Stopping a deployment MUST bring its running instances to zero without changing its declared bounds or its stored scaling decision.
+Stopping a job or an ingress MUST unschedule it without removing its declaration.
+A stopped resource's desired [lifecycle state](../overview.md#lifecycle-state) is `Unscheduled`.
+
+The runtime MUST store the stop durably.
+The result is `{}`.
+
+`/apps/resource/unstop` takes the same parameters and reverses a stop of the resource they name.
+The server MUST refuse a `kind` that names no resource kind with `requirements_invalid`, and MUST refuse the request with `not_found` if the app is not registered.
+Unstopping a resource that is not stopped MUST change nothing.
+Unstopping a deployment restores its effective scale.
+The result is `{}`.
+
+`/apps/unstop` takes an `app` parameter and reverses every stop of that app's resources.
+The server MUST refuse it with `not_found` if the app is not registered.
+The result is `{}`.
+
+The server MUST refuse all three methods with `operation_in_progress` while a lifecycle operation is running or queued for the app, or a change to the app is being applied.
+
+> [!NOTE]
+> An operator cancels a running operation with [`/apps/action/cancel`](rule:i/action.cancel), or waits for a queued one or a change to finish.
+> A change to the desired state made while an action closure drives the same resources would race it.
+
+Uninstalling an app MUST discard every stop recorded for it.
+
+`/apps/show` reports a `stopped` member on each resource, true when the resource is stopped, and a top-level `stopped_resources` array of `{ "kind": <string>, "name": <string> }` naming every stopped resource.
+Each entry of `/apps/list` reports a `has_stopped_resources` member, true when any of the app's resources is stopped.

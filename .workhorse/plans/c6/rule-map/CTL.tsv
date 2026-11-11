@@ -1,0 +1,14 @@
+i/scale.set	CTL#scaling
+i/scale.decision-persistence	CTL#scaling
+i/scale.reset-on-uninstall	CTL#scaling
+i/scale.describe	CTL#scaling
+i/app.priority.set	CTL#app-priority
+i/app.priority.reset-on-uninstall	CTL#app-priority
+i/app.priority.describe	CTL#app-priority
+i/app.canopy.describe	APPS#description
+i/deployment.restart	CTL#deployment-restart
+i/resource.stop	CTL#resource-stop
+i/resource.unstop	CTL#resource-stop
+i/resource.unstop-all	CTL#resource-stop
+i/resource.stop.no-active-op	CTL#resource-stop
+i/resource.stop.status	CTL#resource-stop

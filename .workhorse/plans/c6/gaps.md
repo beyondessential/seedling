@@ -201,3 +201,21 @@ Spec leads code:
 Moves: TLSM stale claims (manual strategy, directory_url, manual issuance clears retry block, set_by auto) — check TLSM rewrite agrees; APP app.canopy-type link should point at CNR.
 Standards: RFC 8555, 9773, draft-ietf-acme-profiles, RFC 9525, 5280, 2986, 7468, 6066 (TLS); RFC 9457, 4648 (TCAN).
 Glossary: Managed hostname, Strategy, Policy, Runtime-managed certificate (TLS); Canopy (TCAN/RLY); Report tick (CNR).
+
+### Interface B (ACI SHL FWD LOG FLTS EVT KEY IMGM)
+Open:
+- SHL: shell volume-kind params validated but never bound: bind (spec says so), or exclude volume kinds from shells.
+- FWD/SHL: malformed forward_id -> not_found, malformed session_id -> requirements_invalid: align on requirements_invalid, or keep.
+- LOG: journal open failure reported as server_busy: internal, or keep.
+- IMGM: failed pull error code: not_found (code), internal, or new pull_failed.
+- IMGM: pull single attempt vs runtime's retrying pull path: restore retries, or keep.
+Spec leads code:
+- SHL: volume-shell failures send undefined codes shell_error/internal_error (spec: internal).
+- FWD: TCP relays outlive /forwards/stop and teardown; teardown only on /apps/update, not param change or uninstall; stream naming no live forward dropped silently (spec: reset).
+- FLTS: settings read failure falls back to 5/1800 and writes them.
+- FLTS/KEY/IMGM/TLSM: database failures return not_found instead of internal (pattern across handlers).
+- EVT: FaultCleared, ShellStarted/Exited, ForwardStarted/Stopped never carry actor.
+- IMGM: proposed_script failure -> not_found (spec: script_error); container list unwrap_or_default makes images look unused (non-forced remove can delete in-use image); in_use likewise; failed allowlist read files disallowed_registry against every app.
+Moves: /volumes/* methods have no interface spec (volume reference belongs there); client identity key (i/key.client.*) could move to CLI.
+Standards: RFC 9000, 3339 (SHL); RFC 9000, 9221, 6891 (FWD); RFC 3339 (LOG FLTS EVT); RFC 8032, 5958, 8410 (KEY); OCI Distribution, OCI Image (IMGM).
+Glossary: Install phase (ACI; also asked by TRD).

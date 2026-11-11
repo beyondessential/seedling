@@ -1,0 +1,8 @@
+r/observe.facts	OBS#observations
+r/observe.deployment	OBS#containers
+r/observe.failure-not-absence	OBS#failed-observation
+r/observe.volume	OBS#volumes
+r/observe.volume.backend-mismatch	OBS#volumes
+r/observe.ingress	OBS#ingresses
+r/observe.ingress.certs	OBS#ingresses
+r/observe.persist	OBS#recording
