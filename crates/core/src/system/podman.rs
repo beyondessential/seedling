@@ -85,6 +85,7 @@ fn is_untagged_sentinel(tag: &str) -> bool {
 impl PodmanRuntime {
     pub(crate) async fn new() -> Result<Self, PodmanError> {
         let client = PodmanRestClient::new(Config {
+            // spec: LINUX#host-facilities
             uri: "unix:///run/podman/podman.sock".to_string(),
             identity_file: None,
         })

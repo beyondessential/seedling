@@ -220,6 +220,7 @@ pub fn scope(bundle: Arc<crate::runtime::definition::Bundle>) -> (Scope<'static>
     scope.push_constant("TIMEZONE", facts.timezone.clone());
 
     // spec: CONST#idle-command
+    // spec: LINUX#idle-command
     let idle_cmd: rhai::Array = vec![
         rhai::Dynamic::from("sleep".to_owned()),
         rhai::Dynamic::from("infinity".to_owned()),

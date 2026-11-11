@@ -115,6 +115,7 @@ fn journal_reader_thread(
     }
 
     // spec: LOG#entry-selection
+    // spec: LINUX#logs
     seek_tail_window(&mut journal, opts.tail)?;
 
     loop {

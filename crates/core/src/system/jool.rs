@@ -174,6 +174,7 @@ pub async fn teardown_nat64() -> Result<(), JoolError> {
     remove_instance().await
 }
 
+// spec: LINUX#forwarding
 async fn ensure_forwarding_enabled() -> Result<(), JoolError> {
     let checks = [
         ("net.ipv6.conf.all.forwarding", "1"),

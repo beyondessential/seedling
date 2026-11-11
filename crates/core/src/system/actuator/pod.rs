@@ -26,6 +26,7 @@ fn pod_network_name(instance: &ResourceInstance) -> String {
     format!("seedling-{}", instance.display_name)
 }
 
+// spec: LINUX#supervised-units
 fn unit_name(instance: &ResourceInstance) -> String {
     format!("seedling-{}.service", instance.display_name)
 }
@@ -362,12 +363,15 @@ impl Actuator {
                 kill_signal,
                 timeout_stop_secs,
                 // spec: PRIO#resource-control-groups
+                // spec: LINUX#resource-control-groups
                 // The tier slice carries the Deployment weight and nests under
                 // the app slice, which carries the app weight.
                 slice: Some(standing.slice(&instance.app)),
                 // spec: PRIO#kill-order
+                // spec: LINUX#kill-order
                 oom_score_adjust: Some(standing.oom_score_adjust()),
                 // spec: AUTO#restart-pacing
+                // spec: LINUX#restart-pacing
                 // Pod containers: 5 second pause between restarts, and a
                 // 10-minute / 10-attempt window before systemd gives up. The
                 // wider window means a slow-failing container (e.g. takes

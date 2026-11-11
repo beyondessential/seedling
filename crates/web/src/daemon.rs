@@ -339,6 +339,7 @@ impl DaemonConn {
     }
 
     /// Default path for the web binary's persistent client key.
+    // spec: LINUX#per-user-state
     pub fn default_key_path() -> PathBuf {
         dirs::state_dir()
             .or_else(dirs::data_local_dir)

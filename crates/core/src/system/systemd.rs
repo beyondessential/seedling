@@ -192,6 +192,7 @@ trait Systemd1Unit {
 /// Restart accounting lives on the `Service` interface, not the `Unit`
 /// interface above, so it needs its own proxy against the same object path.
 // spec: AUTO#restart-record
+// spec: LINUX#exit-status
 #[zbus::proxy(
     interface = "org.freedesktop.systemd1.Service",
     default_service = "org.freedesktop.systemd1"
@@ -276,6 +277,7 @@ impl SystemdManager {
                 name: "StandardError",
                 value: Value::from("journal"),
             },
+            // spec: LINUX#supervised-units
             // Garbage-collect the transient unit (and remove its file from
             // /run/systemd/transient/) as soon as it reaches inactive or
             // failed state with no pending restart jobs. Without this the
@@ -288,6 +290,7 @@ impl SystemdManager {
         ];
 
         // spec: CTR#stopping
+        // spec: LINUX#stopping
         // Override systemd's default SIGTERM stop signal so that workloads
         // whose semantics need a different signal (postgres → SIGINT for
         // fast shutdown rather than SIGTERM smart-shutdown that waits for
@@ -306,6 +309,7 @@ impl SystemdManager {
             });
         }
         // spec: CTR#stopping
+        // spec: LINUX#stopping
         if let Some(secs) = spec.timeout_stop_secs {
             props.push(UnitProperty {
                 name: "TimeoutStopUSec",
@@ -313,6 +317,7 @@ impl SystemdManager {
             });
         }
         // spec: AUTO#restart-pacing
+        // spec: LINUX#restart-pacing
         // Slow systemd's per-unit restart cadence so a crash-looping
         // container does not blow through the start-limit window in seconds.
         if let Some(secs) = spec.restart_sec {
@@ -334,6 +339,7 @@ impl SystemdManager {
             });
         }
         // spec: PRIO#resource-control-groups
+        // spec: LINUX#resource-control-groups
         // The unit joins the slice its app and declared level resolve to; the
         // slice itself carries the CPU and I/O weights.
         if let Some(slice) = &spec.slice {
@@ -344,6 +350,7 @@ impl SystemdManager {
             });
         }
         // spec: PRIO#kill-order
+        // spec: LINUX#kill-order
         // Set here rather than adjusted later because the supervisor applies it
         // when it spawns the process and cannot change it afterwards.
         if let Some(adj) = spec.oom_score_adjust {
@@ -353,6 +360,7 @@ impl SystemdManager {
             });
         }
         // spec: ACTU#container-logs
+        // spec: LINUX#logs
         if !spec.log_extra_fields.is_empty() {
             let ay_sig = Signature::try_from("ay").map_err(|e| {
                 ProtocolSnafu {
@@ -417,6 +425,7 @@ impl SystemdManager {
     /// names offered for removal are ones read back out of the directory, so
     /// this is what keeps a malformed or unexpected entry from being unlinked.
     // spec: PRIO#resource-control-groups
+    // spec: LINUX#resource-control-groups
     fn is_owned_slice(name: &str) -> bool {
         name.starts_with("seedling-") && name.ends_with(".slice")
     }
@@ -439,6 +448,7 @@ impl SystemdManager {
     }
 
     // spec: PRIO#resource-control-groups
+    // spec: LINUX#resource-control-groups
     /// Bring the set of owned slices on this host into line with `desired`.
     ///
     /// The unit directory is the state, not any record this process keeps: what
@@ -607,6 +617,7 @@ impl SystemdManager {
         let sub = unit_proxy.sub_state().await.context(DBusSnafu)?;
 
         // spec: AUTO#restart-record
+        // spec: LINUX#exit-status
         // Two extra property reads on a path already fetching ActiveState and
         // SubState per instance. Failures are not fatal: the Service interface
         // only exists on .service units, and a unit that vanished between the
@@ -921,6 +932,7 @@ mod tests {
     use super::{UnitExit, UnitExitKind, parse_exec_main, validate_unit_name};
 
     // spec: AUTO#restart-record
+    // spec: LINUX#exit-status
     #[test]
     fn exec_main_maps_si_codes_to_exit_kinds() {
         assert_eq!(
@@ -947,6 +959,7 @@ mod tests {
     }
 
     // spec: AUTO#restart-record
+    // spec: LINUX#exit-status
     #[test]
     fn exec_main_is_absent_while_the_main_process_lives() {
         assert_eq!(parse_exec_main(0, 0), None);

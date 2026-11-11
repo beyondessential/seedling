@@ -469,6 +469,7 @@ async fn actuate_one_pod(
             }
         } else if obs.unit_start_limit_hit {
             // spec: AUTO#restart-pacing
+            // spec: LINUX#restart-pacing
             // Surface as a hard fault separate from the routine
             // container_start_failed signal: the operator needs to know
             // that systemd has stopped trying.
