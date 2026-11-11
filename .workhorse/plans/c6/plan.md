@@ -24,7 +24,17 @@ A final sweep (`sweep.py`) resolves placeholders in specs, converts code annotat
 
 ## Conventions settled in the pilot
 
-(filled in as the pilot settles them)
+Signed off on `runtime/reconciliation.md` and `overview.md`.
+
+- A one-sentence scope line under the H1, "Applies to …".
+- Terms a spec coins for itself go in its own `## Terminology`, one `###` per term, before the requirements; terms shared across specs go in the root glossary and are linked on first use per spec (`../overview.md#term`).
+- Prose requirements, one sentence per line, named actor ("The runtime MUST …"); numbered lists only where order is the requirement.
+- Section headings are noun phrases; a heading becomes the citation slug, so choose it to last.
+- Code citations are section-level: several old rule ids map to one `ID#slug`.
+- Cross-spec links to specs not yet rewritten stay as `rule:<prefix>/<id>` placeholders for the final sweep.
+- Vague qualifiers ("closer", "long duration") are either made testable or dropped in favour of the concrete rule the old text's example described.
+- Carve-outs made redundant by a definition are cut.
+- Terminology is applied during each spec's rewrite rather than as a separate sweep, since every sentence is rewritten from the tracey text anyway.
 
 ## Steps
 
