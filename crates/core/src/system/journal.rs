@@ -141,22 +141,43 @@ fn journal_reader_thread(
     Ok(())
 }
 
+/// The journal cursor moves [`seek_tail_window`] needs, so its arithmetic can
+/// be tested without a running journal.
+trait JournalCursor {
+    fn seek_head(&mut self) -> systemd::Result<()>;
+    fn seek_tail(&mut self) -> systemd::Result<()>;
+    /// Step back one entry, returning whether there was one to step onto.
+    fn previous(&mut self) -> systemd::Result<bool>;
+}
+
+impl JournalCursor for systemd::Journal {
+    fn seek_head(&mut self) -> systemd::Result<()> {
+        self.seek(systemd::journal::JournalSeek::Head)
+    }
+
+    fn seek_tail(&mut self) -> systemd::Result<()> {
+        self.seek(systemd::journal::JournalSeek::Tail)
+    }
+
+    fn previous(&mut self) -> systemd::Result<bool> {
+        Ok(systemd::journal::JournalRef::previous(self)? != 0)
+    }
+}
+
 /// Position `journal` so that the next entry read is the oldest of its last
 /// `tail` entries.
 ///
 /// Reading advances before it reads, so the cursor goes one entry further
 /// back than the window. Running out of entries first means the window is
 /// the whole journal, which is then read from the head.
-fn seek_tail_window(journal: &mut systemd::Journal, tail: u64) -> systemd::Result<()> {
-    use systemd::journal::JournalSeek;
-
-    journal.seek(JournalSeek::Tail)?;
+fn seek_tail_window(journal: &mut impl JournalCursor, tail: u64) -> systemd::Result<()> {
+    journal.seek_tail()?;
     let mut stepped = 0;
-    while stepped <= tail && journal.previous()? != 0 {
+    while stepped <= tail && journal.previous()? {
         stepped += 1;
     }
     if stepped <= tail {
-        journal.seek(JournalSeek::Head)?;
+        journal.seek_head()?;
     }
     Ok(())
 }
@@ -204,6 +225,73 @@ mod tests {
     use super::*;
 
     const MARKER_FIELD: &str = "SEEDLING_TEST_MARKER";
+
+    /// An in-memory journal with sd_journal's cursor semantics: a seek leaves
+    /// the cursor between entries, `previous` steps onto the entry before it,
+    /// and reading steps onto the entry after it before reading.
+    struct FakeJournal {
+        len: usize,
+        /// Index of the entry the cursor is on, or the gap before `0` when
+        /// `None`; a tail seek sits past the last entry at `Some(len)`.
+        at: Option<usize>,
+    }
+
+    impl FakeJournal {
+        fn new(len: usize) -> Self {
+            Self { len, at: None }
+        }
+
+        fn read_all(&mut self) -> Vec<usize> {
+            let mut read = Vec::new();
+            loop {
+                let next = self.at.map_or(0, |i| i + 1);
+                if next >= self.len {
+                    return read;
+                }
+                self.at = Some(next);
+                read.push(next);
+            }
+        }
+    }
+
+    impl JournalCursor for FakeJournal {
+        fn seek_head(&mut self) -> systemd::Result<()> {
+            self.at = None;
+            Ok(())
+        }
+
+        fn seek_tail(&mut self) -> systemd::Result<()> {
+            self.at = Some(self.len);
+            Ok(())
+        }
+
+        fn previous(&mut self) -> systemd::Result<bool> {
+            match self.at {
+                Some(i) if i > 0 => {
+                    self.at = Some(i - 1);
+                    Ok(true)
+                }
+                _ => Ok(false),
+            }
+        }
+    }
+
+    fn fake_window(len: usize, tail: u64) -> Vec<usize> {
+        let mut journal = FakeJournal::new(len);
+        seek_tail_window(&mut journal, tail).unwrap();
+        journal.read_all()
+    }
+
+    // i[verify logs.tail]
+    #[test]
+    fn tail_window_arithmetic() {
+        assert!(fake_window(3, 0).is_empty());
+        assert_eq!(fake_window(3, 1), [2]);
+        assert_eq!(fake_window(3, 2), [1, 2]);
+        assert_eq!(fake_window(3, 3), [0, 1, 2]);
+        assert_eq!(fake_window(3, 10), [0, 1, 2]);
+        assert!(fake_window(0, 5).is_empty());
+    }
 
     fn open_marked(marker: &str) -> systemd::Journal {
         let mut journal = OpenOptions::default()
