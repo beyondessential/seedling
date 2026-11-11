@@ -51,3 +51,13 @@ Settled by the user: withholding faults decide faulted; blocking shell.attach wi
 Moved: Barrier defined once in RT (SUSP keeps the mechanism); cycle errors to ACN; sub-action validation and reserved keys to ACN; start-action schedule rule to ACN; secret redaction to SEC; rate-limit budgets to PRX; container defaults to CTR; 0640 writes to ACTU; ingress serving to PRX; certificate warming to RT; template and Canopy offer events to EVT; key fingerprint to the root term; TLS terms from TLSM to TLS; client identity key to CLI; fault restatements across 18 specs now link FLT rows, with descriptions moved into FLT.
 Fixed by me after: FLT clearing wording for cert_expiring_soon and canopy_certificate_failed taken from TLS and TCAN; AUD#generations removed (EVT holds the members), citations to EVT; field ownership moved to INFRA#database, upsert citations retargeted; WIRE internal row says a failed read is never not_found or empty; withholding faults link AUTO.
 Left: WebSession events and web error codes stay in WEB; hostname syntax differs between TLSM and ING (not unified); /volumes/*, /services/exported/list and OI certificate statuses need design, not moves.
+
+## Round 2
+
+### Runtime B (found: 5 critical, 12 suggestion, 7 nit)
+
+Fixed in place: CNR statuses use the APPS names (no `Deregistering`); actors on bare requirements in CNR, OPS, FLT, LCY, TRD, AUD; "what" stand-ins; fault kinds named; link targets corrected.
+
+Critical: canopy_offer_absent shape vs restart; service leaving Ready has no target state; OBS says certificates decide ingress Ready (contradicts LCY); cancelled outcome missing from history and events; container_runtime_unavailable clears only on restart.
+Suggestion: teardown process unspecified; stuck uninstall exit; crash_loop clears between crashes; unreadable priorities behaviour home and scope; failed scheduled validation and refire; CNR identifier discard condition; action-call table incomplete; replay literal arguments; "lifecycle transition of that app"; registry_error two shapes; audit write failures; re-check "infrequently".
+Nit: empty RUN; start-action hold stated thrice; side effects beyond rt.*; uninstalling apps and shared infrastructure; CNR resource field; OBS sentence; old reconstruction twice.

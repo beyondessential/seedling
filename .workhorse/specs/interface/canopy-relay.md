@@ -43,7 +43,7 @@ An offer that has been registered and has not ended.
 | `via` | string | no | how the offering client authenticates to Canopy |
 
 The runtime MUST record `agent`, `endpoint` and `via` for display to operators, and MUST NOT vary its behaviour on their values.
-The result is `{ offer_id }`, an opaque string identifying the offer.
+The result is `{ "offer_id": <string> }`, where `offer_id` is an opaque string identifying the offer.
 On success, the runtime MUST emit a `CanopyOffered` [event](events.md#session-events).
 
 An offer belongs to the connection that made it.
@@ -118,7 +118,7 @@ A header line, including its terminating newline, MUST NOT exceed 65,536 bytes.
 
 ## Relay errors
 
-When the offering client obtained no response from Canopy, it MUST answer with `{ "error": { "code": <string>, "message": <string> } }` and no body.
+When the offering client has no Canopy response to relay, it MUST answer with `{ "error": { "code": <string>, "message": <string> } }` and no body.
 
 | `code` | meaning |
 | --- | --- |
@@ -138,7 +138,7 @@ An offering client SHOULD time out its own request to Canopy sooner, so that it 
 
 The runtime MUST have at most 8 relayed requests in flight at once.
 A further request MUST wait for one of them to finish before its stream is opened.
-Relay streams MUST NOT count against the [stream concurrency limit](wire.md#stream-limit).
+Relay streams MUST NOT count against the [stream limit](wire.md#stream-limit).
 
 ## Unavailability
 
@@ -148,7 +148,7 @@ The runtime MUST NOT hold such a request for an offer that might appear later.
 ## Settings
 
 `/canopy/settings/get` takes no parameters.
-Its result is `{ enabled, updated_at }`.
+Its result is `{ "enabled": <boolean>, "updated_at": <integer> }`.
 `enabled` is the stored [Canopy access setting](../runtime/canopy-reporting.md#canopy-access).
 `updated_at` is when the setting was last written, as an integer count of seconds since 1970-01-01T00:00:00Z, or `0` if it never has been.
 

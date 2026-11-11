@@ -42,7 +42,7 @@ The runtime MUST distinguish a unit the supervisor reports as starting, includin
 
 For a Volume instance, the runtime MUST observe whether the named volume exists.
 
-If a named volume that is not held in memory exists but its storage does not match the storage the host is configured to use, the runtime MUST report a backend mismatch and MUST NOT report the volume as present.
+If a named non-tmpfs volume exists but its storage does not match the storage the host is configured to use, the runtime MUST report a backend mismatch and MUST NOT report the volume as present.
 
 > [!NOTE]
 > A plain directory found where the host is configured for filesystem subvolumes is a backend mismatch, as is the reverse.

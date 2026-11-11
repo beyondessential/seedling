@@ -4,7 +4,7 @@ id: AUTO
 
 # Autonomous reconciliation
 
-Applies to the operations the [runtime](../overview.md#runtime) performs without direction to hold an [app](../overview.md#app) at its [desired state](../overview.md#desired-state): restarting containers, detecting crash loops, settling completed Jobs, scaling Deployments, replacing unhealthy instances, and repairing ingress and network configuration.
+Applies to the operations the [runtime](../overview.md#runtime) performs without direction to hold an [app](../overview.md#app) at its [desired state](../overview.md#desired-state).
 
 ## Terminology
 
@@ -22,7 +22,7 @@ The number of instances a Deployment is held at: the scale an operator chose for
 
 ## Operation provenance
 
-The runtime MUST record each autonomous operation, with its [operation provenance](history.md#operation-provenance), in the autonomous operations log before performing it.
+The runtime MUST record each autonomous operation, with its [operation provenance](history.md#operation-provenance), in the [autonomous operations log](../overview.md#autonomous-operations-log) before performing it.
 
 ## Restarts
 
@@ -33,7 +33,7 @@ When a container instance in the desired state reaches the `Terminated` lifecycl
 The runtime MUST keep a durable record of every restart of a container instance.
 Each record MUST identify the instance, the app's generation when the record was made, the time of the restart, the exit status of the run that ended where the platform reports one, and whether the restart was a recovery restart or a deliberate restart.
 
-The runtime MUST record as the cause why the restart happened, and not which component performed it.
+The runtime MUST classify a restart as a recovery restart or a deliberate restart by its cause, whichever component performed it.
 
 > [!NOTE]
 > On a platform with a service supervisor the supervisor performs recovery restarts and the runtime deliberate ones, while on a platform without one the runtime performs both.
@@ -64,7 +64,7 @@ The runtime SHOULD configure the supervisor to wait 5 seconds between attempts, 
 
 While the supervisor is bringing an instance up, whether for its first start or in the pause before an automatic restart, the runtime MUST NOT tear the instance down or start it again.
 The runtime MUST distinguish a unit the supervisor reports as starting from one it reports as started, and MUST treat only a started unit with no running container as broken.
-The runtime MUST NOT file a unit-failure fault for a unit the supervisor is bringing up.
+The runtime MUST NOT file a [`container_start_failed`](faults.md#workload-faults) fault for a unit the supervisor is bringing up.
 The runtime MUST NOT hold back from replacing a unit whose specification no longer matches the app's definition.
 
 > [!NOTE]

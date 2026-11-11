@@ -39,7 +39,7 @@ Members of the same name carry the same type and meaning across event types.
 | `operation_id` | string | a [lifecycle operation](../overview.md#lifecycle-operation)'s identifier |
 | `session_id` | string | a [shell session](shells.md#shell-session)'s identifier |
 | `forward_id` | string | a [port forward](port-forwards.md#port-forward)'s identifier |
-| `offer_id` | string | a Canopy offer's identifier |
+| `offer_id` | string | a Canopy [offer](canopy-relay.md#offer)'s identifier |
 | `held_id` | string | a [held volume](../runtime/actuation.md#held-volume)'s identifier |
 | `name` | string | the name of the thing the event is about |
 | `external_name` | string | the name of an app's external volume or external service slot |
@@ -61,7 +61,7 @@ A member marked "optional" is absent where it has no value.
 | `AppRegistered` | `app`, `generation` | as [registration](apps.md#registration) specifies |
 | `AppDeregistered` | `app` | as [deregistration](apps.md#removal) specifies |
 | `AppUpdated` | `app`, `generation`, `previous_generation` (integer or null), `definition` (object); and `name`, `previous_value`, `new_value` when a parameter changed alongside | as [definition update](apps.md#update) specifies |
-| `AppPhaseChanged` | `app`, `phase` | on every change of an app's phase |
+| `AppPhaseChanged` | `app`, `phase` | on every change of an app's [install phase](../overview.md#install-phase) |
 | `AppPriorityChanged` | `app`, `priority` (string), `previous_priority` (string) | as [priority change](app-control.md#app-priority) specifies |
 | `ParamSet` | `app`, `name`, `previous_value` (string, optional), `new_value` (string, optional), `redacted` (`true`, optional), `generation`, `previous_generation` | as [setting a parameter](params.md#parameter-set) specifies |
 | `ParamUnset` | `app`, `name`, `previous_value` (string, optional), `redacted` (`true`, optional), `generation`, `previous_generation` | as [unsetting a parameter](params.md#parameter-unset) specifies |
@@ -93,7 +93,7 @@ In `ParamSet` and `ParamUnset`, a secret parameter's event MUST carry `redacted`
 | `FaultCleared` | `id`, `app`, `kind` | when a fault is cleared |
 | `ResourceStateChanged` | `app`, `resource_type` (string), `resource_name` (string), `instance_id` (string), `state` (string) | when a resource instance's derived lifecycle state changes |
 
-`FaultFiled` carries the members of a [fault record](faults.md#fault-records), except that the event's `timestamp` is the record's.
+`FaultFiled` carries the members of a [fault record](faults.md#fault-records), and its `timestamp` is the record's.
 In `ResourceStateChanged`, `resource_type` is the resource's [type name](wire.md#resource-type-names), and `state` is the instance's new [lifecycle state](../overview.md#lifecycle-state), named as the lifecycle states are.
 
 ### Session events
@@ -150,7 +150,7 @@ In the attachment events, `target_kind` is `"forward"` or `"redirect"`; a forwar
 
 | `type` | members | emitted |
 | --- | --- | --- |
-| `ServerBusy` | `reason` (string) | when the server refuses a stream at its [concurrency limit](wire.md#stream-limit) |
+| `ServerBusy` | `reason` (string) | when the server refuses a stream at its [stream limit](wire.md#stream-limit) |
 | `EventsDropped` | `skipped` (integer, optional) | as [gaps](#gaps) specifies |
 
 ## Ordering

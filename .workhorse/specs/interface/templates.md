@@ -93,7 +93,7 @@ Its result is an array with one object per stored template, ordered by name in a
 | member | type | meaning |
 | --- | --- | --- |
 | `name` | string | the template's name |
-| `body` | string | the template's script files concatenated as the [bundle rules](../language/bundle.md#script-formation) define |
+| `body` | string | the template's script files concatenated as [script formation](../language/bundle.md#script-formation) defines |
 | `provenance` | object | the [definition provenance](definitions.md#provenance-reporting) of the template's definition |
 | `supported` | boolean | whether the template is a supported template |
 | `description` | string or null | the template's description |

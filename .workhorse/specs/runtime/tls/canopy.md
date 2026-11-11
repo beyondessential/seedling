@@ -22,7 +22,7 @@ Canopy is available for a hostname it applies to while an [offer](../../interfac
 Seedling holds the key and submits a CSR; Canopy proves control of the name, issues, and renews.
 Every request to Canopy MUST travel through the [relay](../../interface/canopy-relay.md#relay-streams), and the runtime MUST NOT open a connection to Canopy of its own.
 
-The runtime MUST NOT withhold a request on the strength of what Canopy reports the server is entitled to.
+The runtime MUST NOT withhold a request on the strength of the entitlements Canopy reports for the server.
 
 > [!NOTE]
 > A request is how an operator in Canopy learns that a hostname wants a certificate and comes to authorise it.
@@ -51,7 +51,7 @@ The CSR's SAN set MUST name exactly the hostname.
 A wildcard policy MUST result in a request for each concrete hostname it matches, and never in a request for the wildcard.
 The request MUST carry `application_type` when the typed apps declaring the hostname share exactly one type, and MUST omit it otherwise.
 
-The runtime asks Canopy about certificates only on a [report tick](../canopy-reporting.md#report-schedule) whose report succeeded.
+The runtime MUST ask Canopy about certificates only on a [report tick](../canopy-reporting.md#report-schedule) whose report succeeded.
 The runtime SHOULD make its requests one at a time, SHOULD make no more than 8 in one tick, and SHOULD start none once 20 seconds of the tick have passed.
 A tick that stops early SHOULD resume, on the next tick, after the last hostname it asked about.
 
@@ -61,8 +61,10 @@ Canopy answers a first request as pending, and delivers the certificate when ask
 
 While an order is open for a hostname, the runtime MUST ask again on every report tick, whichever strategy is responsible.
 Once a Canopy certificate serving a hostname reaches its [renewal point](certificates.md#renewal-point), the runtime MUST ask again on every report tick until it has stored a certificate expiring later than the one it holds.
-Asking from the renewal point is how the runtime collects a renewal Canopy has carried out.
 At any other time the runtime MUST NOT ask.
+
+> [!NOTE]
+> Asking from the renewal point is how the runtime collects a renewal Canopy has carried out.
 
 After a refusal in the current [cycle](chains.md#cycle), the runtime MUST NOT ask to collect a renewal until the next cycle.
 After a refusal, a failed order or a rejected CSR, the runtime MUST NOT ask again for that hostname until the [after-failure interval](certificates.md#after-failure-interval) has passed, unless an operator retries it.
@@ -120,7 +122,7 @@ A chain that fails any of these checks MUST be classified as unavailable, with t
 While a Canopy certificate for the hostname is active, the runtime MUST store an issued chain only if both expiries are recorded and the new one is later; otherwise the answer MUST be treated as pending.
 
 A stored Canopy certificate has origin `canopy`.
-The runtime MUST store it, and retire what it [supersedes](certificates.md#supersession), in one transaction, and MUST record the end of the cycle in the same transaction.
+The runtime MUST store it, and retire the certificates it [supersedes](certificates.md#supersession), in one transaction, and MUST record the end of the cycle in the same transaction.
 
 ## Revocation
 
@@ -159,7 +161,10 @@ The fault MUST name the hostname and the reason.
 The runtime MUST clear the fault when none of these holds, or when the ingress no longer exists.
 The runtime MUST bring these faults into line on every report tick, whether or not the report succeeded, and MUST log each fault it files.
 
-A hostname that holds a usable certificate and whose responsible strategy has not reached its fall-through point MUST NOT raise the fault, since its chain is still working on it.
+A hostname that holds a usable certificate and whose responsible strategy has not reached its fall-through point MUST NOT raise the fault.
+
+> [!NOTE]
+> Such a hostname's chain is still working on its certificate.
 
 ## Canopy-only policy
 

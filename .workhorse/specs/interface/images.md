@@ -16,7 +16,7 @@ Applies to the [Operator Interface](../overview.md#operator-interface) methods t
 ## Registry allowlist
 
 The registry allowlist is the set of registry hosts from which the runtime accepts images and [definition bundles](definitions.md#registry-access).
-An image's registry is the part of its reference before the first `/`.
+An image's registry is the `registry` part of its [reference](../language/container.md#image).
 The runtime MUST compare a registry against the allowlist by exact string equality.
 
 `/registries/list` takes no parameters, and its result is `{ "registries": [ ... ] }`, the allowlisted registries as strings in ascending order.

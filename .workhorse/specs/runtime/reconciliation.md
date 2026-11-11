@@ -24,7 +24,7 @@ Host state that the runtime rebuilds in full on each iteration and applies whole
 An app's [desired state](../overview.md#desired-state) is derived from its [resource graph](../overview.md#resource-graph) and, while a lifecycle operation is in progress for it, from that operation's progress.
 
 In steady state, an app's desired state MUST be its whole resource graph.
-The runtime MUST maintain that desired state without direction from an operator, as [autonomous reconciliation](autonomous.md#restarts) specifies.
+The runtime MUST maintain that desired state without direction from an operator, as [autonomous reconciliation](autonomous.md) specifies.
 
 While a lifecycle operation is in progress for an app, the app's desired state MUST consist of the resources the operation's [action closure](operations.md#operation) has [started](../language/rt.md#starting-resources) or [stopped](../language/rt.md#stopping-resources), each in the state the closure last put it in.
 The runtime MUST act only on resources in the desired state.

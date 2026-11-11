@@ -15,14 +15,14 @@ Commands in this spec are written without the program name: `apps create` is `se
 
 ## Client identity key
 
-The command-line client authenticates with an Ed25519 key ([RFC 8032](https://www.rfc-editor.org/rfc/rfc8032)) held in a key file as a DER-encoded PKCS#8 private key ([RFC 5958](https://www.rfc-editor.org/rfc/rfc5958), [RFC 8410](https://www.rfc-editor.org/rfc/rfc8410)).
+The CLI authenticates with an Ed25519 key ([RFC 8032](https://www.rfc-editor.org/rfc/rfc8032)) held in a key file as a DER-encoded PKCS#8 private key ([RFC 5958](https://www.rfc-editor.org/rfc/rfc5958), [RFC 8410](https://www.rfc-editor.org/rfc/rfc8410)).
 
-The client MUST read the key file from the path given by its `--key-file` option.
-Without the option, the client MUST use `seedling/client.key` under the user's state directory (`$XDG_STATE_HOME`, or its platform equivalent).
-If the key file does not exist, the client MUST generate a key and write it there, creating missing parent directories.
+The CLI MUST read the key file from the path given by its `--key-file` option.
+Without the option, the CLI MUST use `seedling/client.key` under the user's [state directory](../platform/linux.md#per-user-state).
+If the key file does not exist, the CLI MUST generate a key and write it there, creating missing parent directories.
 
-The client MUST create the key file readable and writable by its owner only.
-The client MUST refuse to load a key file that grants any permission to its group or to other users, and MUST report an error naming the file.
+The CLI MUST create the key file readable and writable by its owner only.
+The CLI MUST refuse to load a key file that grants any permission to its group or to other users, and MUST report an error naming the file.
 
 > [!NOTE]
 > A distinct key file gives a caller a distinct identity, such as a co-located service that needs its own authorised key.
@@ -31,7 +31,7 @@ The client MUST refuse to load a key file that grants any permission to its grou
 ## Shutdown
 
 The CLI MUST put the local terminal into raw mode for a shell session, and MUST restore it when the session ends.
-In raw mode, the CLI MUST pass SIGINT and every other control character typed at the terminal to the remote shell as input.
+In raw mode, the CLI MUST pass every control character typed at the terminal, including the interrupt character, to the remote shell as input.
 On SIGTERM during a shell session, the CLI MUST send ETX (`0x03`) on the session stream's stdin direction, then wait up to five seconds for the session to end.
 If the session has not ended by then, the CLI MUST close the connection and exit with status 130.
 When a shell session ends, the CLI MUST exit with the session's exit code.
@@ -61,7 +61,7 @@ The CLI MUST print a line that is not a JSON object exactly as received.
 
 While a port forward is active, the CLI MUST count the bytes relayed in each direction.
 For a TCP forward, it MUST count the connections opened and the connections active.
-For a UDP forward, it MUST count the datagrams relayed in each direction, and the datagrams dropped for exceeding the path MTU.
+For a UDP forward, it MUST count the datagrams relayed in each direction, and the datagrams dropped for exceeding the [maximum datagram size](port-forwards.md#borrowed-terms).
 When the forward ends, the CLI MUST print a summary of these counts to standard error.
 
 ## Action, shell and install parameters
@@ -80,7 +80,8 @@ If an argument holds no `=`, the CLI MUST report an error naming that argument a
 
 `apps create <app> <source>` and `apps update <app> <source>` MUST each take a definition.
 `templates create <name> <source>` MUST take a definition, and `templates update <name> [<source>]` MAY take one, leaving the template's definition unchanged when none is given.
-In each, `--ref <reference>` MAY stand in place of the source, and the two MUST NOT be combined.
+In each, `--ref <reference>` MAY stand in place of the source.
+The CLI MUST refuse a command that gives both a source and `--ref`.
 
 The CLI MUST send a definition as [definition sources](definitions.md#definition-sources) define, by the form of the source.
 
@@ -92,10 +93,12 @@ The CLI MUST send a definition as [definition sources](definitions.md#definition
 | `--ref <reference>` | the reference as `reference`, for the server to fetch |
 
 For a GitHub URL, the CLI MUST resolve the branch, tag or commit to a commit, download the folder at that commit itself, and send `origin` with `url` set to the URL as given and `revision` set to the commit's id.
-The host then needs no access to GitHub.
 Where the URL's path could split into a ref and a folder in several ways, the CLI MUST try the shortest ref first.
 The CLI MAY authenticate to GitHub with the token in the `GITHUB_TOKEN` environment variable.
 The CLI MUST report an error and send no request when the folder holds no files, or when the downloaded archive holds an entry that is not a regular file or directory or that lies outside the folder.
+
+> [!NOTE]
+> Downloading the folder on the client means the host needs no access to GitHub.
 
 ## Definition folders
 

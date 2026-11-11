@@ -48,7 +48,8 @@ An opening line that further data follows MUST end with a line feed, and MUST NO
 If the opening line has a `forward` member, the server MUST treat the stream as a [port forward data stream](#port-forward-data).
 Otherwise the server MUST treat the stream as a call of the method its `method` member names.
 
-The server MUST begin every server-initiated bidirectional stream with an opening line too, and the member it carries names the stream's kind.
+The server MUST begin every server-initiated bidirectional stream with an opening line.
+The member that opening line carries names the stream's kind.
 A `canopy` member names a [Canopy relay stream](#canopy-relay-streams), and no other kind is defined.
 A client MUST reset a server-initiated bidirectional stream whose kind it does not recognise, so that the server can tell an unsupported kind from an empty answer.
 
@@ -66,8 +67,8 @@ The request MAY be followed by a line feed.
 | `actor` | object | no | the [actor](#actor) the request is made for |
 | `params` | object | no | the method's parameters |
 
-A method that defines parameters MUST refuse a request whose `params` is absent or does not match the method's parameter shape, with `requirements_invalid`.
-A method that defines no parameters MUST ignore `params`.
+For a method that defines parameters, the server MUST refuse a request whose `params` is absent or does not match the method's parameter shape, with `requirements_invalid`.
+For a method that defines no parameters, the server MUST ignore `params`.
 
 The server MUST accept a request of up to 4,194,304 bytes.
 The server MUST answer an unknown method with `not_found`.
@@ -168,12 +169,12 @@ Output waiting to be delivered MUST NOT hold up standard input, nor delay the se
 Each TCP connection tunnelled through a port forward uses one client-initiated bidirectional stream.
 Its opening line MUST be `{ "forward": "<forward_id>" }`, naming the forward the [`/forwards/start`](port-forwards.md#requesting-a-forward) response gave.
 After the opening line, each direction carries the tunnelled connection's bytes unchanged.
-Each direction of the stream MUST be finished when the matching direction of the tunnelled connection ends, and the stream MUST be reset when the tunnelled connection fails, as [TCP tunnelling](port-forwards.md#tcp-tunnelling) specifies.
+Each end finishes or resets the stream as [TCP tunnelling](port-forwards.md#tcp-tunnelling) specifies.
 
 Each UDP datagram tunnelled through a port forward is carried as one QUIC datagram.
 A datagram MUST begin with the forward's 16-bit `forward_key`, in network byte order, immediately followed by the UDP payload.
 The server MUST ignore a datagram shorter than 2 bytes, and one whose key names no forward of the connection.
-A payload too large for the path's datagram limit is dropped, and reported as a [forward status](port-forwards.md#status-messages) message.
+A payload larger than the path's maximum datagram size is handled as [relay resilience](port-forwards.md#relay-resilience) specifies.
 
 ## Canopy relay streams
 

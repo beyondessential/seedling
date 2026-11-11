@@ -48,7 +48,7 @@ A script SHOULD treat an architecture it does not recognise as unsupported rathe
 The host's choice of IPv4 source address does not affect the value, so a host with a private address behind NAT has IPv4 egress.
 If the host's routes cannot be read, whether the host has IPv4 egress is undetermined, and `HOST_HAS_IPV4` MUST be `false` until it is determined.
 
-`HOST_HAS_IPV6` MUST be `true` when the host has [IPv6 egress](../runtime/nat64.md#ipv6-egress), and `false` otherwise, including while that is undetermined.
+`HOST_HAS_IPV6` MUST be `true` when the host has [IPv6 egress](../runtime/nat64.md#ipv6-egress), and `false` otherwise, including while IPv6 egress is undetermined.
 
 `NAT64_ACTIVE` MUST be `true` when the host itself provides NAT64 translation for its workloads, and `false` otherwise.
 
@@ -93,13 +93,13 @@ The runtime MAY change the array's contents between releases.
 
 ## OnTerminate
 
-`OnTerminate` is an enum naming what the runtime does when a container of a [deployment](deployment.md#declaration) terminates.
+`OnTerminate` is an enum naming the runtime's response when a container of a [deployment](deployment.md#declaration) terminates.
 
 Under `OnTerminate.Recreate`, the runtime MUST recreate the container whenever it terminates.
 
 ## OnExit
 
-`OnExit` is an enum naming what the runtime does when the command of a [container](container.md#container-interface) exits.
+`OnExit` is an enum naming the runtime's response when the command of a [container](container.md#container-interface) exits.
 
 Under `OnExit.Restart`, the runtime MUST restart the container whenever its command exits.
 Under `OnExit.Terminate`, the runtime MUST terminate the container whenever its command exits.

@@ -92,7 +92,8 @@ The runtime MUST record when each barrier began to wait, and MUST keep that time
 
 ## rt.stop
 
-[`rt.stop`](../language/rt.md#stopping-resources) is a barrier: the runtime MUST suspend the closure until every resource it names has terminated, under the same deadline, recording and replay rules as any other barrier.
+[`rt.stop`](../language/rt.md#stopping-resources) is a barrier.
+The runtime MUST suspend the closure until every resource it names has terminated, under the same deadline, recording and replay rules as any other barrier.
 
 ## Side-effecting calls
 
@@ -105,7 +106,7 @@ The runtime MUST record when each barrier began to wait, and MUST keep that time
 | `rt.exec` | the target instance and the command's exit code | the command, its arguments and its options |
 
 Before performing a call's effect, the runtime MUST commit an entry recording that the call was begun.
-Once the effect is complete, the runtime MUST commit the entry's completion, with what the table records, before the closure continues.
+Once the effect is complete, the runtime MUST commit the entry's completion, with the values the table lists for the call, before the closure continues.
 
 On a replay, the runtime MUST NOT repeat the effect of a call whose entry is complete, and MUST return from `rt.exec` the exit code the entry records.
 On a replay that reaches an `rt.signal` or `rt.exec` call whose entry was begun but not completed, the runtime MUST NOT repeat the effect, and the call MUST throw, with an error stating that the effect may already have happened.
@@ -120,7 +121,7 @@ The runtime MUST resolve an `rt.write` target to the volume's storage on the hos
 
 ## Abandoned replay
 
-When it starts, the runtime MUST tear down the [dynamic resources](../language/app.md#dynamic-resource-lifetime) that previous runs recorded, except those recorded against the operation it is about to replay, which the replay adopts.
+When it starts, the runtime MUST tear down the [dynamic resources](../language/app.md#dynamic-resource-lifetime) that previous runs of the runtime recorded, except those recorded against the operation it is about to replay, which the replay adopts.
 Where the replay does not then start, for any reason, the runtime MUST tear down the resources it spared and forget their records before it goes on serving.
 
 The runtime MUST forget only the records of resources it has torn down.

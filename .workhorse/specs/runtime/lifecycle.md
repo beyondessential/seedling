@@ -40,7 +40,7 @@ Except for an [external volume](#external-volumes), the runtime MUST derive each
 The runtime MUST be able to re-derive any instance's current lifecycle state from that history at any time.
 The runtime MUST NOT keep a lifecycle state that cannot be re-derived from the history.
 
-A failure to read an instance's observation history MUST NOT be treated as an empty history.
+The runtime MUST NOT treat a failure to read an instance's observation history as an empty history.
 
 ## Containers
 
@@ -79,7 +79,7 @@ A service's routing pool for one of its ports is the set of running backends tha
 
 The runtime MUST compose each pool from the backends running at the time, as follows.
 If at least one running backend is currently observed healthy, the pool MUST hold exactly the running backends currently observed healthy.
-Otherwise, the pool MUST hold every running backend, and the runtime MUST file the [service degraded fault](faults.md#ingress-and-service-faults).
+Otherwise, the pool MUST hold every running backend, and the runtime MUST file a [`service_degraded`](faults.md#ingress-and-service-faults) fault.
 
 A backend with no declared healthcheck MUST count as healthy while it is running.
 A backend whose declared healthcheck has not yet passed, such as one in its start period, MUST count as not healthy.
@@ -117,4 +117,4 @@ An external volume's lifecycle state MUST NOT depend on whether a mapping exists
 The runtime MUST derive an external volume's lifecycle state from the desired state, and MUST NOT record observations of it.
 
 > [!NOTE]
-> A missing mapping is reported by the [external volume unmapped fault](faults.md#workload-faults).
+> A missing mapping is reported by the [`external_volume_not_mapped`](faults.md#workload-faults) fault.

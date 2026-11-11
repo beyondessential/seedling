@@ -18,7 +18,7 @@ The time after an instance of a Deployment with a health check starts, `start_pe
 
 ## Declaration
 
-A script declares a Deployment with `app.deployment(name: string)`, which returns a `Deployment` [builder](overview.md#builders).
+A script declares a Deployment with `app.deployment(name: string)`, which returns a `Deployment` [builder](overview.md#builder).
 A `Deployment` implements the [Pod](pod.md) interface, and so the [Container](container.md) interface.
 
 ## Scale

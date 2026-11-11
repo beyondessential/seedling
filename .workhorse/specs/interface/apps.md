@@ -215,12 +215,12 @@ A `container` object has these members.
 | `stop_signal` | string or null | the stop signal |
 | `stop_timeout_secs` | integer or null | the stop timeout |
 
+A `pod` object has the members `service_mounts`, each `"<service>:<port>"`; `http_bindings`, each `"<pod port> -> <service> <prefix>"`; and `tcp_bindings` and `udp_bindings`, each `"<pod port> -> <service>:<port>"`.
+Each is an array of strings in ascending order.
+
 ### Redacted environment values
 
 The server MUST report as `null` the value of an environment variable whose value contains the stored value of a parameter whose effective [secret flag](../language/parameter.md#secret-parameters) is true.
-
-A `pod` object has the members `service_mounts`, each `"<service>:<port>"`; `http_bindings`, each `"<pod port> -> <service> <prefix>"`; and `tcp_bindings` and `udp_bindings`, each `"<pod port> -> <service>:<port>"`.
-Each is an array of strings in ascending order.
 
 ### Proxy settings
 
@@ -365,7 +365,7 @@ Every generation's bundle MUST remain retrievable for as long as the app is regi
 | parameter | type | required | meaning |
 | --- | --- | --- | --- |
 | `app` | string | yes | the app's name |
-| `limit` | integer | no | the most entries to return: 50 when absent, and held between 1 and 200 |
+| `limit` | integer | no | the most entries to return: 50 when absent, and clamped to the range 1 to 200 |
 | `before` | integer | no | return only entries whose generation is less than this |
 
 The server MUST refuse the request with `not_found` if the app is not registered.

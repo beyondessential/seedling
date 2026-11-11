@@ -63,7 +63,8 @@ The runtime MUST pass a request to a pod with its path unchanged, including the 
 > [!NOTE]
 > `GET /api/books` served through `route("/api")` reaches the pod as `GET /api/books`.
 
-The route at `/` through which the runtime serves a Service that no pod binds a route of MUST take the proxy settings declared on `route("/")`, as any other route takes its own.
+Where no pod binds a route of a Service, the runtime serves the Service through a [fallback route](../runtime/proxy.md#route-emission) at `/`.
+That fallback route MUST take the proxy settings declared on `route("/")`, as any other route takes its own.
 
 ## Route redirects
 
@@ -110,7 +111,7 @@ A positional `to` that contains `<` MUST throw.
 
 > [!NOTE]
 > The positional forms keep everything under the prefix, the common case of moving a prefix.
-> `route("/v1/login").redirect("/api/login")` sends `/v1/login/reset?token=x` to `/api/login/reset?token=x`, where `redirect(#{ to: "/api/login" })` sends it to `/api/login`.
+> `route("/v1/login").redirect("/api/login")` sends `/v1/login/reset?token=x` to `/api/login/reset?token=x`, whereas `redirect(#{ to: "/api/login" })` sends it to `/api/login`.
 > `redirect("/")` throws, since `/` followed by `<tail>` is a literal ending in `/` before `<tail>`.
 
 > [!NOTE]
@@ -274,7 +275,7 @@ These names, in any case, are `Connection`, `Keep-Alive`, `Proxy-Authenticate`, 
 > A proxy may read `*` in a field name as a wildcard, which would let a declaration naming one header reach every header.
 > The proxy holds the connection to the client and the connection to the pod as two separate things, and owns the headers describing each.
 > `Content-Encoding` names the compression the proxy applied, and a response whose encoding is renamed or removed cannot be decoded by the client.
-> [Persistent connections](../runtime/proxy.md#persistent-connections) are served without being asked for.
+> The proxy keeps connections persistent on its own account, as [persistent connections](../runtime/proxy.md#persistent-connections) specifies.
 
 Within one direction of one `headers()` call, a name appearing under more than one operation MUST throw, whatever its case.
 
@@ -290,7 +291,7 @@ A value containing `{` MUST throw.
 
 ### Header declaration bounds
 
-Within one `headers()` call, a direction MUST throw if it names more than 64 headers.
+A `headers()` call MUST throw if either of its directions names more than 64 headers.
 A name longer than 256 characters MUST throw.
 A value array longer than 16 entries MUST throw.
 A value longer than 4096 characters MUST throw.

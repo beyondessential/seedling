@@ -11,7 +11,7 @@ Applies to the service that delivers the [console](console.md#console) to browse
 | term | meaning |
 | --- | --- |
 | secure context | An environment in which a browser exposes features such as WebTransport, as defined by [Secure Contexts](https://www.w3.org/TR/secure-contexts/). |
-| WebTransport session | A session between a browser and a server carrying streams, as defined by [WebTransport](https://www.w3.org/TR/webtransport/) over [WebTransport over HTTP/3](https://datatracker.ietf.org/doc/draft-ietf-webtrans-http3/). |
+| WebTransport session | A session between a browser and a server carrying streams, as defined by [WebTransport](https://www.w3.org/TR/webtransport/) and [WebTransport over HTTP/3](https://datatracker.ietf.org/doc/draft-ietf-webtrans-http3/). |
 | bidirectional stream, unidirectional stream | A stream within a WebTransport session carrying data in both directions, or from its opener only, as defined by [WebTransport](https://www.w3.org/TR/webtransport/). |
 | `serverCertificateHashes` | The WebTransport option through which a page names the hashes of the certificates it accepts in place of certificate authority validation, as defined by [WebTransport](https://www.w3.org/TR/webtransport/#web-transport-configuration). |
 | encoded-word | A MIME encoding of non-ASCII text in a header value, as defined by [RFC 2047](https://www.rfc-editor.org/rfc/rfc2047). |
@@ -55,10 +55,10 @@ The web interface MUST accept the following command-line options.
 | `--key-file <path>` | The web interface's persistent client key | a file in the user's state directory |
 | `--config <path>` | The configuration file | none |
 
-`--http-port` and `--wt-port` MUST be rejected together with `--listen`.
-`--daemon-fingerprint` and `--daemon-fingerprint-file` MUST be rejected together.
+The web interface MUST NOT start when `--listen` is given together with `--http-port` or `--wt-port`.
+The web interface MUST NOT start when both `--daemon-fingerprint` and `--daemon-fingerprint-file` are given.
 
-The configuration file is TOML ([TOML](https://toml.io/en/v1.0.0)).
+The configuration file is a [TOML](https://toml.io/en/v1.0.0) document.
 Its `[auth]` table holds these keys, each optional.
 
 | key | type | meaning | default |
@@ -94,7 +94,7 @@ That port is the one the web interface advertises in each `wt_url` and in its [c
 ## Daemon connection
 
 The web interface MUST connect to the daemon's Operator Interface as a client, as [TRN](../interface/transport.md) specifies.
-It MUST authenticate with a persistent client key, generating it on first start, so that an operator authorises the web interface once.
+It MUST authenticate with a persistent client key, generating it on first start, so that an [operator](../overview.md#operator) authorises the web interface once.
 It SHOULD log the key's fingerprint when it starts.
 
 The web interface MUST verify the daemon by pinning its [SPKI fingerprint](../interface/transport.md#server-identity).
@@ -110,7 +110,8 @@ An error response counts as an answer.
 > In TLS 1.3 the server verifies the client's certificate after the client considers the handshake complete, so a daemon that does not authorise the web interface's key is detected only by the first request.
 
 If an attempt fails, the web interface MUST try again, waiting one second before the second attempt and doubling the wait after each further failure, up to thirty seconds.
-It MUST log a warning for each failed attempt, and MUST keep trying until an attempt succeeds rather than exit.
+It MUST log a warning for each failed attempt, and MUST keep trying until an attempt succeeds.
+A failed attempt MUST NOT make the web interface exit.
 
 When a request finds the daemon connection broken, the web interface MUST open a replacement, verified as at startup, and use it for that request and those after it.
 Requests that found the same broken connection MUST share one replacement attempt.
@@ -132,11 +133,11 @@ A file under `/assets/` MUST be served with `Cache-Control: public, max-age=3153
 A file's path under `/assets/` MUST change whenever its content changes.
 Every other file, including the entry point, MUST be served with `Cache-Control: no-cache, no-store, must-revalidate`.
 
-A browser reaches WebTransport only from a secure context.
 A deployment that serves the console other than over loopback MUST serve it to browsers through a reverse proxy that terminates TLS.
 
 > [!NOTE]
-> A browser treats `http://127.0.0.1` and `http://localhost` as potentially trustworthy origins, which is what lets the console run over plain HTTP on loopback.
+> A browser reaches WebTransport only from a secure context.
+> A browser treats `http://127.0.0.1` and `http://localhost` as potentially trustworthy origins, so the console can run over plain HTTP on loopback.
 
 ## Security headers
 
@@ -160,12 +161,12 @@ The policy MUST NOT name the WebTransport endpoint by a scheme alone.
 The headers are defined by [Content Security Policy Level 3](https://www.w3.org/TR/CSP3/), [RFC 7034](https://www.rfc-editor.org/rfc/rfc7034) (`X-Frame-Options`), [Fetch](https://fetch.spec.whatwg.org/) (`X-Content-Type-Options`, `Cross-Origin-Resource-Policy`), [Permissions Policy](https://www.w3.org/TR/permissions-policy/), and [HTML](https://html.spec.whatwg.org/) (`Cross-Origin-Embedder-Policy`, `Cross-Origin-Opener-Policy`).
 
 > [!NOTE]
-> The console's interface toolkit injects style elements at run time, which is why the policy admits inline styles.
+> The console's interface toolkit injects style elements at run time, so the policy admits inline styles.
 > `X-Frame-Options` covers browsers that predate `frame-ancestors`.
 
 ## Authentication
 
-`POST /connect` authenticates a client and issues what it needs to open a web session.
+`POST /connect` authenticates a client and issues the credentials it needs to open a web session.
 Its body MUST be a JSON object ([RFC 8259](https://www.rfc-editor.org/rfc/rfc8259)), sent as `application/json`, with these members.
 
 | member | type | required | meaning |
@@ -270,7 +271,7 @@ A client MUST send each request on its own bidirectional stream of its web sessi
 The stream MUST begin with a request object as [WIRE](../interface/wire.md) defines, terminated by a newline or by the end of the client's direction of the stream.
 
 The web interface MUST NOT relay a request line longer than 4 MiB (4,194,304 bytes), or one that is not a JSON object.
-It MUST answer such a request with `requirements_invalid`, as the server does.
+It MUST answer such a request with `requirements_invalid`, as the daemon answers a [control request](../interface/wire.md#control-requests) it cannot parse.
 
 The web interface MUST set the request's top-level `actor` to the web session's actor, replacing any actor the client supplied.
 
@@ -287,7 +288,7 @@ The web interface handles these methods itself.
 For any other method, the web interface MUST open a bidirectional stream to the daemon on its shared connection and write the request to it, followed by a newline.
 It MUST then relay the rest of the client's stream to the daemon, and the daemon's stream to the client, each unchanged, and finish each direction when its source ends.
 
-For `/events/subscribe` and `/logs/stream`, the web interface MUST answer on the client's stream with a response envelope followed by a newline.
+For `/events/subscribe` and `/logs/stream`, the web interface MUST answer on the client's stream with a response followed by a newline.
 After a successful response it MUST write the subscribed records to the same stream as newline-delimited JSON objects.
 After an error response it MUST finish the stream.
 
@@ -319,14 +320,12 @@ When the web interface subscribes to the daemon again after losing a subscriptio
 
 ## Shell relay
 
-This section applies to `/shells/start` ([SHL](../interface/shells.md#opening-an-app-shell)) and `/volumes/shell` ([SHL](../interface/shells.md#volume-shells)) requests.
+For a `/shells/start` ([SHL](../interface/shells.md#opening-an-app-shell)) or `/volumes/shell` ([SHL](../interface/shells.md#volume-shells)) request, the web interface MUST open a bidirectional stream to the daemon on its shared connection and write the request to it.
+It MUST relay the daemon's first line to the client unchanged, whether a handshake response or an error response.
+After an error response it MUST finish the client's stream.
+If the daemon's first line cannot be read, or exceeds 64 KiB, the web interface MUST answer the client with a `protocol_error` error response.
 
-The web interface MUST open a bidirectional stream to the daemon on its shared connection and write the request to it.
-It MUST relay the daemon's first line to the client unchanged, whether a handshake response or an error envelope.
-After an error envelope it MUST finish the client's stream.
-If the daemon's first line cannot be read, or exceeds 64 KiB, the web interface MUST answer the client with a `protocol_error` envelope.
-
-After a handshake response, the web interface MUST open two unidirectional streams to the client, one carrying the shell's stdout and one its stderr.
+After a handshake response, the web interface MUST open two unidirectional streams to the client, one carrying the session's stdout stream and one its stderr stream.
 Each MUST begin with eight bytes holding the handshake response's `stdout_stream_id` or `stderr_stream_id`, as an unsigned big-endian integer, followed by the bytes of the daemon's corresponding stream.
 Output streams open at the same time on one web session MUST begin with different eight bytes.
 A client MUST route each incoming unidirectional stream to its shell by those eight bytes, and MUST accept a stream that arrives before it has read the handshake response.
@@ -385,7 +384,7 @@ The web interface MUST emit exactly one `WebSessionStopped` event for each web s
 
 ## Connected clients
 
-`/connected-clients/list {}` returns a result with these members.
+`/connected-clients/list` takes no parameters, and its result has these members.
 
 | member | type | meaning |
 | --- | --- | --- |

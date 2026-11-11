@@ -8,7 +8,7 @@ Applies to the set of client keys authorised to connect to the [Operator Interfa
 
 ## Fingerprints
 
-A fingerprint names a client key as [client authentication](transport.md#client-authentication) defines it: 64 hexadecimal digits.
+A client key is named by its [fingerprint](transport.md#fingerprint).
 The server MUST accept a fingerprint with surrounding whitespace, in either case, and with or without a `sha256:` or `SHA256:` prefix, and MUST store and compare it as 64 lower-case hexadecimal digits.
 The server MUST reject any other value with `requirements_invalid`.
 

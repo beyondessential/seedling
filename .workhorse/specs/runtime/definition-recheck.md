@@ -18,7 +18,7 @@ The runtime MUST NOT re-check a definition fetched by digest, or a pushed defini
 A re-check MUST honour the [registry allowlist](../interface/definitions.md#registry-access).
 A re-check the allowlist does not permit MUST count as a failed re-check.
 
-The outcome of a re-check is reported by the [definition source moved fault](faults.md#app-faults).
+The outcome of a re-check is reported by the [`definition_source_moved`](faults.md#app-faults) fault.
 
 ## Schedule
 

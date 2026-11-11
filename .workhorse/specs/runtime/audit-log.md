@@ -34,7 +34,7 @@ After the file at the configured path has been renamed or removed, the runtime M
 
 ## Write failures
 
-A failure to open or write the audit log MUST NOT block or stop the runtime.
+The runtime MUST NOT block or stop because it fails to open or write the audit log.
 The runtime MUST report each failure to write an entry in its own log.
 
 If the runtime cannot open the audit log, it MUST file an [`audit_log_unavailable`](faults.md#reporting-faults) fault, and MUST try to open it again before writing each later entry.

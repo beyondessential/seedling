@@ -8,7 +8,7 @@ Applies to the [Operator Interface](../overview.md#operator-interface) method th
 
 ## Log stream request
 
-`/logs/stream` is a [subscription request](wire.md#subscription-requests): the server answers on the request's stream, then delivers log entries on a server-initiated unidirectional stream as [log stream framing](wire.md#subscription-requests) specifies.
+`/logs/stream` is a [subscription request](wire.md#subscription-requests) that delivers [log entries](#log-entries).
 On success the result is `{}`.
 
 | member | type | required | meaning |

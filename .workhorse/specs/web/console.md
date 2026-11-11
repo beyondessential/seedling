@@ -64,7 +64,7 @@ Elevating to `dangerous` MUST require the operator's confirmation.
 An elevation to `write` or `dangerous` MUST revert to `read` no later than ten minutes after it began, and the console SHOULD show the time remaining.
 The console reports its safety mode to the web interface as [session tracking](serving.md#session-tracking) specifies.
 
-The console MUST flag its count of web sessions and its safety mode control whenever any other web session is in the `write` or `dangerous` mode, whatever the console's own mode.
+The console MUST flag its count of [web sessions](serving.md#web-session) and its safety mode control whenever any other web session is in the `write` or `dangerous` mode, whatever the console's own mode.
 The flag MUST show, in the colour the console gives that mode, the highest mode any other web session is in.
 
 > [!NOTE]
@@ -102,7 +102,7 @@ It MUST NOT show a fault count for an app with none.
 
 The app detail view MUST show the app's [Canopy application type](../language/app.md#canopy-type) when its definition declares one.
 
-For each container resource with a declared [healthcheck](../language/deployment.md#health-checks), the app detail view MUST show, beside the resource's lifecycle state, that it declares one, its `on_failure` response, and its current check state: passing, failing, or within its start period.
+For each Deployment with a declared [healthcheck](../language/deployment.md#health-checks), the app detail view MUST show, beside the Deployment's lifecycle state, that it declares one, its `on_failure` response, and its current check state: passing, failing, or within its start period.
 The console MUST show a passing check in its success colour, a failing check in its error colour, and a check within its start period in its warning or neutral colour.
 On hover or focus, the console MUST reveal the healthcheck's `kind`, its `on_failure` response and, for a command healthcheck, a truncated form of its command.
 
@@ -124,7 +124,7 @@ That indicator MUST read as standing within the app, not across apps.
 
 The console MUST offer each shell an app defines, as an action of kind `shell` in its [description](../interface/apps.md#description), and MUST collect values for the shell's declared parameters before opening it.
 It MUST offer a [volume shell](../interface/shells.md#volume-shells) over a single volume from each site volume and each app volume resource it lists, and MUST open it without asking the operator for anything further.
-The console MUST label a volume shell with the volume's display name.
+The console MUST label a volume shell with the volume's [display name](../interface/shells.md#volume-shells).
 
 The console MUST show open shells in a persistent sidebar on the left of its layout, one tab per shell, and MUST let several shells be open at once.
 It MUST fit each terminal to the space it has and send [`/shells/resize`](../interface/shells.md#resizing-a-terminal) when that space changes, with at most one resize request in flight for a shell at a time.

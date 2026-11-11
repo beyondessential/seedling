@@ -14,7 +14,7 @@ Evaluation of a script outside every closure the runtime runs as a [lifecycle op
 
 ### Action context
 
-Evaluation of a script inside a closure the runtime runs as a lifecycle operation, such as an [action closure](action.md#action-declaration) or a [parameter change handler](parameter.md#change-handlers).
+Evaluation of a script inside a closure the runtime runs as a lifecycle operation, such as an [action closure](action.md#action-closure) or a [parameter change handler](parameter.md#change-handlers).
 
 ### Static resource
 

@@ -58,7 +58,7 @@ Each time it starts, the server MUST write its fingerprint, followed by a line f
 A failure to write that file MUST NOT stop the server serving.
 
 > [!NOTE]
-> The published fingerprint lets a process on the same host, such as the web console, pin the server without a fingerprint probe.
+> The published fingerprint lets a process on the same host, such as the [web interface](../overview.md#web-interface), pin the server without a fingerprint probe.
 
 ## Listen addresses
 
@@ -96,7 +96,7 @@ An entry is a fingerprint, then optionally a single space and a label running to
 An entry without a label MUST be given the label `bootstrap`.
 
 The server MUST accept a fingerprint an operator supplies in upper or lower case, optionally prefixed `sha256:` or `SHA256:`, and MUST compare it with the fingerprints it computes in its lowercase form.
-The server MUST refuse an operator-supplied fingerprint that is not 64 hexadecimal digits once any prefix is removed, rather than store a value no key can match.
+The server MUST refuse an operator-supplied fingerprint that is not 64 hexadecimal digits once any prefix is removed.
 
 Authorisation MUST hold for the life of a connection, not only at its handshake.
 When a fingerprint leaves the authorised key set, the server MUST close every connection authenticated with that key, with application error code 0 and the reason `key revoked`.

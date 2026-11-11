@@ -24,7 +24,7 @@ Applies to how the [runtime](../../overview.md#runtime) obtains, stores, selects
 
 ### Managed hostname
 
-A hostname declared by a TLS-terminating ingress, per [ingress termination](../../language/ingress.md#termination), of an [app](../../overview.md#app) whose status is anything other than `NotInstalled`.
+A hostname declared by a TLS-terminating ingress, per [ingress termination](../../language/ingress.md#termination), of an [app](../../overview.md#app) whose [install phase](../../overview.md#install-phase) is not `NotInstalled`.
 
 ### Internal name
 
@@ -84,13 +84,13 @@ The runtime cannot renew a `manual` or `csr` certificate by itself.
 
 ## Policies
 
-A managed hostname that no policy matches MUST obtain its certificate through the [default chain](chains.md#default-chain).
+The runtime MUST obtain the certificate of a managed hostname that no policy matches through the [default chain](chains.md#default-chain).
 A definition declares only that an ingress terminates TLS for a hostname, never which strategy obtains its certificate.
 
 The policies an operator can bind are ACME DNS-01 through a named DNS provider, and the [Canopy-only policy](canopy.md#canopy-only-policy).
 
 A policy names an exact hostname, the catch-all pattern `*`, or a subdomain pattern `*.<suffix>`.
-The runtime MUST refuse a policy whose name is none of these, or whose hostname or suffix is not a valid DNS name.
+The runtime MUST refuse a policy whose pattern is none of these, or whose hostname or suffix is not a valid DNS name.
 An exact pattern MUST match a hostname equal to it, ignoring ASCII case.
 The pattern `*` MUST match every hostname.
 The pattern `*.<suffix>` MUST match every hostname that ends in `.<suffix>` and is longer than it, at any depth: `*.example.com` matches `foo.example.com` and `a.b.example.com`, and not `example.com`.
@@ -117,7 +117,7 @@ The runtime MUST store provider credentials encrypted at rest with the [secret k
 Several policies MAY name the same provider.
 The runtime MUST refuse to delete a provider that any policy names.
 
-The provider kinds and their credentials are listed in [TLSM](../../interface/tls.md).
+The provider kinds and their credentials are listed in [TLSM](../../interface/tls.md#dns-providers).
 
 ## ACME accounts and settings
 
@@ -144,7 +144,7 @@ While none is set, the runtime MUST omit the field.
 > The renewal point is a fraction of each certificate's own validity window, so a shorter profile renews proportionally sooner without further configuration.
 
 A change to the contact email or the profile MUST take effect for the next issuance, without a restart.
-The operator surface for these settings is specified in [TLSM](../../interface/tls.md).
+The operator surface for these settings is specified in [TLSM](../../interface/tls.md#settings).
 
 ## ACME DNS-01 issuance
 
@@ -167,7 +167,7 @@ The runtime MUST NOT request a certificate for such a hostname from a public cer
 
 The runtime MUST store a certificate obtained this way, with its private key, as a runtime-managed certificate of origin `tailscale`.
 It MUST obtain a fresh certificate once the stored one reaches its renewal point.
-Obtaining one MUST pass the same [retry gate](#retry-blocks-and-retries) as any other issuance, and a failure MUST file and clear `cert_issue_failed` as for [ACME DNS-01 issuance](#acme-dns-01-issuance).
+Obtaining one MUST pass the same [retry gate](#retry-blocks-and-retries) as any other issuance, and a failure MUST file and clear the [`cert_issue_failed`](../faults.md#certificate-faults) fault as for [ACME DNS-01 issuance](#acme-dns-01-issuance).
 
 ## Renewal
 
@@ -227,7 +227,7 @@ The runtime MUST record every issuance attempt it makes, successful or not, in a
 | certificate | the certificate stored, on success |
 | error | the failure, on failure |
 
-The log is exposed through the operator interface, per [TLSM](../../interface/tls.md).
+The log is exposed through the Operator Interface, per [TLSM](../../interface/tls.md#issuance-attempts).
 
 ## Coverage
 
@@ -368,8 +368,8 @@ For each managed hostname, the runtime MUST make available to the [Operator Inte
 - any retry block, and any recorded retry not yet consumed;
 - the time of its next expected issuance, and whether that time comes from a suggested window, the one-third rule, the after-failure interval, or an issuance due now.
 
-These values MUST be derived from the decision of [issuance](#issuance), so that the operator sees what the runtime will do.
+These values MUST be derived from the decision of [issuance](#issuance), so that the view matches the issuance the runtime carries out.
 The view MUST be available filtered to the hostnames one app declares.
-A hostname declared only by an app whose status is `NotInstalled` MUST NOT appear.
+A hostname declared only by an app whose install phase is `NotInstalled` MUST NOT appear.
 
-The wire form of the view is specified in [TLSM](../../interface/tls.md).
+The wire form of the view is specified in [TLSM](../../interface/tls.md#hostname-view).

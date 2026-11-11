@@ -64,7 +64,8 @@ The runtime MUST NOT use a stored bundle whose contents do not hash to the hash 
 The runtime MUST be able to reconstruct an app's resource graph as it was at any generation N in the app's generation history, by these steps:
 
 1. Load the bundle referenced by the most recent `register` or `script_update` entry at or before N.
-2. Build the parameter values at N, taking each parameter's value from the most recent entry at or before N that changed it, whether a `param_set`, a `param_unset`, or a `script_update` that changed it alongside its definition. A parameter that was unset by that entry, or that no entry at or before N changed, has no value.
+2. Build the parameter values at N, taking each parameter's value from the most recent entry at or before N that changed it, whether a `param_set`, a `param_unset`, or a `script_update` that changed it alongside its definition.
+   A parameter that was unset by that entry, or that no entry at or before N changed, has no value.
 3. Evaluate the bundle with those parameter values.
 
 If any recorded value needed for step 2 cannot be read, reconstruction MUST fail.

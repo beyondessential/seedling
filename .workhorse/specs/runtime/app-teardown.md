@@ -8,9 +8,9 @@ Applies to the removal of an [app](../overview.md#app)'s resources from a [host]
 
 ## Deregistration
 
-Deregistering an app MUST discard all state the runtime holds under the app's name.
+When it deregisters an app, the runtime MUST discard all state it holds under the app's name.
 That state includes the operator-configured [external service mappings](site-resources.md#external-mappings) and [external volume mappings](site-resources.md#external-mappings) made for the app.
-If any of that state cannot be discarded, the deregistration MUST fail and leave the app registered.
+If the runtime cannot discard any of that state, it MUST fail the deregistration and leave the app registered.
 
 > [!NOTE]
 > An app name is the runtime's identity for an app, so state left under a name is inherited by the next app registered under it.
@@ -18,7 +18,7 @@ If any of that state cannot be discarded, the deregistration MUST fail and leave
 
 ## Uninstall scope
 
-Uninstalling an app MUST affect only the [resources](../overview.md#resource) belonging to that app.
+When it uninstalls an app, the runtime MUST act only on the [resources](../overview.md#resource) belonging to that app.
 
 The runtime MUST identify an app's resources by the [identities](identity.md) it recorded for them, and MUST NOT identify them by the shape of their names.
 The runtime MAY use a name prefix to enumerate candidates, and MUST then match each candidate exactly against a recorded identity before acting on it.
@@ -28,7 +28,7 @@ The runtime MAY use a name prefix to enumerate candidates, and MUST then match e
 
 If the runtime cannot read an app's recorded identities, it MUST NOT advance the app's teardown until it can.
 
-An app having no recorded identities MUST NOT on its own be taken as evidence that its teardown has finished.
+The runtime MUST NOT take an app's lack of recorded identities, on its own, as evidence that its teardown has finished.
 Where the runtime has no recorded identities for an app and cannot rule out that resources of the app remain on the host, it MUST NOT declare the app uninstalled.
 In that case the runtime MUST hold an [`uninstall_unidentifiable_units`](faults.md#app-faults) fault.
 

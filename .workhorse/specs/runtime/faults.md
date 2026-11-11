@@ -35,7 +35,7 @@ A fault deliberately kept active after its trigger has passed, until a named lif
 ## Fault records
 
 A fault is identified by its app, its kind and its subject.
-At most one fault MUST be active for a given app, kind and subject.
+The runtime MUST NOT hold more than one active fault for a given app, kind and subject.
 Filing a fault whose key is already active MUST NOT create a second fault.
 
 A fault's subject MUST be the thing that is faulty, never a part of the fault's description.
@@ -51,8 +51,6 @@ The runtime MUST emit an [event](../interface/events.md) when it files a fault a
 The runtime SHOULD log an error when it files a fault.
 
 ## Filing and clearing
-
-Every fault kind MUST state when it is filed, when it clears, and its shape: condition, event or latched.
 
 The runtime MUST clear a fault no more broadly than it files it.
 An occurrence affecting one subject MUST NOT clear a fault held by another.

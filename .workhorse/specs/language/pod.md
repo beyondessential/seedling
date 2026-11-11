@@ -12,7 +12,7 @@ Applies to the BSL `Pod` interface: the builder methods and semantics every work
 A pod has its own network namespace and holds one container.
 Every type that implements `Pod` also implements [`Container`](container.md).
 [Deployments](deployment.md) and [Jobs](job.md) implement `Pod`.
-Every method in this spec is a [builder method](overview.md#builders) available on each type that implements `Pod`.
+Every method in this spec is a [builder method](overview.md#builder-method) available on each type that implements `Pod`.
 
 ## Service mounts
 

@@ -74,7 +74,7 @@ The server MUST NOT refuse a stored definition, when it loads it again, for exce
 
 ## Seedling version support
 
-When a request would install a definition into an app, the server MUST refuse the definition with `unsupported_seedling` if the running Seedling version does not satisfy the definition's [Seedling version requirement](../language/bundle.md#seedling-version-requirement), and MUST store nothing.
+When a request would make a definition an app's definition, the server MUST refuse the definition with `unsupported_seedling` if the running Seedling version does not satisfy the definition's [Seedling version requirement](../language/bundle.md#seedling-version-requirement), and MUST store nothing.
 The error's `message` MUST name the requirement and the running version.
 
 The server MUST check the version requirement before any other part of the metadata, so that a bundle written for a later Seedling is reported as unsupported rather than as malformed.
@@ -82,7 +82,7 @@ The server MUST check the version requirement before any other part of the metad
 ## Content hash computation
 
 A bundle's content hash MUST be `sha256:` followed by the lowercase hexadecimal SHA-256 digest of the bundle's canonical encoding.
-The canonical encoding is the 19 bytes `seedling-bundle-v1` followed by a zero byte, then, for each file in ascending byte order of its normalised bundle path:
+The canonical encoding is the 18 ASCII bytes `seedling-bundle-v1` followed by a zero byte, then, for each file in ascending byte order of its normalised bundle path:
 
 1. the length of the path in bytes, as an unsigned 64-bit integer in network byte order;
 2. the path, in UTF-8;

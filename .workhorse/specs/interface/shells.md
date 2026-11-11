@@ -45,7 +45,7 @@ A client opens a [shell session](#shell-session) on one of an app's [shells](../
 | `params` | object of strings | no | parameter values for the shell, keyed by parameter name |
 
 The server MUST reject a request naming an app that is not registered with `not_found`.
-The server MUST reject the request with `not_installed` unless the app is `Installed`.
+The server MUST reject the request with `not_installed` unless the app's [install phase](../overview.md#install-phase) is `Installed`.
 The server MUST reject a request naming a shell the app does not declare with `not_found`.
 A `params` key ending in `_volume` or `_filename` is [reserved](../language/action.md#param-delivery), and the server MUST reject a request carrying one with `requirements_invalid`.
 Where the shell declares parameters, the server MUST validate `params` and fill in defaults as for [install parameters](actions.md#install-parameters).
@@ -65,7 +65,7 @@ The server MUST open the stdout and stderr streams as server-initiated unidirect
 The server MUST write the session terminal's output to the stdout stream.
 The server MAY write its own diagnostics about the session to the stderr stream.
 
-The server MUST treat every byte the client sends on the session stream after the request line as stdin for the session's job, including bytes that arrived in the same read as the request line.
+The server MUST treat every byte the client sends on the session stream after the [opening line](wire.md#opening-line) as stdin for the session's job.
 
 The server MUST NOT write any other frame on the session stream between the handshake response and the [exit frame](#session-end).
 
@@ -80,7 +80,8 @@ A [`/shells/resize`](#resizing-a-terminal) received before the terminal exists M
 A session stopped before its job runs MUST end without the job having started, and the server MUST remove every container and network the session had created.
 A session stopped while the shell's script runs MUST end only once the script has stopped, so that the script creates nothing after the session has ended.
 
-A session that fails after its handshake response, for example because the shell's script fails, before or after its attachment ends, the script calls `shell.error`, the image cannot be pulled or the job cannot be started, MUST end with an `exit_code` of `-1`.
+A session that fails after its handshake response MUST end with an `exit_code` of `-1`.
+Such a failure includes the shell's script failing, before or after its attachment ends, the script calling `shell.error`, the image failing to pull, and the job failing to start.
 The server MUST write the reason for such a failure to the stderr stream before closing it.
 
 ## Session end
@@ -108,7 +109,7 @@ The runtime MUST clean up resources created within the session as [shell resourc
 
 ## Session events
 
-When the server has written a session's handshake response, it MUST emit a `ShellStarted` event on the [event feed](events.md).
+When the server has written a session's handshake response, it MUST emit a `ShellStarted` [event](events.md#session-events).
 Every session that emitted `ShellStarted` MUST emit a `ShellExited` event when it ends, including a session that ends before its job has started.
 
 ## Resizing a terminal

@@ -83,7 +83,7 @@ If a policy references the provider, the runtime MUST refuse the request with `r
 ## Policies
 
 A policy binds a [hostname pattern](../runtime/tls/certificates.md#hostname-pattern) to a strategy for obtaining certificates.
-A hostname that no policy matches follows the default chain of [the default chain](../runtime/tls/chains.md#default-chain).
+A hostname that no policy matches follows the [default chain](../runtime/tls/chains.md#default-chain).
 A policy takes effect as [the policy rules](../runtime/tls/certificates.md#policies) specify.
 
 `/tls/policies/list` takes no parameters.
@@ -107,7 +107,7 @@ The result is `{ ok, auto_issue_kicked }`, where `ok` is `true` and `auto_issue_
 > A wildcard pattern names no hostname to issue for; an operator issues for each hostname it matches with [ACME-DNS issuance](#operator-driven-issuance), or lets the runtime issue as ingresses declaring matching hostnames appear.
 
 `/tls/policies/set-canopy` takes `hostname`, a hostname pattern.
-It binds the pattern to the Canopy-only policy of [the Canopy-only policy](../runtime/tls/canopy.md#canopy-only-policy), replacing any policy for the same pattern.
+It binds the pattern to the [Canopy-only policy](../runtime/tls/canopy.md#canopy-only-policy), replacing any policy for the same pattern.
 If `hostname` is not a hostname pattern, the runtime MUST refuse the request with `requirements_invalid`.
 Setting the policy MUST NOT by itself replace a usable certificate a matching hostname already holds.
 That certificate serves until its renewal point or an operator [retry](#operator-driven-issuance).
@@ -151,7 +151,9 @@ The hostnames a certificate serves MUST be decided by [SAN coverage](../runtime/
 
 `san_dns_names` MUST be `null` when the row holds no certificate or its certificate cannot be parsed.
 `requested_hostnames` MUST be `null` for a row that was not created by a [CSR request](#certificate-signing-requests).
-A CA may sign a name set other than the one requested, so `requested_hostnames` can differ from the names the certificate covers.
+
+> [!NOTE]
+> A CA may sign a name set other than the one requested, so `requested_hostnames` can differ from the names the certificate covers.
 
 The runtime MUST compute `requested_not_covered` under SAN coverage, so that clients need not apply the rule themselves.
 It MUST be empty when the certificate covers every requested hostname.
@@ -194,7 +196,7 @@ The result is an object with these members.
 | `id` | integer | the new stored certificate's id |
 | `primary_san` | string | the leaf's primary SAN |
 | `san_dns_names` | array of strings | the DNS names in the leaf's SAN extension |
-| `warnings` | array of strings | `self_signed` when the leaf is [self-signed](../runtime/tls/certificates.md#operator-supplied-certificates), and `not_yet_valid` when its `notBefore` is in the future |
+| `warnings` | array of strings | `self_signed` when the leaf is [self-issued](../runtime/tls/certificates.md#operator-supplied-certificates), and `not_yet_valid` when its `notBefore` is in the future |
 
 `/tls/certificates/delete` takes `id` and removes that stored certificate.
 The result is `{ "ok": true }`.
@@ -271,7 +273,7 @@ The runtime MUST check the state and delete the row in one atomic step, so that 
 `/tls/certificates/issue-acme-dns` takes `hostname` and runs ACME issuance over DNS-01 for it, returning when the issuance finishes.
 The hostname's policy MUST be an `acme_dns` policy, matched as [policy matching](../runtime/tls/certificates.md#policies) specifies.
 The issuance MUST use the contact email and certificate profile of the [settings](#settings).
-It MUST proceed even when the hostname's certificate is not due for renewal, or the runtime is waiting out the delay that follows a failed attempt.
+It MUST proceed even when the hostname's certificate is not due for renewal, or the runtime is waiting out the [after-failure interval](../runtime/tls/certificates.md#after-failure-interval).
 It MUST be logged as an [issuance attempt](#issuance-attempts) triggered by `manual`.
 The issued certificate MUST retire the certificates it replaces in full.
 
@@ -326,7 +328,7 @@ Otherwise it MUST carry these members.
 | `active` | a certificate serves the hostname and its `notAfter` has not passed |
 | `expired` | the certificate serving the hostname is past its `notAfter` |
 | `pending` | the runtime is obtaining a certificate the hostname lacks, or acting on a queued operator retry |
-| `error` | the runtime cannot obtain a certificate for the hostname until something changes, or is waiting out the delay after a failed attempt |
+| `error` | the runtime cannot obtain a certificate for the hostname until something changes, or is waiting out the after-failure interval |
 | `blocked` | a retry block is set for the hostname |
 | `default` | none of the above: the hostname follows its chain with nothing serving it and nothing in progress |
 
@@ -378,9 +380,9 @@ The runtime MUST NOT derive `last_issuance` from an issuance attempt whose certi
 | value | meaning |
 | --- | --- |
 | `ari` | `next_issuance_at` is the start of the certificate's ARI suggested window |
-| `fallback` | `next_issuance_at` is the runtime's lifetime-fraction renewal point |
+| `fallback` | `next_issuance_at` is the [renewal point](../runtime/tls/certificates.md#renewal-point) given by the one-third rule |
 | `immediate` | issuance is due as soon as the runtime acts, and `next_issuance_at` is `null` |
-| `debounce` | `next_issuance_at` is when the delay after a failed attempt ends |
+| `debounce` | `next_issuance_at` is when the after-failure interval ends |
 
 ## Issuance attempts
 

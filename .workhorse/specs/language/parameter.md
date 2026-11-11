@@ -47,7 +47,7 @@ Calling a schema method again MUST replace the value it set before.
 | `secret(secret: bool)` | whether the value is [secret](#secret-parameters) | implied by `kind` |
 
 `kind` MUST accept `"text"`, `"multiline"`, `"email"`, `"password"`, `"weak-password"` and `"random"`, each with the meaning [param kinds](action.md#param-kinds) give it.
-`kind` MUST throw when given `"volume"`, which only action and shell parameters accept, or any value it does not define.
+`kind` MUST throw when given `"volume"`, which only action and shell [params](action.md#param-schemas) accept, or any value it does not define.
 
 ## Secret parameters
 
@@ -73,7 +73,7 @@ Storing the value the parameter already holds is not a change.
 The runtime MUST NOT invoke the handler during the app's initial install.
 
 A script MAY pass a closure taking up to two parameters.
-The runtime MUST call `fn` with as many of these arguments as it takes, in this order: the [runtime instance](rt.md#handle-availability), then an `App` named here `old`.
+The runtime MUST call `fn` with as many of these arguments as it takes, in this order: the [runtime handle](rt.md#runtime-handle), then an `App` named here `old`.
 
 `old` MUST reflect the previous [generation](../overview.md#generation): the previous generation's definition, evaluated with the parameter values held before the change.
 When the change arrives together with a new definition, the runtime MUST invoke the handler the new definition registers, and `old` MUST reflect the previous definition at the previous values.
@@ -84,6 +84,7 @@ The static resources and actions reachable through `old` MUST reflect their defi
 Calling a resource method on `old` MUST NOT affect the app.
 
 If the runtime cannot reconstruct the previous generation, it MUST NOT invoke the handler with an `old` that does not reflect that generation.
+The outcome of the operation is then specified by [initiating events](../runtime/operations.md#initiating-events).
 
 ## Validators
 
@@ -99,7 +100,7 @@ Where the script threw a value, that value MUST be the reason reported for the r
 The runtime MUST run a validator only while its parameter would be set.
 A parameter that would be unset passes, and its `required` flag governs whether it needs a value.
 
-The runtime MUST NOT give a validator a runtime instance.
+The runtime MUST NOT give a validator a runtime handle.
 Within a validator, declaring a resource, calling a builder method on any resource, and calling any other method that changes the app MUST throw.
 
 > [!NOTE]

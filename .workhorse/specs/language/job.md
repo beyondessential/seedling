@@ -14,7 +14,7 @@ A [resource](../overview.md#resource) whose instances each run one container wor
 
 ## Declaration
 
-A script declares a Job with `app.job(name: string)`, which returns a `Job` [builder](overview.md#builders).
+A script declares a Job with `app.job(name: string)`, which returns a `Job` [builder](overview.md#builder).
 A `Job` implements the [Pod](pod.md) interface, and so the [Container](container.md) interface.
 
 ## Instances
@@ -26,7 +26,7 @@ Two concurrent runs of the same action closure MUST NOT share or collide on an i
 
 Each call to [`shell.attach`](action.md#shell-control) MUST start its own instance of the Job it attaches to, so that several shell sessions may run against one Job at once.
 
-How the runtime identifies each instance is specified by [Job instance identity](../runtime/identity.md#job-instances) and [shell Job identity](../runtime/identity.md#job-instances).
+How the runtime identifies each instance, including one a shell starts, is specified by [Job instance identity](../runtime/identity.md#job-instances).
 
 ## Deadline
 

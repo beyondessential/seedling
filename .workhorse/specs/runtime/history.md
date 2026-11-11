@@ -4,7 +4,7 @@ id: HIST
 
 # Runtime history
 
-Applies to the records the [runtime](../overview.md#runtime) keeps of what it has observed on a [host](../overview.md#host) and what it has done there.
+Applies to the records the [runtime](../overview.md#runtime) keeps of its observations of a [host](../overview.md#host) and of the operations it performs there.
 
 ## Terminology
 
@@ -90,6 +90,6 @@ The runtime MUST record in the action execution log each runtime call a lifecycl
 | satisfied | for each barrier, whether it has been satisfied |
 
 Before [`Action.invoke()`](../language/action.md#action-invocation) runs the called closure, the runtime MUST record an entry for the invocation holding the called action's name and its validated parameter map.
-Replay of that entry is specified by [composition replay](operations.md#sub-action-parameters).
+Replay of that entry is specified by [sub-action parameters](operations.md#sub-action-parameters).
 
 The action execution log MUST hold enough to [replay](suspension.md#replay) an interrupted lifecycle operation from its beginning and fast-forward to the point of interruption.

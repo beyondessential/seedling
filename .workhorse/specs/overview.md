@@ -73,7 +73,8 @@ The key words MUST, MUST NOT, REQUIRED, SHALL, SHALL NOT, SHOULD, SHOULD NOT, RE
 | [Secure Contexts](https://www.w3.org/TR/secure-contexts/) | loopback origins, under [WEB](web/serving.md) |
 | [WebTransport](https://www.w3.org/TR/webtransport/) and [WebTransport over HTTP/3](https://datatracker.ietf.org/doc/draft-ietf-webtrans-http3/) (Internet-Draft) | the web interface's session transport, under [WEB](web/serving.md) |
 | [Tailscale Serve identity headers](https://tailscale.com/kb/1312/serve) | Tailscale authentication, under [WEB](web/serving.md) |
-| [RFC 1035](https://www.rfc-editor.org/rfc/rfc1035) and [RFC 1123](https://www.rfc-editor.org/rfc/rfc1123) | DNS names, under [ING](language/ingress.md), [DNS](runtime/resolver.md), [SITE](runtime/site-resources.md) |
+| [RFC 1035](https://www.rfc-editor.org/rfc/rfc1035) | DNS names and resource records, under [ING](language/ingress.md), [DNS](runtime/resolver.md), [SITE](runtime/site-resources.md) |
+| [RFC 1123](https://www.rfc-editor.org/rfc/rfc1123) | host name labels, under [ING](language/ingress.md) |
 | [RFC 3596](https://www.rfc-editor.org/rfc/rfc3596) | AAAA records, under [SITE](runtime/site-resources.md) |
 | [RFC 4291](https://www.rfc-editor.org/rfc/rfc4291) | IPv6 addressing, under [NAT64](runtime/nat64.md) |
 | [RFC 4193](https://www.rfc-editor.org/rfc/rfc4193) | unique local IPv6 addresses, under [INFRA](runtime/infrastructure.md) |
@@ -81,6 +82,10 @@ The key words MUST, MUST NOT, REQUIRED, SHALL, SHALL NOT, SHOULD, SHOULD NOT, RE
 | [RFC 6147](https://www.rfc-editor.org/rfc/rfc6147) | DNS64, under [NAT64](runtime/nat64.md), [CONST](language/constants.md) |
 | [RFC 6052](https://www.rfc-editor.org/rfc/rfc6052) | IPv4-embedded IPv6 addresses, under [NAT64](runtime/nat64.md), [SITE](runtime/site-resources.md) |
 | [RFC 7050](https://www.rfc-editor.org/rfc/rfc7050) | NAT64 prefix discovery, under [NAT64](runtime/nat64.md) |
+| [systemd](https://systemd.io/), [systemd.unit(5)](https://www.freedesktop.org/software/systemd/man/latest/systemd.unit.html), [systemd.slice(5)](https://www.freedesktop.org/software/systemd/man/latest/systemd.slice.html), [systemd-journald.service(8)](https://www.freedesktop.org/software/systemd/man/latest/systemd-journald.service.html) and [systemd-resolved.service(8)](https://www.freedesktop.org/software/systemd/man/latest/systemd-resolved.service.html) | supervision, slices, the journal and the host resolver on Linux, under [LINUX](platform/linux.md) |
+| [cgroup v2](https://docs.kernel.org/admin-guide/cgroup-v2.html) | control groups on Linux, under [LINUX](platform/linux.md) |
+| [proc(5)](https://man7.org/linux/man-pages/man5/proc.5.html) | OOM score adjustment on Linux, under [LINUX](platform/linux.md) |
+| [XDG Base Directory Specification](https://specifications.freedesktop.org/basedir-spec/latest/) | per-user state on Linux, under [LINUX](platform/linux.md) |
 
 ## Terminology
 
@@ -129,7 +134,6 @@ Defined in [TRN](interface/transport.md#fingerprint).
 ### App
 
 A named unit of software registered on a host, defined by one definition bundle.
-Defined in [APP](language/app.md).
 
 ### Definition bundle
 
@@ -158,7 +162,7 @@ Defined in [APP](language/app.md#static-resource).
 
 ### Action context
 
-Evaluation inside a closure the runtime runs as part of a lifecycle operation.
+Evaluation inside a closure the runtime runs as a lifecycle operation.
 Defined in [APP](language/app.md#action-context).
 
 ### Action
@@ -168,7 +172,7 @@ Defined in [ACN](language/action.md#action).
 
 ### Action closure
 
-A closure a script hands the runtime to run as a lifecycle operation, such as an action's, a shell's, the install action's or a parameter's change handler.
+A closure a script hands the runtime to run as a lifecycle operation: the closure of an action, a shell or the install action, or a parameter's change handler.
 Defined in [ACN](language/action.md#action-closure).
 
 ### Runtime handle
@@ -193,7 +197,7 @@ Defined in [VOL](language/volume.md#volume).
 
 ### External volume
 
-A volume the host supplies to an app under a name the app declares.
+A volume the runtime supplies to an app under a name the app declares.
 Defined in [VOL](language/volume.md#external-volume).
 
 ### Site volume
@@ -203,13 +207,13 @@ Defined in [SITE](runtime/site-resources.md#site-volume).
 
 ### Site ingress
 
-A hostname an operator or provider manages independently of any app.
+A hostname an operator or a discovery provider manages independently of any app.
 Defined in [SITE](runtime/site-resources.md#site-ingress).
 
 ### Generation
 
 A number identifying one state of an app's definition and parameter values.
-Defined in [GEN](runtime/generation.md).
+Defined in [GEN](runtime/generation.md#generation-numbers).
 
 ### Generation history
 
@@ -224,7 +228,7 @@ Defined in [RCN](runtime/reconciliation.md#desired-state).
 ### Lifecycle state
 
 The stage a resource instance has reached between being wanted and being cleaned up.
-Defined in [LCY](runtime/lifecycle.md).
+Defined in [LCY](runtime/lifecycle.md#lifecycle-states).
 
 ### Install phase
 
@@ -234,7 +238,7 @@ An install moves an app through `Installing` to `Installed`, as [ACI](interface/
 ### Lifecycle operation
 
 A single run of an action closure directing the runtime through a change to an app.
-Defined in [OPS](runtime/operations.md).
+Defined in [OPS](runtime/operations.md#operation).
 
 ### World observation history
 

@@ -14,7 +14,7 @@ A [resource](../overview.md#resource) holding a directory of data that container
 
 ### External volume
 
-A volume supplied to an app by the runtime under a name, rather than declared and owned by the app.
+A volume the host supplies to an app under a name the app declares.
 
 ### Declared file write
 
@@ -22,7 +22,7 @@ A file a script declares to be written into a volume, as a path within the volum
 
 ## Declaration
 
-A script declares a volume with `app.volume(name: string)`, or an anonymous volume with `app.volume()`, each of which returns a `Volume` [builder](overview.md#builders).
+A script declares a volume with `app.volume(name: string)`, or an anonymous volume with `app.volume()`, each of which returns a `Volume` [builder](overview.md#builder).
 A container mounts a volume as [volume mounts](container.md#volume-mounts) specifies.
 
 ## Storage options
@@ -67,10 +67,10 @@ An `ExternalVolume` has no builder methods other than [`description`](overview.m
 A container mounts an external volume as [volume mounts](container.md#volume-mounts) specifies.
 
 The runtime MUST resolve an external volume's name against the bindings of the [lifecycle operation](../overview.md#lifecycle-operation) in progress, if any, and then against the host's external volume mappings.
-An operation's bindings are made by the runtime for that operation, and are not configurable by operators.
+The runtime makes an operation's bindings for that operation.
 A name resolved against an operation's binding MUST refer to the bound storage until the operation ends, and to nothing after it.
 
 > [!NOTE]
-> An operation's binding names are generated for each invocation and reach the action closure in reserved parameters, as [operation volume parameters](../runtime/operations.md#operation-scoped-volumes) specifies.
+> An operation's binding names are generated for each invocation and reach the action closure under [reserved param keys](action.md#param-delivery), as [operation volume params](../runtime/operations.md#operation-scoped-volumes) specifies.
 
 An external volume that resolves to nothing is handled as [an unmapped external volume](../runtime/faults.md#workload-faults) specifies.

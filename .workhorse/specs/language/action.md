@@ -154,7 +154,7 @@ That generator's default output MUST be 32 random bytes written as 64 lowercase 
 ### Volume params
 
 The `volume` kind MUST be accepted in the param schemas of actions and shells.
-It MUST throw in the install action's param schema, and a [parameter's kind](parameter.md#schema) does not accept it.
+A `volume` param in the install action's param schema MUST throw, and a [parameter's kind](parameter.md#schema) does not accept it.
 
 The runtime MUST reject an invocation whose `volume` param names a site volume that does not exist.
 When it dispatches the invocation, the runtime MUST bind the named site volume for the operation, as [operation volume params](../runtime/operations.md#operation-scoped-volumes) specify.
@@ -216,7 +216,8 @@ If the closure returns without having called `shell.attach`, or fails, the runti
 `shell.error(message: string)` ends the session with an error carrying `message`, and MUST throw to end the closure.
 
 > [!NOTE]
-> A shell is a scripted procedure with an interactive step: the closure can prepare what the operator needs before attaching, and act on how the session went once it has ended.
+> A shell is a scripted procedure with an interactive step.
+> The closure can prepare for the session before attaching, and act on the session's outcome once it has ended.
 
 ### ShellExit
 
@@ -245,7 +246,8 @@ If that validation fails, the runtime MUST NOT run the closure, and MUST file a 
 
 ### Schedule expressions
 
-A schedule expression is five fields separated by whitespace, minute, hour, day of month, month and day of week, optionally followed by a time zone.
+A schedule expression is five fields separated by whitespace, optionally followed by a time zone.
+The fields are, in order, minute, hour, day of month, month and day of week.
 Each field MUST be accepted as [POSIX `crontab`](https://pubs.opengroup.org/onlinepubs/9799919799/utilities/crontab.html) defines it, with these extensions:
 
 | syntax | field | meaning |

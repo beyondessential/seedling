@@ -21,10 +21,9 @@ The server MUST clamp `scale` to the deployment's declared scale bounds, and a r
 
 The result is `{ "scale": <integer>, "bounds": { "low": <integer>, "high": <integer> } }`, giving the scale stored and the deployment's declared bounds.
 
-The runtime MUST store the scaling decision durably, and MUST use it as the deployment's effective scale after the daemon restarts.
+The runtime MUST store the scaling decision durably, and MUST use it for the deployment's [effective scale](../runtime/autonomous.md#effective-scale) after the daemon restarts.
 
 Uninstalling an app MUST discard every scaling decision stored for it.
-A deployment with no stored decision has its declared lower bound as its effective scale.
 
 [`/apps/show`](apps.md#resources) reports, for each deployment, a `scale` object with these members.
 
@@ -32,11 +31,11 @@ A deployment with no stored decision has its declared lower bound as its effecti
 | --- | --- | --- |
 | `low` | integer | the declared lower bound |
 | `high` | integer | the declared upper bound |
-| `current` | integer or null | the effective scale: the stored decision clamped to the declared bounds, or the lower bound where no decision is stored |
+| `current` | integer or null | the effective scale |
 
 If the stored decision cannot be read, `current` MUST be `null`, as [unreadable scaling decisions](../runtime/autonomous.md#unreadable-scale) requires, and `low` and `high` are still reported.
 A client MUST NOT take a `null` `current` as a scale.
-A client adjusting a deployment by a step MUST report the scale as unavailable rather than count from zero or from a bound.
+If `current` is `null`, a client adjusting a deployment by a step MUST report the scale as unavailable, and MUST NOT count from zero or from a bound.
 
 ## App priority
 

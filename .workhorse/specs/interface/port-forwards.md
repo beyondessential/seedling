@@ -13,6 +13,7 @@ Applies to port forwards, through which an operator's client reaches a port of a
 | bidirectional stream, finish, reset, stop sending, application error code | as defined by QUIC, [RFC 9000](https://www.rfc-editor.org/rfc/rfc9000) sections 2, 3 and 19 |
 | QUIC datagram | an unreliable DATAGRAM frame payload, as defined by [RFC 9221](https://www.rfc-editor.org/rfc/rfc9221) |
 | maximum datagram size | the largest QUIC datagram payload an endpoint can currently send on a path, as [RFC 9221](https://www.rfc-editor.org/rfc/rfc9221) section 5 describes |
+| EDNS(0) payload size | the UDP payload size a DNS requester advertises, as defined by [RFC 6891](https://www.rfc-editor.org/rfc/rfc6891) section 6.2.3 |
 
 ## Terminology
 
@@ -43,7 +44,7 @@ A service port is declared for `tcp` when a pod in the app attaches to it with [
 
 The server MUST reject a `proto` other than `"tcp"` or `"udp"` with `requirements_invalid`.
 The server MUST reject a request naming an app that is not registered with `not_found`.
-The server MUST reject the request with `not_installed` unless the app is `Installed`.
+The server MUST reject the request with `not_installed` unless the app's [install phase](../overview.md#install-phase) is `Installed`.
 The server MUST reject a request naming a service the app does not declare, or a port the service does not declare for `proto`, with `not_found`.
 For a UDP forward, the server MUST open its relay toward the service before it responds, and MUST reject the request with `internal` if it cannot.
 A rejected request MUST create no forward.
@@ -91,7 +92,7 @@ The server MUST report each of the following by a status message:
 
 A client carries each TCP connection through a TCP forward on its own [forward data stream](wire.md#port-forward-data).
 When the server accepts a forward data stream, it MUST open a TCP connection to the service's address at the forward's port and relay bytes between the two.
-The server MUST deliver to the service any bytes that followed the stream's header line in the same read.
+The server MUST deliver to the service every byte that follows the stream's [opening line](wire.md#opening-line).
 The client MUST relay each local connection it accepts to its own forward data stream in the same way, so that both ends of the tunnel behave alike.
 
 Each end MUST relay each direction independently, so that data waiting to be delivered in one direction never holds up the other.
@@ -144,7 +145,7 @@ When a forward ends, the server MUST close all of its tunnelled connections, fin
 
 ## Forward events
 
-When the server has written a forward's response, it MUST emit a `ForwardStarted` event on the [event feed](events.md).
+When the server has written a forward's response, it MUST emit a `ForwardStarted` [event](events.md#session-events).
 When a forward ends for any reason, the server MUST emit a `ForwardStopped` event.
 
 ## Listing forwards

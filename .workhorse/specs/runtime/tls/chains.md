@@ -59,16 +59,16 @@ It serves for as long as [certificate selection](certificates.md#certificate-sel
 
 ## Cycles
 
-A cycle MUST start for a hostname when it has no usable certificate, and when the certificate serving it, of whatever origin, reaches its [renewal point](certificates.md#renewal-point).
-A hostname whose serving certificate is usable and has not reached its renewal point MUST be left alone, whatever its chain would now resolve to.
+The runtime MUST start a cycle for a hostname when it has no usable certificate, and when the certificate serving it, of whatever origin, reaches its [renewal point](certificates.md#renewal-point).
+The runtime MUST leave alone a hostname whose serving certificate is usable and has not reached its renewal point, whatever its chain would now resolve to.
 A change in which strategies are available, such as an offer connecting, an app gaining a Canopy type or a policy being set, MUST NOT start a cycle.
 
 > [!NOTE]
 > Replacing a working certificate early spends the issuing authority's capacity for no gain, and leaves no fallback if the new source then fails.
 
-A certificate the runtime cannot renew by itself, such as a `manual` upload, MUST start a cycle at its renewal point in the same way, and MUST keep serving until a replacement outranks it.
+The runtime MUST start a cycle in the same way at the renewal point of a certificate it cannot renew by itself, such as a `manual` upload, and MUST keep serving that certificate until a replacement outranks it.
 
-If the runtime cannot read what the ingress proxy holds for a hostname, it MUST NOT treat the hostname as having no certificate, and MUST NOT start a cycle on that account.
+If the runtime cannot read the certificate the ingress proxy holds for a hostname, it MUST NOT treat the hostname as having no certificate, and MUST NOT start a cycle on that account.
 An operator retry MUST start a cycle regardless.
 
 The runtime MUST record durably, for a hostname in a cycle, any position the clock does not determine: a refusal, a revocation, and an open order.
@@ -99,7 +99,7 @@ A failure, a timeout, an authority that could not be reached, and a strategy tha
 ## Hostnames with no certificate
 
 A hostname has no certificate to replace when it has never had one, or when its last one has expired.
-Such a hostname MUST NOT wait for a fall-through point.
+The runtime MUST NOT make such a hostname wait for a fall-through point.
 
 A certificate revoked by its issuer, while its `notAfter` lies ahead, MUST still count as the certificate being replaced, and [Canopy revocation](canopy.md#revocation) applies.
 
@@ -122,7 +122,7 @@ The ingress proxy MUST NOT order or renew a certificate through `acme_http01` fo
 The proxy's own renewal schedule therefore MUST NOT start a cycle, and the proxy MUST NOT give a hostname whose chain begins with `canopy` an HTTP-01 certificate while Canopy is its responsible strategy.
 
 The runtime MUST NOT take a certificate the proxy holds out of service to enforce this.
-For a hostname whose proxy-held certificate must be held back, the runtime MUST instead set the proxy's renewal to begin no earlier than the moment the strategies before `acme_http01` reach their fall-through points.
+For a hostname whose proxy-held certificate needs holding back, the runtime MUST instead set the proxy's renewal to begin no earlier than the moment the strategies before `acme_http01` reach their fall-through points.
 
 Where no fall-through point says when `acme_http01` becomes responsible, as for a hostname under the Canopy-only policy, the runtime MUST hold the proxy's renewal back until one ten-thousandth of the held certificate's validity window remains, and no further.
 

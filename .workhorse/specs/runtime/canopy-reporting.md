@@ -18,8 +18,8 @@ An app relies on Canopy while its current definition declares a [Canopy applicat
 
 ## Canopy access
 
-Whether Canopy access is enabled MUST be stored durably and survive restarts.
-A host that has never been configured MUST have Canopy access enabled.
+The runtime MUST store durably whether Canopy access is enabled.
+The runtime MUST treat Canopy access as enabled on a host where it has never been set.
 The runtime MUST record when access last went from disabled to enabled.
 
 > [!NOTE]
@@ -33,7 +33,10 @@ The runtime MUST run a report tick every 60 seconds for as long as it runs.
 On each tick, while Canopy access is enabled and at least one [offer](../interface/canopy-relay.md#offers) is live, the runtime MUST send one report.
 While access is disabled or no offer is live, the runtime MUST NOT attempt a report, and MUST NOT open a connection of its own to reach Canopy.
 
-The absence of an offer is a deployment choice, and MUST NOT raise a fault except for apps relying on Canopy, as [missing offers](#missing-offers) specifies.
+The runtime MUST NOT file a fault because no offer is live, except against apps relying on Canopy, as [missing offers](#missing-offers) specifies.
+
+> [!NOTE]
+> Running a host with no client offering Canopy is a deployment choice.
 
 Every request to Canopy MUST travel through the [relay](../interface/canopy-relay.md#relay-streams).
 Paths below are relative to the Canopy base URL the offering client resolves.
@@ -71,13 +74,13 @@ The machine checks are a fixed set describing Seedling itself, so that Canopy's 
 
 | check | `passed` | `warning` | `failed` | detail members |
 | --- | --- | --- | --- | --- |
-| `health/apps` | no app is `Degraded` or `Faulted` | an app is `Degraded`, none `Faulted` | an app is `Faulted` | `degraded` and `faulted`, arrays of app names; `total`, the number of apps |
+| `health/apps` | no app is `degraded` or `faulted` | an app is `degraded`, none `faulted` | an app is `faulted` | `degraded` and `faulted`, arrays of app names; `total`, the number of apps |
 | `health/faults` | no fault is active | | a fault is active | `count`, the number of active faults; `kinds`, their distinct kinds |
 | `health/proxy` | the ingress proxy is running | | the ingress proxy is not running | |
 | `health/resolver` | the resolver is running | | the resolver is not running | |
 
-App statuses are those of [app status](../interface/apps.md#status-derivation).
-An app that is `NotInstalled`, `Installing`, `Deregistering` or `Operating` MUST NOT affect the result of `health/apps`.
+App statuses, and their names in a report, are those of [app status](../interface/apps.md#status-derivation).
+An app that is `not_installed`, `installing`, `uninstalling` or `operating` MUST NOT affect the result of `health/apps`.
 
 If the runtime cannot determine a check's result, it MUST report the check as `broken`, and MUST NOT report it as `failed`.
 A `broken` check MUST carry a `reason` detail member saying why.
@@ -96,8 +99,6 @@ A `broken` check MUST carry a `reason` detail member saying why.
 | `appsByStatus` | object | the number of apps in each status, keyed by status name |
 | `activeOperations` | integer | the number of [lifecycle operations](../overview.md#lifecycle-operation) in progress |
 | `activeFaults` | integer | the number of active [faults](../overview.md#fault) |
-
-The status names are `not_installed`, `installing`, `uninstalling`, `operating`, `running`, `degraded` and `faulted`, for the app statuses `NotInstalled`, `Installing`, `Deregistering`, `Operating`, `Running`, `Degraded` and `Faulted`.
 
 The report MUST NOT carry the host's name, the host's uptime, or the version of any app.
 Those describe the host, and the agent that owns them reports them.
@@ -124,20 +125,20 @@ The runtime MUST grade an application's `health/app` check from the app's status
 
 | status | result |
 | --- | --- |
-| `Running` | `passed` |
-| `Degraded` | `warning` |
-| `Faulted` | `failed` |
-| `Operating` | the result last graded before the operation began, or `skipped` if there is none |
-| `NotInstalled`, `Installing`, `Deregistering` | `skipped` |
+| `running` | `passed` |
+| `degraded` | `warning` |
+| `faulted` | `failed` |
+| `operating` | the result last graded before the operation began, or `skipped` if there is none |
+| `not_installed`, `installing`, `uninstalling` | `skipped` |
 
 The runtime MUST record each `passed`, `warning` or `failed` result durably, so that a restart during an operation does not change the result the operation reports.
-When an app becomes `NotInstalled`, the runtime MUST discard its recorded result.
+When an app becomes `not_installed`, the runtime MUST discard its recorded result.
 
 > [!NOTE]
 > A lifecycle operation is neither a failure nor evidence of recovery.
 > Canopy closes a check's issue when the check is `skipped`, so an operating app carries its earlier result instead.
 
-The check's detail members are `status`, the app's status name as in [machine detail](#machine-detail), and `faults`, the app's active faults.
+The check's detail members are `status`, the app's status name, and `faults`, the app's active faults.
 Each fault is an object with members `kind`, `description`, and, where the fault is filed against a resource, `resource`, written `<type>/<name>`, or whichever of the two is recorded.
 
 ## Report response
@@ -163,5 +164,5 @@ A restart MUST NOT clear the fault.
 
 > [!NOTE]
 > A short absence, such as the offering client restarting, files nothing.
-> The fault marks a host that has gone long enough without an offer to fall behind on what its apps need from Canopy.
+> The fault marks a host that has gone long enough without an offer to fall behind on the Canopy requests its apps depend on.
 > Disabling access is an operator's visible decision, and files nothing.

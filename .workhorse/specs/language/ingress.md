@@ -27,7 +27,7 @@ An externally reachable endpoint of an app, identified by a hostname and a port,
 
 ## Declaration
 
-A script declares an ingress with `service.ingress(hostname: string, port: number)`, which returns an `Ingress` [builder](overview.md#builders).
+A script declares an ingress with `service.ingress(hostname: string, port: number)`, which returns an `Ingress` [builder](overview.md#builder).
 `httpService.ingress(hostname, port)` is equivalent, as [HTTP services](http-service.md#declaration) specifies.
 A `port` MUST be validated as a [port number](overview.md#ports).
 
@@ -44,7 +44,7 @@ An ingress is identified within its app by its hostname and port.
 Declaring an ingress whose hostname and port match an ingress already declared in the same app MUST throw, and MUST leave the earlier ingress as it was.
 
 > [!NOTE]
-> A script may catch the error with `try..catch`, as [errors](overview.md#evaluation) allows.
+> A script may catch the error with `try`/`catch`, as [evaluation](overview.md#evaluation) allows.
 
 ### Claims across apps
 
@@ -69,7 +69,7 @@ The ingress's identity, the proxy's configuration and the name a certificate is 
 
 ## Termination
 
-`ingress.tls(terminate: Terminate, output: Output)` declares what the ingress terminates and the protocol it hands to its Service.
+`ingress.tls(terminate: Terminate, output: Output)` declares the protocol the ingress terminates and the protocol it hands to its Service.
 Exactly four pairings are valid:
 
 | `terminate` | `output` | the ingress accepts | the Service receives |
@@ -90,7 +90,7 @@ An ingress on which `tls()` is never called MUST forward TCP connections to its 
 
 ### Terminate
 
-`Terminate` is an [enum](overview.md#enums) of what an ingress terminates.
+`Terminate` is an [enum](overview.md#enums) of the protocols an ingress terminates.
 
 | variant | terminates |
 | --- | --- |

@@ -54,7 +54,7 @@ Admission for an app that is being uninstalled is governed by [app teardown](app
 | an operator request | the named action, or `install` | `operator` | current | current |
 | a schedule falls due | the [scheduled action](scheduled-actions.md) | `schedule` | current | current |
 
-Until an app's start action ends, its [desired state](reconciliation.md#desired-state) holds only what the start action has started or stopped.
+Until an app's start action ends, its [desired state](reconciliation.md#desired-state) holds only the resources the start action has started or stopped.
 
 > [!NOTE]
 > Holding the whole resource graph back until the start action has run lets the start action bring an app up in its own order after the host restarts.
@@ -68,7 +68,8 @@ For any other operation, the runtime MUST record the generation current when the
 
 The runtime MUST run an operation against the definition and parameter values of its target generation, and MUST pass an `on_change` handler `old` reconstructed from the source generation.
 The runtime MUST do so on every replay, including where later generations have been committed since the operation was dispatched.
-If the runtime cannot reconstruct a generation the operation needs, it MUST fail the operation rather than run it against another state.
+If the runtime cannot reconstruct a generation the operation needs, it MUST fail the operation.
+The runtime MUST NOT run the operation against another generation's state.
 
 ## Parameter changes
 
@@ -103,10 +104,13 @@ When the runtime starts, it MUST read the persisted operation, if any, and decid
 The runtime MUST replay an interrupted install only if the app is registered, the persisted parameters can be read, and the app is `Installing` or `NotInstalled`.
 The runtime MUST replay any other interrupted operation only if the app is registered, the persisted parameters can be read, and the app is `Installed`.
 
-Where the runtime does not replay an interrupted operation, it MUST clear the persisted operation and give back the resources it [spared for the replay](suspension.md#abandoned-replay).
+Where the runtime does not replay an interrupted operation, it MUST clear the persisted operation and tear down the resources it [spared for the replay](suspension.md#abandoned-replay).
 Where the operation not replayed was an install of an app in `Installing`, the runtime MUST file an [`install_interrupted`](faults.md#app-faults) fault and recover the app as a [stuck install](#stuck-install-recovery).
 
-If the runtime cannot read whether an interrupted operation exists, it MUST NOT perform stuck-install recovery or [startup cleanup](suspension.md#abandoned-replay), since both act on that operation's absence.
+If the runtime cannot read whether an interrupted operation exists, it MUST NOT perform stuck-install recovery or [startup cleanup](suspension.md#abandoned-replay).
+
+> [!NOTE]
+> Both act on the interrupted operation's absence.
 
 ### Unreadable operation state
 

@@ -18,7 +18,7 @@ Applies to the BSL `Container` interface: the builder methods and semantics ever
 
 `Container` is an interface, and no value has the type `Container`.
 [Deployments](deployment.md) and [Jobs](job.md) implement it, through the [Pod](pod.md) interface.
-Every method in this spec is a [builder method](overview.md#builders) available on each type that implements `Container`.
+Every method in this spec is a [builder method](overview.md#builder-method) available on each type that implements `Container`.
 
 ## Image
 
