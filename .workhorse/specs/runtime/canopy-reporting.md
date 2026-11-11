@@ -43,7 +43,7 @@ Paths below are relative to the Canopy base URL the offering client resolves.
 Reports are addressed to the Canopy server identifier the offering client's identity is enrolled as.
 The runtime MUST resolve it with a `GET` to `/servers/self`, taking the `server_id` member of the answer.
 The runtime MUST cache the identifier durably and use the cached value while it has one.
-If sending a report fails, the runtime MUST discard the cached identifier, so that the next report resolves it again.
+If a report fails in a way that suggests the cached identifier is wrong or absent, the runtime MUST discard the cached identifier, so that the next report resolves it again.
 
 ## Report payload
 

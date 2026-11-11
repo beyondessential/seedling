@@ -47,7 +47,7 @@ Each log entry is a JSON object.
 | `unit` | string | always | the process supervision unit that produced the entry |
 | `stream` | string | always | `"stderr"` for an entry logged at error priority or higher, otherwise `"stdout"` |
 | `app` | string | app entries | the app's name |
-| `resource_kind` | string | app entries naming a resource | the resource's kind, in lower case |
+| `resource_kind` | string | app entries naming a resource | the resource's [type name](wire.md#resource-type-names) |
 | `resource` | string | app entries naming a resource | the resource's name |
 | `instance` | string | app entries naming an instance | the instance's display name |
 | `infra` | string | infrastructure entries | `"proxy"` or `"resolver"` |

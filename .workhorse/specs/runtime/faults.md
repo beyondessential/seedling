@@ -44,6 +44,8 @@ A fault about an [app](../overview.md#app) as a whole has an empty subject.
 The runtime MUST file a fault about the host rather than an app against the app name `_system`.
 The runtime MUST file a fault about its own reporting to other systems against the app name `seedling`.
 
+The runtime MUST NOT pass a fault to a BSL script to handle.
+
 The runtime MUST surface every active fault through the [Operator Interface](../overview.md#operator-interface), in the [fault record](../interface/faults.md#fault-records) shape.
 The runtime MUST emit an [event](../interface/events.md) when it files a fault and when it clears one.
 The runtime SHOULD log an error when it files a fault.
@@ -82,7 +84,7 @@ The runtime MUST file and clear the faults below against the app the instance be
 | `registry_error` | the instance | the runtime cannot read the instance's recorded identity when starting it | the instance starts | event |
 | `external_volume_not_mapped` | the instance | the instance mounts an external volume that has no mapping | the instance starts | condition |
 | `crash_loop` | the instance | the instance's restart rate reaches the [configured threshold](autonomous.md#crash-loop-detection), or its supervisor has [given up restarting it](autonomous.md#restart-pacing) | the instance is observed healthy, or an operator clears it | latched |
-| `health_check_failed` | the instance | the instance has a [healthcheck](../language/deployment.md#health-checks) and has been unhealthy without a break for longer than `start_period` plus `retries` × `interval` | the instance is observed healthy | condition |
+| `health_check_failed` | the instance | the instance has a [healthcheck](../language/deployment.md#health-checks) and has been unhealthy without a break for longer than `start_period` plus `retries` × `interval` | the instance is observed healthy, or is unscheduled | condition |
 | `health_check_replace_failed` | the Deployment | the [replacement guard](autonomous.md#replacement-guard) trips for the Deployment | the app's [generation](../overview.md#generation) changes, or an operator clears it | latched |
 
 An `image_pull_failed` fault MUST name the image reference.
@@ -156,6 +158,7 @@ A site service fault MUST name the failing endpoints, and an unroutable one MUST
 | `cert_expiring_soon` | the ingress's app | the ingress | a certificate the runtime cannot renew itself, [as TLS specifies](tls/certificates.md#expiring-certificates), expires within 14 days | a certificate expiring later replaces it, or no ingress uses the hostname | condition |
 | `canopy_certificate_failed` | the ingress's app | the ingress | the ingress's certificate cannot be obtained or replaced through Canopy, [as TCAN specifies](tls/canopy.md#faults) | a usable certificate replaces the one in doubt | condition |
 
+A `cert_acquisition_failed` fault MUST identify the hostname and the most recent acquisition error.
 If the runtime cannot read whether a certificate is held for a hostname, it MUST neither file nor clear `cert_acquisition_failed` for that hostname.
 
 ## Host faults

@@ -117,9 +117,9 @@ The runtime MUST report a Deployment's scale as unavailable to an operator who a
 
 ### Clamping
 
-When an app's definition is replaced and a Deployment's declared bounds change, the runtime MUST clamp the stored scale for that Deployment to the new bounds, raising it to a new lower bound or lowering it to a new upper bound.
+When an app's definition is re-evaluated and a Deployment's declared bounds change, the runtime MUST clamp the stored scale for that Deployment to the new bounds, raising it to a new lower bound or lowering it to a new upper bound.
 The runtime MUST delete the stored scale of a Deployment the definition no longer declares.
-The runtime MUST clamp before reconciliation acts on the new definition.
+The runtime MUST clamp before reconciliation acts on the re-evaluated definition.
 
 ## Health-check replacement
 

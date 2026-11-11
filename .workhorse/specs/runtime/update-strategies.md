@@ -51,4 +51,4 @@ A replace update MAY take the Deployment below its lower scale bound.
 ## Jobs
 
 A Job takes no part in rolling or replace updates.
-The runtime MUST stop a stale Job instance and start it again with its current definition.
+The runtime MUST stop a stale Job instance and start it again at once, with its current definition.

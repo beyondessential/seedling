@@ -54,6 +54,7 @@ Given a desired state that does not change and a host that functions, successive
 Every operation the runtime performs in an iteration MUST be idempotent.
 Performing an operation whose effect is already in place MUST NOT produce an error or repeat a side effect.
 
+An operation MUST NOT block the loop for an unbounded or long time.
 An operation MUST NOT block the loop to wait on an external condition, such as a process exiting.
 It MUST instead return control to the loop, and a later iteration MUST re-evaluate the condition.
 

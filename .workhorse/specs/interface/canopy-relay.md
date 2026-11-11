@@ -131,9 +131,9 @@ An offering client MUST answer `unknown_offer` to a `canopy` value it cannot par
 ## Relay limits
 
 A relayed body, in either direction, MUST NOT exceed 16 MiB.
-The runtime MUST stop reading a response body that exceeds 16 MiB, and fail the request.
+The runtime MUST stop reading a response body that exceeds 16 MiB, reset the stream, and fail the request.
 
-The runtime MUST stop reading a relay stream, and fail the request, if no complete response arrives within 60 seconds of the request being sent.
+The runtime MUST reset a relay stream, and fail the request, if no complete response arrives within 60 seconds of the request being sent.
 An offering client SHOULD time out its own request to Canopy sooner, so that it can answer `unreachable`.
 
 The runtime MUST have at most 8 relayed requests in flight at once.

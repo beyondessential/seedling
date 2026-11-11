@@ -128,7 +128,7 @@ Defined in [TRN](interface/transport.md#fingerprint).
 
 ### App
 
-A named unit of software installed on a host, defined by one definition bundle.
+A named unit of software registered on a host, defined by one definition bundle.
 Defined in [APP](language/app.md).
 
 ### Definition bundle
@@ -168,7 +168,7 @@ Defined in [ACN](language/action.md#action).
 
 ### Action closure
 
-The script function an action runs.
+A closure a script hands the runtime to run as a lifecycle operation, such as an action's, a shell's, the install action's or a parameter's change handler.
 Defined in [ACN](language/action.md#action-closure).
 
 ### Runtime handle
@@ -188,7 +188,7 @@ Defined in [ING](language/ingress.md#ingress).
 
 ### Volume
 
-Persistent storage an app declares for its containers.
+A resource holding a directory of data that containers mount.
 Defined in [VOL](language/volume.md#volume).
 
 ### External volume

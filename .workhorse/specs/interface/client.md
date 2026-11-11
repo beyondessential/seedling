@@ -35,7 +35,7 @@ If the server refuses the subscription, the CLI MUST exit with a non-zero status
 
 ## Log display
 
-`apps logs` SHOULD print one line per log entry, holding the entry's timestamp, its most specific source name, and its message.
+`apps logs` MUST print one line per log entry, holding the entry's timestamp, its most specific source name, and its message.
 The source name SHOULD be the first the entry carries of its instance, resource, app and infrastructure component.
 An entry recording a runtime call SHOULD be marked by `>` between its source name and its message, and an entry carrying a script position SHOULD end with that position in parentheses.
 
@@ -84,7 +84,7 @@ The CLI MUST report an error and send no request when the folder holds no files,
 
 ## Definition folders
 
-When reading a folder, the CLI MUST leave out `.git` and `.jj` directories, and anything a `.seedignore` file in the folder or one of its subfolders excludes, read as gitignore patterns.
+When reading a folder, the CLI MUST leave out version-control metadata directories, such as `.git` and `.jj`, and anything a `.seedignore` file in the folder or one of its subfolders excludes, read as gitignore patterns.
 If a symlink or other non-regular file is not left out, the CLI MUST report an error naming it and send no request.
 
 ## Parameter change on update

@@ -22,8 +22,12 @@ The outcome of a re-check is reported by the [definition source moved fault](fau
 
 ## Schedule
 
-The runtime SHOULD re-check each app every six hours.
-The runtime SHOULD delay each app's first re-check, and each re-check after a success, by a further random interval of up to a tenth of the six hours, so that hosts started together do not re-resolve against a registry at the same moment.
+The runtime MUST re-check each app infrequently.
+The runtime MUST spread the timing of its re-checks so that hosts do not re-resolve against a registry at the same moment.
+
+> [!NOTE]
+> A tag moves rarely, and acting on a move is the operator's decision.
+> One such schedule re-checks each app every six hours, and delays each app's first re-check, and each re-check after a success, by a further random interval of up to a tenth of the six hours.
 
 ## Back-off
 

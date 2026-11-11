@@ -56,7 +56,7 @@ Values of a secret parameter are protected in history entries as [secret history
 ## Bundle storage
 
 The runtime MUST store definition bundles by their content hash, and a history entry MUST reference its bundle by that hash.
-Generations whose bundles are identical SHOULD share one stored bundle.
+Generations whose bundles are identical MUST share one stored bundle.
 The runtime MUST NOT use a stored bundle whose contents do not hash to the hash it is stored under.
 
 ## Reconstruction

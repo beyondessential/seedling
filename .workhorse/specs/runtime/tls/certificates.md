@@ -335,8 +335,8 @@ If the stored certificate for a hostname cannot be read, because the store canno
 > [!NOTE]
 > The proxy treats any answer other than a certificate or "none" as a failed handshake, so an error answer would stop a hostname being served for as long as the condition lasted.
 
-The cost of a lookup SHOULD grow with the number of stored certificates that could cover the hostname, not with the number stored.
-A lookup for a hostname that no stored certificate could cover SHOULD be answered without parsing any certificate.
+The cost of a lookup MUST grow with the number of stored certificates that could cover the hostname, not with the number stored.
+A lookup for a hostname that no stored certificate could cover MUST be answered without examining the contents of any certificate.
 
 > [!NOTE]
 > Retired certificates are kept, so the store grows without bound over the life of a host.
@@ -355,6 +355,7 @@ For each managed hostname, the runtime MUST make available to the [Operator Inte
 
 - the apps declaring it;
 - the policy that applies, and the pattern it matched;
+- for a hostname on a strategy chain, its [responsible strategy](chains.md#responsible-strategy);
 - the selected or proxy-held certificate, with its origin, issuer, `notBefore` and `notAfter`;
 - its acquisition status, per [ingress certificate observation](../observation.md#ingresses);
 - the outcome and error of its latest issuance attempt;

@@ -46,17 +46,11 @@ The runtime MUST let a barrier whose condition is satisfied succeed even if its 
 ### Re-evaluation cadence
 
 The runtime MUST re-evaluate a suspended barrier's condition repeatedly until it is satisfied, its deadline passes, or the operation is cancelled.
-The interval between re-evaluations SHOULD follow the longest time any of the operation's barriers has been recorded as waiting:
-
-| wait | interval |
-| --- | --- |
-| up to 2 minutes | 2 seconds |
-| 2 minutes to 1 hour | rising linearly from 2 to 30 seconds |
-| 1 hour to 6 hours | rising linearly from 30 to 300 seconds |
-| over 6 hours | 300 seconds |
+The runtime MAY vary the interval between re-evaluations with how long the operation's barriers have been recorded as waiting.
 
 > [!NOTE]
 > A short interval keeps quick barriers responsive, and a long one bounds the cost of re-running a closure throughout an operation that waits for hours.
+> One such schedule re-evaluates every 2 seconds for a wait of up to 2 minutes, then at an interval rising linearly to 30 seconds at 1 hour and to 300 seconds at 6 hours, and every 300 seconds after that.
 
 ## Replay
 

@@ -119,7 +119,7 @@ An operator retry of the hostname, per [retries](certificates.md#retry-blocks-an
 ## Proxy strategies
 
 The ingress proxy MUST NOT order or renew a certificate through `acme_http01` for a hostname unless `acme_http01` is the responsible strategy, or no strategy precedes it in the hostname's chain.
-The proxy's own renewal schedule therefore MUST NOT start a cycle, and a hostname whose chain begins with `canopy` MUST NOT receive an HTTP-01 certificate before Canopy's fall-through point.
+The proxy's own renewal schedule therefore MUST NOT start a cycle, and the proxy MUST NOT give a hostname whose chain begins with `canopy` an HTTP-01 certificate while Canopy is its responsible strategy.
 
 The runtime MUST NOT take a certificate the proxy holds out of service to enforce this.
 For a hostname whose proxy-held certificate must be held back, the runtime MUST instead set the proxy's renewal to begin no earlier than the moment the strategies before `acme_http01` reach their fall-through points.

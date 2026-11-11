@@ -153,6 +153,7 @@ The runtime MUST NOT let a later operation inherit it, whether that operation wa
 The runtime hands a volume to an action closure, such as the site volume an operator names for a `volume` action parameter, through an operation-scoped volume binding.
 
 For each volume it hands over, the runtime MUST generate a name from the [reserved](identity.md#reserved-names) prefix `seedling-op-`, bind it to the host path and access mode for the duration of the operation, and pass the name to the closure as the parameter `<key>_volume`, where `<key>` is the binding's logical key.
+The runtime MUST generate a fresh name for each binding, and MUST NOT generate a name that another operation-scoped volume binding uses.
 The runtime MUST remove the binding when the operation ends.
 A script resolves the volume with `app.external_volume(param["<key>_volume"])`.
 

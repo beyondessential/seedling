@@ -71,7 +71,7 @@ A missing `[auth]` table MUST take the same defaults as an empty one.
 
 ## Listen addresses
 
-The web interface MUST serve an HTTP endpoint over TCP and a WebTransport endpoint over UDP.
+The web interface MUST serve an HTTP endpoint over TCP, without TLS, and a WebTransport endpoint over UDP.
 
 Each listener binds a set of socket addresses.
 An address given explicitly carries its own port.
@@ -173,6 +173,9 @@ Its body MUST be a JSON object ([RFC 8259](https://www.rfc-editor.org/rfc/rfc825
 | `token` | string | no | A session token from an earlier `/connect` |
 | `password` | string | no | The operator password |
 
+A client MUST send at most one of `token` and `password`.
+A client holding a session token MUST send it as `token` on each later `/connect`.
+
 The web interface MUST try these credential sources in order, and authenticate the request by the first that succeeds:
 
 1. [Tailscale identity](#tailscale-identity), when trusted.
@@ -221,9 +224,8 @@ A request without that header falls through to the next credential source.
 
 The web interface MUST decode a `Tailscale-User-Name` value made of encoded-words, and MUST use a value that is not so encoded, or does not decode, as it stands.
 
-An operator MUST NOT enable this trust unless every request reaching the HTTP endpoint passes through [Tailscale Serve](https://tailscale.com/kb/1312/serve).
-
 > [!NOTE]
+> This trust is intended for deployments where [Tailscale Serve](https://tailscale.com/kb/1312/serve) fronts the HTTP endpoint and enforces access control at the network level.
 > Tailscale Serve sets these headers on the requests it proxies and strips them from incoming requests, so a request that bypasses it can carry any identity.
 
 ### Development bypass
@@ -360,7 +362,10 @@ The web interface MUST answer a heartbeat with a result of these members, follow
 | `session_id` | string | The web session's id |
 
 A client MUST send a heartbeat at least once every 200 seconds while its web session is open.
-It SHOULD send one as soon as the session opens, and another as soon as its safety mode changes.
+A client MUST include its current safety mode in every heartbeat.
+A client SHOULD send a heartbeat as soon as the session opens.
+A client MUST send a heartbeat as soon as its safety mode changes.
+On the page's `pagehide` event ([HTML](https://html.spec.whatwg.org/)), a client MUST attempt to send a heartbeat or to close its web session, without waiting for the attempt to complete.
 
 A web session is stale once ten minutes have passed since its `last_seen`.
 The web interface MUST stop recording a stale web session, and SHOULD do so within a minute of it becoming stale.

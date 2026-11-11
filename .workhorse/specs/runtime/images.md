@@ -90,13 +90,13 @@ The runtime MUST periodically remove images from the host that meet every condit
 - no running container uses the image;
 - the image's last-used time is at least 30 days in the past.
 
-The runtime SHOULD do this once an hour.
+The runtime MUST do this once per [collection interval](garbage-collection.md#collection).
 Every running container on the host, whether a workload container, an infrastructure container, a shell, or a container the runtime did not start, MUST count as using its image.
 
 If the runtime cannot determine whether an image is pinned or in use, it MUST NOT remove the image in that pass.
 A failure to remove one image MUST be logged, and MUST NOT prevent the removal of other images in the same pass.
 
-The runtime MUST NOT autonomously remove an image last used fewer than 30 days ago.
+Without explicit operator configuration, the runtime MUST NOT autonomously remove an image last used fewer than 30 days ago, nor remove images by any more aggressive policy.
 Operators remove images sooner through the Operator Interface.
 
 ## Image discovery

@@ -93,7 +93,7 @@ If the pull fails, the server MUST answer with `fetch_failed`, whose `message` c
 
 The server MUST reject an empty `reference` with `requirements_invalid`.
 Unless `force` is `true`, the server MUST reject the request with `requirements_invalid` while a running container uses the image.
-Unless the request is rejected, the runtime MUST clear every pin on `reference`, whether or not an image is removed.
+Otherwise the runtime MUST clear every pin on `reference`, whether or not an image is then removed.
 The server MUST reject a `reference` that resolves to no image on the host with `not_found`.
 On success the result is `{ "ok": true }`.
 

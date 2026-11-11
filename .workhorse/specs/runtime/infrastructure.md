@@ -116,7 +116,8 @@ These rules are [absolute state](reconciliation.md#absolute-state).
 ## Host-originated traffic
 
 The runtime MUST redirect traffic originating on the host and addressed to an ingress port on any of the host's own addresses to the proxy, as it redirects traffic arriving from the network.
-The redirection MUST cover the same ports, protocols and address families as the redirection of traffic from the network, and apply only to traffic addressed to a local address.
+The redirection MUST cover the same ports and protocols as the redirection of traffic from the network.
+It MUST apply only to IPv6 traffic addressed to a local address.
 
 A connection from a host process over the loopback interface that the runtime redirects MUST receive the proxy's replies.
 

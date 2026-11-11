@@ -189,7 +189,8 @@ A volume shell's `ShellStarted` event MUST carry `app` `"_volumes"` and `name` `
 
 ### Volume shell privileges
 
-The root user in a volume shell MUST be able to read, traverse, modify, and change the ownership and mode of every file on a writable mounted volume, whichever user owns it.
+The root user in a volume shell MUST be able to read and traverse every file on a mounted volume, whichever user owns it.
+On a volume mounted read-write, the root user MUST also be able to modify every file, and change its ownership and mode, whichever user owns it.
 
 > [!NOTE]
 > Workload containers drop every Linux capability by default, which leaves root inside them subject to file permission checks.

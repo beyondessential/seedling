@@ -22,6 +22,23 @@ The console MUST let an operator observe and control a host through its [Operato
 It SHOULD offer each Operator Interface operation the CLI offers, other than those this spec withholds and those a browser cannot carry out, such as listening on a local port for a port forward.
 It MUST offer log streaming for both app workloads and the host's infrastructure components.
 
+The console MUST let the operator list apps with their statuses, and see an app's status with its resources, faults, parameters, install requirements and actions.
+It MUST let the operator register an app with a script, update an app's script or fetch its definition from a registry, and deregister an app.
+It MUST let the operator set and unset an app's parameters, scale its deployments, set its priority, view its generation history, and plan a change.
+It MUST let the operator invoke an app's lifecycle actions, and invoke its install action with the install requirements.
+
+The console MUST let the operator list the authorised client keys, authorise a key, and revoke a key.
+It MUST let the operator list, add and remove the hostnames on the container registry allowlist.
+
+The console MUST let the operator list manual and discovered site ingresses, each kind apart from the other.
+It MUST let the operator create, update and delete manual site ingresses, and attach and detach their forward and redirect targets.
+It MUST show the status of each ingress discovery provider.
+
+The console MUST let the operator list, create and delete site volumes of the managed, bind and snapshot kinds.
+It MUST list the volumes apps export.
+It MUST let the operator list, add, remap and remove external volume mappings.
+It MUST list held volumes, and let the operator confirm a held volume's deletion.
+
 The console MUST show the operator the error of each request that fails.
 It MUST NOT present a read that failed as an empty result.
 While ingress discovery is unhealthy, the console MUST warn the operator.
@@ -47,7 +64,8 @@ Elevating to `dangerous` MUST require the operator's confirmation.
 An elevation to `write` or `dangerous` MUST revert to `read` no later than ten minutes after it began, and the console SHOULD show the time remaining.
 The console reports its safety mode to the web interface as [session tracking](serving.md#session-tracking) specifies.
 
-The console MUST show the operator when any other web session is in the `write` or `dangerous` mode, distinguishing the two, whatever the console's own mode.
+The console MUST flag its count of web sessions and its safety mode control whenever any other web session is in the `write` or `dangerous` mode, whatever the console's own mode.
+The flag MUST show, in the colour the console gives that mode, the highest mode any other web session is in.
 
 > [!NOTE]
 > The safety mode guards against slips, not against a hostile operator.
@@ -79,20 +97,24 @@ The console MUST NOT apply an edit until it has read the definition's files, and
 
 ## App status
 
-The apps list MUST show, for each app with active faults, how many there are.
+The apps list MUST show, for each app with active faults, how many there are, beside the app's status and in the colour the console uses for faults.
+It MUST NOT show a fault count for an app with none.
 
 The app detail view MUST show the app's [Canopy application type](../language/app.md#canopy-type) when its definition declares one.
 
-For each container resource with a declared [healthcheck](../language/deployment.md#health-checks), the app detail view MUST show its `on_failure` response and its current check state: passing, failing, or within its start period.
-It SHOULD reveal the healthcheck's `kind` and, for a command healthcheck, its command, on hover or focus.
+For each container resource with a declared [healthcheck](../language/deployment.md#health-checks), the app detail view MUST show, beside the resource's lifecycle state, that it declares one, its `on_failure` response, and its current check state: passing, failing, or within its start period.
+The console MUST show a passing check in its success colour, a failing check in its error colour, and a check within its start period in its warning or neutral colour.
+On hover or focus, the console MUST reveal the healthcheck's `kind`, its `on_failure` response and, for a command healthcheck, a truncated form of its command.
 
 ## Priority
 
 The app detail view MUST show the app's [priority](../interface/app-control.md#app-priority) and let the operator set it to any level the Operator Interface accepts.
-The apps list MUST mark each app whose priority is not `normal`, distinguishing a raised priority from a lowered one.
+The apps list MUST mark each app whose priority is not `normal`, beside its status, and MUST NOT mark an app at `normal`.
+The mark MUST distinguish a raised priority from a lowered one by colour, following the status colours the console uses elsewhere.
 A change of priority MUST appear in both views without a reload.
 
-For each Deployment declaring a [priority](../language/deployment.md#priority) other than `normal`, the app detail view MUST show the declared level as configuration, not as a control.
+For each Deployment declaring a [priority](../language/deployment.md#priority) other than `normal`, the app detail view MUST show the declared level beside the Deployment's lifecycle state, as configuration, not as a control.
+That indicator MUST use the same colours as the app priority mark, so that a level reads alike in both.
 That indicator MUST read as standing within the app, not across apps.
 
 > [!NOTE]
@@ -101,20 +123,23 @@ That indicator MUST read as standing within the app, not across apps.
 ## Shells
 
 The console MUST offer each shell an app defines, as an action of kind `shell` in its [description](../interface/apps.md#description), and MUST collect values for the shell's declared parameters before opening it.
-It MUST offer a [volume shell](../interface/shells.md#volume-shells) over a single volume from each site volume and each app volume resource it lists, and SHOULD label the shell with the volume's display name.
+It MUST offer a [volume shell](../interface/shells.md#volume-shells) over a single volume from each site volume and each app volume resource it lists, and MUST open it without asking the operator for anything further.
+The console MUST label a volume shell with the volume's display name.
 
-The console MUST let several shells be open at once.
+The console MUST show open shells in a persistent sidebar on the left of its layout, one tab per shell, and MUST let several shells be open at once.
 It MUST fit each terminal to the space it has and send [`/shells/resize`](../interface/shells.md#resizing-a-terminal) when that space changes, with at most one resize request in flight for a shell at a time.
-When a shell exits, the console MUST show its exit code and offer to reopen it.
+When a shell exits, the console MUST show its exit code and offer to close or reopen it.
 When the operator closes a shell that has not exited, the console MUST stop it with [`/shells/stop`](../interface/shells.md#stopping-a-session).
 
 Volume shells MUST be available in every safety mode.
-In the `read` mode the console MUST open a volume shell with `read_only: true`, and SHOULD mark it as read-only.
+In the `read` mode the console MUST open a volume shell with `read_only: true`, and MUST mark its label as read-only.
+In the `write` and `dangerous` modes the console MUST open a volume shell read-write.
 The safety mode in force when the operator opens a shell MUST govern its mounts for the shell's lifetime.
 
 ## Images
 
-The console MUST show every image in the host's local storage, with its references, size, last use, and whether it is pinned or in use, and let the operator remove it.
+The console MUST offer an images view at the path `/images`.
+It MUST show every image in the host's local storage, with its references, size, last use, and whether it is pinned or in use, and let the operator remove it.
 It MUST show the host's image pins, with the pinning app, reference and time pinned, and let the operator clear each.
 It MUST let the operator remove every image that is not backing a running container in one action.
 
@@ -141,13 +166,17 @@ The console MUST show the number of held volumes on every view, and keep it curr
 
 ## Restart history
 
-The console MUST list [restart records](../interface/faults.md#restart-records), most recent first, with their app, instance, time, initiator and exit status, and let the operator filter them by app.
+The console MUST offer a restart history view at the path `/restarts`.
+It MUST list [restart records](../interface/faults.md#restart-records), most recent first, with their app, instance, time, initiator and exit status, and let the operator filter them by app.
 It MUST distinguish deliberate restarts from recovery restarts.
 It MUST show the crash-loop rate threshold and window, and let the operator change them.
 
 ## Certificates
 
-The console MUST let the operator manage per-hostname certificate policies, the ACME contact email and certificate profile, stored certificates, and DNS providers.
+The console MUST offer a certificates view at the path `/certificates`.
+It MUST let the operator list per-hostname certificate policies, clear one, and add one binding a hostname or wildcard either to ACME DNS-01 through a configured DNS provider or to the Canopy-only policy.
+It MUST let the operator view and edit the ACME contact email and the certificate profile used for issuance.
+It MUST let the operator list DNS providers without their credentials, add a Route 53 provider, and delete a provider.
 For each hostname, it MUST show the strategy responsible for it and when that strategy falls through to the next, as [hostname listing](../interface/tls.md#hostname-view) reports, with Canopy certificates among the others.
 
 The console MUST group stored certificates by label and show each one's state, origin, issuer, expiry and serial.
@@ -156,12 +185,15 @@ For a certificate obtained through a certificate signing request, the console MU
 
 A certificate signing request the console begins MUST take one or more hostnames, each a hostname or a `*.<suffix>` wildcard, as [beginning a request](../interface/tls.md#certificate-signing-requests) accepts.
 For an active manual or request-derived certificate that expires within fourteen days or has expired, the console MUST offer to [renew](../runtime/tls/certificates.md#certificate-signing-requests) it.
-Renewing begins a certificate signing request pre-filled, editably, with the certificate's DNS subject alternative names and the hostnames it currently serves.
+To renew, the console MUST begin a certificate signing request pre-filled, editably, with the certificate's DNS subject alternative names and the hostnames it currently serves.
 Where the certificate already has a pending renewal, the console MUST lead to that renewal instead, and MUST name the certificate a pending renewal renews.
+
+The web interface MUST NOT send the console any private key material, ACME account key or DNS provider credential.
 
 ## Canopy access
 
-The console MUST show whether Canopy access is enabled, and let the operator turn it on or off.
+The console MUST offer a Canopy view at the path `/canopy`.
+It MUST show whether Canopy access is enabled, and let the operator turn it on or off.
 It MUST show the offer that would serve the next request, with its agent, endpoint and time offered, or that no client is offering one.
 It MUST show the outcome and time of the most recent status report, with its error when it failed, and each app reported to Canopy with its type.
 

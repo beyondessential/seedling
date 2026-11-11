@@ -76,9 +76,9 @@ Checking that a name is free and taking it MUST be one indivisible step, so that
 
 ### Site volume snapshots
 
-An operator MAY snapshot an app volume or a managed site volume into a new snapshot site volume, when the data directory is on BTRFS.
+An operator MAY snapshot an app volume or a managed site volume into a new snapshot site volume, when that volume is stored as a BTRFS subvolume.
 A snapshot site volume MUST record the volume it was taken from.
-On a host whose data directory is not on BTRFS, the runtime MUST reject a snapshot request.
+The runtime MUST reject a request to snapshot a volume that is not stored as a BTRFS subvolume.
 
 The runtime MUST emit an event when it creates a snapshot site volume, identifying the new snapshot and its source volume, app or site.
 
@@ -142,7 +142,7 @@ An unroutable or unresolvable endpoint MUST NOT affect the routing of other endp
 ### Partial DNS answers
 
 The runtime MUST resolve a name from the address families whose lookups succeeded.
-When the lookup for one family fails and the other returns records, the runtime MUST resolve the endpoint from those records, MUST keep the failed family's last answer, and SHOULD look the name up again without waiting for the answer's lifetime to pass.
+When the lookup for one family fails and the other returns records, the runtime MUST resolve the endpoint from those records, MUST keep the failed family's last answer, and MUST look the name up again promptly rather than after the answer's lifetime has passed.
 A failed lookup MUST NOT be recorded as the family having no records.
 
 A failure MUST count towards the unresolvable threshold only when no lookup returned records and at least one lookup failed.

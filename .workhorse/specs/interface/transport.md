@@ -104,7 +104,7 @@ Closing the connection ends every event subscription, shell session and port for
 
 ## Fingerprint probe
 
-A client that does not yet trust any fingerprint for a server MAY learn the server's fingerprint with a probe connection.
+A client that does not yet trust any fingerprint for a server MUST learn the server's fingerprint with a probe connection before it connects with its own key.
 
 A probe connection MUST present a freshly generated key that the client uses for no other connection and discards once the probe ends.
 It MUST offer the same ALPN identifier and the same connection parameters as an authenticated connection, so that it differs from one only in the key it presents.

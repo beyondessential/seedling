@@ -67,7 +67,7 @@ Certificate status determines whether an ingress is [`Ready`](lifecycle.md#ingre
 
 After each observation pass, the runtime MUST record the facts it observed in the [world observation history](history.md#world-observation-history), from which lifecycle states are derived and barriers decided.
 The runtime MUST NOT treat a fact as recorded unless recording it succeeded.
-The runtime SHOULD NOT record a fact again for an instance while it is unchanged since it was last recorded.
+Within one run, the runtime MUST NOT record a fact again for an instance while it is unchanged since it was last recorded.
 The runtime MUST record a fact again whenever it differs from the fact last recorded for the instance, including a healthcheck result that changes back to a value recorded earlier.
 
 The runtime MUST record a Service's network as created, and a backend as healthy, from the backends running when the Service's routes are built.

@@ -58,7 +58,7 @@ The runtime MUST relay the resolver's queries to it through the host side of the
 ## Resolver configuration
 
 The resolver MUST forward every query to its upstreams.
-The resolver SHOULD cache responses.
+The resolver MUST cache responses.
 It MUST NOT serve a cached response beyond its TTL, and SHOULD NOT serve one for more than 30 seconds.
 
 The resolver MUST synthesise AAAA records as [DNS64](nat64.md#dns64) specifies.

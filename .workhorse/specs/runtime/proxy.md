@@ -142,7 +142,7 @@ A limit declared on a route MUST be one budget for that route.
 A limit declared on a service and inherited by several of its routes MUST be one budget shared by those routes.
 A budget MUST NOT be divided by the hostname, port, ingress or site ingress a request arrived through.
 
-A client MUST be identified by the source address of the connection the request arrived on.
+A client MUST be identified by the IP address the proxy attributes to the request.
 All IPv6 addresses within one /64 MUST be counted as one client.
 Each IPv4 address MUST be counted as one client.
 
@@ -182,7 +182,8 @@ A route's proxy settings MUST come only from the app's definition.
 ## Persistent connections
 
 The proxy MUST keep an HTTP/1.1 connection to an ingress persistent, serving successive requests on it rather than closing it after each exchange.
-The proxy SHOULD keep an idle HTTP/1.1 connection open for at least five minutes.
+The proxy MUST hold an idle HTTP/1.1 connection open long enough for a client to reuse it.
+It SHOULD hold one open for at least five minutes.
 
 The proxy MUST NOT add connection-specific fields to responses to keep a connection persistent.
 
