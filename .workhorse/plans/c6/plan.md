@@ -47,10 +47,26 @@ Signed off on `runtime/reconciliation.md` and `overview.md`.
 - [x] Remove tracey config and workflow; add CI checks
 - [x] Update `AGENTS.md`, add `.workhorse/rules.md`, repoint docs
 - [x] cargo build, clippy, tests; CI scripts pass locally
-- [ ] Pause for the whole-spec review loop
+- [x] Pause for the whole-spec review loop
+- [ ] Whole-spec review loop (below)
 
 ## Gaps
 
 Collected per batch in `gaps.md` beside this plan: open decisions, places the spec now leads the code, cross-spec moves for the review loop.
 Spec-leads-code items are filed as themed issues on D6, which brings the code in line after this card merges.
 Open decisions are settled in batches with the user; each settled batch moves to `gaps.md`'s "Decided" section, is folded into the specs, and its code changes are filed on D6.
+
+## Review loop
+
+Rounds run until one finds nothing above a nit, capped at three.
+Each round's findings and outcomes are logged in `review-log.md` beside this plan.
+Settled decisions (gaps.md "Decided", LINUX) are never reverted by a finding; a finding that would need one goes to the user.
+
+Round 1:
+
+- [ ] Fidelity pass against the original specs (`git show 96eb265f^:docs/spec/{language,runtime,interface,web}.md`), one agent per area, using `rule-map/` to find where each rule went: restore constraints the rewrite tightened, loosened, dropped or invented; intent questions to the user
+- [ ] Cross-spec structure: the moves listed in gaps.md, duplicated definitions (Barrier in RT and SUSP), restatements that should link their home
+- [ ] Repoint code citations of PRIO, AUTO and other generic specs to LINUX where the cited code is Linux-specific
+- [ ] Checks, build, tests
+
+Later rounds: fresh-eyes review per area against the spec-voice checklist, contradictions between specs, and information architecture.
