@@ -8,6 +8,7 @@ mod migrations {
     pub mod v14;
     pub mod v20;
     pub mod v58;
+    pub mod v67;
 }
 
 struct Migration {
@@ -146,6 +147,7 @@ const SQL_V63: &str = include_str!("db/migrations/v63.sql");
 const SQL_V64: &str = include_str!("db/migrations/v64.sql");
 const SQL_V65: &str = include_str!("db/migrations/v65.sql");
 const SQL_V66: &str = include_str!("db/migrations/v66.sql");
+const SQL_V67: &str = migrations::v67::SQL;
 
 const MIGRATIONS: &[Migration] = &[
     Migration {
@@ -472,6 +474,11 @@ const MIGRATIONS: &[Migration] = &[
         version: 66,
         sql: SQL_V66,
         custom_run: None,
+    },
+    Migration {
+        version: 67,
+        sql: SQL_V67,
+        custom_run: Some(migrations::v67::run),
     },
 ];
 

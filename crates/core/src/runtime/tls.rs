@@ -24,6 +24,7 @@ pub mod keypair;
 pub mod parse;
 pub mod renewal;
 pub mod resolve;
+pub mod san_index;
 pub mod serve;
 pub mod state;
 pub mod store;

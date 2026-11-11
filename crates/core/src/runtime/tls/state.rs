@@ -16,17 +16,21 @@
 //! function. The functions here are pure over a [`Snapshot`] of DB
 //! state; the snapshot is loaded once and reused per call.
 
-use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
+use std::sync::Arc;
 
 use jiff::Timestamp;
+use parking_lot::Mutex;
 use seedling_protocol::names::AppName;
 
 use super::{
     AttemptOutcome, TlsCertAttempt, TlsCertForceRetry, TlsCertOrigin, TlsCertRetryBlock,
     TlsCertState, TlsCertificate, TlsChainRow, TlsPolicy, TlsPolicyRow, TlsSettings,
     chain::{self, Strategy},
-    pattern_matches, pattern_specificity, store,
+    parse::LeafFacts,
+    pattern_matches, pattern_specificity,
+    san_index::SanIndex,
+    store,
 };
 use crate::defs::resource::Resource;
 use crate::runtime::apps::{AppPhase, AppRegistry};
@@ -200,25 +204,22 @@ pub struct Snapshot {
     /// the caller when the snapshot is loaded; see [`Snapshot::load`].
     pub env: ChainEnv,
     pub now: i64,
-    /// SAN list per certificate id, parsed once when the snapshot is built.
+    /// The [SAN index](super::san_index) entries of the active certificates,
+    /// which is how each hostname finds the certificates that could cover it
+    /// without the snapshot parsing every certificate.
     ///
-    /// Resolution is per hostname and every caller loops over hostnames —
-    /// renewal over due certs, the expiry sweep over ingress targets, the
-    /// operator rollup over the whole hostname set — so parsing inside the
-    /// matcher costs one X.509 parse per hostname per certificate. The
-    /// snapshot is immutable for the length of those loops, so the parse
-    /// belongs here.
+    /// Resolution is per hostname and every caller loops over hostnames, or
+    /// loads a snapshot per hostname as the issuance coordinator does, so
+    /// parsing every certificate to answer each would cost a parse per
+    /// certificate per hostname, inside the database call.
+    pub index: SanIndex,
+    /// Each certificate's parsed leaf, for the ones an answer has rested on.
     ///
-    /// Failures are memoised as `None` alongside successes, so a certificate
-    /// whose PEM will not parse is parsed and reported once per snapshot rather
-    /// than once per hostname — the memo has to cover the rows it cannot read,
-    /// or it fails precisely where it is needed and floods the log doing it.
-    ///
-    /// A memo, not a source of truth: a certificate absent from the map
-    /// entirely is parsed on the spot rather than treated as covering nothing.
-    /// A snapshot assembled without it is slower, never wrong — the same
-    /// discipline this subsystem learned about the `hostname` label.
-    sans: BTreeMap<i64, Option<Vec<String>>>,
+    /// The index is not trusted with an answer: the certificate it selects is
+    /// parsed and checked first. Many hostnames often rest on one certificate,
+    /// a wildcard most of all, so each is parsed once per snapshot. Shared
+    /// between clones, which see the same rows.
+    confirmed: Arc<Mutex<BTreeMap<i64, Option<Arc<LeafFacts>>>>>,
 }
 
 impl Snapshot {
@@ -231,7 +232,7 @@ impl Snapshot {
     /// that snapshot are not to be acted on.
     pub fn load(db: &Db, env: ChainEnv) -> rusqlite::Result<Self> {
         let certificates = store::list_certificates(db)?;
-        let sans = index_sans(&certificates);
+        let index = SanIndex::load_active(db, &certificates)?;
         Ok(Self {
             policies: store::list_policies(db)?,
             certificates,
@@ -242,7 +243,8 @@ impl Snapshot {
             settings: store::get_settings(db)?,
             env,
             now: Timestamp::now().as_second(),
-            sans,
+            index,
+            confirmed: Arc::default(),
         })
     }
 
@@ -257,62 +259,33 @@ impl Snapshot {
         self.force_retries.retain(|r| r.hostname != hostname);
     }
 
-    /// The certificate's SAN list, from the memo when it is there and by
-    /// parsing when it is not.
-    /// Borrowed on a memo hit, so a hit costs nothing: the memo exists to take
-    /// H×C work out of the per-tick loops, and cloning the list back per
-    /// lookup would put the same shape straight back as allocations.
-    fn sans_for(&self, cert: &TlsCertificate) -> Option<Cow<'_, [String]>> {
-        if let Some(entry) = self.sans.get(&cert.id) {
-            return entry.as_deref().map(Cow::Borrowed);
+    /// The certificate's parsed leaf, or `None` when it has no PEM or the PEM
+    /// will not parse.
+    fn leaf(&self, cert: &TlsCertificate) -> Option<Arc<LeafFacts>> {
+        if let Some(facts) = self.confirmed.lock().get(&cert.id) {
+            return facts.clone();
         }
-        let pem = cert.cert_pem.as_deref()?;
-        match super::parse::leaf_san_dns_names(pem) {
-            Ok(sans) => Some(Cow::Owned(sans)),
-            Err(e) => {
-                tracing::warn!(
-                    cert_id = cert.id,
-                    error = %e,
-                    "stored certificate could not be parsed; skipping it when resolving a hostname"
-                );
-                None
-            }
-        }
-    }
-}
-
-/// Parse each active certificate's SAN list once, recording failures as `None`
-/// so they are not retried per lookup. Reported here, once per snapshot,
-/// because an active row the runtime cannot read is unservable and nothing else
-/// will say so.
-fn index_sans(certificates: &[TlsCertificate]) -> BTreeMap<i64, Option<Vec<String>>> {
-    certificates
-        .iter()
-        .filter(|c| c.state == TlsCertState::Active)
-        .map(|c| {
-            let sans = match c.cert_pem.as_deref() {
-                None => {
+        let facts = cert.cert_pem.as_deref().and_then(|pem| {
+            super::parse::leaf_facts(pem)
+                .inspect_err(|e| {
                     tracing::warn!(
-                        cert_id = c.id,
-                        "active certificate has no stored PEM; it can never be served"
+                        cert_id = cert.id,
+                        error = %e,
+                        "stored certificate could not be parsed; skipping it when resolving a \
+                         hostname"
                     );
-                    None
-                }
-                Some(pem) => match super::parse::leaf_san_dns_names(pem) {
-                    Ok(sans) => Some(sans),
-                    Err(e) => {
-                        tracing::warn!(
-                            cert_id = c.id,
-                            error = %e,
-                            "stored certificate could not be parsed; it can never be served"
-                        );
-                        None
-                    }
-                },
-            };
-            (c.id, sans)
-        })
-        .collect()
+                })
+                .ok()
+                .map(Arc::new)
+        });
+        self.confirmed.lock().insert(cert.id, facts.clone());
+        facts
+    }
+
+    /// The certificate with id `id`, if the snapshot holds it.
+    fn certificate(&self, id: i64) -> Option<&TlsCertificate> {
+        self.certificates.iter().find(|c| c.id == id)
+    }
 }
 
 /// Resolved per-hostname state. Borrows from the [`Snapshot`] it was
@@ -687,29 +660,54 @@ fn find_active_for_hostname<'a>(
     hostname: &str,
     now: i64,
 ) -> Option<&'a TlsCertificate> {
-    let mut best: Option<(super::resolve::Rank, &TlsCertificate)> = None;
-    for cert in snap
-        .certificates
-        .iter()
-        .filter(|c| c.state == TlsCertState::Active && !c.not_before.is_some_and(|nb| nb > now))
-    {
-        let Some(sans) = snap.sans_for(cert) else {
-            continue;
-        };
-        if let Some(rank) = super::resolve::rank(
-            &sans,
+    let mut ranked: Vec<_> = snap
+        .index
+        .candidates(hostname)
+        .into_iter()
+        .filter_map(|candidate| {
+            let cert = snap.certificate(candidate.id)?;
+            if cert.state != TlsCertState::Active || cert.not_before.is_some_and(|nb| nb > now) {
+                return None;
+            }
+            let rank = super::resolve::rank(
+                &candidate.sans,
+                hostname,
+                candidate.self_issued,
+                cert.not_after,
+                cert.created_at,
+                cert.id,
+                now,
+            )?;
+            Some((rank, cert))
+        })
+        .collect();
+    ranked.sort_by(|(a, _), (b, _)| b.cmp(a));
+
+    // The index chose; the certificate confirms. One the PEM disagrees with is
+    // passed over here and repaired by the serving lookup or the sweep, since a
+    // snapshot writes nothing.
+    ranked.into_iter().find_map(|(indexed_rank, cert)| {
+        let leaf = snap.leaf(cert)?;
+        let confirmed = super::resolve::rank(
+            &leaf.san_dns_names,
             hostname,
-            cert.self_signed,
+            leaf.self_issued,
             cert.not_after,
             cert.created_at,
             cert.id,
             now,
-        ) && best.as_ref().is_none_or(|(best_rank, _)| rank > *best_rank)
-        {
-            best = Some((rank, cert));
+        );
+        if confirmed == Some(indexed_rank) {
+            Some(cert)
+        } else {
+            tracing::error!(
+                cert_id = cert.id,
+                hostname,
+                "SAN index disagreed with the certificate's own PEM; passing it over"
+            );
+            None
         }
-    }
-    best.map(|(_, cert)| cert)
+    })
 }
 
 /// The earliest moment a stored certificate covering `hostname` starts
@@ -720,23 +718,27 @@ fn find_active_for_hostname<'a>(
 /// outrank it once both are valid does not change that answer.
 // r[impl tls.cert.serve]
 fn staged_start_for_hostname(snap: &Snapshot, hostname: &str, now: i64) -> Option<i64> {
-    let mut earliest: Option<i64> = None;
-    for cert in snap
-        .certificates
-        .iter()
-        .filter(|c| c.state == TlsCertState::Active && c.not_before.is_some_and(|nb| nb > now))
-    {
-        let Some(sans) = snap.sans_for(cert) else {
-            continue;
-        };
-        // Coverage only — ranking decides which certificate wins once several
-        // are servable, which is not the question here.
-        if super::parse::san_covers(&sans, hostname) {
-            let from = cert.not_before.unwrap_or(now);
-            earliest = Some(earliest.map_or(from, |e: i64| e.min(from)));
-        }
-    }
-    earliest
+    let mut staged: Vec<(i64, &TlsCertificate)> = snap
+        .index
+        .candidates(hostname)
+        .into_iter()
+        .filter_map(|candidate| {
+            let cert = snap.certificate(candidate.id)?;
+            let from = cert.not_before.filter(|nb| *nb > now)?;
+            (cert.state == TlsCertState::Active).then_some((from, cert))
+        })
+        .collect();
+    staged.sort_by_key(|(from, cert)| (*from, cert.id));
+    // Coverage only, confirmed against the certificate itself: ranking decides
+    // which certificate wins once several are servable, which is not the
+    // question here.
+    staged
+        .into_iter()
+        .find(|(_, cert)| {
+            snap.leaf(cert)
+                .is_some_and(|leaf| super::parse::san_covers(&leaf.san_dns_names, hostname))
+        })
+        .map(|(from, _)| from)
 }
 
 #[expect(
@@ -1186,7 +1188,7 @@ mod tests {
         contact_email: &str,
         now: i64,
     ) -> Snapshot {
-        let sans = index_sans(&certs);
+        let index = SanIndex::parsed(&certs);
         Snapshot {
             policies,
             certificates: certs,
@@ -1204,13 +1206,14 @@ mod tests {
                 ..ChainEnv::none()
             },
             now,
-            sans,
+            index,
+            confirmed: Default::default(),
         }
     }
 
     /// A snapshot carrying only certificates, for the matcher tests. Goes
-    /// through `snap` so the SAN memo is built the same way it is in
-    /// production.
+    /// through `snap`, which indexes the certificates by parsing them as the
+    /// sweep would.
     fn certs_snap(certs: Vec<TlsCertificate>, now: i64) -> Snapshot {
         snap(vec![], certs, vec![], vec![], vec![], "ops@x", now)
     }
@@ -2280,5 +2283,123 @@ mod tests {
             compute_state(&s, "host.example.com").decision,
             Decision::IssueNow { .. }
         ));
+    }
+
+    fn store_cert(db: &Db, sans: &[&str]) -> i64 {
+        store::insert_certificate(
+            db,
+            store::NewCertificate {
+                hostname: "label.example.com",
+                requested_hostnames: None,
+                state: TlsCertState::Active,
+                origin: TlsCertOrigin::Manual,
+                cert_pem: Some(&super::super::test_support::self_signed_pem(sans)),
+                csr_pem: None,
+                key_ciphertext: b"key",
+                key_type: KeyType::EcdsaP256,
+                metadata: store::CertMetadata {
+                    not_before: Some(Timestamp::now().as_second() - 86_400),
+                    not_after: Some(Timestamp::now().as_second() + 86_400),
+                    ..Default::default()
+                },
+                note: None,
+                acme_account_id: None,
+                renews: None,
+            },
+        )
+        .unwrap()
+    }
+
+    /// The snapshot reads every certificate row anyway, so one missing from
+    /// the index is parsed there rather than going unseen until the sweep.
+    // r[verify tls.cert.serve]
+    #[test]
+    fn a_snapshot_finds_an_active_certificate_missing_from_the_index() {
+        let db = Db::open_in_memory().unwrap();
+        let id = store_cert(&db, &["example.com"]);
+        db.conn
+            .execute("DELETE FROM tls_cert_index WHERE cert_id = ?1", [id])
+            .unwrap();
+
+        let snap = Snapshot::load(&db, ChainEnv::none()).unwrap();
+        assert_eq!(
+            find_active_for_hostname(&snap, "example.com", snap.now).map(|c| c.id),
+            Some(id)
+        );
+    }
+
+    /// The snapshot confirms the index's choice against the certificate, as
+    /// the serving lookup does, and passes over one its PEM contradicts.
+    // r[verify tls.cert.serve]
+    // r[verify tls.cert.validation.san-coverage]
+    #[test]
+    fn a_snapshot_passes_over_an_index_entry_the_pem_contradicts() {
+        let db = Db::open_in_memory().unwrap();
+        let covering = store_cert(&db, &["example.com"]);
+        let other = store_cert(&db, &["other.example.com"]);
+        db.conn
+            .execute(
+                "INSERT INTO tls_cert_sans (cert_id, san) VALUES (?1, 'example.com')",
+                [other],
+            )
+            .unwrap();
+
+        let snap = Snapshot::load(&db, ChainEnv::none()).unwrap();
+        assert_eq!(
+            find_active_for_hostname(&snap, "example.com", snap.now).map(|c| c.id),
+            Some(covering)
+        );
+    }
+
+    /// Self-issuance is read from the certificate, not the stored column, which
+    /// rows written before its derivation was corrected hold wrongly. The
+    /// serving lookup already read it from the certificate; the two matchers
+    /// have to agree.
+    // r[verify tls.strategy.manual]
+    #[test]
+    fn a_snapshot_ranks_by_the_certificates_own_self_issuance() {
+        let db = Db::open_in_memory().unwrap();
+        let ca_issued = store::insert_certificate(
+            &db,
+            store::NewCertificate {
+                hostname: "example.com",
+                requested_hostnames: None,
+                state: TlsCertState::Active,
+                origin: TlsCertOrigin::Manual,
+                cert_pem: Some(&super::super::test_support::ca_signed_pem(&["example.com"])),
+                csr_pem: None,
+                key_ciphertext: b"key",
+                key_type: KeyType::EcdsaP256,
+                metadata: store::CertMetadata {
+                    not_before: Some(Timestamp::now().as_second() - 86_400),
+                    not_after: Some(Timestamp::now().as_second() + 86_400),
+                    ..Default::default()
+                },
+                note: None,
+                acme_account_id: None,
+                renews: None,
+            },
+        )
+        .unwrap();
+        // Newer and self-signed, but its column says otherwise.
+        let legacy = store_cert(&db, &["example.com"]);
+        db.conn
+            .execute(
+                "UPDATE tls_certificates SET self_signed = 0 WHERE id = ?1",
+                [legacy],
+            )
+            .unwrap();
+
+        let snap = Snapshot::load(&db, ChainEnv::none()).unwrap();
+        assert_eq!(
+            find_active_for_hostname(&snap, "example.com", snap.now).map(|c| c.id),
+            Some(ca_issued)
+        );
+        assert_eq!(
+            store::find_active_for_hostname(&db, "example.com")
+                .unwrap()
+                .map(|c| c.id),
+            Some(ca_issued)
+        );
     }
 }

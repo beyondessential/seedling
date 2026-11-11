@@ -20,13 +20,15 @@ A lookup computes two keys: the hostname, and `*.` followed by everything after 
 Both guards rebuild rows with the same derivation the write paths use. They catch rows that have drifted from their PEM, never a bug in the derivation itself.
 
 **Marker, trigger and sweep (prompt repair).**
-- `tls_certificates` gains a `sans_indexed` marker, with a partial index on rows that have a PEM but no marker. The indexing function sets it, including when the PEM will not parse (that certificate is recorded as indexed with no rows, so it isn't retried forever).
-- A trigger `AFTER UPDATE OF cert_pem` deletes that certificate's SAN rows and clears its marker. That turns a stale index into a missing one, which the sweep can see. The activate paths update the PEM and then index inside one transaction, so the trigger's delete comes before their insert.
-- A background sweep selects `cert_pem IS NOT NULL AND sans_indexed IS NULL`. It parses nothing when the index is right.
+- The marker is a row in its own table, `tls_cert_index` (one per indexed certificate, also holding self-issuance), not a column on `tls_certificates`. The SAN rows reference it with `ON DELETE CASCADE`. Changed from the first plan: a future migration that rebuilds `tls_certificates` cascades away the index rows and their marker together, so the certificates show up as unindexed, where a marker column would have been carried over and still claimed they were indexed.
+- A certificate whose PEM will not parse gets an index row with `self_issued` NULL and no SANs, so it isn't retried forever.
+- A trigger `AFTER UPDATE OF cert_pem` (only when the value changes) deletes the certificate's index row. That turns a stale index into a missing one, which the sweep can see. The activate paths update the PEM and then index inside one transaction.
+- The unindexed sweep is an anti-join: certificates with a PEM and no index row. It parses nothing when the index is right. It runs at startup and every five minutes.
+- `Snapshot::load` already reads every certificate row, so it parses any active certificate missing from the index on the spot (logged as an error) instead of waiting for the sweep.
 - If the SAN derivation ever changes, a migration clears every marker and this sweep reindexes everything.
 
 **Full re-parse (backstop).**
-- Occasionally re-derive every stored certificate's SAN rows and rewrite any that differ. This catches what the marker can't, such as SAN rows deleted by hand.
+- Once a day, re-derive every stored certificate's SAN rows and rewrite any that differ. This catches what the marker can't, such as SAN rows deleted by hand.
 
 **Shared by both.**
 - Read PEMs in one database call, parse them off the database thread, then write in a second call. The write is conditional on the PEM being the one that was parsed, so a concurrent certificate write wins.
@@ -56,12 +58,12 @@ The open comment on the card: `Coordinator::run` loads a snapshot per hostname p
 
 ## Steps
 
-- [ ] Migration: table, index, backfill
-- [ ] Key derivation beside `san_covers`, with an agreement test
-- [ ] Write SAN rows from the three write paths, in their transactions
-- [ ] Serving lookup: candidates from the index, winner confirmed, reindex on contradiction
-- [ ] Snapshot: candidates from the index, confirmation memoised, self-issuance from the index
-- [ ] Marker column, partial index and `cert_pem` trigger (same migration)
-- [ ] Background task: unmarked-row sweep plus the occasional full re-parse, both with a conditional write-back
-- [ ] Tests: unknown hostname parses nothing; wildcard-only hostname; history rows ranked out; deleted certificate gone from the index; a contradicting index row is corrected and the next candidate served; backfill skips an unparseable row; a raw `cert_pem` update clears the marker and the sweep reindexes it; hand-deleted SAN rows restored by the full re-parse; a write landing mid-sweep isn't overwritten
-- [ ] Update the doc comments on `store::find_active_for_hostname` and `Snapshot::sans` to describe the index
+- [x] Migration: table, index, backfill
+- [x] Key derivation beside `san_covers`, with an agreement test
+- [x] Write SAN rows from the three write paths, in their transactions
+- [x] Serving lookup: candidates from the index, winner confirmed, reindex on contradiction
+- [x] Snapshot: candidates from the index, confirmation memoised, self-issuance from the index
+- [x] Marker column, partial index and `cert_pem` trigger (same migration)
+- [x] Background task: unmarked-row sweep plus the occasional full re-parse, both with a conditional write-back
+- [x] Tests: unknown hostname parses nothing; wildcard-only hostname; history rows ranked out; deleted certificate gone from the index; a contradicting index row is corrected and the next candidate served; backfill skips an unparseable row; a raw `cert_pem` update clears the marker and the sweep reindexes it; hand-deleted SAN rows restored by the full re-parse; a write landing mid-sweep isn't overwritten
+- [x] Update the doc comments on `store::find_active_for_hostname` and `Snapshot::sans` to describe the index

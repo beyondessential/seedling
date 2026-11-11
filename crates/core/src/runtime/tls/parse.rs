@@ -185,6 +185,7 @@ pub fn leaf_spki_der(pem: &str) -> Result<Vec<u8>> {
 
 /// What the resolution and supersession rules need to know about a leaf,
 /// from one parse.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LeafFacts {
     pub san_dns_names: Vec<String>,
     /// Issuer equal to subject. Derived here rather than read from the stored
@@ -295,6 +296,29 @@ pub fn san_covers(sans: &[String], hostname: &str) -> bool {
     false
 }
 
+/// The SAN entries that would cover `hostname` under [`san_covers`], lowercased:
+/// the hostname itself, and the wildcard naming its parent when it has one.
+///
+/// A SAN covers `hostname` exactly when it is one of these, ignoring case. That
+/// is what lets the SAN index find a hostname's candidates by equality rather
+/// than by testing every certificate; the two have to agree, and a test holds
+/// them to it.
+// r[impl tls.cert.validation.san-coverage]
+pub fn covering_sans(hostname: &str) -> Vec<String> {
+    let host_lc = hostname.to_ascii_lowercase();
+    let wildcard = match host_lc.split_once('.') {
+        Some((first, rest)) if !first.is_empty() => Some(format!("*.{rest}")),
+        _ => None,
+    };
+    let mut keys = vec![host_lc];
+    if let Some(wildcard) = wildcard
+        && wildcard != keys[0]
+    {
+        keys.push(wildcard);
+    }
+    keys
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -340,6 +364,39 @@ mod tests {
         assert!(san_covers(&sans, "FOO.example.com"));
         assert!(!san_covers(&sans, "example.com"));
         assert!(!san_covers(&sans, "a.b.example.com"));
+    }
+
+    /// The index finds candidates by [`covering_sans`] and nothing else, so a
+    /// SAN it does not produce is a certificate the lookup never sees.
+    // r[verify tls.cert.validation.san-coverage]
+    #[test]
+    fn covering_sans_agree_with_san_covers() {
+        let names = [
+            "example.com",
+            "foo.example.com",
+            "FOO.Example.com",
+            "a.b.example.com",
+            "*.example.com",
+            "*.foo.example.com",
+            "*.com",
+            "com",
+            "localhost",
+            "foo.",
+            ".example.com",
+            "*",
+            "*.",
+            "",
+        ];
+        for hostname in names {
+            let keys = covering_sans(hostname);
+            for san in names {
+                assert_eq!(
+                    san_covers(&[san.to_owned()], hostname),
+                    keys.contains(&san.to_ascii_lowercase()),
+                    "SAN {san:?} against hostname {hostname:?}",
+                );
+            }
+        }
     }
 
     #[test]

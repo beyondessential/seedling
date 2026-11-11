@@ -746,6 +746,12 @@ async fn main() {
         );
     }
 
+    // r[impl tls.cert.serve]
+    // Keep the certificate SAN index in line with the certificates it indexes:
+    // it narrows every certificate lookup, so a certificate missing from it is
+    // one no lookup finds.
+    let _san_index_handle = seedling_core::runtime::tls::san_index::spawn(db.clone());
+
     // r[impl service.site.address]
     // Spawn the site-service DNS resolver alongside the reconciler so
     // operator-supplied DNS-named endpoints get periodically re-resolved
