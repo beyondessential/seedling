@@ -143,6 +143,10 @@ pub(crate) fn invoke_install(
         state
             .event_tx
             .app_phase_changed(app_name, "installed", None);
+        // spec: ACN#start-action
+        // An app with no install action moves to Installed without an install
+        // operation, and its start action runs as it does after one.
+        crate::oi::handler::actions::lifecycle::initiate_start(state, app_name, "install");
         state.tick_notify.notify_one();
         tracing::info!(app = %app_name, schedule = "accepted", "invoke_install (immediate)");
         return Ok(json!({ "schedule": "accepted" }));
@@ -206,6 +210,14 @@ pub(crate) fn invoke_install(
             Ok(json!({ "schedule": "accepted", "operation_id": op_id_str }))
         }
         ScheduleResult::Queued => {
+            // spec: OPS#concurrency
+            // Installing is entered when the install starts, so a queued
+            // install leaves no phase behind if it is refused here.
+            super::lifecycle::persist_queued(
+                state,
+                &crate::runtime::barrier::OperationId(op_id_str.clone()),
+                Some(Arc::clone(&ctx.events.actor)),
+            )?;
             tracing::info!(app = %app_name, schedule = "queued", "invoke_install");
             Ok(json!({ "schedule": "queued", "operation_id": op_id_str }))
         }
@@ -225,6 +237,10 @@ pub(crate) fn invoke_install(
         ScheduleResult::Rejected(RejectReason::AppUninstalling) => Err(OiError::new(
             ErrorCode::NotInstalled,
             format!("app is being uninstalled: {app_name}"),
+        )),
+        // spec: OPS#unreadable-operation-state
+        ScheduleResult::Rejected(RejectReason::OperationStateUnreadable) => Err(OiError::internal(
+            "the persisted operation state cannot be read, so no operation can start",
         )),
     }
 }

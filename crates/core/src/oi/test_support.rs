@@ -135,9 +135,23 @@ impl TestOi {
     }
 
     /// Mark `name` installed through the immediate (no `on_install`) path.
+    ///
+    /// Installing starts the app's start action, which holds the scheduler
+    /// until it ends; this waits for that, so the app is left installed and
+    /// nothing is in progress.
     pub fn install(&self, name: &str) {
         self.call("/apps/install/invoke", json!({ "app": name }))
             .expect("install app");
+        self.block_on(async {
+            let idle = async {
+                while self.state.scheduler.lock().active().is_some() {
+                    tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+                }
+            };
+            tokio::time::timeout(std::time::Duration::from_secs(10), idle)
+                .await
+                .expect("the start action ends");
+        });
     }
 
     /// Drive a future on the harness's own runtime.
@@ -223,6 +237,176 @@ mod tests {
 
         let busy = oi.call("/server/status", json!({})).unwrap();
         assert_eq!(busy["active_operations"], 1, "one operation active");
+    }
+
+    const ACTION_SCRIPT: &str = r#"
+        app.deployment("web").image("docker.io/library/nginx:1.29");
+        app.on_action("refresh", |rt, _p| {}, #{
+            params: #{ token: #{ kind: "text", secret: true, required: false } },
+        });
+    "#;
+
+    /// Register `app`, installed, with an action, and hold the scheduler with
+    /// an operation of another app so that a request for `app` queues.
+    fn oi_with_a_busy_scheduler(app: &str) -> TestOi {
+        use seedling_protocol::names::{ActionName, AppName};
+        let oi = TestOi::new();
+        oi.call(
+            "/apps/create",
+            json!({ "app": app, "script": ACTION_SCRIPT }),
+        )
+        .unwrap();
+        *oi.state.registry.read().get(app).unwrap().phase.lock() =
+            crate::runtime::apps::AppPhase::Installed;
+        oi.state.scheduler.lock().admit(
+            &AppName::new("blocker").unwrap(),
+            &ActionName::new("install").unwrap(),
+            serde_json::Map::new(),
+            1,
+            1,
+            "test",
+            &parking_lot::Mutex::new(crate::runtime::apps::AppPhase::Installed),
+        );
+        oi
+    }
+
+    // spec: OPS#concurrency
+    #[test]
+    fn a_queued_request_is_persisted_with_its_params_protected_and_cleared_when_it_starts() {
+        let oi = oi_with_a_busy_scheduler("demo");
+        let result = oi
+            .call(
+                "/apps/action/invoke",
+                json!({ "app": "demo", "name": "refresh", "params": { "token": "hunter2" } }),
+            )
+            .unwrap();
+        assert_eq!(result["schedule"], "queued");
+        let id = result["operation_id"].as_str().unwrap().to_owned();
+
+        let (count, ciphertext, actor): (i64, Vec<u8>, Option<String>) = oi.state.db.call(|db| {
+            db.conn
+                .query_row(
+                    "SELECT COUNT(*), params_ciphertext, actor FROM queued_operations",
+                    [],
+                    |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+                )
+                .unwrap()
+        });
+        assert_eq!(count, 1);
+        assert!(
+            !String::from_utf8_lossy(&ciphertext).contains("hunter2"),
+            "the params are stored protected"
+        );
+        assert!(
+            actor.unwrap().contains("test-suite"),
+            "the requesting actor is kept"
+        );
+
+        let restored = oi.state.db.call({
+            let cipher = std::sync::Arc::clone(&oi.state.cipher);
+            move |db| crate::runtime::history::load_queued_operations(db, &cipher).unwrap()
+        });
+        assert_eq!(restored.len(), 1);
+        assert_eq!(restored[0].operation_id.0, id);
+        assert_eq!(restored[0].params["token"], "hunter2");
+        assert_eq!(
+            restored[0].actor.as_ref().unwrap().id.as_deref(),
+            Some("test-suite")
+        );
+    }
+
+    // spec: OPS#concurrency
+    #[test]
+    fn a_request_that_cannot_be_persisted_is_refused_and_not_queued() {
+        let oi = oi_with_a_busy_scheduler("demo");
+        oi.state.db.call(|db| {
+            db.conn
+                .execute_batch("DROP TABLE queued_operations;")
+                .unwrap();
+        });
+        let (code, _) = oi
+            .call(
+                "/apps/action/invoke",
+                json!({ "app": "demo", "name": "refresh" }),
+            )
+            .unwrap_err();
+        assert_eq!(code, "internal");
+        assert_eq!(
+            oi.state.scheduler.lock().queue_iter().count(),
+            0,
+            "a refused request must not run later"
+        );
+    }
+
+    // spec: OPS#concurrency
+    #[test]
+    fn a_restored_request_for_an_unregistered_app_is_discarded_and_the_rest_are_kept() {
+        let oi = oi_with_a_busy_scheduler("demo");
+        let queued = |app: &str, id: &str| crate::runtime::scheduler::QueuedOperation {
+            app: seedling_protocol::names::AppName::new(app).unwrap(),
+            action: seedling_protocol::names::ActionName::new("refresh").unwrap(),
+            operation_id: crate::runtime::barrier::OperationId(id.to_owned()),
+            params: serde_json::Map::new(),
+            source_generation: 1,
+            target_generation: 1,
+            trigger: "operator".to_owned(),
+            actor: None,
+        };
+        let ghost = queued("ghost", "op-ghost");
+        let real = queued("demo", "op-real");
+        for op in [&ghost, &real] {
+            let (op, cipher) = (op.clone(), std::sync::Arc::clone(&oi.state.cipher));
+            oi.state
+                .db
+                .call(move |db| crate::runtime::history::save_queued_operation(db, &cipher, &op))
+                .unwrap();
+        }
+
+        crate::oi::handler::actions::lifecycle::restore_queue(&oi.state, vec![ghost, real]);
+
+        let queue: Vec<String> = oi
+            .state
+            .scheduler
+            .lock()
+            .queue_iter()
+            .map(|q| q.operation_id.0.clone())
+            .collect();
+        assert_eq!(queue, vec!["op-real"]);
+        let rows: i64 = oi.state.db.call(|db| {
+            db.conn
+                .query_row("SELECT COUNT(*) FROM queued_operations", [], |r| r.get(0))
+                .unwrap()
+        });
+        assert_eq!(rows, 1, "the discarded request's record is gone");
+    }
+
+    // spec: OPS#unreadable-operation-state
+    #[test]
+    fn nothing_starts_while_the_persisted_operation_state_is_unreadable() {
+        let oi = TestOi::new();
+        oi.call(
+            "/apps/create",
+            json!({ "app": "demo", "script": ACTION_SCRIPT }),
+        )
+        .unwrap();
+        oi.install("demo");
+        oi.state.scheduler.lock().set_state_unreadable(true);
+        let (code, _) = oi
+            .call(
+                "/apps/action/invoke",
+                json!({ "app": "demo", "name": "refresh" }),
+            )
+            .unwrap_err();
+        assert_eq!(code, "internal");
+        assert!(
+            oi.state
+                .scheduler
+                .lock()
+                .active()
+                .is_none_or(|a| a.action != "refresh"),
+            "the refused request did not start"
+        );
+        oi.state.scheduler.lock().set_state_unreadable(false);
     }
 
     // spec: WIRE#error-codes

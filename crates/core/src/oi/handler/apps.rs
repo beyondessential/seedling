@@ -1629,7 +1629,11 @@ pub(crate) fn validation_error(rejections: &[crate::runtime::apps::Rejection]) -
 }
 
 // spec: APPS#update
-pub(crate) fn update_app(state: &OiState, params: UpdateParams, ctx: &RequestCtx) -> HandlerResult {
+pub(crate) fn update_app(
+    state: &Arc<OiState>,
+    params: UpdateParams,
+    ctx: &RequestCtx,
+) -> HandlerResult {
     let name = params.app.as_str();
 
     {
@@ -1880,9 +1884,14 @@ pub(crate) fn update_app(state: &OiState, params: UpdateParams, ctx: &RequestCtx
     // generation. A definition replaced without a parameter change
     // schedules nothing.
     let schedule = match &change {
-        Some((pname, _, _)) => {
-            super::params::schedule_on_change(state, hold, &params.app, pname, generation)?
-        }
+        Some((pname, _, _)) => super::params::schedule_on_change(
+            state,
+            hold,
+            &params.app,
+            pname,
+            generation,
+            &ctx.events.actor,
+        )?,
         None => "not_scheduled",
     };
 

@@ -256,6 +256,12 @@ pub(crate) fn invoke_action(
             Ok(json!({ "schedule": "accepted", "operation_id": op_id_str }))
         }
         ScheduleResult::Queued => {
+            // spec: OPS#concurrency
+            lifecycle::persist_queued(
+                state,
+                &crate::runtime::barrier::OperationId(op_id_str.clone()),
+                Some(Arc::clone(&ctx.events.actor)),
+            )?;
             tracing::info!(app = %app_name, action = %action_name, schedule = "queued", "invoke_action");
             Ok(json!({ "schedule": "queued", "operation_id": op_id_str }))
         }
@@ -275,6 +281,10 @@ pub(crate) fn invoke_action(
         ScheduleResult::Rejected(RejectReason::AppUninstalling) => Err(OiError::new(
             ErrorCode::NotInstalled,
             format!("app is being uninstalled: {app_name}"),
+        )),
+        // spec: OPS#unreadable-operation-state
+        ScheduleResult::Rejected(RejectReason::OperationStateUnreadable) => Err(OiError::internal(
+            "the persisted operation state cannot be read, so no operation can start",
         )),
     }
 }

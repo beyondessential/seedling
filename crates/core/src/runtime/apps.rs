@@ -135,6 +135,11 @@ pub struct AppEntry {
     /// completed, lower first; `None` before any install has completed.
     // spec: ING#claims-across-apps
     pub install_seq: Option<i64>,
+    /// The app's start action has been initiated and has not yet ended,
+    /// including while it is queued. Until it ends, the app's desired state is
+    /// held as for an app with an operation in progress.
+    // spec: RCN#desired-state
+    pub start_pending: Arc<std::sync::atomic::AtomicBool>,
 }
 
 pub struct AppRegistry {
@@ -212,6 +217,7 @@ impl AppRegistry {
                 script_error,
                 current_generation: generation,
                 install_seq: None,
+                start_pending: Arc::default(),
             },
         );
     }
@@ -389,6 +395,7 @@ impl AppRegistry {
                     script_error,
                     current_generation,
                     install_seq,
+                    start_pending: Arc::default(),
                 },
             );
         }

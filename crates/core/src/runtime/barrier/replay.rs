@@ -397,7 +397,7 @@ pub fn run_operation<W: WorldStateOracle + 'static>(
         let captured_actions = captured.actions.clone();
         let (closure, is_install, is_shell) = if action_name == "install" {
             if let Some(c) = captured.install {
-                (c, true, false)
+                (Some(c), true, false)
             } else {
                 return OperationResult::Failed(Box::new(EvalAltResult::ErrorRuntime(
                     "install action not defined in script".into(),
@@ -405,11 +405,16 @@ pub fn run_operation<W: WorldStateOracle + 'static>(
                 )));
             }
         } else if let Some(c) = captured.actions.get(action_name) {
-            (c.clone(), false, false)
+            (Some(c.clone()), false, false)
         } else if let Some(c) = captured.param_changes.get(action_name) {
-            (c.clone(), false, false)
+            (Some(c.clone()), false, false)
         } else if let Some(c) = captured.shells.get(action_name) {
-            (c.clone(), false, true)
+            (Some(c.clone()), false, true)
+        } else if action_name == "start" {
+            // spec: ACN#start-action
+            // An app that declares no start action is brought up as though
+            // its closure called `rt.start(app)`.
+            (None, false, false)
         } else {
             return OperationResult::Failed(Box::new(EvalAltResult::ErrorRuntime(
                 format!("Action '{}' not found", action_name).into(),
@@ -467,7 +472,12 @@ pub fn run_operation<W: WorldStateOracle + 'static>(
     };
 
     scope.push("__bsl_rt", rt);
-    scope.push("__bsl_closure", closure);
+    let default_start = closure.is_none();
+    if let Some(closure) = closure {
+        scope.push("__bsl_closure", closure);
+    } else {
+        scope.push("__bsl_app", app.clone());
+    }
     scope.push("__bsl_old_app", old_app);
     let param_map: rhai::Map = params
         .iter()
@@ -478,7 +488,10 @@ pub fn run_operation<W: WorldStateOracle + 'static>(
         scope.push("__bsl_shell", super::shell::ShellControl::new());
     }
 
-    let call_script = if is_param_change {
+    let call_script = if default_start {
+        // spec: ACN#start-action
+        "__bsl_rt.start(__bsl_app)"
+    } else if is_param_change {
         "__bsl_closure.call(__bsl_rt, __bsl_old_app)"
     } else if is_shell {
         "__bsl_closure.call(__bsl_rt, __bsl_shell, __bsl_param)"
@@ -511,6 +524,7 @@ pub fn run_operation<W: WorldStateOracle + 'static>(
 
     let _ = scope.remove::<Dynamic>("__bsl_rt");
     let _ = scope.remove::<Dynamic>("__bsl_closure");
+    let _ = scope.remove::<crate::defs::app::App>("__bsl_app");
     let _ = scope.remove::<Dynamic>("__bsl_old_app");
     let _ = scope.remove::<rhai::Map>("__bsl_param");
     if is_shell {

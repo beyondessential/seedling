@@ -436,63 +436,6 @@ async fn main() {
     let db = DbHandle::from_db(db);
     let scheduler = Arc::new(parking_lot::Mutex::new(Scheduler::new()));
 
-    // ---------------------------------------------------------------------------
-    // Load the persisted in-flight operation (if any) so we can both skip its
-    // resources during orphan cleanup below and replay it after the reconciler
-    // comes online.
-    // spec: OPS#initiating-events, SUSP#replay
-    // ---------------------------------------------------------------------------
-
-    let persisted_operation = db
-        .call(seedling_core::runtime::history::load_current_operation)
-        .unwrap_or_else(|e| {
-            tracing::warn!("failed to load current_operation on startup: {e}");
-            None
-        });
-    if let Some(op) = &persisted_operation {
-        tracing::info!(
-            app = %op.app,
-            action = %op.action_name,
-            operation_id = %op.operation_id.0,
-            "found interrupted operation; will replay after startup"
-        );
-    }
-
-    // ---------------------------------------------------------------------------
-    // Startup orphan cleanup — remove dynamic resources left by a previous run.
-    // Resources owned by the operation we are about to replay are kept so the
-    // replay picks up where it left off.
-    // ---------------------------------------------------------------------------
-
-    let replay_op_id: Option<String> = persisted_operation
-        .as_ref()
-        .map(|op| op.operation_id.0.clone());
-    {
-        let records = db.call(seedling_core::runtime::desired::list_dynamic_resources);
-        // Keep resources that belong to the operation we're about to replay;
-        // the replay will take ownership of them. Everything else from a
-        // prior run gets cleaned up here.
-        let records: Result<Vec<_>, _> = records.map(|rs| {
-            rs.into_iter()
-                .filter(|r| Some(&r.operation_id) != replay_op_id.as_ref())
-                .collect()
-        });
-        match records {
-            Ok(records) if !records.is_empty() => {
-                tracing::warn!(
-                    count = records.len(),
-                    "found orphaned dynamic resources from a previous run; cleaning up"
-                );
-                tear_down_dynamic_resources(&driver, &db, &records);
-                tracing::info!("orphaned dynamic resource cleanup complete");
-            }
-            Ok(_) => {}
-            Err(e) => {
-                tracing::warn!("failed to check for orphaned dynamic resources: {e}");
-            }
-        }
-    }
-
     // Podman-level scan for orphaned anonymous volumes.
     // Any volume with the "seedling-anon-" prefix that isn't tracked in the DB
     // is an orphan from a previous run.
@@ -850,76 +793,16 @@ async fn main() {
     )));
 
     // ---------------------------------------------------------------------------
-    // Replay any interrupted lifecycle operation. Runs after OiState is built
-    // but before the reconciler starts ticking, so the install closure's
-    // rt.start() calls are picked up by the first reconciliation tick.
-    // spec: OPS#initiating-events, SUSP#replay
+    // Decide whether to replay an interrupted lifecycle operation, restore the
+    // queue, and start each installed app. Runs after OiState is built but
+    // before the reconciler starts ticking, so the install closure's
+    // rt.start() calls are picked up by the first reconciliation tick. If the
+    // persisted state cannot be read, nothing starts until a later iteration
+    // reads it.
+    // spec: OPS#initiating-events, SUSP#replay, OPS#unreadable-operation-state
     // ---------------------------------------------------------------------------
 
-    let persisted_op_app = persisted_operation.as_ref().map(|op| op.app.clone());
-    if let Some(op) = persisted_operation {
-        replay_interrupted_operation(Arc::clone(&oi_state), op);
-    }
-
-    // spec: OPS#stuck-install-recovery
-    // Recover apps left in inconsistent state by a previous run:
-    //
-    // 1. `Installing` phase with no matching current_operation. Causes: a
-    //    previous run cancelled an op and cleared current_operation but its
-    //    phase-revert persist was interrupted by crash/restart; or the daemon
-    //    died between persisting the phase and persisting current_operation.
-    //    Without this sweep, the operator can neither cancel nor uninstall
-    //    such an app — both gates check phase.
-    //
-    // 2. `NotInstalled` phase but resource_instances still exist for the
-    //    app. Causes: a previous recovery dropped Installing → NotInstalled
-    //    directly (older code path), or DB-level surgery. The reconciler
-    //    skips NotInstalled apps so the orphaned resources never get torn
-    //    down through normal reconciliation.
-    //
-    // Both stuck apps transition to Uninstalling so the reconciler runs the
-    // teardown loop; it converges to NotInstalled once teardown completes.
-    {
-        use seedling_core::runtime::apps::AppPhase;
-        let stuck: Vec<seedling_protocol::names::AppName> = {
-            let reg = oi_state.registry.read();
-            reg.iter()
-                .filter(|e| {
-                    if persisted_op_app.as_ref() == Some(&e.name) {
-                        return false;
-                    }
-                    let phase = e.phase.lock();
-                    if matches!(*phase, AppPhase::Installing) {
-                        return true;
-                    }
-                    if matches!(*phase, AppPhase::NotInstalled) {
-                        let app_for_query = e.name.clone();
-                        let count: i64 = db.call(move |db| {
-                            seedling_core::runtime::history::app_resource_instance_count(
-                                db,
-                                &app_for_query,
-                            )
-                            .unwrap_or(0)
-                        });
-                        return count > 0;
-                    }
-                    false
-                })
-                .map(|e| e.name.clone())
-                .collect()
-        };
-        for app_name in stuck {
-            tracing::warn!(
-                app = %app_name,
-                "app in stuck state at startup; transitioning to Uninstalling for teardown"
-            );
-            seedling_core::oi::handler::actions::lifecycle::set_phase_and_persist(
-                &oi_state,
-                &app_name,
-                AppPhase::Uninstalling,
-            );
-        }
-    }
+    resume_operations(&oi_state).await;
 
     // Pre-build the volume-shell image so it is warm before the first
     // operator opens a volume shell session. Building takes longer than a
@@ -1006,6 +889,16 @@ async fn main() {
             // spec: SCHED#firing
             let mut schedule_ticker = seedling_core::runtime::schedules::ScheduleTicker::new();
             loop {
+                // spec: OPS#unreadable-operation-state
+                // Until the persisted operation state can be read nothing
+                // starts, so each iteration tries again, and the loop keeps
+                // iterating rather than idling.
+                if oi_state_for_sched.scheduler.lock().is_state_unreadable() {
+                    resume_operations(&oi_state_for_sched).await;
+                    if oi_state_for_sched.scheduler.lock().is_state_unreadable() {
+                        idle = false;
+                    }
+                }
                 if idle {
                     tick_notify.notified().await;
                     idle = false;
@@ -1064,10 +957,27 @@ async fn main() {
                         drop(sched);
                         fired
                             .into_iter()
-                            .filter(|f| f.accepted && f.operation_id.is_some())
+                            .filter(|f| f.operation_id.is_some())
                             .collect::<Vec<_>>()
                     });
                     for fire in accepted_fires {
+                        if !fire.accepted {
+                            // spec: OPS#concurrency
+                            // A fire queued behind another app's operation is
+                            // persisted like any queued request, and taken off
+                            // the queue again if that fails.
+                            if let Some(op_id) = &fire.operation_id
+                                && let Err(e) =
+                                    seedling_core::oi::handler::actions::lifecycle::persist_queued(
+                                        &oi_state_for_sched,
+                                        op_id,
+                                        None,
+                                    )
+                            {
+                                tracing::error!(app = %fire.app, action = %fire.action, "scheduled fire refused: {}", e.message);
+                            }
+                            continue;
+                        }
                         if let Some(op_id) = fire.operation_id {
                             seedling_core::oi::handler::actions::lifecycle::spawn_accepted_operation(
                                 Arc::clone(&oi_state_for_sched),
@@ -1343,6 +1253,202 @@ fn abandon_spared_resources(
     }
 }
 
+/// Read the persisted operation state and act on it: spare or tear down
+/// dynamic resources, replay an interrupted operation, recover stuck installs,
+/// restore the queue and run each installed app's start action.
+///
+/// If the state cannot be read, files `operation_state_unreadable`, starts no
+/// operation, and does none of the above, since each acts on an operation's
+/// absence. Called again on each reconciliation iteration until it reads.
+// spec: OPS#unreadable-operation-state
+// spec: OPS#interrupted-operations
+// spec: OPS#initiating-events
+async fn resume_operations(oi_state: &Arc<OiState>) {
+    use seedling_core::runtime::history::read_operation_state;
+    use seedling_protocol::names::AppName;
+
+    let system = AppName::new_unchecked("_system");
+    let cipher = Arc::clone(&oi_state.cipher);
+    let read = oi_state
+        .db
+        .call(move |db| read_operation_state(db, &cipher));
+    let state = match read {
+        Ok(state) => state,
+        Err(why) => {
+            tracing::error!(
+                "cannot read the persisted operation state; starting no operation: {why}"
+            );
+            oi_state.scheduler.lock().set_state_unreadable(true);
+            let description = format!("cannot read {why}");
+            oi_state.db.call(move |db| {
+                let key = seedling_core::runtime::faults::FaultKey::new(
+                    &AppName::new_unchecked("_system"),
+                    "operation_state_unreadable",
+                    "",
+                );
+                let meta = seedling_core::runtime::faults::FaultMeta::default();
+                if let Err(e) =
+                    seedling_core::runtime::faults::file_once(db, &key, &meta, &description)
+                {
+                    tracing::warn!("failed to file operation_state_unreadable: {e}");
+                }
+            });
+            return;
+        }
+    };
+    if oi_state.scheduler.lock().is_state_unreadable() {
+        oi_state.scheduler.lock().set_state_unreadable(false);
+    }
+    {
+        let system = system.clone();
+        oi_state.db.call(move |db| {
+            let _ = seedling_core::runtime::faults::clear_faults_by_kind(
+                db,
+                &system,
+                "operation_state_unreadable",
+            );
+        });
+    }
+
+    let persisted_operation = state.current;
+    if let Some(op) = &persisted_operation {
+        tracing::info!(
+            app = %op.app,
+            action = %op.action_name,
+            operation_id = %op.operation_id.0,
+            "found interrupted operation; will replay after startup"
+        );
+    }
+
+    // Startup orphan cleanup — remove dynamic resources left by a previous run.
+    // Resources owned by the operation we are about to replay are kept so the
+    // replay picks up where it left off.
+    let replay_op_id: Option<String> = persisted_operation
+        .as_ref()
+        .map(|op| op.operation_id.0.clone());
+    {
+        let records = oi_state
+            .db
+            .call(seedling_core::runtime::desired::list_dynamic_resources);
+        let records: Result<Vec<_>, _> = records.map(|rs| {
+            rs.into_iter()
+                .filter(|r| Some(&r.operation_id) != replay_op_id.as_ref())
+                .collect()
+        });
+        match records {
+            Ok(records) if !records.is_empty() => {
+                tracing::warn!(
+                    count = records.len(),
+                    "found orphaned dynamic resources from a previous run; cleaning up"
+                );
+                tear_down_dynamic_resources(&oi_state.driver, &oi_state.db, &records);
+                tracing::info!("orphaned dynamic resource cleanup complete");
+            }
+            Ok(_) => {}
+            Err(e) => {
+                tracing::warn!("failed to check for orphaned dynamic resources: {e}");
+            }
+        }
+    }
+
+    let persisted_op_app = persisted_operation.as_ref().map(|op| op.app.clone());
+    let replayed_app = match persisted_operation {
+        Some(op) => {
+            let app = op.app.clone();
+            replay_interrupted_operation(Arc::clone(oi_state), op).then_some(app)
+        }
+        None => None,
+    };
+
+    let db = &oi_state.db;
+    // spec: OPS#stuck-install-recovery
+    // Recover apps left in inconsistent state by a previous run:
+    //
+    // 1. `Installing` phase with no matching current_operation. Causes: a
+    //    previous run cancelled an op and cleared current_operation but its
+    //    phase-revert persist was interrupted by crash/restart; or the daemon
+    //    died between persisting the phase and persisting current_operation.
+    //    Without this sweep, the operator can neither cancel nor uninstall
+    //    such an app — both gates check phase.
+    //
+    // 2. `NotInstalled` phase but resource_instances still exist for the
+    //    app. Causes: a previous recovery dropped Installing → NotInstalled
+    //    directly (older code path), or DB-level surgery. The reconciler
+    //    skips NotInstalled apps so the orphaned resources never get torn
+    //    down through normal reconciliation.
+    //
+    // Both stuck apps transition to Uninstalling so the reconciler runs the
+    // teardown loop; it converges to NotInstalled once teardown completes.
+    {
+        use seedling_core::runtime::apps::AppPhase;
+        let stuck: Vec<seedling_protocol::names::AppName> = {
+            let reg = oi_state.registry.read();
+            reg.iter()
+                .filter(|e| {
+                    if persisted_op_app.as_ref() == Some(&e.name) {
+                        return false;
+                    }
+                    let phase = e.phase.lock();
+                    if matches!(*phase, AppPhase::Installing) {
+                        return true;
+                    }
+                    if matches!(*phase, AppPhase::NotInstalled) {
+                        let app_for_query = e.name.clone();
+                        let count: i64 = db.call(move |db| {
+                            seedling_core::runtime::history::app_resource_instance_count(
+                                db,
+                                &app_for_query,
+                            )
+                            .unwrap_or(0)
+                        });
+                        return count > 0;
+                    }
+                    false
+                })
+                .map(|e| e.name.clone())
+                .collect()
+        };
+        for app_name in stuck {
+            tracing::warn!(
+                app = %app_name,
+                "app in stuck state at startup; transitioning to Uninstalling for teardown"
+            );
+            seedling_core::oi::handler::actions::lifecycle::set_phase_and_persist(
+                oi_state,
+                &app_name,
+                AppPhase::Uninstalling,
+            );
+        }
+    }
+
+    // spec: OPS#concurrency
+    seedling_core::oi::handler::actions::lifecycle::restore_queue(oi_state, state.queued);
+
+    // spec: OPS#initiating-events
+    // spec: ACN#start-action
+    // Each installed app with no operation being replayed or waiting has its
+    // start action run, with the trigger `boot`; until it ends the app's
+    // desired state is held, so the start action brings it up in its own
+    // order.
+    {
+        use seedling_core::runtime::apps::AppPhase;
+        let installed: Vec<AppName> = {
+            let reg = oi_state.registry.read();
+            reg.iter()
+                .filter(|e| matches!(*e.phase.lock(), AppPhase::Installed))
+                .filter(|e| replayed_app.as_ref() != Some(&e.name))
+                .filter(|e| oi_state.scheduler.lock().blocker_for(&e.name).is_none())
+                .map(|e| e.name.clone())
+                .collect()
+        };
+        for app_name in installed {
+            seedling_core::oi::handler::actions::lifecycle::initiate_start(
+                oi_state, &app_name, "boot",
+            );
+        }
+    }
+}
+
 // spec: SUSP#abandoned-replay
 /// Replay an interrupted lifecycle operation, and where it does not start,
 /// hand back the resources startup spared on its behalf.
@@ -1353,11 +1459,13 @@ fn abandon_spared_resources(
 fn replay_interrupted_operation(
     state: Arc<OiState>,
     op: seedling_core::runtime::history::CurrentOperation,
-) {
+) -> bool {
     let operation_id = op.operation_id.0.clone();
-    if !start_replay(Arc::clone(&state), op) {
+    let replayed = start_replay(Arc::clone(&state), op);
+    if !replayed {
         abandon_spared_resources(&state.driver, &state.db, &operation_id);
     }
+    replayed
 }
 
 /// Decide whether the interrupted operation can be replayed, and start it if

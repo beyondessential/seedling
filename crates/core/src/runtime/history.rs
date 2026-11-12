@@ -755,6 +755,139 @@ pub fn load_current_operation(db: &Db) -> rusqlite::Result<Option<CurrentOperati
     }
 }
 
+// ---------------------------------------------------------------------------
+// Queued operations
+// ---------------------------------------------------------------------------
+
+/// Persist a queued request, with its parameters protected under the secret
+/// key as a persisted operation's are.
+// spec: OPS#concurrency
+pub fn save_queued_operation(
+    db: &Db,
+    cipher: &crate::runtime::secrets::Cipher,
+    op: &crate::runtime::scheduler::QueuedOperation,
+) -> Result<(), OperationPersistError> {
+    let plaintext = serde_json::to_string(&op.params).map_err(OperationPersistError::Json)?;
+    let ciphertext = cipher
+        .encrypt(&secrecy::SecretString::new(plaintext.into()))
+        .map_err(OperationPersistError::Cipher)?;
+    let actor = op
+        .actor
+        .as_deref()
+        .map(serde_json::to_string)
+        .transpose()
+        .map_err(OperationPersistError::Json)?;
+    db.conn.execute(
+        "INSERT INTO queued_operations
+            (operation_id, app, action, trigger, source_generation, target_generation,
+             params_ciphertext, actor)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+        params![
+            op.operation_id.0,
+            op.app,
+            op.action,
+            op.trigger,
+            op.source_generation as i64,
+            op.target_generation as i64,
+            ciphertext,
+            actor,
+        ],
+    )?;
+    Ok(())
+}
+
+/// Remove a queued request's record, because it has started or been refused.
+// spec: OPS#concurrency
+pub fn clear_queued_operation(db: &Db, operation_id: &OperationId) -> rusqlite::Result<()> {
+    db.conn.execute(
+        "DELETE FROM queued_operations WHERE operation_id = ?1",
+        [&operation_id.0],
+    )?;
+    Ok(())
+}
+
+/// Every persisted queued request, in the order it was made.
+///
+/// A record that cannot be read fails the whole read rather than being
+/// skipped: a queue missing a request is not the queue that was persisted.
+// spec: OPS#concurrency
+pub fn load_queued_operations(
+    db: &Db,
+    cipher: &crate::runtime::secrets::Cipher,
+) -> Result<Vec<crate::runtime::scheduler::QueuedOperation>, OperationPersistError> {
+    use secrecy::ExposeSecret;
+    let mut stmt = db.conn.prepare(
+        "SELECT operation_id, app, action, trigger, source_generation, target_generation,
+                params_ciphertext, actor
+           FROM queued_operations ORDER BY seq",
+    )?;
+    let rows = stmt.query_map([], |row| {
+        Ok((
+            row.get::<_, String>(0)?,
+            row.get::<_, AppName>(1)?,
+            row.get::<_, ActionName>(2)?,
+            row.get::<_, String>(3)?,
+            row.get::<_, i64>(4)?,
+            row.get::<_, i64>(5)?,
+            row.get::<_, Vec<u8>>(6)?,
+            row.get::<_, Option<String>>(7)?,
+        ))
+    })?;
+    let mut out = Vec::new();
+    for row in rows {
+        let (id, app, action, trigger, source, target, ciphertext, actor) = row?;
+        let plaintext = cipher
+            .decrypt(&ciphertext)
+            .map_err(OperationPersistError::Cipher)?;
+        let params =
+            serde_json::from_str(plaintext.expose_secret()).map_err(OperationPersistError::Json)?;
+        let actor = actor
+            .map(|a| serde_json::from_str(&a))
+            .transpose()
+            .map_err(OperationPersistError::Json)?
+            .map(std::sync::Arc::new);
+        out.push(crate::runtime::scheduler::QueuedOperation {
+            app,
+            action,
+            operation_id: OperationId(id),
+            params,
+            source_generation: source as u64,
+            target_generation: target as u64,
+            trigger,
+            actor,
+        });
+    }
+    Ok(out)
+}
+
+/// What the runtime persisted about lifecycle operations when it stopped.
+pub struct PersistedOperationState {
+    /// The operation that was in progress, if any.
+    pub current: Option<CurrentOperation>,
+    /// The requests that were waiting, in the order they were made.
+    pub queued: Vec<crate::runtime::scheduler::QueuedOperation>,
+}
+
+/// Read the persisted operation, whether a cancel was persisted for it, and
+/// the persisted queue, or say which could not be read.
+///
+/// All three are read or none is answered for: acting on a part of the state
+/// would treat what could not be read as absent.
+// spec: OPS#unreadable-operation-state
+pub fn read_operation_state(
+    db: &Db,
+    cipher: &crate::runtime::secrets::Cipher,
+) -> Result<PersistedOperationState, String> {
+    let current =
+        load_current_operation(db).map_err(|e| format!("the persisted operation: {e}"))?;
+    if current.is_some() {
+        load_cancel_requested(db).map_err(|e| format!("the persisted cancel: {e}"))?;
+    }
+    let queued = load_queued_operations(db, cipher)
+        .map_err(|e| format!("the persisted operation queue: {e}"))?;
+    Ok(PersistedOperationState { current, queued })
+}
+
 pub fn clear_current_operation(db: &Db) -> rusqlite::Result<()> {
     db.conn.execute("DELETE FROM current_operation", [])?;
     Ok(())

@@ -83,6 +83,7 @@ fn make_entry(name: &str, script_error: Option<&str>) -> AppEntry {
         script_error: script_error.map(|msg| (msg.to_owned(), Timestamp::now())),
         current_generation: 0,
         install_seq: None,
+        start_pending: Default::default(),
     }
 }
 

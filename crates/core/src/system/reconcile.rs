@@ -752,6 +752,22 @@ impl Reconciler {
                         resources: Vec::new(),
                     }),
                 },
+                // spec: RCN#desired-state
+                // From the moment the start action is initiated until it ends,
+                // including while it is queued, the desired state is held as
+                // for an operation in progress: only what the start action has
+                // started or stopped. Until it has put something there, that
+                // is nothing.
+                AppPhase::Installed
+                    if progress.is_none()
+                        && entry
+                            .start_pending
+                            .load(std::sync::atomic::Ordering::Acquire) =>
+                {
+                    Ok(DesiredState {
+                        resources: Vec::new(),
+                    })
+                }
                 AppPhase::Installed => compute(
                     &name,
                     &app_def,
@@ -785,7 +801,11 @@ impl Reconciler {
             // Read once for the whole tick above; an app with no stored
             // decision stands at the default.
             let app_priority = priorities.get(&name).copied().unwrap_or_default();
-            let steady = phase == AppPhase::Installed && progress.is_none();
+            let steady = phase == AppPhase::Installed
+                && progress.is_none()
+                && !entry
+                    .start_pending
+                    .load(std::sync::atomic::Ordering::Acquire);
             snapshots.push(AppSnapshot {
                 name,
                 desired,
@@ -2608,6 +2628,61 @@ mod tests {
             app_priority,
             install_seq: Some(1),
         }
+    }
+
+    // spec: RCN#desired-state
+    #[test]
+    fn a_pending_start_action_holds_the_apps_desired_state_until_it_ends() {
+        use std::sync::atomic::Ordering;
+
+        let oi = crate::oi::test_support::TestOi::with_app("demo");
+        let reconciler = Reconciler::new(
+            Arc::clone(&oi.state.driver),
+            oi.state.node_prefix,
+            Arc::new(crate::runtime::registry::DbInstanceRegistry::new(
+                oi.state.db.clone(),
+            )),
+            Arc::new(AsyncRwLock::new(reqwest::Client::new())),
+            std::env::temp_dir(),
+            oi.state.db.clone(),
+            Arc::clone(&oi.state.registry),
+            oi.state.event_tx.clone(),
+            Vec::new(),
+            Vec::new(),
+            false,
+            false,
+            Arc::clone(&oi.state.shells),
+            None,
+            None,
+            None,
+            crate::runtime::gc::InstanceGcConfig {
+                interval: std::time::Duration::from_secs(3600),
+                retain: std::time::Duration::from_secs(3600),
+            },
+        );
+        let (pending, phase) = {
+            let reg = oi.state.registry.read();
+            let entry = reg.get("demo").unwrap();
+            (Arc::clone(&entry.start_pending), Arc::clone(&entry.phase))
+        };
+        *phase.lock() = AppPhase::Installed;
+        let desired_of = |reconciler: &Reconciler| {
+            let (snapshots, dropped) = reconciler.snapshot_all_apps();
+            assert_eq!(dropped, 0);
+            let app = snapshots
+                .into_iter()
+                .next()
+                .expect("the app is snapshotted");
+            (app.desired.resources.len(), app.steady)
+        };
+
+        pending.store(true, Ordering::Release);
+        assert_eq!(desired_of(&reconciler), (0, false));
+
+        pending.store(false, Ordering::Release);
+        let (resources, steady) = desired_of(&reconciler);
+        assert!(resources > 0, "the whole resource graph is desired again");
+        assert!(steady);
     }
 
     // spec: PRIO#resource-control-groups

@@ -792,13 +792,14 @@ pub fn spawn_accepted_operation(
     trigger: String,
     actor: Option<std::sync::Arc<seedling_protocol::actor::Actor>>,
 ) {
-    let (app, active_progress, tick_notify) = {
+    let (app, active_progress, tick_notify, start_pending) = {
         let reg = state.registry.read();
         match reg.get(app_name.as_str()) {
             Some(e) => (
                 e.app.clone(),
                 Arc::clone(&e.active_progress),
                 Arc::clone(&e.tick_notify),
+                Arc::clone(&e.start_pending),
             ),
             None => {
                 tracing::error!(app = %app_name, "spawn_accepted_operation: app not found");
@@ -811,6 +812,7 @@ pub fn spawn_accepted_operation(
     let script_limits = state.script_limits.clone();
     let cipher = Arc::clone(&state.cipher);
     let is_install = action_name == "install";
+    let is_start = action_name == "start";
 
     tokio::spawn(async move {
         // spec: WIRE#actor-attribution
@@ -823,6 +825,15 @@ pub fn spawn_accepted_operation(
             actor,
         );
         op_ctx.started(&trigger);
+
+        // spec: OPS#concurrency
+        // The request is no longer waiting, so its record goes.
+        {
+            let id = operation_id.clone();
+            state.db.call(move |db| {
+                let _ = crate::runtime::history::clear_queued_operation(db, &id);
+            });
+        }
 
         // spec: ACI#install
         // Flip to Installing as soon as the install operation actually starts
@@ -892,6 +903,14 @@ pub fn spawn_accepted_operation(
 
         cleanup_dynamic_resources(&state, &operation_id_str, &active_progress, &tick_notify).await;
 
+        // spec: RCN#desired-state
+        // The start action has ended, however it ended. Released while the
+        // operation's progress still stands, so the desired state passes from
+        // what the closure placed there to the whole resource graph without a
+        // moment of holding nothing.
+        if is_start {
+            start_pending.store(false, std::sync::atomic::Ordering::Release);
+        }
         *active_progress.write() = None;
         tick_notify.notify_one();
 
@@ -915,8 +934,201 @@ pub fn spawn_accepted_operation(
                 queued.source_generation,
                 queued.target_generation,
                 queued.trigger,
-                None,
+                queued.actor,
             );
         }
+
+        // spec: OPS#initiating-events
+        // The install has finished and its slot is free, so the start action
+        // can be admitted: before this, the install itself held the app's.
+        if is_install && success {
+            initiate_start(&state, &app_name, "install");
+        }
     });
+}
+
+/// Persist the request the scheduler has just queued as `operation_id`, so
+/// the queue survives a restart, and refuse the request if that fails.
+///
+/// The request is on the scheduler's queue until this returns, and is taken
+/// off it again when it cannot be persisted, so a request that is refused is
+/// one that never ran. A request that has already started by the time it is
+/// persisted leaves no record behind.
+// spec: OPS#concurrency
+pub fn persist_queued(
+    state: &OiState,
+    operation_id: &OperationId,
+    actor: Option<Arc<seedling_protocol::actor::Actor>>,
+) -> Result<(), seedling_protocol::error::OiError> {
+    let queued = {
+        let mut sched = state.scheduler.lock();
+        sched.set_queued_actor(operation_id, actor);
+        sched.queued(operation_id).cloned()
+    };
+    let Some(queued) = queued else {
+        return Ok(());
+    };
+    let cipher = Arc::clone(&state.cipher);
+    let saved = state
+        .db
+        .call(move |db| crate::runtime::history::save_queued_operation(db, &cipher, &queued));
+    if let Err(e) = saved {
+        state.scheduler.lock().unqueue(operation_id);
+        return Err(seedling_protocol::error::OiError::internal(format!(
+            "cannot persist the queued operation, so it is refused: {e}"
+        )));
+    }
+    if state.scheduler.lock().queued(operation_id).is_none() {
+        let id = operation_id.clone();
+        state.db.call(move |db| {
+            let _ = crate::runtime::history::clear_queued_operation(db, &id);
+        });
+    }
+    Ok(())
+}
+
+/// Restore the persisted queue after the decision to replay an interrupted
+/// operation, in the order the requests were made.
+///
+/// A request whose app is no longer registered is discarded. With nothing in
+/// progress the first restored request starts, and the rest queue behind it.
+// spec: OPS#concurrency
+pub fn restore_queue(
+    state: &Arc<OiState>,
+    queued: Vec<crate::runtime::scheduler::QueuedOperation>,
+) {
+    use crate::runtime::scheduler::ScheduleResult;
+    for op in queued {
+        let app = {
+            let reg = state.registry.read();
+            reg.get(op.app.as_str())
+                .map(|e| Arc::clone(&e.start_pending))
+        };
+        let Some(start_pending) = app else {
+            tracing::warn!(app = %op.app, action = %op.action, "queued operation names an unregistered app; discarding");
+            let id = op.operation_id.clone();
+            state.db.call(move |db| {
+                let _ = crate::runtime::history::clear_queued_operation(db, &id);
+            });
+            continue;
+        };
+        let result = state.scheduler.lock().request_with_id(
+            &op.app,
+            &op.action,
+            op.params.clone(),
+            op.source_generation,
+            op.target_generation,
+            &op.trigger,
+            op.operation_id.clone(),
+        );
+        match result {
+            ScheduleResult::Accepted => {
+                if op.action == "start" {
+                    start_pending.store(true, std::sync::atomic::Ordering::Release);
+                }
+                spawn_accepted_operation(
+                    Arc::clone(state),
+                    op.app,
+                    op.action,
+                    op.operation_id,
+                    op.params,
+                    op.source_generation,
+                    op.target_generation,
+                    op.trigger,
+                    op.actor,
+                );
+            }
+            ScheduleResult::Queued => {
+                if op.action == "start" {
+                    start_pending.store(true, std::sync::atomic::Ordering::Release);
+                }
+                state
+                    .scheduler
+                    .lock()
+                    .set_queued_actor(&op.operation_id, op.actor);
+            }
+            ScheduleResult::Rejected(reason) => {
+                tracing::warn!(app = %op.app, action = %op.action, ?reason, "restored queued operation refused; discarding");
+                let id = op.operation_id.clone();
+                state.db.call(move |db| {
+                    let _ = crate::runtime::history::clear_queued_operation(db, &id);
+                });
+            }
+        }
+    }
+}
+
+/// Initiate `app_name`'s start action with `trigger`, holding the app's
+/// desired state from now until the start action ends.
+///
+/// The start action runs as any lifecycle operation does: at once if nothing
+/// else is in progress, or queued behind another app's.
+// spec: OPS#initiating-events
+// spec: ACN#start-action
+// spec: RCN#desired-state
+pub fn initiate_start(state: &Arc<OiState>, app_name: &AppName, trigger: &str) {
+    let (generation, phase_handle, start_pending) = {
+        let reg = state.registry.read();
+        let Some(entry) = reg.get(app_name.as_str()) else {
+            return;
+        };
+        (
+            entry.current_generation,
+            Arc::clone(&entry.phase),
+            Arc::clone(&entry.start_pending),
+        )
+    };
+    start_pending.store(true, std::sync::atomic::Ordering::Release);
+    let start = ActionName::new_unchecked("start");
+    let (result, op_id) = {
+        let mut sched = state.scheduler.lock();
+        let result = sched.admit(
+            app_name,
+            &start,
+            serde_json::Map::new(),
+            generation,
+            generation,
+            trigger,
+            &phase_handle,
+        );
+        let op_id = match &result {
+            crate::runtime::scheduler::ScheduleResult::Accepted => {
+                sched.active().map(|a| a.operation_id.clone())
+            }
+            crate::runtime::scheduler::ScheduleResult::Queued => sched
+                .queue_iter()
+                .find(|q| q.app == *app_name)
+                .map(|q| q.operation_id.clone()),
+            crate::runtime::scheduler::ScheduleResult::Rejected(_) => None,
+        };
+        (result, op_id)
+    };
+    match (result, op_id) {
+        (crate::runtime::scheduler::ScheduleResult::Accepted, Some(operation_id)) => {
+            spawn_accepted_operation(
+                Arc::clone(state),
+                app_name.clone(),
+                start,
+                operation_id,
+                serde_json::Map::new(),
+                generation,
+                generation,
+                trigger.to_owned(),
+                None,
+            )
+        }
+        (crate::runtime::scheduler::ScheduleResult::Queued, Some(operation_id)) => {
+            match persist_queued(state, &operation_id, None) {
+                Ok(()) => tracing::info!(app = %app_name, trigger, "start action queued"),
+                Err(e) => {
+                    tracing::error!(app = %app_name, trigger, "start action refused: {}", e.message);
+                    start_pending.store(false, std::sync::atomic::Ordering::Release);
+                }
+            }
+        }
+        (other, _) => {
+            tracing::warn!(app = %app_name, trigger, "start action not admitted: {other:?}");
+            start_pending.store(false, std::sync::atomic::Ordering::Release);
+        }
+    }
 }

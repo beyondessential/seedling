@@ -387,3 +387,41 @@ fn an_array_is_a_selection_of_its_elements_and_other_values_are_not() {
         assert!(err.contains("not a selection"), "{value}: {err}");
     }
 }
+
+// spec: ACN#start-action
+#[test]
+fn an_app_with_no_start_action_is_started_as_though_its_closure_called_rt_start() {
+    use crate::runtime::barrier::replay::ActionLog as _;
+    let log = crate::runtime::barrier::replay::InMemoryActionLog::new();
+    let result = run_action_with(
+        r#"
+        app.deployment("web").image("docker.io/library/nginx:1");
+        app.service("public");
+    "#,
+        &[],
+        "start",
+        Some(&log),
+        ActionHooks::default(),
+    );
+    assert!(
+        matches!(
+            result,
+            OperationResult::Completed | OperationResult::Suspended(_)
+        ),
+        "{result:?}"
+    );
+    let starts: Vec<_> = log
+        .load()
+        .unwrap()
+        .into_iter()
+        .filter(|e| e.call_kind == crate::runtime::barrier::CallKind::Start)
+        .collect();
+    assert_eq!(starts.len(), 1, "rt.start(app) is one call");
+    assert!(
+        starts[0]
+            .resources
+            .iter()
+            .any(|r| r.name.as_deref() == Some("web")),
+        "it starts the app's resources"
+    );
+}

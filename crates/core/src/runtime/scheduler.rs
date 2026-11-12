@@ -53,6 +53,10 @@ pub struct QueuedOperation {
     pub target_generation: u64,
     // spec: EVT#event-types
     pub trigger: String,
+    /// Who asked for the operation, where a person or client did; its events
+    /// carry them when it starts.
+    // spec: WIRE#actor-attribution
+    pub actor: Option<Arc<seedling_protocol::actor::Actor>>,
 }
 
 // spec: OPS#concurrency
@@ -96,6 +100,10 @@ pub enum RejectReason {
     /// A change to the application is being committed, and its `on_change`
     /// handler is admitted in the hold's place; see [`AppHold`].
     ChangeBeingApplied,
+    // spec: OPS#unreadable-operation-state
+    /// The persisted operation, its cancel or the persisted queue cannot be
+    /// read, so which operation is in progress, or waiting, is not known.
+    OperationStateUnreadable,
 }
 
 /// What keeps an operation from being admitted for an app.
@@ -153,6 +161,10 @@ pub struct Scheduler {
     active: Option<ActiveOperation>,
     /// Pending operations in insertion (request) order; at most one per app.
     queue: VecDeque<QueuedOperation>,
+    /// The persisted operation state could not be read, so no operation is
+    /// started until it can be.
+    // spec: OPS#unreadable-operation-state
+    state_unreadable: bool,
     /// Inline action invocation chain for the active operation.
     call_stack: Vec<String>,
     /// Apps held against admission while a change to them is committed; see
@@ -166,6 +178,17 @@ impl Scheduler {
     }
 
     /// The currently active operation, if any.
+    /// Whether the persisted operation state is unreadable, so that no
+    /// operation may start.
+    pub fn is_state_unreadable(&self) -> bool {
+        self.state_unreadable
+    }
+
+    // spec: OPS#unreadable-operation-state
+    pub fn set_state_unreadable(&mut self, unreadable: bool) {
+        self.state_unreadable = unreadable;
+    }
+
     pub fn active(&self) -> Option<&ActiveOperation> {
         self.active.as_ref()
     }
@@ -293,6 +316,10 @@ impl Scheduler {
         trigger: &str,
         operation_id: OperationId,
     ) -> ScheduleResult {
+        // spec: OPS#unreadable-operation-state
+        if self.state_unreadable {
+            return ScheduleResult::Rejected(RejectReason::OperationStateUnreadable);
+        }
         if self.held.contains(app) {
             return ScheduleResult::Rejected(RejectReason::ChangeBeingApplied);
         }
@@ -327,10 +354,41 @@ impl Scheduler {
                     source_generation,
                     target_generation,
                     trigger: trigger.to_owned(),
+                    actor: None,
                 });
                 ScheduleResult::Queued
             }
         }
+    }
+
+    /// The queued request with `operation_id`, if it is still queued.
+    pub fn queued(&self, operation_id: &OperationId) -> Option<&QueuedOperation> {
+        self.queue.iter().find(|q| q.operation_id == *operation_id)
+    }
+
+    /// Record who asked for the queued request `operation_id`.
+    pub fn set_queued_actor(
+        &mut self,
+        operation_id: &OperationId,
+        actor: Option<Arc<seedling_protocol::actor::Actor>>,
+    ) {
+        if let Some(q) = self
+            .queue
+            .iter_mut()
+            .find(|q| q.operation_id == *operation_id)
+        {
+            q.actor = actor;
+        }
+    }
+
+    /// Take the queued request `operation_id` back out of the queue, if it is
+    /// still there.
+    pub fn unqueue(&mut self, operation_id: &OperationId) -> Option<QueuedOperation> {
+        let pos = self
+            .queue
+            .iter()
+            .position(|q| q.operation_id == *operation_id)?;
+        self.queue.remove(pos)
     }
 
     /// Mark the current operation as complete and dequeue the next one, if any.

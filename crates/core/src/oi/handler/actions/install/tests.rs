@@ -239,6 +239,40 @@ fn install_params_without_schema_are_rejected() {
     assert!(message.contains("no install params"), "message: {message}");
 }
 
+// spec: ACN#start-action
+// spec: OPS#initiating-events
+// spec: RCN#desired-state
+#[test]
+fn an_app_moving_to_installed_without_an_install_action_has_its_start_action_run() {
+    use seedling_protocol::events::OiEvent;
+
+    let oi = TestOi::with_app("demo");
+    let mut events = oi.state.event_tx.subscribe();
+    oi.call("/apps/install/invoke", json!({ "app": "demo" }))
+        .unwrap();
+
+    let started = oi.block_on(async {
+        let wait = async {
+            loop {
+                match events.recv().await {
+                    Ok(OiEvent::OperationStarted {
+                        action_name,
+                        trigger,
+                        actor,
+                        ..
+                    }) => break (action_name.to_string(), trigger, actor.is_some()),
+                    Ok(_) => {}
+                    Err(e) => panic!("event stream ended: {e}"),
+                }
+            }
+        };
+        tokio::time::timeout(std::time::Duration::from_secs(10), wait)
+            .await
+            .expect("the start action starts")
+    });
+    assert_eq!(started, ("start".to_owned(), "install".to_owned(), false));
+}
+
 // spec: ACN#param-delivery
 #[test]
 fn install_params_with_a_reserved_suffix_are_rejected() {

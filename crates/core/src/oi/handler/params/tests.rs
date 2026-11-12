@@ -269,6 +269,69 @@ fn a_param_set_during_an_uninstall_stores_the_value_and_runs_no_handler() {
     assert!(oi.state.scheduler.lock().active().is_none());
 }
 
+// spec: OPS#initiating-events
+// A change that matches a handler's transitions initiates an operation: the
+// handler was admitted to the scheduler but never run.
+#[test]
+fn a_param_change_runs_its_on_change_handler_as_an_operation_attributed_to_the_requester() {
+    use seedling_protocol::events::OiEvent;
+
+    let oi = TestOi::new();
+    oi.call(
+        "/apps/create",
+        json!({
+            "app": "demo",
+            "script": r#"
+                app.deployment("web").image("docker.io/library/nginx:1.29");
+                let p = app.param("greeting");
+                p.on_change(|rt| {});
+            "#,
+        }),
+    )
+    .unwrap();
+    oi.install("demo");
+    let mut events = oi.state.event_tx.subscribe();
+
+    let result = oi
+        .call(
+            "/apps/params/set",
+            json!({ "app": "demo", "name": "greeting", "value": "hello" }),
+        )
+        .unwrap();
+    assert_eq!(result["schedule"], "accepted");
+
+    let started = oi.block_on(async {
+        let wait = async {
+            loop {
+                if let Ok(OiEvent::OperationStarted {
+                    action_name,
+                    trigger,
+                    actor,
+                    source_generation,
+                    target_generation,
+                    ..
+                }) = events.recv().await
+                {
+                    break (
+                        action_name.to_string(),
+                        trigger,
+                        actor.and_then(|a| a.id.clone()),
+                        source_generation,
+                        target_generation,
+                    );
+                }
+            }
+        };
+        tokio::time::timeout(std::time::Duration::from_secs(10), wait)
+            .await
+            .expect("the handler's operation starts")
+    });
+    assert_eq!(started.0, "greeting");
+    assert_eq!(started.1, "param_change");
+    assert_eq!(started.2.as_deref(), Some("test-suite"));
+    assert_eq!(started.4, started.3 + 1);
+}
+
 // spec: SEC#migration
 // Only startup and a definition update migrated, so a param made secret by
 // another param's change kept its plaintext row until the daemon restarted.
