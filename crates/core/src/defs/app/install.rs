@@ -4,7 +4,7 @@ use rhai::{EvalAltResult, FnPtr, Map, TypeBuilder};
 use seedling_protocol::names::ParamName;
 
 use super::super::install::{InstallDef, ParamDef, ParamKind};
-use super::super::take::{take_bool, take_map, take_string};
+use super::super::take::{reject_unknown_keys, take_bool, take_map, take_string};
 use super::App;
 
 /// Declare the app's install action.
@@ -40,6 +40,8 @@ pub(super) fn on_app(builder: &mut TypeBuilder<App>) {
         .with_fn(
             "on_install",
             |this: &mut App, closure: FnPtr, config: Map| -> Result<(), Box<EvalAltResult>> {
+                // spec: ACN#install-action
+                reject_unknown_keys("on_install config", &config, &["params"])?;
                 // spec: ACN#param-schemas
                 let params_map = config
                     .get("params")
@@ -66,6 +68,11 @@ pub(super) fn parse_param_defs(
         // did not exist — and a non-string `kind` fell back to the default,
         // quietly installing a `password` param as plain text.
         let req_map = take_map(&format!("param `{key}`"), value.clone())?;
+        reject_unknown_keys(
+            &format!("param `{key}`"),
+            &req_map,
+            &["kind", "required", "default_value", "description", "secret"],
+        )?;
 
         let kind = match req_map.get("kind").cloned() {
             Some(v) => {

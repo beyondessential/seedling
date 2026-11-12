@@ -929,17 +929,33 @@ impl RuntimeInstance {
             }
         }
 
-        // Anything else is a non-instance-bearing value: Volumes,
-        // ExternalVolumes, ExternalServices, and other items that
-        // legitimately appear in a Collection (e.g. via `col(app)`)
-        // but contribute nothing to the action log. Silently skipping
-        // them lets `rt.start(app)`, `rt.warm_certs(app)`, etc. accept
-        // the App's full Collection without each caller filtering.
-        // Direct misuse (`rt.start(some_volume)`) is also accepted as
-        // a no-op for symmetry with the pre-Action-call behaviour;
-        // the Action arm above catches the one case where silent
-        // dropping would mask a real script bug.
-        Ok(vec![])
+        // spec: RT#selections
+        // An array is a selection of every resource of every element, each
+        // of which must itself be a selection.
+        if resources.is_array() {
+            let mut out = Vec::new();
+            for element in resources.cast::<rhai::Array>() {
+                out.extend(self.extract_instances(element, reuse)?);
+            }
+            return Ok(out);
+        }
+
+        // spec: RT#selections
+        // The other resource handles — volumes, external volumes and
+        // external services — are selections whose resources a runtime
+        // handle method ignores, so `rt.start(app)` and the like take an
+        // app's whole collection. Any other value is no selection at all.
+        let ignored_resource = resources.is::<crate::defs::volume::Volume>()
+            || resources.is::<crate::defs::volume::ExternalVolume>()
+            || resources.is::<crate::defs::service::ExternalService>();
+        if ignored_resource {
+            return Ok(vec![]);
+        }
+        Err(RegistryError::message(format!(
+            "a {} is not a selection: pass an app, a collection, a Started, a resource or an \
+             array of these",
+            resources.type_name()
+        )))
     }
 
     // spec: RCN#desired-state

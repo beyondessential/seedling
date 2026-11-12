@@ -146,7 +146,7 @@ use super::{
     Freezable, Holder,
     enums::OnExit,
     resource::ResourceId,
-    take::{take_int_in_range, take_map, take_string, take_string_array},
+    take::{reject_unknown_keys, take_int_in_range, take_map, take_string, take_string_array},
     volume::{ExternalVolume, Volume},
 };
 
@@ -518,6 +518,7 @@ impl ContainerDef {
                     let mut def = holder.lock();
                     for (index, item) in vars.into_iter().enumerate() {
                         let map = take_map(&format!("env entry {index}"), item)?;
+                        reject_unknown_keys(&format!("env entry {index}"), &map, &["name", "value"])?;
                         let name = map
                             .get("name")
                             .cloned()

@@ -40,6 +40,9 @@ fn validate_install_params(
     app_name: &AppName,
     submitted: &BTreeMap<String, String>,
 ) -> Result<BTreeMap<String, String>, OiError> {
+    // spec: ACN#param-delivery
+    crate::runtime::action_params::reject_reserved(submitted.keys())
+        .map_err(|e| OiError::new(ErrorCode::RequirementsInvalid, e.to_string()))?;
     let reg = state.registry.read();
     let entry = reg.get(app_name.as_str()).expect("caller confirmed exists");
     let def = entry.app.def.load();

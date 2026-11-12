@@ -4,6 +4,7 @@ use rhai::{EvalAltResult, FnPtr, Map, TypeBuilder};
 use seedling_protocol::names::{ActionName, ParamName};
 
 use super::super::action::{Action, ActionDef};
+use super::super::take::{reject_unknown_keys, take_map};
 use super::App;
 use crate::runtime::barrier::runtime::is_in_action_closure;
 
@@ -68,6 +69,12 @@ pub(super) fn on_app(builder: &mut TypeBuilder<App>) {
              -> Result<Action, Box<EvalAltResult>> {
                 let action_name: ActionName = ActionName::new(name)
                     .map_err(|e| -> Box<EvalAltResult> { e.to_string().into() })?;
+                // spec: ACN#action-declaration
+                reject_unknown_keys("on_action options", &options, &["description", "params"])?;
+                // spec: ACN#start-action
+                if action_name == "start" && options.contains_key("params") {
+                    return Err("the start action takes no params".into());
+                }
                 let desc = super::extract_description(&options)?;
                 // spec: ACN#param-schemas
                 let params = parse_action_params(&options)?;
@@ -108,6 +115,8 @@ pub(super) fn on_app(builder: &mut TypeBuilder<App>) {
         .with_fn(
             "on_start",
             |this: &mut App, closure: FnPtr, options: Map| -> Result<Action, Box<EvalAltResult>> {
+                // spec: ACN#start-action
+                reject_unknown_keys("on_start options", &options, &["description"])?;
                 let desc = super::extract_description(&options)?;
                 let start_name = ActionName::new_unchecked("start");
                 declare_action(this, start_name, closure, desc, BTreeMap::new())
@@ -115,14 +124,12 @@ pub(super) fn on_app(builder: &mut TypeBuilder<App>) {
         );
 }
 
-fn parse_action_params(
+// spec: ACN#param-schemas
+pub(super) fn parse_action_params(
     options: &Map,
 ) -> Result<BTreeMap<ParamName, super::super::install::ParamDef>, Box<rhai::EvalAltResult>> {
-    match options
-        .get("params")
-        .and_then(|v| v.read_lock::<Map>().map(|m| m.clone()))
-    {
-        Some(params_map) => super::install::parse_param_defs(&params_map, true),
+    match options.get("params").cloned() {
+        Some(params) => super::install::parse_param_defs(&take_map("params", params)?, true),
         None => Ok(BTreeMap::new()),
     }
 }

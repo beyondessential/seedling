@@ -111,6 +111,30 @@ pub fn take_array_of<T: std::any::Any + Clone>(
 /// The builders' rhai signatures take `i64` because that is rhai's integer
 /// type; the domain is narrower. Without the check, `pids_limit(4294967297)`
 /// wraps to 1 and the container cannot start a workload.
+/// Refuse a map carrying a key other than `allowed`, naming the keys it does
+/// not take and the ones it does.
+pub fn reject_unknown_keys(
+    what: &str,
+    map: &rhai::Map,
+    allowed: &[&str],
+) -> Result<(), Box<EvalAltResult>> {
+    let mut unknown: Vec<&str> = map
+        .keys()
+        .map(|k| k.as_str())
+        .filter(|k| !allowed.contains(k))
+        .collect();
+    if unknown.is_empty() {
+        return Ok(());
+    }
+    unknown.sort_unstable();
+    Err(format!(
+        "{what} has unknown key(s) {}; it takes {}",
+        unknown.join(", "),
+        allowed.join(", ")
+    )
+    .into())
+}
+
 pub fn take_int_in_range<T: TryFrom<i64>>(
     what: &str,
     n: i64,

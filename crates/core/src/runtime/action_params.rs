@@ -90,12 +90,18 @@ impl std::error::Error for ParamValidationError {}
 pub fn reject_reserved_keys(
     params: &serde_json::Map<String, serde_json::Value>,
 ) -> Result<(), ParamValidationError> {
-    for key in params.keys() {
-        if key.ends_with("_volume") || key.ends_with("_filename") {
-            return Err(ParamValidationError::ReservedKey { key: key.clone() });
-        }
+    reject_reserved(params.keys())
+}
+
+/// Refuse the first of `keys` that is reserved for the runtime.
+// spec: ACN#param-delivery
+pub fn reject_reserved<'a>(
+    mut keys: impl Iterator<Item = &'a String>,
+) -> Result<(), ParamValidationError> {
+    match keys.find(|key| key.ends_with("_volume") || key.ends_with("_filename")) {
+        Some(key) => Err(ParamValidationError::ReservedKey { key: key.clone() }),
+        None => Ok(()),
     }
-    Ok(())
 }
 
 /// Run the same field-by-field requirements check the install path

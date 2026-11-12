@@ -421,9 +421,13 @@ fn rhai_dynamic_to_json(v: Dynamic) -> Result<JsonValue, Box<EvalAltResult>> {
     } else if v.is_int() {
         Ok(JsonValue::from(v.cast::<i64>()))
     } else if v.is_float() {
-        Ok(serde_json::Number::from_f64(v.cast::<f64>())
+        // spec: BSL#arguments
+        // A non-finite number has no form in the param map; null would be a
+        // different value than the script passed.
+        let f = v.cast::<f64>();
+        serde_json::Number::from_f64(f)
             .map(JsonValue::Number)
-            .unwrap_or(JsonValue::Null))
+            .ok_or_else(|| format!("Action.invoke: param value {f} is not a finite number").into())
     } else if v.is_string() {
         Ok(JsonValue::String(v.into_string().unwrap_or_default()))
     } else if v.is_array() {
