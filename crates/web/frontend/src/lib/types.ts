@@ -808,7 +808,7 @@ export type TlsCertState =
   | "failed"
   | "revoked";
 export type TlsCertOrigin = "manual" | "csr" | "acme_dns" | "tailscale" | "canopy";
-export type TlsKeyType = "ecdsa_p256";
+export type TlsKeyType = "ecdsa_p256" | "ecdsa_p384" | "ecdsa_p521" | "ed25519" | "rsa";
 
 export interface TlsCertificate {
   id: number;

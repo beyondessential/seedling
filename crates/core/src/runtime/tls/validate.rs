@@ -50,6 +50,9 @@ pub enum ValidateError {
 
     #[snafu(display("supplied private key does not match the certificate's public key"))]
     KeyMismatch,
+
+    #[snafu(display("supplied private key's algorithm is not one a stored certificate may hold"))]
+    UnsupportedKeyType,
 }
 
 pub type Result<T, E = ValidateError> = std::result::Result<T, E>;
@@ -61,9 +64,7 @@ pub type Result<T, E = ValidateError> = std::result::Result<T, E>;
 pub struct Validated {
     pub parsed: parse::ParsedChain,
     pub warnings: Vec<&'static str>,
-    /// Key type detected from the supplied private key. Always
-    /// [`KeyType::EcdsaP256`] today; widening this enum is the path
-    /// for future PQC support.
+    /// Key type detected from the supplied private key.
     pub key_type: KeyType,
 }
 
@@ -110,10 +111,8 @@ pub fn validate_upload(cert_pem: &str, key_pem: &SecretString) -> Result<Validat
         return KeyMismatchSnafu.fail();
     }
 
-    // Today rcgen only hands us ECDSA-P256 keys (it's the only algorithm
-    // exposed via `KeyType`). When more variants land, key.is_compatible
-    // will let us classify by detected algorithm.
-    let key_type = KeyType::EcdsaP256;
+    // spec: TLSM#certificates
+    let key_type = keypair::key_type_of(&key).ok_or(ValidateError::UnsupportedKeyType)?;
 
     Ok(Validated {
         parsed,

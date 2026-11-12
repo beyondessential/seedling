@@ -4,10 +4,13 @@
 //! submitted to the CA) and the operator-driven CSR flow (server-generated
 //! keypair, CSR returned to the operator who arranges signing externally).
 //!
-//! ECDSA P-256 only. The [`KeyType`] enum in the parent module is reserved
-//! for future PQC variants.
+//! Both flows generate ECDSA P-256 keys; [`key_type_of`] classifies a key an
+//! operator supplies.
 
-use rcgen::{CertificateParams, DistinguishedName, KeyPair, PKCS_ECDSA_P256_SHA256};
+use rcgen::{
+    CertificateParams, DistinguishedName, KeyPair, PKCS_ECDSA_P256_SHA256, PKCS_ECDSA_P384_SHA384,
+    PKCS_ECDSA_P521_SHA512, PKCS_ED25519, PKCS_RSA_SHA256, SignatureAlgorithm,
+};
 use secrecy::SecretString;
 use snafu::{ResultExt, Snafu};
 
@@ -36,15 +39,37 @@ pub struct GeneratedKey {
 
 /// Generate a keypair of the requested type.
 pub fn generate(key_type: KeyType) -> Result<GeneratedKey> {
-    let pair = match key_type {
-        KeyType::EcdsaP256 => KeyPair::generate_for(&PKCS_ECDSA_P256_SHA256).context(RcgenSnafu)?,
-    };
+    let pair = KeyPair::generate_for(algorithm_of(key_type)).context(RcgenSnafu)?;
     let pem = SecretString::new(pair.serialize_pem().into());
     Ok(GeneratedKey {
         key_type,
         pem,
         inner: pair,
     })
+}
+
+fn algorithm_of(key_type: KeyType) -> &'static SignatureAlgorithm {
+    match key_type {
+        KeyType::EcdsaP256 => &PKCS_ECDSA_P256_SHA256,
+        KeyType::EcdsaP384 => &PKCS_ECDSA_P384_SHA384,
+        KeyType::EcdsaP521 => &PKCS_ECDSA_P521_SHA512,
+        KeyType::Ed25519 => &PKCS_ED25519,
+        KeyType::Rsa => &PKCS_RSA_SHA256,
+    }
+}
+
+/// The algorithm of a parsed key, or `None` for one no [`KeyType`] names.
+// spec: TLSM#certificates
+pub fn key_type_of(key: &KeyPair) -> Option<KeyType> {
+    [
+        KeyType::EcdsaP256,
+        KeyType::EcdsaP384,
+        KeyType::EcdsaP521,
+        KeyType::Ed25519,
+        KeyType::Rsa,
+    ]
+    .into_iter()
+    .find(|t| algorithm_of(*t) == key.algorithm())
 }
 
 /// Reconstruct a [`KeyPair`] from a previously-stored PEM blob. Used during

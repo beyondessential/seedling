@@ -45,7 +45,7 @@ whoami.workspace = true
 orion = "0.17.15"
 secrecy = "0.10.3"
 instant-acme = { version = "0.8.5", features = ["time"] }
-rcgen = "0.14.8"
+rcgen = { version = "0.14.8", features = ["aws_lc_rs"] }
 pem = "4.0.0"
 x509-parser = "0.18.1"
 aws-sdk-route53 = "1.111.0"

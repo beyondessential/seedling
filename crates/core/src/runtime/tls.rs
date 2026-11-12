@@ -216,25 +216,37 @@ impl TlsCertOrigin {
     }
 }
 
-/// Key types accepted today. ECDSA P-256 only; the enum is kept so adding
-/// PQC variants later (ML-DSA once Caddy / public CAs catch up) is a single
-/// new arm.
+/// The algorithm of a stored certificate's private key. The runtime
+/// generates P-256 keys only; an operator's upload may carry any of these.
+// spec: TLSM#certificates
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum KeyType {
     EcdsaP256,
+    EcdsaP384,
+    EcdsaP521,
+    Ed25519,
+    Rsa,
 }
 
 impl KeyType {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::EcdsaP256 => "ecdsa_p256",
+            Self::EcdsaP384 => "ecdsa_p384",
+            Self::EcdsaP521 => "ecdsa_p521",
+            Self::Ed25519 => "ed25519",
+            Self::Rsa => "rsa",
         }
     }
 
     pub fn parse(s: &str) -> Option<Self> {
         match s {
             "ecdsa_p256" => Some(Self::EcdsaP256),
+            "ecdsa_p384" => Some(Self::EcdsaP384),
+            "ecdsa_p521" => Some(Self::EcdsaP521),
+            "ed25519" => Some(Self::Ed25519),
+            "rsa" => Some(Self::Rsa),
             _ => None,
         }
     }

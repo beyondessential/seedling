@@ -262,6 +262,33 @@ fn warnings(response: &serde_json::Value) -> Vec<String> {
         .collect()
 }
 
+// spec: TLSM#certificates
+#[test]
+fn a_manual_upload_records_the_algorithm_of_the_uploaded_key() {
+    let oi = TestOi::new();
+    for (alg, expected) in [
+        (&rcgen::PKCS_ECDSA_P256_SHA256, "ecdsa_p256"),
+        (&rcgen::PKCS_ECDSA_P384_SHA384, "ecdsa_p384"),
+        (&rcgen::PKCS_ECDSA_P521_SHA512, "ecdsa_p521"),
+        (&rcgen::PKCS_ED25519, "ed25519"),
+        (&rcgen::PKCS_RSA_SHA256, "rsa"),
+    ] {
+        let key = KeyPair::generate_for(alg).expect("keypair");
+        let host = format!("{expected}.example.com").replace('_', "-");
+        let mut params = CertificateParams::new(vec![host]).expect("params");
+        params.distinguished_name = DistinguishedName::new();
+        let cert = params.self_signed(&key).expect("self-sign");
+        let uploaded = oi
+            .call(
+                "/tls/certificates/upload-manual",
+                json!({ "cert_pem": cert.pem(), "key_pem": key.serialize_pem() }),
+            )
+            .unwrap_or_else(|e| panic!("{expected} upload: {e:?}"));
+        let row = cert_row(&oi, uploaded["id"].as_i64().unwrap());
+        assert_eq!(row["key_type"], expected);
+    }
+}
+
 // spec: TLSM#certificate-signing-requests
 // spec: TLSM#certificates
 // spec: TLS#coverage
