@@ -20,7 +20,7 @@ Each issue is worked on its own and committed on its own, with a test that fails
 - [ ] Action, shell and change-handler dispatch
 - [ ] Host startup ordering, addressing and the web listener
 - [ ] Resource and lifecycle behaviour the code does not enforce
-- [ ] Wire, event and ACME protocol shapes
+- [x] Wire, event and ACME protocol shapes
 - [ ] Operations: start action, persisted queue, unreadable state, intent-before-effect
 - [x] OI error codes and request validation
 - [ ] Host: new faults, key file, permissions, reserved prefix and env redaction
@@ -88,6 +88,9 @@ Each is done once, in whichever issue is worked first, and the later issue notes
 - `/connected-clients/list` read failures (failed reads issue, WEB): done with the OI error codes issue.
 - `issue-acme-dns` precondition codes (round 2 part 2): done with the OI error codes issue; round 2 part 2 still owes `operation_in_progress` for a running issuance and `claim_if_idle`, and round 3 part 1 the Tailscale-hostname refusal.
 
+- ARI renewal-information re-fetch on the RFC 9773 §4.3 schedule, keeping the stored window on failure (round 2 part 2): done with the wire shapes issue.
+- The operation trigger list (wire shapes issue): already held; replay uses `replay`, and `boot` arrives with the start action in the operations issue.
+
 ## Decisions
 
 - Secret sub-action params are kept in the action log encrypted under the secret key, apart from the readable params, so replay can still recover them; a call with secret params and no key to protect them fails rather than recording them in the clear.
@@ -96,3 +99,5 @@ Each is done once, in whichever issue is worked first, and the later issue notes
 - Install completion order is a sequence number (`install_seq`) rather than a timestamp, so two installs can never tie; apps installed before it existed are ordered by name.
 - A definition is checked once it has evaluated in full (`defs::check_evaluated`), for rules a later call could otherwise undo: redirect pairing, and containers with no image.
 - A run whose exit status was never captured succeeded only if `unit_inactive` (the unit inactive or gone, failed units being kept loaded) is recorded after it ended.
+- Shell and forward events carry the actor of the request that opened the session, including the session's end however it came about; `FaultCleared` carries the clearing request's actor when an operator clears it, and none when the runtime does.
+- ARI is re-fetched by its own task, waking for the soonest due certificate and at least hourly; Retry-After is held between one minute and one day, and any failed fetch waits six hours.
