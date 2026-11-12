@@ -2226,3 +2226,66 @@ fn each_barrier_on_one_call_keeps_its_own_record() {
         "the barrier still waiting records the start it is timed from"
     );
 }
+
+/// The deadline `rt.stop(<stopped>)` records when called with no deadline.
+fn default_stop_deadline_of(declarations: &str, stopped: &str) -> Option<u64> {
+    let (engine, mut scope, app, ast) = setup_with_script(&format!(
+        r#"
+        {declarations}
+        app.on_start(|rt, _param| {{ rt.start({stopped}); rt.stop({stopped}); }});
+    "#
+    ));
+    let log = InMemoryActionLog::new();
+    let r = run_operation(
+        OperationContext {
+            engine: &engine,
+            script_ast: &ast,
+            operation_id: OperationId::new(),
+            app: &app,
+            action_name: "start",
+            log: &log,
+            world: Arc::new(TestWorldOracle::new()),
+            registry: registry(),
+            active_progress: None,
+            tick_notify: None,
+            params: serde_json::Map::new(),
+            is_shell: false,
+            db: None,
+            source_generation: 0,
+            target_generation: 0,
+            script_limits: None,
+            cipher: None,
+            operation_volume_bindings: std::collections::HashMap::new(),
+            cancel_token: Arc::new(crate::runtime::barrier::CancelToken::new()),
+            container_signaler: None,
+            volume_writer: None,
+            executor: None,
+        },
+        &mut scope,
+    );
+    assert!(matches!(r, OperationResult::Suspended(_)), "{r:?}");
+    let entries = log.load().unwrap();
+    let stop = entries
+        .iter()
+        .find(|e| e.call_kind == crate::runtime::barrier::CallKind::Stop)
+        .expect("the stop is recorded");
+    stop.barriers[0].deadline_secs
+}
+
+// spec: RT#barriers
+#[test]
+fn rt_stops_default_deadline_follows_the_longest_stop_timeout() {
+    let declarations = r#"
+        let slow = app.deployment("slow").image("docker.io/library/postgres:17").stop_timeout(120);
+        let quick = app.deployment("quick").image("docker.io/library/nginx:1").stop_timeout(5);
+        let unset = app.deployment("unset").image("docker.io/library/nginx:1");
+        let svc = app.service("public");
+    "#;
+    assert_eq!(
+        default_stop_deadline_of(declarations, "col([slow, quick])"),
+        Some(150)
+    );
+    assert_eq!(default_stop_deadline_of(declarations, "quick"), Some(35));
+    // A container that sets no stop timeout has the supervisor's.
+    assert_eq!(default_stop_deadline_of(declarations, "unset"), Some(120));
+}

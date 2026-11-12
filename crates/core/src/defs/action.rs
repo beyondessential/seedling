@@ -88,6 +88,9 @@ impl CustomType for Action {
             .with_fn(
                 "on_schedule",
                 |this: &mut Self, expr: &str| -> Result<Self, Box<EvalAltResult>> {
+                    if crate::runtime::barrier::runtime::is_in_action_closure() {
+                        return Err("on_schedule cannot be called inside an action closure".into());
+                    }
                     if this.name == "start" {
                         return Err("on_schedule cannot be called on the start action".into());
                     }

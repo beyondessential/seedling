@@ -360,7 +360,8 @@ fn eval_merged(
     call_source: &str,
 ) -> Result<Dynamic, Box<rhai::EvalAltResult>> {
     let call_ast = engine.compile(call_source)?;
-    let merged = script_ast.merge(&call_ast);
+    // The script's functions only: its statements already ran, as in replay.
+    let merged = script_ast.clone_functions_only().merge(&call_ast);
     engine.eval_ast_with_scope(scope, &merged)
 }
 

@@ -67,9 +67,56 @@ pub const DEFAULT_READY_DEADLINE_SECS: u64 = 30;
 // spec: RT#barriers
 pub const DEFAULT_TERMINATED_DEADLINE_SECS: u64 = 6 * 3600;
 
-/// Default deadline for `rt.stop()` — stops should settle quickly.
+/// What `rt.stop()`'s default deadline allows beyond the longest stop timeout
+/// among the containers it stops, and the whole of it when it stops none.
 // spec: RT#barriers
-pub const DEFAULT_STOP_DEADLINE_SECS: u64 = 30;
+pub const STOP_DEADLINE_MARGIN_SECS: u64 = 30;
+
+/// The stop timeout of a container that sets none: the host's process
+/// supervisor's own default, which the runtime leaves in place.
+// spec: CTR#stopping
+const SUPERVISOR_STOP_TIMEOUT_SECS: u64 = 90;
+
+/// The default deadline of an `rt.stop` over `resources`: the longest stop
+/// timeout among their containers, plus a margin.
+// spec: RT#barriers
+fn default_stop_deadline(
+    resources: &[(ResourceInstance, Option<crate::defs::resource::Resource>)],
+) -> u64 {
+    use crate::defs::resource::{Resource, ResourceKind};
+    let container_timeout = |pod: &crate::defs::pod::PodDef| {
+        pod.container
+            .lock()
+            .stop_timeout_secs
+            .map_or(SUPERVISOR_STOP_TIMEOUT_SECS, u64::from)
+    };
+    let static_def = |instance: &ResourceInstance| -> Option<Resource> {
+        let name = instance.name.as_ref()?;
+        action_def()?
+            .load()
+            .resources
+            .get(&crate::defs::resource::ResourceId {
+                kind: instance.kind,
+                name: Arc::new(name.clone()),
+            })
+            .cloned()
+    };
+    resources
+        .iter()
+        .filter_map(|(instance, def)| {
+            match def.clone().or_else(|| static_def(instance)) {
+                Some(Resource::Deployment(d)) => Some(container_timeout(&d.def.lock().pod.lock())),
+                Some(Resource::Job(j)) => Some(container_timeout(&j.def.lock().pod.lock())),
+                Some(_) => None,
+                // A container whose declaration cannot be found is held to
+                // the timeout it most likely has rather than to none.
+                None => matches!(instance.kind, ResourceKind::Deployment | ResourceKind::Job)
+                    .then_some(SUPERVISOR_STOP_TIMEOUT_SECS),
+            }
+        })
+        .max()
+        .map_or(STOP_DEADLINE_MARGIN_SECS, |t| t + STOP_DEADLINE_MARGIN_SECS)
+}
 
 // ---------------------------------------------------------------------------
 // Thread-local flag: set when a BarrierHit is thrown so that subsequent
@@ -1784,18 +1831,17 @@ impl CustomType for RuntimeInstance {
             .with_fn(
                 "stop",
                 |this: &mut Self, resources: Dynamic| -> Result<(), Box<EvalAltResult>> {
-                    let instances = this
+                    let extracted = this
                         .extract_instances(resources, InstanceReuse::Any)
                         .map_err(|e| {
                             Box::new(EvalAltResult::ErrorRuntime(
                                 e.to_string().into(),
                                 rhai::Position::NONE,
                             ))
-                        })?
-                        .into_iter()
-                        .map(|(r, _)| r)
-                        .collect();
-                    this.do_stop(instances, Some(DEFAULT_STOP_DEADLINE_SECS))
+                        })?;
+                    let deadline = default_stop_deadline(&extracted);
+                    let instances = extracted.into_iter().map(|(r, _)| r).collect();
+                    this.do_stop(instances, Some(deadline))
                 },
             )
             .with_fn(
@@ -1804,21 +1850,17 @@ impl CustomType for RuntimeInstance {
                  resources: Dynamic,
                  deadline: i64|
                  -> Result<(), Box<EvalAltResult>> {
-                    let instances = this
+                    let extracted = this
                         .extract_instances(resources, InstanceReuse::Any)
                         .map_err(|e| {
                             Box::new(EvalAltResult::ErrorRuntime(
                                 e.to_string().into(),
                                 rhai::Position::NONE,
                             ))
-                        })?
-                        .into_iter()
-                        .map(|(r, _)| r)
-                        .collect();
-                    this.do_stop(
-                        instances,
-                        Some(resolve_deadline(deadline, DEFAULT_STOP_DEADLINE_SECS)?),
-                    )
+                        })?;
+                    let deadline = resolve_deadline(deadline, default_stop_deadline(&extracted))?;
+                    let instances = extracted.into_iter().map(|(r, _)| r).collect();
+                    this.do_stop(instances, Some(deadline))
                 },
             )
             // spec: RT#querying-resources
@@ -2197,6 +2239,23 @@ pub struct Started {
 }
 
 impl Started {
+    /// Refuse a barrier other than `ready()` and `ready_eventually()` on a
+    /// `Started` that a warm call returned: it waits on a certificate or an
+    /// image, which has no lifecycle state for the barrier to name.
+    // spec: RT#certificate-warming
+    // spec: RT#image-warming
+    fn refuse_on_warm(&self, barrier: &str) -> Result<(), Box<EvalAltResult>> {
+        let call = match self.warm {
+            WarmMode::None => return Ok(()),
+            WarmMode::Certs => "rt.warm_certs",
+            WarmMode::Images(_) => "rt.warm_images",
+        };
+        Err(format!(
+            "{barrier}() cannot be called on what {call} returned; use ready() or ready_eventually()"
+        )
+        .into())
+    }
+
     // spec: RT#started
     /// This `Started` over `kept` alone.
     ///
@@ -2483,6 +2542,7 @@ impl CustomType for Started {
             .with_fn(
                 "scheduled",
                 |this: &mut Self| -> Result<Started, Box<EvalAltResult>> {
+                    this.refuse_on_warm("scheduled")?;
                     this.check_barrier(
                         LifecycleState::Scheduled,
                         Some(DEFAULT_SCHEDULED_DEADLINE_SECS),
@@ -2492,6 +2552,7 @@ impl CustomType for Started {
             .with_fn(
                 "scheduled",
                 |this: &mut Self, d: i64| -> Result<Started, Box<EvalAltResult>> {
+                    this.refuse_on_warm("scheduled")?;
                     this.check_barrier(
                         LifecycleState::Scheduled,
                         Some(resolve_deadline(d, DEFAULT_SCHEDULED_DEADLINE_SECS)?),
@@ -2501,12 +2562,14 @@ impl CustomType for Started {
             .with_fn(
                 "running",
                 |this: &mut Self| -> Result<Started, Box<EvalAltResult>> {
+                    this.refuse_on_warm("running")?;
                     this.check_barrier(LifecycleState::Running, Some(DEFAULT_RUNNING_DEADLINE_SECS))
                 },
             )
             .with_fn(
                 "running",
                 |this: &mut Self, d: i64| -> Result<Started, Box<EvalAltResult>> {
+                    this.refuse_on_warm("running")?;
                     this.check_barrier(
                         LifecycleState::Running,
                         Some(resolve_deadline(d, DEFAULT_RUNNING_DEADLINE_SECS)?),
@@ -2539,6 +2602,7 @@ impl CustomType for Started {
             .with_fn(
                 "terminated",
                 |this: &mut Self| -> Result<Termination, Box<EvalAltResult>> {
+                    this.refuse_on_warm("terminated")?;
                     this.check_barrier(
                         LifecycleState::Terminated,
                         Some(DEFAULT_TERMINATED_DEADLINE_SECS),
@@ -2549,6 +2613,7 @@ impl CustomType for Started {
             .with_fn(
                 "terminated",
                 |this: &mut Self, d: i64| -> Result<Termination, Box<EvalAltResult>> {
+                    this.refuse_on_warm("terminated")?;
                     this.check_barrier(
                         LifecycleState::Terminated,
                         Some(resolve_deadline(d, DEFAULT_TERMINATED_DEADLINE_SECS)?),
@@ -2560,6 +2625,7 @@ impl CustomType for Started {
             .with_fn(
                 "terminated_eventually",
                 |this: &mut Self| -> Result<Termination, Box<EvalAltResult>> {
+                    this.refuse_on_warm("terminated_eventually")?;
                     this.check_barrier(LifecycleState::Terminated, None)?;
                     Ok(this.compute_termination())
                 },

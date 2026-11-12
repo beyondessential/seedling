@@ -7,19 +7,36 @@ use super::super::install::{InstallDef, ParamDef, ParamKind};
 use super::super::take::{take_bool, take_map, take_string};
 use super::App;
 
+/// Declare the app's install action.
+// spec: ACN#install-action
+fn declare_install(
+    this: &mut App,
+    closure: FnPtr,
+    requirements: BTreeMap<ParamName, ParamDef>,
+) -> Result<(), Box<EvalAltResult>> {
+    if this.def.load().install.is_some() {
+        return Err("the install action is already declared".into());
+    }
+    this.def.rcu(|d| {
+        let mut d = (**d).clone();
+        d.install = Some(InstallDef {
+            requirements: requirements.clone(),
+        });
+        d
+    });
+    super::capture_install(closure);
+    Ok(())
+}
+
 pub(super) fn on_app(builder: &mut TypeBuilder<App>) {
     // spec: ACN#install-action
     builder
-        .with_fn("on_install", |this: &mut App, closure: FnPtr| {
-            this.def.rcu(|d| {
-                let mut d = (**d).clone();
-                d.install = Some(InstallDef {
-                    requirements: BTreeMap::new(),
-                });
-                d
-            });
-            super::capture_install(closure);
-        })
+        .with_fn(
+            "on_install",
+            |this: &mut App, closure: FnPtr| -> Result<(), Box<EvalAltResult>> {
+                declare_install(this, closure, BTreeMap::new())
+            },
+        )
         .with_fn(
             "on_install",
             |this: &mut App, closure: FnPtr, config: Map| -> Result<(), Box<EvalAltResult>> {
@@ -31,15 +48,7 @@ pub(super) fn on_app(builder: &mut TypeBuilder<App>) {
                     .transpose()?
                     .unwrap_or_default();
                 let reqs = parse_param_defs(&params_map, false)?;
-                this.def.rcu(|d| {
-                    let mut d = (**d).clone();
-                    d.install = Some(InstallDef {
-                        requirements: reqs.clone(),
-                    });
-                    d
-                });
-                super::capture_install(closure);
-                Ok(())
+                declare_install(this, closure, reqs)
             },
         );
 }

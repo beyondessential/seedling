@@ -75,7 +75,8 @@ fn invoke_action(
         let call_ast = engine
             .compile("__bsl_closure.call(__bsl_rt, __bsl_param)")
             .expect("call ast must compile");
-        let merged = ast.merge(&call_ast);
+        // The script's functions only: its statements already ran, as in replay.
+        let merged = ast.clone_functions_only().merge(&call_ast);
         engine.eval_ast_with_scope::<Dynamic>(&mut scope, &merged)
     });
 
@@ -112,6 +113,23 @@ fn app_action_in_static_context_throws() {
         msg.contains("inside an action"),
         "expected static-context error, got: {msg}"
     );
+}
+
+// spec: ACN#scheduled-actions
+#[test]
+fn on_schedule_inside_an_action_closure_throws() {
+    let err = invoke_action(
+        r#"
+            let nightly = app.on_action("nightly", |rt, _p| {});
+            app.on_action("outer", |rt, _p| {
+                nightly.on_schedule("0 3 * * *");
+            });
+        "#,
+        "outer",
+        rhai::Map::new(),
+    )
+    .expect_err("on_schedule in an action closure must fail");
+    assert!(err_string(err).contains("inside an action closure"));
 }
 
 // spec: ACN#action-handles
@@ -430,7 +448,8 @@ fn run_outer_in_replay_context(
         let call_ast = engine
             .compile("__bsl_closure.call(__bsl_rt, __bsl_param)")
             .expect("call ast must compile");
-        let merged = ast.merge(&call_ast);
+        // The script's functions only: its statements already ran, as in replay.
+        let merged = ast.clone_functions_only().merge(&call_ast);
         engine
             .eval_ast_with_scope::<Dynamic>(&mut scope, &merged)
             .map(|_| ())

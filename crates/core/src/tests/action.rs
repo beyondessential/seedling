@@ -453,3 +453,41 @@ fn on_schedule_rejects_invalid_cron() {
     "#,
     );
 }
+
+// spec: ACN#action-declaration
+#[test]
+fn install_is_reserved_as_an_action_name() {
+    let err = run_test_script_err(r#"app.on_action("install", |rt, _p| {});"#);
+    assert!(err.to_string().contains("reserved"), "{err}");
+}
+
+// spec: ACN#action-declaration
+// spec: ACN#start-action
+#[test]
+fn declaring_an_action_twice_throws() {
+    for script in [
+        r#"app.on_action("migrate", |rt, _p| {}); app.on_action("migrate", |rt, _p| {});"#,
+        r#"app.on_start(|rt, _p| {}); app.on_start(|rt, _p| {});"#,
+        r#"app.on_action("start", |rt, _p| {}); app.on_start(|rt, _p| {});"#,
+        r#"app.on_start(|rt, _p| {}); app.on_action("start", |rt, _p| {}, #{});"#,
+    ] {
+        let err = run_test_script_err(script);
+        assert!(err.to_string().contains("already declared"), "{script}: {err}");
+    }
+}
+
+// spec: ACN#shells
+#[test]
+fn declaring_a_shell_twice_throws() {
+    let err = run_test_script_err(
+        r#"app.on_shell("psql", |rt, sh, _p| {}); app.on_shell("psql", |rt, sh, _p| {}, #{});"#,
+    );
+    assert!(err.to_string().contains("already declared"), "{err}");
+}
+
+// spec: ACN#install-action
+#[test]
+fn a_second_install_action_throws() {
+    let err = run_test_script_err(r#"app.on_install(|rt, _p| {}); app.on_install(|rt, _p| {});"#);
+    assert!(err.to_string().contains("already declared"), "{err}");
+}

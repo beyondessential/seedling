@@ -285,3 +285,28 @@ fn rt_signal_is_callable() {
     "#,
     );
 }
+
+// spec: RT#certificate-warming
+// spec: RT#image-warming
+#[test]
+fn warm_results_refuse_barriers_other_than_ready() {
+    for (warm, barrier) in [
+        ("rt.warm_certs(ing)", "running()"),
+        ("rt.warm_certs(ing)", "scheduled(5)"),
+        ("rt.warm_images(web)", "terminated()"),
+        ("rt.warm_images(web)", "terminated_eventually()"),
+    ] {
+        let err = run_action_err(
+            &format!(
+                r#"
+                let ing = app.service("public").ingress("test.example.com", 443)
+                    .tls(Terminate.Https, Output.Http1);
+                let web = app.deployment("web").image("docker.io/library/nginx:latest");
+                app.on_action("warm", |rt, _p| {{ {warm}.{barrier}; }});
+                "#
+            ),
+            "warm",
+        );
+        assert!(err.contains("use ready() or ready_eventually()"), "{warm}.{barrier}: {err}");
+    }
+}
