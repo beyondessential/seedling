@@ -39,7 +39,10 @@ pub const RESERVED_SITE_INGRESS_NAMES: &[&str] =
 /// that realises the slice component the daemon keeps for its own
 /// infrastructure would have its containers share — and reweight — the slice
 /// holding the proxy and the resolver.
-pub const RESERVED_APP_NAMES: &[&str] = &[crate::system::priority::INFRA_COMPONENT];
+///
+/// `seedling` is the app the runtime files faults about its own reporting to
+/// other systems against.
+pub const RESERVED_APP_NAMES: &[&str] = &[crate::system::priority::INFRA_COMPONENT, "seedling"];
 
 /// A name that belongs to the daemon.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -98,8 +101,8 @@ pub fn check_app_name(name: &AppName) -> Result<(), ReservedName> {
     if RESERVED_APP_NAMES.contains(&name.as_str()) {
         return Err(ReservedName {
             name: name.as_str().to_owned(),
-            reason: "this app name would collide with the resource-control group the daemon \
-                     keeps for its own infrastructure"
+            reason: "this app name is one the daemon keeps for its own infrastructure and \
+                     reporting"
                 .to_owned(),
         });
     }
@@ -130,6 +133,13 @@ mod tests {
         assert!(check_app_name(&reserved).is_err());
         let ordinary = AppName::new("infra-tools").unwrap();
         assert!(check_app_name(&ordinary).is_ok());
+    }
+
+    // spec: IDN#reserved-names
+    #[test]
+    fn the_reporting_app_name_is_reserved() {
+        let reserved = AppName::new("seedling").unwrap();
+        assert!(check_app_name(&reserved).is_err());
     }
 
     // spec: IDN#reserved-names

@@ -113,18 +113,6 @@ impl Reconciler {
         let deployment = deployment.to_owned();
         let replacement_display = replacement_display.to_owned();
         self.db.call(move |db| {
-            // Dedupe: only file once per deployment until the fault is cleared
-            // (by a generation bump that resets replace_failed).
-            let already = faults::list_active_faults(db, Some(&app))
-                .unwrap_or_default()
-                .iter()
-                .any(|f| {
-                    f.kind == "health_check_replace_failed"
-                        && f.resource_name.as_deref() == Some(deployment.as_str())
-                });
-            if already {
-                return;
-            }
             let desc = format!(
                 "automatic replacement {replacement_display} for deployment '{deployment}' failed to become healthy; original instance kept running in degraded mode pending operator action"
             );
@@ -134,35 +122,11 @@ impl Reconciler {
             // `retire_unscheduled_excess` / `clear_faults_for_instance` —
             // which would silently remove our hard fault. The fault must
             // outlive the instance that triggered it; it clears only when the
-            // AppDef generation advances (see `clear_replace_failed_faults`).
-            if let Err(e) = faults::file_fault(
-                db,
-                &app,
-                Some("deployment"),
-                Some(deployment.as_str()),
-                None,
-                "health_check_replace_failed",
-                &desc,
-            ) {
+            // generation changes.
+            let key = faults::FaultKey::new(&app, "health_check_replace_failed", deployment.as_str());
+            let meta = faults::FaultMeta::resource("deployment", deployment.as_str());
+            if let Err(e) = faults::file_once(db, &key, &meta, &desc) {
                 tracing::warn!(app = %app, deployment = %deployment, "failed to file health_check_replace_failed fault: {e}");
-            }
-        });
-    }
-
-    // spec: AUTO#replacement-guard
-    /// Clear all `health_check_replace_failed` faults for the named app. Called
-    /// when the AppDef generation advances so a freshly-shipped script gets a
-    /// clean slate.
-    pub(super) fn clear_replace_failed_faults(&self, app: &AppName) {
-        let app = app.clone();
-        self.db.call(move |db| {
-            let active = faults::list_active_faults(db, Some(&app)).unwrap_or_default();
-            for f in active {
-                if f.kind == "health_check_replace_failed"
-                    && let Err(e) = faults::clear_fault(db, &f.id, &app)
-                {
-                    tracing::warn!(app = %app, fault_id = %f.id, "failed to clear health_check_replace_failed fault: {e}");
-                }
             }
         });
     }
@@ -738,53 +702,41 @@ impl Reconciler {
         let entries: Vec<_> = unresolved.to_vec();
         self.db.call(move |db| {
             let system = AppName::new_unchecked("_system");
-            let active = faults::list_active_faults(db, Some(&system)).unwrap_or_default();
-            // Track which currently-active site_ingress_target_missing
-            // faults survive this tick — anything that doesn't get a
-            // matching `entries` row is cleared at the end.
-            let mut keep: std::collections::BTreeSet<String> =
+            // The subject is the attachment: its site ingress, port and
+            // protocol. Not part of the description, which is free to change.
+            let mut current: std::collections::BTreeSet<String> =
                 std::collections::BTreeSet::new();
             for entry in &entries {
-                let key = format!(
+                let subject = format!(
                     "{}:{}:{}",
                     entry.site_ingress, entry.port, entry.protocol
                 );
-                let already = active.iter().any(|f| {
-                    f.kind == "site_ingress_target_missing"
-                        && f.resource_name.as_deref() == Some(entry.site_ingress.as_str())
-                        && f.description.contains(&key)
-                });
-                keep.insert(key.clone());
-                if already {
-                    continue;
-                }
                 let desc = format!(
-                    "[{key}] {} (site ingress {} port {} protocol {})",
+                    "{} (site ingress {} port {} protocol {})",
                     entry.reason, entry.site_ingress, entry.port, entry.protocol
                 );
-                if let Err(e) = faults::file_fault(
-                    db,
-                    &system,
-                    Some("site_ingress"),
-                    Some(entry.site_ingress.as_str()),
-                    None,
-                    "site_ingress_target_missing",
-                    &desc,
-                ) {
+                let key =
+                    faults::FaultKey::new(&system, "site_ingress_target_missing", subject.as_str());
+                let meta = faults::FaultMeta::resource("site_ingress", entry.site_ingress.as_str());
+                if let Err(e) = faults::file_once(db, &key, &meta, &desc) {
                     tracing::warn!(site_ingress = %entry.site_ingress, "failed to file site_ingress_target_missing fault: {e}");
                 }
+                current.insert(subject);
             }
-            // Clear stale faults whose key no longer appears in this
-            // tick's unresolved set.
-            for f in active {
-                if f.kind != "site_ingress_target_missing" {
-                    continue;
+            // Clear the attachments no longer unresolved, and only those.
+            let active = match faults::list_active_faults(db, Some(&system)) {
+                Ok(active) => active,
+                Err(e) => {
+                    tracing::warn!("could not read the host's faults to clear site_ingress_target_missing: {e}");
+                    return;
                 }
-                let still_in_set = keep.iter().any(|key| f.description.contains(&format!("[{key}]")));
-                if still_in_set {
-                    continue;
-                }
-                if let Err(e) = faults::clear_fault(db, &f.id, &system) {
+            };
+            for f in active
+                .iter()
+                .filter(|f| f.kind == "site_ingress_target_missing" && !current.contains(&f.subject))
+            {
+                let key = faults::FaultKey::new(&system, &f.kind, &f.subject);
+                if let Err(e) = faults::clear_fault_by_key(db, &key) {
                     tracing::warn!(fault_id = %f.id, "failed to clear site_ingress_target_missing fault: {e}");
                 }
             }
@@ -999,18 +951,15 @@ impl Reconciler {
         });
     }
 
+    /// Clear the app-wide `registry_error` fault, and not the instance-scoped
+    /// ones, which clear when their own instance is next started.
+    // spec: FLT#filing-and-clearing
     pub(super) fn clear_registry_faults(&self, app: &AppName) {
         let app = app.clone();
         self.db.call(move |db| {
-            let cleared: Vec<_> = faults::list_active_faults(db, Some(&app))
-                .unwrap_or_default()
-                .into_iter()
-                .filter(|f| f.kind == "registry_error")
-                .collect();
-            for f in cleared {
-                if let Err(e) = faults::clear_fault(db, &f.id, &app) {
-                    tracing::warn!(app = %app, fault_id = %f.id, "failed to clear registry fault: {e}");
-                }
+            let key = faults::FaultKey::app_wide(&app, "registry_error");
+            if let Err(e) = faults::clear_fault_by_key(db, &key) {
+                tracing::warn!(app = %app, "failed to clear registry fault: {e}");
             }
         });
     }

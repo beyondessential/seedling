@@ -330,13 +330,21 @@ async fn main() {
     );
 
     // spec: NAT64#translator
-    if !args.stub_backends
-        && nat64_active
-        && let Err(e) = seedling_core::system::jool::setup_nat64().await
-    {
-        // spec: NAT64#translator-lifecycle
-        fatal!("failed to set up NAT64 translator: {e}");
-    }
+    // spec: NAT64#translator-lifecycle
+    // A translator that cannot be set up is reported and held against, not
+    // fatal: the reconciler files `nat64_setup_failed`, starts no workload
+    // while it is down, and sets it up again on each iteration.
+    let nat64_translator_down = if !args.stub_backends && nat64_active {
+        match seedling_core::system::jool::setup_nat64().await {
+            Ok(()) => false,
+            Err(e) => {
+                tracing::error!("failed to set up NAT64 translator: {e}");
+                true
+            }
+        }
+    } else {
+        false
+    };
 
     // spec: NAT64#ipv6-egress
     // spec: CONST#host-constants
@@ -723,6 +731,11 @@ async fn main() {
         Some(Arc::clone(&site_resolver)),
         instance_gc,
     );
+    let reconciler = if nat64_translator_down {
+        reconciler.with_translator_down()
+    } else {
+        reconciler
+    };
 
     // The reconciler and schedule ticker are spawned below, after OiState is
     // constructed, so that scheduled-action fires can spawn lifecycle operations.

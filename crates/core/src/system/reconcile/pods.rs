@@ -23,6 +23,7 @@ use crate::{
 
 use super::RunningPod;
 
+#[derive(Default)]
 pub(super) struct PodActuationUpdate {
     pub running: Vec<RunningPod>,
     pub observations: Vec<(ResourceInstance, &'static str, serde_json::Value)>,
@@ -657,8 +658,7 @@ async fn actuate_one_pod(
                             failures,
                             "pods: image pull failed"
                         );
-                        result.image_pull_failure =
-                            Some((dr.instance.clone(), reference.clone()));
+                        result.image_pull_failure = Some((dr.instance.clone(), reference.clone()));
                     } else {
                         tracing::debug!(
                             instance = %dr.instance.display_name,

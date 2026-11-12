@@ -167,16 +167,10 @@ impl TailscaleProvider {
                     self.sync_unreachable_fault(false);
                     self.reconcile_db(identity);
                 }
-                Err(TailscaleError::Unreachable(msg)) => {
-                    debug!("tailscale: {msg}; skipping cycle");
-                    consecutive_failures = 0;
-                    self.status.record(DiscoveryStatusSnapshot {
-                        healthy: false,
-                        last_poll_at: Some(Timestamp::now()),
-                        identity: None,
-                        last_error: Some(msg),
-                    });
-                }
+                // spec: FLT#host-faults
+                // An unreachable socket is a failed poll like any other, and
+                // counts toward the fault; resetting the count on it meant a
+                // tailnet that was down never faulted.
                 Err(e) => {
                     consecutive_failures += 1;
                     warn!(
@@ -509,6 +503,44 @@ mod tests {
             node_id: node_id.to_owned(),
             backend_running: true,
         }
+    }
+
+    // spec: FLT#host-faults
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn an_unreachable_socket_files_tailscale_unreachable_after_five_polls() {
+        let db = DbHandle::open_in_memory().expect("open");
+        let dir = tempfile::tempdir().unwrap();
+        let provider = TailscaleProvider::new(
+            db.clone(),
+            TailscaleConfig {
+                socket_path: dir.path().join("no-such.sock"),
+                poll_interval: Duration::from_millis(5),
+            },
+        );
+        let handle = Arc::clone(&provider).spawn();
+
+        let filed = tokio::time::timeout(Duration::from_secs(10), async {
+            loop {
+                let held = tokio::task::block_in_place(|| {
+                    db.call(|db| {
+                        crate::runtime::faults::list_active_faults(
+                            db,
+                            Some(&seedling_protocol::names::AppName::new_unchecked("_system")),
+                        )
+                        .unwrap()
+                        .iter()
+                        .any(|f| f.kind == "tailscale_unreachable")
+                    })
+                });
+                if held {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await;
+        handle.abort();
+        assert!(filed.is_ok(), "an unreachable socket never faulted");
     }
 
     #[test]

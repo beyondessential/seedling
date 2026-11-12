@@ -358,11 +358,6 @@ struct AppSnapshot {
     /// `OperationProgress`, if any.
     // spec: RT#certificate-warming
     warm_cert_hostnames: std::collections::BTreeSet<String>,
-    /// Generation number of the app definition this snapshot was taken from.
-    /// Used to detect operator-pushed updates that should reset transient
-    /// per-deployment state such as the replace-loop guard.
-    // spec: AUTO#replacement-guard
-    current_generation: u64,
     /// The operator-set app priority, read fresh this tick so a change takes
     /// effect without a redeploy.
     // spec: PRIO#priority-setting
@@ -423,10 +418,6 @@ pub struct Reconciler {
     /// generation for the app changes (operator-pushed update).
     // spec: AUTO#replacement-guard
     replace_failed: HashSet<(AppName, String)>,
-    /// Last `current_generation` we saw for each app; a higher value on a
-    /// subsequent tick triggers a reset of `replace_failed` for that app.
-    // spec: AUTO#replacement-guard
-    last_seen_generation: HashMap<AppName, u64>,
     /// Paces retries when the supervisor refuses the slice set, so a host with
     /// a read-only unit directory is not asked to re-read its units every tick.
     /// One gate, not one per slice: the set is synced as a whole.
@@ -533,6 +524,15 @@ fn units_possibly_of<'a>(units: &'a [UnitSummary], app: &AppName) -> Vec<&'a Uni
 }
 
 impl Reconciler {
+    /// This reconciler, for a host whose NAT64 translator could not be set up
+    /// at startup: it sets it up again on its iterations, and keeps workloads
+    /// offline until that succeeds.
+    // spec: NAT64#translator-lifecycle
+    pub fn with_translator_down(mut self) -> Self {
+        self.nat64_installed = false;
+        self
+    }
+
     #[expect(
         clippy::too_many_arguments,
         reason = "construction requires all subsystem handles"
@@ -590,7 +590,6 @@ impl Reconciler {
             rolling_updates: HashSet::new(),
             unhealthy_replace_deployments: HashSet::new(),
             replace_failed: HashSet::new(),
-            last_seen_generation: HashMap::new(),
             nat64_active,
             // Daemon startup has already called `setup_nat64` iff
             // `nat64_active`; mirror that in our tracking flag.
@@ -796,7 +795,6 @@ impl Reconciler {
                 .as_ref()
                 .map(|p| p.warm_cert_hostnames.clone())
                 .unwrap_or_default();
-            let current_generation = entry.current_generation;
             // spec: PRIO#priority-setting
             // Read once for the whole tick above; an app with no stored
             // decision stands at the default.
@@ -814,7 +812,6 @@ impl Reconciler {
                 phase,
                 phase_handle: Arc::clone(&entry.phase),
                 warm_cert_hostnames,
-                current_generation,
                 app_priority,
                 install_seq: entry.install_seq,
             });
@@ -1784,20 +1781,16 @@ impl Reconciler {
         apps: &[AppSnapshot],
         running_pods_by_app: &HashMap<AppName, Vec<RunningPod>>,
     ) {
-        // Reset the replace-loop guard for any app whose generation increased
-        // (operator pushed new code). Simultaneously prune entries for apps
-        // that no longer exist.
-        let active: std::collections::HashSet<AppName> =
-            apps.iter().map(|a| a.name.clone()).collect();
-        self.last_seen_generation
-            .retain(|app, _| active.contains(app));
-        self.replace_failed.retain(|(app, _)| active.contains(app));
-
         // spec: AUTO#replacement-guard
         // The guard is in-memory but its truth lives in the persisted fault
         // table. Re-derive each tick so the suppression survives daemon
         // restarts (and so an operator clearing the fault has its effect
-        // picked up immediately, ahead of the future fault-clear UI).
+        // picked up immediately).
+        //
+        // The fault clears when the app's generation changes. That is read
+        // from the generation history, which records when each generation was
+        // made, not from a generation this process remembered: a change made
+        // while the daemon was down would otherwise never clear it.
         let persisted_failed: std::collections::HashSet<(AppName, String)> = self.db.call(|db| {
             let mut out = std::collections::HashSet::new();
             let active = match crate::runtime::faults::list_active_faults(db, None) {
@@ -1805,31 +1798,37 @@ impl Reconciler {
                 Err(_) => return out,
             };
             for f in active {
-                if f.kind == "health_check_replace_failed"
-                    && let Some(dep) = f.resource_name.clone()
-                {
-                    out.insert((f.app, dep));
+                if f.kind != "health_check_replace_failed" {
+                    continue;
+                }
+                let Some(dep) = f.resource_name.clone() else {
+                    continue;
+                };
+                match crate::runtime::generations::changed_since(db, &f.app, f.timestamp) {
+                    Ok(false) => {
+                        out.insert((f.app, dep));
+                    }
+                    Ok(true) => {
+                        let key = crate::runtime::faults::FaultKey::new(
+                            &f.app,
+                            "health_check_replace_failed",
+                            &f.subject,
+                        );
+                        if let Err(e) = crate::runtime::faults::clear_fault_by_key(db, &key) {
+                            warn!(app = %f.app, "failed to clear health_check_replace_failed: {e}");
+                            out.insert((f.app, dep));
+                        }
+                    }
+                    // Whether the generation changed is unknown: the guard holds.
+                    Err(e) => {
+                        warn!(app = %f.app, "could not read the generation history: {e}");
+                        out.insert((f.app, dep));
+                    }
                 }
             }
             out
         });
-        for entry in persisted_failed {
-            self.replace_failed.insert(entry);
-        }
-
-        for app in apps {
-            let prior = self.last_seen_generation.get(&app.name).copied();
-            if prior.map(|p| app.current_generation > p).unwrap_or(false) {
-                // spec: AUTO#replacement-guard
-                // Operator changed the AppDef — give the workload a fresh
-                // chance to converge. Clear both the in-memory bump
-                // suppression and the persisted hard fault.
-                self.replace_failed.retain(|(a, _)| a != &app.name);
-                self.clear_replace_failed_faults(&app.name);
-            }
-            self.last_seen_generation
-                .insert(app.name.clone(), app.current_generation);
-        }
+        self.replace_failed = persisted_failed;
 
         // Recompute the bump set from scratch each tick. A deployment is bumped
         // when (a) it has any unhealthy running instance with on_failure=replace,
@@ -2612,7 +2611,6 @@ mod tests {
             phase: AppPhase::Installed,
             phase_handle: Arc::new(Mutex::new(AppPhase::Installed)),
             warm_cert_hostnames: Default::default(),
-            current_generation: 1,
             app_priority: AppPriority::default(),
             install_seq: Some(1),
         }
@@ -2640,7 +2638,6 @@ mod tests {
             phase: AppPhase::Installed,
             phase_handle: Arc::new(Mutex::new(AppPhase::Installed)),
             warm_cert_hostnames: Default::default(),
-            current_generation: 1,
             app_priority,
             install_seq: Some(1),
         }
@@ -2699,7 +2696,7 @@ mod tests {
     }
 
     fn active_kinds(oi: &crate::oi::test_support::TestOi, app: &str) -> Vec<(String, String)> {
-        let app = AppName::new(app).unwrap();
+        let app = AppName::new_unchecked(app);
         oi.state.db.call(move |db| {
             crate::runtime::faults::list_active_faults(db, Some(&app))
                 .unwrap()
@@ -2814,18 +2811,20 @@ mod tests {
     #[test]
     fn image_pull_failed_is_keyed_by_reference_and_clears_when_the_image_is_present() {
         let oi = crate::oi::test_support::TestOi::with_app("demo");
-        let mut reconciler = test_reconciler(&oi);
+        let reconciler = test_reconciler(&oi);
         let app = AppName::new("demo").unwrap();
         let first = volume_instance("demo", "one");
         let second = volume_instance("demo", "two");
         let image = "docker.io/library/nginx:1.29";
 
         // Two instances needing one broken image make one fault, named by the image.
-        let mut update = pods::PodActuationUpdate::empty();
-        update.image_pull_failures = vec![
-            (first.clone(), image.to_owned()),
-            (second.clone(), image.to_owned()),
-        ];
+        let update = pods::PodActuationUpdate {
+            image_pull_failures: vec![
+                (first.clone(), image.to_owned()),
+                (second.clone(), image.to_owned()),
+            ],
+            ..Default::default()
+        };
         reconciler.file_image_pull_faults(&app, &update);
         reconciler.file_image_pull_faults(&app, &update);
         assert_eq!(
@@ -2839,6 +2838,123 @@ mod tests {
             reconciler.reconcile_images(std::iter::empty()).await;
         });
         assert!(active_kinds(&oi, "demo").is_empty());
+    }
+
+    // spec: FLT#ingress-and-service-faults
+    #[test]
+    fn site_ingress_target_missing_is_keyed_by_attachment() {
+        use crate::runtime::site_ingress_attachments::AttachmentProtocol;
+        let oi = crate::oi::test_support::TestOi::new();
+        let reconciler = test_reconciler(&oi);
+        let attachment =
+            |ingress: &str, port: u16, reason: &str| site_proxy::UnresolvedAttachment {
+                site_ingress: ingress.to_owned(),
+                port,
+                protocol: AttachmentProtocol::Tcp,
+                reason: reason.to_owned(),
+            };
+        let held = || -> Vec<String> {
+            let mut subjects: Vec<String> = active_kinds(&oi, "_system")
+                .into_iter()
+                .filter(|(k, _)| k == "site_ingress_target_missing")
+                .map(|(_, s)| s)
+                .collect();
+            subjects.sort();
+            subjects
+        };
+
+        // `edge` and `edge-2` share a name prefix, and one ingress has two ports.
+        reconciler.reconcile_unresolved_site_attachments(&[
+            attachment("edge", 80, "no service"),
+            attachment("edge", 81, "no service"),
+            attachment("edge-2", 80, "no service"),
+        ]);
+        assert_eq!(held().len(), 3);
+
+        // The reason changing leaves one fault, and resolving one clears only it.
+        reconciler.reconcile_unresolved_site_attachments(&[
+            attachment("edge", 80, "unbound"),
+            attachment("edge-2", 80, "no service"),
+        ]);
+        assert_eq!(
+            held(),
+            vec!["edge-2:80:tcp".to_owned(), "edge:80:tcp".to_owned()]
+        );
+    }
+
+    // spec: FLT#filing-and-clearing
+    #[test]
+    fn clearing_the_app_wide_registry_error_leaves_instance_scoped_ones() {
+        let oi = crate::oi::test_support::TestOi::with_app("demo");
+        let reconciler = test_reconciler(&oi);
+        let app = AppName::new("demo").unwrap();
+        let instance = volume_instance("demo", "web");
+        oi.state.db.call({
+            let (app, instance) = (app.clone(), instance.clone());
+            move |db| {
+                crate::runtime::faults::file_fault(
+                    db,
+                    &app,
+                    None,
+                    None,
+                    None,
+                    "registry_error",
+                    "lookup",
+                )
+                .unwrap();
+                crate::runtime::faults::file_fault(
+                    db,
+                    &app,
+                    Some("deployment"),
+                    Some("web"),
+                    Some(&instance.id.to_hex()),
+                    "registry_error",
+                    "lookup",
+                )
+                .unwrap();
+            }
+        });
+
+        reconciler.clear_registry_faults(&app);
+        assert_eq!(
+            active_kinds(&oi, "demo"),
+            vec![("registry_error".to_owned(), instance.id.to_hex())]
+        );
+    }
+
+    // spec: FLT#workload-faults
+    #[test]
+    fn the_replacement_guard_clears_on_a_generation_made_while_the_daemon_was_down() {
+        let oi = crate::oi::test_support::TestOi::with_app("demo");
+        let mut reconciler = test_reconciler(&oi);
+        let app = AppName::new("demo").unwrap();
+        reconciler.file_replace_failed_fault(&app, "web", "web-2");
+        reconciler.update_replace_state(&[], &HashMap::new());
+        assert_eq!(
+            active_kinds(&oi, "demo").len(),
+            1,
+            "no new generation: it holds"
+        );
+
+        // A new generation is made after the fault, then the process restarts:
+        // a fresh reconciler has no memory of the generation it last saw.
+        std::thread::sleep(std::time::Duration::from_millis(5));
+        oi.state.db.call({
+            let app = app.clone();
+            move |db| {
+                crate::runtime::generations::update_script(
+                    db,
+                    &app,
+                    r#"app.deployment("web").image("docker.io/library/nginx:1.30");"#,
+                )
+                .unwrap()
+            }
+        });
+        let mut restarted = test_reconciler(&oi);
+        restarted.update_replace_state(&[], &HashMap::new());
+        assert!(active_kinds(&oi, "demo").is_empty());
+        assert!(restarted.replace_failed.is_empty());
+        let _ = &mut reconciler;
     }
 
     // spec: INFRA#unavailable-backends

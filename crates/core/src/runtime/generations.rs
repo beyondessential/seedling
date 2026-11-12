@@ -13,6 +13,27 @@ use crate::{
     },
 };
 
+/// Whether any generation of `app` was made after `since`.
+///
+/// Read from the history's own record of when each generation was made, so
+/// the answer is the same after a restart as before one.
+pub fn changed_since(db: &Db, app: &AppName, since: jiff::Timestamp) -> rusqlite::Result<bool> {
+    let mut stmt = db
+        .conn
+        .prepare("SELECT created_at FROM generations WHERE app = ?1")?;
+    let rows = stmt.query_map([app], |row| row.get::<_, String>(0))?;
+    for created in rows {
+        let created = created?;
+        let made: jiff::Timestamp = created.parse().map_err(|e| {
+            rusqlite::Error::FromSqlConversionFailure(0, rusqlite::types::Type::Text, Box::new(e))
+        })?;
+        if made > since {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
 // spec: GEN#generation-numbers
 pub type Generation = u64;
 

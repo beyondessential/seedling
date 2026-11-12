@@ -16,7 +16,7 @@ Each issue is worked on its own and committed on its own, with a test that fails
 - [x] Database and internal failures reported with the wrong error code
 - [x] Malformed script input coerced or ignored
 - [x] Crash recovery and replay
-- [ ] Faults out of line with the fault catalogue
+- [x] Faults out of line with the fault catalogue
 - [ ] Action, shell and change-handler dispatch
 - [ ] Host startup ordering, addressing and the web listener
 - [ ] Resource and lifecycle behaviour the code does not enforce
@@ -109,3 +109,8 @@ Each is done once, in whichever issue is worked first, and the later issue notes
 - A failed read leaves faults as they stand (disallowed registry), reads as `null` or `internal` for operators (status, `/apps/show`), and keeps images, instances and schedules in place; a reconciliation iteration that dropped every app does not idle.
 - A schedule whose last fire time cannot be parsed is not fired and holds `schedule_unreadable`; unreadable schedule records hold `schedules_unreadable` on `_system`.
 - A certificate in the proxy's cache is observed valid only inside its validity window; one that cannot be read leaves the hostname undetermined.
+- Backends are held behind `system::backends::Backends`: the container runtime and process supervisor start as erroring stubs when unreachable, are probed again with doubling delay up to 300 seconds, and replace the stubs in place; `container_runtime_unavailable` clears once both are reachable.
+- Observe-failure streaks are reset only for instances the calling pass observed, since they are shared by every app and resource kind. Faults keyed by an instance, image reference, attachment or hostname are filed with `file_once` and cleared by key.
+- `health_check_replace_failed` clears when the generation history shows a generation made after the fault, so a change made while the daemon was down still clears it.
+- A NAT64 translator that cannot be set up at startup no longer exits the daemon; the reconciler retries it and withholds workloads. This path has no test, since set-up runs the host's translator.
+- The `registry_error` split into `desired_state_unreadable` and `instance_identity_unreadable` is left to round 2 part 1; only the over-broad clear was fixed here.
