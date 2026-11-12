@@ -454,7 +454,9 @@ async fn actuate_one_pod(
             } else {
                 "job_terminal_stop"
             };
-            let op = autonomous_ops::record(db, &dr.instance, op_kind, rule);
+            let Some(op) = autonomous_ops::record(db, &dr.instance, op_kind, rule) else {
+                return Some(obs.result);
+            };
             let outcome = match actuator.stop(&dr.instance, &dr.definition).await {
                 Ok(()) => "ok".to_owned(),
                 Err(e) => {
@@ -583,7 +585,9 @@ async fn actuate_one_pod(
                 } else {
                     "systemd unit active but container not running; tearing down for restart"
                 };
-                let op = autonomous_ops::record(db, &dr.instance, "stop_broken_unit", rule);
+                let Some(op) = autonomous_ops::record(db, &dr.instance, "stop_broken_unit", rule) else {
+                return Some(obs.result);
+            };
                 let outcome = match actuator.stop(&dr.instance, &dr.definition).await {
                     Ok(()) => "ok".to_owned(),
                     Err(e) => {
@@ -605,7 +609,20 @@ async fn actuate_one_pod(
             // spec: AUTO#restarts
             // spec: AUTO#scale
             let rule = "instance in desired state but not running; AUTO#restarts / AUTO#scale requires (re)start";
-            let op = autonomous_ops::record(db, &dr.instance, "start", rule);
+            // spec: HIST#autonomous-operations
+            // Repeated starts of one instance are spaced, so one that exits
+            // as soon as it starts is not restarted at full speed.
+            if let Some(wait) = autonomous_ops::back_off(db, &dr.instance, "start") {
+                tracing::debug!(
+                    instance = %dr.instance.display_name,
+                    wait_secs = wait.as_secs(),
+                    "pods: backing off a repeated start"
+                );
+                return Some(obs.result);
+            }
+            let Some(op) = autonomous_ops::record(db, &dr.instance, "start", rule) else {
+                return Some(obs.result);
+            };
             let outcome = match actuator
                 .start(&dr.instance, &dr.definition, app_priority)
                 .await
@@ -688,7 +705,9 @@ async fn actuate_one_pod(
                 .push((dr.instance.clone(), "stop_sent", json!({})));
             // spec: AUTO#scale
             let rule = "instance has desired=Unscheduled but pod resources still present (running/container/network); AUTO#scale / scale-down requires stop";
-            let op = autonomous_ops::record(db, &dr.instance, "scale_down_stop", rule);
+            let Some(op) = autonomous_ops::record(db, &dr.instance, "scale_down_stop", rule) else {
+                return Some(obs.result);
+            };
             let outcome = match actuator.stop(&dr.instance, &dr.definition).await {
                 Ok(()) => "ok".to_owned(),
                 Err(e) => {

@@ -50,6 +50,7 @@ pub enum Outcome {
     Pending,
     Succeeded,
     Failed,
+    Cancelled,
 }
 
 impl Outcome {
@@ -58,6 +59,7 @@ impl Outcome {
             Self::Pending => "pending",
             Self::Succeeded => "succeeded",
             Self::Failed => "failed",
+            Self::Cancelled => "cancelled",
         }
     }
 
@@ -66,6 +68,7 @@ impl Outcome {
             "pending" => Some(Self::Pending),
             "succeeded" => Some(Self::Succeeded),
             "failed" => Some(Self::Failed),
+            "cancelled" => Some(Self::Cancelled),
             _ => None,
         }
     }
@@ -467,6 +470,25 @@ pub fn record_outcome(
                 outcome_error = ?2
           WHERE app = ?3 AND generation = ?4",
         rusqlite::params![outcome.as_str(), error, app, generation as i64],
+    )?;
+    Ok(())
+}
+
+/// Record how the operation `operation_id` ended against the generation it
+/// was attached to, if it was attached to one.
+// spec: GEN#generation-numbers
+pub fn record_operation_outcome(
+    db: &Db,
+    operation_id: &str,
+    outcome: Outcome,
+    error: Option<&str>,
+) -> rusqlite::Result<()> {
+    db.conn.execute(
+        "UPDATE generations
+            SET outcome       = ?1,
+                outcome_error = ?2
+          WHERE operation_id = ?3",
+        rusqlite::params![outcome.as_str(), error, operation_id],
     )?;
     Ok(())
 }

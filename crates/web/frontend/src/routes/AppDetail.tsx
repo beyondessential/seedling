@@ -2742,6 +2742,7 @@ const APP_DETAIL_EVENTS: Set<string> = new Set([
   "OperationStarted",
   "OperationCompleted",
   "OperationFailed",
+  "OperationCancelled",
   "ParamSet",
   "ParamUnset",
   "ResourceStateChanged",

@@ -340,7 +340,7 @@ export interface SeedlingEvent {
   phase?: string;
   // ParamSet / ParamUnset
   name?: string;
-  // OperationStarted / OperationCompleted / OperationFailed
+  // OperationStarted / OperationCompleted / OperationFailed / OperationCancelled
   action_name?: string;
   operation_id?: string;
   source_generation?: number;

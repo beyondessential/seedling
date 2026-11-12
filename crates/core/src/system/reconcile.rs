@@ -2728,6 +2728,43 @@ mod tests {
         );
     }
 
+    // spec: OBS#recording
+    #[test]
+    fn an_observation_that_failed_to_write_is_written_when_next_observed() {
+        let oi = crate::oi::test_support::TestOi::with_app("demo");
+        let mut reconciler = test_reconciler(&oi);
+        let instance = crate::runtime::identity::ResourceInstance::new_singleton(
+            AppName::new("demo").unwrap(),
+            crate::defs::resource::ResourceKind::Deployment,
+            "web",
+        );
+        let batch = || vec![(instance.clone(), "container_running", serde_json::json!({}))];
+        let count = || {
+            let instance = instance.clone();
+            oi.state.db.call(move |db| {
+                crate::runtime::history::query_observations(db, &instance)
+                    .map(|o| o.len())
+                    .unwrap_or(0)
+            })
+        };
+
+        oi.state.db.call(|db| {
+            db.conn
+                .execute_batch("ALTER TABLE world_observations RENAME TO world_observations_away;")
+                .unwrap()
+        });
+        let recorded = reconciler.persist_obs(batch());
+        assert!(recorded.is_empty(), "nothing was written, so nothing is on record");
+
+        oi.state.db.call(|db| {
+            db.conn
+                .execute_batch("ALTER TABLE world_observations_away RENAME TO world_observations;")
+                .unwrap()
+        });
+        reconciler.persist_obs(batch());
+        assert_eq!(count(), 1, "the next observation of it is written");
+    }
+
     // spec: PRIO#resource-control-groups
     #[test]
     fn each_declared_level_gets_a_tier_slice_under_its_app() {

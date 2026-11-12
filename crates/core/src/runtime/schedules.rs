@@ -31,6 +31,9 @@ pub struct FiredSchedule {
     pub accepted: bool,
     pub operation_id: Option<OperationId>,
     pub generation: u64,
+    /// The expression the schedule fired on, for stamping its fire time once
+    /// a queued fire is persisted.
+    pub cronexpr: String,
 }
 
 // spec: SCHED#firing
@@ -170,15 +173,13 @@ pub fn check_due_schedules(
                 ScheduleResult::Accepted | ScheduleResult::Queued => {
                     // spec: SCHED#fire-times
                     // Stamp the fire when it happens, not when it is intended.
-                    // A queued fire exists only in the scheduler's in-memory
-                    // VecDeque, so stamping it here lost the operation on a
-                    // restart while the database said it had fired — and
-                    // SCHED#fire-times then had nothing to catch up on.
-                    // While it stays queued the next tick's re-fire is
-                    // rejected as SameAppAlreadyQueued and silently dropped,
-                    // so leaving it unstamped cannot double-fire; after a
-                    // restart the unstamped schedule fires again, which is
-                    // the point.
+                    // A queued fire is stamped by the caller once it is
+                    // persisted: until then a restart would lose the
+                    // operation while the database said it had fired. While it
+                    // stays queued the next check's re-fire is rejected as
+                    // SameAppAlreadyQueued, so it cannot double-fire; once
+                    // persisted and stamped, a restart restores it from the
+                    // queue instead of firing again.
                     if accepted {
                         let fired_at = now.to_string();
                         if let Err(e) = db::upsert_schedule_fired(
@@ -216,6 +217,7 @@ pub fn check_due_schedules(
                         accepted,
                         operation_id: op_id,
                         generation,
+                        cronexpr: row.cronexpr.clone(),
                     });
                 }
                 ScheduleResult::Rejected(_) => {

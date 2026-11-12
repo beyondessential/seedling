@@ -156,6 +156,9 @@ impl OperationProgress {
                 // their own log entries and contribute to desired state via
                 // the matching arms above.
                 CallKind::SubAction => {}
+                // spec: RT#deployment-restart
+                // A restart changes no resource's desired state.
+                CallKind::Restart => {}
             }
         }
         this

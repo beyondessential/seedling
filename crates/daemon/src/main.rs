@@ -976,18 +976,12 @@ async fn main() {
                         if !fire.accepted {
                             // spec: OPS#concurrency
                             // A fire queued behind another app's operation is
-                            // persisted like any queued request, and taken off
-                            // the queue again if that fails.
-                            if let Some(op_id) = &fire.operation_id
-                                && let Err(e) =
-                                    seedling_core::oi::handler::actions::lifecycle::persist_queued(
-                                        &oi_state_for_sched,
-                                        op_id,
-                                        None,
-                                    )
-                            {
-                                tracing::error!(app = %fire.app, action = %fire.action, "scheduled fire refused: {}", e.message);
-                            }
+                            // persisted like any queued request.
+                            seedling_core::oi::handler::actions::lifecycle::persist_queued_fire(
+                                &oi_state_for_sched,
+                                &fire,
+                                now,
+                            );
                             continue;
                         }
                         if let Some(op_id) = fire.operation_id {

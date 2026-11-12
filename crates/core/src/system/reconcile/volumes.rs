@@ -81,12 +81,14 @@ async fn process_one_volume(
         // spec: ACTU#held-volumes
         LifecycleState::Ready if backend_mismatch => {
             // Storage backend changed; hold old volume and recreate.
-            let hold_op = autonomous_ops::record(
+            let Some(hold_op) = autonomous_ops::record(
                 db,
                 &dr.instance,
                 "volume_hold_for_migration",
                 "Volume backend mismatch observed; holding existing volume before recreating with current storage backend",
-            );
+            ) else {
+                return result;
+            };
             let hold_outcome = match actuator
                 .hold_volume(&dr.instance, &dr.definition, "storage backend changed")
                 .await
@@ -106,12 +108,14 @@ async fn process_one_volume(
             };
             hold_op.complete(&hold_outcome);
             // Now create a fresh volume with the current backend.
-            let create_op = autonomous_ops::record(
+            let Some(create_op) = autonomous_ops::record(
                 db,
                 &dr.instance,
                 "volume_recreate_after_migration",
                 "After holding mismatched volume, creating replacement with current backend",
-            );
+            ) else {
+                return result;
+            };
             let create_outcome = match actuator.start_volume(&dr.instance, &dr.definition).await {
                 Ok(_) => "ok".to_owned(),
                 Err(e) => {
@@ -129,12 +133,14 @@ async fn process_one_volume(
         }
         LifecycleState::Ready if !volume_present => {
             // spec: ACTU#volume-creation-and-seeding
-            let op = autonomous_ops::record(
+            let Some(op) = autonomous_ops::record(
                 db,
                 &dr.instance,
                 "volume_create",
                 "Volume desired=Ready but absent on disk; creating",
-            );
+            ) else {
+                return result;
+            };
             let outcome = match actuator.start_volume(&dr.instance, &dr.definition).await {
                 Ok(_) => "ok".to_owned(),
                 Err(e) => {
@@ -155,12 +161,14 @@ async fn process_one_volume(
                 .observations
                 .push((dr.instance.clone(), "stop_sent", json!({})));
             // spec: ACTU#volume-removal
-            let op = autonomous_ops::record(
+            let Some(op) = autonomous_ops::record(
                 db,
                 &dr.instance,
                 "volume_remove",
                 "Volume desired=Unscheduled but still present; removing",
-            );
+            ) else {
+                return result;
+            };
             let outcome = match actuator.stop(&dr.instance, &dr.definition).await {
                 Ok(()) => "ok".to_owned(),
                 Err(e) => {

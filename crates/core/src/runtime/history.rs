@@ -426,6 +426,24 @@ pub fn interrupt_incomplete_autonomous_operations(db: &Db) -> rusqlite::Result<u
     )
 }
 
+/// The ids of the most recent observations recorded for `instance_id`, oldest
+/// first: what the runtime had observed of it when it decided to act.
+// spec: HIST#operation-provenance
+pub fn recent_observation_ids(
+    db: &Db,
+    instance_id: InstanceId,
+    limit: usize,
+) -> rusqlite::Result<Vec<i64>> {
+    let mut stmt = db.conn.prepare(
+        "SELECT id FROM (
+             SELECT id FROM world_observations WHERE instance_id = ?1
+             ORDER BY id DESC LIMIT ?2
+         ) ORDER BY id ASC",
+    )?;
+    stmt.query_map(params![instance_id.to_hex(), limit as i64], |r| r.get(0))?
+        .collect()
+}
+
 pub fn query_autonomous_operations(
     db: &Db,
     resource_id: InstanceId,
@@ -551,6 +569,7 @@ pub fn load_action_log(
             "Signal" => CallKind::Signal,
             "Write" => CallKind::Write,
             "Exec" => CallKind::Exec,
+            "Restart" => CallKind::Restart,
             "SubAction" => CallKind::SubAction,
             other => {
                 return Err(rusqlite::Error::FromSqlConversionFailure(

@@ -273,6 +273,24 @@ fn resolve_action_volume_params(
     clippy::too_many_arguments,
     reason = "operation state is inherently multi-dimensional"
 )]
+/// End an operation that was accepted but cannot run, as a failed one ends.
+fn refuse_to_run(db: &DbHandle, op_ctx: &OperationEventCtx, description: String) {
+    let app_name = op_ctx.app.clone();
+    let operation_id = op_ctx.operation_id.clone();
+    let for_db = description.clone();
+    db.call(move |db| {
+        let _ = faults::file_fault(db, &app_name, None, None, None, "operation_failed", &for_db);
+        let _ = clear_current_operation(db);
+        let _ = crate::runtime::generations::record_operation_outcome(
+            db,
+            &operation_id,
+            crate::runtime::generations::Outcome::Failed,
+            Some(&for_db),
+        );
+    });
+    op_ctx.failed(&description);
+}
+
 fn run_operation_loop(
     app: &App,
     db: DbHandle,
@@ -291,6 +309,48 @@ fn run_operation_loop(
     let app_name = &op_ctx.app;
     let action_name = &op_ctx.action_name;
     let operation_id = OperationId(op_ctx.operation_id.clone());
+
+    // spec: OPS#initiating-events
+    // The operation runs against the definition and parameters of its target
+    // generation, however many generations have been committed since it was
+    // dispatched, and on every replay. If that generation cannot be rebuilt
+    // the operation fails; it is never run against another's state.
+    let target_app;
+    let app = {
+        let name = app_name.clone();
+        let current = db.call(move |db| crate::runtime::generations::current(db, &name));
+        match current {
+            Ok(Some(current)) if op_ctx.target_generation != 0 && current != op_ctx.target_generation => {
+                let name = app_name.clone();
+                let (limits, cipher, target) = (
+                    script_limits.clone(),
+                    Arc::clone(&cipher),
+                    op_ctx.target_generation,
+                );
+                match db.call(move |db| {
+                    crate::runtime::generations::reconstruct_app_def(db, &name, target, &limits, &cipher)
+                }) {
+                    Ok(rebuilt) => {
+                        target_app = rebuilt;
+                        &target_app
+                    }
+                    Err(e) => {
+                        tracing::error!(app = %app_name, action = %action_name, "cannot rebuild generation {}: {e}", op_ctx.target_generation);
+                        refuse_to_run(
+                            &db,
+                            op_ctx,
+                            format!(
+                                "{action_name} not run: generation {} cannot be rebuilt: {e}",
+                                op_ctx.target_generation
+                            ),
+                        );
+                        return false;
+                    }
+                }
+            }
+            _ => app,
+        }
+    };
 
     let (engine, mut scope, _) = crate::setup_language(script_limits, Arc::clone(&app.bundle));
     // spec: BND#script-formation
@@ -345,14 +405,23 @@ fn run_operation_loop(
     };
     let params_for_persist = params.clone();
     let cipher_for_persist = Arc::clone(&cipher);
+    // spec: OPS#persistence
+    // The closure does not run unless the operation is on record: a restart
+    // could not otherwise replay it, and its params could not be recovered.
     if let Err(e) = db.call(move |db| {
         save_current_operation(db, &cipher_for_persist, &record, &params_for_persist)
     }) {
-        tracing::warn!(
+        tracing::error!(
             app = %app_name,
             action = %action_name,
-            "failed to persist current_operation: {e}"
+            "failed to persist current_operation; not running the operation: {e}"
         );
+        refuse_to_run(
+            &db,
+            op_ctx,
+            format!("{action_name} not run: the operation could not be persisted: {e}"),
+        );
+        return false;
     }
 
     loop {
@@ -383,6 +452,7 @@ fn run_operation_loop(
             },
             &mut scope,
         );
+        let operation_id_for_outcome = operation_id.0.clone();
         match result {
             OperationResult::Completed => {
                 let app_name_owned = app_name.clone();
@@ -399,6 +469,13 @@ fn run_operation_loop(
                         faults::clear_faults_by_kind(db, &app_name_owned, kind).ok();
                     }
                     let _ = clear_current_operation(db);
+                    // spec: GEN#generation-numbers
+                    let _ = crate::runtime::generations::record_operation_outcome(
+                        db,
+                        &operation_id_for_outcome,
+                        crate::runtime::generations::Outcome::Succeeded,
+                        None,
+                    );
                 });
                 op_ctx.completed();
                 return true;
@@ -418,6 +495,12 @@ fn run_operation_loop(
                         &desc,
                     );
                     let _ = clear_current_operation(db);
+                    let _ = crate::runtime::generations::record_operation_outcome(
+                        db,
+                        &operation_id_for_outcome,
+                        crate::runtime::generations::Outcome::Failed,
+                        Some(&desc),
+                    );
                 });
                 op_ctx.failed(&e.to_string());
                 return false;
@@ -439,8 +522,16 @@ fn run_operation_loop(
                         &desc_for_fault,
                     );
                     let _ = clear_current_operation(db);
+                    let _ = crate::runtime::generations::record_operation_outcome(
+                        db,
+                        &operation_id_for_outcome,
+                        crate::runtime::generations::Outcome::Cancelled,
+                        None,
+                    );
                 });
-                op_ctx.failed(&desc);
+                // spec: OPS#cancellation
+                // A cancelled operation ends in an outcome of its own.
+                op_ctx.cancelled();
                 return false;
             }
             OperationResult::Suspended(cond) => {
@@ -1095,6 +1186,36 @@ pub fn restore_queue(
     }
 }
 
+/// Persist a scheduled fire the scheduler queued, and stamp its fire time once
+/// it is on record. A fire that cannot be persisted is taken off the queue and
+/// left unstamped, so the next check fires it again.
+// spec: SCHED#fire-times
+// spec: OPS#concurrency
+pub fn persist_queued_fire(
+    state: &OiState,
+    fire: &crate::runtime::schedules::FiredSchedule,
+    now: jiff::Timestamp,
+) {
+    let Some(operation_id) = &fire.operation_id else {
+        return;
+    };
+    match persist_queued(state, operation_id, None) {
+        Ok(()) => {
+            let (app, action, cron) = (fire.app.clone(), fire.action.clone(), fire.cronexpr.clone());
+            state.db.call(move |db| {
+                if let Err(e) =
+                    crate::runtime::db::upsert_schedule_fired(db, &app, &action, &cron, &now.to_string())
+                {
+                    tracing::error!(app = %app, action = %action, "failed to stamp a queued fire: {e}");
+                }
+            });
+        }
+        Err(e) => {
+            tracing::error!(app = %fire.app, action = %fire.action, "scheduled fire refused: {}", e.message);
+        }
+    }
+}
+
 /// Initiate `app_name`'s start action with `trigger`, holding the app's
 /// desired state from now until the start action ends.
 ///
@@ -1169,3 +1290,6 @@ pub fn initiate_start(state: &Arc<OiState>, app_name: &AppName, trigger: &str) {
         }
     }
 }
+
+#[cfg(test)]
+mod tests;

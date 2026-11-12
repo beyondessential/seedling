@@ -136,6 +136,17 @@ pub enum OiEvent {
         #[serde(skip_serializing_if = "Option::is_none")]
         actor: Option<Arc<Actor>>,
     },
+    // spec: OPS#cancellation
+    OperationCancelled {
+        timestamp: Timestamp,
+        app: AppName,
+        action_name: ActionName,
+        operation_id: String,
+        source_generation: u64,
+        target_generation: u64,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        actor: Option<Arc<Actor>>,
+    },
     FaultFiled {
         timestamp: Timestamp,
         id: String,
@@ -1904,6 +1915,19 @@ impl OperationEventCtx {
 
     pub fn completed(&self) {
         self.tx.emit(OiEvent::OperationCompleted {
+            timestamp: now(),
+            app: self.app.clone(),
+            action_name: self.action_name.clone(),
+            operation_id: self.operation_id.clone(),
+            source_generation: self.source_generation,
+            target_generation: self.target_generation,
+            actor: self.actor.clone(),
+        });
+    }
+
+    // spec: OPS#cancellation
+    pub fn cancelled(&self) {
+        self.tx.emit(OiEvent::OperationCancelled {
             timestamp: now(),
             app: self.app.clone(),
             action_name: self.action_name.clone(),

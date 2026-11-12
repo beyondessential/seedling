@@ -430,11 +430,17 @@ impl Reconciler {
                         }
                     }
                 }
-                Err(e) => error!(
-                    error = %e,
-                    obs = kind,
-                    "reconciler: failed to persist observation"
-                ),
+                Err(e) => {
+                    // spec: OBS#recording
+                    // Not recorded, so not marked as recorded: the next tick
+                    // observes it again and writes it.
+                    self.written_obs.remove(&(id, kind));
+                    error!(
+                        error = %e,
+                        obs = kind,
+                        "reconciler: failed to persist observation"
+                    );
+                }
             }
         }
         recorded

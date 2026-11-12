@@ -981,11 +981,22 @@ impl RuntimeInstance {
     /// implemented as a wrapper that forwarded into `do_start` —
     /// which mislabelled both records as `Start`. Take the kind as a
     /// parameter so each call surface emits its own label.
+    /// End the operation here if it has been cancelled: a cancelled operation
+    /// stops at the next barrier or `rt.*` call it reaches.
+    // spec: OPS#cancellation
+    fn stop_if_cancelled(&self) -> Result<(), Box<EvalAltResult>> {
+        match &self.ctx {
+            Some(ctx) if ctx.lock().cancel_token.is_cancelled() => Err(make_cancel_error()),
+            _ => Ok(()),
+        }
+    }
+
     fn do_start_or_query(
         &mut self,
         resources_with_defs: Vec<(ResourceInstance, Option<crate::defs::resource::Resource>)>,
         call_kind: CallKind,
     ) -> Result<Started, Box<EvalAltResult>> {
+        self.stop_if_cancelled()?;
         let resources: Vec<ResourceInstance> =
             resources_with_defs.iter().map(|(r, _)| r.clone()).collect();
 
@@ -1085,6 +1096,7 @@ impl RuntimeInstance {
         &mut self,
         resources_with_defs: Vec<(ResourceInstance, Option<crate::defs::resource::Resource>)>,
     ) -> Result<Started, Box<EvalAltResult>> {
+        self.stop_if_cancelled()?;
         // Filter to TLS-terminating ingresses; ignore everything else
         // (per the language spec rule RT#certificate-warming).
         let resources: Vec<ResourceInstance> = resources_with_defs
@@ -1160,6 +1172,7 @@ impl RuntimeInstance {
         &mut self,
         resources_with_defs: Vec<(ResourceInstance, Option<crate::defs::resource::Resource>)>,
     ) -> Result<Started, Box<EvalAltResult>> {
+        self.stop_if_cancelled()?;
         let pairs = extract_container_images(&resources_with_defs);
         let refs: Vec<String> = dedup_image_refs(&pairs)
             .into_iter()
@@ -1245,6 +1258,7 @@ impl RuntimeInstance {
         signal: &str,
     ) -> Result<(), Box<EvalAltResult>> {
         use crate::defs::resource::ResourceKind;
+        self.stop_if_cancelled()?;
         let canonical = canonicalise_signal_name(signal).ok_or_else(|| {
             Box::<EvalAltResult>::from(format!(
                 "rt.signal: unknown signal {signal:?}; expected something like \"SIGHUP\" or \"HUP\""
@@ -1804,14 +1818,11 @@ impl RuntimeInstance {
             let started_at = g
                 .committed
                 .iter()
-                .chain(g.pending.iter())
-                .find(|e| {
-                    e.resources == resources
-                        && e.barrier(STOP_BARRIER_SEQ).is_some_and(|b| {
-                            b.required_state == LifecycleState::Terminated && !b.satisfied
-                        })
-                })
-                .and_then(|e| e.barrier(STOP_BARRIER_SEQ)?.started_at_secs);
+                .find(|e| e.call_index == g.call_index)
+                .filter(|e| e.call_kind == CallKind::Stop)
+                .and_then(|e| e.barrier(STOP_BARRIER_SEQ))
+                .filter(|b| b.required_state == LifecycleState::Terminated && !b.satisfied)
+                .and_then(|b| b.started_at_secs);
             if let (Some(d), Some(started_at)) = (deadline_secs, started_at)
                 && now.saturating_sub(started_at) >= d
             {
@@ -1906,6 +1917,37 @@ impl CustomType for RuntimeInstance {
                         && ctx.lock().probe_mode()
                     {
                         return Ok(());
+                    }
+                    this.stop_if_cancelled()?;
+                    // spec: RT#deployment-restart
+                    // Each call restarts the deployment at most once, replays
+                    // included: the call is on record before it is made, so a
+                    // replay that finds it skips it.
+                    if let Some(ctx) = &this.ctx {
+                        let mut g = ctx.lock();
+                        match g.replay_step(CallKind::Restart, Some(dep_name.as_str())) {
+                            Ok(Some(_)) => return Ok(()),
+                            Ok(None) => {}
+                            Err(mismatch) => {
+                                return Err(Box::<EvalAltResult>::from(mismatch.to_string()));
+                            }
+                        }
+                        let entry = ActionLogEntry {
+                            call_index: g.call_index,
+                            call_kind: CallKind::Restart,
+                            resources: Vec::new(),
+                            barriers: Vec::new(),
+                            extra: Some(dep_name.clone()),
+                            begun: false,
+                        };
+                        let on_record = g.commit_through(&entry).map_err(|e| -> Box<EvalAltResult> {
+                            format!("rt.restart: cannot record the call before making it: {e}")
+                                .into()
+                        })?;
+                        if !on_record {
+                            g.pending.push(entry);
+                        }
+                        g.call_index += 1;
                     }
                     emit_breadcrumb(crate::system::breadcrumb::BreadcrumbKind::Restart {
                         deployment: &dep_name,

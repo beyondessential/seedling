@@ -83,6 +83,11 @@ pub enum CallKind {
     // spec: OPS#action-composition
     // spec: HIST#action-calls
     SubAction,
+    /// `rt.restart(deployment)` — restart a deployment's instances. The
+    /// deployment's name is stored in `extra`. The entry is committed before
+    /// the restart is requested, so a replay does not request it again.
+    // spec: RT#deployment-restart
+    Restart,
 }
 
 // spec: HIST#action-calls

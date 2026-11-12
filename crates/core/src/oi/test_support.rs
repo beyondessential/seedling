@@ -315,6 +315,70 @@ mod tests {
         );
     }
 
+    // spec: SCHED#fire-times
+    #[test]
+    fn a_queued_fire_is_stamped_once_persisted_and_left_unstamped_if_refused() {
+        use crate::runtime::{db as rdb, scheduler::ScheduleResult, schedules::check_due_schedules};
+        let oi = oi_with_a_busy_scheduler("demo");
+        let app = seedling_protocol::names::AppName::new("demo").unwrap();
+        let action = seedling_protocol::names::ActionName::new("refresh").unwrap();
+        oi.state.db.call({
+            let (app, action) = (app.clone(), action.clone());
+            move |db| {
+                rdb::ensure_schedules(db, &app, &[(action.clone(), "0 * * * *".to_owned())]).unwrap();
+                rdb::upsert_schedule_fired(db, &app, &action, "0 * * * *", "2026-04-21T17:05:00Z")
+                    .unwrap();
+            }
+        });
+        let now: jiff::Timestamp = "2026-04-21T18:37:22Z".parse().unwrap();
+        let phase = Arc::clone(&oi.state.registry.read().get("demo").unwrap().phase);
+        let fire = |oi: &TestOi| {
+            let mut fired = oi.state.db.call({
+                let sched = Arc::clone(&oi.state.scheduler);
+                let phase = Arc::clone(&phase);
+                move |db| {
+                    check_due_schedules(db, &mut sched.lock(), now, &|_| {
+                        Some((1, Arc::clone(&phase), Default::default()))
+                    })
+                }
+            });
+            assert_eq!(fired.len(), 1);
+            assert!(!fired[0].accepted, "it queued behind the other app's operation");
+            fired.remove(0)
+        };
+        let last_fired = |oi: &TestOi| -> String {
+            oi.state.db.call(|db| {
+                db.conn
+                    .query_row("SELECT last_fired_at FROM action_schedules", [], |r| r.get(0))
+                    .unwrap()
+            })
+        };
+
+        // Refused: not persisted, so not stamped, and off the queue.
+        oi.state.db.call(|db| db.conn.execute_batch("DROP TABLE queued_operations;").unwrap());
+        let first = fire(&oi);
+        crate::oi::handler::actions::lifecycle::persist_queued_fire(&oi.state, &first, now);
+        assert_eq!(last_fired(&oi), "2026-04-21T17:05:00Z");
+        assert_eq!(oi.state.scheduler.lock().queue_iter().count(), 0);
+
+        // Persisted: stamped, so a restart restores it rather than firing again.
+        oi.state.db.call(|db| {
+            db.conn
+                .execute_batch(
+                    "CREATE TABLE queued_operations (
+                        seq INTEGER PRIMARY KEY AUTOINCREMENT, operation_id TEXT NOT NULL UNIQUE,
+                        app TEXT NOT NULL, action TEXT NOT NULL, trigger TEXT NOT NULL,
+                        source_generation INTEGER NOT NULL, target_generation INTEGER NOT NULL,
+                        params_ciphertext BLOB NOT NULL, actor TEXT);",
+                )
+                .unwrap()
+        });
+        let second = fire(&oi);
+        crate::oi::handler::actions::lifecycle::persist_queued_fire(&oi.state, &second, now);
+        assert_eq!(last_fired(&oi), now.to_string());
+        let _ = ScheduleResult::Queued;
+    }
+
     // spec: OPS#concurrency
     #[test]
     fn a_request_that_cannot_be_persisted_is_refused_and_not_queued() {

@@ -45,6 +45,7 @@ function eventSummary(ev: SeedlingEvent): string {
     case "OperationStarted": return `${ev.action_name ?? "operation"} started`;
     case "OperationCompleted": return `${ev.action_name ?? "operation"} completed`;
     case "OperationFailed": return `${ev.action_name ?? "operation"} failed: ${ev.error ?? ""}`;
+    case "OperationCancelled": return `${ev.action_name ?? "operation"} cancelled`;
     case "FaultFiled": return `fault: ${ev.kind ?? ""} — ${ev.description ?? ""}`;
     case "FaultCleared": return `fault cleared: ${ev.kind ?? ""}`;
     case "ResourceStateChanged": return `${ev.resource_type ?? ""}/${ev.resource_name ?? ""} → ${ev.state ?? ""}`;
