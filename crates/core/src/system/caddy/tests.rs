@@ -2244,3 +2244,37 @@ fn tls_servers_keep_automatic_https() {
     let json = build_caddy_config(&config);
     assert!(json["apps"]["http"]["servers"]["seedling_https_8443"]["automatic_https"].is_null());
 }
+
+// spec: PRX#route-selection
+#[test]
+fn a_proxied_route_with_no_upstreams_answers_503() {
+    let mut vhost = http_vhost("example.com", "[fd5e::1]:3000");
+    vhost.routes[0].handler = ProxyRouteHandler::ReverseProxy {
+        upstreams: vec![],
+        proxy: Box::new(default_proxy()),
+    };
+    let config = ProxyConfig {
+        listeners: vec![ProxyListener {
+            port: 80,
+            proto: ProxyListenerProto::Http,
+        }],
+        virtual_hosts: vec![vhost],
+        l4_routes: vec![],
+        warm_cert_hostnames: Default::default(),
+        cert_endpoint_url: None,
+        renewal_ratios: Default::default(),
+    };
+    let json = build_caddy_config(&config);
+    let routes = json["apps"]["http"]["servers"]["seedling_http_80"]["routes"]
+        .as_array()
+        .unwrap();
+    let route = routes
+        .iter()
+        .find(|r| r["match"][0]["host"][0] == "example.com")
+        .expect("the route is still emitted");
+    let handlers: Vec<&serde_json::Value> = route["handle"].as_array().unwrap().iter().collect();
+    assert!(handlers.iter().all(|h| h["handler"] != "reverse_proxy"));
+    let last = handlers.last().unwrap();
+    assert_eq!(last["handler"], "static_response");
+    assert_eq!(last["status_code"], 503);
+}

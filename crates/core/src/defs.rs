@@ -188,6 +188,14 @@ fn read_mem_total_bytes() -> i64 {
 
 // spec: BSL#evaluation
 // spec: BSL#enums
+/// Check the rules a definition is held to once it has evaluated in full,
+/// which no single call could check because a later call can change what an
+/// earlier one depends on.
+// spec: BSL#evaluation
+pub fn check_evaluated(def: &app::AppDef) -> Result<(), String> {
+    ingress::check_redirect_terminations(def)
+}
+
 pub fn scope(bundle: Arc<crate::runtime::definition::Bundle>) -> (Scope<'static>, app::App) {
     let mut scope = Scope::new();
     let facts = crate::sysconst::get();

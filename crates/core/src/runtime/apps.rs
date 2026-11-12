@@ -131,6 +131,10 @@ pub struct AppEntry {
     /// Current app generation (0 if not yet bumped).
     // spec: APPS#generations
     pub current_generation: generations::Generation,
+    /// Where the app's latest completed install stands in the order installs
+    /// completed, lower first; `None` before any install has completed.
+    // spec: ING#claims-across-apps
+    pub install_seq: Option<i64>,
 }
 
 pub struct AppRegistry {
@@ -207,6 +211,7 @@ impl AppRegistry {
                 tick_notify,
                 script_error,
                 current_generation: generation,
+                install_seq: None,
             },
         );
     }
@@ -321,10 +326,11 @@ impl AppRegistry {
     ) -> rusqlite::Result<Self> {
         let mut registry = Self::new();
         let mut stmt = db.conn.prepare(
-            "SELECT name, installed, uninstalling, installing, current_generation \
+            "SELECT name, installed, uninstalling, installing, current_generation, install_seq \
              FROM registered_apps ORDER BY name",
         )?;
-        let rows: Vec<(AppName, bool, bool, bool, i64)> = stmt
+        type Row = (AppName, bool, bool, bool, i64, Option<i64>);
+        let rows: Vec<Row> = stmt
             .query_map([], |row| {
                 Ok((
                     row.get::<_, AppName>(0)?,
@@ -332,11 +338,12 @@ impl AppRegistry {
                     row.get::<_, bool>(2)?,
                     row.get::<_, bool>(3)?,
                     row.get::<_, i64>(4)?,
+                    row.get::<_, Option<i64>>(5)?,
                 ))
             })?
             .collect::<rusqlite::Result<_>>()?;
 
-        for (name, installed, uninstalling, installing, current_gen) in rows {
+        for (name, installed, uninstalling, installing, current_gen, install_seq) in rows {
             let phase = decode_phase(name.as_str(), installed, uninstalling, installing);
             if current_gen <= 0 {
                 tracing::warn!(app = %name, "skipping app with no current generation");
@@ -381,11 +388,26 @@ impl AppRegistry {
                     tick_notify: Arc::clone(&tick_notify),
                     script_error,
                     current_generation,
+                    install_seq,
                 },
             );
         }
 
         Ok(registry)
+    }
+
+    /// Record that `name`'s install has just completed, placing it after
+    /// every install completed before it, and return its place.
+    // spec: ING#claims-across-apps
+    pub fn record_install_completed(db: &Db, name: &AppName) -> rusqlite::Result<i64> {
+        db.conn.query_row(
+            "UPDATE registered_apps \
+                SET install_seq = (SELECT COALESCE(MAX(install_seq), 0) + 1 FROM registered_apps) \
+              WHERE name = ?1 \
+             RETURNING install_seq",
+            [name],
+            |row| row.get(0),
+        )
     }
 
     // spec: APPS#persistence
@@ -697,6 +719,10 @@ fn run_definition(
         Ok(ast) => ast,
         Err(e) => return (app, Err(e)),
     };
+    // spec: BSL#evaluation
+    if let Err(e) = crate::defs::check_evaluated(&app.def.load()) {
+        return (app, Err(ScriptError(e)));
+    }
     let (Some(proposed), Some(validators)) = (validate, validators) else {
         return (app, Ok(Vec::new()));
     };

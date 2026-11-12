@@ -366,6 +366,9 @@ struct AppSnapshot {
     /// effect without a redeploy.
     // spec: PRIO#priority-setting
     app_priority: AppPriority,
+    /// Where the app's install stands in the order installs completed.
+    // spec: ING#claims-across-apps
+    install_seq: Option<i64>,
 }
 
 /// Single global reconciler that processes all installed apps each tick.
@@ -792,6 +795,7 @@ impl Reconciler {
                 warm_cert_hostnames,
                 current_generation,
                 app_priority,
+                install_seq: entry.install_seq,
             });
         }
         (snapshots, skipped)
@@ -2548,6 +2552,7 @@ mod tests {
             warm_cert_hostnames: Default::default(),
             current_generation: 1,
             app_priority: AppPriority::default(),
+            install_seq: Some(1),
         }
     }
 
@@ -2575,6 +2580,7 @@ mod tests {
             warm_cert_hostnames: Default::default(),
             current_generation: 1,
             app_priority,
+            install_seq: Some(1),
         }
     }
 

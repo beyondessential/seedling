@@ -605,8 +605,9 @@ impl Reconciler {
     }
 
     /// Converge `ingress_conflict` faults to the current `(hostname, port)`
-    /// collision set: one fault per involved app ingress and one against
-    /// `_system` per involved site ingress, and nothing else.
+    /// collision set: one fault per involved app ingress, one per app ingress
+    /// left out for another app's claim, and one against `_system` per
+    /// involved site ingress, and nothing else.
     ///
     /// This used to clear only `prior \\ current`, where `prior` was a
     /// `Reconciler` field that starts empty on every daemon start — so a
@@ -620,10 +621,28 @@ impl Reconciler {
         report: &super::site_proxy::ConflictReport,
     ) {
         let parties = report.parties.clone();
+        let app_claims = report.app_claims.clone();
         self.db.call(move |db| {
             let system = AppName::new_unchecked("_system");
             let mut current: BTreeMap<faults::FaultKey, (faults::FaultMeta, String)> =
                 BTreeMap::new();
+
+            // spec: ING#claims-across-apps
+            for lost in &app_claims {
+                let (served_app, served_ingress) = &lost.served;
+                current.insert(
+                    faults::FaultKey::new(&lost.app, "ingress_conflict", lost.ingress.as_str()),
+                    (
+                        faults::FaultMeta::resource("ingress", lost.ingress.as_str()),
+                        format!(
+                            "ingress conflict on ({}:{}) with app ingress {served_app}/\
+                             {served_ingress}, whose app installed first; this ingress is left \
+                             out of the proxy while that one claims them",
+                            lost.hostname, lost.port
+                        ),
+                    ),
+                );
+            }
 
             for party in &parties {
                 let app_summary: Vec<String> = party

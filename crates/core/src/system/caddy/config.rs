@@ -360,6 +360,20 @@ fn proxy_routes_for_vhost(vh: &VirtualHost) -> Vec<Value> {
                     if !proxy.headers.is_empty() {
                         chain.push(headers_handler(&proxy.headers));
                     }
+                    // spec: PRX#route-selection
+                    // Answered at once rather than left to the proxy, which
+                    // would hold the request for its retry window first.
+                    if upstreams.is_empty() {
+                        chain.push(json!({
+                            "handler": "static_response",
+                            "status_code": 503,
+                        }));
+                        return json!({
+                            "match": [match_expr],
+                            "handle": chain,
+                            "terminal": true,
+                        });
+                    }
                     // spec: PRX#rate-limiting
                     // Ahead of compression and the proxy: an over-limit
                     // request is answered without engaging either, so the

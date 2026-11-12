@@ -746,8 +746,27 @@ fn enter_installing_phase(state: &OiState, app_name: &AppName) {
     tracing::info!(app = %app_name, "install started; entering Installing phase");
 }
 
+/// Place the app's just-completed install after every install completed
+/// before it, durably and then in memory.
+// spec: ING#claims-across-apps
+pub(crate) fn record_install_completed(state: &OiState, app_name: &AppName) {
+    let name = app_name.clone();
+    match state
+        .db
+        .call(move |db| crate::runtime::apps::AppRegistry::record_install_completed(db, &name))
+    {
+        Ok(seq) => {
+            if let Some(entry) = state.registry.write().get_mut(app_name.as_str()) {
+                entry.install_seq = Some(seq);
+            }
+        }
+        Err(e) => tracing::error!(app = %app_name, "record install completion order: {e}"),
+    }
+}
+
 // spec: ACI#install-completion
 fn finalize_install(state: &OiState, app_name: &AppName) {
+    record_install_completed(state, app_name);
     set_phase_and_persist(state, app_name, AppPhase::Installed);
     tracing::info!(app = %app_name, "install completed; app is now installed");
 }

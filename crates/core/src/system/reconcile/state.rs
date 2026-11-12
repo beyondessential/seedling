@@ -580,6 +580,7 @@ mod tests {
             warm_cert_hostnames: Default::default(),
             current_generation: 1,
             app_priority: Default::default(),
+            install_seq: Some(1),
         }
     }
 

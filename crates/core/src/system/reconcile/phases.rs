@@ -431,8 +431,15 @@ pub(super) fn compute_proxy_config(
         registry,
     );
 
+    // spec: ING#claims-across-apps
+    let install_seqs: HashMap<&AppName, Option<i64>> =
+        apps.iter().map(|a| (&a.name, a.install_seq)).collect();
+    let (all_pairs, lost_app_claims) =
+        site_proxy::resolve_app_claims(all_pairs, |app| install_seqs.get(app).copied().flatten());
+
     // spec: SITE#ingress-conflicts
-    let conflicts = site_proxy::detect_conflicts(&all_pairs, &site_data);
+    let mut conflicts = site_proxy::detect_conflicts(&all_pairs, &site_data);
+    conflicts.app_claims = lost_app_claims;
     let surviving_app_pairs =
         site_proxy::drop_conflicting_app_pairs(all_pairs, &conflicts.conflicts);
     let surviving_site_data =

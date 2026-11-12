@@ -82,6 +82,7 @@ fn make_entry(name: &str, script_error: Option<&str>) -> AppEntry {
         tick_notify: Arc::new(Notify::new()),
         script_error: script_error.map(|msg| (msg.to_owned(), Timestamp::now())),
         current_generation: 0,
+        install_seq: None,
     }
 }
 
@@ -796,4 +797,31 @@ fn reload_runs_no_validators() {
     .expect("load registry");
     let loaded = registry.get("myapp").expect("registered");
     assert!(loaded.script_error.is_none(), "{:?}", loaded.script_error);
+}
+
+// spec: ING#claims-across-apps
+#[test]
+fn installs_are_ordered_as_they_complete_and_the_order_survives_a_reload() {
+    let db = Db::open_in_memory().expect("open");
+    for name in ["alpha", "bravo"] {
+        let generation =
+            generations::register_script(&db, &app(name), trivial_script()).expect("register");
+        let mut entry = make_entry(name, None);
+        entry.current_generation = generation;
+        AppRegistry::persist_app(&db, &entry).expect("persist");
+    }
+
+    let bravo = AppRegistry::record_install_completed(&db, &app("bravo")).unwrap();
+    let alpha = AppRegistry::record_install_completed(&db, &app("alpha")).unwrap();
+    assert!(bravo < alpha, "bravo completed first");
+
+    let reloaded = AppRegistry::load_from_db(
+        &db,
+        &crate::runtime::secrets::Cipher::for_tests(),
+        Arc::new(Notify::new()),
+        &crate::ScriptLimits::default(),
+    )
+    .unwrap();
+    assert_eq!(reloaded.get("bravo").unwrap().install_seq, Some(bravo));
+    assert_eq!(reloaded.get("alpha").unwrap().install_seq, Some(alpha));
 }

@@ -395,6 +395,72 @@ pub(super) struct ConflictReport {
     pub conflicts: BTreeSet<(String, u16)>,
     /// Per-conflict roster of involved parties, used for fault descriptions.
     pub parties: Vec<ConflictParties>,
+    /// App ingresses left out because another app's ingress claims the same
+    /// `(hostname, port)`.
+    // spec: ING#claims-across-apps
+    pub app_claims: Vec<LostAppClaim>,
+}
+
+/// An app ingress left out of the proxy because an ingress of an app whose
+/// install completed earlier claims the same `(hostname, port)`.
+// spec: ING#claims-across-apps
+#[derive(Debug, Clone)]
+pub(super) struct LostAppClaim {
+    pub hostname: String,
+    pub port: u16,
+    pub app: AppName,
+    pub ingress: String,
+    /// The app whose ingress is served, and that ingress.
+    pub served: (AppName, String),
+}
+
+/// Keep, of the app ingresses claiming each `(hostname, port)`, only the one
+/// of the app whose install completed first, and report the rest.
+///
+/// `install_seq` gives each app's place in the order installs completed; an
+/// app with none ranks after every app with one, and the app name breaks a
+/// tie, so the outcome is the same on every tick.
+// spec: ING#claims-across-apps
+pub(super) fn resolve_app_claims(
+    pairs: Vec<(AppName, IngressDef, ServiceUpstream)>,
+    install_seq: impl Fn(&AppName) -> Option<i64>,
+) -> (
+    Vec<(AppName, IngressDef, ServiceUpstream)>,
+    Vec<LostAppClaim>,
+) {
+    use std::collections::BTreeMap;
+
+    let rank = |app: &AppName| (install_seq(app).unwrap_or(i64::MAX), app.clone());
+    let mut served: BTreeMap<(String, u16), (AppName, String)> = BTreeMap::new();
+    for (app, def, _up) in &pairs {
+        let key = (def.hostname.clone(), def.port.get());
+        let claim = (app.clone(), ingress_resource_name(def));
+        match served.get(&key) {
+            Some((current, _)) if rank(current) <= rank(app) => {}
+            _ => {
+                served.insert(key, claim);
+            }
+        }
+    }
+
+    let mut kept = Vec::new();
+    let mut lost = Vec::new();
+    for (app, def, up) in pairs {
+        let key = (def.hostname.clone(), def.port.get());
+        let winner = &served[&key];
+        if winner.0 == app {
+            kept.push((app, def, up));
+        } else {
+            lost.push(LostAppClaim {
+                hostname: key.0,
+                port: key.1,
+                app,
+                ingress: ingress_resource_name(&def),
+                served: winner.clone(),
+            });
+        }
+    }
+    (kept, lost)
 }
 
 #[derive(Debug, Clone)]
@@ -534,6 +600,47 @@ mod tests {
 
     fn site(name: &str) -> SiteIngressName {
         SiteIngressName::new(name).unwrap()
+    }
+
+    // spec: ING#claims-across-apps
+    #[test]
+    fn the_app_that_installed_first_keeps_a_shared_hostname_and_port() {
+        let first = AppName::new("first").unwrap();
+        let second = AppName::new("second").unwrap();
+        let never = AppName::new("never").unwrap();
+        let seq = |app: &AppName| match app.as_str() {
+            "first" => Some(1),
+            "second" => Some(2),
+            _ => None,
+        };
+        let pairs = vec![
+            (never.clone(), def("shared.example.com", 443), upstream()),
+            (second.clone(), def("shared.example.com", 443), upstream()),
+            (first.clone(), def("shared.example.com", 443), upstream()),
+            (second.clone(), def("shared.example.com", 8443), upstream()),
+        ];
+
+        let (kept, lost) = resolve_app_claims(pairs, seq);
+        let kept: Vec<_> = kept
+            .iter()
+            .map(|(app, def, _)| (app.as_str(), def.port.get()))
+            .collect();
+        assert_eq!(kept, vec![("first", 443), ("second", 8443)]);
+        let mut losers: Vec<_> = lost.iter().map(|l| l.app.as_str()).collect();
+        losers.sort();
+        assert_eq!(losers, vec!["never", "second"]);
+        assert!(lost.iter().all(|l| l.served.0 == first && l.port == 443));
+
+        // Once the served ingress stops claiming them, the next is served.
+        let (kept, lost) = resolve_app_claims(
+            vec![
+                (never.clone(), def("shared.example.com", 443), upstream()),
+                (second.clone(), def("shared.example.com", 443), upstream()),
+            ],
+            seq,
+        );
+        assert_eq!(kept[0].0, second);
+        assert_eq!(lost[0].app, never);
     }
 
     #[test]

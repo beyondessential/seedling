@@ -60,7 +60,24 @@ impl PodDef {
             "mount",
             move |this: &mut T, svc: ServicePort| -> Result<T, Box<EvalAltResult>> {
                 this.ensure_unfrozen()?;
-                ext(this).lock().service_mounts.push(svc);
+                let holder = ext(this);
+                let mut pod = holder.lock();
+                // spec: POD#service-mounts
+                // A mount is reached at `localmount` on its port number, so
+                // two on one port would leave one of them unreachable.
+                if let Some(earlier) = pod.service_mounts.iter().find(|m| m.port == svc.port) {
+                    return Err(format!(
+                        "cannot mount port {} of service '{}': the pod already mounts port {} of \
+                         service '{}'",
+                        svc.port.get(),
+                        svc.service.name(),
+                        earlier.port.get(),
+                        earlier.service.name()
+                    )
+                    .into());
+                }
+                pod.service_mounts.push(svc);
+                drop(pod);
                 Ok(this.clone())
             },
         );

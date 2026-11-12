@@ -98,13 +98,42 @@ fn ingress_redirect_custom_port_and_code() {
     );
 }
 
+fn evaluate(script: &str) -> Option<crate::runtime::apps::ScriptError> {
+    crate::runtime::apps::evaluate_script(
+        &seedling_protocol::names::AppName::new_unchecked("demo"),
+        script,
+        &Default::default(),
+        &crate::ScriptLimits::default(),
+    )
+    .1
+}
+
 // spec: ING#redirect-to-https
 #[test]
-fn ingress_redirect_without_https_throws() {
-    let _ = run_test_script_err(
-        r#"
-        app.service("web").ingress("example.com", 443).tls(Terminate.Tls, Output.Tcp).redirect();
-    "#,
+fn a_redirect_on_an_ingress_whose_final_termination_is_not_https_fails_evaluation() {
+    for script in [
+        r#"app.service("web").ingress("example.com", 443).tls(Terminate.Tls, Output.Tcp).redirect();"#,
+        r#"app.service("web").ingress("example.com", 443).redirect().tls(Terminate.Tls, Output.Tcp);"#,
+        r#"app.service("web").ingress("example.com", 443)
+            .tls(Terminate.Https, Output.Http1).redirect().tls(Terminate.Tls, Output.Tcp);"#,
+        r#"app.service("web").ingress("example.com", 443).redirect();"#,
+    ] {
+        let err = evaluate(script).expect("the definition fails to evaluate");
+        assert!(
+            err.0.contains("example.com:443"),
+            "names the ingress: {err}"
+        );
+    }
+}
+
+// spec: ING#redirect-to-https
+#[test]
+fn a_redirect_declared_before_the_https_termination_is_accepted() {
+    assert!(
+        evaluate(
+            r#"app.service("web").ingress("example.com", 443).redirect().tls(Terminate.Https, Output.Http1);"#
+        )
+        .is_none()
     );
 }
 
