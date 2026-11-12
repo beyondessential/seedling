@@ -2444,3 +2444,68 @@ fn a_change_handler_is_not_run_when_the_previous_generation_cannot_be_rebuilt() 
         other => panic!("the handler ran without a faithful old: {other:?}"),
     }
 }
+
+// spec: ACN#shells
+#[test]
+fn a_shell_that_shares_an_actions_name_runs_the_shells_closure() {
+    let (engine, mut scope, app, ast) = setup_with_script(
+        r#"
+        app.deployment("web").image("docker.io/library/nginx:latest");
+        app.on_action("tools", |rt, p| { throw "the action ran"; });
+        app.on_shell("tools", |rt, shell, p| { throw "the shell ran"; });
+    "#,
+    );
+    let mut run = |is_shell: bool| {
+        run_operation(
+            OperationContext {
+                engine: &engine,
+                script_ast: &ast,
+                operation_id: OperationId::new(),
+                app: &app,
+                action_name: "tools",
+                log: &InMemoryActionLog::new(),
+                world: Arc::new(TestWorldOracle::new()),
+                registry: registry(),
+                active_progress: None,
+                tick_notify: None,
+                params: serde_json::Map::new(),
+                is_shell,
+                db: None,
+                source_generation: 0,
+                target_generation: 0,
+                script_limits: None,
+                cipher: None,
+                operation_volume_bindings: std::collections::HashMap::new(),
+                cancel_token: Arc::new(crate::runtime::barrier::CancelToken::new()),
+                container_signaler: None,
+                volume_writer: None,
+                executor: None,
+            },
+            &mut scope,
+        )
+    };
+    let thrown = |r: OperationResult| match r {
+        OperationResult::Failed(e) => e.to_string(),
+        other => panic!("expected a failure, got {other:?}"),
+    };
+    assert!(thrown(run(true)).contains("the shell ran"));
+    assert!(thrown(run(false)).contains("the action ran"));
+}
+
+// spec: PARAM#change-handlers
+#[test]
+fn a_change_handler_taking_one_parameter_is_called_with_one() {
+    // It registered but failed when it ran: it was always called with two.
+    let result = run_change_handler(
+        Some(r#"app.deployment("legacy").image("docker.io/library/nginx:1.0");"#),
+        r#"
+        app.deployment("web").image("docker.io/library/nginx:latest");
+        app.param("greeting").on_change(|rt| { });
+    "#,
+        false,
+    );
+    assert!(
+        matches!(result, OperationResult::Completed),
+        "a one-parameter handler must run: {result:?}"
+    );
+}

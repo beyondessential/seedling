@@ -108,6 +108,11 @@ fn external_volume_resolve(this: &mut App, name: &str) -> Result<Dynamic, Box<Ev
         kind: ResourceKind::ExternalVolume,
         name: rname.clone(),
     };
+    // A static external volume reached from the action context is a
+    // reference to the declaration, which the closure may not modify.
+    let declared_statically = is_in_action_closure()
+        && op_binding.is_none()
+        && this.def.load().resources.contains_key(&id);
     this.def.rcu(|d| {
         let mut d = (**d).clone();
         d.resources.entry(id.clone()).or_insert_with(|| {
@@ -115,13 +120,18 @@ fn external_volume_resolve(this: &mut App, name: &str) -> Result<Dynamic, Box<Ev
                 name: rname.clone(),
                 operation_binding: op_binding.clone(),
                 def: Default::default(),
+                frozen: false,
             })
         });
         d
     });
     let def = this.def.load();
     match def.resources.get(&id) {
-        Some(Resource::ExternalVolume(v)) => Ok(Dynamic::from(v.clone())),
+        Some(Resource::ExternalVolume(v)) => {
+            let mut handle = v.clone();
+            handle.frozen = declared_statically;
+            Ok(Dynamic::from(handle))
+        }
         _ => unreachable!(),
     }
 }

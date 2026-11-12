@@ -7,7 +7,7 @@ use seedling_protocol::{
 };
 use tokio::sync::Notify;
 
-use super::run_operation_loop;
+use super::{BoundParams, run_operation_loop};
 use crate::runtime::{
     barrier::{CancelToken, OperationId, replay::ActionLog as _},
     db::DbHandle,
@@ -70,13 +70,15 @@ fn run_poke(cancel: bool, break_persistence: bool) -> Run {
     let ok = run_operation_loop(
         &app,
         db.clone(),
-        serde_json::Map::new(),
+        Ok(BoundParams {
+            params: serde_json::Map::new(),
+            bindings: HashMap::new(),
+        }),
         Arc::new(RwLock::new(None)),
         Arc::new(Notify::new()),
         &op_ctx,
         &crate::ScriptLimits::default(),
         Arc::new(Cipher::for_tests()),
-        HashMap::new(),
         cancel_token,
         None,
         None,
@@ -191,13 +193,15 @@ fn a_replayed_closure_restarts_the_deployment_only_once() {
         run_operation_loop(
             &app,
             db.clone(),
-            serde_json::Map::new(),
+            Ok(BoundParams {
+                params: serde_json::Map::new(),
+                bindings: HashMap::new(),
+            }),
             Arc::new(RwLock::new(None)),
             Arc::new(Notify::new()),
             &op_ctx,
             &crate::ScriptLimits::default(),
             Arc::new(Cipher::for_tests()),
-            HashMap::new(),
             Arc::new(CancelToken::new()),
             None,
             None,
@@ -263,13 +267,15 @@ fn an_operation_runs_against_its_target_generation_not_the_current_one() {
     let ok = run_operation_loop(
         &current,
         db.clone(),
-        serde_json::Map::new(),
+        Ok(BoundParams {
+            params: serde_json::Map::new(),
+            bindings: HashMap::new(),
+        }),
         Arc::new(RwLock::new(None)),
         Arc::new(Notify::new()),
         &op_ctx,
         &crate::ScriptLimits::default(),
         Arc::new(Cipher::for_tests()),
-        HashMap::new(),
         Arc::new(CancelToken::new()),
         None,
         None,
@@ -282,4 +288,36 @@ fn an_operation_runs_against_its_target_generation_not_the_current_one() {
         restarted, 1,
         "generation 1's closure ran, not generation 2's"
     );
+}
+
+// spec: ACN#volume-params
+#[test]
+fn a_volume_param_that_cannot_be_bound_fails_the_dispatch_rather_than_being_skipped() {
+    use crate::defs::install::{ParamDef, ParamKind};
+    use crate::oi::test_support::TestOi;
+    use seedling_protocol::names::ParamName;
+
+    let oi = TestOi::new();
+    let schema = std::collections::BTreeMap::from([(
+        ParamName::new("data").unwrap(),
+        ParamDef {
+            kind: ParamKind::Volume,
+            required: true,
+            default_value: None,
+            description: None,
+            secret: None,
+        },
+    )]);
+    let mut params = serde_json::Map::new();
+    params.insert("data".into(), serde_json::json!("vanished"));
+
+    let err = super::bind_volume_params(&oi.state, &schema, params, "op-1")
+        .err()
+        .expect("a volume that is not there cannot be bound");
+    assert!(err.contains("no longer exists"), "{err}");
+
+    // A param that was not supplied binds nothing and is not an error.
+    let none = super::bind_volume_params(&oi.state, &schema, serde_json::Map::new(), "op-1")
+        .expect("an absent optional volume param is not a failure");
+    assert!(none.bindings.is_empty());
 }

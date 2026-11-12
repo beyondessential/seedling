@@ -113,7 +113,7 @@ impl VolumeLookup for StateVolumeLookup<'_> {
 /// Map a [`ParamValidationError`] into the OI error envelope. Volume
 /// not-found gets a distinct code; everything else is
 /// `requirements_invalid`.
-fn validation_error_to_oi(e: ParamValidationError) -> OiError {
+pub(crate) fn validation_error_to_oi(e: ParamValidationError) -> OiError {
     let code = match e {
         ParamValidationError::VolumeNotFound { .. } => ErrorCode::NotFound,
         _ => ErrorCode::RequirementsInvalid,
@@ -178,12 +178,10 @@ pub(crate) fn invoke_action(
             )));
         }
 
+        // spec: ACN#shells
+        // Shells and actions have separate namespaces: a shell of the same
+        // name does not stand in the way of the action.
         let def = entry.app.def.load();
-        if def.shells.contains_key(action_name.as_str()) {
-            return Err(OiError::not_found(format!(
-                "'{action_name}' is a shell action; use /shells/start"
-            )));
-        }
         // spec: ACN#start-action
         if action_name == "start" {
             return Err(OiError::not_found(
@@ -395,6 +393,32 @@ mod tests {
             )
             .unwrap_err();
         assert_eq!(code, "requirements_invalid");
+    }
+
+    // spec: ACN#shells
+    #[test]
+    fn an_action_that_shares_a_shells_name_can_be_invoked() {
+        let oi = TestOi::new();
+        oi.call(
+            "/apps/create",
+            json!({
+                "app": "demo",
+                "script": r#"
+                    app.deployment("web").image("docker.io/library/nginx:1.29");
+                    app.on_action("tools", |rt, p| {});
+                    app.on_shell("tools", |rt, shell, p| { shell.error("no"); });
+                "#,
+            }),
+        )
+        .unwrap();
+        oi.install("demo");
+        let result = oi
+            .call(
+                "/apps/action/invoke",
+                json!({ "app": "demo", "name": "tools" }),
+            )
+            .expect("the action is reachable under the shell's name");
+        assert_eq!(result["schedule"], "accepted");
     }
 
     // spec: ACI#cancellation

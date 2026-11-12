@@ -702,6 +702,7 @@ fn external_volume_resolution_prefers_operation_binding_then_static_mapping() {
             name: Arc::new(name.to_string()),
             operation_binding: binding,
             def: Arc::new(parking_lot::Mutex::new(ExternalVolumeDef::default())),
+            frozen: false,
         }
     }
 

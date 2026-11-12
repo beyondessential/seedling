@@ -17,7 +17,7 @@ Each issue is worked on its own and committed on its own, with a test that fails
 - [x] Malformed script input coerced or ignored
 - [x] Crash recovery and replay
 - [x] Faults out of line with the fault catalogue
-- [ ] Action, shell and change-handler dispatch
+- [x] Action, shell and change-handler dispatch
 - [ ] Host startup ordering, addressing and the web listener
 - [ ] Resource and lifecycle behaviour the code does not enforce
 - [x] Wire, event and ACME protocol shapes
@@ -114,3 +114,5 @@ Each is done once, in whichever issue is worked first, and the later issue notes
 - `health_check_replace_failed` clears when the generation history shows a generation made after the fault, so a change made while the daemon was down still clears it.
 - A NAT64 translator that cannot be set up at startup no longer exits the daemon; the reconciler retries it and withholds workloads. This path has no test, since set-up runs the host's translator.
 - The `registry_error` split into `desired_state_unreadable` and `instance_identity_unreadable` is left to round 2 part 1; only the over-broad clear was fixed here.
+- A shell's params are validated by the same code as an action's (`validate_shell_params`), and a `volume` param is bound through `bind_volume_params`, which both dispatches use; a binding that cannot be made fails the dispatch before the closure runs. `shell.error`'s message is the reason the client is given.
+- A change handler is called with as many of `rt` and `old` as it declares, read from its definition in the script.

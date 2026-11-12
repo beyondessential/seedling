@@ -165,38 +165,36 @@ fn make_executor(state: &OiState) -> Option<Arc<dyn crate::runtime::barrier::Exe
     }))
 }
 
+/// A dispatch's params with its volume params bound, and the bindings made.
+pub(crate) struct BoundParams {
+    pub params: serde_json::Map<String, serde_json::Value>,
+    pub bindings: HashMap<String, OperationVolumeBinding>,
+}
+
 // spec: ACN#volume-params
-/// For every `kind: "volume"` param in the action's schema, look up the
+/// For every `kind: "volume"` param in `schema`, look up the
 /// operator-supplied site volume name, build an
 /// [`OperationVolumeBinding`] keyed by a generated per-operation name, and
-/// rewrite the params map so the action closure sees `<key>_volume = <generated-name>`
+/// rewrite the params map so the closure sees `<key>_volume = <generated-name>`
 /// — consumed by `app.external_volume(param[...])`.
 ///
-/// Volumes that have already been validated to exist by `invoke_action`'s
-/// pre-flight; here we only resolve to the host path and warn (instead of
-/// failing) if a volume disappeared between validation and dispatch — the
-/// closure will then see a missing `<key>_volume` and can fail gracefully.
-fn resolve_action_volume_params(
+/// A binding that cannot be made is an error and the closure does not run:
+/// a volume that disappeared between validation and dispatch, a name that is
+/// not one, or a record that cannot be read. Running it with the key missing
+/// would have it act on a volume nobody chose.
+pub(crate) fn bind_volume_params(
     state: &OiState,
-    app: &App,
-    action_name: &ActionName,
+    schema: &std::collections::BTreeMap<
+        seedling_protocol::names::ParamName,
+        crate::defs::install::ParamDef,
+    >,
     mut params: serde_json::Map<String, serde_json::Value>,
     operation_id: &str,
-) -> (
-    serde_json::Map<String, serde_json::Value>,
-    HashMap<String, OperationVolumeBinding>,
-) {
+) -> Result<BoundParams, String> {
     use crate::defs::install::ParamKind;
     use crate::defs::volume::{VolumeParamSpec, build_operation_volume_params};
     use crate::runtime::site_volumes;
     use seedling_protocol::names::SiteVolumeName;
-
-    let def = app.def.load();
-    let schema = match def.actions.get(action_name.as_str()) {
-        Some(a) => a.params.clone(),
-        None => return (params, HashMap::new()),
-    };
-    drop(def);
 
     let mut specs: Vec<(String, VolumeParamSpec)> = Vec::new();
     let volume_keys: Vec<String> = schema
@@ -207,42 +205,21 @@ fn resolve_action_volume_params(
     for key in &volume_keys {
         let val = match params.remove(key.as_str()) {
             Some(serde_json::Value::String(s)) => s,
-            other => {
-                if other.is_some() {
-                    tracing::warn!(
-                        action = %action_name,
-                        key = %key,
-                        "volume param value is not a string; skipping binding",
-                    );
-                }
-                continue;
-            }
+            Some(_) => return Err(format!("volume param {key:?} is not a string")),
+            // An optional volume param that was not supplied binds nothing.
+            None => continue,
         };
-        let site_name = match SiteVolumeName::new(&val) {
-            Ok(n) => n,
-            Err(e) => {
-                tracing::warn!(
-                    action = %action_name,
-                    key = %key,
-                    value = %val,
-                    "invalid site volume name; skipping binding: {e}",
-                );
-                continue;
-            }
-        };
+        let site_name = SiteVolumeName::new(&val).map_err(|e| {
+            format!("volume param {key:?} names {val:?}, which is not a volume name: {e}")
+        })?;
         let lookup_name = site_name.clone();
-        let resolved = state
+        let site_vol = state
             .db
-            .call(move |db| site_volumes::get(db, &lookup_name).ok().flatten());
-        let Some(site_vol) = resolved else {
-            tracing::warn!(
-                action = %action_name,
-                key = %key,
-                value = %val,
-                "site volume not found at dispatch; skipping binding",
-            );
-            continue;
-        };
+            .call(move |db| site_volumes::get(db, &lookup_name))
+            .map_err(|e| format!("could not read site volume {val:?} for param {key:?}: {e}"))?
+            .ok_or_else(|| {
+                format!("site volume {val:?} named by param {key:?} no longer exists")
+            })?;
         let host_path = match &site_vol.kind {
             site_volumes::SiteVolumeKind::Bind { host_path } => std::path::PathBuf::from(host_path),
             _ => state.driver.volume_store.site_path(site_name.as_str()),
@@ -259,13 +236,16 @@ fn resolve_action_volume_params(
     }
 
     if specs.is_empty() {
-        return (params, HashMap::new());
+        return Ok(BoundParams {
+            params,
+            bindings: HashMap::new(),
+        });
     }
     let (bindings, injected) = build_operation_volume_params(operation_id, specs);
     for (k, v) in injected {
         params.insert(k, v);
     }
-    (params, bindings)
+    Ok(BoundParams { params, bindings })
 }
 
 /// End an operation that was accepted but cannot run, as a failed one ends.
@@ -294,13 +274,12 @@ fn refuse_to_run(db: &DbHandle, op_ctx: &OperationEventCtx, description: String)
 fn run_operation_loop(
     app: &App,
     db: DbHandle,
-    params: serde_json::Map<String, serde_json::Value>,
+    bound: Result<BoundParams, String>,
     active_progress: Arc<RwLock<Option<OperationProgress>>>,
     tick_notify: Arc<Notify>,
     op_ctx: &OperationEventCtx,
     script_limits: &crate::ScriptLimits,
     cipher: Arc<crate::runtime::secrets::Cipher>,
-    operation_volume_bindings: HashMap<String, OperationVolumeBinding>,
     cancel_token: Arc<CancelToken>,
     container_signaler: Option<Arc<dyn crate::runtime::barrier::ContainerSignaler>>,
     volume_writer: Option<Arc<dyn crate::runtime::barrier::VolumeWriter>>,
@@ -309,6 +288,24 @@ fn run_operation_loop(
     let app_name = &op_ctx.app;
     let action_name = &op_ctx.action_name;
     let operation_id = OperationId(op_ctx.operation_id.clone());
+
+    // spec: ACN#volume-params
+    // The closure does not run if a volume param could not be bound.
+    let BoundParams {
+        params,
+        bindings: operation_volume_bindings,
+    } = match bound {
+        Ok(bound) => bound,
+        Err(why) => {
+            tracing::error!(app = %app_name, action = %action_name, "volume binding failed: {why}");
+            refuse_to_run(
+                &db,
+                op_ctx,
+                format!("{action_name} not run: a volume param could not be bound: {why}"),
+            );
+            return false;
+        }
+    };
 
     // spec: OPS#initiating-events
     // The operation runs against the definition and parameters of its target
@@ -956,14 +953,19 @@ pub fn spawn_accepted_operation(
         // operator-supplied volume reference, looked up to a host path and
         // exposed to the action closure as a per-operation external volume
         // binding via the standard `<key>_volume` convention.
-        let (params, operation_volume_bindings) =
-            resolve_action_volume_params(&state, &app, &action_name, params, &operation_id.0);
+        let schema = app
+            .def
+            .load()
+            .actions
+            .get(action_name.as_str())
+            .map(|a| a.params.clone())
+            .unwrap_or_default();
+        let bound = bind_volume_params(&state, &schema, params, &operation_id.0);
 
         let success = {
             let app_name = app_name.clone();
             let active_progress = Arc::clone(&active_progress);
             let tick_notify = Arc::clone(&tick_notify);
-            let params = params.clone();
             let op_ctx = op_ctx.clone();
             let cipher = Arc::clone(&cipher);
             let cancel_token = Arc::clone(&cancel_token);
@@ -979,13 +981,12 @@ pub fn spawn_accepted_operation(
                 run_operation_loop(
                     &app,
                     db,
-                    params,
+                    bound,
                     active_progress,
                     tick_notify,
                     &op_ctx,
                     &script_limits,
                     cipher,
-                    operation_volume_bindings,
                     cancel_token,
                     signaler,
                     writer,

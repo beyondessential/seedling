@@ -100,7 +100,8 @@ impl CustomType for Service {
             .with_fn(
                 "port",
                 |this: &mut Self, port: i64| -> Result<ServicePort, Box<EvalAltResult>> {
-                    this.ensure_unfrozen()?;
+                    // An instance method: it declares nothing on the service,
+                    // so a frozen static service in the action context offers it.
                     let port = Port::new(port)?;
                     Ok(ServicePort {
                         service: this.clone().into(),

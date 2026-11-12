@@ -358,7 +358,7 @@ pub fn run_operation<W: WorldStateOracle + 'static>(
         active_progress,
         tick_notify,
         params,
-        is_shell: _,
+        is_shell: requested_shell,
         db,
         source_generation,
         target_generation: _,
@@ -463,12 +463,23 @@ pub fn run_operation<W: WorldStateOracle + 'static>(
                     rhai::Position::NONE,
                 )));
             }
+        } else if requested_shell {
+            // spec: ACN#shells
+            // A shell is looked up among shells, and an action among
+            // actions: a shell and an action may share a name.
+            match captured.shells.get(action_name) {
+                Some(c) => (Some(c.clone()), false, true),
+                None => {
+                    return OperationResult::Failed(Box::new(EvalAltResult::ErrorRuntime(
+                        format!("Shell '{}' not found", action_name).into(),
+                        rhai::Position::NONE,
+                    )));
+                }
+            }
         } else if let Some(c) = captured.actions.get(action_name) {
             (Some(c.clone()), false, false)
         } else if let Some(c) = captured.param_changes.get(action_name) {
             (Some(c.clone()), false, false)
-        } else if let Some(c) = captured.shells.get(action_name) {
-            (Some(c.clone()), false, true)
         } else if action_name == "start" {
             // spec: ACN#start-action
             // An app that declares no start action is brought up as though
@@ -542,6 +553,12 @@ pub fn run_operation<W: WorldStateOracle + 'static>(
 
     scope.push("__bsl_rt", rt);
     let default_start = closure.is_none();
+    // spec: PARAM#change-handlers
+    // A change handler is called with as many of its arguments as it takes.
+    let change_handler_arity = closure
+        .as_ref()
+        .filter(|_| is_param_change)
+        .and_then(|c| closure_arity(script_ast, c));
     if let Some(closure) = closure {
         scope.push("__bsl_closure", closure);
     } else {
@@ -561,7 +578,13 @@ pub fn run_operation<W: WorldStateOracle + 'static>(
         // spec: ACN#start-action
         "__bsl_rt.start(__bsl_app)"
     } else if is_param_change {
-        "__bsl_closure.call(__bsl_rt, __bsl_old_app)"
+        match change_handler_arity {
+            Some(0) => "__bsl_closure.call()",
+            Some(1) => "__bsl_closure.call(__bsl_rt)",
+            // Two, or more: a closure declaring more than two parameters
+            // fails when called, as it must.
+            _ => "__bsl_closure.call(__bsl_rt, __bsl_old_app)",
+        }
     } else if is_shell {
         "__bsl_closure.call(__bsl_rt, __bsl_shell, __bsl_param)"
     } else {
@@ -672,3 +695,11 @@ fn check_idempotent(fresh: &AppDef, stored: &AppDef) {
 
 #[cfg(test)]
 mod tests;
+
+/// How many parameters the closure `closure` declares, not counting the
+/// variables it captured, or `None` if `ast` does not hold it.
+fn closure_arity(ast: &rhai::AST, closure: &rhai::FnPtr) -> Option<usize> {
+    ast.iter_functions()
+        .find(|f| f.name == closure.fn_name())
+        .map(|f| f.params.len().saturating_sub(closure.curry().len()))
+}

@@ -186,22 +186,21 @@ pub(crate) async fn open_shell_session(
         }
     };
 
-    let validated_params: serde_json::Map<String, serde_json::Value> =
-        if shell_params_schema.is_empty() {
-            serde_json::Map::new()
-        } else {
-            match crate::oi::handler::actions::install::validate_requirements(
-                &shell_params_schema,
-                &submitted_params,
-            ) {
-                Ok(filled) => filled
-                    .into_iter()
-                    .map(|(k, v)| (k, serde_json::Value::String(v)))
-                    .collect(),
-                Err(e) => {
-                    reject(&mut send, "requirements_invalid", e.message).await;
-                    return;
-                }
+    // spec: ACN#param-delivery
+    // spec: SHL#opening-an-app-shell
+    // A shell's params are validated as an action's are, by the same code:
+    // the schema fills defaults and checks kinds, `volume` params must name a
+    // site volume, and params the schema does not declare reach the closure.
+    let validated_params =
+        match validate_shell_params(&state, &shell_params_schema, &submitted_params) {
+            Ok(params) => params,
+            Err(e) => {
+                let code = serde_json::to_value(e.code)
+                    .ok()
+                    .and_then(|v| v.as_str().map(str::to_owned))
+                    .unwrap_or_else(|| "requirements_invalid".to_owned());
+                reject(&mut send, &code, e.message).await;
+                return;
             }
         };
 
@@ -258,14 +257,23 @@ pub(crate) async fn open_shell_session(
         stderr: stderr_send,
     };
 
-    let live =
-        match start_app_shell(&state, app, &app_name, &shell_name, validated_params, &stop).await {
-            Ok(live) => live,
-            Err(failure) => {
-                abort_startup(&state, &events, session_id, failure, streams).await;
-                return;
-            }
-        };
+    let live = match start_app_shell(
+        &state,
+        app,
+        &app_name,
+        &shell_name,
+        &shell_params_schema,
+        validated_params,
+        &stop,
+    )
+    .await
+    {
+        Ok(live) => live,
+        Err(failure) => {
+            abort_startup(&state, &events, session_id, failure, streams).await;
+            return;
+        }
+    };
 
     let exit_code = run_to_exit(
         &state,
@@ -282,10 +290,39 @@ pub(crate) async fn open_shell_session(
     tracing::info!(app = %app_name, shell = %shell_name, %exit_code, "shell session ended");
 }
 
+/// Validate the params a client submitted for a shell, as an action's are.
+///
+/// The schema fills defaults and checks kinds, `volume` params must name a
+/// site volume, and params the schema does not declare reach the closure.
+// spec: ACN#param-delivery
+pub(super) fn validate_shell_params(
+    state: &OiState,
+    schema: &std::collections::BTreeMap<
+        seedling_protocol::names::ParamName,
+        crate::defs::install::ParamDef,
+    >,
+    submitted: &std::collections::BTreeMap<String, String>,
+) -> Result<serde_json::Map<String, serde_json::Value>, seedling_protocol::error::OiError> {
+    let mut params: serde_json::Map<String, serde_json::Value> = submitted
+        .iter()
+        .map(|(k, v)| (k.clone(), serde_json::Value::String(v.clone())))
+        .collect();
+    crate::runtime::action_params::apply_schema(schema, &mut params)
+        .and_then(|()| {
+            crate::runtime::action_params::validate_volume_params(
+                schema,
+                &params,
+                &crate::oi::handler::actions::StateVolumeLookup(state),
+            )
+        })
+        .map_err(crate::oi::handler::actions::validation_error_to_oi)?;
+    Ok(params)
+}
+
 /// Why a session ended before its job was running.
 pub(super) struct StartupFailure {
     /// What went wrong, for the client; `None` when the session was stopped.
-    reason: Option<String>,
+    pub(super) reason: Option<String>,
     /// The pod network to remove, if one had been created.
     network: Option<String>,
 }
@@ -398,20 +435,39 @@ async fn ensure_image(
 ///
 /// A stop is acted on wherever the startup waits, and between the steps that
 /// are not interrupted part-way: creating the network and starting the job.
-async fn start_app_shell(
+pub(super) async fn start_app_shell(
     state: &OiState,
     app: App,
     app_name: &AppName,
     shell_name: &ShellName,
+    schema: &std::collections::BTreeMap<
+        seedling_protocol::names::ParamName,
+        crate::defs::install::ParamDef,
+    >,
     validated_params: serde_json::Map<String, serde_json::Value>,
     stop: &StopSignal,
 ) -> Result<LiveShell, StartupFailure> {
+    let operation_id = OperationId::new();
+    // spec: ACN#volume-params
+    // A binding that cannot be made fails the session without running the
+    // closure.
+    let crate::oi::handler::actions::lifecycle::BoundParams {
+        params: validated_params,
+        bindings: operation_volume_bindings,
+    } = crate::oi::handler::actions::lifecycle::bind_volume_params(
+        state,
+        schema,
+        validated_params,
+        &operation_id.0,
+    )
+    .map_err(|why| {
+        StartupFailure::failed(format!("a volume param could not be bound: {why}"), None)
+    })?;
     let result_slot: Arc<Mutex<Option<ShellOutcome>>> = Arc::new(Mutex::new(None));
     let result_slot_for_task = Arc::clone(&result_slot);
     let db_for_task = state.db.clone();
     let script_limits = state.script_limits.clone();
     let cipher = Arc::clone(&state.cipher);
-    let operation_id = OperationId::new();
     let op_id_for_log = operation_id.clone();
     let app_name_for_task = app_name.clone();
     let shell_name_for_task = shell_name.clone();
@@ -483,7 +539,7 @@ async fn start_app_shell(
                     target_generation: 0,
                     script_limits: None,
                     cipher: Some(Arc::clone(&cipher)),
-                    operation_volume_bindings: std::collections::HashMap::new(),
+                    operation_volume_bindings: operation_volume_bindings.clone(),
                     // Shell sessions don't participate in operator-initiated
                     // cancellation; the token fires only when the session is
                     // stopped, which ends the script early.
@@ -528,11 +584,19 @@ async fn start_app_shell(
     if stop.is_requested() {
         return Err(StartupFailure::stopped(None));
     }
+
+    // spec: ACN#shell-control
+    // `shell.error` throws to end the closure, so the script fails; its
+    // message is what the client is told, ahead of the generic failure.
+    let shell_outcome = result_slot.lock().take();
+    if let Some(ShellOutcome::Error(msg)) = &shell_outcome {
+        tracing::warn!(app = %app_name, shell = %shell_name, "shell error: {msg}");
+        return Err(StartupFailure::failed(msg.clone(), None));
+    }
     if !script_ok {
         return Err(StartupFailure::failed("the shell's script failed", None));
     }
 
-    let shell_outcome = result_slot.lock().take();
     let exec_target = match shell_outcome {
         Some(ShellOutcome::Attach(target)) => target,
         Some(ShellOutcome::Error(msg)) => {

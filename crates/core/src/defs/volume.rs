@@ -334,6 +334,16 @@ pub struct ExternalVolume {
     // spec: VOL#external-volumes
     pub operation_binding: Option<OperationVolumeBinding>,
     pub def: Holder<ExternalVolumeDef>,
+    /// Set on a static external volume handed out in the action context,
+    /// which an action closure may not modify.
+    // spec: APP#static-resource-immutability
+    pub frozen: bool,
+}
+
+impl Freezable for ExternalVolume {
+    fn is_frozen(&self) -> bool {
+        self.frozen
+    }
 }
 
 impl CustomType for ExternalVolume {
@@ -341,10 +351,14 @@ impl CustomType for ExternalVolume {
         builder
             .with_name("ExternalVolume")
             // spec: BSL#descriptions
-            .with_fn("description", |this: &mut Self, desc: &str| -> Self {
-                this.def.lock().description = Some(desc.to_owned());
-                this.clone()
-            });
+            .with_fn(
+                "description",
+                |this: &mut Self, desc: &str| -> Result<Self, Box<EvalAltResult>> {
+                    this.ensure_unfrozen()?;
+                    this.def.lock().description = Some(desc.to_owned());
+                    Ok(this.clone())
+                },
+            );
     }
 }
 

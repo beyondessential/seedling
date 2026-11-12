@@ -1250,6 +1250,43 @@ fn static_ref_names_the_kind_that_holds_the_name() {
     );
 }
 
+// spec: SVC#service-ports
+#[test]
+fn service_port_is_an_instance_method_a_static_service_offers_in_an_action() {
+    // It threw: `port` refused a frozen static service like a builder method.
+    let result = crate::tests::run_action(
+        r#"
+        app.service("database");
+        app.on_action("run-it", |rt, _param| {
+            app.service("database").port(5432);
+        });
+    "#,
+        "run-it",
+    );
+    assert!(
+        matches!(result, OperationResult::Completed),
+        "port must be callable on a static service in the action context: {result:?}"
+    );
+}
+
+// spec: APP#static-resource-immutability
+#[test]
+fn a_static_external_volume_cannot_be_modified_in_an_action() {
+    let msg = crate::tests::run_action_err(
+        r#"
+        app.external_volume("data");
+        app.on_action("run-it", |rt, _param| {
+            app.external_volume("data").description("changed");
+        });
+    "#,
+        "run-it",
+    );
+    assert!(
+        msg.contains("cannot modify a static resource"),
+        "got: {msg}"
+    );
+}
+
 // spec: APP#named-resources
 #[test]
 fn static_ref_reports_an_undeclared_name_as_missing() {

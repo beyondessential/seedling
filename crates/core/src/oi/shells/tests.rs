@@ -308,3 +308,90 @@ fn stop_after_the_job_is_running_ends_the_session() {
         assert_eq!(frame, b"{\"exit_code\":-1}\n");
     });
 }
+
+/// Run the `tools` shell of a `demo` app declared by `script`, with `params`,
+/// and say why its startup failed.
+fn shell_startup_failure(script: &str, params: serde_json::Value) -> Option<String> {
+    use seedling_protocol::names::ShellName;
+
+    let oi = TestOi::new();
+    oi.call(
+        "/apps/create",
+        serde_json::json!({ "app": "demo", "script": script }),
+    )
+    .unwrap();
+    let (app, schema) = {
+        let reg = oi.state.registry.read();
+        let entry = reg.get("demo").unwrap();
+        let schema = entry
+            .app
+            .def
+            .load()
+            .shells
+            .get(&"tools".parse::<ShellName>().unwrap())
+            .unwrap()
+            .params
+            .clone();
+        (entry.app.clone(), schema)
+    };
+    let params = params.as_object().cloned().unwrap_or_default();
+    let failure = oi.block_on(super::session::start_app_shell(
+        &oi.state,
+        app,
+        &"demo".parse().unwrap(),
+        &"tools".parse().unwrap(),
+        &schema,
+        params,
+        &StopSignal::new(),
+    ));
+    match failure {
+        Ok(_) => None,
+        Err(f) => f.reason,
+    }
+}
+
+// spec: ACN#shell-control
+#[test]
+fn shell_error_delivers_its_message_to_the_client() {
+    let reason = shell_startup_failure(
+        r#"
+        app.on_shell("tools", |rt, shell, p| { shell.error("not today"); });
+    "#,
+        serde_json::json!({}),
+    );
+    assert_eq!(reason.as_deref(), Some("not today"));
+}
+
+// spec: ACN#volume-params
+#[test]
+fn a_shell_whose_volume_param_cannot_be_bound_does_not_run_its_closure() {
+    // The volume was validated and has since gone; the closure would have run
+    // with the key missing.
+    let reason = shell_startup_failure(
+        r#"
+        app.on_shell("tools", |rt, shell, p| { shell.error("the closure ran"); },
+            #{ params: #{ data: #{ kind: "volume", required: true } } });
+    "#,
+        serde_json::json!({ "data": "gone-volume" }),
+    );
+    let reason = reason.expect("startup fails");
+    assert!(reason.contains("could not be bound"), "{reason}");
+    assert!(!reason.contains("the closure ran"), "{reason}");
+}
+
+// spec: ACN#param-delivery
+#[test]
+fn params_a_shell_declares_no_schema_for_still_reach_its_closure() {
+    let oi = TestOi::new();
+    let submitted = std::collections::BTreeMap::from([("greeting".to_owned(), "hello".to_owned())]);
+    let params = super::session::validate_shell_params(
+        &oi.state,
+        &std::collections::BTreeMap::new(),
+        &submitted,
+    )
+    .unwrap();
+    assert_eq!(
+        params["greeting"], "hello",
+        "an undeclared param was dropped"
+    );
+}
