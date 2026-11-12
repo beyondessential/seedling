@@ -82,6 +82,8 @@ pub(crate) fn upsert_dns_provider(
             "name must not be empty",
         ));
     }
+    crate::runtime::tls::dns::check_config(kind, &params.config)
+        .map_err(|e| OiError::new(ErrorCode::RequirementsInvalid, e))?;
     let config_json = serde_json::to_string(&params.config).map_err(|e| {
         OiError::new(
             ErrorCode::RequirementsInvalid,
@@ -381,10 +383,18 @@ pub(crate) fn issue_acme_dns(state: &OiState, params: IssueAcmeDnsParams) -> Han
             "cert_id": issued.cert_id,
             "not_after": issued.not_after,
         })),
-        Err(e) => Err(OiError::new(
-            ErrorCode::Internal,
-            format!("acme-dns issuance failed: {e}"),
-        )),
+        Err(e) => {
+            use crate::runtime::tls::issuance::CoordinatorError as E;
+            let code = match e {
+                // spec: TLSM#operator-driven-issuance
+                // The request could not proceed as asked; nothing failed.
+                E::NoPolicy { .. } | E::Paused { .. } | E::NoContactEmail => {
+                    ErrorCode::RequirementsInvalid
+                }
+                _ => ErrorCode::Internal,
+            };
+            Err(OiError::new(code, format!("acme-dns issuance failed: {e}")))
+        }
     }
 }
 

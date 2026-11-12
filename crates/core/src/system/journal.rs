@@ -71,22 +71,31 @@ pub fn spawn_log_reader(
     opts: LogStreamOptions,
 ) -> Result<tokio::sync::mpsc::Receiver<LogEntry>, Box<dyn std::error::Error + Send + Sync>> {
     let (tx, rx) = tokio::sync::mpsc::channel(256);
+    // spec: LOG#log-stream-request
+    // The journal is opened on the reader thread, which owns it, so whether it
+    // opened is handed back before the caller answers the request.
+    let (opened_tx, opened_rx) = std::sync::mpsc::sync_channel::<Result<(), String>>(1);
 
     std::thread::Builder::new()
         .name("journal-reader".into())
         .spawn(move || {
-            if let Err(e) = journal_reader_thread(opts, tx) {
+            if let Err(e) = journal_reader_thread(opts, tx, opened_tx) {
                 tracing::error!("journal reader thread failed: {e}");
             }
         })?;
 
-    Ok(rx)
+    match opened_rx.recv() {
+        Ok(Ok(())) => Ok(rx),
+        Ok(Err(e)) => Err(e.into()),
+        Err(_) => Err("the journal reader ended before opening the journal".into()),
+    }
 }
 
-fn journal_reader_thread(
-    opts: LogStreamOptions,
-    tx: tokio::sync::mpsc::Sender<LogEntry>,
-) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+/// Open the system journal, narrowed to the entries `opts` asks for and
+/// positioned at the start of its tail window.
+fn open_journal(
+    opts: &LogStreamOptions,
+) -> Result<systemd::journal::Journal, Box<dyn std::error::Error + Send + Sync>> {
     use systemd::journal::OpenOptions;
 
     let mut journal = OpenOptions::default().system(true).open()?;
@@ -117,6 +126,24 @@ fn journal_reader_thread(
     // spec: LOG#entry-selection
     // spec: LINUX#logs
     seek_tail_window(&mut journal, opts.tail)?;
+    Ok(journal)
+}
+
+fn journal_reader_thread(
+    opts: LogStreamOptions,
+    tx: tokio::sync::mpsc::Sender<LogEntry>,
+    opened: std::sync::mpsc::SyncSender<Result<(), String>>,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    let mut journal = match open_journal(&opts) {
+        Ok(journal) => {
+            let _ = opened.send(Ok(()));
+            journal
+        }
+        Err(e) => {
+            let _ = opened.send(Err(e.to_string()));
+            return Err(e);
+        }
+    };
 
     loop {
         match journal.next_entry()? {

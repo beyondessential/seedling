@@ -200,23 +200,30 @@ async fn handle_incoming(incoming: wtransport::endpoint::IncomingSession, state:
             // spec: WEB#connected-clients
             if peeked.method == "/connected-clients/list" {
                 let web = state3.web_sessions.list();
-                let shells = match state3.daemon.request("/shells/list", json!({})).await {
-                    Ok(v) => v.get("shells").cloned().unwrap_or(json!([])),
-                    Err(_) => json!([]),
-                };
-                let forwards = match state3.daemon.request("/forwards/list", json!({})).await {
-                    Ok(v) => v.get("forwards").cloned().unwrap_or(json!([])),
-                    Err(_) => json!([]),
-                };
+                let shells = listed(
+                    state3.daemon.request("/shells/list", json!({})).await,
+                    "shells",
+                );
+                let forwards = listed(
+                    state3.daemon.request("/forwards/list", json!({})).await,
+                    "forwards",
+                );
                 let actors = state3.actor_activity.list_recent();
-                let response = json!({
-                    "result": {
-                        "web": web,
-                        "shells": shells,
-                        "forwards": forwards,
-                        "actors": actors,
-                    }
-                });
+                let response = match (shells, forwards) {
+                    (Ok(shells), Ok(forwards)) => json!({
+                        "result": {
+                            "web": web,
+                            "shells": shells,
+                            "forwards": forwards,
+                            "actors": actors,
+                        }
+                    }),
+                    // spec: WEB#connected-clients
+                    // An empty list would claim nothing is connected.
+                    (Err(e), _) | (_, Err(e)) => json!({
+                        "error": { "code": "daemon_unavailable", "message": e }
+                    }),
+                };
                 let _ = wt_send
                     .write_all((response.to_string() + "\n").as_bytes())
                     .await;
@@ -328,6 +335,21 @@ async fn handle_incoming(incoming: wtransport::endpoint::IncomingSession, state:
 /// `safety_mode` value sits under `params`. Unknown or absent values fall back
 /// to `read` so a malformed client can never silently elevate the recorded
 /// mode for its session.
+/// The `member` array of a daemon list response, or why it could not be read.
+// spec: WEB#connected-clients
+fn listed(
+    response: Result<serde_json::Value, ClientError>,
+    member: &str,
+) -> Result<serde_json::Value, String> {
+    let value = response.map_err(|e| format!("cannot read {member} from the daemon: {e}"))?;
+    match value.get(member) {
+        Some(list @ serde_json::Value::Array(_)) => Ok(list.clone()),
+        _ => Err(format!(
+            "the daemon's {member} list holds no {member} array"
+        )),
+    }
+}
+
 fn parse_heartbeat_mode(peeked_line: &[u8]) -> Option<SafetyMode> {
     let value: serde_json::Value = serde_json::from_slice(peeked_line).ok()?;
     let raw = value.get("params")?.get("safety_mode")?.as_str();
@@ -391,5 +413,23 @@ pub async fn run_cert_rotation(
         if rotated {
             let _ = rotation_tx.send(());
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use super::*;
+
+    // spec: WEB#connected-clients
+    #[test]
+    fn a_list_the_daemon_could_not_give_is_an_error_not_an_empty_list() {
+        assert_eq!(
+            listed(Ok(json!({ "shells": [1] })), "shells").unwrap(),
+            json!([1])
+        );
+        assert!(listed(Ok(json!({})), "shells").is_err());
+        assert!(listed(Err(ClientError::Protocol("closed".into())), "forwards").is_err());
     }
 }

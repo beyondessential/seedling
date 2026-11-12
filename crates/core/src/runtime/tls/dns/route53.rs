@@ -71,7 +71,9 @@ where
 
 /// JSON shape stored in `tls_dns_providers.config_ciphertext` for
 /// `kind = 'route53'`.
+// spec: TLSM#dns-providers
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Config {
     pub access_key_id: String,
     pub secret_access_key: String,

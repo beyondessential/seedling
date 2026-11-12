@@ -76,7 +76,7 @@ fn dns_provider_upsert_list_delete_roundtrip() {
     let outcome = oi
         .call(
             "/tls/dns-providers/upsert",
-            json!({ "name": "aws-prod", "kind": "route53", "config": { "region": "us-east-1" } }),
+            json!({ "name": "aws-prod", "kind": "route53", "config": { "access_key_id": "AKIA-TEST", "secret_access_key": "secret", "region": "us-east-1" } }),
         )
         .unwrap();
     assert_eq!(outcome["auto_policy_created"], true);
@@ -90,7 +90,7 @@ fn dns_provider_upsert_list_delete_roundtrip() {
     let outcome = oi
         .call(
             "/tls/dns-providers/upsert",
-            json!({ "name": "aws-prod", "kind": "route53", "config": { "region": "eu-west-1" } }),
+            json!({ "name": "aws-prod", "kind": "route53", "config": { "access_key_id": "AKIA-TEST", "secret_access_key": "secret", "region": "eu-west-1" } }),
         )
         .unwrap();
     assert_eq!(outcome["auto_policy_created"], false);
@@ -120,6 +120,23 @@ fn dns_provider_upsert_list_delete_roundtrip() {
         )
         .unwrap_err();
     assert_eq!(code, "requirements_invalid");
+
+    // spec: TLSM#dns-providers
+    for config in [
+        json!({ "region": "us-east-1" }),
+        json!({ "access_key_id": "AKIA", "secret_access_key": 7 }),
+        json!({ "access_key_id": "AKIA", "secret_access_key": "s", "region": true }),
+        json!({ "access_key_id": "AKIA", "secret_access_key": "s", "zone": "x" }),
+        json!("not an object"),
+    ] {
+        let (code, _) = oi
+            .call(
+                "/tls/dns-providers/upsert",
+                json!({ "name": "shapes", "kind": "route53", "config": config }),
+            )
+            .unwrap_err();
+        assert_eq!(code, "requirements_invalid", "{config}");
+    }
 
     assert_eq!(
         oi.call("/tls/dns-providers/delete", json!({ "name": "aws-prod" }))
@@ -951,7 +968,7 @@ fn issue_acme_dns_fails_without_policy() {
             json!({ "hostname": "nopolicy.example.com" }),
         )
         .unwrap_err();
-    assert_eq!(code, "internal");
+    assert_eq!(code, "requirements_invalid");
     assert!(msg.contains("issuance failed"), "{msg}");
 }
 
@@ -1536,7 +1553,7 @@ fn a_hostname_on_a_chain_is_not_driven_through_an_acme_dns_flow() {
             json!({ "hostname": "shop.example.com" }),
         )
         .unwrap_err();
-    assert_eq!(code, "internal");
+    assert_eq!(code, "requirements_invalid");
     assert!(msg.contains("has no policy"), "{msg}");
 }
 

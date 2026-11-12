@@ -231,6 +231,13 @@ pub(crate) fn update_template(
 
     let input: DefinitionInput = params.definition.into();
     let definition = if input.is_empty() {
+        // spec: TPL#update
+        if input.origin.is_some() {
+            return Err(OiError::new(
+                ErrorCode::RequirementsInvalid,
+                "origin describes a definition, and this update supplies none",
+            ));
+        }
         None
     } else {
         Some(resolve_for_template(state, input, ctx)?)

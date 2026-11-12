@@ -52,6 +52,17 @@ pub enum DnsError {
     NoZone { name: String },
 }
 
+/// Check that `config` has the shape `kind` defines, naming what is wrong
+/// where it does not.
+// spec: TLSM#dns-providers
+pub fn check_config(kind: DnsProviderKind, config: &serde_json::Value) -> Result<(), String> {
+    match kind {
+        DnsProviderKind::Route53 => serde_json::from_value::<route53::Config>(config.clone())
+            .map(drop)
+            .map_err(|e| format!("route53 config: {e}")),
+    }
+}
+
 /// Construct a [`DnsProvider`] from a stored entry.
 pub fn build_provider(entry: &DnsProviderEntry) -> Result<Box<dyn DnsProvider>, DnsError> {
     match entry.kind {

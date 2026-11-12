@@ -6,7 +6,13 @@ use serde_json::json;
 use tokio::sync::Semaphore;
 use tracing::Instrument;
 
-use seedling_protocol::{OI_ALPN, actor::Actor, events::EventSenderWithActor, keys};
+use seedling_protocol::{
+    OI_ALPN,
+    actor::Actor,
+    error::{ErrorCode, OiError},
+    events::EventSenderWithActor,
+    keys,
+};
 
 use super::{
     auth::{SeedlingClientVerifier, TrustedKeys},
@@ -67,6 +73,40 @@ fn extract_client_fp(conn: &quinn::Connection) -> Option<String> {
         .downcast::<Vec<rustls_pki_types::CertificateDer<'static>>>()
         .ok()?;
     certs.first().map(|c| keys::fingerprint(c.as_ref()))
+}
+
+/// The actor a control request names, or `None` when it names none.
+///
+/// A malformed `actor` is refused rather than replaced: attributing the
+/// request to someone the client did not name would record a fiction.
+// spec: WIRE#actor-attribution
+fn request_actor(request: &serde_json::Value) -> Result<Option<Actor>, OiError> {
+    let Some(actor) = request.get("actor") else {
+        return Ok(None);
+    };
+    let invalid = |why: String| OiError::new(ErrorCode::RequirementsInvalid, why);
+    let members = actor
+        .as_object()
+        .ok_or_else(|| invalid("actor must be an object".to_owned()))?;
+    let member = |name: &str| -> Result<Option<String>, OiError> {
+        match members.get(name) {
+            None => Ok(None),
+            Some(serde_json::Value::String(s)) => Ok(Some(s.clone())),
+            Some(_) => Err(invalid(format!("actor.{name} must be a string"))),
+        }
+    };
+    Ok(Some(Actor {
+        kind: member("kind")?,
+        id: member("id")?,
+        display: member("display")?,
+        session: member("session")?,
+    }))
+}
+
+/// Serialise an error response.
+fn error_response(e: &OiError) -> Vec<u8> {
+    serde_json::to_vec(&json!({ "error": { "code": e.code, "message": e.message } }))
+        .expect("response serialisation never fails")
 }
 
 // spec: WIRE#actor-attribution
@@ -451,19 +491,21 @@ async fn handle_bidi_stream(
             }
         };
 
-        let rx = match crate::system::journal::spawn_log_reader(opts) {
-            Ok(rx) => rx,
-            Err(e) => {
-                tracing::error!("failed to open journal: {e}");
-                let resp = serde_json::to_vec(&json!({
-                    "error": { "code": "server_busy", "message": format!("journal: {e}") }
-                }))
-                .expect("serialisation");
-                let _ = send.write_all(&resp).await;
-                let _ = send.finish();
-                return;
-            }
-        };
+        let rx =
+            match tokio::task::block_in_place(|| crate::system::journal::spawn_log_reader(opts)) {
+                Ok(rx) => rx,
+                Err(e) => {
+                    tracing::error!("failed to open journal: {e}");
+                    // spec: LOG#log-stream-request
+                    let resp = error_response(&OiError::new(
+                        ErrorCode::Internal,
+                        format!("cannot open the host's log store: {e}"),
+                    ));
+                    let _ = send.write_all(&resp).await;
+                    let _ = send.finish();
+                    return;
+                }
+            };
 
         let response = serde_json::to_vec(&json!({ "result": {} })).expect("serialisation");
         if let Err(e) = send.write_all(&response).await {
@@ -524,19 +566,40 @@ async fn handle_bidi_stream(
         return;
     }
 
+    // spec: WIRE#control-requests
+    // The opening line was read up to its first line feed or a cap, so the
+    // request is only whole once the rest of the stream is read.
+    let rest = match recv
+        .read_to_end(MAX_REQUEST_SIZE.saturating_sub(line.len()))
+        .await
+    {
+        Ok(rest) => rest,
+        Err(e) => {
+            let refusal = OiError::new(
+                ErrorCode::RequirementsInvalid,
+                format!("request cannot be read whole, or exceeds {MAX_REQUEST_SIZE} bytes: {e}"),
+            );
+            let _ = send.write_all(&error_response(&refusal)).await;
+            let _ = send.finish();
+            return;
+        }
+    };
+    let buf = [line, rest].concat();
+
     // spec: WIRE#actor-attribution — extract actor from request or synthesise from client identity.
-    let client_fp = extract_client_fp(&conn);
-    let actor = first_obj
-        .get("actor")
-        .and_then(|v| serde_json::from_value::<Actor>(v.clone()).ok())
-        .map(Arc::new)
-        .unwrap_or_else(|| synthesise_actor(&state, client_fp.as_deref()));
+    let request = serde_json::from_slice::<serde_json::Value>(&buf).unwrap_or_default();
+    let actor = match request_actor(&request) {
+        Ok(Some(actor)) => Arc::new(actor),
+        Ok(None) => synthesise_actor(&state, extract_client_fp(&conn).as_deref()),
+        Err(refusal) => {
+            let _ = send.write_all(&error_response(&refusal)).await;
+            let _ = send.finish();
+            return;
+        }
+    };
     let ctx = RequestCtx {
         events: EventSenderWithActor::new(state.event_tx.clone(), actor),
     };
-
-    let rest = recv.read_to_end(MAX_REQUEST_SIZE).await.unwrap_or_default();
-    let buf = [line, rest].concat();
 
     // spec: RLY#offers — registering an offer needs the connection it arrived on,
     // so these are dispatched here rather than through the shared table. Done
@@ -689,7 +752,7 @@ mod connection_tests {
     };
     use serde_json::json;
 
-    use super::{DEFAULT_MAX_STREAMS, build_tls_config, handle_connection};
+    use super::{DEFAULT_MAX_STREAMS, MAX_REQUEST_SIZE, build_tls_config, handle_connection};
     use crate::oi::{state::OiState, test_support::TestOi};
 
     /// Run the real connection handler against a real endpoint.
@@ -798,6 +861,52 @@ mod connection_tests {
                 0,
                 "an offer must not outlive the connection that made it"
             );
+        });
+    }
+
+    /// Send `request` raw on a fresh control stream and return the response.
+    async fn raw_request(client: &OiClient, request: &[u8]) -> serde_json::Value {
+        let (mut send, mut recv) = client.open_bi().await.expect("open stream");
+        send.write_all(request).await.expect("write");
+        let _ = send.finish();
+        let response = recv.read_to_end(1 << 20).await.expect("read response");
+        serde_json::from_slice(&response).expect("a JSON response")
+    }
+
+    // spec: WIRE#actor-attribution
+    // spec: WIRE#control-requests
+    #[test]
+    fn a_malformed_actor_or_an_oversized_request_is_requirements_invalid() {
+        let oi = TestOi::new();
+        oi.block_on(async {
+            let _ = rustls::crypto::ring::default_provider().install_default();
+            let identity = ClientIdentity::ephemeral();
+            oi.state.trusted_keys.insert(identity.fingerprint.clone());
+            let addr = spawn_server(Arc::clone(&oi.state));
+            let client = OiClient::connect(addr, ClientAuth::TrustAny, &identity, Actor::default())
+                .await
+                .expect("connect");
+
+            for actor in [json!("someone"), json!({ "kind": 7 }), json!(null)] {
+                let request =
+                    json!({ "method": "/server/ping", "actor": actor, "params": {} }).to_string();
+                let response = raw_request(&client, format!("{request}\n").as_bytes()).await;
+                assert_eq!(
+                    response["error"]["code"], "requirements_invalid",
+                    "{actor}: {response}"
+                );
+            }
+
+            let padding = "x".repeat(MAX_REQUEST_SIZE);
+            let request = json!({ "method": "/server/ping", "params": { "pad": padding } });
+            let response = raw_request(&client, request.to_string().as_bytes()).await;
+            assert_eq!(
+                response["error"]["code"], "requirements_invalid",
+                "{response}"
+            );
+
+            let ok = raw_request(&client, b"{\"method\":\"/server/ping\"}\n").await;
+            assert!(ok.get("result").is_some(), "{ok}");
         });
     }
 

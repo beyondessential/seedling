@@ -180,8 +180,13 @@ fn parse_and_dispatch(state: &Arc<OiState>, buf: &[u8], ctx: &RequestCtx) -> Han
         #[serde(default)]
         params: Value,
     }
-    let req: Request = serde_json::from_slice(buf)
-        .map_err(|e| OiError::new(ErrorCode::NotFound, format!("invalid request: {e}")))?;
+    // spec: WIRE#control-requests
+    let req: Request = serde_json::from_slice(buf).map_err(|e| {
+        OiError::new(
+            ErrorCode::RequirementsInvalid,
+            format!("invalid request: {e}"),
+        )
+    })?;
 
     let result = match req.method.as_str() {
         // spec: STS#liveness

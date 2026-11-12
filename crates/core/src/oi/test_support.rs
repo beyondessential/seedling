@@ -225,6 +225,23 @@ mod tests {
         assert_eq!(busy["active_operations"], 1, "one operation active");
     }
 
+    // spec: FWD#stopping-a-forward
+    #[test]
+    fn stopping_a_forward_names_a_malformed_id_and_a_missing_one_apart() {
+        let oi = TestOi::new();
+        let (code, _) = oi
+            .call("/forwards/stop", json!({ "forward_id": "not-a-uuid" }))
+            .unwrap_err();
+        assert_eq!(code, "requirements_invalid");
+        let (code, _) = oi
+            .call(
+                "/forwards/stop",
+                json!({ "forward_id": "6f1c1f5e-3b0b-4c8e-9a43-2d6f2b8f6a10" }),
+            )
+            .unwrap_err();
+        assert_eq!(code, "not_found");
+    }
+
     // spec: WIRE#control-requests
     #[test]
     fn unknown_method_returns_not_found() {
@@ -239,7 +256,7 @@ mod tests {
     fn malformed_request_returns_error_envelope() {
         let oi = TestOi::new();
         let (code, message) = oi.call_raw(b"this is not json").unwrap_err();
-        assert_eq!(code, "not_found");
+        assert_eq!(code, "requirements_invalid");
         assert!(message.contains("invalid request"), "message: {message}");
     }
 
