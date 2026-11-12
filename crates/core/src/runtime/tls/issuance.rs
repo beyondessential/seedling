@@ -813,51 +813,22 @@ fn proceed(owned: &OwnedState) -> Result<ProceedKind> {
 /// per (kind, hostname): if the same fault is already filed we don't
 /// duplicate it.
 fn file_cert_fault(db: &DbHandle, hostname: &str, kind: &str, description: &str) {
-    let kind_owned = kind.to_owned();
-    let desc_owned = description.to_owned();
-    let host_owned = hostname.to_owned();
-    db.call(move |db_inner| {
-        let app = AppName::new_unchecked("_system");
-        let already = faults::list_active_faults(db_inner, Some(&app))
-            .unwrap_or_default()
-            .into_iter()
-            .any(|f| {
-                f.kind == kind_owned && f.resource_name.as_deref() == Some(host_owned.as_str())
-            });
-        if already {
-            return;
-        }
-        if let Err(e) = faults::file_fault(
-            db_inner,
-            &app,
-            Some("hostname"),
-            Some(&host_owned),
-            None,
-            &kind_owned,
-            &desc_owned,
-        ) {
+    let key = faults::FaultKey::new(&AppName::new_unchecked("_system"), kind, hostname);
+    let meta = faults::FaultMeta::resource("hostname", hostname);
+    let description = description.to_owned();
+    db.call(move |db| {
+        if let Err(e) = faults::file_once(db, &key, &meta, &description) {
             tracing::warn!(error = %e, "failed to file cert fault");
         }
     });
 }
 
+/// Clear the hostname's own fault of `kind`, and no other hostname's.
 fn clear_cert_fault(db: &DbHandle, hostname: &str, kind: &str) {
-    let kind_owned = kind.to_owned();
-    let host_owned = hostname.to_owned();
-    db.call(move |db_inner| {
-        let app = AppName::new_unchecked("_system");
-        let to_clear: Vec<String> = faults::list_active_faults(db_inner, Some(&app))
-            .unwrap_or_default()
-            .into_iter()
-            .filter(|f| {
-                f.kind == kind_owned && f.resource_name.as_deref() == Some(host_owned.as_str())
-            })
-            .map(|f| f.id)
-            .collect();
-        for id in to_clear {
-            if let Err(e) = faults::clear_fault(db_inner, &id, &app) {
-                tracing::warn!(error = %e, "failed to clear cert fault");
-            }
+    let key = faults::FaultKey::new(&AppName::new_unchecked("_system"), kind, hostname);
+    db.call(move |db| {
+        if let Err(e) = faults::clear_fault_by_key(db, &key) {
+            tracing::warn!(error = %e, "failed to clear cert fault");
         }
     });
 }

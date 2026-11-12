@@ -645,12 +645,28 @@ async fn actuate_one_pod(
                     ref reference,
                     ..
                 }) => {
-                    error!(
-                        instance = %dr.instance.display_name,
-                        image = %reference,
-                        "pods: image pull failed"
-                    );
-                    result.image_pull_failure = Some((dr.instance.clone(), reference.clone()));
+                    // spec: FLT#workload-faults
+                    // A pull in progress, or backing off after its first
+                    // failures, is not a fault: only a reference that has
+                    // failed enough times in a row is.
+                    let failures = actuator.consecutive_pull_failures(reference);
+                    if actuator.pull_failure_is_fault(reference) {
+                        error!(
+                            instance = %dr.instance.display_name,
+                            image = %reference,
+                            failures,
+                            "pods: image pull failed"
+                        );
+                        result.image_pull_failure =
+                            Some((dr.instance.clone(), reference.clone()));
+                    } else {
+                        tracing::debug!(
+                            instance = %dr.instance.display_name,
+                            image = %reference,
+                            failures,
+                            "pods: image not yet available"
+                        );
+                    }
                     format!("error: image_unavailable {reference}")
                 }
                 Err(ref e @ crate::system::actuator::ActuateError::Registry { .. }) => {

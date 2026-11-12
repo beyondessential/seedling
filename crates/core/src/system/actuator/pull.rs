@@ -10,7 +10,7 @@ use crate::runtime::retry::RetryGate;
 
 /// Consecutive failures after which the pull becomes an operator-visible
 /// fault. Attempts continue at the cap interval past this point.
-pub(super) const PULL_FAULT_AFTER_ATTEMPTS: u32 = 5;
+const PULL_FAULT_AFTER_ATTEMPTS: u32 = 5;
 
 /// Retry pacing for image pulls. The reconciler ticks every five seconds, so
 /// the base matches the tick and the cap bounds a broken registry to one
@@ -106,6 +106,23 @@ fn finish_pull(
 }
 
 impl Actuator {
+    /// How many pulls of `image` have failed in a row, `0` for one with no
+    /// failed pull on record.
+    // spec: IMG#image-pulls
+    pub(crate) fn consecutive_pull_failures(&self, image: &str) -> u32 {
+        self.pulling
+            .lock()
+            .get(image)
+            .map_or(0, |state| state.gate.failures())
+    }
+
+    /// Whether `image` has failed to pull often enough in a row that the
+    /// failure is a fault.
+    // spec: FLT#workload-faults
+    pub(crate) fn pull_failure_is_fault(&self, image: &str) -> bool {
+        self.consecutive_pull_failures(image) >= PULL_FAULT_AFTER_ATTEMPTS
+    }
+
     // spec: RCN#reconciliation-loop
     // spec: IMG#image-pulls
     /// Check image availability; spawn background pull if missing.

@@ -96,6 +96,24 @@ impl Reconciler {
             if let Err(e) = images::prune_tracking_except(db, &live_for_db) {
                 warn!(error = %e, "images: prune_tracking_except failed");
             }
+            // spec: FLT#workload-faults
+            // An image present on the host, however it came to be, no longer
+            // fails to pull.
+            let present: HashSet<&str> = pairs_for_db.iter().map(|(r, _)| r.as_str()).collect();
+            match crate::runtime::faults::list_active_faults(db, None) {
+                Ok(active) => {
+                    for f in active
+                        .iter()
+                        .filter(|f| f.kind == "image_pull_failed" && present.contains(f.subject.as_str()))
+                    {
+                        let key = crate::runtime::faults::FaultKey::new(&f.app, &f.kind, &f.subject);
+                        if let Err(e) = crate::runtime::faults::clear_fault_by_key(db, &key) {
+                            warn!(image = %f.subject, error = %e, "images: failed to clear image_pull_failed");
+                        }
+                    }
+                }
+                Err(e) => warn!(error = %e, "images: could not read faults to clear image_pull_failed"),
+            }
             // spec: IMG#pin-expiry
             if let Err(e) = images::drop_expired_pins(db) {
                 warn!(error = %e, "images: drop_expired_pins failed");

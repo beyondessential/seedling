@@ -56,21 +56,35 @@ pub(crate) struct TestOi {
 
 impl TestOi {
     pub fn new() -> Self {
-        Self::build(None)
+        Self::build(None, None)
+    }
+
+    /// A harness running over `driver` rather than the stub system.
+    pub fn with_driver(driver: Arc<System>) -> Self {
+        Self::build(Some(driver), None)
     }
 
     /// A harness whose container runtime fails every call, as when podman
     /// could not be reached.
     pub fn with_unreadable_containers() -> Self {
-        Self::build(Some(Arc::new(
-            crate::system::unavailable::UnavailableContainerRuntime,
-        )))
+        Self::build(
+            None,
+            Some(Arc::new(
+                crate::system::unavailable::UnavailableContainerRuntime,
+            )),
+        )
     }
 
-    fn build(container_runtime: Option<Arc<dyn crate::system::ContainerRuntime>>) -> Self {
+    fn build(
+        driver: Option<Arc<System>>,
+        container_runtime: Option<Arc<dyn crate::system::ContainerRuntime>>,
+    ) -> Self {
         let data_dir = tempfile::tempdir().expect("create temp data dir");
-        let (driver, _caddy_admin) =
-            System::setup_stubbed(data_dir.path(), false).expect("stub system setup");
+        let driver = driver.unwrap_or_else(|| {
+            System::setup_stubbed(data_dir.path(), false)
+                .expect("stub system setup")
+                .0
+        });
         let db = DbHandle::open_in_memory().expect("open in-memory db");
         let cipher = Arc::new(Cipher::for_tests());
         let registry = Arc::new(FakeRegistry::default());

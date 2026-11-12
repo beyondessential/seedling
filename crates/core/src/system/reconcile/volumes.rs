@@ -20,6 +20,10 @@ struct VolumeInstanceResult {
     observed: Option<ResourceInstance>,
     create_failure: Option<(ResourceInstance, String)>,
     remove_failure: Option<(ResourceInstance, String)>,
+    /// The volume's storage is observed present or was created this tick.
+    present: bool,
+    /// The volume was removed or held this tick.
+    removed: bool,
 }
 
 pub(super) struct VolumeActuationUpdate {
@@ -30,6 +34,12 @@ pub(super) struct VolumeActuationUpdate {
     pub observed: Vec<ResourceInstance>,
     pub create_failures: Vec<(ResourceInstance, String)>,
     pub remove_failures: Vec<(ResourceInstance, String)>,
+    /// Instances whose storage is observed present, or was created, this tick.
+    // spec: FLT#volume-faults
+    pub present: Vec<ResourceInstance>,
+    /// Instances removed or held successfully this tick.
+    // spec: FLT#volume-faults
+    pub removed: Vec<ResourceInstance>,
 }
 
 async fn process_one_volume(
@@ -44,6 +54,8 @@ async fn process_one_volume(
         observed: None,
         create_failure: None,
         remove_failure: None,
+        present: false,
+        removed: false,
     };
 
     // spec: OBS#volumes
@@ -76,6 +88,7 @@ async fn process_one_volume(
     let backend_mismatch = facts
         .iter()
         .any(|(f, _)| matches!(f, ObservationFact::VolumeBackendMismatch));
+    result.present = volume_present && !backend_mismatch;
 
     match dr.desired {
         // spec: ACTU#held-volumes
@@ -93,7 +106,10 @@ async fn process_one_volume(
                 .hold_volume(&dr.instance, &dr.definition, "storage backend changed")
                 .await
             {
-                Ok(()) => "ok".to_owned(),
+                Ok(()) => {
+                    result.removed = true;
+                    "ok".to_owned()
+                }
                 Err(e) => {
                     error!(
                         instance = %dr.instance.display_name,
@@ -117,7 +133,10 @@ async fn process_one_volume(
                 return result;
             };
             let create_outcome = match actuator.start_volume(&dr.instance, &dr.definition).await {
-                Ok(_) => "ok".to_owned(),
+                Ok(_) => {
+                    result.present = true;
+                    "ok".to_owned()
+                }
                 Err(e) => {
                     error!(
                         instance = %dr.instance.display_name,
@@ -142,7 +161,10 @@ async fn process_one_volume(
                 return result;
             };
             let outcome = match actuator.start_volume(&dr.instance, &dr.definition).await {
-                Ok(_) => "ok".to_owned(),
+                Ok(_) => {
+                    result.present = true;
+                    "ok".to_owned()
+                }
                 Err(e) => {
                     error!(
                         instance = %dr.instance.display_name,
@@ -170,7 +192,10 @@ async fn process_one_volume(
                 return result;
             };
             let outcome = match actuator.stop(&dr.instance, &dr.definition).await {
-                Ok(()) => "ok".to_owned(),
+                Ok(()) => {
+                    result.removed = true;
+                    "ok".to_owned()
+                }
                 Err(e) => {
                     error!(
                         instance = %dr.instance.display_name,
@@ -211,9 +236,21 @@ pub(super) async fn observe_and_actuate(
         observed: Vec::new(),
         create_failures: Vec::new(),
         remove_failures: Vec::new(),
+        present: Vec::new(),
+        removed: Vec::new(),
     };
 
     for result in results {
+        if result.present
+            && let Some(instance) = &result.observed
+        {
+            update.present.push(instance.clone());
+        }
+        if result.removed
+            && let Some(instance) = &result.observed
+        {
+            update.removed.push(instance.clone());
+        }
         if let Some(instance) = result.observed {
             update.observed.push(instance);
         }

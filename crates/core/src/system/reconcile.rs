@@ -1059,17 +1059,20 @@ impl Reconciler {
         // just error against the unavailable backends. File the overarching
         // system fault (idempotent) and skip the rest of the tick so the OI
         // stays responsive and the operator sees why nothing is running.
-        if let Some(reason) = self.driver.degraded_reason() {
+        if let Some(reason) = self.driver.probe_backends().await {
             self.file_system_fault(
                 "container_runtime_unavailable",
                 &format!(
-                    "podman/systemd could not be reached at startup, so no workloads can be \
-                     actuated. Restart seedling once the container runtime and service manager \
-                     are healthy. Details: {reason}"
+                    "the container runtime or service manager cannot be reached, so no \
+                     workloads can be actuated; both are probed again on later iterations. \
+                     Details: {reason}"
                 ),
             );
             return true;
         }
+        // spec: FLT#host-faults
+        // Both backends are reachable, so the fault no longer holds.
+        self.clear_system_fault("container_runtime_unavailable");
 
         self.reconcile_stray_shells().await;
 
@@ -1444,6 +1447,16 @@ impl Reconciler {
                         coord.ensure(hostname);
                     }
                 }
+
+                // spec: FLT#certificate-faults
+                // A hostname no ingress needs a certificate for has nothing
+                // left to fail at.
+                let needing_certificates: std::collections::BTreeSet<String> = managed_ingresses
+                    .iter()
+                    .map(|mi| mi.hostname.clone())
+                    .chain(site_ingress_tls_hostnames(&site_ingress_snapshot))
+                    .collect();
+                self.clear_cert_issue_faults_not_needed(needing_certificates);
 
                 // spec: TLS#expiring-certificates
                 // Reconcile cert_expiring_soon faults against the
@@ -2663,6 +2676,209 @@ mod tests {
         let (resources, steady) = desired_of(&reconciler);
         assert!(resources > 0, "the whole resource graph is desired again");
         assert!(steady);
+    }
+
+    fn volume_instance(app: &str, name: &str) -> crate::runtime::identity::ResourceInstance {
+        crate::runtime::identity::ResourceInstance::new_singleton(
+            AppName::new(app).unwrap(),
+            crate::defs::resource::ResourceKind::Volume,
+            name,
+        )
+    }
+
+    fn volume_update() -> volumes::VolumeActuationUpdate {
+        volumes::VolumeActuationUpdate {
+            observations: Vec::new(),
+            observe_failures: Vec::new(),
+            observed: Vec::new(),
+            create_failures: Vec::new(),
+            remove_failures: Vec::new(),
+            present: Vec::new(),
+            removed: Vec::new(),
+        }
+    }
+
+    fn active_kinds(oi: &crate::oi::test_support::TestOi, app: &str) -> Vec<(String, String)> {
+        let app = AppName::new(app).unwrap();
+        oi.state.db.call(move |db| {
+            crate::runtime::faults::list_active_faults(db, Some(&app))
+                .unwrap()
+                .into_iter()
+                .map(|f| (f.kind, f.subject))
+                .collect()
+        })
+    }
+
+    // spec: FLT#volume-faults
+    #[test]
+    fn volume_create_and_remove_failures_clear_when_the_volume_is_created_or_removed() {
+        let oi = crate::oi::test_support::TestOi::with_app("demo");
+        let mut reconciler = test_reconciler(&oi);
+        let app = AppName::new("demo").unwrap();
+        let data = volume_instance("demo", "data");
+        let other = volume_instance("demo", "other");
+
+        let mut failing = volume_update();
+        failing.create_failures = vec![
+            (data.clone(), "no space".into()),
+            (other.clone(), "no space".into()),
+        ];
+        failing.remove_failures = vec![(data.clone(), "busy".into())];
+        reconciler.file_volume_actuation_faults(&app, &failing);
+        assert_eq!(active_kinds(&oi, "demo").len(), 3);
+
+        // `data` is created and `other` is not: only its own fault clears.
+        let mut recovered = volume_update();
+        recovered.present = vec![data.clone()];
+        reconciler.file_volume_actuation_faults(&app, &recovered);
+        let held = active_kinds(&oi, "demo");
+        assert!(!held.contains(&("volume_create_failed".into(), data.id.to_hex())));
+        assert!(held.contains(&("volume_create_failed".into(), other.id.to_hex())));
+        assert!(held.contains(&("volume_remove_failed".into(), data.id.to_hex())));
+
+        let mut removed = volume_update();
+        removed.removed = vec![data.clone()];
+        reconciler.file_volume_actuation_faults(&app, &removed);
+        assert!(
+            !active_kinds(&oi, "demo").contains(&("volume_remove_failed".into(), data.id.to_hex()))
+        );
+    }
+
+    // spec: FLT#volume-faults
+    // spec: OBS#failed-observation
+    #[test]
+    fn volume_observation_failures_fault_on_the_third_and_survive_other_apps_ticks() {
+        let oi = crate::oi::test_support::TestOi::with_app("demo");
+        let mut reconciler = test_reconciler(&oi);
+        let app = AppName::new("demo").unwrap();
+        let data = volume_instance("demo", "data");
+        let bystander = volume_instance("elsewhere", "data");
+        let other_app = AppName::new("elsewhere").unwrap();
+
+        let mut failing = volume_update();
+        failing.observe_failures = vec![(data.clone(), "podman".into())];
+        let mut bystander_ok = volume_update();
+        bystander_ok.observed = vec![bystander.clone()];
+        for tick in 1..=3 {
+            reconciler.file_volume_actuation_faults(&app, &failing);
+            // Another app's pass between the two must not reset the streak.
+            reconciler.file_volume_actuation_faults(&other_app, &bystander_ok);
+            let held = active_kinds(&oi, "demo");
+            assert_eq!(
+                held.contains(&("observe_failed".into(), data.id.to_hex())),
+                tick == 3,
+                "tick {tick}: {held:?}"
+            );
+        }
+
+        let mut ok = volume_update();
+        ok.observed = vec![data.clone()];
+        reconciler.file_volume_actuation_faults(&app, &ok);
+        assert!(active_kinds(&oi, "demo").is_empty());
+    }
+
+    // spec: FLT#certificate-faults
+    #[test]
+    fn cert_issue_failed_clears_for_a_hostname_no_ingress_needs() {
+        let oi = crate::oi::test_support::TestOi::with_app("demo");
+        let reconciler = test_reconciler(&oi);
+        let system = AppName::new_unchecked("_system");
+        oi.state.db.call(|db| {
+            let system = AppName::new_unchecked("_system");
+            for host in ["kept.example.com", "gone.example.com"] {
+                crate::runtime::faults::file_fault(
+                    db,
+                    &system,
+                    Some("hostname"),
+                    Some(host),
+                    None,
+                    "cert_issue_failed",
+                    "boom",
+                )
+                .unwrap();
+            }
+        });
+
+        reconciler.clear_cert_issue_faults_not_needed(["kept.example.com".to_owned()].into());
+        let held: Vec<String> = oi.state.db.call(move |db| {
+            crate::runtime::faults::list_active_faults(db, Some(&system))
+                .unwrap()
+                .into_iter()
+                .map(|f| f.subject)
+                .collect()
+        });
+        assert_eq!(held, vec!["kept.example.com".to_owned()]);
+    }
+
+    // spec: FLT#workload-faults
+    #[test]
+    fn image_pull_failed_is_keyed_by_reference_and_clears_when_the_image_is_present() {
+        let oi = crate::oi::test_support::TestOi::with_app("demo");
+        let mut reconciler = test_reconciler(&oi);
+        let app = AppName::new("demo").unwrap();
+        let first = volume_instance("demo", "one");
+        let second = volume_instance("demo", "two");
+        let image = "docker.io/library/nginx:1.29";
+
+        // Two instances needing one broken image make one fault, named by the image.
+        let mut update = pods::PodActuationUpdate::empty();
+        update.image_pull_failures = vec![
+            (first.clone(), image.to_owned()),
+            (second.clone(), image.to_owned()),
+        ];
+        reconciler.file_image_pull_faults(&app, &update);
+        reconciler.file_image_pull_faults(&app, &update);
+        assert_eq!(
+            active_kinds(&oi, "demo"),
+            vec![("image_pull_failed".to_owned(), image.to_owned())]
+        );
+
+        // The image turning up on the host clears it, whoever put it there.
+        oi.block_on(async {
+            oi.state.container_runtime.pull_image(image).await.unwrap();
+            reconciler.reconcile_images(std::iter::empty()).await;
+        });
+        assert!(active_kinds(&oi, "demo").is_empty());
+    }
+
+    // spec: INFRA#unavailable-backends
+    // spec: FLT#host-faults
+    #[test]
+    fn container_runtime_unavailable_is_filed_while_down_and_cleared_once_both_are_up() {
+        use crate::system::backends::tests::{Flaky, down_backends};
+
+        let flaky = Flaky::down();
+        let backends = down_backends(&flaky);
+        let dir = tempfile::tempdir().unwrap();
+        let system = Arc::new(crate::system::System {
+            container: backends.container(),
+            process: backends.process(),
+            proxy: Arc::new(crate::system::stub::StubNetworkProxy),
+            data_plane: Arc::new(crate::system::stub::StubDataPlane),
+            volume_store: crate::system::volume_store::VolumeStore::new(dir.path(), false).unwrap(),
+            backends,
+        });
+        let oi = crate::oi::test_support::TestOi::with_driver(Arc::clone(&system));
+        let mut reconciler = test_reconciler(&oi);
+        let held = |oi: &crate::oi::test_support::TestOi| -> bool {
+            oi.state.db.call(|db| {
+                crate::runtime::faults::list_active_faults(
+                    db,
+                    Some(&AppName::new_unchecked("_system")),
+                )
+                .unwrap()
+                .iter()
+                .any(|f| f.kind == "container_runtime_unavailable")
+            })
+        };
+
+        assert!(oi.block_on(reconciler.tick()));
+        assert!(held(&oi), "filed while a backend is unreachable");
+
+        flaky.up.store(true, std::sync::atomic::Ordering::SeqCst);
+        system.backends.probe_now();
+        oi.block_on(reconciler.tick());
+        assert!(!held(&oi), "cleared once both are reachable");
     }
 
     // spec: AUTO#unreadable-scale

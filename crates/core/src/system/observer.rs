@@ -403,13 +403,17 @@ mod tests {
         std::fs::create_dir_all(&volumes).expect("volumes dir");
         let container = Arc::new(StubContainerRuntime::new(volumes));
         let process = Arc::new(StubProcessManager::new(Arc::clone(&container)));
+        let backends = crate::system::backends::Backends::working(
+            Arc::clone(&container) as Arc<dyn ContainerRuntime>,
+            Arc::clone(&process) as Arc<dyn ProcessManager>,
+        );
         let system = Arc::new(System {
-            container: Arc::clone(&container) as Arc<dyn ContainerRuntime>,
-            process: Arc::clone(&process) as Arc<dyn ProcessManager>,
+            container: backends.container(),
+            process: backends.process(),
             proxy: Arc::new(StubNetworkProxy),
             data_plane: Arc::new(StubDataPlane),
             volume_store: VolumeStore::new(dir.path(), false).expect("volume store"),
-            degraded: None,
+            backends,
         });
         (system, process, dir)
     }
