@@ -22,7 +22,7 @@ Each issue is worked on its own and committed on its own, with a test that fails
 - [ ] Resource and lifecycle behaviour the code does not enforce
 - [ ] Wire, event and ACME protocol shapes
 - [ ] Operations: start action, persisted queue, unreadable state, intent-before-effect
-- [ ] OI error codes and request validation
+- [x] OI error codes and request validation
 - [ ] Host: new faults, key file, permissions, reserved prefix and env redaction
 - [ ] Batch 5: runtime and fault code
 - [ ] Batch 6: collections, validators, CLI, web, uninstall and image pulls
@@ -83,6 +83,10 @@ Each is done once, in whichever issue is worked first, and the later issue notes
 - `CollectMode` and discarding a failed unit once its result is observed (round 2 part 1, LINUX#supervised-units): done with the BSL issue, as termination depends on it.
 - The database's side files being owner-only (host faults issue, INFRA#file-permissions): done with the secrets issue, by creating the database file owner-only before SQLite opens it; that issue still owes nothing else for it.
 - `/apps/show` unknown secret params: done with the secrets issue; the host faults issue still owes env redaction.
+- A control request over 64 KiB losing its actor (wire shapes issue): done with the OI error codes issue, which reads the actor from the whole request.
+- Unparseable request is `requirements_invalid` (round 2 part 2, `parse_and_dispatch`): done with the OI error codes issue.
+- `/connected-clients/list` read failures (failed reads issue, WEB): done with the OI error codes issue.
+- `issue-acme-dns` precondition codes (round 2 part 2): done with the OI error codes issue; round 2 part 2 still owes `operation_in_progress` for a running issuance and `claim_if_idle`, and round 3 part 1 the Tailscale-hostname refusal.
 
 ## Decisions
 
