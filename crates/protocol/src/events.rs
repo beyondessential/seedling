@@ -721,13 +721,13 @@ impl EventSender {
         });
     }
 
-    pub fn fault_cleared(&self, id: &str, app: &AppName, kind: &str) {
+    pub fn fault_cleared(&self, id: &str, app: &AppName, kind: &str, actor: Option<Arc<Actor>>) {
         self.emit(OiEvent::FaultCleared {
             timestamp: now(),
             id: id.to_owned(),
             app: app.clone(),
             kind: kind.to_owned(),
-            actor: None,
+            actor,
         });
     }
 
@@ -751,44 +751,57 @@ impl EventSender {
     }
 
     // spec: SHL#session-events
-    pub fn shell_started(&self, session_id: SessionId, app: &AppName, name: &ShellName) {
+    pub fn shell_started(
+        &self,
+        session_id: SessionId,
+        app: &AppName,
+        name: &ShellName,
+        actor: Option<Arc<Actor>>,
+    ) {
         self.emit(OiEvent::ShellStarted {
             timestamp: now(),
             session_id,
             app: app.clone(),
             name: name.clone(),
-            actor: None,
+            actor,
         });
     }
 
     // spec: SHL#session-end
-    pub fn shell_exited(&self, session_id: SessionId, exit_code: i32) {
+    pub fn shell_exited(&self, session_id: SessionId, exit_code: i32, actor: Option<Arc<Actor>>) {
         self.emit(OiEvent::ShellExited {
             timestamp: now(),
             session_id,
             exit_code,
-            actor: None,
+            actor,
         });
     }
 
     // spec: FWD#forward-events
-    pub fn forward_started(&self, forward_id: ForwardId, app: &AppName, service: &str, port: u16) {
+    pub fn forward_started(
+        &self,
+        forward_id: ForwardId,
+        app: &AppName,
+        service: &str,
+        port: u16,
+        actor: Option<Arc<Actor>>,
+    ) {
         self.emit(OiEvent::ForwardStarted {
             timestamp: now(),
             forward_id,
             app: app.clone(),
             service: service.to_owned(),
             port,
-            actor: None,
+            actor,
         });
     }
 
     // spec: FWD#forward-events
-    pub fn forward_stopped(&self, forward_id: ForwardId) {
+    pub fn forward_stopped(&self, forward_id: ForwardId, actor: Option<Arc<Actor>>) {
         self.emit(OiEvent::ForwardStopped {
             timestamp: now(),
             forward_id,
-            actor: None,
+            actor,
         });
     }
 
@@ -1403,6 +1416,41 @@ impl EventSenderWithActor {
     pub fn app_deregistered(&self, app: &AppName) {
         self.inner
             .app_deregistered(app, Some(Arc::clone(&self.actor)));
+    }
+
+    // spec: EVT#event-objects
+    pub fn fault_cleared(&self, id: &str, app: &AppName, kind: &str) {
+        self.inner
+            .fault_cleared(id, app, kind, Some(Arc::clone(&self.actor)));
+    }
+
+    // spec: SHL#session-events
+    pub fn shell_started(&self, session_id: SessionId, app: &AppName, name: &ShellName) {
+        self.inner
+            .shell_started(session_id, app, name, Some(Arc::clone(&self.actor)));
+    }
+
+    // spec: SHL#session-end
+    pub fn shell_exited(&self, session_id: SessionId, exit_code: i32) {
+        self.inner
+            .shell_exited(session_id, exit_code, Some(Arc::clone(&self.actor)));
+    }
+
+    // spec: FWD#forward-events
+    pub fn forward_started(&self, forward_id: ForwardId, app: &AppName, service: &str, port: u16) {
+        self.inner.forward_started(
+            forward_id,
+            app,
+            service,
+            port,
+            Some(Arc::clone(&self.actor)),
+        );
+    }
+
+    // spec: FWD#forward-events
+    pub fn forward_stopped(&self, forward_id: ForwardId) {
+        self.inner
+            .forward_stopped(forward_id, Some(Arc::clone(&self.actor)));
     }
 
     pub fn app_updated(

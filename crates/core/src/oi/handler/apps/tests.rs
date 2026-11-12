@@ -354,6 +354,7 @@ fn plan_with_no_proposals_returns_empty_diff() {
     let plan = oi.call("/apps/plan", json!({ "app": "demo" })).unwrap();
     assert!(plan["diff"].as_array().unwrap().is_empty());
     assert!(plan["on_change_would_fire"].as_array().unwrap().is_empty());
+    assert_eq!(plan["errors"], json!([]));
 }
 
 // spec: PRM#change-planning

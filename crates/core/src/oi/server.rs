@@ -103,6 +103,20 @@ fn request_actor(request: &serde_json::Value) -> Result<Option<Actor>, OiError> 
     }))
 }
 
+/// The actor a request is attributed to: the one it names, or else the one
+/// its client's identity gives.
+// spec: WIRE#actor-attribution
+fn resolve_actor(
+    state: &OiState,
+    conn: &quinn::Connection,
+    request: &serde_json::Value,
+) -> Result<Arc<Actor>, OiError> {
+    Ok(match request_actor(request)? {
+        Some(actor) => Arc::new(actor),
+        None => synthesise_actor(state, extract_client_fp(conn).as_deref()),
+    })
+}
+
 /// Serialise an error response.
 fn error_response(e: &OiError) -> Vec<u8> {
     serde_json::to_vec(&json!({ "error": { "code": e.code, "message": e.message } }))
@@ -527,17 +541,40 @@ async fn handle_bidi_stream(
         return;
     }
 
+    // spec: SHL#session-events
+    // spec: FWD#forward-events
+    // A session request is the stream's opening line alone, and the events of
+    // the session it opens carry its actor.
+    let is_session = matches!(
+        maybe_method.as_deref(),
+        Some("/shells/start" | "/volumes/shell" | "/forwards/start")
+    );
+    let session_events = if is_session {
+        match resolve_actor(&state, &conn, &first_obj) {
+            Ok(actor) => Some(EventSenderWithActor::new(state.event_tx.clone(), actor)),
+            Err(refusal) => {
+                let mut response = error_response(&refusal);
+                response.push(b'\n');
+                let _ = send.write_all(&response).await;
+                let _ = send.finish();
+                return;
+            }
+        }
+    } else {
+        None
+    };
+
     // spec: SHL#concurrency
-    if maybe_method.as_deref() == Some("/shells/start") {
+    if let (Some("/shells/start"), Some(events)) = (maybe_method.as_deref(), &session_events) {
         drop(stream_permit);
-        open_shell_session(conn, send, recv, leftover, line, state).await;
+        open_shell_session(conn, send, recv, leftover, line, state, events.clone()).await;
         return;
     }
 
     // spec: SHL#volume-shells
-    if maybe_method.as_deref() == Some("/volumes/shell") {
+    if let (Some("/volumes/shell"), Some(events)) = (maybe_method.as_deref(), &session_events) {
         drop(stream_permit);
-        open_volume_shell_session(conn, send, recv, leftover, line, state).await;
+        open_volume_shell_session(conn, send, recv, leftover, line, state, events.clone()).await;
         return;
     }
 
@@ -560,9 +597,9 @@ async fn handle_bidi_stream(
 
     // spec: FWD#requesting-a-forward — /forwards/start keeps the control stream open for the
     // duration of the forward; it must be handled outside the normal req/resp path.
-    if maybe_method.as_deref() == Some("/forwards/start") {
+    if let (Some("/forwards/start"), Some(events)) = (maybe_method.as_deref(), &session_events) {
         drop(stream_permit);
-        forward_port_session(conn, send, recv, line, state).await;
+        forward_port_session(conn, send, recv, line, state, events.clone()).await;
         return;
     }
 
@@ -588,9 +625,8 @@ async fn handle_bidi_stream(
 
     // spec: WIRE#actor-attribution — extract actor from request or synthesise from client identity.
     let request = serde_json::from_slice::<serde_json::Value>(&buf).unwrap_or_default();
-    let actor = match request_actor(&request) {
-        Ok(Some(actor)) => Arc::new(actor),
-        Ok(None) => synthesise_actor(&state, extract_client_fp(&conn).as_deref()),
+    let actor = match resolve_actor(&state, &conn, &request) {
+        Ok(actor) => actor,
         Err(refusal) => {
             let _ = send.write_all(&error_response(&refusal)).await;
             let _ = send.finish();

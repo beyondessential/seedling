@@ -6,7 +6,7 @@ use std::{
 };
 
 use rustls_pki_types::PrivatePkcs8KeyDer;
-use seedling_protocol::names::SessionId;
+use seedling_protocol::{actor::Actor, events::EventSenderWithActor, names::SessionId};
 use tokio::io::AsyncWrite;
 
 use super::{
@@ -103,6 +103,11 @@ impl AsyncWrite for BrokenStdin {
     }
 }
 
+/// Session events bound to a stand-in actor.
+fn events(state: &crate::oi::state::OiState) -> EventSenderWithActor {
+    EventSenderWithActor::new(state.event_tx.clone(), Arc::new(Actor::default()))
+}
+
 fn process_exists(pid: u32) -> bool {
     // SAFETY: signal 0 only checks that the process can be signalled.
     unsafe { libc::kill(pid as libc::pid_t, 0) == 0 }
@@ -184,6 +189,7 @@ fn stdin_failure_after_exec_removes_the_job_and_its_network() {
 
         let exit_code = run_to_exit(
             &state,
+            &events(&state),
             session_id,
             &stop,
             live,
@@ -232,7 +238,17 @@ fn stop_that_lands_before_the_job_attaches_ends_the_job() {
         // the registry entry is gone by the time the job is ready to attach.
         assert!(state.shells.stop(&session_id));
 
-        let exit_code = run_to_exit(&state, session_id, &stop, live, &mut recv, b"", streams).await;
+        let exit_code = run_to_exit(
+            &state,
+            &events(&state),
+            session_id,
+            &stop,
+            live,
+            &mut recv,
+            b"",
+            streams,
+        )
+        .await;
 
         assert_eq!(exit_code, -1);
         assert!(!process_exists(pid), "the job does not run on");
@@ -273,7 +289,17 @@ fn stop_after_the_job_is_running_ends_the_session() {
                 state.shells.stop(&session_id)
             })
         };
-        let exit_code = run_to_exit(&state, session_id, &stop, live, &mut recv, b"", streams).await;
+        let exit_code = run_to_exit(
+            &state,
+            &events(&state),
+            session_id,
+            &stop,
+            live,
+            &mut recv,
+            b"",
+            streams,
+        )
+        .await;
 
         assert!(stopper.await.unwrap(), "the session was registered to stop");
         assert_eq!(exit_code, -1);

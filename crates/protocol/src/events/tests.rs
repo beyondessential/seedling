@@ -302,7 +302,7 @@ fn fault_and_resource_events_wire_shape() {
     );
 
     assert_eq!(
-        shape(|tx| tx.fault_cleared("f1", &app, "health_check_failed")),
+        shape(|tx| tx.fault_cleared("f1", &app, "health_check_failed", None)),
         json!({
             "type": "FaultCleared",
             "id": "f1",
@@ -333,7 +333,7 @@ fn shell_events_wire_shape() {
     let session = SessionId::generate();
 
     assert_eq!(
-        shape(|tx| tx.shell_started(session, &app, &name)),
+        shape(|tx| tx.shell_started(session, &app, &name, None)),
         json!({
             "type": "ShellStarted",
             "session_id": session.to_string(),
@@ -343,7 +343,7 @@ fn shell_events_wire_shape() {
     );
 
     assert_eq!(
-        shape(|tx| tx.shell_exited(session, 130)),
+        shape(|tx| tx.shell_exited(session, 130, None)),
         json!({
             "type": "ShellExited",
             "session_id": session.to_string(),
@@ -359,7 +359,7 @@ fn forward_events_wire_shape() {
     let forward = ForwardId::generate();
 
     assert_eq!(
-        shape(|tx| tx.forward_started(forward, &app, "api", 8080)),
+        shape(|tx| tx.forward_started(forward, &app, "api", 8080, None)),
         json!({
             "type": "ForwardStarted",
             "forward_id": forward.to_string(),
@@ -370,7 +370,7 @@ fn forward_events_wire_shape() {
     );
 
     assert_eq!(
-        shape(|tx| tx.forward_stopped(forward)),
+        shape(|tx| tx.forward_stopped(forward, None)),
         json!({"type": "ForwardStopped", "forward_id": forward.to_string()})
     );
 }
@@ -878,6 +878,14 @@ fn event_sender_with_actor_attaches_actor_to_every_event() {
     sender.held_volume_created(held, &app, "data", "uninstall");
     sender.held_volume_deleted(held);
     sender.held_volume_restored(held, "recovered");
+    // spec: EVT#event-objects
+    sender.fault_cleared("fault-1", &app, "crash_loop");
+    let session = SessionId::generate();
+    sender.shell_started(session, &app, &ShellName::new("psql").unwrap());
+    sender.shell_exited(session, 0);
+    let forward = ForwardId::generate();
+    sender.forward_started(forward, &app, "db", 5432);
+    sender.forward_stopped(forward);
     sender.site_volume_created("shared", "managed", None);
     sender.site_volume_deleted("shared", "managed", Some(held));
     sender.site_volume_snapshotted("snap-1", &vol_ref);
@@ -947,5 +955,5 @@ fn event_sender_with_actor_attaches_actor_to_every_event() {
         );
         count += 1;
     }
-    assert_eq!(count, 37, "every delegate emitted exactly one event");
+    assert_eq!(count, 42, "every delegate emitted exactly one event");
 }

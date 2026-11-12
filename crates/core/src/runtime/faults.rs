@@ -32,9 +32,14 @@ fn emit_filed(record: &FaultRecord) {
     }
 }
 
-fn emit_cleared(id: &str, app: &AppName, kind: &str) {
+fn emit_cleared(
+    id: &str,
+    app: &AppName,
+    kind: &str,
+    actor: Option<std::sync::Arc<seedling_protocol::actor::Actor>>,
+) {
     if let Some(tx) = EVENT_TX.get() {
-        tx.fault_cleared(id, app, kind);
+        tx.fault_cleared(id, app, kind, actor);
     }
 }
 
@@ -230,6 +235,18 @@ pub fn clear_fault(
     fault_id: &str,
     app: &AppName,
 ) -> rusqlite::Result<()> {
+    clear_fault_by(db, fault_id, app, None)
+}
+
+/// Clear a fault on behalf of `actor`, the operator whose request clears it,
+/// or of the runtime when `None`.
+// spec: EVT#event-objects
+pub fn clear_fault_by(
+    db: &crate::runtime::db::Db,
+    fault_id: &str,
+    app: &AppName,
+    actor: Option<std::sync::Arc<seedling_protocol::actor::Actor>>,
+) -> rusqlite::Result<()> {
     let now = Timestamp::now();
     // Read the kind before the UPDATE — after clearing, the row is no longer
     // "active" but still exists, so this also works post-clear, but reading
@@ -245,7 +262,7 @@ pub fn clear_fault(
         rusqlite::params![now.to_string(), fault_id],
     )?;
     if changed > 0 {
-        emit_cleared(fault_id, app, kind.as_deref().unwrap_or(""));
+        emit_cleared(fault_id, app, kind.as_deref().unwrap_or(""), actor);
     }
     Ok(())
 }

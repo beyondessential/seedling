@@ -1170,11 +1170,13 @@ pub(crate) fn dry_run_plan(state: &OiState, params: PlanParams, ctx: &RequestCtx
     };
 
     // Empty input → empty diff.
+    // spec: PRM#change-planning
     if proposed_definition.is_empty() && params.proposed_params.is_none() {
         return Ok(json!({
             "diff": Vec::<Value>::new(),
             "on_change_would_fire": Vec::<String>::new(),
             "rejections": Vec::<Value>::new(),
+            "errors": Vec::<String>::new(),
         }));
     }
 

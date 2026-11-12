@@ -622,7 +622,10 @@ impl Coordinator {
                 contact_email: &owned.contact_email,
                 directory_url: &acme::default_directory_url(),
                 dns_provider_name: &dns_provider_name,
-                previous_cert_pem: owned.previous_cert_pem.as_deref(),
+                previous: owned.previous.as_ref().map(|p| acme::PreviousCert {
+                    chain_pem: &p.0,
+                    acme_account_id: p.1,
+                }),
                 cert_profile: owned.cert_profile.as_deref(),
             },
         )
@@ -679,7 +682,9 @@ struct OwnedState {
     cert_profile: Option<String>,
     active_cert_id: Option<i64>,
     active_cert_not_after: Option<i64>,
-    previous_cert_pem: Option<String>,
+    /// The certificate serving the hostname, as its chain and, when it
+    /// was issued through ACME, the account that issued it.
+    previous: Option<(String, Option<i64>)>,
     retry_block_reason: Option<String>,
 }
 
@@ -698,7 +703,12 @@ impl OwnedState {
             cert_profile: snap.settings.cert_profile.clone(),
             active_cert_id: s.active_cert.map(|c| c.id),
             active_cert_not_after: s.active_cert.and_then(|c| c.not_after),
-            previous_cert_pem: s.active_cert.and_then(|c| c.cert_pem.clone()),
+            previous: s.active_cert.and_then(|c| {
+                let account = (c.origin == super::TlsCertOrigin::AcmeDns)
+                    .then_some(c.acme_account_id)
+                    .flatten();
+                c.cert_pem.clone().map(|pem| (pem, account))
+            }),
             retry_block_reason: s.retry_block.and_then(|b| b.reason.clone()),
         }
     }

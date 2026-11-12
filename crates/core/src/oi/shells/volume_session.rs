@@ -62,6 +62,7 @@ pub(crate) async fn open_volume_shell_session(
     leftover_stdin: Vec<u8>,
     initial_line: Vec<u8>,
     state: Arc<OiState>,
+    events: seedling_protocol::events::EventSenderWithActor,
 ) {
     #[derive(serde::Deserialize)]
     struct Params {
@@ -77,8 +78,6 @@ pub(crate) async fn open_volume_shell_session(
     #[derive(serde::Deserialize)]
     struct Request {
         #[serde(default)]
-        actor: Option<seedling_protocol::actor::Actor>,
-        #[serde(default)]
         params: serde_json::Value,
     }
 
@@ -91,9 +90,8 @@ pub(crate) async fn open_volume_shell_session(
 
     let req: Request = match serde_json::from_slice(&initial_line) {
         Ok(r) => r,
-        Err(e) => err!("not_found", format!("invalid request: {e}")),
+        Err(e) => err!("requirements_invalid", format!("invalid request: {e}")),
     };
-    let req_actor = req.actor;
     let params: Params = match serde_json::from_value(req.params) {
         Ok(p) => p,
         Err(e) => err!("requirements_invalid", format!("invalid params: {e}")),
@@ -280,13 +278,14 @@ pub(crate) async fn open_volume_shell_session(
         session_id,
         volumes_app,
         session_name.clone(),
-        req_actor,
+        Some((*events.actor).clone()),
         (params.rows, params.cols),
         stop.clone(),
     );
     let event_name = ShellName::new_unchecked("volume-shell");
     if !begin_session(
         &state,
+        &events,
         &mut send,
         session,
         &event_name,
@@ -372,6 +371,7 @@ pub(crate) async fn open_volume_shell_session(
     if stop.is_requested() {
         abort_startup(
             &state,
+            &events,
             session_id,
             StartupFailure::stopped(Some(net_name)),
             streams,
@@ -385,13 +385,14 @@ pub(crate) async fn open_volume_shell_session(
         Err(e) => {
             tracing::warn!("volume shell: exec failed: {e}");
             let failure = StartupFailure::failed(format!("exec failed: {e}"), Some(net_name));
-            abort_startup(&state, session_id, failure, streams).await;
+            abort_startup(&state, &events, session_id, failure, streams).await;
             return;
         }
     };
 
     let exit_code = run_to_exit(
         &state,
+        &events,
         session_id,
         &stop,
         LiveShell {

@@ -1,7 +1,10 @@
 use std::{collections::BTreeMap, net::Ipv6Addr, sync::Arc, time::Duration};
 
 use parking_lot::Mutex;
-use seedling_protocol::names::{ActionName, AppName, SessionId, ShellName};
+use seedling_protocol::{
+    events::EventSenderWithActor,
+    names::{ActionName, AppName, SessionId, ShellName},
+};
 use tokio::io::AsyncWriteExt;
 
 use super::registry::{ShellSession, StopSignal};
@@ -91,6 +94,7 @@ pub(crate) async fn open_shell_session(
     leftover_stdin: Vec<u8>,
     initial_line: Vec<u8>,
     state: Arc<OiState>,
+    events: EventSenderWithActor,
 ) {
     // spec: SHL#opening-an-app-shell
     #[derive(serde::Deserialize)]
@@ -105,19 +109,21 @@ pub(crate) async fn open_shell_session(
     #[derive(serde::Deserialize)]
     struct Request {
         #[serde(default)]
-        actor: Option<seedling_protocol::actor::Actor>,
-        #[serde(default)]
         params: serde_json::Value,
     }
 
     let req: Request = match serde_json::from_slice(&initial_line) {
         Ok(r) => r,
         Err(e) => {
-            reject(&mut send, "not_found", format!("invalid request: {e}")).await;
+            reject(
+                &mut send,
+                "requirements_invalid",
+                format!("invalid request: {e}"),
+            )
+            .await;
             return;
         }
     };
-    let req_actor = req.actor;
     let params: Params = match serde_json::from_value(req.params) {
         Ok(p) => p,
         Err(e) => {
@@ -229,12 +235,13 @@ pub(crate) async fn open_shell_session(
         session_id,
         app_name.clone(),
         shell_name.as_str().to_owned(),
-        req_actor,
+        Some((*events.actor).clone()),
         (initial_rows, initial_cols),
         stop.clone(),
     );
     if !begin_session(
         &state,
+        &events,
         &mut send,
         session,
         &shell_name,
@@ -255,13 +262,14 @@ pub(crate) async fn open_shell_session(
         match start_app_shell(&state, app, &app_name, &shell_name, validated_params, &stop).await {
             Ok(live) => live,
             Err(failure) => {
-                abort_startup(&state, session_id, failure, streams).await;
+                abort_startup(&state, &events, session_id, failure, streams).await;
                 return;
             }
         };
 
     let exit_code = run_to_exit(
         &state,
+        &events,
         session_id,
         &stop,
         live,
@@ -305,6 +313,7 @@ impl StartupFailure {
 /// told.
 pub(super) async fn begin_session(
     state: &OiState,
+    events: &EventSenderWithActor,
     send: &mut quinn::SendStream,
     session: ShellSession,
     event_name: &ShellName,
@@ -335,7 +344,7 @@ pub(super) async fn begin_session(
     }
 
     // spec: SHL#session-events
-    state.event_tx.shell_started(session_id, &app, event_name);
+    events.shell_started(session_id, &app, event_name);
     true
 }
 
@@ -343,6 +352,7 @@ pub(super) async fn begin_session(
 /// failed.
 pub(super) async fn abort_startup(
     state: &OiState,
+    events: &EventSenderWithActor,
     session_id: SessionId,
     failure: StartupFailure,
     streams: SessionStreams,
@@ -352,7 +362,7 @@ pub(super) async fn abort_startup(
     }
     state.shells.remove(&session_id);
     // spec: SHL#session-end
-    state.event_tx.shell_exited(session_id, -1);
+    events.shell_exited(session_id, -1);
     streams.end(-1, failure.reason.as_deref()).await;
 }
 
@@ -686,8 +696,13 @@ pub(super) struct LiveShell {
 ///
 /// Every way a session can end comes through here, so none can leave the job or
 /// its network behind.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "a running session's whole state, each piece of which the run uses"
+)]
 pub(super) async fn run_to_exit(
     state: &OiState,
+    events: &EventSenderWithActor,
     session_id: SessionId,
     stop: &StopSignal,
     mut live: LiveShell,
@@ -754,7 +769,7 @@ pub(super) async fn run_to_exit(
 
     state.shells.remove(&session_id);
     // spec: SHL#session-end
-    state.event_tx.shell_exited(session_id, exit_code);
+    events.shell_exited(session_id, exit_code);
     let _ = state.container_runtime.remove_network(&live.net_name).await;
     streams.end(exit_code, None).await;
     exit_code

@@ -3,7 +3,7 @@ use seedling_protocol::names::AppName;
 use serde::Deserialize;
 use serde_json::json;
 
-use super::HandlerResult;
+use super::{HandlerResult, RequestCtx};
 use crate::{oi::state::OiState, runtime::faults};
 
 #[derive(Deserialize)]
@@ -46,16 +46,21 @@ pub(crate) struct ClearAppFaultsParams {
 /// cleared. The runtime never re-files cleared faults that were derived
 /// observationally (e.g. `image_pull_failed`) — they will be re-filed on the
 /// next tick if the underlying condition is still present.
-pub(crate) fn clear_app_faults(state: &OiState, params: ClearAppFaultsParams) -> HandlerResult {
+pub(crate) fn clear_app_faults(
+    state: &OiState,
+    params: ClearAppFaultsParams,
+    ctx: &RequestCtx,
+) -> HandlerResult {
     let app = params.app.clone();
     let app_name = app.clone();
+    let actor = std::sync::Arc::clone(&ctx.events.actor);
     let cleared = state
         .db
         .call(move |db| -> rusqlite::Result<usize> {
             let active = faults::list_active_faults(db, Some(&app_name))?;
             let mut count = 0;
             for f in active {
-                faults::clear_fault(db, &f.id, &app_name)?;
+                faults::clear_fault_by(db, &f.id, &app_name, Some(std::sync::Arc::clone(&actor)))?;
                 count += 1;
             }
             Ok(count)

@@ -256,7 +256,7 @@ fn parse_and_dispatch(state: &Arc<OiState>, buf: &[u8], ctx: &RequestCtx) -> Han
         // spec: FLTS#listing-faults
         "/faults/list" => faults::list_faults(state, parse_params(req.params)?),
         // spec: FLTS#clearing-faults
-        "/faults/clear" => faults::clear_app_faults(state, parse_params(req.params)?),
+        "/faults/clear" => faults::clear_app_faults(state, parse_params(req.params)?, ctx),
         // spec: FLTS#listing-restarts
         "/restarts/list" => restarts::list_restarts(state, parse_params(req.params)?),
         // spec: FLTS#crash-loop-settings

@@ -738,6 +738,11 @@ async fn main() {
             coord_for_renewal,
             seedling_core::runtime::tls::renewal::DEFAULT_TICK,
         );
+        // spec: TLS#renewal
+        let _ari_handle = seedling_core::runtime::tls::renewal::spawn_ari_refresh(
+            db.clone(),
+            Arc::clone(&cipher),
+        );
     }
 
     // spec: TLS#serving

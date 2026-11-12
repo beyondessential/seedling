@@ -996,17 +996,65 @@ pub fn update_ari_window(
     window_start: i64,
     window_end: i64,
     polled_at: i64,
+    next_poll_at: i64,
 ) -> rusqlite::Result<()> {
     db.conn.execute(
         "UPDATE tls_certificates SET
             ari_window_start = ?1,
             ari_window_end   = ?2,
             ari_polled_at    = ?3,
+            ari_next_poll_at = ?4,
             updated_at       = ?3
-         WHERE id = ?4",
-        params![window_start, window_end, polled_at, id],
+         WHERE id = ?5",
+        params![window_start, window_end, polled_at, next_poll_at, id],
     )?;
     Ok(())
+}
+
+/// Put off a certificate's next renewal-information fetch to `next_poll_at`,
+/// keeping the window it holds.
+// spec: TLS#renewal
+pub fn defer_ari_poll(db: &Db, id: i64, next_poll_at: i64) -> rusqlite::Result<()> {
+    db.conn.execute(
+        "UPDATE tls_certificates SET ari_next_poll_at = ?1 WHERE id = ?2",
+        params![next_poll_at, id],
+    )?;
+    Ok(())
+}
+
+/// A certificate whose renewal information is in use, with what fetching it
+/// again needs.
+#[derive(Debug, Clone)]
+pub struct AriPoll {
+    pub cert_id: i64,
+    pub chain_pem: String,
+    pub acme_account_id: i64,
+    pub next_poll_at: i64,
+}
+
+/// Every certificate whose renewal information is in use: an active ACME
+/// certificate, not yet expired, whose information has been fetched once.
+/// Ordered by when each is next due.
+// spec: TLS#renewal
+pub fn ari_polls(db: &Db, now: i64) -> rusqlite::Result<Vec<AriPoll>> {
+    let mut stmt = db.conn.prepare(
+        "SELECT id, cert_pem, acme_account_id, ari_next_poll_at
+           FROM tls_certificates
+          WHERE state = 'active' AND origin = 'acme_dns'
+            AND ari_polled_at IS NOT NULL AND ari_next_poll_at IS NOT NULL
+            AND acme_account_id IS NOT NULL AND cert_pem IS NOT NULL
+            AND not_after > ?1
+          ORDER BY ari_next_poll_at",
+    )?;
+    stmt.query_map([now], |row| {
+        Ok(AriPoll {
+            cert_id: row.get(0)?,
+            chain_pem: row.get(1)?,
+            acme_account_id: row.get(2)?,
+            next_poll_at: row.get(3)?,
+        })
+    })?
+    .collect()
 }
 
 /// Find the most-specific [`TlsPolicy`] that matches `hostname`. Patterns
@@ -1696,6 +1744,7 @@ pub fn activate_canopy_chain(
                 ari_window_start = NULL,
                 ari_window_end = NULL,
                 ari_polled_at = NULL,
+                ari_next_poll_at = NULL,
                 created_at = ?7,
                 updated_at = ?7
              WHERE id = ?8 AND origin = 'canopy' AND state IN ('csr_pending', 'active')",
