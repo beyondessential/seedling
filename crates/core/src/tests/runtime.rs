@@ -313,3 +313,77 @@ fn warm_results_refuse_barriers_other_than_ready() {
         );
     }
 }
+
+struct FailingSignaler;
+
+impl crate::runtime::barrier::ContainerSignaler for FailingSignaler {
+    fn signal(&self, _container_name: &str, _signal: &str) -> Result<bool, String> {
+        Err("no such unit".to_owned())
+    }
+}
+
+// spec: RT#signal-delivery
+#[test]
+fn a_signal_that_cannot_be_delivered_throws_and_is_not_recorded() {
+    use crate::runtime::barrier::replay::ActionLog as _;
+    let log = crate::runtime::barrier::replay::InMemoryActionLog::new();
+    let result = run_action_with(
+        r#"
+        app.deployment("web").image("docker.io/library/nginx:latest");
+        app.on_action("poke", |rt, _p| { rt.signal(app.deployment("web"), "HUP"); });
+    "#,
+        &[],
+        "poke",
+        Some(&log),
+        ActionHooks {
+            container_signaler: Some(Arc::new(FailingSignaler)),
+            ..Default::default()
+        },
+    );
+    match result {
+        OperationResult::Failed(e) => assert!(e.to_string().contains("delivering"), "{e}"),
+        other => panic!("expected the signal to fail, got {other:?}"),
+    }
+    assert!(
+        log.load()
+            .unwrap()
+            .iter()
+            .all(|e| e.call_kind != crate::runtime::barrier::CallKind::Signal),
+        "an undelivered signal must not be on record as delivered"
+    );
+}
+
+// spec: RT#signal-delivery
+#[test]
+fn a_signal_to_a_selection_with_no_deployment_or_job_throws() {
+    let err = run_action_err(
+        r#"
+        let svc = app.service("public");
+        app.on_action("poke", |rt, _p| { rt.signal(svc, "HUP"); });
+    "#,
+        "poke",
+    );
+    assert!(err.contains("no deployment or job"), "{err}");
+}
+
+// spec: RT#selections
+#[test]
+fn an_array_is_a_selection_of_its_elements_and_other_values_are_not() {
+    exercise(
+        r#"
+        let a = app.deployment("alpha").image("docker.io/library/nginx:1");
+        let b = app.deployment("bravo").image("docker.io/library/nginx:1");
+        app.on_start(|rt, _p| {
+            rt.warm_images([a, b]);
+            rt.start([a, [b]]);
+        });
+    "#,
+    );
+    for value in ["42", r#""web""#, "#{ a: 1 }"] {
+        let err = run_action_err(
+            &format!(r#"app.on_action("begin", |rt, _p| {{ rt.start({value}); }});"#),
+            "begin",
+        );
+        assert!(err.contains("not a selection"), "{value}: {err}");
+    }
+}

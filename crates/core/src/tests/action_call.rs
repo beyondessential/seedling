@@ -115,6 +115,25 @@ fn app_action_in_static_context_throws() {
     );
 }
 
+// spec: BSL#arguments
+#[test]
+fn a_non_finite_param_value_is_refused_not_turned_into_null() {
+    for value in ["1.0 / 0.0", "0.0 / 0.0"] {
+        let err = invoke_action(
+            &format!(
+                r#"
+                app.on_action("inner", |rt, p| {{}}, #{{ params: #{{ amount: #{{ kind: "text", required: false }} }} }});
+                app.on_action("outer", |rt, _p| {{ app.action("inner").invoke(#{{ amount: {value} }}); }});
+            "#
+            ),
+            "outer",
+            rhai::Map::new(),
+        )
+        .expect_err("a non-finite number has no form in the param map");
+        assert!(err_string(err).contains("not a finite number"), "{value}");
+    }
+}
+
 // spec: ACN#scheduled-actions
 #[test]
 fn on_schedule_inside_an_action_closure_throws() {

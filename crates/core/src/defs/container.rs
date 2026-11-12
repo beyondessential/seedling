@@ -518,7 +518,11 @@ impl ContainerDef {
                     let mut def = holder.lock();
                     for (index, item) in vars.into_iter().enumerate() {
                         let map = take_map(&format!("env entry {index}"), item)?;
-                        reject_unknown_keys(&format!("env entry {index}"), &map, &["name", "value"])?;
+                        reject_unknown_keys(
+                            &format!("env entry {index}"),
+                            &map,
+                            &["name", "value"],
+                        )?;
                         let name = map
                             .get("name")
                             .cloned()

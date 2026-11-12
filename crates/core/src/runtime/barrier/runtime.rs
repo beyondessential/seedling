@@ -1250,10 +1250,17 @@ impl RuntimeInstance {
             ))
         })?;
 
-        if resources.is_empty() {
-            return Err(
-                format!("rt.signal: target resolved to no instances (signal={canonical})").into(),
-            );
+        // spec: RT#signal-delivery
+        // A selection holding only services or ingresses has nothing a signal
+        // can reach, which is the same mistake as an empty one.
+        if !resources
+            .iter()
+            .any(|r| matches!(r.kind, ResourceKind::Deployment | ResourceKind::Job))
+        {
+            return Err(format!(
+                "rt.signal: the selection holds no deployment or job (signal={canonical})"
+            )
+            .into());
         }
 
         // Expand each named container target to all of its currently-existing
@@ -1336,6 +1343,9 @@ impl RuntimeInstance {
             });
         }
 
+        // spec: RT#signal-delivery
+        // A failed delivery fails the call, and nothing is recorded: the entry
+        // says a signal was delivered, which it was not.
         let signaler = ctx.lock().container_signaler.clone();
         if let Some(signaler) = signaler {
             for r in &expanded {
@@ -1345,6 +1355,11 @@ impl RuntimeInstance {
                         signal = %canonical,
                         "rt.signal: signal delivery failed: {e}",
                     );
+                    return Err(format!(
+                        "rt.signal: delivering {canonical} to {} failed: {e}",
+                        r.display_name
+                    )
+                    .into());
                 }
             }
         }

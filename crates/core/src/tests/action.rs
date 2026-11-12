@@ -494,3 +494,48 @@ fn a_second_install_action_throws() {
     let err = run_test_script_err(r#"app.on_install(|rt, _p| {}); app.on_install(|rt, _p| {});"#);
     assert!(err.to_string().contains("already declared"), "{err}");
 }
+
+// spec: ACN#action-declaration
+// spec: ACN#start-action
+// spec: ACN#shells
+// spec: ACN#install-action
+// spec: ACN#param-schemas
+#[test]
+fn unknown_option_and_param_definition_keys_throw() {
+    for script in [
+        r#"app.on_action("a", |rt, _p| {}, #{ descripton: "typo" });"#,
+        r#"app.on_start(|rt, _p| {}, #{ params: #{} });"#,
+        r#"app.on_action("start", |rt, _p| {}, #{ params: #{} });"#,
+        r#"app.on_shell("s", |rt, sh, _p| {}, #{ param: #{} });"#,
+        r#"app.on_install(|rt, _p| {}, #{ requires: #{} });"#,
+        r#"app.on_action("a", |rt, _p| {}, #{ params: #{ x: #{ kinds: "text" } } });"#,
+        r#"app.on_action("a", |rt, _p| {}, #{ params: "not a map" });"#,
+        r#"app.on_action("a", |rt, _p| {}, #{ params: #{ x: "not a map" } });"#,
+    ] {
+        let err = run_test_script_err(script);
+        assert!(!err.to_string().is_empty(), "{script} must throw");
+    }
+}
+
+// spec: VOL#export
+// spec: SVC#export
+#[test]
+fn unknown_keys_in_exported_options_throw() {
+    for script in [
+        r#"app.volume("data").exported(#{ descriptions: "x" });"#,
+        r#"app.service("api").exported(#{ note: "x" });"#,
+    ] {
+        let err = run_test_script_err(script);
+        assert!(err.to_string().contains("unknown key"), "{script}: {err}");
+    }
+}
+
+// spec: CTR#environment
+#[test]
+fn an_env_entry_with_an_extra_key_throws() {
+    let err = run_test_script_err(
+        r#"app.deployment("web").image("docker.io/library/nginx:1")
+            .env([#{ name: "A", value: "1", extra: "x" }]);"#,
+    );
+    assert!(err.to_string().contains("unknown key"), "{err}");
+}

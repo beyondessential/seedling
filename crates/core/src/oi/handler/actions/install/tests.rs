@@ -239,6 +239,27 @@ fn install_params_without_schema_are_rejected() {
     assert!(message.contains("no install params"), "message: {message}");
 }
 
+// spec: ACN#param-delivery
+#[test]
+fn install_params_with_a_reserved_suffix_are_rejected() {
+    let oi = TestOi::new();
+    oi.call(
+        "/apps/create",
+        json!({ "app": "demo", "script": INSTALL_SCRIPT }),
+    )
+    .unwrap();
+    for key in ["data_volume", "upload_filename"] {
+        let (code, message) = oi
+            .call(
+                "/apps/install/invoke",
+                json!({ "app": "demo", "params": { "admin-email": "a@b.co", key: "x" } }),
+            )
+            .unwrap_err();
+        assert_eq!(code, "requirements_invalid", "{key}");
+        assert!(message.contains(key), "{message}");
+    }
+}
+
 // spec: ACI#install-parameters
 #[test]
 fn install_with_missing_required_requirement_is_rejected() {
