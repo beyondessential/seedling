@@ -152,12 +152,6 @@ pub(crate) fn list_policies(state: &OiState) -> HandlerResult {
                 "dns_provider": dns_provider,
                 "updated_at": row.updated_at,
             }),
-            // spec: SITE#tailscale-discovery
-            TlsPolicy::Tailscale => json!({
-                "hostname": row.hostname,
-                "strategy": "tailscale",
-                "updated_at": row.updated_at,
-            }),
             // spec: TCAN#canopy-only-policy
             TlsPolicy::Canopy => json!({
                 "hostname": row.hostname,
@@ -1081,12 +1075,6 @@ fn project_hostname_state(
             "pattern": pattern,
             "is_wildcard_match": pattern != hostname,
         }),
-        // spec: SITE#tailscale-discovery
-        Some((TlsPolicy::Tailscale, pattern)) => json!({
-            "strategy": "tailscale",
-            "pattern": pattern,
-            "is_wildcard_match": pattern != hostname,
-        }),
         // spec: TCAN#canopy-only-policy
         Some((TlsPolicy::Canopy, pattern)) => json!({
             "strategy": "canopy",
@@ -1155,64 +1143,87 @@ fn project_hostname_state(
 
 /// Map the unified [`state::Decision`] (plus the active cert it
 /// resolved against) to a status label for the UI. The label is a
-/// projection of the decision, not a re-computation — when the
-/// decision says "Issue now (renewal)" but the existing cert is still
-/// valid, status is `"active"` because the operator's mental model of
-/// the cert is "it's serving".
+/// projection of the decision, not a re-computation.
 ///
 /// For `Decision::Default`, the runtime has no opinion; the status
 /// reflects whichever cert is actually serving — a SAN-bound manual
 /// cert from the runtime store, or whatever proxy-managed cert is on
 /// disk.
+// spec: TLS#certificate-status
 fn decision_status(
     st: &state::HostnameState<'_>,
     caddy_cert: Option<&state::ProxyCert>,
 ) -> &'static str {
-    use state::Decision::*;
-    use state::IssueReason as R;
     let now = jiff::Timestamp::now().as_second();
     let active_not_after = st.active_cert.and_then(|c| c.not_after);
-    match &st.decision {
-        Default => serving_status(active_not_after, caddy_cert, now).unwrap_or("default"),
-        Chain(c) => {
-            if matches!(c.act, state::ChainAct::Blocked { .. }) {
-                return "blocked";
-            }
-            if let Some(status) = serving_status(active_not_after, caddy_cert, now) {
-                return status;
-            }
-            // Nothing is serving the hostname. Canopy cannot be asked about it,
-            // so nothing is in progress and the operator has something to fix.
-            if c.act == state::ChainAct::CannotAskCanopy {
-                return "error";
-            }
-            // Canopy being asked is an acquisition in progress, and a failure it
-            // reported is an error.
-            match (&c.cycle, &c.last_error) {
-                (chain::Cycle::Running(r), Some(_)) if r.responsible == Strategy::Canopy => "error",
-                (chain::Cycle::Running(r), None) if r.responsible == Strategy::Canopy => "pending",
-                _ => "default",
-            }
-        }
-        Blocked { .. } => "blocked",
-        NoContactEmail | Debounced { .. } => "error",
-        Scheduled { .. } => "active",
-        IssueNow {
-            reason: R::First | R::ForceRetry,
-        } => "pending",
-        IssueNow {
-            reason: R::Renewal { .. },
-        } => {
-            // Cert is past its renewal trigger. If it's also past expiry
-            // (which can happen if every retry has failed), surface that
-            // instead of pretending it's still active.
-            if active_not_after.is_some_and(|na| na < now) {
-                "expired"
-            } else {
-                "active"
-            }
-        }
+    let serving = serving_status(active_not_after, caddy_cert, now);
+    status_facts(&st.decision, serving).status()
+}
+
+/// Which meanings of the certificate status hold for a hostname at once.
+#[derive(Debug, Default)]
+struct StatusFacts {
+    blocked: bool,
+    expired: bool,
+    error: bool,
+    pending: bool,
+    active: bool,
+}
+
+impl StatusFacts {
+    /// The first status whose meaning holds, in the order the status is
+    /// defined.
+    // spec: TLS#certificate-status
+    fn status(&self) -> &'static str {
+        [
+            (self.blocked, "blocked"),
+            (self.expired, "expired"),
+            (self.error, "error"),
+            (self.pending, "pending"),
+            (self.active, "active"),
+        ]
+        .into_iter()
+        .find_map(|(holds, status)| holds.then_some(status))
+        .unwrap_or("default")
     }
+}
+
+/// The certificate-status meanings that `decision` and the certificate
+/// serving the hostname, as [`serving_status`] reads it, say hold.
+// spec: TLS#certificate-status
+fn status_facts(decision: &state::Decision, serving: Option<&str>) -> StatusFacts {
+    use state::Decision::*;
+    let mut facts = StatusFacts {
+        expired: serving == Some("expired"),
+        active: serving == Some("active"),
+        ..StatusFacts::default()
+    };
+    match decision {
+        Default => {}
+        Chain(c) => {
+            facts.blocked = matches!(c.act, state::ChainAct::Blocked { .. });
+            // Canopy cannot be asked about it, so the operator has something
+            // to fix.
+            facts.error = c.act == state::ChainAct::CannotAskCanopy;
+            // Canopy being asked is an acquisition in progress, and a failure
+            // it reported is an error.
+            if let chain::Cycle::Running(r) = &c.cycle
+                && r.responsible == Strategy::Canopy
+            {
+                match &c.last_error {
+                    Some(_) => facts.error = true,
+                    None => facts.pending = true,
+                }
+            }
+        }
+        Blocked { .. } => facts.blocked = true,
+        NoContactEmail | Debounced { .. } => facts.error = true,
+        Scheduled { .. } => facts.active = true,
+        // An issuance due now, renewal included, is an acquisition in
+        // progress.
+        IssueNow { .. } => facts.pending = true,
+    }
+    facts
 }
 
 /// The status a hostname reflects from whichever certificate is actually
@@ -1396,6 +1407,12 @@ fn default_attempts_limit() -> i64 {
 // spec: TLSM#issuance-attempts
 pub(crate) fn list_attempts(state: &OiState, params: ListAttemptsParams) -> HandlerResult {
     let ListAttemptsParams { hostname, limit } = params;
+    if !(1..=500).contains(&limit) {
+        return Err(OiError::new(
+            ErrorCode::RequirementsInvalid,
+            format!("limit must be from 1 to 500, got {limit}"),
+        ));
+    }
     let rows = state
         .db
         .call(move |db| store::list_attempts(db, hostname.as_deref(), limit))

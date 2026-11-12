@@ -1008,6 +1008,22 @@ fn hostname_and_attempt_rollups_start_empty() {
     );
 }
 
+// spec: TLSM#issuance-attempts
+#[test]
+fn an_attempts_limit_outside_1_to_500_is_refused() {
+    let oi = TestOi::new();
+    for limit in [0, -1, 501] {
+        let (code, _) = oi
+            .call("/tls/certificates/attempts/list", json!({ "limit": limit }))
+            .expect_err("out-of-range limit");
+        assert_eq!(code, "requirements_invalid", "limit {limit}");
+    }
+    for limit in [1, 500] {
+        oi.call("/tls/certificates/attempts/list", json!({ "limit": limit }))
+            .unwrap();
+    }
+}
+
 // spec: TLSM#policies
 // The FK refusal arrived as `not_found: db error: FOREIGN KEY constraint
 // failed`, naming neither the provider nor the remedy, and handing a client
@@ -1666,4 +1682,36 @@ fn the_rollup_does_not_walk_the_proxys_cache_itself() {
 
     // And the rollup still answers.
     assert_eq!(shop_hostname(&oi)["hostname"], "shop.example.com");
+}
+
+// spec: TLS#certificate-status
+#[test]
+fn the_certificate_status_is_the_first_meaning_that_holds() {
+    use super::status_facts;
+    use crate::runtime::tls::state::{Decision, IssueReason, NextSource};
+
+    // A failed attempt waiting to retry while the served certificate has
+    // expired: expired comes before error.
+    assert_eq!(
+        status_facts(&Decision::Debounced { until: 0 }, Some("expired")).status(),
+        "expired"
+    );
+    // A renewal due now while a usable certificate is served: pending comes
+    // before active.
+    let renewal = Decision::IssueNow {
+        reason: IssueReason::Renewal {
+            scheduled_at: 0,
+            source: NextSource::Fallback,
+        },
+    };
+    assert_eq!(status_facts(&renewal, Some("active")).status(), "pending");
+    assert_eq!(
+        status_facts(&Decision::NoContactEmail, Some("active")).status(),
+        "error"
+    );
+    assert_eq!(
+        status_facts(&Decision::Blocked { reason: None }, Some("expired")).status(),
+        "blocked"
+    );
+    assert_eq!(status_facts(&Decision::Default, None).status(), "default");
 }

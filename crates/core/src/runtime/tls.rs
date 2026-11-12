@@ -262,13 +262,6 @@ pub enum TlsPolicy {
     AcmeDns {
         dns_provider: String,
     },
-    /// Hostnames whose certs are obtained from the local Tailscale
-    /// facility. The Coordinator dispatches to
-    /// [`super::tls::tailscale_issuer`] for these instead of running
-    /// ACME. Only legal on hostnames that match a discovered Tailscale
-    /// site ingress.
-    // spec: TLS#tailscale-certificates
-    Tailscale,
     /// Canopy is the chain's only strategy: the hostname never passes to
     /// HTTP-01 or the proxy's internal CA.
     // spec: TCAN#canopy-only-policy

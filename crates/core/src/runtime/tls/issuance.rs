@@ -687,9 +687,6 @@ impl OwnedState {
     fn from_snapshot(snap: &state::Snapshot, s: &state::HostnameState<'_>) -> Self {
         let dns_provider_name = s.policy.and_then(|p| match &p.policy {
             TlsPolicy::AcmeDns { dns_provider } => Some(dns_provider.clone()),
-            // Tailscale issuance doesn't use a DNS provider; the cert
-            // comes from the local tailscaled API.
-            TlsPolicy::Tailscale => None,
             // Canopy requests go through the relay, not through this
             // coordinator.
             TlsPolicy::Canopy => None,

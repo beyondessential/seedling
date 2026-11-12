@@ -209,8 +209,6 @@ pub fn list_policies(db: &Db) -> rusqlite::Result<Vec<TlsPolicyRow>> {
                 "acme_dns" => TlsPolicy::AcmeDns {
                     dns_provider: dns_provider.ok_or_else(|| rusqlite::Error::InvalidQuery)?,
                 },
-                // spec: SITE#tailscale-discovery
-                "tailscale" => TlsPolicy::Tailscale,
                 // spec: TCAN#canopy-only-policy
                 "canopy" => TlsPolicy::Canopy,
                 "manual" => return Ok(None),

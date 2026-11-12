@@ -817,13 +817,6 @@ fn decide(
             force_retry,
             settings,
         ),
-        // spec: SITE#tailscale-discovery
-        // Tailscale-issued certs are managed by the local Tailscale
-        // facility; the runtime fetches a fresh pair on demand and
-        // doesn't run the ACME state machine for them. The Coordinator
-        // dispatch path that does the actual fetch is wired separately;
-        // this branch keeps the decision pipeline exhaustive.
-        Some(TlsPolicy::Tailscale) => Decision::Default,
     }
 }
 

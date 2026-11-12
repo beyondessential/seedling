@@ -33,15 +33,18 @@ impl CanopyTransport for OiCanopyTransport {
         if !self.canopy.is_enabled() {
             return Err(miette!("Canopy access is turned off for this instance"));
         }
-        // Nothing is queued for a provider that might turn up later: a caller
-        // that wants to retry is better placed to decide when than the relay is.
+        // spec: RLY#relay-limits
+        let _slot = self.canopy.acquire_slot().await;
+
+        // spec: RLY#offer-selection
+        // Chosen only once the request holds a slot, so an offer that ended
+        // while it waited is never the one it is sent to. Nothing is queued
+        // for a provider that might turn up later: a caller that wants to
+        // retry is better placed to decide when than the relay is.
         let offer = self
             .canopy
             .current()
             .ok_or_else(|| miette!("no client is currently offering to reach Canopy"))?;
-
-        // spec: RLY#relay-limits
-        let _slot = self.canopy.acquire_slot().await;
 
         let (parts, body) = request.into_parts();
         let path = parts
@@ -120,8 +123,21 @@ mod tests {
     ) {
         let (tx, rx) = std::sync::mpsc::channel();
         let state = Arc::new(CanopyState::new());
+        offer_answering(&state, 0, tx, status, body);
+        (OiCanopyTransport::new(Arc::clone(&state)), state, rx)
+    }
+
+    /// Register an offer on `conn_id` that answers every relayed request with
+    /// `status` and `body`, sending the request it received down `tx`.
+    fn offer_answering(
+        state: &CanopyState,
+        conn_id: usize,
+        tx: std::sync::mpsc::Sender<SentRequest>,
+        status: u16,
+        body: &'static [u8],
+    ) {
         state.offer(
-            0,
+            conn_id,
             "test".into(),
             "https://example.invalid".into(),
             None,
@@ -151,7 +167,39 @@ mod tests {
                 });
             }),
         );
-        (OiCanopyTransport::new(Arc::clone(&state)), state, rx)
+    }
+
+    // spec: RLY#offer-selection
+    #[tokio::test]
+    async fn the_offer_is_chosen_once_a_slot_is_held() {
+        let (old_tx, old_rx) = std::sync::mpsc::channel();
+        let (new_tx, new_rx) = std::sync::mpsc::channel();
+        let state = Arc::new(CanopyState::new());
+        offer_answering(&state, 0, old_tx, 200, b"old");
+
+        let mut held = Vec::new();
+        for _ in 0..8 {
+            held.push(state.acquire_slot().await);
+        }
+        let transport = OiCanopyTransport::new(Arc::clone(&state));
+        let call = tokio::spawn(async move {
+            let request = http::Request::builder()
+                .uri("/servers/self")
+                .body(Bytes::new())
+                .unwrap();
+            transport.call(request).await
+        });
+        tokio::task::yield_now().await;
+
+        // The offer live when the request arrived ends while it waits.
+        state.remove_by_conn(0);
+        offer_answering(&state, 1, new_tx, 200, b"new");
+        drop(held);
+
+        let response = call.await.unwrap().expect("a response");
+        assert_eq!(response.body().as_ref(), b"new");
+        assert!(new_rx.try_recv().is_ok());
+        assert!(old_rx.try_recv().is_err());
     }
 
     // spec: RLY#relay-streams

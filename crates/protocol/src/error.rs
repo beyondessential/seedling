@@ -31,8 +31,6 @@ pub enum ErrorCode {
     // spec: RLY#disabled-access
     // spec: RLY#unavailability
     CanopyDisabled,
-    // spec: RLY#unavailability
-    CanopyUnavailable,
 }
 
 #[derive(Debug)]
