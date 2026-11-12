@@ -3,6 +3,37 @@
 Each of the card's issues is one theme of divergence between the code and the specs #C6 rewrote.
 Each issue is worked on its own and committed on its own, with a test that fails without the fix.
 
+## Issues
+
+- [x] Secret values exposed
+- [x] Throw when a pod binds an external service
+- [x] Deployment scale ranges
+- [x] Manual certificate uploads' key type
+- [x] TLS and Canopy decisions
+- [x] Ingress decisions
+- [x] BSL throws, reserved names and defaults (and its correction)
+- [ ] Failed reads become definite answers
+- [ ] Database and internal failures reported with the wrong error code
+- [ ] Malformed script input coerced or ignored
+- [ ] Crash recovery and replay
+- [ ] Faults out of line with the fault catalogue
+- [ ] Action, shell and change-handler dispatch
+- [ ] Host startup ordering, addressing and the web listener
+- [ ] Resource and lifecycle behaviour the code does not enforce
+- [ ] Wire, event and ACME protocol shapes
+- [ ] Operations: start action, persisted queue, unreadable state, intent-before-effect
+- [ ] OI error codes and request validation
+- [ ] Host: new faults, key file, permissions, reserved prefix and env redaction
+- [ ] Batch 5: runtime and fault code
+- [ ] Batch 6: collections, validators, CLI, web, uninstall and image pulls
+- [ ] Requirements restored by the fidelity review
+- [ ] Blocking shell.attach, withholding-fault app status, rt.write to mapped external volumes
+- [ ] Review round 2, part 1
+- [ ] Review round 2, part 2
+- [ ] VOLM, SVCM and INGM handlers
+- [ ] Review round 3, part 1
+- [ ] Review round 3, part 2
+
 ## Overlaps between issues
 
 Several items appear in more than one issue.
@@ -44,8 +75,20 @@ Each is done once, in whichever issue is worked first, and the later issue notes
 - Site volume delete while mapped: VOLM/SVCM/INGM issue, round 3 part 1.
 - Host constants: batch 5 item 7, round 3 part 2 (CONST).
 
+## Already done in an earlier issue
+
+- Uploaded key algorithms (round 3 part 1): done with the manual uploads issue, which detects all five algorithms.
+- Removing `TlsPolicy::Tailscale` and `ErrorCode::CanopyUnavailable`: done with the TLS and Canopy decisions.
+- Status precedence (TLS#certificate-status ordering): done with the TLS and Canopy decisions; round 2 part 2 still owes `none` for `default`, usable-certificate facts and `null` when unknown.
+- `CollectMode` and discarding a failed unit once its result is observed (round 2 part 1, LINUX#supervised-units): done with the BSL issue, as termination depends on it.
+- The database's side files being owner-only (host faults issue, INFRA#file-permissions): done with the secrets issue, by creating the database file owner-only before SQLite opens it; that issue still owes nothing else for it.
+- `/apps/show` unknown secret params: done with the secrets issue; the host faults issue still owes env redaction.
+
 ## Decisions
 
 - Secret sub-action params are kept in the action log encrypted under the secret key, apart from the readable params, so replay can still recover them; a call with secret params and no key to protect them fails rather than recording them in the clear.
 - Files that must be owner-only are created through one helper, `seedling_protocol::keys::write_new_private_file`, which opens with mode 0600 and refuses an existing path, including a planted symlink.
-- The container stop-timeout default stays with the supervisor, as the correction to the BSL issue says.
+- The container stop-timeout default stays with the supervisor, as the correction to the BSL issue says. `rt.stop`'s default deadline counts a container with no stop timeout at systemd's default of 90 seconds.
+- Install completion order is a sequence number (`install_seq`) rather than a timestamp, so two installs can never tie; apps installed before it existed are ordered by name.
+- A definition is checked once it has evaluated in full (`defs::check_evaluated`), for rules a later call could otherwise undo: redirect pairing, and containers with no image.
+- A run whose exit status was never captured succeeded only if `unit_inactive` (the unit inactive or gone, failed units being kept loaded) is recorded after it ended.
