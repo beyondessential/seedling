@@ -1548,5 +1548,5 @@ pub(crate) fn set_settings(state: &OiState, params: SetSettingsParams) -> Handle
 // ---------------------------------------------------------------------------
 
 fn db_error(e: rusqlite::Error) -> OiError {
-    OiError::new(ErrorCode::NotFound, format!("db error: {e}"))
+    OiError::internal(format!("db error: {e}"))
 }

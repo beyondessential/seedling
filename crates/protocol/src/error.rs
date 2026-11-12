@@ -54,6 +54,13 @@ impl OiError {
     pub fn script_error(message: impl Into<String>) -> Self {
         Self::new(ErrorCode::ScriptError, message)
     }
+
+    /// A failure inside the server, such as a failed database read: never
+    /// an answer about what was asked for.
+    // spec: WIRE#error-codes
+    pub fn internal(message: impl Into<String>) -> Self {
+        Self::new(ErrorCode::Internal, message)
+    }
 }
 
 pub type HandlerResult = Result<serde_json::Value, OiError>;

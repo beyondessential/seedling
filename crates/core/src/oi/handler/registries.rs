@@ -40,7 +40,7 @@ pub(crate) fn list_registries(state: &OiState) -> HandlerResult {
     let registries = state
         .db
         .call(registries::list_allowed_registries)
-        .map_err(|e| OiError::new(ErrorCode::NotFound, format!("db error: {e}")))?;
+        .map_err(|e| OiError::internal(format!("db error: {e}")))?;
     Ok(json!({ "registries": registries }))
 }
 
@@ -50,7 +50,7 @@ pub(crate) fn add_registry(state: &OiState, params: RegistryParams) -> HandlerRe
     state
         .db
         .call(move |db| registries::add_allowed_registry(db, &registry))
-        .map_err(|e| OiError::new(ErrorCode::NotFound, format!("db error: {e}")))?;
+        .map_err(|e| OiError::internal(format!("db error: {e}")))?;
 
     // spec: FLT#filing-and-clearing — `disallowed_registry` is a condition fault:
     // true exactly while an app's images reference a registry outside the
@@ -69,7 +69,7 @@ pub(crate) fn remove_registry(state: &OiState, params: RegistryParams) -> Handle
     let removed = state
         .db
         .call(move |db| registries::remove_allowed_registry(db, &registry))
-        .map_err(|e| OiError::new(ErrorCode::NotFound, format!("db error: {e}")))?;
+        .map_err(|e| OiError::internal(format!("db error: {e}")))?;
     if !removed {
         return Err(OiError::not_found(format!(
             "registry not in allowlist: {}",

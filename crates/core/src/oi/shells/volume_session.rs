@@ -119,7 +119,7 @@ pub(crate) async fn open_volume_shell_session(
                 }) {
                     Ok(Some(d)) => d,
                     Ok(None) => err!("not_found", format!("site volume not found: {name}")),
-                    Err(e) => err!("internal_error", format!("db error: {e}")),
+                    Err(e) => err!("internal", format!("db error: {e}")),
                 };
 
                 use crate::runtime::site_volumes::SiteVolumeKind;
@@ -173,7 +173,7 @@ pub(crate) async fn open_volume_shell_session(
                 // name instead of a raw UUID.
                 let held_list = match vol_store.list_held() {
                     Ok(v) => v,
-                    Err(e) => err!("internal_error", format!("list held: {e}")),
+                    Err(e) => err!("internal", format!("list held: {e}")),
                 };
                 let meta = held_list.iter().find(|m| m.id == *id);
                 let label = meta
@@ -226,7 +226,7 @@ pub(crate) async fn open_volume_shell_session(
                 .unwrap_or_else(|| std::path::PathBuf::from("."));
             if let Err(e) = build_volume_shell_image(&data_dir).await {
                 tracing::warn!(%image, "image build failed: {e}");
-                err!("shell_error", format!("image build failed: {e}"));
+                err!("internal", format!("image build failed: {e}"));
             }
         }
         Err(e) => tracing::warn!(%image, "image_exists check failed: {e}"),
@@ -240,7 +240,7 @@ pub(crate) async fn open_volume_shell_session(
         .await
     {
         tracing::warn!(%net_name, "volume shell: create network failed: {e}");
-        err!("shell_error", format!("create network failed: {e}"));
+        err!("internal", format!("create network failed: {e}"));
     }
 
     // Open daemon stdout/stderr uni streams.

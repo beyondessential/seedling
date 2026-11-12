@@ -24,9 +24,11 @@ use crate::{
 pub(crate) fn list_images(state: &OiState) -> HandlerResult {
     let (images, in_use_ids) = tokio::task::block_in_place(|| {
         tokio::runtime::Handle::current().block_on(async {
-            let images = state.container_runtime.list_images().await.map_err(|e| {
-                OiError::new(ErrorCode::NotFound, format!("list_images failed: {e}"))
-            })?;
+            let images = state
+                .container_runtime
+                .list_images()
+                .await
+                .map_err(|e| OiError::internal(format!("list_images failed: {e}")))?;
 
             let mut in_use_ids: std::collections::HashSet<String> =
                 std::collections::HashSet::new();
@@ -257,7 +259,7 @@ pub(crate) fn remove_image(state: &OiState, params: RemoveParams) -> HandlerResu
                 .remove_image(&params.reference, params.force)
                 .await
                 .map_err(|e| {
-                    OiError::new(ErrorCode::NotFound, format!("remove_image failed: {e}"))
+                    OiError::internal(format!("remove_image failed: {e}"))
                 })?;
             if !removed {
                 return Err(OiError::not_found(format!(
@@ -381,11 +383,11 @@ pub(crate) fn discover_images(state: &OiState, params: DiscoverParams) -> Handle
         });
         let (proposed_app, err) =
             crate::runtime::apps::evaluate(&name, &bundle, &stored_params, &state.script_limits);
+        // spec: IMGM#image-discovery
         if let Some(e) = err {
-            return Err(OiError::new(
-                ErrorCode::NotFound,
-                format!("proposed script failed to evaluate: {e}"),
-            ));
+            return Err(OiError::script_error(format!(
+                "proposed script failed to evaluate: {e}"
+            )));
         }
         proposed_app
     } else {
@@ -398,13 +400,10 @@ pub(crate) fn discover_images(state: &OiState, params: DiscoverParams) -> Handle
     let ast = match engine.compile(script.text()) {
         Ok(a) => a,
         Err(e) => {
-            return Err(OiError::new(
-                ErrorCode::NotFound,
-                format!(
-                    "failed to compile app script: {}",
-                    script.remap_error(&e.to_string())
-                ),
-            ));
+            return Err(OiError::script_error(format!(
+                "failed to compile app script: {}",
+                script.remap_error(&e.to_string())
+            )));
         }
     };
 
@@ -416,7 +415,7 @@ pub(crate) fn discover_images(state: &OiState, params: DiscoverParams) -> Handle
         lenient: params.lenient,
     };
     let response = probe_app(&engine, &ast, &app, registry, &request)
-        .map_err(|e| OiError::new(ErrorCode::NotFound, format!("probe failed: {e}")))?;
+        .map_err(|e| OiError::script_error(format!("probe failed: {e}")))?;
 
     let per_handler: Vec<Value> = response
         .per_handler

@@ -42,7 +42,7 @@ fn current_param_value(
                 db, &cipher, &app_owned,
             ))
         })
-        .map_err(|e| OiError::new(ErrorCode::NotFound, format!("db error: {e}")))?;
+        .map_err(|e| OiError::internal(format!("db error: {e}")))?;
     Ok(map.get(name_owned.as_str()).cloned())
 }
 
@@ -98,7 +98,7 @@ fn reload_and_persist_apperror(
                 db, &cipher, &app_owned,
             ))
         })
-        .map_err(|e| OiError::new(ErrorCode::NotFound, format!("db error: {e}")))?;
+        .map_err(|e| OiError::internal(format!("db error: {e}")))?;
     // The outcome needs no gating here: this re-evaluates the app's existing
     // definition under new param values and derives nothing from the result
     // but the fault state synced below, which is filed on either outcome.
@@ -139,7 +139,7 @@ fn reload_and_persist_apperror(
                     installing,
                 )
             })
-            .map_err(|e| OiError::new(ErrorCode::NotFound, format!("db persist: {e}")))?;
+            .map_err(|e| OiError::internal(format!("db persist: {e}")))?;
     }
     Ok(())
 }
@@ -357,7 +357,7 @@ pub(crate) fn set_param(
                 Ok((generation, previous_is_secret))
             })
         })
-        .map_err(|e| OiError::new(ErrorCode::NotFound, format!("db error: {e}")))?;
+        .map_err(|e| OiError::internal(format!("db error: {e}")))?;
 
     reload_and_persist_apperror(state, app, generation)?;
 
@@ -461,7 +461,7 @@ pub(crate) fn unset_param(
                 Ok((generation, previous_is_secret))
             })
         })
-        .map_err(|e| OiError::new(ErrorCode::NotFound, format!("db error: {e}")))?;
+        .map_err(|e| OiError::internal(format!("db error: {e}")))?;
 
     reload_and_persist_apperror(state, app, generation)?;
 

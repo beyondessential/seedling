@@ -1457,65 +1457,43 @@ pub(crate) fn deregister_app(
         }
     }
 
-    // Remove from DB.
+    // spec: TRD#deregistration
+    // Every piece of the app's state goes, or none does: a removal that left
+    // some behind would hand it to the next app registered under this name.
     let name_owned = params.app.clone();
     state
         .db
         .call(move |db| {
-            AppRegistry::remove_app(db, &name_owned)
-                .map_err(|e| OiError::new(ErrorCode::NotFound, format!("db remove: {e}")))?;
-            crate::runtime::apps::delete_app_params(db, &name_owned)
-                .map_err(|e| OiError::new(ErrorCode::NotFound, format!("db param cleanup: {e}")))?;
-            // spec: GEN#lineage
-            if let Err(e) = crate::runtime::generations::delete_for_app(db, &name_owned) {
-                tracing::warn!(app = %name_owned, "failed to delete generation history during deregister: {e}");
-            }
-            if let Err(e) = crate::runtime::faults::clear_all_faults_for_app(db, &name_owned) {
-                tracing::warn!(app = %name_owned, "failed to clear faults during deregister: {e}");
-            }
-            // spec: CNR#applications
-            if let Err(e) = crate::runtime::canopy::store::delete_app(db, name_owned.as_str()) {
-                tracing::warn!(app = %name_owned, "failed to forget the Canopy type during deregister: {e}");
-            }
-            if let Err(e) = scaling::delete_scaling_decisions_for_app(db, &name_owned) {
-                tracing::warn!(app = %name_owned, "failed to clean up scaling decisions during deregister: {e}");
-            }
-            // spec: CTL#app-priority
-            if let Err(e) = priority::delete_app_priority_for_app(db, &name_owned) {
-                tracing::warn!(app = %name_owned, "failed to clean up app priority during deregister: {e}");
-            }
-            if let Err(e) = restart_gens::delete_restart_gens_for_app(db, &name_owned) {
-                tracing::warn!(app = %name_owned, "failed to clean up restart generations during deregister: {e}");
-            }
-            if let Err(e) = stopped::delete_stopped_for_app(db, &name_owned) {
-                tracing::warn!(app = %name_owned, "failed to clean up stopped resources during deregister: {e}");
-            }
-            // spec: GC#unscheduled-instances
-            // Once the app leaves the registry, the instance sweep can no
-            // longer tell what it desires, so its rows go now or never.
-            if let Err(e) = crate::runtime::history::delete_instances_for_app(db, &name_owned) {
-                tracing::warn!(app = %name_owned, "failed to clean up resource instances during deregister: {e}");
-            }
-            if let Err(e) = crate::runtime::db::delete_schedules_for_app(db, &name_owned) {
-                tracing::warn!(app = %name_owned, "failed to clean up schedules during deregister: {e}");
-            }
-            // spec: TRD#deregistration
-            // Left behind, these are inherited by the next app registered
-            // under this name — and a volume mapping carries a target and a
-            // read-only flag, so that app would come up already mounting
-            // data an operator granted to a different one.
-            if let Err(e) =
-                crate::runtime::external_volume_mappings::delete_for_app(db, &name_owned)
-            {
-                tracing::warn!(app = %name_owned, "failed to clean up external volume mappings during deregister: {e}");
-            }
-            if let Err(e) =
-                crate::runtime::external_service_mappings::delete_for_app(db, &name_owned)
-            {
-                tracing::warn!(app = %name_owned, "failed to clean up external service mappings during deregister: {e}");
-            }
-            Ok::<_, OiError>(())
-        })?;
+            db.atomically(|db| {
+                AppRegistry::remove_app(db, &name_owned)?;
+                crate::runtime::apps::delete_app_params(db, &name_owned)?;
+                // spec: GEN#lineage
+                crate::runtime::generations::delete_for_app(db, &name_owned)?;
+                // spec: CNR#applications
+                crate::runtime::canopy::store::delete_app(db, name_owned.as_str())?;
+                scaling::delete_scaling_decisions_for_app(db, &name_owned)?;
+                // spec: CTL#app-priority
+                priority::delete_app_priority_for_app(db, &name_owned)?;
+                restart_gens::delete_restart_gens_for_app(db, &name_owned)?;
+                stopped::delete_stopped_for_app(db, &name_owned)?;
+                // spec: GC#unscheduled-instances
+                // Once the app leaves the registry, the instance sweep can no
+                // longer tell what it desires, so its rows go now or never.
+                crate::runtime::history::delete_instances_for_app(db, &name_owned)?;
+                crate::runtime::db::delete_schedules_for_app(db, &name_owned)?;
+                // Left behind, these are inherited by the next app registered
+                // under this name — and a volume mapping carries a target and
+                // a read-only flag, so that app would come up already
+                // mounting data an operator granted to a different one.
+                crate::runtime::external_volume_mappings::delete_for_app(db, &name_owned)?;
+                crate::runtime::external_service_mappings::delete_for_app(db, &name_owned)?;
+                // Last, because clearing announces itself: nothing after it
+                // can roll back what the events have already said.
+                crate::runtime::faults::clear_all_faults_for_app(db, &name_owned)?;
+                Ok(())
+            })
+        })
+        .map_err(|e| OiError::internal(format!("removing the app's state: {e}")))?;
 
     // Remove from in-memory registry.
     state.registry.write().deregister(name);
@@ -2044,7 +2022,7 @@ pub(crate) fn restart_deployment(
     state
         .db
         .call(move |db| restart_gens::bump_restart_gen(db, &name_owned, &deployment_name_owned))
-        .map_err(|e| OiError::new(ErrorCode::ScriptError, format!("db error: {e}")))?;
+        .map_err(|e| OiError::internal(format!("db error: {e}")))?;
 
     entry.tick_notify.notify_one();
 
@@ -2086,10 +2064,10 @@ pub(crate) fn scale_app(state: &OiState, params: ScaleParams, ctx: &RequestCtx) 
     let new_scale_clamped = params.scale.clamp(low, high);
     let (previous_scale, new_scale) = state.db.call(move |db| -> Result<_, OiError> {
         let current = scaling::effective_scale(db, &name_owned, &deployment_name_owned, low, high)
-            .map_err(|e| OiError::new(ErrorCode::ScriptError, format!("db error: {e}")))?;
+            .map_err(|e| OiError::internal(format!("db error: {e}")))?;
         // spec: CTL#scaling
         scaling::save_scaling_decision(db, &name_owned, &deployment_name_owned, new_scale_clamped)
-            .map_err(|e| OiError::new(ErrorCode::ScriptError, format!("db error: {e}")))?;
+            .map_err(|e| OiError::internal(format!("db error: {e}")))?;
         Ok((current, new_scale_clamped))
     })?;
 
@@ -2128,10 +2106,10 @@ pub(crate) fn set_priority(
     let name_owned = params.app.clone();
     let previous = state.db.call(move |db| -> Result<_, OiError> {
         let current = priority::effective_app_priority(db, &name_owned)
-            .map_err(|e| OiError::new(ErrorCode::ScriptError, format!("db error: {e}")))?;
+            .map_err(|e| OiError::internal(format!("db error: {e}")))?;
         // spec: PRIO#priority-setting
         priority::save_app_priority(db, &name_owned, priority)
-            .map_err(|e| OiError::new(ErrorCode::ScriptError, format!("db error: {e}")))?;
+            .map_err(|e| OiError::internal(format!("db error: {e}")))?;
         Ok(current)
     })?;
 
@@ -2215,7 +2193,7 @@ pub(crate) fn stop_resource(
     state
         .db
         .call(move |db| stopped::stop_resource(db, &app_owned, kind, &resource_name_owned))
-        .map_err(|e| OiError::new(ErrorCode::ScriptError, format!("db error: {e}")))?;
+        .map_err(|e| OiError::internal(format!("db error: {e}")))?;
 
     entry.tick_notify.notify_one();
 
@@ -2259,7 +2237,7 @@ pub(crate) fn unstop_resource(
     state
         .db
         .call(move |db| stopped::unstop_resource(db, &app_owned, kind, &resource_name_owned))
-        .map_err(|e| OiError::new(ErrorCode::ScriptError, format!("db error: {e}")))?;
+        .map_err(|e| OiError::internal(format!("db error: {e}")))?;
 
     let ks = kind_str(kind);
     tracing::info!(app = %app, kind = %ks, name = %resource_name, "resource unstopped");
@@ -2297,9 +2275,9 @@ pub(crate) fn unstop_all_resources(
     let app_owned = params.app.clone();
     let stopped_list = state.db.call(move |db| -> Result<_, OiError> {
         let set = stopped::load_stopped(db, &app_owned)
-            .map_err(|e| OiError::new(ErrorCode::ScriptError, format!("db error: {e}")))?;
+            .map_err(|e| OiError::internal(format!("db error: {e}")))?;
         stopped::unstop_all(db, &app_owned)
-            .map_err(|e| OiError::new(ErrorCode::ScriptError, format!("db error: {e}")))?;
+            .map_err(|e| OiError::internal(format!("db error: {e}")))?;
         Ok(set)
     })?;
 

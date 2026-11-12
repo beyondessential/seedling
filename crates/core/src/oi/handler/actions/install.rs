@@ -133,7 +133,7 @@ pub(crate) fn invoke_install(
                             installing,
                         )
                     })
-                    .map_err(|e| OiError::new(ErrorCode::NotFound, format!("db persist: {e}")))?;
+                    .map_err(|e| OiError::internal(format!("db persist: {e}")))?;
             }
         }
         // spec: EVT#event-types

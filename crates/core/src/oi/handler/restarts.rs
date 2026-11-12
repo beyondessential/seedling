@@ -30,7 +30,7 @@ pub(crate) fn list_restarts(state: &OiState, params: ListRestartsParams) -> Hand
     let records = state
         .db
         .call(move |db| restarts::list(db, app.as_ref(), instance.as_deref(), limit))
-        .map_err(|e| OiError::new(ErrorCode::NotFound, format!("db query: {e}")))?;
+        .map_err(|e| OiError::internal(format!("db query: {e}")))?;
 
     // spec: FLTS#restart-records
     let result: Vec<serde_json::Value> = records
@@ -58,7 +58,7 @@ pub(crate) fn get_settings(state: &OiState) -> HandlerResult {
     let s = state
         .db
         .call(restarts::settings)
-        .map_err(|e| OiError::new(ErrorCode::NotFound, format!("db query: {e}")))?;
+        .map_err(|e| OiError::internal(format!("db query: {e}")))?;
     Ok(json!({ "threshold": s.threshold, "window_secs": s.window_secs }))
 }
 

@@ -225,6 +225,62 @@ mod tests {
         assert_eq!(busy["active_operations"], 1, "one operation active");
     }
 
+    // spec: WIRE#error-codes
+    // A failed read is a failure inside the server, never an answer about the
+    // thing asked for.
+    #[test]
+    fn a_failed_database_read_is_internal() {
+        let oi = TestOi::with_app("demo");
+        oi.state.db.call(|db| {
+            db.conn
+                .execute_batch(
+                    "DROP TABLE faults; DROP TABLE authorized_keys; DROP TABLE allowed_registries;
+                     DROP TABLE tls_dns_providers;",
+                )
+                .unwrap();
+        });
+        for (method, params) in [
+            ("/faults/list", json!({})),
+            ("/keys/list", json!({})),
+            ("/registries/list", json!({})),
+            ("/tls/dns-providers/list", json!({})),
+        ] {
+            let (code, _) = oi.call(method, params).unwrap_err();
+            assert_eq!(code, "internal", "{method}");
+        }
+    }
+
+    // spec: IMGM#image-discovery
+    #[test]
+    fn discovery_with_a_proposed_script_that_fails_is_a_script_error() {
+        let oi = TestOi::with_app("demo");
+        let (code, _) = oi
+            .call(
+                "/apps/images/discover",
+                json!({ "app": "demo", "proposed_script": "throw \"broken\";" }),
+            )
+            .unwrap_err();
+        assert_eq!(code, "script_error");
+    }
+
+    // spec: APPS#removal
+    // spec: TRD#deregistration
+    #[test]
+    fn a_removal_that_cannot_discard_the_apps_state_fails_and_keeps_the_app() {
+        let oi = TestOi::with_app("demo");
+        oi.state.db.call(|db| {
+            db.conn
+                .execute_batch("DROP TABLE action_schedules;")
+                .unwrap();
+        });
+        let (code, _) = oi
+            .call("/apps/remove", json!({ "app": "demo" }))
+            .unwrap_err();
+        assert_eq!(code, "internal");
+        oi.call("/apps/show", json!({ "app": "demo" }))
+            .expect("the app is still registered");
+    }
+
     // spec: FWD#stopping-a-forward
     #[test]
     fn stopping_a_forward_names_a_malformed_id_and_a_missing_one_apart() {

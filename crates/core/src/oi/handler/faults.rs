@@ -17,7 +17,7 @@ pub(crate) fn list_faults(state: &OiState, params: ListFaultsParams) -> HandlerR
     let records = state
         .db
         .call(move |db| faults::list_active_faults(db, app.as_ref()))
-        .map_err(|e| OiError::new(ErrorCode::NotFound, format!("db query: {e}")))?;
+        .map_err(|e| OiError::internal(format!("db query: {e}")))?;
     let result: Vec<serde_json::Value> = records
         .into_iter()
         .map(|f| {
