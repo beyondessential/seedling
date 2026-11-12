@@ -16,7 +16,9 @@
 
 use std::collections::BTreeMap;
 
+use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use rhai::{Dynamic, EvalAltResult, FnPtr, Map, NativeCallContext, Position};
+use secrecy::{ExposeSecret, SecretString};
 use seedling_protocol::names::{ActionName, ParamName, SiteVolumeName};
 use serde_json::{Map as JsonMap, Value as JsonValue};
 
@@ -25,6 +27,12 @@ use crate::defs::install::ParamDef;
 use crate::runtime::action_params::{self, ParamValidationError, VolumeLookup};
 use crate::runtime::barrier::runtime::{RuntimeInstance, active_rt, is_in_action_closure};
 use crate::runtime::barrier::{ActionLogEntry, CallKind, ReplayMismatch};
+use crate::runtime::secrets::Cipher;
+
+/// What the journal shows in place of a secret param's value.
+const REDACTED: &str = "<redacted>";
+
+type Schema = BTreeMap<ParamName, ParamDef>;
 
 // spec: ACN#action-invocation
 // spec: OPS#action-composition
@@ -88,19 +96,18 @@ pub fn call_action(
 /// convert the result into a JSON map suitable for the log entry.
 fn validate_call_params(
     rt: &RuntimeInstance,
-    action_name: &ActionName,
+    schema: Option<&Schema>,
     params: Map,
 ) -> Result<JsonMap<String, JsonValue>, Box<EvalAltResult>> {
     let mut json_params = rhai_map_to_json(params)?;
     action_params::reject_reserved_keys(&json_params).map_err(validation_to_eval)?;
 
-    let schema = match action_schema(rt, action_name)? {
-        Some(s) => s,
-        None => return Ok(json_params),
+    let Some(schema) = schema else {
+        return Ok(json_params);
     };
 
-    action_params::apply_schema(&schema, &mut json_params).map_err(validation_to_eval)?;
-    action_params::validate_volume_params(&schema, &json_params, &RtVolumeLookup(rt))
+    action_params::apply_schema(schema, &mut json_params).map_err(validation_to_eval)?;
+    action_params::validate_volume_params(schema, &json_params, &RtVolumeLookup(rt))
         .map_err(validation_to_eval)?;
     Ok(json_params)
 }
@@ -110,7 +117,7 @@ fn validate_call_params(
 fn action_schema(
     rt: &RuntimeInstance,
     action_name: &ActionName,
-) -> Result<Option<BTreeMap<ParamName, ParamDef>>, Box<EvalAltResult>> {
+) -> Result<Option<Schema>, Box<EvalAltResult>> {
     let def_holder =
         crate::runtime::barrier::runtime::action_def().ok_or_else(|| -> Box<EvalAltResult> {
             "Action.invoke: action-def context is missing"
@@ -139,16 +146,20 @@ fn action_schema(
 /// already committed with valid params by then, and the payload exists so
 /// that it can replay with the params it was committed with — which is also
 /// what `OPS#sub-action-parameters` requires the closure to observe.
+///
+/// The entry holds secret params encrypted under the secret key, apart from
+/// the others, and the journal breadcrumb shows them redacted.
 fn resolve_call_params(
     rt: &RuntimeInstance,
     action_name: &ActionName,
     params: Map,
 ) -> Result<JsonMap<String, JsonValue>, Box<EvalAltResult>> {
+    let schema = action_schema(rt, action_name)?;
     let Some(ctx) = rt.ctx.as_ref() else {
         // Stub / language-only context — nothing to record and nothing to
         // recover. Tests that exercise the call surface without a real
         // runtime context still execute the closure inline.
-        return validate_call_params(rt, action_name, params);
+        return validate_call_params(rt, schema.as_ref(), params);
     };
 
     // spec: OPS#sub-action-parameters
@@ -160,23 +171,38 @@ fn resolve_call_params(
         let mut g = ctx.lock();
         match g.replay_step(CallKind::SubAction, None) {
             Ok(Some(entry)) => {
+                let cipher = g.cipher.clone();
                 drop(g);
-                return recover_recorded_params(action_name, &entry);
+                return recover_recorded_params(action_name, &entry, cipher.as_deref());
             }
             Ok(None) => {}
             Err(mismatch) => return Err(Box::<EvalAltResult>::from(mismatch.to_string())),
         }
     }
 
-    let validated = validate_call_params(rt, action_name, params)?;
+    let validated = validate_call_params(rt, schema.as_ref(), params)?;
+
+    let SplitParams {
+        plain,
+        secret,
+        journal,
+    } = split_secret_params(schema.as_ref(), &validated);
 
     let mut g = ctx.lock();
     let idx = g.call_index;
-    let payload = serde_json::json!({
+    let mut payload = serde_json::json!({
         "action": action_name.as_str(),
-        "params": &validated,
-    })
-    .to_string();
+        "params": &plain,
+    });
+    if !secret.is_empty() {
+        let cipher = g.cipher.clone().ok_or_else(|| -> Box<EvalAltResult> {
+            "Action.invoke: no secret key to protect the call's secret params"
+                .to_string()
+                .into()
+        })?;
+        payload["secret_params"] = JsonValue::String(seal_secret_params(&cipher, &secret)?);
+    }
+    let payload = payload.to_string();
     g.pending.push(ActionLogEntry {
         call_index: idx,
         call_kind: CallKind::SubAction,
@@ -192,7 +218,7 @@ fn resolve_call_params(
         )),
         kind: crate::system::breadcrumb::BreadcrumbKind::SubAction {
             name: action_name,
-            params: &validated,
+            params: &journal,
         },
         script_pos: None,
     }
@@ -206,6 +232,7 @@ fn resolve_call_params(
 fn recover_recorded_params(
     action_name: &ActionName,
     entry: &ActionLogEntry,
+    cipher: Option<&Cipher>,
 ) -> Result<JsonMap<String, JsonValue>, Box<EvalAltResult>> {
     let payload: JsonValue = entry
         .extra
@@ -244,22 +271,117 @@ fn recover_recorded_params(
         .into());
     }
 
-    match payload.get("params") {
-        Some(JsonValue::Object(params)) => Ok(params.clone()),
+    let mut params = match payload.get("params") {
+        Some(JsonValue::Object(params)) => params.clone(),
         // A call committed with no params is a call with no params.
-        None | Some(JsonValue::Null) => Ok(JsonMap::new()),
-        Some(other) => Err(format!(
-            "replay diverged at call {}: the log records sub-action params that are not a \
-             map but a {}",
-            entry.call_index,
-            match other {
-                JsonValue::Array(_) => "list",
-                JsonValue::String(_) => "string",
-                JsonValue::Bool(_) => "boolean",
-                _ => "number",
-            }
-        )
-        .into()),
+        None | Some(JsonValue::Null) => JsonMap::new(),
+        Some(other) => {
+            return Err(format!(
+                "replay diverged at call {}: the log records sub-action params that are not a \
+                 map but a {}",
+                entry.call_index,
+                match other {
+                    JsonValue::Array(_) => "list",
+                    JsonValue::String(_) => "string",
+                    JsonValue::Bool(_) => "boolean",
+                    _ => "number",
+                }
+            )
+            .into());
+        }
+    };
+
+    // spec: SEC#storage
+    match payload.get("secret_params") {
+        None => {}
+        Some(JsonValue::String(sealed)) => {
+            let cipher = cipher.ok_or_else(|| -> Box<EvalAltResult> {
+                format!(
+                    "replay diverged at call {}: the log records secret sub-action params and \
+                     there is no secret key to read them",
+                    entry.call_index
+                )
+                .into()
+            })?;
+            params.extend(open_secret_params(cipher, sealed).map_err(
+                |e| -> Box<EvalAltResult> {
+                    format!(
+                        "replay diverged at call {}: the log records secret sub-action params \
+                         that cannot be read ({e})",
+                        entry.call_index
+                    )
+                    .into()
+                },
+            )?);
+        }
+        Some(_) => {
+            return Err(format!(
+                "replay diverged at call {}: the log records secret sub-action params that are \
+                 not sealed",
+                entry.call_index
+            )
+            .into());
+        }
+    }
+    Ok(params)
+}
+
+/// A call's validated params, divided for recording.
+struct SplitParams {
+    /// The params recorded readable in the log entry.
+    plain: JsonMap<String, JsonValue>,
+    /// The secret params, recorded encrypted.
+    secret: JsonMap<String, JsonValue>,
+    /// Every param, with each secret one's value redacted, for the journal.
+    journal: JsonMap<String, JsonValue>,
+}
+
+// spec: SEC#storage
+// spec: SEC#redaction
+fn split_secret_params(
+    schema: Option<&Schema>,
+    validated: &JsonMap<String, JsonValue>,
+) -> SplitParams {
+    let mut plain = validated.clone();
+    let mut secret = JsonMap::new();
+    let mut journal = validated.clone();
+    for (name, _) in schema
+        .into_iter()
+        .flatten()
+        .filter(|(_, def)| def.is_secret())
+    {
+        if let Some(value) = plain.remove(name.as_str()) {
+            secret.insert(name.as_str().to_owned(), value);
+            journal.insert(name.as_str().to_owned(), JsonValue::from(REDACTED));
+        }
+    }
+    SplitParams {
+        plain,
+        secret,
+        journal,
+    }
+}
+
+// spec: SEC#storage
+fn seal_secret_params(
+    cipher: &Cipher,
+    secret: &JsonMap<String, JsonValue>,
+) -> Result<String, Box<EvalAltResult>> {
+    let plaintext = SecretString::new(JsonValue::Object(secret.clone()).to_string().into());
+    let sealed = cipher
+        .encrypt(&plaintext)
+        .map_err(|e| -> Box<EvalAltResult> {
+            format!("Action.invoke: could not protect the call's secret params: {e}").into()
+        })?;
+    Ok(BASE64.encode(sealed))
+}
+
+fn open_secret_params(cipher: &Cipher, sealed: &str) -> Result<JsonMap<String, JsonValue>, String> {
+    let ciphertext = BASE64.decode(sealed).map_err(|e| e.to_string())?;
+    let plaintext = cipher.decrypt(&ciphertext).map_err(|e| e.to_string())?;
+    match serde_json::from_str(plaintext.expose_secret()).map_err(|e| e.to_string())? {
+        JsonValue::Object(map) => Ok(map),
+        _ => Err("not a map".to_owned()),
     }
 }
 
@@ -351,5 +473,36 @@ impl VolumeLookup for RtVolumeLookup<'_> {
         let name = name.clone();
         db.call(move |db| crate::runtime::site_volumes::get(db, &name).ok().flatten())
             .is_some()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // spec: SEC#redaction
+    #[test]
+    fn journal_shows_secret_params_redacted() {
+        let def = |secret| ParamDef {
+            kind: crate::defs::install::ParamKind::Text,
+            required: false,
+            default_value: None,
+            description: None,
+            secret,
+        };
+        let mut schema = Schema::new();
+        schema.insert(ParamName::new_unchecked("token"), def(Some(true)));
+        schema.insert(ParamName::new_unchecked("label"), def(None));
+        let validated: JsonMap<String, JsonValue> = serde_json::from_value(serde_json::json!({
+            "token": "s3cret-value",
+            "label": "plain-label",
+        }))
+        .unwrap();
+
+        let split = split_secret_params(Some(&schema), &validated);
+        assert_eq!(split.journal["token"], REDACTED);
+        assert_eq!(split.journal["label"], "plain-label");
+        assert_eq!(split.secret["token"], "s3cret-value");
+        assert!(!split.plain.contains_key("token"));
     }
 }

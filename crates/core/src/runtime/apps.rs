@@ -26,7 +26,9 @@ mod registry_faults;
 pub mod secret_params;
 pub mod status;
 
-pub use params::{delete_app_params, delete_one_param, sync_script_error_fault, upsert_param};
+pub use params::{
+    delete_app_params, delete_one_param, load_params_for_app, sync_script_error_fault, upsert_param,
+};
 pub use registry_faults::sync_registry_faults;
 
 #[derive(Debug)]

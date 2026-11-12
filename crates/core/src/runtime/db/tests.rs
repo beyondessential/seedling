@@ -101,6 +101,31 @@ fn open_creates_database_with_owner_only_permissions() {
     let _db = Db::open(&path).expect("open db");
     let mode = path.metadata().unwrap().permissions().mode() & 0o777;
     assert_eq!(mode, 0o600, "db file should be 0600, got 0{mode:o}");
+    for side in ["seedling.db-wal", "seedling.db-shm"] {
+        let mode = dir
+            .path()
+            .join(side)
+            .metadata()
+            .unwrap()
+            .permissions()
+            .mode()
+            & 0o777;
+        assert_eq!(mode, 0o600, "{side} should be 0600, got 0{mode:o}");
+    }
+}
+
+// spec: INFRA#file-permissions
+#[test]
+fn open_does_not_create_the_database_through_a_planted_symlink() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("seedling.db");
+    let target = dir.path().join("elsewhere.db");
+    std::os::unix::fs::symlink(&target, &path).unwrap();
+    assert!(Db::open(&path).is_err());
+    assert!(
+        !target.exists(),
+        "the database must not be created through the link"
+    );
 }
 
 // spec: INFRA#file-permissions

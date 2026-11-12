@@ -400,6 +400,7 @@ async fn start_app_shell(
     let result_slot_for_task = Arc::clone(&result_slot);
     let db_for_task = state.db.clone();
     let script_limits = state.script_limits.clone();
+    let cipher = Arc::clone(&state.cipher);
     let operation_id = OperationId::new();
     let op_id_for_log = operation_id.clone();
     let app_name_for_task = app_name.clone();
@@ -471,7 +472,7 @@ async fn start_app_shell(
                     source_generation: 0,
                     target_generation: 0,
                     script_limits: None,
-                    cipher: None,
+                    cipher: Some(Arc::clone(&cipher)),
                     operation_volume_bindings: std::collections::HashMap::new(),
                     // Shell sessions don't participate in operator-initiated
                     // cancellation; the token fires only when the session is

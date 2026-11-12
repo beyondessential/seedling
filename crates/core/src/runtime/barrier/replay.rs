@@ -356,6 +356,8 @@ pub fn run_operation<W: WorldStateOracle + 'static>(
     ctx.lock().volume_writer = volume_writer;
     // spec: RT#command-execution
     ctx.lock().executor = executor;
+    // spec: SEC#storage
+    ctx.lock().cipher = cipher.clone();
 
     // Clear the thread-local barrier-hit flag at the start of each pass.
     clear_barrier_hit();

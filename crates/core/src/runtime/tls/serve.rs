@@ -357,8 +357,8 @@ pub fn load_or_create_token(path: &Path) -> std::io::Result<String> {
     let mut bytes = [0u8; 32];
     rng().fill_bytes(&mut bytes);
     let token = hex_encode(&bytes);
-    std::fs::write(path, &token)?;
-    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))?;
+    // spec: INFRA#file-permissions
+    seedling_protocol::keys::write_new_private_file(path, token.as_bytes())?;
     Ok(token)
 }
 
@@ -610,6 +610,20 @@ mod tests {
         assert_eq!(t1.len(), 64, "32-byte hex token");
         let perms = path.metadata().unwrap().permissions();
         assert_eq!(perms.mode() & 0o777, 0o600);
+    }
+
+    // spec: INFRA#file-permissions
+    #[test]
+    fn token_creation_does_not_follow_a_planted_symlink() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("cert-endpoint-token");
+        let target = dir.path().join("elsewhere");
+        std::os::unix::fs::symlink(&target, &path).unwrap();
+        assert!(load_or_create_token(&path).is_err());
+        assert!(
+            !target.exists(),
+            "the token must not be written through the link"
+        );
     }
 
     #[tokio::test]

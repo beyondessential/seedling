@@ -292,6 +292,11 @@ pub struct ReplayContext {
     /// test / stub contexts where no real container runtime is present.
     // spec: RT#command-execution
     pub executor: Option<Arc<dyn Executor>>,
+    /// Cipher protecting secret values the action execution log records.
+    /// `None` in test / stub contexts, where a call that would record a
+    /// secret value fails rather than recording it in the clear.
+    // spec: SEC#storage
+    pub cipher: Option<Arc<crate::runtime::secrets::Cipher>>,
 }
 
 /// Synchronous side-effect handle the BSL `rt.signal` call uses to actually
@@ -399,6 +404,7 @@ impl ReplayContext {
             container_signaler: None,
             volume_writer: None,
             executor: None,
+            cipher: None,
         }
     }
 

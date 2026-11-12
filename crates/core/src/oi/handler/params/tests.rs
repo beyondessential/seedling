@@ -105,6 +105,33 @@ fn set_undeclared_param_is_stored_as_unknown() {
     assert_eq!(unknown[0]["value"], "42");
 }
 
+// spec: SEC#redaction
+// spec: APPS#parameters
+#[test]
+fn unknown_param_held_in_secret_storage_is_not_returned() {
+    let oi = oi_with_params_app();
+    let cipher = std::sync::Arc::clone(&oi.state.cipher);
+    oi.state.db.call(move |db| {
+        crate::runtime::apps::secret_params::upsert_secret_param(
+            db,
+            &cipher,
+            &seedling_protocol::names::AppName::new_unchecked("demo"),
+            &seedling_protocol::names::ParamName::new_unchecked("retired-token"),
+            &secrecy::SecretString::new("hunter2hunter2".into()),
+        )
+        .unwrap();
+    });
+
+    let desc = oi.call("/apps/show", json!({ "app": "demo" })).unwrap();
+    let unknown = desc["unknown_params"].as_array().unwrap();
+    let retired = unknown
+        .iter()
+        .find(|p| p["name"] == "retired-token")
+        .expect("the stored secret is listed as unknown");
+    assert!(retired["value"].is_null());
+    assert!(!desc.to_string().contains("hunter2hunter2"));
+}
+
 // spec: PRM#parameter-unset
 #[test]
 fn unset_param_removes_value_and_bumps_generation() {

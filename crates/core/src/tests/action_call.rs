@@ -363,11 +363,16 @@ fn indirect_cycle_detection_walks_the_full_stack() {
     );
 }
 
-// spec: ACN#action-invocation
-// spec: HIST#action-calls
-#[test]
-fn sub_action_invoked_log_entry_records_validated_params() {
-    use crate::runtime::barrier::CallKind;
+/// Run the `outer` action of `source` against a real `ReplayContext` holding
+/// `committed`, and return its result and the log entries it pushed.
+fn run_outer_in_replay_context(
+    source: &str,
+    committed: Vec<crate::runtime::barrier::ActionLogEntry>,
+    cipher: Option<Arc<crate::runtime::secrets::Cipher>>,
+) -> (
+    Result<(), Box<rhai::EvalAltResult>>,
+    Vec<crate::runtime::barrier::ActionLogEntry>,
+) {
     use crate::runtime::barrier::ReplayContext;
     use crate::runtime::barrier::oracle::WorldStateOracle;
     use crate::runtime::registry::EphemeralInstanceRegistry;
@@ -386,12 +391,14 @@ fn sub_action_invoked_log_entry_records_validated_params() {
     }
 
     let cancel = Arc::new(crate::runtime::barrier::CancelToken::new());
-    let ctx = Arc::new(parking_lot::Mutex::new(ReplayContext::new(
+    let mut replay = ReplayContext::new(
         crate::runtime::barrier::OperationId("test-op".into()),
-        Vec::new(),
+        committed,
         Arc::new(AlwaysReadyOracle),
         cancel,
-    )));
+    );
+    replay.cipher = cipher;
+    let ctx = Arc::new(parking_lot::Mutex::new(replay));
     let rt = RuntimeInstance::with_context(
         Arc::clone(&ctx),
         seedling_protocol::names::AppName::new_unchecked("testapp"),
@@ -400,16 +407,6 @@ fn sub_action_invoked_log_entry_records_validated_params() {
     );
 
     let (engine, mut scope, _) = setup(&crate::ScriptLimits::default());
-    let source = r#"
-        app.on_action("inner", |rt, p| {}, #{
-            params: #{
-                "count": #{ kind: "text", default_value: "7" },
-            },
-        });
-        app.on_action("outer", |rt, _p| {
-            app.action("inner").invoke();
-        });
-    "#;
     let ast = engine.compile(source).expect("script must compile");
     engine
         .run_ast_with_scope(&mut scope, &ast)
@@ -434,18 +431,97 @@ fn sub_action_invoked_log_entry_records_validated_params() {
             .compile("__bsl_closure.call(__bsl_rt, __bsl_param)")
             .expect("call ast must compile");
         let merged = ast.merge(&call_ast);
-        engine.eval_ast_with_scope::<Dynamic>(&mut scope, &merged)
+        engine
+            .eval_ast_with_scope::<Dynamic>(&mut scope, &merged)
+            .map(|_| ())
     });
-    let _ = result.expect("outer must run");
-
     let pending = ctx.lock().take_pending();
-    let sub = pending
+    (result, pending)
+}
+
+fn sub_action_payload(entries: &[crate::runtime::barrier::ActionLogEntry]) -> String {
+    entries
         .iter()
-        .find(|e| matches!(e.call_kind, CallKind::SubAction))
-        .expect("SubActionInvoked entry must be recorded");
-    let extra = sub.extra.as_ref().expect("SubAction must carry payload");
+        .find(|e| matches!(e.call_kind, crate::runtime::barrier::CallKind::SubAction))
+        .expect("SubActionInvoked entry must be recorded")
+        .extra
+        .clone()
+        .expect("SubAction must carry payload")
+}
+
+// spec: ACN#action-invocation
+// spec: HIST#action-calls
+#[test]
+fn sub_action_invoked_log_entry_records_validated_params() {
+    let source = r#"
+        app.on_action("inner", |rt, p| {}, #{
+            params: #{
+                "count": #{ kind: "text", default_value: "7" },
+            },
+        });
+        app.on_action("outer", |rt, _p| {
+            app.action("inner").invoke();
+        });
+    "#;
+    let (result, pending) = run_outer_in_replay_context(source, Vec::new(), None);
+    result.expect("outer must run");
+    let extra = sub_action_payload(&pending);
     assert!(
         extra.contains("inner") && extra.contains(r#""count":"7""#),
         "payload should name the action and the validated params, got: {extra}"
     );
+}
+
+const SECRET_SUB_ACTION_SCRIPT: &str = r#"
+    app.on_action("inner", |rt, p| {
+        if p.token != "s3cret-value" { throw "inner saw the wrong token"; }
+    }, #{
+        params: #{
+            "token": #{ kind: "text", secret: true },
+            "label": #{ kind: "text" },
+        },
+    });
+    app.on_action("outer", |rt, _p| {
+        app.action("inner").invoke(#{ token: TOKEN, label: "plain-label" });
+    });
+"#;
+
+// spec: SEC#storage
+// spec: HIST#action-calls
+#[test]
+fn sub_action_log_entry_protects_secret_params_and_replays_them() {
+    let cipher = Arc::new(crate::runtime::secrets::Cipher::for_tests());
+    let first = SECRET_SUB_ACTION_SCRIPT.replace("TOKEN", r#""s3cret-value""#);
+    let (result, pending) =
+        run_outer_in_replay_context(&first, Vec::new(), Some(Arc::clone(&cipher)));
+    result.expect("outer must run");
+    let extra = sub_action_payload(&pending);
+    assert!(
+        !extra.contains("s3cret-value"),
+        "the secret must not be recorded in the clear: {extra}"
+    );
+    assert!(
+        extra.contains("plain-label"),
+        "non-secret params stay readable: {extra}"
+    );
+
+    // spec: OPS#sub-action-parameters
+    // Replay takes the params from the committed entry, so the closure sees
+    // the recorded secret even though the script now supplies another.
+    let second = SECRET_SUB_ACTION_SCRIPT.replace("TOKEN", r#""changed""#);
+    let (result, _) = run_outer_in_replay_context(&second, pending, Some(cipher));
+    result.expect("replay must recover the recorded secret");
+}
+
+// spec: SEC#storage
+#[test]
+fn sub_action_with_secret_params_fails_without_a_secret_key() {
+    let source = SECRET_SUB_ACTION_SCRIPT.replace("TOKEN", r#""s3cret-value""#);
+    let (result, pending) = run_outer_in_replay_context(&source, Vec::new(), None);
+    assert!(result.is_err(), "a secret must not be recorded unprotected");
+    assert!(pending.iter().all(|e| {
+        e.extra
+            .as_deref()
+            .is_none_or(|x| !x.contains("s3cret-value"))
+    }));
 }

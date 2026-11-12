@@ -67,8 +67,8 @@ impl Cipher {
         }
 
         let key = aead::SecretKey::default();
-        std::fs::write(path, key.unprotected_as_bytes())?;
-        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))?;
+        // spec: INFRA#file-permissions
+        seedling_protocol::keys::write_new_private_file(path, key.unprotected_as_bytes())?;
         Ok(Self { key })
     }
 
@@ -135,6 +135,20 @@ mod tests {
         Cipher::load_or_create(&path).expect("create");
         let mode = path.metadata().unwrap().permissions().mode() & 0o777;
         assert_eq!(mode, 0o600, "key file must be 0600");
+    }
+
+    // spec: INFRA#file-permissions
+    #[test]
+    fn keyfile_creation_does_not_follow_a_planted_symlink() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("test.key");
+        let target = dir.path().join("elsewhere");
+        std::os::unix::fs::symlink(&target, &path).unwrap();
+        assert!(Cipher::load_or_create(&path).is_err());
+        assert!(
+            !target.exists(),
+            "the key must not be written through the link"
+        );
     }
 
     #[test]

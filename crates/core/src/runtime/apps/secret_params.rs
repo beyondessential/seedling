@@ -35,6 +35,20 @@ pub fn load_secret_params_for_app(
     Ok(map)
 }
 
+/// The names of this app's parameters held in secret storage, read without
+/// decrypting their values.
+// spec: SEC#redaction
+pub fn secret_param_names(
+    db: &Db,
+    app_name: &AppName,
+) -> rusqlite::Result<std::collections::BTreeSet<String>> {
+    let mut stmt = db
+        .conn
+        .prepare("SELECT param_name FROM secret_params WHERE app_name = ?1")?;
+    stmt.query_map([app_name], |row| row.get::<_, String>(0))?
+        .collect()
+}
+
 /// Whether this app's parameter is currently held in secret storage.
 ///
 /// A definition can stop marking a parameter secret without the value it

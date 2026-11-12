@@ -509,18 +509,17 @@ impl Db {
                 )
                 .into());
             }
+        } else {
+            // SQLite creates the journal, WAL and shared-memory files with
+            // the database file's own mode, so creating it owner-only here
+            // makes them owner-only from creation too.
+            seedling_protocol::keys::write_new_private_file(path, &[])?;
         }
 
         let conn = Connection::open(path)?;
 
         // spec: INFRA#database
         conn.busy_timeout(Duration::from_secs(5))?;
-
-        if let Ok(meta) = path.metadata()
-            && meta.permissions().mode() & 0o777 != 0o600
-        {
-            std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))?;
-        }
 
         conn.execute_batch("PRAGMA journal_mode=WAL;")?;
         // Foreign keys are a connection-scoped pragma in SQLite and are off

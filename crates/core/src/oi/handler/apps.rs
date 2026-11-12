@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use seedling_protocol::error::{ErrorCode, OiError};
@@ -532,14 +533,19 @@ pub(crate) fn describe_app(state: &OiState, params: AppParams) -> HandlerResult 
 
     let status = app_status::of(entry, active.as_ref(), &state.db);
 
-    // Load stored param values from DB (both plaintext and secret tables).
-    // Names come from AppDef; values come from the params/secret_params tables.
-    // Params declared by the script but never set by the operator are shown as null.
+    // Names come from AppDef; values come from the params table. A value in
+    // secret storage is never returned, so only its name is read.
+    // spec: SEC#redaction
     let name_owned = params.app.clone();
-    let cipher = std::sync::Arc::clone(&state.cipher);
-    let stored_params = state
+    let (plain_params, secret_param_names) = state
         .db
-        .call(move |db| crate::runtime::apps::load_all_params_for_app(db, &cipher, &name_owned));
+        .call(move |db| {
+            Ok::<_, rusqlite::Error>((
+                crate::runtime::apps::load_params_for_app(db, &name_owned)?,
+                crate::runtime::apps::secret_params::secret_param_names(db, &name_owned)?,
+            ))
+        })
+        .map_err(|e| OiError::new(ErrorCode::Internal, format!("failed to read params: {e}")))?;
 
     // Fetch all active faults for this app once, then split by level.
     let name_owned = params.app.clone();
@@ -582,11 +588,12 @@ pub(crate) fn describe_app(state: &OiState, params: AppParams) -> HandlerResult 
         .iter()
         .map(|(k, schema)| {
             let mut obj = param_schema_entry_json(k.as_str(), schema);
-            let is_set = stored_params.contains_key(k.as_str());
+            let is_set =
+                plain_params.contains_key(k.as_str()) || secret_param_names.contains(k.as_str());
             let value = if schema.is_secret() {
                 Value::Null
             } else {
-                stored_params
+                plain_params
                     .get(k.as_str())
                     .map(|v| Value::String(v.clone()))
                     .unwrap_or(Value::Null)
@@ -599,9 +606,14 @@ pub(crate) fn describe_app(state: &OiState, params: AppParams) -> HandlerResult 
 
     // spec: APPS#description — params stored in the DB that the current script does
     // not reference; shown for operator awareness only.
-    let unknown_params_json: Vec<Value> = stored_params
+    // spec: SEC#redaction
+    let unknown_params_json: Vec<Value> = plain_params
         .iter()
+        .map(|(k, v)| (k, Value::String(v.clone())))
+        .chain(secret_param_names.iter().map(|k| (k, Value::Null)))
         .filter(|(k, _)| !def.params.contains_key(k.as_str()))
+        .collect::<BTreeMap<_, _>>()
+        .into_iter()
         .map(|(k, v)| json!({ "name": k, "value": v }))
         .collect();
 
