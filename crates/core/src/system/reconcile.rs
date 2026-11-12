@@ -973,8 +973,8 @@ impl Reconciler {
                     let dep_def = deployment.def.lock();
                     Some((
                         id.name.as_str().to_owned(),
-                        dep_def.scale.start,
-                        dep_def.scale.end,
+                        *dep_def.scale.start(),
+                        *dep_def.scale.end(),
                     ))
                 } else {
                     None
@@ -1789,7 +1789,7 @@ impl Reconciler {
                     continue;
                 };
                 let dep_def = dep.def.lock();
-                let scale = (dep_def.scale.start, dep_def.scale.end);
+                let scale = (*dep_def.scale.start(), *dep_def.scale.end());
                 let pod_def = dep_def.pod.lock();
                 let container = pod_def.container.lock();
                 let healthcheck = container.healthcheck.as_ref().map(|hc| {

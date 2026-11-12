@@ -1509,7 +1509,7 @@ fn an_action_addresses_every_replica_the_deployment_is_scaled_to() {
         r#"
         let web = app.deployment("web")
             .image("docker.io/library/nginx:latest")
-            .scale(2..10);
+            .scale(2..=10);
         app.on_start(|rt, _param| {
             rt.start(app.deployment("web")).ready();
         });

@@ -126,7 +126,7 @@ app.deployment("worker")
     .tcp(5432, db_svc.port(5432))     // expose pod port to TCP service
     .udp(5353, dns_svc)
     .scale(2)                         // fixed replicas (Deployment only)
-    .scale(1..8)                      // scalable range (Deployment only)
+    .scale(1..=8)                     // scalable range (Deployment only)
     .on_update(OnUpdate.Rolling)      // default; or OnUpdate.Replace
     .priority(Priority.Critical)      // claim on host resources (Deployment only)
     .on_exit(OnExit.Restart)          // default for Deployment; Terminate for Job
@@ -282,7 +282,7 @@ let data = app.volume("data").exported(#{ description: "Application data" });
 // A deployment is a long-running container workload.
 app.deployment("api")
     .image(image.call())
-    .scale(1..4)
+    .scale(1..=4)
     .mount("/data", data)
     .http(8080, web_svc.route("/api"))
     .http(8080, web_svc.route("/"));

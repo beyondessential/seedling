@@ -707,7 +707,7 @@ impl RuntimeInstance {
             // on serving.
             let scale = {
                 let def = dep.def.lock();
-                (def.scale.start, def.scale.end)
+                (*def.scale.start(), *def.scale.end())
             };
             let scale = self.effective_scale(&dep.name, scale.0, scale.1)?;
             // spec: GC#instances-started-by-actions
@@ -2042,10 +2042,10 @@ fn resolve_exec_target(
             return Err("rt.exec: anonymous deployments must be passed via the Started returned by rt.start, not directly".into());
         }
         let scale = dep.def.lock().scale.clone();
-        if scale.end > 1 {
+        if *scale.end() > 1 {
             return Err(format!(
                 "rt.exec: deployment '{}' has scale upper bound {}; rt.exec requires scale 1 (so the target is unambiguous)",
-                dep.name, scale.end
+                dep.name, *scale.end()
             )
             .into());
         }

@@ -167,7 +167,7 @@ fn rt_exec_rejects_scale_range_with_upper_above_one() {
         r#"
         let api = app.deployment("api")
             .image("docker.io/library/busybox:latest")
-            .scale(1..3);
+            .scale(1..=3);
         app.on_action("nope", |rt, _param| {
             rt.exec(api, ["echo", "hi"]);
         });
@@ -197,7 +197,7 @@ fn rt_exec_accepts_zero_to_one_range() {
         r#"
         let api = app.deployment("api")
             .image("docker.io/library/busybox:latest")
-            .scale(0..1);
+            .scale(0..=1);
         app.on_action("ping", |rt, _param| {
             rt.exec(api, ["echo", "hi"]);
         });

@@ -23,10 +23,13 @@ fn app_name(s: &str) -> AppName {
 // -----------------------------------------------------------------------
 
 fn make_deployment(name: &str) -> (ResourceId, Resource) {
-    make_deployment_with_scale(name, 1..1)
+    make_deployment_with_scale(name, 1..=1)
 }
 
-fn make_deployment_with_scale(name: &str, scale: std::ops::Range<u16>) -> (ResourceId, Resource) {
+fn make_deployment_with_scale(
+    name: &str,
+    scale: std::ops::RangeInclusive<u16>,
+) -> (ResourceId, Resource) {
     let rname = Arc::new(name.to_owned());
     let id = ResourceId {
         kind: ResourceKind::Deployment,
@@ -53,7 +56,7 @@ fn make_app_def(names: &[&str]) -> AppDef {
     def
 }
 
-fn make_app_def_scaled(entries: &[(&str, std::ops::Range<u16>)]) -> AppDef {
+fn make_app_def_scaled(entries: &[(&str, std::ops::RangeInclusive<u16>)]) -> AppDef {
     let mut def = AppDef::default();
     for &(name, ref scale) in entries {
         let (id, resource) = make_deployment_with_scale(name, scale.clone());
@@ -83,8 +86,8 @@ fn default_effective_scales(app_def: &AppDef) -> EffectiveScales {
     for (id, resource) in &app_def.resources {
         if let Resource::Deployment(deployment) = resource {
             let dep_def = deployment.def.lock();
-            let low = dep_def.scale.start;
-            let high = dep_def.scale.end;
+            let low = *dep_def.scale.start();
+            let high = *dep_def.scale.end();
             scales.insert(id.name.as_str().to_owned(), (low, high, low));
         }
     }
@@ -489,7 +492,7 @@ fn definition_field_is_populated_from_app_def() {
 // spec: AUTO#scale
 #[test]
 fn scaled_deployment_produces_multiple_instances() {
-    let app_def = make_app_def_scaled(&[("web", 1..3)]);
+    let app_def = make_app_def_scaled(&[("web", 1..=3)]);
     let registry = EphemeralInstanceRegistry::new();
     let scales = custom_effective_scales(&[("web", 1, 3, 3)]);
     let state = compute(
@@ -519,7 +522,7 @@ fn scaled_deployment_produces_multiple_instances() {
 // spec: AUTO#scale
 #[test]
 fn scaled_deployment_effective_less_than_existing_marks_excess_unscheduled() {
-    let app_def = make_app_def_scaled(&[("web", 1..5)]);
+    let app_def = make_app_def_scaled(&[("web", 1..=5)]);
     let registry = EphemeralInstanceRegistry::new();
 
     // First, create 4 instances.
@@ -592,7 +595,7 @@ fn fixed_scale_one_uses_scaled_instance() {
 // spec: AUTO#scale
 #[test]
 fn fixed_scale_two_uses_scaled_instances() {
-    let app_def = make_app_def_scaled(&[("web", 2..2)]);
+    let app_def = make_app_def_scaled(&[("web", 2..=2)]);
     let registry = EphemeralInstanceRegistry::new();
     let scales = custom_effective_scales(&[("web", 2, 2, 2)]);
     let state = compute(
@@ -618,7 +621,7 @@ fn fixed_scale_two_uses_scaled_instances() {
 // spec: AUTO#scale
 #[test]
 fn scale_zero_lower_bound_starts_with_zero_instances() {
-    let app_def = make_app_def_scaled(&[("web", 0..3)]);
+    let app_def = make_app_def_scaled(&[("web", 0..=3)]);
     let registry = EphemeralInstanceRegistry::new();
     let scales = custom_effective_scales(&[("web", 0, 3, 0)]);
     let state = compute(
@@ -646,7 +649,7 @@ fn scale_zero_lower_bound_starts_with_zero_instances() {
 // spec: AUTO#scale
 #[test]
 fn scaled_instances_have_distinct_ids() {
-    let app_def = make_app_def_scaled(&[("web", 1..5)]);
+    let app_def = make_app_def_scaled(&[("web", 1..=5)]);
     let registry = EphemeralInstanceRegistry::new();
     let scales = custom_effective_scales(&[("web", 1, 5, 3)]);
     let state = compute(
@@ -667,7 +670,7 @@ fn scaled_instances_have_distinct_ids() {
 // spec: AUTO#scale
 #[test]
 fn scaled_instances_are_stable_across_recomputes() {
-    let app_def = make_app_def_scaled(&[("web", 1..5)]);
+    let app_def = make_app_def_scaled(&[("web", 1..=5)]);
     let registry = EphemeralInstanceRegistry::new();
     let scales = custom_effective_scales(&[("web", 1, 5, 3)]);
 
@@ -712,7 +715,7 @@ fn scaled_instances_are_stable_across_recomputes() {
 // spec: AUTO#scale
 #[test]
 fn scale_up_preserves_existing_instances() {
-    let app_def = make_app_def_scaled(&[("web", 1..5)]);
+    let app_def = make_app_def_scaled(&[("web", 1..=5)]);
     let registry = EphemeralInstanceRegistry::new();
 
     // Start with 2.
@@ -767,7 +770,7 @@ fn scale_up_preserves_existing_instances() {
 fn mixed_fixed_and_scalable_deployments() {
     let mut def = AppDef::default();
     let (id1, res1) = make_deployment("fixed-dep");
-    let (id2, res2) = make_deployment_with_scale("scalable-dep", 1..3);
+    let (id2, res2) = make_deployment_with_scale("scalable-dep", 1..=3);
     def.resources.insert(id1, res1);
     def.resources.insert(id2, res2);
 
@@ -868,7 +871,7 @@ fn singleton_to_scaled_transition_marks_old_singleton_excess() {
 // spec: AUTO#scale
 #[test]
 fn uninstall_tears_down_all_scaled_instances() {
-    let app_def = make_app_def_scaled(&[("web", 1..5)]);
+    let app_def = make_app_def_scaled(&[("web", 1..=5)]);
     let registry = EphemeralInstanceRegistry::new();
 
     // Create 3 scaled instances via steady-state compute.
@@ -941,7 +944,7 @@ fn stopped_singleton_resource_is_desired_at_unscheduled() {
 // spec: CTL#resource-stop
 #[test]
 fn stopped_deployment_scales_to_zero_unscheduling_existing_instances() {
-    let app_def = make_app_def_scaled(&[("web", 1..5)]);
+    let app_def = make_app_def_scaled(&[("web", 1..=5)]);
     let registry = EphemeralInstanceRegistry::new();
     let scales = custom_effective_scales(&[("web", 1, 5, 2)]);
 

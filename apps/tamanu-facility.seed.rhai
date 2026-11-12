@@ -255,7 +255,7 @@ let configure_server = |c| c
 configure_server.call(app.deployment("api")
     .description("Tamanu facility API workers serving /api and /v1")
     .image(server_image.call())
-    .scale(1..api_max_replicas.call())
+    .scale(1..=api_max_replicas.call())
     .arg(["startApi"])
     .http(3000, web_svc.route("/api"))
     .http(3000, web_svc.route("/v1"))

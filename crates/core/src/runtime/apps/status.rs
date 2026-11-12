@@ -194,7 +194,7 @@ fn declared(entry: &AppEntry) -> Vec<Declared> {
             let scale_bounds = match resource {
                 Resource::Deployment(d) => {
                     let scale = &d.def.lock().scale;
-                    Some((scale.start, scale.end))
+                    Some((*scale.start(), *scale.end()))
                 }
                 _ => None,
             };

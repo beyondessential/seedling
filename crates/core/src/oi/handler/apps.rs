@@ -1847,7 +1847,7 @@ pub(crate) fn update_app(state: &OiState, params: UpdateParams, ctx: &RequestCtx
                         let dep_def = deployment.def.lock();
                         Some((
                             id.name.as_str().to_owned(),
-                            (dep_def.scale.start, dep_def.scale.end),
+                            (*dep_def.scale.start(), *dep_def.scale.end()),
                         ))
                     } else {
                         None
@@ -2070,7 +2070,7 @@ pub(crate) fn scale_app(state: &OiState, params: ScaleParams, ctx: &RequestCtx) 
                 && id.name.as_str() == deployment_name
             {
                 let dep_def = deployment.def.lock();
-                found = Some((dep_def.scale.start, dep_def.scale.end));
+                found = Some((*dep_def.scale.start(), *dep_def.scale.end()));
                 break;
             }
         }

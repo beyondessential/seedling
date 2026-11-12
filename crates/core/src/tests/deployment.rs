@@ -21,7 +21,7 @@ fn deployment_with_image_and_scale() {
         .unwrap();
     if let defs::resource::Resource::Deployment(dep) = &def.resources[id] {
         let dep_def = dep.def.lock();
-        assert_eq!(dep_def.scale, 3..3);
+        assert_eq!(dep_def.scale, 3..=3);
         let pod = dep_def.pod.lock();
         let container = pod.container.lock();
         assert_eq!(
@@ -33,27 +33,44 @@ fn deployment_with_image_and_scale() {
     }
 }
 
-// spec: DEP#scale
-#[test]
-fn deployment_scale_range() {
-    let app = run_test_script_app(
-        r#"
-        app.deployment("workers")
-            .scale(1..8);
-    "#,
-    );
+fn scale_of(scale: &str) -> std::ops::RangeInclusive<u16> {
+    let app = run_test_script_app(&format!(r#"app.deployment("workers").scale({scale});"#));
     let def = app.def.load();
     let id = def
         .resources
         .keys()
         .find(|id| id.kind == ResourceKind::Deployment && &*id.name == "workers")
         .unwrap();
-    if let defs::resource::Resource::Deployment(dep) = &def.resources[id] {
-        let dep_def = dep.def.lock();
-        assert_eq!(dep_def.scale, 1..8);
-    } else {
-        panic!("expected Deployment");
+    match &def.resources[id] {
+        defs::resource::Resource::Deployment(dep) => dep.def.lock().scale.clone(),
+        _ => panic!("expected Deployment"),
     }
+}
+
+// spec: DEP#scale
+#[test]
+fn an_exclusive_scale_range_excludes_its_end() {
+    assert_eq!(scale_of("1..8"), 1..=7);
+}
+
+// spec: DEP#scale
+#[test]
+fn an_inclusive_scale_range_includes_its_end() {
+    assert_eq!(scale_of("1..=8"), 1..=8);
+}
+
+// spec: DEP#scale
+#[test]
+fn a_fixed_scale_is_the_inclusive_range_of_itself() {
+    assert_eq!(scale_of("4"), scale_of("4..=4"));
+}
+
+// spec: DEP#scale
+#[test]
+fn an_exclusive_scale_range_holding_no_value_throws() {
+    let err = run_test_script_err(r#"app.deployment("web").scale(5..5);"#);
+    assert!(err.to_string().contains("holds no instance count"), "{err}");
+    let _ = run_test_script_err(r#"app.deployment("web").scale(0..1);"#);
 }
 
 // spec: DEP#update-and-termination-strategies
@@ -133,7 +150,7 @@ fn scale_fixed_accepts_10() {
         .unwrap();
     if let defs::resource::Resource::Deployment(dep) = &def.resources[id] {
         let dep_def = dep.def.lock();
-        assert_eq!(dep_def.scale, 10..10);
+        assert_eq!(dep_def.scale, 10..=10);
     } else {
         panic!("expected Deployment");
     }
@@ -154,7 +171,7 @@ fn scale_range_lower_bound_rejects_above_10() {
 fn scale_range_lower_bound_accepts_10() {
     let app = run_test_script_app(
         r#"
-        app.deployment("web").scale(10..20);
+        app.deployment("web").scale(10..=20);
     "#,
     );
     let def = app.def.load();
@@ -165,7 +182,7 @@ fn scale_range_lower_bound_accepts_10() {
         .unwrap();
     if let defs::resource::Resource::Deployment(dep) = &def.resources[id] {
         let dep_def = dep.def.lock();
-        assert_eq!(dep_def.scale, 10..20);
+        assert_eq!(dep_def.scale, 10..=20);
     } else {
         panic!("expected Deployment");
     }
@@ -196,7 +213,7 @@ fn scale_fixed_rejects_negative() {
 fn scale_range_allows_zero_lower_bound() {
     let app = run_test_script_app(
         r#"
-        app.deployment("web").scale(0..5);
+        app.deployment("web").scale(0..=5);
     "#,
     );
     let def = app.def.load();
@@ -207,7 +224,7 @@ fn scale_range_allows_zero_lower_bound() {
         .unwrap();
     if let defs::resource::Resource::Deployment(dep) = &def.resources[id] {
         let dep_def = dep.def.lock();
-        assert_eq!(dep_def.scale, 0..5);
+        assert_eq!(dep_def.scale, 0..=5);
     } else {
         panic!("expected Deployment");
     }
@@ -249,8 +266,7 @@ fn deployment_implements_pod_interface() {
 
 // spec: BSL#arguments
 // spec: DEP#scale
-// An inverted range is an empty one: `scale(5..2)` stored bounds no replica
-// count can satisfy rather than naming the mistake.
+// An inverted range is an empty one, which holds no instance count.
 #[test]
 fn scale_rejects_an_inverted_range() {
     let err = run_test_script_err(
@@ -262,4 +278,6 @@ fn scale_rejects_an_inverted_range() {
     );
     let message = err.to_string();
     assert!(message.contains("must not exceed"), "{message}");
+    let err = run_test_script_err(r#"app.deployment("web").scale(5..=2);"#);
+    assert!(err.to_string().contains("must not exceed"), "{err}");
 }

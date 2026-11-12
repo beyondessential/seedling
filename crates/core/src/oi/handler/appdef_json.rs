@@ -35,7 +35,7 @@ fn schedule_entries_json(schedules: &[String]) -> Vec<Value> {
 pub(crate) fn scale_bounds_of(resource: &Resource) -> Option<(u16, u16)> {
     if let Resource::Deployment(deployment) = resource {
         let dep_def = deployment.def.lock();
-        Some((dep_def.scale.start, dep_def.scale.end))
+        Some((*dep_def.scale.start(), *dep_def.scale.end()))
     } else {
         None
     }
@@ -61,8 +61,8 @@ pub(crate) fn resource_static_json(
     if let Resource::Deployment(deployment) = resource {
         let dep_def = deployment.def.lock();
         obj["scale"] = json!({
-            "low": dep_def.scale.start,
-            "high": dep_def.scale.end,
+            "low": *dep_def.scale.start(),
+            "high": *dep_def.scale.end(),
         });
         // spec: CTL#app-priority
         obj["priority"] = json!(dep_def.priority.as_str());

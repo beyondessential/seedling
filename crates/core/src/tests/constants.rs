@@ -18,7 +18,7 @@ fn available_threads_usable_in_scale() {
     run_test_script_app(
         r#"
         app.deployment("workers")
-            .scale(1..AVAILABLE_THREADS);
+            .scale(1..=AVAILABLE_THREADS);
     "#,
     );
 }
@@ -393,5 +393,5 @@ fn priority_is_chainable_with_other_builders() {
     };
     let d = d.def.lock();
     assert_eq!(d.priority, Priority::Critical);
-    assert_eq!(d.scale.start, 2);
+    assert_eq!(*d.scale.start(), 2);
 }

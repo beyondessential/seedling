@@ -491,8 +491,8 @@ impl Deployment {
             container: container.summary(),
             pod: pod.summary(),
             scale: ScaleSummary {
-                low: def.scale.start,
-                high: def.scale.end,
+                low: *def.scale.start(),
+                high: *def.scale.end(),
             },
             on_update: match def.on_update {
                 OnUpdate::Rolling => "rolling",

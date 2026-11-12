@@ -26,7 +26,7 @@ use crate::system::System;
 pub(crate) const MINIMAL_SCRIPT: &str = r#"
     app.deployment("web")
         .image("docker.io/library/nginx:1.29")
-        .scale(1..4);
+        .scale(1..=4);
 "#;
 
 /// [`MINIMAL_SCRIPT`] plus a plaintext and a secret param.

@@ -165,8 +165,8 @@ fn description_returns_self_for_chaining() {
         .map(|(_, r)| r.clone())
         .unwrap();
     if let Resource::Deployment(d) = &resource {
-        assert_eq!(d.def.lock().scale.start, 2);
-        assert_eq!(d.def.lock().scale.end, 2);
+        assert_eq!(*d.def.lock().scale.start(), 2);
+        assert_eq!(*d.def.lock().scale.end(), 2);
         assert_eq!(d.def.lock().description.as_deref(), Some("a deployment"));
     } else {
         panic!("expected Deployment");

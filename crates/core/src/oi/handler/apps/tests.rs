@@ -363,7 +363,7 @@ fn plan_reports_added_removed_and_modified_resources() {
     let proposed = r#"
         app.deployment("web")
             .image("docker.io/library/nginx:1.30")
-            .scale(1..4);
+            .scale(1..=4);
         app.volume("data");
     "#;
     let plan = oi
@@ -612,7 +612,7 @@ const DERIVED_STATE_SCRIPT: &str = r#"
     app.volume("data");
     app.deployment("web")
         .image("docker.io/library/nginx:1.29")
-        .scale(1..4);
+        .scale(1..=4);
     app.on_action("vacuum", |rt, _p| {
         rt.start(app.job().image("docker.io/library/busybox:1.37").command("true"))
             .terminated();
@@ -1179,7 +1179,7 @@ fn resources_meant_to_have_nothing_ready_do_not_degrade_the_app() {
             "script": r#"
                 app.deployment("web")
                     .image("docker.io/library/nginx:1.29")
-                    .scale(0..4);
+                    .scale(0..=4);
                 app.external_service("api");
             "#,
         }),
