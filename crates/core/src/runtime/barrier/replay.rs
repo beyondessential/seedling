@@ -36,7 +36,20 @@ pub trait ActionLog: Send + Sync {
     /// committing an entry that already exists updates its barrier satisfaction
     /// status rather than creating a duplicate.
     fn commit(&self, entries: &[ActionLogEntry]);
+
+    /// A handle that commits entries at once, whose failure is reported, for
+    /// a call that must have its entry on record before it acts on the host.
+    ///
+    /// `None` for a log that cannot commit mid-pass, whose calls then record
+    /// themselves only when the pass ends.
+    // spec: SUSP#side-effecting-calls
+    fn early_committer(&self) -> Option<EarlyCommit> {
+        None
+    }
 }
+
+/// Commits entries to the log at once, and says whether they are on record.
+pub type EarlyCommit = Arc<dyn Fn(&[ActionLogEntry]) -> Result<(), String> + Send + Sync>;
 
 // ---------------------------------------------------------------------------
 // InMemoryActionLog
@@ -45,7 +58,20 @@ pub trait ActionLog: Send + Sync {
 // spec: HIST#action-execution-log
 #[derive(Debug, Default)]
 pub struct InMemoryActionLog {
-    entries: Mutex<Vec<ActionLogEntry>>,
+    entries: Arc<Mutex<Vec<ActionLogEntry>>>,
+}
+
+/// Replace the entry at each of `new_entries`' positions, or add it.
+fn merge_entries(entries: &mut Vec<ActionLogEntry>, new_entries: &[ActionLogEntry]) {
+    for entry in new_entries {
+        match entries
+            .iter_mut()
+            .find(|e| e.call_index == entry.call_index)
+        {
+            Some(existing) => *existing = entry.clone(),
+            None => entries.push(entry.clone()),
+        }
+    }
 }
 
 impl InMemoryActionLog {
@@ -56,7 +82,19 @@ impl InMemoryActionLog {
 
 impl ActionLog for InMemoryActionLog {
     fn load(&self) -> Result<Vec<ActionLogEntry>, Box<dyn std::error::Error + Send + Sync>> {
-        Ok(self.entries.lock().clone())
+        // In the order of the calls, as the database log returns them: the
+        // entries are read back by position.
+        let mut entries = self.entries.lock().clone();
+        entries.sort_by_key(|e| e.call_index);
+        Ok(entries)
+    }
+
+    fn early_committer(&self) -> Option<EarlyCommit> {
+        let entries = Arc::clone(&self.entries);
+        Some(Arc::new(move |new_entries| {
+            merge_entries(&mut entries.lock(), new_entries);
+            Ok(())
+        }))
     }
 
     fn commit(&self, new_entries: &[ActionLogEntry]) {
@@ -75,15 +113,7 @@ impl ActionLog for InMemoryActionLog {
         // A re-emitted entry is always a whole entry: every caller that
         // claims a position already held clones the committed entry and
         // changes the one field it means to.
-        for entry in new_entries {
-            match entries
-                .iter_mut()
-                .find(|e| e.call_index == entry.call_index)
-            {
-                Some(existing) => *existing = entry.clone(),
-                None => entries.push(entry.clone()),
-            }
-        }
+        merge_entries(&mut entries, new_entries);
     }
 }
 
@@ -115,7 +145,34 @@ impl DbActionLog {
     }
 }
 
+impl DbActionLog {
+    fn commit_checked(&self, entries: &[super::ActionLogEntry]) -> Result<(), String> {
+        let op_id = self.operation_id.clone();
+        let app = self.app.clone();
+        let action_name = self.action_name.clone();
+        let entries = entries.to_vec();
+        self.db
+            .call(move |db| {
+                for entry in &entries {
+                    history::insert_action_log_entry(db, &op_id, &app, &action_name, entry)?;
+                }
+                Ok::<_, rusqlite::Error>(())
+            })
+            .map_err(|e| e.to_string())
+    }
+}
+
 impl ActionLog for DbActionLog {
+    fn early_committer(&self) -> Option<EarlyCommit> {
+        let log = DbActionLog::new(
+            self.db.clone(),
+            self.operation_id.clone(),
+            self.app.clone(),
+            self.action_name.clone(),
+        );
+        Some(Arc::new(move |entries| log.commit_checked(entries)))
+    }
+
     fn load(&self) -> Result<Vec<super::ActionLogEntry>, Box<dyn std::error::Error + Send + Sync>> {
         let op_id = self.operation_id.clone();
         Ok(self
@@ -358,6 +415,8 @@ pub fn run_operation<W: WorldStateOracle + 'static>(
     ctx.lock().executor = executor;
     // spec: SEC#storage
     ctx.lock().cipher = cipher.clone();
+    // spec: SUSP#side-effecting-calls
+    ctx.lock().early_commit = log.early_committer();
 
     // Clear the thread-local barrier-hit flag at the start of each pass.
     clear_barrier_hit();

@@ -380,6 +380,32 @@ mod tests {
         assert_eq!(rows, 1, "the discarded request's record is gone");
     }
 
+    // spec: OPS#interrupted-operations
+    // spec: OPS#stuck-install-recovery
+    #[test]
+    fn an_install_that_cannot_be_replayed_is_recovered_as_a_stuck_install() {
+        let oi = TestOi::with_app("demo");
+        *oi.state.registry.read().get("demo").unwrap().phase.lock() =
+            crate::runtime::apps::AppPhase::Installing;
+        let name = seedling_protocol::names::AppName::new("demo").unwrap();
+
+        crate::oi::handler::actions::lifecycle::recover_unreplayable_install(&oi.state, &name);
+
+        assert_eq!(
+            *oi.state.registry.read().get("demo").unwrap().phase.lock(),
+            crate::runtime::apps::AppPhase::Uninstalling,
+            "teardown, not NotInstalled, is the way out"
+        );
+        let faults = oi.call("/faults/list", json!({ "app": "demo" })).unwrap();
+        assert!(
+            faults
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|f| f["kind"] == "install_interrupted")
+        );
+    }
+
     // spec: OPS#unreadable-operation-state
     #[test]
     fn nothing_starts_while_the_persisted_operation_state_is_unreadable() {

@@ -209,6 +209,7 @@ fn resolve_call_params(
         resources: Vec::new(),
         barriers: Vec::new(),
         extra: Some(payload),
+        begun: false,
     });
     g.call_index += 1;
     drop(g);

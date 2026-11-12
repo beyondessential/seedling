@@ -374,6 +374,26 @@ impl Reconciler {
     }
 
     // spec: OBS#recording
+    // The observation kinds that answer one question about an instance and are
+    // never observed together, so that recording one of them makes the others
+    // news again: a health result that flips back, or a unit that fails again
+    // after recovering, differs from the last fact recorded and is recorded
+    // afresh. Kinds that are observed side by side, such as a container's
+    // creation and its running, are not here: each would displace the other
+    // on every tick.
+    fn contradicting_kinds(kind: &str) -> &'static [&'static str] {
+        match kind {
+            "health_check_pass" | "health_check_fail" => {
+                &["health_check_pass", "health_check_fail"]
+            }
+            "unit_failed" | "unit_start_limit_hit" | "unit_inactive" => {
+                &["unit_failed", "unit_start_limit_hit", "unit_inactive"]
+            }
+            _ => &[],
+        }
+    }
+
+    // spec: OBS#recording
     // spec: HIST#observations
     // `batch` is collected from probing real podman/systemd state during the
     // current tick — every entry persisted here corresponds to a check or
@@ -403,6 +423,12 @@ impl Reconciler {
             {
                 Ok(()) => {
                     recorded.insert((id, kind));
+                    // spec: OBS#recording
+                    for other in Self::contradicting_kinds(kind) {
+                        if *other != kind {
+                            self.written_obs.remove(&(id, other));
+                        }
+                    }
                 }
                 Err(e) => error!(
                     error = %e,

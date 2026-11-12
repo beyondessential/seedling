@@ -2636,30 +2636,7 @@ mod tests {
         use std::sync::atomic::Ordering;
 
         let oi = crate::oi::test_support::TestOi::with_app("demo");
-        let reconciler = Reconciler::new(
-            Arc::clone(&oi.state.driver),
-            oi.state.node_prefix,
-            Arc::new(crate::runtime::registry::DbInstanceRegistry::new(
-                oi.state.db.clone(),
-            )),
-            Arc::new(AsyncRwLock::new(reqwest::Client::new())),
-            std::env::temp_dir(),
-            oi.state.db.clone(),
-            Arc::clone(&oi.state.registry),
-            oi.state.event_tx.clone(),
-            Vec::new(),
-            Vec::new(),
-            false,
-            false,
-            Arc::clone(&oi.state.shells),
-            None,
-            None,
-            None,
-            crate::runtime::gc::InstanceGcConfig {
-                interval: std::time::Duration::from_secs(3600),
-                retain: std::time::Duration::from_secs(3600),
-            },
-        );
+        let reconciler = test_reconciler(&oi);
         let (pending, phase) = {
             let reg = oi.state.registry.read();
             let entry = reg.get("demo").unwrap();
@@ -2683,6 +2660,72 @@ mod tests {
         let (resources, steady) = desired_of(&reconciler);
         assert!(resources > 0, "the whole resource graph is desired again");
         assert!(steady);
+    }
+
+    /// A reconciler over `oi`'s stub backends and database.
+    fn test_reconciler(oi: &crate::oi::test_support::TestOi) -> Reconciler {
+        Reconciler::new(
+            Arc::clone(&oi.state.driver),
+            oi.state.node_prefix,
+            Arc::new(crate::runtime::registry::DbInstanceRegistry::new(
+                oi.state.db.clone(),
+            )),
+            Arc::new(AsyncRwLock::new(reqwest::Client::new())),
+            std::env::temp_dir(),
+            oi.state.db.clone(),
+            Arc::clone(&oi.state.registry),
+            oi.state.event_tx.clone(),
+            Vec::new(),
+            Vec::new(),
+            false,
+            false,
+            Arc::clone(&oi.state.shells),
+            None,
+            None,
+            None,
+            crate::runtime::gc::InstanceGcConfig {
+                interval: std::time::Duration::from_secs(3600),
+                retain: std::time::Duration::from_secs(3600),
+            },
+        )
+    }
+
+    // spec: OBS#recording
+    #[test]
+    fn a_fact_that_flips_back_is_recorded_again_and_an_unchanged_one_is_not() {
+        let oi = crate::oi::test_support::TestOi::with_app("demo");
+        let mut reconciler = test_reconciler(&oi);
+        let instance = crate::runtime::identity::ResourceInstance::new_singleton(
+            AppName::new("demo").unwrap(),
+            crate::defs::resource::ResourceKind::Deployment,
+            "web",
+        );
+        let count = |kind: &'static str| {
+            let instance = instance.clone();
+            oi.state.db.call(move |db| {
+                crate::runtime::history::query_observations(db, &instance)
+                    .unwrap()
+                    .iter()
+                    .filter(|o| o.obs_kind == kind)
+                    .count()
+            })
+        };
+        let mut observe = |kind: &'static str| {
+            reconciler.persist_obs(vec![(instance.clone(), kind, serde_json::json!({}))]);
+        };
+
+        observe("health_check_pass");
+        observe("health_check_pass");
+        assert_eq!(count("health_check_pass"), 1, "unchanged: recorded once");
+
+        observe("health_check_fail");
+        observe("health_check_pass");
+        assert_eq!(count("health_check_fail"), 1);
+        assert_eq!(
+            count("health_check_pass"),
+            2,
+            "it flipped back, so it is news again"
+        );
     }
 
     // spec: PRIO#resource-control-groups

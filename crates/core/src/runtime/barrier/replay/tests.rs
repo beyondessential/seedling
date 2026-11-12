@@ -299,6 +299,7 @@ mod positional {
             resources,
             barriers: Vec::new(),
             extra: Some("SIGHUP".to_owned()),
+            begun: false,
         }
     }
 

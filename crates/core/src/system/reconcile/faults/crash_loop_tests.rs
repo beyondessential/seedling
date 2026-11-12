@@ -113,3 +113,40 @@ fn clearing_is_scoped_to_the_instance_that_recovered() {
     assert_eq!(remaining.len(), 1);
     assert_eq!(remaining[0].instance_id.as_deref(), Some(&*two.id.to_hex()));
 }
+
+// spec: OBS#failed-observation
+// spec: FLT#filing-and-clearing
+#[test]
+fn an_observe_failed_fault_clears_on_the_next_successful_observation() {
+    let db = Db::open_in_memory().expect("open");
+    let inst = instance();
+    let other = ResourceInstance::new_singleton(app(), ResourceKind::Volume, "data");
+    for i in [&inst, &other] {
+        crate::system::reconcile::Reconciler::file_instance_faults(
+            &db,
+            &app(),
+            &[(i.clone(), "inspect failed".to_owned())],
+            "observe_failed",
+        );
+    }
+    let active = |db: &Db| {
+        faults::list_active_faults(db, Some(&app()))
+            .unwrap()
+            .into_iter()
+            .filter(|f| f.kind == "observe_failed")
+            .count()
+    };
+    assert_eq!(active(&db), 2);
+
+    crate::system::reconcile::Reconciler::clear_observe_failed(
+        &db,
+        &app(),
+        std::slice::from_ref(&inst),
+    );
+
+    assert_eq!(
+        active(&db),
+        1,
+        "only the instance that observed cleanly is cleared"
+    );
+}

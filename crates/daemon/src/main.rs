@@ -935,9 +935,21 @@ async fn main() {
                                     // can read the phase again under its own
                                     // lock: this reading is already stale by
                                     // the time a firing is admitted.
+                                    let schemas: std::collections::BTreeMap<_, _> = entry
+                                        .app
+                                        .def
+                                        .load()
+                                        .actions
+                                        .iter()
+                                        .map(|(n, a)| (n.clone(), a.params.clone()))
+                                        .collect();
                                     Some((
                                         name,
-                                        (entry.current_generation, Arc::clone(&entry.phase)),
+                                        (
+                                            entry.current_generation,
+                                            Arc::clone(&entry.phase),
+                                            Arc::new(schemas),
+                                        ),
                                     ))
                                 } else {
                                     None
@@ -1351,7 +1363,6 @@ async fn resume_operations(oi_state: &Arc<OiState>) {
         }
     }
 
-    let persisted_op_app = persisted_operation.as_ref().map(|op| op.app.clone());
     let replayed_app = match persisted_operation {
         Some(op) => {
             let app = op.app.clone();
@@ -1385,7 +1396,7 @@ async fn resume_operations(oi_state: &Arc<OiState>) {
             let reg = oi_state.registry.read();
             reg.iter()
                 .filter(|e| {
-                    if persisted_op_app.as_ref() == Some(&e.name) {
+                    if replayed_app.as_ref() == Some(&e.name) {
                         return false;
                     }
                     let phase = e.phase.lock();
@@ -1521,7 +1532,9 @@ fn start_replay(
                         app = %app_name,
                         "interrupted install has no persisted params; reverting to NotInstalled"
                     );
-                    revert_install_and_fault(&state, &app_name);
+                    seedling_core::oi::handler::actions::lifecycle::recover_unreplayable_install(
+                        &state, &app_name,
+                    );
                     return false;
                 }
                 tracing::warn!(
@@ -1538,7 +1551,9 @@ fn start_replay(
                     "failed to decrypt interrupted operation params: {e}"
                 );
                 if is_install {
-                    revert_install_and_fault(&state, &app_name);
+                    seedling_core::oi::handler::actions::lifecycle::recover_unreplayable_install(
+                        &state, &app_name,
+                    );
                 } else {
                     state.db.call(|db| {
                         let _ = clear_current_operation(db);
@@ -1638,58 +1653,6 @@ fn start_replay(
         None,
     );
     true
-}
-
-/// Flip a persisted Installing row back to NotInstalled and file a fault
-/// indicating the install was interrupted and could not be replayed.
-// spec: ACI#install-completion
-fn revert_install_and_fault(state: &Arc<OiState>, app_name: &AppName) {
-    use seedling_core::runtime::apps::AppPhase;
-    use seedling_core::runtime::history::clear_current_operation;
-
-    // Only flip if the app is actually in Installing.
-    let was_installing = {
-        let reg = state.registry.read();
-        reg.get(app_name.as_str())
-            .map(|e| matches!(*e.phase.lock(), AppPhase::Installing))
-            .unwrap_or(false)
-    };
-
-    if was_installing {
-        {
-            let mut reg = state.registry.write();
-            if let Some(entry) = reg.get_mut(app_name.as_str()) {
-                *entry.phase.lock() = AppPhase::NotInstalled;
-            }
-        }
-        let app_owned = app_name.clone();
-        state.db.call(move |db| {
-            if let Err(e) = db.conn.execute(
-                "UPDATE registered_apps SET installing = 0, installed = 0, uninstalling = 0 \
-                 WHERE name = ?1",
-                [&app_owned],
-            ) {
-                tracing::warn!(app = %app_owned, "failed to persist revert: {e}");
-            }
-            let _ = clear_current_operation(db);
-            let _ = seedling_core::runtime::faults::file_fault(
-                db,
-                &app_owned,
-                None,
-                None,
-                None,
-                "install_interrupted",
-                "install was interrupted by a runtime restart and could not be replayed",
-            );
-        });
-        state
-            .event_tx
-            .app_phase_changed(app_name, "not_installed", None);
-    } else {
-        state.db.call(|db| {
-            let _ = clear_current_operation(db);
-        });
-    }
 }
 
 // spec: TRN#listen-addresses

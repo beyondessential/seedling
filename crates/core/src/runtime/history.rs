@@ -495,8 +495,8 @@ pub fn insert_action_log_entry(
         "INSERT OR REPLACE INTO action_log
              (recorded_at, operation_id, app, action_name, call_index, call_kind,
               resources, barrier_state, barrier_deadline, barrier_satisfied,
-              barrier_started_at, extra, barriers)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
+              barrier_started_at, extra, barriers, begun)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
         params![
             now_ms(),
             operation_id.0,
@@ -511,6 +511,7 @@ pub fn insert_action_log_entry(
             barrier_started_at,
             entry.extra,
             barriers_json,
+            entry.begun,
         ],
     )?;
     Ok(())
@@ -523,7 +524,7 @@ pub fn load_action_log(
 ) -> rusqlite::Result<Vec<ActionLogEntry>> {
     let mut stmt = db.conn.prepare(
         "SELECT call_index, call_kind, resources, barrier_state, barrier_deadline,
-                barrier_satisfied, barrier_started_at, extra, barriers
+                barrier_satisfied, barrier_started_at, extra, barriers, begun
          FROM action_log
          WHERE operation_id = ?1
          ORDER BY call_index ASC",
@@ -539,6 +540,7 @@ pub fn load_action_log(
         let barrier_started_at: Option<i64> = row.get(6)?;
         let extra: Option<String> = row.get(7)?;
         let barriers_json: Option<String> = row.get(8)?;
+        let begun: bool = row.get(9)?;
 
         let call_kind = match call_kind_str.as_str() {
             "Start" => CallKind::Start,
@@ -600,6 +602,7 @@ pub fn load_action_log(
             resources,
             barriers,
             extra,
+            begun,
         })
     })?;
 

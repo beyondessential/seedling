@@ -510,6 +510,7 @@ fn make_entry(
         resources: vec![dep("app", "web")],
         barriers: barrier.into_iter().collect(),
         extra: None,
+        begun: false,
     }
 }
 
@@ -579,6 +580,7 @@ fn barrier_satisfaction_update_via_replace() {
             started_at_secs: Some(1000),
         }],
         extra: None,
+        begun: false,
     };
     insert_action_log_entry(
         &db,

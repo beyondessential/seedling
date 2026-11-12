@@ -108,6 +108,12 @@ pub struct ActionLogEntry {
     // spec: RT#signal-delivery
     #[serde(default)]
     pub extra: Option<String>,
+    /// The call was begun and its completion has not been recorded: its
+    /// effect on the host may have happened. Only `rt.signal`, `rt.write`
+    /// and `rt.exec` entries are ever begun.
+    // spec: SUSP#side-effecting-calls
+    #[serde(default)]
+    pub begun: bool,
 }
 
 impl ActionLogEntry {
@@ -292,6 +298,10 @@ pub struct ReplayContext {
     /// test / stub contexts where no real container runtime is present.
     // spec: RT#command-execution
     pub executor: Option<Arc<dyn Executor>>,
+    /// Commits an entry to the action log at once, for the calls that must be
+    /// on record before they act on the host.
+    // spec: SUSP#side-effecting-calls
+    pub early_commit: Option<replay::EarlyCommit>,
     /// Cipher protecting secret values the action execution log records.
     /// `None` in test / stub contexts, where a call that would record a
     /// secret value fails rather than recording it in the clear.
@@ -404,6 +414,7 @@ impl ReplayContext {
             container_signaler: None,
             volume_writer: None,
             executor: None,
+            early_commit: None,
             cipher: None,
         }
     }
@@ -496,6 +507,25 @@ impl ReplayContext {
         }
         self.call_index += 1;
         Ok(Some(entry))
+    }
+
+    /// Commit `entry` at once, with this pass's earlier entries, so that a
+    /// log holding `entry` holds every call before it: a replay reads entries
+    /// by position, and one at a position whose predecessors are missing
+    /// would be read as another call's.
+    ///
+    /// The earlier entries stay pending, so their barriers can still be
+    /// recorded against them. Returns `Ok(false)` when the log cannot commit
+    /// mid-pass.
+    // spec: SUSP#side-effecting-calls
+    pub fn commit_through(&self, entry: &ActionLogEntry) -> Result<bool, String> {
+        let Some(commit) = &self.early_commit else {
+            return Ok(false);
+        };
+        let mut batch = self.pending.clone();
+        batch.push(entry.clone());
+        commit(&batch)?;
+        Ok(true)
     }
 
     pub fn take_pending(&mut self) -> Vec<ActionLogEntry> {

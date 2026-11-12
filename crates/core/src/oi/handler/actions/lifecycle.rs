@@ -947,6 +947,43 @@ pub fn spawn_accepted_operation(
     });
 }
 
+/// Recover an `Installing` app whose install cannot be replayed as a stuck
+/// install, and file a fault saying the install was interrupted.
+///
+/// The app moves to `Uninstalling` rather than back to `NotInstalled`: the
+/// install may have left running resources, which reconciliation leaves alone
+/// for a `NotInstalled` app, and teardown is what returns it to
+/// `NotInstalled`.
+// spec: OPS#interrupted-operations
+// spec: OPS#stuck-install-recovery
+pub fn recover_unreplayable_install(state: &OiState, app_name: &AppName) {
+    let was_installing = {
+        let reg = state.registry.read();
+        reg.get(app_name.as_str())
+            .map(|e| matches!(*e.phase.lock(), AppPhase::Installing))
+            .unwrap_or(false)
+    };
+
+    let app_owned = app_name.clone();
+    state.db.call(move |db| {
+        let _ = crate::runtime::history::clear_current_operation(db);
+        if was_installing {
+            let _ = crate::runtime::faults::file_fault(
+                db,
+                &app_owned,
+                None,
+                None,
+                None,
+                "install_interrupted",
+                "install was interrupted by a runtime restart and could not be replayed",
+            );
+        }
+    });
+    if was_installing {
+        set_phase_and_persist(state, app_name, AppPhase::Uninstalling);
+    }
+}
+
 /// Persist the request the scheduler has just queued as `operation_id`, so
 /// the queue survives a restart, and refuse the request if that fails.
 ///

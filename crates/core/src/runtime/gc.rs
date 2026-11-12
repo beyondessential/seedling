@@ -276,6 +276,7 @@ mod tests {
             resources: vec![dep("app", "web")],
             barriers: Vec::new(),
             extra: None,
+            begun: false,
         }
     }
 

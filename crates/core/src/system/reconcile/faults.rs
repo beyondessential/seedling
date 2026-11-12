@@ -499,6 +499,7 @@ impl Reconciler {
             .map(|(i, s)| (i.clone(), s.clone()))
             .collect();
         let observe_failures = self.escalate_observe_failures(&update.observe_failures);
+        let observed: Vec<ResourceInstance> = update.observed.to_vec();
         // spec: FLT#filing-and-clearing — the file set and the clear set must be
         // disjoint per instance. `stop_sent` is recorded before the stop is
         // attempted, so an instance whose stop just failed appears in both:
@@ -520,6 +521,7 @@ impl Reconciler {
             Self::file_instance_faults(db, &app, &start_failures, "start_failed");
             Self::file_instance_faults(db, &app, &stop_failures, "stop_failed");
             Self::file_instance_faults(db, &app, &observe_failures, "observe_failed");
+            Self::clear_observe_failed(db, &app, &observed);
 
             if !stopped_instances.is_empty() {
                 let active_faults = faults::list_active_faults(db, Some(&app)).unwrap_or_default();
@@ -558,8 +560,10 @@ impl Reconciler {
             .iter()
             .map(|(i, s)| (i.clone(), s.clone()))
             .collect();
+        let observed: Vec<ResourceInstance> = update.observed.to_vec();
         self.db.call(move |db| {
             Self::file_instance_faults(db, &app, &observe_failures, "observe_failed");
+            Self::clear_observe_failed(db, &app, &observed);
             Self::file_instance_faults(db, &app, &create_failures, "volume_create_failed");
             Self::file_instance_faults(db, &app, &remove_failures, "volume_remove_failed");
         });
@@ -1026,6 +1030,30 @@ impl Reconciler {
         for f in cleared {
             if let Err(e) = faults::clear_fault(db, &f.id, app) {
                 tracing::warn!(app = %app, fault_id = %f.id, "failed to clear registry fault: {e}");
+            }
+        }
+    }
+
+    /// Clear the `observe_failed` fault of each instance observed successfully
+    /// this iteration: the observation it reports failing has since succeeded.
+    // spec: OBS#failed-observation
+    // spec: FLT#filing-and-clearing
+    fn clear_observe_failed(
+        db: &crate::runtime::db::Db,
+        app: &AppName,
+        observed: &[ResourceInstance],
+    ) {
+        if observed.is_empty() {
+            return;
+        }
+        let hexes: std::collections::HashSet<String> =
+            observed.iter().map(|i| i.id.to_hex()).collect();
+        for f in faults::list_active_faults(db, Some(app)).unwrap_or_default() {
+            if f.kind == "observe_failed"
+                && f.instance_id.as_ref().is_some_and(|id| hexes.contains(id))
+                && let Err(e) = faults::clear_fault(db, &f.id, app)
+            {
+                tracing::warn!(app = %app, fault_id = %f.id, "failed to clear observe_failed fault: {e}");
             }
         }
     }

@@ -320,6 +320,24 @@ fn row_to_record(row: &rusqlite::Row<'_>) -> rusqlite::Result<FaultRecord> {
 
 /// Clear all active faults matching an app + kind. Returns how many were cleared.
 // spec: FLTS#listing-faults
+/// Clear the active fault holding `key`, if one does, announcing it as any
+/// clear is. Returns whether one was cleared.
+pub fn clear_fault_by_key(db: &crate::runtime::db::Db, key: &FaultKey) -> rusqlite::Result<bool> {
+    let id: Option<String> = db
+        .conn
+        .query_row(
+            "SELECT id FROM faults
+             WHERE app = ?1 AND kind = ?2 AND subject = ?3 AND cleared_at IS NULL",
+            rusqlite::params![key.app, key.kind, key.subject],
+            |row| row.get(0),
+        )
+        .optional()?;
+    match id {
+        Some(id) => clear_fault(db, &id, &key.app).map(|()| true),
+        None => Ok(false),
+    }
+}
+
 pub fn clear_faults_by_kind(
     db: &crate::runtime::db::Db,
     app: &AppName,

@@ -454,6 +454,7 @@ fn claim_log_position(
         resources: resources.to_vec(),
         barriers: Vec::new(),
         extra: None,
+        begun: false,
     });
     g.call_index += 1;
     drop(g);
@@ -1330,6 +1331,17 @@ impl RuntimeInstance {
             // The signal name is a literal in the script, so unlike the
             // resolved instance set it must match the log.
             match g.replay_step(CallKind::Signal, Some(canonical.as_str())) {
+                // spec: SUSP#side-effecting-calls
+                // Begun and never completed: the signal may have been
+                // delivered, and a second one can have consequences the first
+                // did not, so it is not sent again.
+                Ok(Some(entry)) if entry.begun => {
+                    return Err(format!(
+                        "rt.signal: replay reached a call begun but not completed; the signal \
+                         {canonical} may already have been delivered, so it is not sent again"
+                    )
+                    .into());
+                }
                 Ok(Some(_)) => return Ok(()),
                 Ok(None) => {}
                 Err(mismatch) => return Err(Box::<EvalAltResult>::from(mismatch.to_string())),
@@ -1343,9 +1355,26 @@ impl RuntimeInstance {
             });
         }
 
+        // spec: SUSP#side-effecting-calls
+        // The entry is on record, as begun, before any signal is sent.
+        let call_index = ctx.lock().call_index;
+        let mut entry = ActionLogEntry {
+            call_index,
+            call_kind: CallKind::Signal,
+            resources: expanded.clone(),
+            barriers: Vec::new(),
+            extra: Some(canonical.clone()),
+            begun: true,
+        };
+        ctx.lock()
+            .commit_through(&entry)
+            .map_err(|e| -> Box<EvalAltResult> {
+                format!("rt.signal: cannot record the call before making it: {e}").into()
+            })?;
+
         // spec: RT#signal-delivery
-        // A failed delivery fails the call, and nothing is recorded: the entry
-        // says a signal was delivered, which it was not.
+        // A failed delivery fails the call, and the entry stays begun: the
+        // runtime cannot say the signal was not delivered.
         let signaler = ctx.lock().container_signaler.clone();
         if let Some(signaler) = signaler {
             for r in &expanded {
@@ -1364,18 +1393,19 @@ impl RuntimeInstance {
             }
         }
 
-        {
-            let mut g = ctx.lock();
-            let idx = g.call_index;
-            g.pending.push(ActionLogEntry {
-                call_index: idx,
-                call_kind: CallKind::Signal,
-                resources: expanded.clone(),
-                barriers: Vec::new(),
-                extra: Some(canonical.clone()),
-            });
-            g.call_index += 1;
+        // spec: SUSP#side-effecting-calls
+        // Completed, and on record, before the closure continues.
+        entry.begun = false;
+        let on_record = ctx
+            .lock()
+            .commit_through(&entry)
+            .map_err(|e| -> Box<EvalAltResult> {
+                format!("rt.signal: cannot record the call's completion: {e}").into()
+            })?;
+        if !on_record {
+            ctx.lock().pending.push(entry);
         }
+        ctx.lock().call_index += 1;
 
         Ok(())
     }
@@ -1481,6 +1511,17 @@ impl RuntimeInstance {
                     )
                     .into());
                 }
+                // spec: SUSP#side-effecting-calls
+                // Begun and never completed: the command may have run, and a
+                // second run can have consequences the first did not.
+                if entry.begun {
+                    return Err(format!(
+                        "rt.exec: replay reached a call begun but not completed; the command \
+                         may already have run in {}, so it is not run again",
+                        target.display_name
+                    )
+                    .into());
+                }
                 let recovered = entry.extra.as_deref().and_then(|s| s.parse::<i32>().ok());
                 if let Some(exit_code) = recovered {
                     // Recover the target name from the committed entry so
@@ -1511,6 +1552,22 @@ impl RuntimeInstance {
             argv: &argv,
         });
 
+        // spec: SUSP#side-effecting-calls
+        let call_index = ctx.lock().call_index;
+        let mut entry = ActionLogEntry {
+            call_index,
+            call_kind: CallKind::Exec,
+            resources: vec![target.clone()],
+            barriers: Vec::new(),
+            extra: None,
+            begun: true,
+        };
+        ctx.lock()
+            .commit_through(&entry)
+            .map_err(|e| -> Box<EvalAltResult> {
+                format!("rt.exec: cannot record the call before making it: {e}").into()
+            })?;
+
         let executor = ctx.lock().executor.clone();
         let exit_code = if let Some(executor) = executor {
             executor
@@ -1521,18 +1578,21 @@ impl RuntimeInstance {
         };
 
         let target_display = target.display_name.clone();
-        {
-            let mut g = ctx.lock();
-            let idx = g.call_index;
-            g.pending.push(ActionLogEntry {
-                call_index: idx,
-                call_kind: CallKind::Exec,
-                resources: vec![target],
-                barriers: Vec::new(),
-                extra: Some(exit_code.to_string()),
-            });
-            g.call_index += 1;
+        // spec: SUSP#side-effecting-calls
+        // Completed, with its exit code, and on record before the closure
+        // continues.
+        entry.begun = false;
+        entry.extra = Some(exit_code.to_string());
+        let on_record = ctx
+            .lock()
+            .commit_through(&entry)
+            .map_err(|e| -> Box<EvalAltResult> {
+                format!("rt.exec: cannot record the call's completion: {e}").into()
+            })?;
+        if !on_record {
+            ctx.lock().pending.push(entry);
         }
+        ctx.lock().call_index += 1;
 
         Ok(Executed {
             exit_code,
@@ -1590,13 +1650,33 @@ impl RuntimeInstance {
         // evidence this write had been done, and skip it. The path is not
         // checked, only the kind, because a path built from the action's
         // params is as much this call's path as a literal one is.
-        {
+        // spec: SUSP#side-effecting-calls
+        // A write begun and never completed is performed again, which leaves
+        // the volume as one write would.
+        let redo = {
             let mut g = ctx.lock();
             match g.replay_step(CallKind::Write, None) {
+                Ok(Some(entry)) if entry.begun => Some(entry.call_index),
                 Ok(Some(_)) => return Ok(()),
-                Ok(None) => {}
+                Ok(None) => None,
                 Err(mismatch) => return Err(Box::<EvalAltResult>::from(mismatch.to_string())),
             }
+        };
+        let call_index = redo.unwrap_or_else(|| ctx.lock().call_index);
+        let mut entry = ActionLogEntry {
+            call_index,
+            call_kind: CallKind::Write,
+            resources: vec![target_resource],
+            barriers: Vec::new(),
+            extra: Some(path.to_owned()),
+            begun: true,
+        };
+        if redo.is_none() {
+            ctx.lock()
+                .commit_through(&entry)
+                .map_err(|e| -> Box<EvalAltResult> {
+                    format!("rt.write: cannot record the call before making it: {e}").into()
+                })?;
         }
 
         emit_breadcrumb(crate::system::breadcrumb::BreadcrumbKind::Write {
@@ -1613,17 +1693,19 @@ impl RuntimeInstance {
                 .map_err(|e| -> Box<EvalAltResult> { format!("rt.write: {e}").into() })?;
         }
 
-        {
-            let mut g = ctx.lock();
-            let idx = g.call_index;
-            g.pending.push(ActionLogEntry {
-                call_index: idx,
-                call_kind: CallKind::Write,
-                resources: vec![target_resource],
-                barriers: Vec::new(),
-                extra: Some(path.to_owned()),
-            });
-            g.call_index += 1;
+        // spec: SUSP#side-effecting-calls
+        entry.begun = false;
+        let on_record = ctx
+            .lock()
+            .commit_through(&entry)
+            .map_err(|e| -> Box<EvalAltResult> {
+                format!("rt.write: cannot record the call's completion: {e}").into()
+            })?;
+        if !on_record {
+            ctx.lock().pending.push(entry);
+        }
+        if redo.is_none() {
+            ctx.lock().call_index += 1;
         }
 
         Ok(())
@@ -1773,6 +1855,7 @@ impl RuntimeInstance {
                 started_at_secs,
             }],
             extra: None,
+            begun: false,
         });
         // Drop the lock before the breadcrumb's journald send so we
         // don't hold it across an arbitrarily slow syscall. Skip if
@@ -2515,6 +2598,7 @@ impl Started {
                     started_at_secs: Some(now),
                 }],
                 extra: None,
+                begun: false,
             });
         }
         g.pending_barrier = Some(condition.clone());

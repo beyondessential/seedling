@@ -243,7 +243,6 @@ impl VolumeStore {
 
         let id = HeldVolumeId::generate();
         let dest = held_dir.join(id.to_string());
-        tokio::fs::rename(&src, &dest).await?;
 
         let meta = HeldVolumeMeta {
             id,
@@ -252,12 +251,20 @@ impl VolumeStore {
             display_name: display_name.to_owned(),
             reason: reason.to_owned(),
             held_at: jiff::Timestamp::now().to_string(),
-            path: dest,
+            path: dest.clone(),
         };
 
+        // spec: ACTU#held-volumes
+        // The record is committed before the data moves, so data is never
+        // moved aside with nothing to say where it went; if the move then
+        // fails, the record goes again.
         let meta_path = held_dir.join(format!("{id}.meta.json"));
         let json = serde_json::to_string_pretty(&meta).map_err(std::io::Error::other)?;
         tokio::fs::write(&meta_path, json).await?;
+        if let Err(e) = tokio::fs::rename(&src, &dest).await {
+            let _ = tokio::fs::remove_file(&meta_path).await;
+            return Err(e);
+        }
 
         tracing::info!(
             app = app,
@@ -612,6 +619,55 @@ mod tests {
         std::fs::create_dir_all(target).unwrap();
         std::fs::write(target.join("data.db"), b"the volume's contents").unwrap();
         std::os::unix::fs::symlink(target, store.path(name)).unwrap();
+    }
+
+    // spec: ACTU#held-volumes
+    #[tokio::test]
+    async fn holding_a_volume_records_it_with_its_data_beside_the_record() {
+        let (_data, store) = store();
+        let name = VolumeName::for_app("app", "data");
+        std::fs::create_dir_all(store.path(&name)).unwrap();
+        std::fs::write(store.path(&name).join("data.db"), b"contents").unwrap();
+
+        let meta = store
+            .hold(&name, "app", "uninstall")
+            .await
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(store.list_held().unwrap().len(), 1);
+        assert!(meta.path.join("data.db").exists());
+    }
+
+    // spec: ACTU#held-volumes
+    #[tokio::test]
+    async fn a_hold_whose_move_fails_leaves_no_record_and_the_data_where_it_was() {
+        use std::os::unix::fs::{MetadataExt as _, PermissionsExt as _};
+        let (data, store) = store();
+        let name = VolumeName::for_app("app", "data");
+        let volume = store.path(&name);
+        std::fs::create_dir_all(&volume).unwrap();
+        std::fs::write(volume.join("data.db"), b"contents").unwrap();
+        let parent = volume.parent().unwrap().to_owned();
+        if std::fs::metadata(data.path()).unwrap().uid() == 0 {
+            return; // root ignores the permission that makes the move fail
+        }
+        // A directory that cannot be written cannot have the volume moved
+        // out of it, though the record, in a directory of its own, can be.
+        std::fs::set_permissions(&parent, std::fs::Permissions::from_mode(0o500)).unwrap();
+
+        let result = store.hold(&name, "app", "uninstall").await;
+
+        std::fs::set_permissions(&parent, std::fs::Permissions::from_mode(0o700)).unwrap();
+        assert!(
+            result.is_err(),
+            "the hold fails, so the removal does not go ahead"
+        );
+        assert!(
+            store.list_held().unwrap().is_empty(),
+            "no record is left behind"
+        );
+        assert!(volume.join("data.db").exists(), "the data is where it was");
     }
 
     // spec: ACTU#storage-confinement

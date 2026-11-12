@@ -17,6 +17,7 @@ use crate::{
 struct VolumeInstanceResult {
     observations: Vec<(ResourceInstance, &'static str, serde_json::Value)>,
     observe_failure: Option<(ResourceInstance, String)>,
+    observed: Option<ResourceInstance>,
     create_failure: Option<(ResourceInstance, String)>,
     remove_failure: Option<(ResourceInstance, String)>,
 }
@@ -24,6 +25,9 @@ struct VolumeInstanceResult {
 pub(super) struct VolumeActuationUpdate {
     pub observations: Vec<(ResourceInstance, &'static str, serde_json::Value)>,
     pub observe_failures: Vec<(ResourceInstance, String)>,
+    /// Instances observed successfully this tick.
+    // spec: OBS#failed-observation
+    pub observed: Vec<ResourceInstance>,
     pub create_failures: Vec<(ResourceInstance, String)>,
     pub remove_failures: Vec<(ResourceInstance, String)>,
 }
@@ -37,6 +41,7 @@ async fn process_one_volume(
     let mut result = VolumeInstanceResult {
         observations: Vec::new(),
         observe_failure: None,
+        observed: None,
         create_failure: None,
         remove_failure: None,
     };
@@ -55,6 +60,7 @@ async fn process_one_volume(
         }
     };
 
+    result.observed = Some(dr.instance.clone());
     for (fact, _ts) in &facts {
         for (kind, payload) in fact.to_obs_kinds() {
             result
@@ -194,11 +200,15 @@ pub(super) async fn observe_and_actuate(
     let mut update = VolumeActuationUpdate {
         observations: Vec::new(),
         observe_failures: Vec::new(),
+        observed: Vec::new(),
         create_failures: Vec::new(),
         remove_failures: Vec::new(),
     };
 
     for result in results {
+        if let Some(instance) = result.observed {
+            update.observed.push(instance);
+        }
         update.observations.extend(result.observations);
         if let Some(f) = result.observe_failure {
             update.observe_failures.push(f);

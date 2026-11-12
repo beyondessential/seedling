@@ -324,7 +324,7 @@ impl crate::runtime::barrier::ContainerSignaler for FailingSignaler {
 
 // spec: RT#signal-delivery
 #[test]
-fn a_signal_that_cannot_be_delivered_throws_and_is_not_recorded() {
+fn a_signal_that_cannot_be_delivered_throws_and_is_never_recorded_as_delivered() {
     use crate::runtime::barrier::replay::ActionLog as _;
     let log = crate::runtime::barrier::replay::InMemoryActionLog::new();
     let result = run_action_with(
@@ -348,8 +348,9 @@ fn a_signal_that_cannot_be_delivered_throws_and_is_not_recorded() {
         log.load()
             .unwrap()
             .iter()
-            .all(|e| e.call_kind != crate::runtime::barrier::CallKind::Signal),
-        "an undelivered signal must not be on record as delivered"
+            .filter(|e| e.call_kind == crate::runtime::barrier::CallKind::Signal)
+            .all(|e| e.begun),
+        "a signal that was not delivered is never on record as completed"
     );
 }
 
@@ -424,4 +425,188 @@ fn an_app_with_no_start_action_is_started_as_though_its_closure_called_rt_start(
             .any(|r| r.name.as_deref() == Some("web")),
         "it starts the app's resources"
     );
+}
+
+/// Stands in for the host: records each effect, and whether the call's entry
+/// was already on record, as begun, when the effect was made.
+#[derive(Default)]
+struct HostProbe {
+    log: parking_lot::Mutex<Option<Arc<crate::runtime::barrier::replay::InMemoryActionLog>>>,
+    effects: parking_lot::Mutex<Vec<(&'static str, bool)>>,
+}
+
+impl HostProbe {
+    fn effect(&self, what: &'static str, kind: crate::runtime::barrier::CallKind) {
+        use crate::runtime::barrier::replay::ActionLog as _;
+        let log = self.log.lock().clone().expect("the probe is given the log");
+        let begun_on_record = log
+            .load()
+            .unwrap()
+            .iter()
+            .any(|e| e.call_kind == kind && e.begun);
+        self.effects.lock().push((what, begun_on_record));
+    }
+}
+
+impl crate::runtime::barrier::ContainerSignaler for HostProbe {
+    fn signal(&self, _container: &str, _signal: &str) -> Result<bool, String> {
+        self.effect("signal", crate::runtime::barrier::CallKind::Signal);
+        Ok(true)
+    }
+}
+
+impl crate::runtime::barrier::VolumeWriter for HostProbe {
+    fn write(
+        &self,
+        _app: &str,
+        _target: crate::runtime::barrier::VolumeWriteTarget,
+        _path: &str,
+        _contents: &[u8],
+    ) -> Result<(), String> {
+        self.effect("write", crate::runtime::barrier::CallKind::Write);
+        Ok(())
+    }
+}
+
+impl crate::runtime::barrier::Executor for HostProbe {
+    fn exec(
+        &self,
+        _name: &str,
+        _argv: &[String],
+        _env: &[(String, String)],
+    ) -> Result<i32, String> {
+        self.effect("exec", crate::runtime::barrier::CallKind::Exec);
+        Ok(3)
+    }
+}
+
+const HOST_CALLS_SCRIPT: &str = r#"
+    let web = app.deployment("web").image("docker.io/library/nginx:1");
+    let data = app.volume("data");
+    app.on_action("poke", |rt, _p| {
+        rt.start(web);
+        rt.signal(web, "HUP");
+        rt.write(data, "/a.txt", "x");
+        let out = rt.exec(web, ["echo", "hi"]);
+        if out.exit_code() != 3 { throw `exit code was ${out.exit_code()}`; }
+    });
+"#;
+
+fn run_poke(
+    probe: &Arc<HostProbe>,
+    log: &Arc<crate::runtime::barrier::replay::InMemoryActionLog>,
+) -> OperationResult {
+    *probe.log.lock() = Some(Arc::clone(log));
+    run_action_with(
+        HOST_CALLS_SCRIPT,
+        &[],
+        "poke",
+        Some(log),
+        ActionHooks {
+            container_signaler: Some(Arc::clone(probe) as _),
+            volume_writer: Some(Arc::clone(probe) as _),
+            executor: Some(Arc::clone(probe) as _),
+            ..Default::default()
+        },
+    )
+}
+
+// spec: SUSP#side-effecting-calls
+#[test]
+fn a_host_call_is_on_record_as_begun_before_its_effect_and_complete_before_the_closure_goes_on() {
+    use crate::runtime::barrier::{CallKind, replay::ActionLog as _};
+    let probe = Arc::new(HostProbe::default());
+    let log = Arc::new(crate::runtime::barrier::replay::InMemoryActionLog::new());
+
+    let result = run_poke(&probe, &log);
+    assert!(matches!(result, OperationResult::Completed), "{result:?}");
+
+    assert_eq!(
+        *probe.effects.lock(),
+        vec![("signal", true), ("write", true), ("exec", true)],
+        "each call's begun entry was on record at its effect"
+    );
+    let entries = log.load().unwrap();
+    for kind in [CallKind::Signal, CallKind::Write, CallKind::Exec] {
+        let entry = entries.iter().find(|e| e.call_kind == kind).unwrap();
+        assert!(!entry.begun, "{kind:?} is completed");
+    }
+    let exec = entries
+        .iter()
+        .find(|e| e.call_kind == CallKind::Exec)
+        .unwrap();
+    assert_eq!(exec.extra.as_deref(), Some("3"));
+}
+
+// spec: SUSP#side-effecting-calls
+#[test]
+fn a_replay_does_not_repeat_a_completed_call() {
+    let probe = Arc::new(HostProbe::default());
+    let log = Arc::new(crate::runtime::barrier::replay::InMemoryActionLog::new());
+    run_poke(&probe, &log);
+    probe.effects.lock().clear();
+
+    let result = run_poke(&probe, &log);
+    assert!(matches!(result, OperationResult::Completed), "{result:?}");
+    assert!(probe.effects.lock().is_empty(), "nothing is repeated");
+}
+
+/// Run `poke` once, then mark the entry of `kind` as begun, as it is when the
+/// runtime stops between beginning the call and recording its end.
+fn replay_after_interruption(
+    kind: crate::runtime::barrier::CallKind,
+) -> (OperationResult, Vec<&'static str>) {
+    use crate::runtime::barrier::replay::ActionLog as _;
+    let probe = Arc::new(HostProbe::default());
+    let log = Arc::new(crate::runtime::barrier::replay::InMemoryActionLog::new());
+    run_poke(&probe, &log);
+
+    let mut entries = log.load().unwrap();
+    let at = entries
+        .iter()
+        .find(|x| x.call_kind == kind)
+        .unwrap()
+        .call_index;
+    entries.retain(|e| e.call_index <= at);
+    let target = entries.iter_mut().find(|e| e.call_kind == kind).unwrap();
+    target.begun = true;
+    if kind == crate::runtime::barrier::CallKind::Exec {
+        target.extra = None;
+    }
+    let truncated = Arc::new(crate::runtime::barrier::replay::InMemoryActionLog::new());
+    truncated.commit(&entries);
+    probe.effects.lock().clear();
+
+    let result = run_poke(&probe, &truncated);
+    let effects = probe.effects.lock().iter().map(|(w, _)| *w).collect();
+    (result, effects)
+}
+
+// spec: SUSP#side-effecting-calls
+#[test]
+fn a_replay_reaching_a_begun_signal_or_exec_throws_without_repeating_it() {
+    use crate::runtime::barrier::CallKind;
+    for (kind, name) in [(CallKind::Signal, "signal"), (CallKind::Exec, "exec")] {
+        let (result, effects) = replay_after_interruption(kind);
+        match result {
+            OperationResult::Failed(e) => {
+                assert!(e.to_string().contains("may already have"), "{name}: {e}");
+            }
+            other => panic!("{name}: expected the call to throw, got {other:?}"),
+        }
+        assert!(
+            !effects.contains(&name),
+            "{name} must not be repeated: {effects:?}"
+        );
+    }
+}
+
+// spec: SUSP#side-effecting-calls
+#[test]
+fn a_replay_reaching_a_begun_write_performs_it_again() {
+    use crate::runtime::barrier::CallKind;
+    let (result, effects) = replay_after_interruption(CallKind::Write);
+    // The write is repeated; the exec after it is new work, not a replay.
+    assert!(matches!(result, OperationResult::Completed), "{result:?}");
+    assert_eq!(effects, vec!["write", "exec"]);
 }

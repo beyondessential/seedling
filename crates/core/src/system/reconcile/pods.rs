@@ -68,6 +68,13 @@ pub(super) struct PodActuationUpdate {
     /// Instances successfully started this tick; their written_obs entries must
     /// be cleared so the new lifecycle observations can be recorded.
     pub started_instances: Vec<ResourceInstance>,
+    /// The part of `started_instances` that replaced a run which ended in
+    /// failure.
+    // spec: AUTO#recovery-restart
+    pub recovery_starts: Vec<ResourceInstance>,
+    /// Instances observed successfully this tick.
+    // spec: OBS#failed-observation
+    pub observed: Vec<ResourceInstance>,
     // spec: AUTO#job-completion
     /// Job instances detected as complete this tick, for the reconciler's
     /// completed-jobs set.
@@ -124,6 +131,9 @@ struct PodInstanceResult {
     stop_failure: Option<(ResourceInstance, String)>,
     observe_failure: Option<(ResourceInstance, String)>,
     started_instance: Option<ResourceInstance>,
+    // spec: AUTO#recovery-restart
+    replaced_failed_run: bool,
+    observed: Option<ResourceInstance>,
     // spec: AUTO#job-completion
     completed_job: Option<InstanceId>,
 }
@@ -211,6 +221,8 @@ async fn observe_one_pod<'a>(
         stop_failure: None,
         observe_failure: None,
         started_instance: None,
+        replaced_failed_run: false,
+        observed: None,
         completed_job: None,
     };
 
@@ -234,6 +246,7 @@ async fn observe_one_pod<'a>(
         }
     };
 
+    result.observed = Some(dr.instance.clone());
     for (fact, _ts) in &facts {
         for (kind, payload) in fact.to_obs_kinds() {
             result
@@ -602,6 +615,12 @@ async fn actuate_one_pod(
                         result.image_pull_success = Some((dr.instance.clone(), img));
                     }
                     result.started_instance = Some(dr.instance.clone());
+                    // spec: AUTO#recovery-restart
+                    // A start that replaces a run which ended in failure
+                    // brings the instance back after it exited unexpectedly,
+                    // whoever performs it. The unit's failure may not be
+                    // recorded yet, so this tick's observation counts too.
+                    result.replaced_failed_run = obs.unit_failed || db_run_failed(db, &dr.instance);
                     "ok".to_owned()
                 }
                 Err(crate::system::actuator::ActuateError::ImageUnavailable {
@@ -689,6 +708,17 @@ async fn actuate_one_pod(
     }
 
     Some(obs.result)
+}
+
+/// Whether the instance's most recent recorded run ended in failure.
+// spec: AUTO#recovery-restart
+fn db_run_failed(db: &DbHandle, instance: &ResourceInstance) -> bool {
+    let instance = instance.clone();
+    db.call(move |db| {
+        crate::runtime::history::query_observations(db, &instance)
+            .map(|o| crate::runtime::barrier::oracle::container_run_succeeded(&o) == Some(false))
+            .unwrap_or(false)
+    })
 }
 
 /// Determine which stale instances should have their stop inhibited based on
@@ -940,6 +970,8 @@ pub(super) async fn observe_and_actuate(
         observe_failures: Vec::new(),
         rolling_deployments,
         started_instances: Vec::new(),
+        recovery_starts: Vec::new(),
+        observed: Vec::new(),
         completed_job_instances: Vec::new(),
     };
 
@@ -991,7 +1023,13 @@ pub(super) async fn observe_and_actuate(
         if let Some(f) = result.observe_failure {
             update.observe_failures.push(f);
         }
+        if let Some(instance) = result.observed {
+            update.observed.push(instance);
+        }
         if let Some(s) = result.started_instance {
+            if result.replaced_failed_run {
+                update.recovery_starts.push(s.clone());
+            }
             update.started_instances.push(s);
         }
         // spec: AUTO#job-completion
