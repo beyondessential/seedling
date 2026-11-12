@@ -1257,6 +1257,65 @@ fn job(name: &str) -> ResourceInstance {
     )
 }
 
+// spec: SUSP#deadlines
+// spec: SUSP#rtstop
+#[test]
+fn rt_stop_deadline_start_is_read_from_the_calls_own_record() {
+    // A named job resolves to one instance UUID for the whole operation, so
+    // two stops of it carry byte-identical resources. The deadline's start
+    // was found by resource equality, which handed the second stop the
+    // first one's started_at and expired it on arrival. The first stop
+    // here times out and is caught, leaving its unsatisfied record in the log.
+    let (engine, mut scope, app, ast) = setup_with_script(
+        r#"
+        let runner = app.job("runner").image("docker.io/library/busybox:latest");
+        app.on_start(|rt, _param| {
+            try {
+                rt.stop(app.job("runner"), 1);
+            } catch (e) {}
+            rt.stop(app.job("runner"), 1);
+        });
+    "#,
+    );
+
+    let oracle = Arc::new(TestWorldOracle::new());
+    let log = InMemoryActionLog::new();
+    let op = OperationId::new();
+    let reg: Arc<dyn crate::runtime::InstanceRegistry> = registry();
+    oracle.set(job("runner"), LifecycleState::Running);
+
+    let r = run_pass(
+        &engine,
+        &ast,
+        &app,
+        &mut scope,
+        op.clone(),
+        &log,
+        Arc::clone(&oracle),
+        Arc::clone(&reg),
+    );
+    assert!(matches!(r, OperationResult::Suspended(_)), "pass 1: {r:?}");
+
+    std::thread::sleep(std::time::Duration::from_millis(1100));
+
+    // The first stop's deadline has elapsed and is caught; the second has
+    // only just started waiting, so the closure suspends rather than failing.
+    let r = run_pass(
+        &engine,
+        &ast,
+        &app,
+        &mut scope,
+        op,
+        &log,
+        Arc::clone(&oracle),
+        Arc::clone(&reg),
+    );
+    assert!(
+        matches!(r, OperationResult::Suspended(_)),
+        "the second stop took the first stop's start time: {r:?}"
+    );
+}
+
 // spec: SUSP#barrier-anchoring
 #[test]
 fn terminated_barrier_does_not_short_circuit_against_an_earlier_stop() {

@@ -2754,7 +2754,10 @@ mod tests {
                 .unwrap()
         });
         let recorded = reconciler.persist_obs(batch());
-        assert!(recorded.is_empty(), "nothing was written, so nothing is on record");
+        assert!(
+            recorded.is_empty(),
+            "nothing was written, so nothing is on record"
+        );
 
         oi.state.db.call(|db| {
             db.conn

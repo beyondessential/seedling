@@ -268,11 +268,6 @@ fn resolve_action_volume_params(
     (params, bindings)
 }
 
-/// Run the operation loop synchronously until completion or failure.
-#[expect(
-    clippy::too_many_arguments,
-    reason = "operation state is inherently multi-dimensional"
-)]
 /// End an operation that was accepted but cannot run, as a failed one ends.
 fn refuse_to_run(db: &DbHandle, op_ctx: &OperationEventCtx, description: String) {
     let app_name = op_ctx.app.clone();
@@ -291,6 +286,11 @@ fn refuse_to_run(db: &DbHandle, op_ctx: &OperationEventCtx, description: String)
     op_ctx.failed(&description);
 }
 
+/// Run the operation loop synchronously until completion or failure.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "operation state is inherently multi-dimensional"
+)]
 fn run_operation_loop(
     app: &App,
     db: DbHandle,
@@ -320,7 +320,9 @@ fn run_operation_loop(
         let name = app_name.clone();
         let current = db.call(move |db| crate::runtime::generations::current(db, &name));
         match current {
-            Ok(Some(current)) if op_ctx.target_generation != 0 && current != op_ctx.target_generation => {
+            Ok(Some(current))
+                if op_ctx.target_generation != 0 && current != op_ctx.target_generation =>
+            {
                 let name = app_name.clone();
                 let (limits, cipher, target) = (
                     script_limits.clone(),
@@ -328,7 +330,9 @@ fn run_operation_loop(
                     op_ctx.target_generation,
                 );
                 match db.call(move |db| {
-                    crate::runtime::generations::reconstruct_app_def(db, &name, target, &limits, &cipher)
+                    crate::runtime::generations::reconstruct_app_def(
+                        db, &name, target, &limits, &cipher,
+                    )
                 }) {
                     Ok(rebuilt) => {
                         target_app = rebuilt;
@@ -1201,7 +1205,8 @@ pub fn persist_queued_fire(
     };
     match persist_queued(state, operation_id, None) {
         Ok(()) => {
-            let (app, action, cron) = (fire.app.clone(), fire.action.clone(), fire.cronexpr.clone());
+            let (app, action, cron) =
+                (fire.app.clone(), fire.action.clone(), fire.cronexpr.clone());
             state.db.call(move |db| {
                 if let Err(e) =
                     crate::runtime::db::upsert_schedule_fired(db, &app, &action, &cron, &now.to_string())

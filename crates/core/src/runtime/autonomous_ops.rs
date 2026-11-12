@@ -65,8 +65,8 @@ pub fn record(
     let op = operation.to_owned();
     let rule = rule.to_owned();
     let id = db.call(move |db| {
-        let observation_ids =
-            history::recent_observation_ids(db, inst_id, PROVENANCE_OBSERVATIONS).unwrap_or_default();
+        let observation_ids = history::recent_observation_ids(db, inst_id, PROVENANCE_OBSERVATIONS)
+            .unwrap_or_default();
         let prov = Provenance {
             observation_ids,
             rule,
@@ -189,19 +189,31 @@ mod tests {
             });
         }
 
-        record(&db, &instance, "start", "exited").unwrap().complete("ok");
+        record(&db, &instance, "start", "exited")
+            .unwrap()
+            .complete("ok");
 
         let entries = db
             .call(move |db| query_autonomous_operations(db, instance.id))
             .unwrap();
-        assert_eq!(entries[0].provenance["observations"].as_array().unwrap().len(), 2);
+        assert_eq!(
+            entries[0].provenance["observations"]
+                .as_array()
+                .unwrap()
+                .len(),
+            2
+        );
     }
 
     // spec: HIST#autonomous-operations
     #[test]
     fn an_operation_that_cannot_be_recorded_is_not_to_be_performed() {
         let db = DbHandle::from_db(Db::open_in_memory().unwrap());
-        db.call(|db| db.conn.execute_batch("DROP TABLE autonomous_operations;").unwrap());
+        db.call(|db| {
+            db.conn
+                .execute_batch("DROP TABLE autonomous_operations;")
+                .unwrap()
+        });
         assert!(record(&db, &dep("app", "web"), "start", "rule").is_none());
     }
 
@@ -210,7 +222,10 @@ mod tests {
     fn a_repeated_operation_on_one_instance_is_backed_off_with_a_growing_delay() {
         let db = DbHandle::from_db(Db::open_in_memory().unwrap());
         let instance = dep("app", "web");
-        assert!(back_off(&db, &instance, "start").is_none(), "the first goes ahead");
+        assert!(
+            back_off(&db, &instance, "start").is_none(),
+            "the first goes ahead"
+        );
 
         record(&db, &instance, "start", "r").unwrap().complete("ok");
         let first = back_off(&db, &instance, "start").expect("the repeat waits");
@@ -221,6 +236,9 @@ mod tests {
             back_off(&db, &dep("app", "other"), "start").is_none(),
             "another instance is not held back"
         );
-        assert!(back_off(&db, &instance, "stop").is_none(), "nor is another operation");
+        assert!(
+            back_off(&db, &instance, "stop").is_none(),
+            "nor is another operation"
+        );
     }
 }

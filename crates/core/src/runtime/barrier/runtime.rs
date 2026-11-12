@@ -1826,6 +1826,10 @@ impl RuntimeInstance {
             if let (Some(d), Some(started_at)) = (deadline_secs, started_at)
                 && now.saturating_sub(started_at) >= d
             {
+                // The call keeps its slot, so a script that catches the
+                // failure goes on to the next call at the next position
+                // rather than reading this call's record as its own.
+                g.call_index += 1;
                 return Err(Box::new(EvalAltResult::ErrorRuntime(
                     format!("Barrier deadline of {d}s exceeded waiting for Terminated (rt.stop)")
                         .into(),
@@ -1940,10 +1944,14 @@ impl CustomType for RuntimeInstance {
                             extra: Some(dep_name.clone()),
                             begun: false,
                         };
-                        let on_record = g.commit_through(&entry).map_err(|e| -> Box<EvalAltResult> {
-                            format!("rt.restart: cannot record the call before making it: {e}")
-                                .into()
-                        })?;
+                        let on_record =
+                            g.commit_through(&entry)
+                                .map_err(|e| -> Box<EvalAltResult> {
+                                    format!(
+                                        "rt.restart: cannot record the call before making it: {e}"
+                                    )
+                                    .into()
+                                })?;
                         if !on_record {
                             g.pending.push(entry);
                         }

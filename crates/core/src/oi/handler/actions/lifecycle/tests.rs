@@ -47,7 +47,9 @@ fn run_poke(cancel: bool, break_persistence: bool) -> Run {
             let generation = generations::register_script(db, &name, SCRIPT).unwrap();
             generations::attach_operation(db, &name, generation, &id).unwrap();
             if break_persistence {
-                db.conn.execute_batch("DROP TABLE current_operation;").unwrap();
+                db.conn
+                    .execute_batch("DROP TABLE current_operation;")
+                    .unwrap();
             }
         });
     }
@@ -91,7 +93,11 @@ fn run_poke(cancel: bool, break_persistence: bool) -> Run {
 fn outcome_of(db: &DbHandle) -> Option<String> {
     db.call(|db| {
         db.conn
-            .query_row("SELECT outcome FROM generations WHERE generation = 1", [], |r| r.get(0))
+            .query_row(
+                "SELECT outcome FROM generations WHERE generation = 1",
+                [],
+                |r| r.get(0),
+            )
             .unwrap()
     })
 }
@@ -125,7 +131,10 @@ fn a_cancelled_operation_ends_cancelled_rather_than_failed() {
     assert!(!run.ok);
 
     let kinds = kinds_of(&mut run.events);
-    assert!(kinds.contains(&"OperationCancelled".to_owned()), "{kinds:?}");
+    assert!(
+        kinds.contains(&"OperationCancelled".to_owned()),
+        "{kinds:?}"
+    );
     assert!(!kinds.contains(&"OperationFailed".to_owned()), "{kinds:?}");
     assert_eq!(outcome_of(&run.db).as_deref(), Some("cancelled"));
     let filed: Vec<String> = run.db.call(|db| {
@@ -197,9 +206,7 @@ fn a_replayed_closure_restarts_the_deployment_only_once() {
     };
     let generation = |db: &DbHandle| {
         let name = name.clone();
-        db.call(move |db| {
-            crate::runtime::restart_gens::load_restart_gen(db, &name, "web").unwrap()
-        })
+        db.call(move |db| crate::runtime::restart_gens::load_restart_gen(db, &name, "web").unwrap())
     };
 
     assert!(run(&db));
@@ -269,8 +276,10 @@ fn an_operation_runs_against_its_target_generation_not_the_current_one() {
         None,
     );
     assert!(ok);
-    let restarted = db.call(move |db| {
-        crate::runtime::restart_gens::load_restart_gen(db, &name, "web").unwrap()
-    });
-    assert_eq!(restarted, 1, "generation 1's closure ran, not generation 2's");
+    let restarted = db
+        .call(move |db| crate::runtime::restart_gens::load_restart_gen(db, &name, "web").unwrap());
+    assert_eq!(
+        restarted, 1,
+        "generation 1's closure ran, not generation 2's"
+    );
 }

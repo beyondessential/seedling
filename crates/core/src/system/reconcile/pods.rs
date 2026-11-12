@@ -585,9 +585,10 @@ async fn actuate_one_pod(
                 } else {
                     "systemd unit active but container not running; tearing down for restart"
                 };
-                let Some(op) = autonomous_ops::record(db, &dr.instance, "stop_broken_unit", rule) else {
-                return Some(obs.result);
-            };
+                let Some(op) = autonomous_ops::record(db, &dr.instance, "stop_broken_unit", rule)
+                else {
+                    return Some(obs.result);
+                };
                 let outcome = match actuator.stop(&dr.instance, &dr.definition).await {
                     Ok(()) => "ok".to_owned(),
                     Err(e) => {

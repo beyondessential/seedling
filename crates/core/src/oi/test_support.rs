@@ -318,14 +318,17 @@ mod tests {
     // spec: SCHED#fire-times
     #[test]
     fn a_queued_fire_is_stamped_once_persisted_and_left_unstamped_if_refused() {
-        use crate::runtime::{db as rdb, scheduler::ScheduleResult, schedules::check_due_schedules};
+        use crate::runtime::{
+            db as rdb, scheduler::ScheduleResult, schedules::check_due_schedules,
+        };
         let oi = oi_with_a_busy_scheduler("demo");
         let app = seedling_protocol::names::AppName::new("demo").unwrap();
         let action = seedling_protocol::names::ActionName::new("refresh").unwrap();
         oi.state.db.call({
             let (app, action) = (app.clone(), action.clone());
             move |db| {
-                rdb::ensure_schedules(db, &app, &[(action.clone(), "0 * * * *".to_owned())]).unwrap();
+                rdb::ensure_schedules(db, &app, &[(action.clone(), "0 * * * *".to_owned())])
+                    .unwrap();
                 rdb::upsert_schedule_fired(db, &app, &action, "0 * * * *", "2026-04-21T17:05:00Z")
                     .unwrap();
             }
@@ -343,19 +346,28 @@ mod tests {
                 }
             });
             assert_eq!(fired.len(), 1);
-            assert!(!fired[0].accepted, "it queued behind the other app's operation");
+            assert!(
+                !fired[0].accepted,
+                "it queued behind the other app's operation"
+            );
             fired.remove(0)
         };
         let last_fired = |oi: &TestOi| -> String {
             oi.state.db.call(|db| {
                 db.conn
-                    .query_row("SELECT last_fired_at FROM action_schedules", [], |r| r.get(0))
+                    .query_row("SELECT last_fired_at FROM action_schedules", [], |r| {
+                        r.get(0)
+                    })
                     .unwrap()
             })
         };
 
         // Refused: not persisted, so not stamped, and off the queue.
-        oi.state.db.call(|db| db.conn.execute_batch("DROP TABLE queued_operations;").unwrap());
+        oi.state.db.call(|db| {
+            db.conn
+                .execute_batch("DROP TABLE queued_operations;")
+                .unwrap()
+        });
         let first = fire(&oi);
         crate::oi::handler::actions::lifecycle::persist_queued_fire(&oi.state, &first, now);
         assert_eq!(last_fired(&oi), "2026-04-21T17:05:00Z");
