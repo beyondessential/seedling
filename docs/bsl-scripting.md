@@ -94,8 +94,10 @@ svc.ingress("dtls.example.com", 443)
 // The resulting Ingress is bound to the Service. Throws on external services.
 http_svc.ingress("api.example.com", 443).tls(Terminate.Https, Output.Http1);
 
-// External services are slots; the operator binds them to a concrete endpoint.
+// External services are slots; the operator maps them to a concrete endpoint.
+// A pod reaches one by mounting its ports; binding a pod to one throws.
 let db = app.external_service("upstream-db");
+app.deployment("api").mount(db.port(5432));
 ```
 
 ### Deployment / Job (Container + Pod)

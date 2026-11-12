@@ -238,7 +238,13 @@ pub(super) fn compute_nftables_rules(
             caddy_ip,
             caddy_v4_addr,
         ));
-        all_mounts.extend(rules::build_mount_rules(running));
+        all_mounts.extend(rules::build_mount_rules(
+            running,
+            &app.name,
+            ext_snapshot,
+            &backends_by_app,
+            resolve_ctx,
+        ));
         match rules::build_service_dnat_rules(
             node_prefix,
             registry,

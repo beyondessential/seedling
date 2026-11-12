@@ -1267,3 +1267,23 @@ fn static_ref_reports_an_undeclared_name_as_missing() {
     );
     assert!(!msg.contains("it is a"), "got: {msg}");
 }
+
+// spec: POD#port-bindings
+// spec: SVC#external-services
+#[test]
+fn binding_a_pod_to_an_external_service_throws() {
+    for binding in [
+        r#"app.deployment("web").http(8080, ext.http(80).route("/api"))"#,
+        r#"app.deployment("web").http(8080, ext.http(80))"#,
+        r#"app.deployment("web").tcp(5432, ext.port(5432))"#,
+        r#"app.deployment("web").udp(53, ext.port(53))"#,
+    ] {
+        let err = run_test_script_err(&format!(
+            r#"let ext = app.external_service("upstream"); {binding};"#
+        ));
+        assert!(
+            err.to_string().contains("external service"),
+            "{binding}: {err}"
+        );
+    }
+}

@@ -11,6 +11,7 @@ use crate::{
     defs::{
         app::AppDef,
         resource::{Resource, ResourceKind},
+        service::{BoundService, ServicePort},
     },
     runtime::{
         InstanceRegistry,
@@ -244,11 +245,13 @@ pub(super) fn build_service_dnat_rules(
         });
     }
 
-    // spec: SITE#external-mappings external-service bindings are
-    // resolved through the operator-configured mapping table: the slot gets
-    // its own stable service IP, backends come from either the target app's
-    // service or from the site service's endpoints.
-    for (ext_name, svc_port, proto) in collect_external_bindings(running_pods) {
+    // spec: SITE#external-mappings
+    // spec: SVC#external-services
+    // An external service's mounted ports are resolved through the
+    // operator-configured mapping table: the slot gets its own stable service
+    // IP, backends come from either the target app's service or from the
+    // site service's endpoints.
+    for (ext_name, svc_port, proto) in collect_external_mounts(running_pods) {
         let Some(target) = snapshot.mappings.get(&(app_name.clone(), ext_name.clone())) else {
             continue;
         };
@@ -280,72 +283,37 @@ pub(super) fn build_service_dnat_rules(
     })
 }
 
-/// Walk a running app's pods and collect its external-service bindings as
-/// `(slot name, service port, transport protocol)` triples, de-duplicated so
-/// we emit at most one DNAT rule per slot+port+proto.
-fn collect_external_bindings(
+/// The Service Ports a running pod mounts.
+fn pod_service_mounts(pod: &RunningPod) -> Vec<ServicePort> {
+    match &pod.resource {
+        Resource::Deployment(dep) => dep.def.lock().pod.lock().service_mounts.clone(),
+        Resource::Job(job) => job.def.lock().pod.lock().service_mounts.clone(),
+        _ => Vec::new(),
+    }
+}
+
+/// Walk a running app's pods and collect the external-service ports they
+/// mount as `(slot name, service port, transport protocol)` triples,
+/// de-duplicated so we emit at most one DNAT rule per slot+port+proto. A
+/// mount names no protocol, so each mounted port is collected for both.
+// spec: SVC#external-services
+fn collect_external_mounts(
     running_pods: &[RunningPod],
 ) -> std::collections::HashSet<(ExternalServiceName, u16, ForwardProto)> {
     let mut out = std::collections::HashSet::new();
-
     for pod in running_pods {
-        let (http, tcp, udp) = match &pod.resource {
-            Resource::Deployment(dep) => {
-                let def = dep.def.lock();
-                let pod_def = def.pod.lock();
-                (
-                    pod_def.http_bindings.clone(),
-                    pod_def.tcp_bindings.clone(),
-                    pod_def.udp_bindings.clone(),
-                )
-            }
-            Resource::Job(job) => {
-                let def = job.def.lock();
-                let pod_def = def.pod.lock();
-                (
-                    pod_def.http_bindings.clone(),
-                    pod_def.tcp_bindings.clone(),
-                    pod_def.udp_bindings.clone(),
-                )
-            }
-            _ => continue,
-        };
-
-        for b in &http {
-            if b.route.http.service.is_external() {
-                out.insert((
-                    ExternalServiceName::new_unchecked(
-                        b.route.http.service.name().as_str().to_owned(),
-                    ),
-                    b.route.http.port.get(),
-                    ForwardProto::Tcp,
-                ));
-            }
-        }
-        for b in &tcp {
-            if b.service_port.service.is_external() {
-                out.insert((
-                    ExternalServiceName::new_unchecked(
-                        b.service_port.service.name().as_str().to_owned(),
-                    ),
-                    b.service_port.port.get(),
-                    ForwardProto::Tcp,
-                ));
-            }
-        }
-        for b in &udp {
-            if b.service_port.service.is_external() {
-                out.insert((
-                    ExternalServiceName::new_unchecked(
-                        b.service_port.service.name().as_str().to_owned(),
-                    ),
-                    b.service_port.port.get(),
-                    ForwardProto::Udp,
-                ));
+        for sp in pod_service_mounts(pod) {
+            if let BoundService::External(ext) = &sp.service {
+                for proto in [ForwardProto::Tcp, ForwardProto::Udp] {
+                    out.insert((
+                        ExternalServiceName::new_unchecked(ext.name.as_str().to_owned()),
+                        sp.port.get(),
+                        proto,
+                    ));
+                }
             }
         }
     }
-
     out
 }
 
@@ -410,25 +378,18 @@ fn protocols_match(site_proto: SiteServiceProtocol, fwd_proto: ForwardProto) -> 
 }
 
 // spec: INFRA#mount-endpoint-addressing
-pub(super) fn build_mount_rules(running_pods: &[RunningPod]) -> Vec<MountRule> {
+pub(super) fn build_mount_rules(
+    running_pods: &[RunningPod],
+    app_name: &AppName,
+    snapshot: &ExternalServiceSnapshot,
+    backends_by_app: &HashMap<AppName, AppBackendMap>,
+    resolve_ctx: &ResolveCtx<'_>,
+) -> Vec<MountRule> {
     let backend_map = collect_service_backends(running_pods).filtered;
     let mut rules = Vec::new();
 
     for pod in running_pods {
-        let service_mounts = match &pod.resource {
-            Resource::Deployment(dep) => {
-                let def = dep.def.lock();
-                let pod_def = def.pod.lock();
-                pod_def.service_mounts.clone()
-            }
-            Resource::Job(job) => {
-                let def = job.def.lock();
-                let pod_def = def.pod.lock();
-                pod_def.service_mounts.clone()
-            }
-            _ => continue,
-        };
-
+        let service_mounts = pod_service_mounts(pod);
         if service_mounts.is_empty() {
             continue;
         }
@@ -436,12 +397,33 @@ pub(super) fn build_mount_rules(running_pods: &[RunningPod]) -> Vec<MountRule> {
         let mount_addr = crate::system::translate::proxy::node_mount_addr(&pod.pod_prefix);
 
         for sp in &service_mounts {
-            let svc_name = sp.service.name().as_str();
             // Emit a mount rule for each protocol that has backends for this
             // (service, port) pair.  Most mounts are TCP but UDP is valid too.
             for proto in [ForwardProto::Tcp, ForwardProto::Udp] {
-                let key = (svc_name.to_owned(), sp.port.get(), proto);
-                let svc_backends = backend_map.get(&key).cloned().unwrap_or_default();
+                let svc_backends = match &sp.service {
+                    BoundService::App(svc) => backend_map
+                        .get(&(svc.name.as_str().to_owned(), sp.port.get(), proto))
+                        .cloned()
+                        .unwrap_or_default(),
+                    // spec: SVC#external-services
+                    BoundService::External(ext) => snapshot
+                        .mappings
+                        .get(&(
+                            app_name.clone(),
+                            ExternalServiceName::new_unchecked(ext.name.as_str().to_owned()),
+                        ))
+                        .map(|target| {
+                            resolve_external_backends(
+                                target,
+                                sp.port.get(),
+                                proto,
+                                snapshot,
+                                backends_by_app,
+                                resolve_ctx,
+                            )
+                        })
+                        .unwrap_or_default(),
+                };
                 if svc_backends.is_empty() {
                     continue;
                 }
@@ -490,6 +472,79 @@ mod tests {
             has_ipv6_egress: true,
             resolver,
         }
+    }
+
+    // spec: SVC#external-services
+    // spec: INFRA#mount-endpoint-addressing
+    #[test]
+    fn a_mounted_external_service_reaches_its_mapped_endpoint() {
+        let app_def = crate::tests::run_test_script_app(
+            r#"
+            let db = app.external_service("database");
+            app.deployment("web").image("ghcr.io/example/web:1").mount(db.port(5432));
+        "#,
+        )
+        .def
+        .load_full();
+        let web = app_def
+            .resources
+            .iter()
+            .find(|(id, _)| id.name.as_str() == "web")
+            .map(|(_, r)| r.clone())
+            .unwrap();
+        let app = AppName::new_unchecked("demo");
+        let pod = RunningPod {
+            instance: crate::runtime::identity::ResourceInstance::new_singleton(
+                app.clone(),
+                ResourceKind::Deployment,
+                "web",
+            ),
+            pod_prefix: "fd00:1:2:3::/64".parse().unwrap(),
+            pod_ip: ipv6("fd00:1:2:3::2"),
+            resource: web,
+            observed_healthy: true,
+        };
+
+        let site = SiteServiceName::new("postgres-prod").unwrap();
+        let mut snap = snapshot_with_site(
+            site.as_str(),
+            vec![SiteServiceEndpoint {
+                service_port: 5432,
+                protocol: SiteServiceProtocol::Tcp,
+                remote_host: "fd5e::1".into(),
+                remote_port: 6432,
+            }],
+        );
+        snap.mappings.insert(
+            (app.clone(), ExternalServiceName::new_unchecked("database")),
+            ServiceRef::Site { name: site },
+        );
+        let resolver = empty_resolver();
+        let pods = [pod];
+
+        let mounts = build_mount_rules(&pods, &app, &snap, &HashMap::new(), &ctx(&resolver));
+        assert_eq!(mounts.len(), 1);
+        assert_eq!(mounts[0].mount_port, 5432);
+        assert_eq!(mounts[0].backends, vec![(ipv6("fd5e::1"), 6432)]);
+
+        let registry = crate::runtime::registry::EphemeralInstanceRegistry::new();
+        let dnat = build_service_dnat_rules(
+            &"fd00:1::/48".parse().unwrap(),
+            &registry,
+            &pods,
+            &app,
+            &snap,
+            &HashMap::new(),
+            &ctx(&resolver),
+        )
+        .unwrap();
+        let tcp = dnat
+            .rules
+            .iter()
+            .find(|r| r.proto == ForwardProto::Tcp)
+            .expect("the external service's address routes to its endpoint");
+        assert_eq!(tcp.service_port, 5432);
+        assert_eq!(tcp.backends, vec![(ipv6("fd5e::1"), 6432)]);
     }
 
     #[test]
