@@ -1317,6 +1317,7 @@ async fn resume_operations(oi_state: &Arc<OiState>) {
     }
 
     let persisted_operation = state.current;
+    let cancel_requested = state.cancel_requested;
     if let Some(op) = &persisted_operation {
         tracing::info!(
             app = %op.app,
@@ -1360,7 +1361,7 @@ async fn resume_operations(oi_state: &Arc<OiState>) {
     let replayed_app = match persisted_operation {
         Some(op) => {
             let app = op.app.clone();
-            replay_interrupted_operation(Arc::clone(oi_state), op).then_some(app)
+            replay_interrupted_operation(Arc::clone(oi_state), op, cancel_requested).then_some(app)
         }
         None => None,
     };
@@ -1399,14 +1400,26 @@ async fn resume_operations(oi_state: &Arc<OiState>) {
                     }
                     if matches!(*phase, AppPhase::NotInstalled) {
                         let app_for_query = e.name.clone();
-                        let count: i64 = db.call(move |db| {
+                        let counted = db.call(move |db| {
                             seedling_core::runtime::history::app_resource_instance_count(
                                 db,
                                 &app_for_query,
                             )
-                            .unwrap_or(0)
                         });
-                        return count > 0;
+                        // A count that cannot be read is not a count of none:
+                        // an app with recorded instances is left alone this
+                        // start, not declared clean.
+                        return match counted {
+                            Ok(count) => count > 0,
+                            Err(err) => {
+                                tracing::warn!(
+                                    app = %e.name,
+                                    "cannot count the instances recorded for an app; \
+                                     not recovering it: {err}"
+                                );
+                                false
+                            }
+                        };
                     }
                     false
                 })
@@ -1464,9 +1477,10 @@ async fn resume_operations(oi_state: &Arc<OiState>) {
 fn replay_interrupted_operation(
     state: Arc<OiState>,
     op: seedling_core::runtime::history::CurrentOperation,
+    cancel_requested: bool,
 ) -> bool {
     let operation_id = op.operation_id.0.clone();
-    let replayed = start_replay(Arc::clone(&state), op);
+    let replayed = start_replay(Arc::clone(&state), op, cancel_requested);
     if !replayed {
         abandon_spared_resources(&state.driver, &state.db, &operation_id);
     }
@@ -1478,6 +1492,7 @@ fn replay_interrupted_operation(
 fn start_replay(
     state: Arc<OiState>,
     op: seedling_core::runtime::history::CurrentOperation,
+    cancel_requested: bool,
 ) -> bool {
     use seedling_core::runtime::{
         apps::AppPhase,
@@ -1615,10 +1630,7 @@ fn start_replay(
     // current_operation.cancel_requested; flip the newly-minted token so
     // the replay unwinds cleanly at the first barrier instead of re-doing
     // the whole operation the operator just cancelled.
-    let cancel_was_requested = state
-        .db
-        .call(|db| seedling_core::runtime::history::load_cancel_requested(db).unwrap_or(false));
-    if cancel_was_requested {
+    if cancel_requested {
         let outcome = state.scheduler.lock().request_cancel(&app_name);
         tracing::info!(
             app = %app_name,

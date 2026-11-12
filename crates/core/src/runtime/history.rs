@@ -886,6 +886,8 @@ pub fn load_queued_operations(
 pub struct PersistedOperationState {
     /// The operation that was in progress, if any.
     pub current: Option<CurrentOperation>,
+    /// Whether a cancel was persisted for `current`; false when there is none.
+    pub cancel_requested: bool,
     /// The requests that were waiting, in the order they were made.
     pub queued: Vec<crate::runtime::scheduler::QueuedOperation>,
 }
@@ -902,12 +904,18 @@ pub fn read_operation_state(
 ) -> Result<PersistedOperationState, String> {
     let current =
         load_current_operation(db).map_err(|e| format!("the persisted operation: {e}"))?;
-    if current.is_some() {
-        load_cancel_requested(db).map_err(|e| format!("the persisted cancel: {e}"))?;
-    }
+    let cancel_requested = if current.is_some() {
+        load_cancel_requested(db).map_err(|e| format!("the persisted cancel: {e}"))?
+    } else {
+        false
+    };
     let queued = load_queued_operations(db, cipher)
         .map_err(|e| format!("the persisted operation queue: {e}"))?;
-    Ok(PersistedOperationState { current, queued })
+    Ok(PersistedOperationState {
+        current,
+        cancel_requested,
+        queued,
+    })
 }
 
 pub fn clear_current_operation(db: &Db) -> rusqlite::Result<()> {

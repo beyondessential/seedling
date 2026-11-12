@@ -422,8 +422,9 @@ fn run_outer_in_replay_context(
         fn lifecycle_state(
             &self,
             _resource: &crate::runtime::ResourceInstance,
-        ) -> crate::runtime::LifecycleState {
-            crate::runtime::LifecycleState::Ready
+        ) -> Result<crate::runtime::LifecycleState, crate::runtime::barrier::oracle::Undetermined>
+        {
+            Ok(crate::runtime::LifecycleState::Ready)
         }
     }
 

@@ -1,5 +1,7 @@
 use std::collections::BTreeSet;
 
+use seedling_protocol::names::AppName;
+
 use crate::{
     defs::{container::image_registry, resource::Resource},
     runtime::{db::Db, faults, registries},
@@ -44,12 +46,35 @@ fn collect_image_registries(entry: &AppEntry) -> BTreeSet<String> {
 
 // spec: CTR#registry-allowlist
 pub fn sync_registry_faults(db: &Db, entry: &AppEntry) {
-    let used = collect_image_registries(entry);
+    sync_used_registries(db, &entry.name, &collect_image_registries(entry));
+}
 
-    let allowed: BTreeSet<String> = registries::list_allowed_registries(db)
-        .unwrap_or_default()
-        .into_iter()
-        .collect();
+/// File, replace or clear the app's `disallowed_registry` fault for the given
+/// registries. A failed read of the allowlist or of the app's faults leaves
+/// every fault as it was: neither is an empty list.
+// spec: CTR#registry-allowlist
+pub fn sync_used_registries(db: &Db, app: &AppName, used: &BTreeSet<String>) {
+    let allowed: BTreeSet<String> = match registries::list_allowed_registries(db) {
+        Ok(list) => list.into_iter().collect(),
+        Err(e) => {
+            tracing::warn!(
+                app = %app,
+                "could not read the registry allowlist, leaving {FAULT_KIND} faults as they are: {e}",
+            );
+            return;
+        }
+    };
+
+    let existing: Vec<_> = match faults::list_active_faults(db, Some(app)) {
+        Ok(list) => list.into_iter().filter(|f| f.kind == FAULT_KIND).collect(),
+        Err(e) => {
+            tracing::warn!(
+                app = %app,
+                "could not read the app's faults, leaving {FAULT_KIND} faults as they are: {e}",
+            );
+            return;
+        }
+    };
 
     let disallowed: Vec<&str> = used
         .iter()
@@ -57,17 +82,11 @@ pub fn sync_registry_faults(db: &Db, entry: &AppEntry) {
         .map(String::as_str)
         .collect();
 
-    let existing: Vec<_> = faults::list_active_faults(db, Some(&entry.name))
-        .unwrap_or_default()
-        .into_iter()
-        .filter(|f| f.kind == FAULT_KIND)
-        .collect();
-
     if disallowed.is_empty() {
         for f in &existing {
-            if let Err(e) = faults::clear_fault(db, &f.id, &entry.name) {
+            if let Err(e) = faults::clear_fault(db, &f.id, app) {
                 tracing::warn!(
-                    app = %entry.name, fault_id = %f.id,
+                    app = %app, fault_id = %f.id,
                     "failed to clear {FAULT_KIND} fault: {e}",
                 );
             }
@@ -86,17 +105,16 @@ pub fn sync_registry_faults(db: &Db, entry: &AppEntry) {
     }
 
     for f in &existing {
-        if let Err(e) = faults::clear_fault(db, &f.id, &entry.name) {
+        if let Err(e) = faults::clear_fault(db, &f.id, app) {
             tracing::warn!(
-                app = %entry.name, fault_id = %f.id,
+                app = %app, fault_id = %f.id,
                 "failed to clear stale {FAULT_KIND} fault: {e}",
             );
         }
     }
 
-    if let Err(e) = faults::file_fault(db, &entry.name, None, None, None, FAULT_KIND, &description)
-    {
-        tracing::warn!(app = %entry.name, "failed to file {FAULT_KIND} fault: {e}");
+    if let Err(e) = faults::file_fault(db, app, None, None, None, FAULT_KIND, &description) {
+        tracing::warn!(app = %app, "failed to file {FAULT_KIND} fault: {e}");
     }
 }
 

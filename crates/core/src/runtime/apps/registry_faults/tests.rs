@@ -139,3 +139,34 @@ fn changed_disallowed_set_replaces_the_fault() {
     assert_ne!(second[0].id, first[0].id);
     assert!(second[0].description.contains("two.example.com"));
 }
+
+// spec: CTR#registry-allowlist
+#[test]
+fn an_unreadable_allowlist_neither_files_nor_clears_the_fault() {
+    let db = Db::open_in_memory().expect("open");
+    let bad = entry_with_script(
+        "myapp",
+        r#"app.deployment("web").image("evil.example.com/foo:1");"#,
+    );
+    sync_registry_faults(&db, &bad);
+    assert_eq!(active_registry_faults(&db, "myapp").len(), 1);
+
+    // With the allowlist unreadable, an app on an allowed registry must not
+    // clear the standing fault, and an app on a disallowed one must not file.
+    db.conn
+        .execute("DROP TABLE allowed_registries", [])
+        .unwrap();
+    let good = entry_with_script(
+        "myapp",
+        r#"app.deployment("web").image("docker.io/library/nginx:latest");"#,
+    );
+    sync_registry_faults(&db, &good);
+    assert_eq!(active_registry_faults(&db, "myapp").len(), 1);
+
+    let other = entry_with_script(
+        "other",
+        r#"app.deployment("web").image("docker.io/library/nginx:latest");"#,
+    );
+    sync_registry_faults(&db, &other);
+    assert!(active_registry_faults(&db, "other").is_empty());
+}

@@ -29,18 +29,21 @@ pub fn active_operation(scheduler: &Mutex<Scheduler>) -> Option<ActiveOperation>
 ///
 /// The registry is read only to take a snapshot, and released before every
 /// app is read from the database in one pass.
+///
+/// A failed read fails the whole call: a status derived without what could
+/// not be read would claim an app healthy that nobody checked.
 pub fn all(
     registry: &RwLock<AppRegistry>,
     scheduler: &Mutex<Scheduler>,
     db: &DbHandle,
-) -> Vec<(AppName, AppStatus)> {
+) -> rusqlite::Result<Vec<(AppName, AppStatus)>> {
     let (active, snapshots) = snapshot_all(registry, scheduler, |_| ());
     db.call(move |db| {
         snapshots
             .into_iter()
             .map(|(snapshot, ())| {
-                let status = status_in(db, &snapshot, active.as_ref());
-                (snapshot.name, status)
+                let status = status_in(db, &snapshot, active.as_ref())?;
+                Ok((snapshot.name, status))
             })
             .collect()
     })
@@ -93,7 +96,14 @@ pub fn standings<T: Send + 'static>(
 /// The phase resolves the states that outrank an operation; an operation the
 /// scheduler is running for the app is the only thing that makes it
 /// Operating, because the scheduler is what knows which action it is.
-pub fn of(entry: &AppEntry, active: Option<&ActiveOperation>, db: &DbHandle) -> AppStatus {
+///
+/// A failed read is an error, never a status: Running claims everything was
+/// checked, and Degraded claims something was found wrong.
+pub fn of(
+    entry: &AppEntry,
+    active: Option<&ActiveOperation>,
+    db: &DbHandle,
+) -> rusqlite::Result<AppStatus> {
     let snapshot = Snapshot::of(entry);
     let active = active.cloned();
     db.call(move |db| status_in(db, &snapshot, active.as_ref()))
@@ -161,20 +171,17 @@ fn settled(snapshot: &Snapshot, active: Option<&ActiveOperation>) -> Option<AppS
     }
 }
 
-fn status_in(db: &Db, snapshot: &Snapshot, active: Option<&ActiveOperation>) -> AppStatus {
-    settled(snapshot, active).unwrap_or_else(|| {
-        let read = faults::has_active_faults(db, &snapshot.name).and_then(|faulted| {
-            let stopped = stopped::load_stopped(db, &snapshot.name)?;
-            steady(db, snapshot, faulted, &stopped)
-        });
-        read.unwrap_or_else(|e| {
-            // Running is a claim that everything was checked. With a read
-            // failed nothing was, and Degraded is the status that has an
-            // operator look.
-            tracing::warn!(app = %snapshot.name, "could not read the app's state to derive its status: {e}");
-            AppStatus::Degraded
-        })
-    })
+fn status_in(
+    db: &Db,
+    snapshot: &Snapshot,
+    active: Option<&ActiveOperation>,
+) -> rusqlite::Result<AppStatus> {
+    if let Some(status) = settled(snapshot, active) {
+        return Ok(status);
+    }
+    let faulted = faults::has_active_faults(db, &snapshot.name)?;
+    let stopped = stopped::load_stopped(db, &snapshot.name)?;
+    steady(db, snapshot, faulted, &stopped)
 }
 
 /// What the status rollup reads of one declared resource.

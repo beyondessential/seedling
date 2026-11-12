@@ -107,6 +107,12 @@ pub enum Error {
     },
     MissingBundle(String),
     CorruptBundle(String),
+    /// A recorded parameter value could not be read back, so the parameter
+    /// map at the generation cannot be built.
+    UnreadableParam {
+        param: String,
+        reason: String,
+    },
 }
 
 impl std::fmt::Display for Error {
@@ -120,6 +126,12 @@ impl std::fmt::Display for Error {
             }
             Self::MissingBundle(hash) => write!(f, "definition bundle not found for hash {hash}"),
             Self::CorruptBundle(msg) => write!(f, "stored definition bundle is unreadable: {msg}"),
+            Self::UnreadableParam { param, reason } => {
+                write!(
+                    f,
+                    "recorded value of parameter {param:?} is unreadable: {reason}"
+                )
+            }
         }
     }
 }
@@ -583,7 +595,7 @@ pub fn param_map_at(
     app: &AppName,
     generation: Generation,
     cipher: &Cipher,
-) -> rusqlite::Result<BTreeMap<String, String>> {
+) -> Result<BTreeMap<String, String>, Error> {
     let mut stmt = db.conn.prepare(
         "SELECT param_name, kind, new_value, new_value_ciphertext
          FROM generations
@@ -616,7 +628,10 @@ pub fn param_map_at(
                     Ok(s) => Some(s.expose_secret().to_owned()),
                     Err(e) => {
                         tracing::error!(app = %app, param = %name, "failed to decrypt param history for reconstruction: {e}");
-                        None
+                        return Err(Error::UnreadableParam {
+                            param: name,
+                            reason: e.to_string(),
+                        });
                     }
                 }
             } else {

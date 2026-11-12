@@ -56,6 +56,18 @@ pub(crate) struct TestOi {
 
 impl TestOi {
     pub fn new() -> Self {
+        Self::build(None)
+    }
+
+    /// A harness whose container runtime fails every call, as when podman
+    /// could not be reached.
+    pub fn with_unreadable_containers() -> Self {
+        Self::build(Some(Arc::new(
+            crate::system::unavailable::UnavailableContainerRuntime,
+        )))
+    }
+
+    fn build(container_runtime: Option<Arc<dyn crate::system::ContainerRuntime>>) -> Self {
         let data_dir = tempfile::tempdir().expect("create temp data dir");
         let (driver, _caddy_admin) =
             System::setup_stubbed(data_dir.path(), false).expect("stub system setup");
@@ -83,7 +95,7 @@ impl TestOi {
             shells: crate::oi::shells::ShellRegistry::new(),
             forwards: crate::oi::forwards::ForwardRegistry::new(),
             canopy: Arc::new(crate::oi::canopy::CanopyState::new()),
-            container_runtime: Arc::clone(&driver.container),
+            container_runtime: container_runtime.unwrap_or_else(|| Arc::clone(&driver.container)),
             driver,
             node_prefix: "fd5e:ed11:9000::/48".parse().expect("valid /48"),
             event_tx: event_tx.clone(),
@@ -563,8 +575,15 @@ mod tests {
             .call("/apps/remove", json!({ "app": "demo" }))
             .unwrap_err();
         assert_eq!(code, "internal");
-        oi.call("/apps/show", json!({ "app": "demo" }))
-            .expect("the app is still registered");
+        let listed = oi.call("/apps/list", json!({})).unwrap();
+        assert!(
+            listed
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|a| a["name"] == "demo"),
+            "the app is still registered"
+        );
     }
 
     // spec: FWD#stopping-a-forward

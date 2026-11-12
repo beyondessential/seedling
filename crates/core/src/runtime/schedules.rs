@@ -51,10 +51,29 @@ pub fn check_due_schedules(
     now: Timestamp,
     installed_app: &dyn Fn(&AppName) -> Option<ScheduledApp>,
 ) -> Vec<FiredSchedule> {
+    // spec: SCHED#firing
+    // With the records unreadable nothing is fired: an absent schedule and an
+    // unread one must not look alike.
+    let unreadable = FaultKey::new(
+        &AppName::new_unchecked("_system"),
+        "schedules_unreadable",
+        "",
+    );
     let rows = match db::list_all_schedules(db) {
-        Ok(r) => r,
+        Ok(r) => {
+            let _ = faults::clear_fault_by_key(db, &unreadable);
+            r
+        }
         Err(e) => {
             tracing::error!("failed to list schedules: {e}");
+            if let Err(e) = faults::file_once(
+                db,
+                &unreadable,
+                &FaultMeta::default(),
+                &format!("the schedule records cannot be read, so no schedule is fired: {e}"),
+            ) {
+                tracing::warn!("failed to file schedules_unreadable: {e}");
+            }
             return Vec::new();
         }
     };
@@ -74,17 +93,40 @@ pub fn check_due_schedules(
             }
         };
 
+        // spec: SCHED#firing
+        // A last fire time that cannot be parsed is not "never fired": the
+        // schedule is not fired, and the action holds a fault until it can be.
+        let unreadable = FaultKey::new(&row.app, "schedule_unreadable", row.action.as_str());
         let base_time = match &row.last_fired_at {
             Some(ts_str) => match ts_str.parse::<Timestamp>() {
                 Ok(ts) => ts,
-                Err(_) => now
-                    .checked_sub(SignedDuration::from_secs(300))
-                    .unwrap_or(now),
+                Err(e) => {
+                    tracing::warn!(
+                        app = %row.app,
+                        action = %row.action,
+                        last_fired_at = %ts_str,
+                        "schedule not fired: its last fire time cannot be parsed: {e}"
+                    );
+                    if let Err(e) = faults::file_once(
+                        db,
+                        &unreadable,
+                        &FaultMeta::default(),
+                        &format!(
+                            "the last fire time {ts_str:?} of a schedule of {} cannot be parsed, \
+                             so it is not fired",
+                            row.action
+                        ),
+                    ) {
+                        tracing::warn!(app = %row.app, action = %row.action, "failed to file schedule_unreadable: {e}");
+                    }
+                    continue;
+                }
             },
             None => now
                 .checked_sub(SignedDuration::from_secs(300))
                 .unwrap_or(now),
         };
+        let _ = faults::clear_fault_by_key(db, &unreadable);
 
         let next_fire = match crontab.find_next(base_time) {
             Ok(zoned) => Timestamp::from(zoned),
@@ -391,6 +433,85 @@ mod tests {
         assert_eq!(fired[0].app, "myapp");
         assert_eq!(fired[0].action, "backup");
         assert!(fired[0].accepted);
+    }
+
+    // spec: SCHED#firing
+    #[test]
+    fn a_last_fire_time_that_cannot_be_parsed_is_not_never_fired() {
+        let db = Db::open_in_memory().unwrap();
+        let pairs = vec![(action_name("backup"), "* * * * *".to_owned())];
+        db::ensure_schedules(&db, &app_name("myapp"), &pairs).unwrap();
+        db.conn
+            .execute("UPDATE action_schedules SET last_fired_at = 'garbage'", [])
+            .unwrap();
+
+        let now: Timestamp = "2026-04-18T12:01:00Z".parse().unwrap();
+        let mut scheduler = Scheduler::new();
+        let fired = check_due_schedules(&db, &mut scheduler, now, &|_| {
+            Some((1, installed(), no_schemas()))
+        });
+        assert!(fired.is_empty(), "an unreadable schedule must not fire");
+        let held = faults::list_active_faults(&db, Some(&app_name("myapp"))).unwrap();
+        assert!(
+            held.iter()
+                .any(|f| f.kind == "schedule_unreadable" && f.subject == "backup"),
+            "{held:?}"
+        );
+
+        // Once it reads again, it fires and the fault clears.
+        db.conn
+            .execute(
+                "UPDATE action_schedules SET last_fired_at = '2026-04-18T12:00:00Z'",
+                [],
+            )
+            .unwrap();
+        let fired = check_due_schedules(&db, &mut scheduler, now, &|_| {
+            Some((1, installed(), no_schemas()))
+        });
+        assert_eq!(fired.len(), 1);
+        assert!(
+            faults::list_active_faults(&db, Some(&app_name("myapp")))
+                .unwrap()
+                .iter()
+                .all(|f| f.kind != "schedule_unreadable")
+        );
+    }
+
+    // spec: SCHED#firing
+    #[test]
+    fn unreadable_schedule_records_fire_nothing_and_hold_a_host_fault() {
+        let db = Db::open_in_memory().unwrap();
+        let pairs = vec![(action_name("backup"), "* * * * *".to_owned())];
+        db::ensure_schedules(&db, &app_name("myapp"), &pairs).unwrap();
+        db.conn
+            .execute_batch("ALTER TABLE action_schedules RENAME TO gone;")
+            .unwrap();
+
+        let now: Timestamp = "2026-04-18T12:01:00Z".parse().unwrap();
+        let mut scheduler = Scheduler::new();
+        let fired = check_due_schedules(&db, &mut scheduler, now, &|_| {
+            Some((1, installed(), no_schemas()))
+        });
+        assert!(fired.is_empty());
+        let system = AppName::new_unchecked("_system");
+        let held = faults::list_active_faults(&db, Some(&system)).unwrap();
+        assert!(
+            held.iter().any(|f| f.kind == "schedules_unreadable"),
+            "{held:?}"
+        );
+
+        db.conn
+            .execute_batch("ALTER TABLE gone RENAME TO action_schedules;")
+            .unwrap();
+        check_due_schedules(&db, &mut scheduler, now, &|_| {
+            Some((1, installed(), no_schemas()))
+        });
+        assert!(
+            faults::list_active_faults(&db, Some(&system))
+                .unwrap()
+                .iter()
+                .all(|f| f.kind != "schedules_unreadable")
+        );
     }
 
     // spec: SCHED#fire-times

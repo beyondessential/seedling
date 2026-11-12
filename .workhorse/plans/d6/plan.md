@@ -12,7 +12,7 @@ Each issue is worked on its own and committed on its own, with a test that fails
 - [x] TLS and Canopy decisions
 - [x] Ingress decisions
 - [x] BSL throws, reserved names and defaults (and its correction)
-- [ ] Failed reads become definite answers
+- [x] Failed reads become definite answers
 - [x] Database and internal failures reported with the wrong error code
 - [x] Malformed script input coerced or ignored
 - [x] Crash recovery and replay
@@ -104,3 +104,8 @@ Each is done once, in whichever issue is worked first, and the later issue notes
 - Shell and forward events carry the actor of the request that opened the session, including the session's end however it came about; `FaultCleared` carries the clearing request's actor when an operator clears it, and none when the runtime does.
 - ARI is re-fetched by its own task, waking for the soonest due certificate and at least hourly; Retry-After is held between one minute and one day, and any failed fetch waits six hours.
 - A stop that fails its deadline keeps its call slot, so a script that catches the failure reaches the next call at the next position; the deadline's start is read from the call's own log record, never by matching resources.
+- A reconstruction that cannot read a recorded value fails (`Error::UnreadableParam`), and `load_all_params_for_app` returns an error when either parameter table cannot be read; a change handler is never run with an `old` that is not the previous generation, and `old.<type>(name)` resolves against `old`'s own definition.
+- An instance whose observation history cannot be read has an undetermined lifecycle state (`Undetermined`): no event, no barrier decided or timed out, no retirement. The oracle's `lifecycle_state` returns a `Result` so a caller must decide.
+- A failed read leaves faults as they stand (disallowed registry), reads as `null` or `internal` for operators (status, `/apps/show`), and keeps images, instances and schedules in place; a reconciliation iteration that dropped every app does not idle.
+- A schedule whose last fire time cannot be parsed is not fired and holds `schedule_unreadable`; unreadable schedule records hold `schedules_unreadable` on `_system`.
+- A certificate in the proxy's cache is observed valid only inside its validity window; one that cannot be read leaves the hostname undetermined.

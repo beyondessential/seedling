@@ -130,3 +130,41 @@ fn discover_returns_empty_probe_for_handlerless_app() {
         .unwrap_err();
     assert_eq!(code, "not_found");
 }
+
+// spec: IMGM#listing-images
+#[test]
+fn an_unreadable_container_list_is_not_an_image_nothing_uses() {
+    let oi = TestOi::new();
+    oi.call("/images/pull", json!({ "reference": REF }))
+        .unwrap();
+    let bad = TestOi::with_unreadable_containers();
+
+    let (code, _) = bad.call("/images/list", json!({})).unwrap_err();
+    assert_eq!(code, "internal");
+}
+
+// spec: IMGM#removing-an-image
+#[test]
+fn a_remove_that_cannot_tell_whether_the_image_is_in_use_does_not_proceed() {
+    let oi = TestOi::with_unreadable_containers();
+    let (code, _) = oi
+        .call("/images/remove", json!({ "reference": REF }))
+        .unwrap_err();
+    assert_eq!(code, "internal");
+}
+
+// spec: IMGM#image-pins
+#[test]
+fn an_unreadable_pin_table_is_an_error_not_no_pins() {
+    let oi = TestOi::with_app("demo");
+    oi.call("/images/pull", json!({ "reference": REF, "app": "demo" }))
+        .unwrap();
+    oi.state
+        .db
+        .call(|db| db.conn.execute_batch("DROP TABLE image_pins;").unwrap());
+
+    let (code, _) = oi.call("/images/pins/list", json!({})).unwrap_err();
+    assert_eq!(code, "internal");
+    let (code, _) = oi.call("/images/list", json!({})).unwrap_err();
+    assert_eq!(code, "internal");
+}

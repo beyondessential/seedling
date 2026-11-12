@@ -191,8 +191,13 @@ impl Reconciler {
         }
 
         let retain_ms = GC_UNUSED_RETAIN.as_millis() as i64;
-        let candidates =
-            db.call(move |db| images::gc_candidates(db, retain_ms).unwrap_or_default());
+        let candidates = match db.call(move |db| images::gc_candidates(db, retain_ms)) {
+            Ok(candidates) => candidates,
+            Err(e) => {
+                warn!(error = %e, "image gc: reading candidates failed; skipping this cycle");
+                return;
+            }
+        };
         if candidates.is_empty() {
             return;
         }
@@ -208,10 +213,18 @@ impl Reconciler {
             Ok(list) => {
                 let mut set = HashSet::new();
                 for c in list {
-                    if let Ok(Some(state)) = driver.container.inspect(&c.name).await
-                        && let Some(id) = state.image_id
-                    {
-                        set.insert(id);
+                    match driver.container.inspect(&c.name).await {
+                        Ok(Some(state)) => {
+                            if let Some(id) = state.image_id {
+                                set.insert(id);
+                            }
+                        }
+                        // Gone between the list and the inspect: it no longer uses an image.
+                        Ok(None) => {}
+                        Err(e) => {
+                            warn!(container = %c.name, error = %e, "image gc: inspecting a running container failed; skipping this cycle");
+                            return;
+                        }
                     }
                 }
                 set
@@ -221,23 +234,26 @@ impl Reconciler {
                 return;
             }
         };
-
         for row in candidates {
             if observed_ids.contains(&row.image_id) {
                 continue;
             }
             let image_id = row.image_id.clone();
-            let refs =
-                db.call(move |db| images::references_for_image(db, &image_id).unwrap_or_default());
+            // A failed read is not "not pinned": the image stays for this pass.
             let pinned = db.call(move |db| {
+                let refs = images::references_for_image(db, &image_id)?;
                 images::list_pinned_apps_for_references(
                     db,
                     &refs.iter().map(String::as_str).collect::<Vec<_>>(),
                 )
-                .unwrap_or_default()
             });
-            if !pinned.is_empty() {
-                continue;
+            match pinned {
+                Ok(pinned) if pinned.is_empty() => {}
+                Ok(_) => continue,
+                Err(e) => {
+                    warn!(image_id = %row.image_id, error = %e, "image gc: reading pins failed; keeping the image");
+                    continue;
+                }
             }
 
             match driver.container.remove_image(&row.image_id, false).await {
@@ -268,5 +284,68 @@ fn image_ref_for_resource(resource: &Resource) -> Option<String> {
         Resource::Deployment(dep) => dep.def.lock().pod.lock().container.lock().image.clone(),
         Resource::Job(job) => job.def.lock().pod.lock().container.lock().image.clone(),
         _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{oi::test_support::TestOi, system::reconcile::tests::test_reconciler};
+
+    const REF: &str = "docker.io/library/nginx:1.29";
+
+    /// An image on the host that has gone unused for longer than the
+    /// retention period, with the reconciler that would collect it.
+    fn unused_image(oi: &TestOi) -> (Reconciler, tokio::runtime::Runtime) {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let reconciler = test_reconciler(oi);
+        rt.block_on(async {
+            oi.state.container_runtime.pull_image(REF).await.unwrap();
+            reconciler.reconcile_images(std::iter::empty()).await;
+            // The pass above ran the collector once; let it run again.
+            *reconciler.image_phase_state.last_gc.lock().await = None;
+        });
+        oi.state
+            .db
+            .call(|db| {
+                db.conn
+                    .execute("UPDATE image_tracking SET last_used_at = 0", [])
+            })
+            .unwrap();
+        (reconciler, rt)
+    }
+
+    fn image_count(rt: &tokio::runtime::Runtime, oi: &TestOi) -> usize {
+        rt.block_on(oi.state.container_runtime.list_images())
+            .unwrap()
+            .len()
+    }
+
+    // spec: IMG#image-garbage-collection
+    #[test]
+    fn an_unused_unpinned_image_is_collected() {
+        let oi = TestOi::new();
+        let (reconciler, rt) = unused_image(&oi);
+        assert_eq!(image_count(&rt, &oi), 1);
+
+        rt.block_on(reconciler.maybe_run_image_gc(&reconciler.driver, &reconciler.db));
+        assert_eq!(image_count(&rt, &oi), 0);
+    }
+
+    // spec: IMG#image-garbage-collection
+    #[test]
+    fn an_unreadable_pin_table_does_not_make_an_image_collectable() {
+        let oi = TestOi::new();
+        let (reconciler, rt) = unused_image(&oi);
+        oi.state
+            .db
+            .call(|db| db.conn.execute_batch("DROP TABLE image_pins;"))
+            .unwrap();
+
+        rt.block_on(reconciler.maybe_run_image_gc(&reconciler.driver, &reconciler.db));
+        assert_eq!(image_count(&rt, &oi), 1, "the image must be kept");
     }
 }

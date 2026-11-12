@@ -491,39 +491,49 @@ pub fn run_operation<W: WorldStateOracle + 'static>(
     // For param-change handlers, materialise `old` from the previous
     // generation (= source_generation). For other operations, leave it
     // empty: the spec only defines `old` for on_change handlers, but the
-    // closure-call script still references the variable.
+    // closure-call script still references the variable. A handler is never
+    // invoked with an `old` that does not reflect the previous generation.
     let old_app = if is_param_change && source_generation > 0 {
         match (&db, &script_limits, &cipher) {
             (Some(db_handle), Some(limits), Some(cipher)) => {
                 let app_name_owned = app.def.load().name.clone();
                 let limits = limits.clone();
                 let cipher = std::sync::Arc::clone(cipher);
-                db_handle.call(move |db| {
-                    match generations::reconstruct_app_def(
+                let rebuilt = db_handle.call(move |db| {
+                    generations::reconstruct_app_def(
                         db,
                         &app_name_owned,
                         source_generation,
                         &limits,
                         &cipher,
-                    ) {
-                        Ok(a) => a,
-                        Err(e) => {
-                            tracing::warn!(
-                                app = %app_name_owned,
-                                source_generation,
-                                "failed to reconstruct old App for on_change; using empty: {e}"
-                            );
-                            App::default()
-                        }
+                    )
+                });
+                match rebuilt {
+                    Ok(a) => a,
+                    Err(e) => {
+                        tracing::error!(
+                            app = %app.def.load().name,
+                            source_generation,
+                            "cannot rebuild the previous generation for on_change: {e}"
+                        );
+                        return OperationResult::Failed(Box::new(EvalAltResult::ErrorRuntime(
+                            format!(
+                                "the previous generation ({source_generation}) cannot be rebuilt, \
+                                 so the change handler was not run: {e}"
+                            )
+                            .into(),
+                            rhai::Position::NONE,
+                        )));
                     }
-                })
+                }
             }
             _ => {
-                debug_assert!(
-                    false,
-                    "param_change replay missing db, script_limits, or cipher in OperationContext"
-                );
-                App::default()
+                return OperationResult::Failed(Box::new(EvalAltResult::ErrorRuntime(
+                    "the previous generation cannot be rebuilt without the database, script \
+                     limits and cipher, so the change handler was not run"
+                        .into(),
+                    rhai::Position::NONE,
+                )));
             }
         }
     } else {

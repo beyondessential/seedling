@@ -925,3 +925,25 @@ fn observations_for_a_group_come_back_per_instance_in_order() {
         assert_eq!(one, kinds(inst), "{}", inst.display_name);
     }
 }
+
+// spec: OPS#cancel-persistence
+// spec: OPS#unreadable-operation-state
+#[test]
+fn the_persisted_operation_state_carries_a_persisted_cancel() {
+    use crate::runtime::secrets::Cipher;
+
+    let db = Db::open_in_memory().unwrap();
+    let cipher = Cipher::for_tests();
+    let op = CurrentOperation {
+        operation_id: OperationId("op-cancelled".into()),
+        app: app_name("myapp"),
+        action_name: action_name("start"),
+        source_generation: 1,
+        target_generation: 1,
+    };
+    save_current_operation(&db, &cipher, &op, &serde_json::Map::new()).unwrap();
+    assert!(!read_operation_state(&db, &cipher).unwrap().cancel_requested);
+
+    assert!(set_cancel_requested(&db, &OperationId("op-cancelled".into())).unwrap());
+    assert!(read_operation_state(&db, &cipher).unwrap().cancel_requested);
+}

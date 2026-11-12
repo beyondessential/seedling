@@ -575,7 +575,10 @@ fn db_oracle_empty_gives_pending() {
     let db = Db::open_in_memory().expect("open");
     let oracle = DbWorldOracle::new(DbHandle::from_db(db));
     let resource = dep("app", "web");
-    assert_eq!(oracle.lifecycle_state(&resource), LifecycleState::Pending);
+    assert_eq!(
+        oracle.lifecycle_state(&resource),
+        Ok(LifecycleState::Pending)
+    );
 }
 
 // spec: LCY#derivation
@@ -590,7 +593,10 @@ fn db_oracle_derives_from_observations() {
         .expect("insert");
 
     let oracle = DbWorldOracle::new(DbHandle::from_db(db));
-    assert_eq!(oracle.lifecycle_state(&resource), LifecycleState::Running);
+    assert_eq!(
+        oracle.lifecycle_state(&resource),
+        Ok(LifecycleState::Running)
+    );
 }
 
 // spec: LCY#derivation
@@ -608,7 +614,7 @@ fn db_oracle_full_sequence_to_terminated() {
     let oracle = DbWorldOracle::new(DbHandle::from_db(db));
     assert_eq!(
         oracle.lifecycle_state(&resource),
-        LifecycleState::Terminated
+        Ok(LifecycleState::Terminated)
     );
 }
 
@@ -628,7 +634,21 @@ fn db_oracle_uses_query_observations_from_history() {
     assert_eq!(direct_state, LifecycleState::Ready);
 
     let oracle = DbWorldOracle::new(DbHandle::from_db(db));
-    assert_eq!(oracle.lifecycle_state(&resource), LifecycleState::Ready);
+    assert_eq!(oracle.lifecycle_state(&resource), Ok(LifecycleState::Ready));
+}
+
+// spec: LCY#derivation
+#[test]
+fn db_oracle_unreadable_history_is_undetermined_not_pending() {
+    let db = Db::open_in_memory().expect("open");
+    db.conn
+        .execute_batch("DROP TABLE world_observations;")
+        .expect("drop");
+    let oracle = DbWorldOracle::new(DbHandle::from_db(db));
+    assert_eq!(
+        oracle.lifecycle_state(&dep("app", "web")),
+        Err(Undetermined)
+    );
 }
 
 // -----------------------------------------------------------------------

@@ -20,7 +20,7 @@ pub(super) fn on_app(builder: &mut TypeBuilder<App>) {
             super::ensure_not_validating()?;
             let rname = ResourceName::new(name.into());
             if is_in_action_closure() {
-                super::static_ref::<Volume>(name)
+                super::static_ref::<Volume>(this, name)
             } else {
                 // spec: APP#static-resource
                 let id = ResourceId {

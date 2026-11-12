@@ -38,6 +38,9 @@ struct DesiredGroup {
     kind_str: String,
 }
 
+/// The resource groups whose instances could not be listed.
+type UnreadGroups = HashSet<(AppName, ResourceKind, Option<String>)>;
+
 /// One group per resource, from a stream of per-instance entries.
 ///
 /// `desired.resources` holds an entry per *instance*, so a deployment scaled
@@ -72,7 +75,10 @@ struct StateEntry {
     res_name: String,
     hex: String,
     inst_id: InstanceId,
-    state: LifecycleState,
+    /// `None` while the instance's observation history cannot be read: its
+    /// state is undetermined, not Pending.
+    // spec: LCY#derivation
+    state: Option<LifecycleState>,
 }
 
 impl Reconciler {
@@ -87,44 +93,65 @@ impl Reconciler {
             })
         }));
 
-        let entries: Vec<StateEntry> = self.db.call(move |db| {
-            let mut out = Vec::new();
-            for g in &groups {
-                let instances = find_instances_for_group(db, &g.app, g.kind, g.res_name.as_deref())
-                    .unwrap_or_default();
-                for inst in instances {
-                    let hex = inst.id.to_hex();
-                    let obs = query_observations(db, &inst).unwrap_or_default();
-                    let state = derive_lifecycle_state(&inst, &obs);
-                    out.push(StateEntry {
-                        app: g.app.clone(),
-                        kind_str: g.kind_str.clone(),
-                        res_name: g.res_name.as_deref().unwrap_or("").to_owned(),
-                        hex,
-                        inst_id: inst.id,
-                        state,
-                    });
+        let (entries, unread_groups): (Vec<StateEntry>, UnreadGroups) =
+            self.db.call(move |db| {
+                let mut out = Vec::new();
+                let mut unread = HashSet::new();
+                for g in &groups {
+                    let instances =
+                        match find_instances_for_group(db, &g.app, g.kind, g.res_name.as_deref()) {
+                            Ok(instances) => instances,
+                            Err(e) => {
+                                warn!(app = %g.app, error = %e, "state changes: could not list a resource's instances");
+                                unread.insert((g.app.clone(), g.kind, g.res_name.clone()));
+                                continue;
+                            }
+                        };
+                    for inst in instances {
+                        let hex = inst.id.to_hex();
+                        let state = match query_observations(db, &inst) {
+                            Ok(obs) => Some(derive_lifecycle_state(&inst, &obs)),
+                            Err(e) => {
+                                warn!(app = %g.app, instance = %inst.display_name, error = %e, "state changes: could not read an observation history");
+                                None
+                            }
+                        };
+                        out.push(StateEntry {
+                            app: g.app.clone(),
+                            kind_str: g.kind_str.clone(),
+                            res_name: g.res_name.as_deref().unwrap_or("").to_owned(),
+                            hex,
+                            inst_id: inst.id,
+                            state,
+                        });
+                    }
                 }
-            }
-            out
-        });
+                (out, unread)
+            });
 
         let mut new_states = BTreeMap::new();
 
         for entry in &entries {
             let key = (entry.app.clone(), entry.hex.clone());
+            let Some(state) = entry.state else {
+                // Undetermined: no event, and the last known state stands.
+                if let Some(&prev) = self.prev_states.get(&key) {
+                    new_states.insert(key, prev);
+                }
+                continue;
+            };
             if let Some(&prev) = self.prev_states.get(&key)
-                && prev != entry.state
+                && prev != state
             {
                 self.event_tx.resource_state_changed(
                     &entry.app,
                     &entry.kind_str,
                     &entry.res_name,
                     &entry.hex,
-                    &format!("{:?}", entry.state),
+                    &format!("{state:?}"),
                 );
             }
-            new_states.insert(key, entry.state);
+            new_states.insert(key, state);
         }
 
         // For desired resources that had no DB instances yet, mark Pending.
@@ -132,7 +159,19 @@ impl Reconciler {
             for dr in &app.desired.resources {
                 let inst_hex = dr.instance.id.to_hex();
                 let key = (app.name.clone(), inst_hex.clone());
-                if !entries.iter().any(|e| e.inst_id == dr.instance.id) {
+                if entries.iter().any(|e| e.inst_id == dr.instance.id) {
+                    continue;
+                }
+                let group = (
+                    app.name.clone(),
+                    dr.instance.kind,
+                    dr.instance.name.as_deref().map(str::to_owned),
+                );
+                if unread_groups.contains(&group) {
+                    if let Some(&prev) = self.prev_states.get(&key) {
+                        new_states.insert(key, prev);
+                    }
+                } else {
                     new_states.insert(key, LifecycleState::Pending);
                 }
             }
@@ -183,9 +222,13 @@ impl Reconciler {
         self.warm_cert_first_seen
             .retain(|h, _| active_hostnames.contains(h));
 
-        let mut observations = match &path {
-            Some(path) => crate::system::caddy::observe_certs(path, &targets),
-            None => Vec::new(),
+        let (mut observations, undetermined) = match &path {
+            Some(path) => {
+                let seen =
+                    crate::system::caddy::observe_certs(path, &targets, jiff::Timestamp::now());
+                (seen.observations, seen.undetermined)
+            }
+            None => (Vec::new(), std::collections::BTreeSet::new()),
         };
 
         // A certificate the runtime holds is served to the proxy by the daemon
@@ -227,7 +270,7 @@ impl Reconciler {
             if observed_hostnames.contains(hostname) {
                 self.warm_cert_first_seen.remove(hostname);
                 self.clear_resource_fault(instance, "cert_acquisition_failed");
-            } else if path.is_none() || !runtime_known {
+            } else if path.is_none() || !runtime_known || undetermined.contains(hostname) {
                 // The proxy's cache, or the runtime's own store, could not be
                 // read, so whether a certificate is held for this hostname is
                 // unknown. Unknown is not absent, and faulting a hostname that is
@@ -274,8 +317,8 @@ impl Reconciler {
                     continue;
                 }
                 let instance = dr.instance.clone();
-                let (state, has_observations, has_terminal_obs) = self.db.call(move |db| {
-                    let obs = query_observations(db, &instance).unwrap_or_default();
+                let read = self.db.call(move |db| {
+                    let obs = query_observations(db, &instance)?;
                     let has_obs = !obs.is_empty();
                     // spec: GC#demoted-instances
                     // Multiple observations recorded in a single tick may share
@@ -290,12 +333,26 @@ impl Reconciler {
                             "container_removed" | "network_cleaned_up"
                         )
                     });
-                    (
+                    Ok::<_, rusqlite::Error>((
                         derive_lifecycle_state(&instance, &obs),
                         has_obs,
                         has_terminal,
-                    )
+                    ))
                 });
+                // A history that cannot be read is not an empty one: the
+                // instance stays until it can be.
+                let (state, has_observations, has_terminal_obs) = match read {
+                    Ok(read) => read,
+                    Err(e) => {
+                        tracing::warn!(
+                            app = %app.name,
+                            instance = %dr.instance.display_name,
+                            error = %e,
+                            "could not read an excess instance's observation history; not retiring it"
+                        );
+                        continue;
+                    }
+                };
                 let eligible = retire_eligible(state, has_observations, has_terminal_obs);
                 if !eligible {
                     if matches!(

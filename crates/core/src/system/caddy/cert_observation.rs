@@ -14,11 +14,6 @@ use serde_json::{Value, json};
 
 use crate::runtime::identity::ResourceInstance;
 
-/// Returns whether a cert file exists for the given hostname under any issuer.
-pub(crate) fn cert_present(caddy_data_path: &Path, hostname: &str) -> bool {
-    matches!(cert_path_for(caddy_data_path, hostname), Ok(Some(_)))
-}
-
 /// Locate the on-disk cert file for `hostname` under any issuer subdir.
 ///
 /// `Ok(None)` means the cache was read and holds nothing for the hostname. A
@@ -102,25 +97,54 @@ pub fn read_cert_state(caddy_data_path: &Path, hostname: &str) -> CertRead {
     })
 }
 
+/// What one look at the proxy's certificate cache found.
+pub(crate) struct Observed {
+    /// The `cert_valid` observations to persist.
+    pub observations: Vec<(ResourceInstance, &'static str, Value)>,
+    /// Hostnames whose certificate could not be read, so that whether a
+    /// usable certificate is held for them is unknown rather than no.
+    pub undetermined: std::collections::BTreeSet<String>,
+}
+
 /// For each `(instance, hostname)` pair, check the cert cache and return any
-/// `cert_valid` observation that should be persisted. Hostnames whose cert is
-/// not yet present produce no observation here; the fault layer is responsible
-/// for filing `cert_acquisition_failed` after a deadline.
+/// `cert_valid` observation that should be persisted. A certificate is valid
+/// only inside its validity window, so a file that is there but expired, or
+/// not yet valid, produces none. Hostnames whose cert is not yet present
+/// produce no observation here; the fault layer is responsible for filing
+/// `cert_acquisition_failed` after a deadline.
+// spec: OBS#ingresses
 pub(crate) fn observe(
     caddy_data_path: &Path,
     targets: &[(ResourceInstance, String)],
-) -> Vec<(ResourceInstance, &'static str, Value)> {
-    let mut out = Vec::new();
+    now: jiff::Timestamp,
+) -> Observed {
+    let mut observed = Observed {
+        observations: Vec::new(),
+        undetermined: std::collections::BTreeSet::new(),
+    };
     for (instance, hostname) in targets {
-        if cert_present(caddy_data_path, hostname) {
-            out.push((
-                instance.clone(),
-                "cert_valid",
-                json!({ "hostname": hostname }),
-            ));
+        match read_cert_state(caddy_data_path, hostname) {
+            CertRead::Absent => {}
+            CertRead::Unreadable => {
+                observed.undetermined.insert(hostname.clone());
+            }
+            CertRead::Present(view) => match (view.not_before, view.not_after) {
+                (Some(from), Some(to)) => {
+                    if (from..=to).contains(&now.as_second()) {
+                        observed.observations.push((
+                            instance.clone(),
+                            "cert_valid",
+                            json!({ "hostname": hostname }),
+                        ));
+                    }
+                }
+                _ => {
+                    observed.undetermined.insert(hostname.clone());
+                }
+            },
         }
     }
-    out
+    observed
 }
 
 #[cfg(test)]
@@ -137,40 +161,48 @@ mod tests {
     }
 
     #[test]
-    fn cert_present_false_when_dir_missing() {
+    fn a_missing_cache_holds_nothing() {
         let tmp = tempfile::TempDir::new().unwrap();
-        assert!(!cert_present(tmp.path(), "example.com"));
+        assert!(matches!(
+            read_cert_state(tmp.path(), "example.com"),
+            CertRead::Absent
+        ));
     }
 
     #[test]
-    fn cert_present_true_when_file_in_local_issuer() {
+    fn a_certificate_under_any_issuer_is_found() {
         let tmp = tempfile::TempDir::new().unwrap();
-        let issuer_dir = tmp.path().join("caddy/certificates/local/example.com");
-        std::fs::create_dir_all(&issuer_dir).unwrap();
-        std::fs::write(issuer_dir.join("example.com.crt"), b"PEM").unwrap();
-        assert!(cert_present(tmp.path(), "example.com"));
+        for issuer in ["local", "acme-v02.api.letsencrypt.org-directory"] {
+            let host = format!("{}.example.com", issuer.len());
+            write_cert(
+                tmp.path(),
+                issuer,
+                &host,
+                &crate::runtime::tls::test_support::self_signed_pem(&[host.as_str()]),
+            );
+            assert!(matches!(
+                read_cert_state(tmp.path(), &host),
+                CertRead::Present(_)
+            ));
+        }
     }
 
-    #[test]
-    fn cert_present_true_for_acme_issuer() {
-        let tmp = tempfile::TempDir::new().unwrap();
-        let issuer = "acme-v02.api.letsencrypt.org-directory";
-        let issuer_dir = tmp
-            .path()
-            .join(format!("caddy/certificates/{issuer}/real.example.com"));
-        std::fs::create_dir_all(&issuer_dir).unwrap();
-        std::fs::write(issuer_dir.join("real.example.com.crt"), b"PEM").unwrap();
-        assert!(cert_present(tmp.path(), "real.example.com"));
+    fn write_cert(root: &Path, issuer: &str, host: &str, pem: &str) {
+        let dir = root.join(format!("caddy/certificates/{issuer}/{host}"));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join(format!("{host}.crt")), pem).unwrap();
     }
 
+    // spec: OBS#ingresses
     #[test]
-    fn observe_emits_only_for_present_certs() {
+    fn observe_emits_only_for_present_valid_certs() {
         let tmp = tempfile::TempDir::new().unwrap();
-        let issuer_dir = tmp
-            .path()
-            .join("caddy/certificates/local/has-cert.example.com");
-        std::fs::create_dir_all(&issuer_dir).unwrap();
-        std::fs::write(issuer_dir.join("has-cert.example.com.crt"), b"PEM").unwrap();
+        write_cert(
+            tmp.path(),
+            "local",
+            "has-cert.example.com",
+            &crate::runtime::tls::test_support::self_signed_pem(&["has-cert.example.com"]),
+        );
 
         let targets = vec![
             (
@@ -179,9 +211,42 @@ mod tests {
             ),
             (ingress_instance("other"), "missing.example.com".to_string()),
         ];
-        let obs = observe(tmp.path(), &targets);
-        assert_eq!(obs.len(), 1, "only the present cert should produce an obs");
-        assert_eq!(obs[0].1, "cert_valid");
-        assert_eq!(obs[0].2["hostname"], "has-cert.example.com");
+        let seen = observe(tmp.path(), &targets, jiff::Timestamp::now());
+        assert_eq!(
+            seen.observations.len(),
+            1,
+            "only the present cert should produce an obs"
+        );
+        assert_eq!(seen.observations[0].1, "cert_valid");
+        assert_eq!(seen.observations[0].2["hostname"], "has-cert.example.com");
+        assert!(seen.undetermined.is_empty());
+    }
+
+    // spec: OBS#ingresses
+    #[test]
+    fn a_certificate_outside_its_validity_window_is_not_observed_valid() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        write_cert(
+            tmp.path(),
+            "local",
+            "old.example.com",
+            &crate::runtime::tls::test_support::expired_pem(&["old.example.com"]),
+        );
+        let targets = vec![(ingress_instance("public"), "old.example.com".to_string())];
+
+        let seen = observe(tmp.path(), &targets, jiff::Timestamp::now());
+        assert!(seen.observations.is_empty(), "an expired file is not valid");
+    }
+
+    // spec: OBS#ingresses
+    #[test]
+    fn a_certificate_that_cannot_be_read_is_undetermined_not_absent() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        write_cert(tmp.path(), "local", "bad.example.com", "not a certificate");
+        let targets = vec![(ingress_instance("public"), "bad.example.com".to_string())];
+
+        let seen = observe(tmp.path(), &targets, jiff::Timestamp::now());
+        assert!(seen.observations.is_empty());
+        assert!(seen.undetermined.contains("bad.example.com"));
     }
 }

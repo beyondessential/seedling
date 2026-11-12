@@ -16,9 +16,7 @@ use crate::{
         db::Db,
         generations,
         identity::ResourceInstance,
-        restarts::{
-            self, Cause, ExitKind, ExitStatus, RETAIN_PER_INSTANCE, RestartSettings, RestartSubject,
-        },
+        restarts::{self, Cause, ExitKind, ExitStatus, RETAIN_PER_INSTANCE, RestartSubject},
     },
     system::types::{UnitExit, UnitExitKind},
 };
@@ -62,10 +60,33 @@ pub(super) fn reconcile_counters(
     started: &[ResourceInstance],
     replaced_failed: &[ResourceInstance],
 ) -> Vec<CrashLoop> {
-    let settings = restarts::settings(db).unwrap_or(RestartSettings {
-        threshold: 5,
-        window_secs: 1800,
-    });
+    // A threshold nobody set is not one to detect against: with the settings
+    // unreadable, no rate-derived crash loop is declared this tick, and the
+    // restarts are still recorded.
+    let settings = match restarts::settings(db) {
+        Ok(s) => Some(s),
+        Err(e) => {
+            warn!(app = %app, "could not read the crash-loop settings; detecting no restart rate this tick: {e}");
+            None
+        }
+    };
+    let rate_loop = |instance: &ResourceInstance, hex: &str| -> Option<CrashLoop> {
+        let settings = settings?;
+        match restarts::recent_recovery_count(db, hex, settings.window_secs) {
+            Ok(count) if count >= settings.threshold => Some(CrashLoop {
+                instance: instance.clone(),
+                cause: CrashLoopCause::RestartRate {
+                    count,
+                    window_secs: settings.window_secs,
+                },
+            }),
+            Ok(_) => None,
+            Err(e) => {
+                warn!(app = %app, instance = %hex, "failed to count recent restarts: {e}");
+                None
+            }
+        }
+    };
     let generation = generations::current(db, app)
         .ok()
         .flatten()
@@ -100,19 +121,7 @@ pub(super) fn reconcile_counters(
                     warn!(app = %app, instance = %hex, "failed to record restart: {e}");
                 } else if recovery {
                     // spec: AUTO#crash-loop-detection
-                    match restarts::recent_recovery_count(db, &hex, settings.window_secs) {
-                        Ok(count) if count >= settings.threshold => rate_loops.push(CrashLoop {
-                            instance: instance.clone(),
-                            cause: CrashLoopCause::RestartRate {
-                                count,
-                                window_secs: settings.window_secs,
-                            },
-                        }),
-                        Ok(_) => {}
-                        Err(e) => {
-                            warn!(app = %app, instance = %hex, "failed to count recent restarts: {e}");
-                        }
-                    }
+                    rate_loops.extend(rate_loop(instance, &hex));
                 }
             }
             // No baseline: the reconciler has never seen this instance's unit,
@@ -186,19 +195,7 @@ pub(super) fn reconcile_counters(
         }
 
         // spec: AUTO#crash-loop-detection
-        match restarts::recent_recovery_count(db, &hex, settings.window_secs) {
-            Ok(count) if count >= settings.threshold => rate_loops.push(CrashLoop {
-                instance: instance.clone(),
-                cause: CrashLoopCause::RestartRate {
-                    count,
-                    window_secs: settings.window_secs,
-                },
-            }),
-            Ok(_) => {}
-            Err(e) => {
-                warn!(app = %app, instance = %hex, "failed to count recent restarts: {e}");
-            }
-        }
+        rate_loops.extend(rate_loop(instance, &hex));
     }
     rate_loops
 }

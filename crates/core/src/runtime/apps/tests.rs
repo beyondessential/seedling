@@ -270,7 +270,7 @@ fn reload_after_secret_param_set_populates_stored() {
     )
     .expect("upsert secret");
 
-    let loaded = load_all_params_for_app(&db, &cipher, &app("myapp"));
+    let loaded = load_all_params_for_app(&db, &cipher, &app("myapp")).expect("load");
     let (app_def, err) = evaluate_script(
         &app("myapp"),
         script,
@@ -313,7 +313,7 @@ fn load_params_for_app_alone_misses_secrets() {
         "plaintext-only loader must not surface secrets (confirms the trap)"
     );
 
-    let merged = load_all_params_for_app(&db, &cipher, &app("myapp"));
+    let merged = load_all_params_for_app(&db, &cipher, &app("myapp")).expect("load");
     assert_eq!(
         merged.get("apikey").map(String::as_str),
         Some("sekret"),
@@ -825,4 +825,20 @@ fn installs_are_ordered_as_they_complete_and_the_order_survives_a_reload() {
     .unwrap();
     assert_eq!(reloaded.get("bravo").unwrap().install_seq, Some(bravo));
     assert_eq!(reloaded.get("alpha").unwrap().install_seq, Some(alpha));
+}
+
+// spec: PARAM#values
+#[test]
+fn a_param_table_that_cannot_be_read_fails_the_load_rather_than_reading_as_unset() {
+    let db = Db::open_in_memory().expect("open");
+    let cipher = crate::runtime::secrets::Cipher::for_tests();
+    upsert_param(&db, &app("myapp"), &param("greeting"), "hello").expect("upsert");
+
+    db.conn
+        .execute_batch("DROP TABLE secret_params;")
+        .expect("drop");
+    assert!(
+        load_all_params_for_app(&db, &cipher, &app("myapp")).is_err(),
+        "the plaintext half must not stand in for both"
+    );
 }

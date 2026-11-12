@@ -1802,13 +1802,21 @@ impl RuntimeInstance {
         // says these resources are already terminated, the call must succeed
         // even when more than `deadline_secs` have elapsed. See the matching
         // comment in check_barrier — the committed log can lag the world.
-        let all_terminated = resources.iter().all(|r| {
-            g.world
-                .lifecycle_state(r)
-                .has_reached(LifecycleState::Terminated)
-        });
+        let mut undetermined = false;
+        let all_terminated =
+            resources
+                .iter()
+                .fold(true, |all, r| match g.world.lifecycle_state(r) {
+                    Ok(state) => all && state.has_reached(LifecycleState::Terminated),
+                    Err(_) => {
+                        undetermined = true;
+                        false
+                    }
+                });
 
-        if !all_terminated {
+        // An instance whose state cannot be read neither satisfies the stop
+        // nor runs its deadline out.
+        if !all_terminated && !undetermined {
             // spec: SUSP#deadlines
             // spec: SUSP#rtstop
             // Enforce the stop deadline against the earliest unsatisfied record
@@ -2525,6 +2533,7 @@ impl Started {
         // - `rt.warm_images` checks that each recorded image reference is
         //   present in local container storage; the resources it holds are
         //   only for audit (and may be empty for anonymous references).
+        let mut undetermined = false;
         let all_reached = match (&self.warm, required) {
             // spec: RT#certificate-warming
             // An empty resource list here means every element was filtered
@@ -2548,7 +2557,13 @@ impl Started {
             _ => self
                 .resources
                 .iter()
-                .all(|r| g.world.lifecycle_state(r).has_reached(required)),
+                .fold(true, |all, r| match g.world.lifecycle_state(r) {
+                    Ok(state) => all && state.has_reached(required),
+                    Err(_) => {
+                        undetermined = true;
+                        false
+                    }
+                }),
         };
 
         // spec: SUSP#barriers
@@ -2601,7 +2616,12 @@ impl Started {
             .and_then(|b| b.started_at_secs);
 
         // spec: SUSP#deadlines
-        if let (Some(d), Some(started_at)) = (deadline_secs, started_at)
+        // spec: LCY#derivation
+        // A barrier on an instance whose state cannot be read is not decided
+        // either way: it stays suspended, and its deadline is not run out
+        // against a state nobody could see.
+        if !undetermined
+            && let (Some(d), Some(started_at)) = (deadline_secs, started_at)
             && now.saturating_sub(started_at) >= d
         {
             return Err(Box::new(EvalAltResult::ErrorRuntime(

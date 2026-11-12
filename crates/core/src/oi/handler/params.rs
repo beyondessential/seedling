@@ -1,4 +1,4 @@
-use std::{collections::BTreeMap, sync::Arc};
+use std::sync::Arc;
 
 use seedling_protocol::error::{ErrorCode, OiError};
 use seedling_protocol::names::{AppName, ParamName};
@@ -37,11 +37,7 @@ fn current_param_value(
     let cipher = Arc::clone(&state.cipher);
     let map = state
         .db
-        .call(move |db| -> rusqlite::Result<BTreeMap<String, String>> {
-            Ok(crate::runtime::apps::load_all_params_for_app(
-                db, &cipher, &app_owned,
-            ))
-        })
+        .call(move |db| crate::runtime::apps::load_all_params_for_app(db, &cipher, &app_owned))
         .map_err(|e| OiError::internal(format!("db error: {e}")))?;
     Ok(map.get(name_owned.as_str()).cloned())
 }
@@ -93,11 +89,7 @@ fn reload_and_persist_apperror(
     let cipher = Arc::clone(&state.cipher);
     let loaded_params = state
         .db
-        .call(move |db| -> rusqlite::Result<BTreeMap<String, String>> {
-            Ok(crate::runtime::apps::load_all_params_for_app(
-                db, &cipher, &app_owned,
-            ))
-        })
+        .call(move |db| crate::runtime::apps::load_all_params_for_app(db, &cipher, &app_owned))
         .map_err(|e| OiError::internal(format!("db error: {e}")))?;
     // The outcome needs no gating here: this re-evaluates the app's existing
     // definition under new param values and derives nothing from the result
@@ -172,7 +164,8 @@ fn validate_proposed(
     let cipher = Arc::clone(&state.cipher);
     let mut proposed = state
         .db
-        .call(move |db| crate::runtime::apps::load_all_params_for_app(db, &cipher, &app_owned));
+        .call(move |db| crate::runtime::apps::load_all_params_for_app(db, &cipher, &app_owned))
+        .map_err(|e| OiError::internal(format!("db error: {e}")))?;
     match change.1 {
         Some(v) => proposed.insert(change.0.as_str().to_owned(), v.to_owned()),
         None => proposed.remove(change.0.as_str()),

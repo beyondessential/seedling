@@ -254,7 +254,8 @@ fn check(name: &str, result: Result_, extra: Value) -> Value {
 // spec: CNR#applications
 async fn build_payload(state: &Arc<OiState>) -> Result<Value, String> {
     // One sweep serves the health check, the totals and the applications.
-    let statuses = status::all(&state.registry, &state.scheduler, &state.db);
+    let statuses = status::all(&state.registry, &state.scheduler, &state.db)
+        .map_err(|e| format!("could not read the apps' status: {e}"))?;
     let (apps_check, apps_total, apps_by_status) = apps_check(&statuses);
     let faults_check = faults_check(state);
     let proxy = component_check(

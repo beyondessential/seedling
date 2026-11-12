@@ -182,3 +182,23 @@ fn settings_reject_out_of_bounds_values() {
     assert_eq!(s.threshold, 5);
     assert_eq!(s.window_secs, 1800);
 }
+
+// spec: FLTS#crash-loop-settings
+#[test]
+fn settings_that_cannot_be_read_are_not_replaced_by_defaults_and_written_back() {
+    let db = Db::open_in_memory().expect("open");
+    set_settings(&db, Some(9), Some(7200)).expect("set");
+
+    db.conn
+        .execute_batch("ALTER TABLE restart_settings RENAME TO gone;")
+        .unwrap();
+    let err = set_settings(&db, Some(11), None).unwrap_err();
+    assert!(matches!(err, SettingsError::Unavailable(_)), "{err:?}");
+
+    // The stored window was never overwritten with the default.
+    db.conn
+        .execute_batch("ALTER TABLE gone RENAME TO restart_settings;")
+        .unwrap();
+    let stored = settings(&db).unwrap();
+    assert_eq!((stored.threshold, stored.window_secs), (9, 7200));
+}

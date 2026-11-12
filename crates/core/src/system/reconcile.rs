@@ -1089,6 +1089,9 @@ impl Reconciler {
                     "every installed app failed to compute its desired state; \
                      holding the data plane rather than tearing it down"
                 );
+                // Not idle: nothing outside will announce that the state has
+                // become readable, so the loop must keep coming back to look.
+                return true;
             }
             return false;
         }
@@ -2662,8 +2665,27 @@ mod tests {
         assert!(steady);
     }
 
+    // spec: AUTO#unreadable-scale
+    #[test]
+    fn a_tick_that_could_not_read_the_scale_is_not_idle() {
+        let oi = crate::oi::test_support::TestOi::with_app("demo");
+        oi.install("demo");
+        let mut reconciler = test_reconciler(&oi);
+        oi.state.db.call(|db| {
+            db.conn
+                .execute_batch("DROP TABLE scaling_decisions;")
+                .unwrap()
+        });
+
+        let active = oi.block_on(reconciler.tick());
+        assert!(
+            active,
+            "an idle loop waits for a notification that nothing sends when a read fails"
+        );
+    }
+
     /// A reconciler over `oi`'s stub backends and database.
-    fn test_reconciler(oi: &crate::oi::test_support::TestOi) -> Reconciler {
+    pub(super) fn test_reconciler(oi: &crate::oi::test_support::TestOi) -> Reconciler {
         Reconciler::new(
             Arc::clone(&oi.state.driver),
             oi.state.node_prefix,

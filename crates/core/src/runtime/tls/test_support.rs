@@ -17,6 +17,19 @@ pub fn self_signed_pem(sans: &[&str]) -> String {
     params.self_signed(&key).expect("self-sign").pem()
 }
 
+/// A self-signed certificate carrying exactly `sans` whose validity window
+/// ended long ago.
+pub fn expired_pem(sans: &[&str]) -> String {
+    let key = rcgen::KeyPair::generate_for(&rcgen::PKCS_ECDSA_P256_SHA256).expect("keypair");
+    let mut params =
+        rcgen::CertificateParams::new(sans.iter().map(|s| (*s).to_owned()).collect::<Vec<_>>())
+            .expect("params");
+    params.distinguished_name = rcgen::DistinguishedName::new();
+    params.not_before = rcgen::date_time_ymd(2000, 1, 1);
+    params.not_after = rcgen::date_time_ymd(2001, 1, 1);
+    params.self_signed(&key).expect("self-sign").pem()
+}
+
 /// A certificate carrying exactly `sans`, signed by a separate CA so its
 /// issuer differs from its subject.
 ///

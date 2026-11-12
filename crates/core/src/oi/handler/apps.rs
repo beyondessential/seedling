@@ -273,44 +273,7 @@ pub(crate) fn sync_fault_state(
                 }
             }
         }
-        // Sync disallowed_registry fault.
-        {
-            use crate::runtime::{faults, registries as reg_mod};
-            let allowed: std::collections::BTreeSet<String> =
-                reg_mod::list_allowed_registries(db)
-                    .unwrap_or_default()
-                    .into_iter()
-                    .collect();
-            let disallowed: Vec<&str> = used_registries
-                .iter()
-                .filter(|r| !allowed.contains(*r))
-                .map(String::as_str)
-                .collect();
-            let existing: Vec<_> = faults::list_active_faults(db, Some(&app_name))
-                .unwrap_or_default()
-                .into_iter()
-                .filter(|f| f.kind == "disallowed_registry")
-                .collect();
-            if disallowed.is_empty() {
-                for f in &existing {
-                    if let Err(e) = faults::clear_fault(db, &f.id, &app_name) {
-                        tracing::warn!(app = %app_name, fault_id = %f.id, "failed to clear disallowed_registry fault: {e}");
-                    }
-                }
-            } else {
-                let description = format!("image references use disallowed registries: {}", disallowed.join(", "));
-                if !existing.iter().any(|f| f.description == description) {
-                    for f in &existing {
-                        if let Err(e) = faults::clear_fault(db, &f.id, &app_name) {
-                            tracing::warn!(app = %app_name, fault_id = %f.id, "failed to clear stale disallowed_registry fault: {e}");
-                        }
-                    }
-                    if let Err(e) = faults::file_fault(db, &app_name, None, None, None, "disallowed_registry", &description) {
-                        tracing::warn!(app = %app_name, "failed to file disallowed_registry fault: {e}");
-                    }
-                }
-            }
-        }
+        crate::runtime::apps::sync_used_registries(db, &app_name, &used_registries);
     });
 }
 
@@ -344,19 +307,61 @@ fn sync_action_schedules(state: &OiState, app_name: &AppName) {
         {
             tracing::warn!(app = %app_name_owned, "failed to ensure schedules: {e}");
         }
+        // spec: FLT#app-faults
+        // A schedule the definition no longer declares has no record left to
+        // be unreadable.
+        match faults::list_active_faults(db, Some(&app_name_owned)) {
+            Ok(active) => {
+                for f in active.iter().filter(|f| {
+                    f.kind == "schedule_unreadable"
+                        && !valid_pairs_owned
+                            .iter()
+                            .any(|(a, _)| a.as_str() == f.subject)
+                }) {
+                    let key = faults::FaultKey::new(&app_name_owned, &f.kind, &f.subject);
+                    let _ = faults::clear_fault_by_key(db, &key);
+                }
+            }
+            Err(e) => tracing::warn!(app = %app_name_owned, "failed to read faults: {e}"),
+        }
     });
 }
 
 // spec: APPS#description — fills in `last_fired_at` and `next_fire_at` on each
 // action's `schedules` entries. Schedules whose cronexpr is no longer present
 // in the AppDef are ignored (they will be pruned by `sync_action_schedules`).
-fn enrich_action_schedules(state: &OiState, app: &AppName, actions_json: &mut [Value]) {
+fn enrich_action_schedules(
+    state: &OiState,
+    app: &AppName,
+    actions_json: &mut [Value],
+) -> Result<(), OiError> {
     let app_owned = app.clone();
     let rows = state
         .db
-        .call(move |db| crate::runtime::db::list_schedules(db, &app_owned).unwrap_or_default());
+        .call(move |db| crate::runtime::db::list_schedules(db, &app_owned))
+        .map_err(|e| {
+            OiError::new(
+                ErrorCode::Internal,
+                format!("could not read the app's schedules: {e}"),
+            )
+        })?;
     if rows.is_empty() {
-        return;
+        return Ok(());
+    }
+    // A last fire time that cannot be parsed is state the server cannot read,
+    // not a schedule that never fired.
+    for row in &rows {
+        if let Some(text) = &row.last_fired_at
+            && text.parse::<jiff::Timestamp>().is_err()
+        {
+            return Err(OiError::new(
+                ErrorCode::Internal,
+                format!(
+                    "the last fire time of a schedule of {} cannot be read",
+                    row.action
+                ),
+            ));
+        }
     }
 
     let now = jiff::Timestamp::now();
@@ -403,6 +408,7 @@ fn enrich_action_schedules(state: &OiState, app: &AppName, actions_json: &mut [V
             };
         }
     }
+    Ok(())
 }
 
 fn compute_next_fire(
@@ -531,7 +537,12 @@ pub(crate) fn describe_app(state: &OiState, params: AppParams) -> HandlerResult 
         .ok_or_else(|| OiError::not_found(format!("app not found: {name}")))?;
     let generation = entry.current_generation;
 
-    let status = app_status::of(entry, active.as_ref(), &state.db);
+    let status = app_status::of(entry, active.as_ref(), &state.db).map_err(|e| {
+        OiError::new(
+            ErrorCode::Internal,
+            format!("could not read the app's state to derive its status: {e}"),
+        )
+    })?;
 
     // Names come from AppDef; values come from the params table. A value in
     // secret storage is never returned, so only its name is read.
@@ -551,7 +562,13 @@ pub(crate) fn describe_app(state: &OiState, params: AppParams) -> HandlerResult 
     let name_owned = params.app.clone();
     let all_faults_for_app = state
         .db
-        .call(move |db| faults::list_active_faults(db, Some(&name_owned)).unwrap_or_default());
+        .call(move |db| faults::list_active_faults(db, Some(&name_owned)))
+        .map_err(|e| {
+            OiError::new(
+                ErrorCode::Internal,
+                format!("could not read the app's faults: {e}"),
+            )
+        })?;
 
     // spec: APPS#description — app-level faults from the DB.
     let app_faults_json: Vec<Value> = all_faults_for_app
@@ -576,7 +593,13 @@ pub(crate) fn describe_app(state: &OiState, params: AppParams) -> HandlerResult 
         let name_owned = params.app.clone();
         state
             .db
-            .call(move |db| stopped::load_stopped(db, &name_owned).unwrap_or_default())
+            .call(move |db| stopped::load_stopped(db, &name_owned))
+            .map_err(|e| {
+                OiError::new(
+                    ErrorCode::Internal,
+                    format!("could not read the app's stopped resources: {e}"),
+                )
+            })?
     };
 
     let def = entry.app.def.load();
@@ -631,7 +654,7 @@ pub(crate) fn describe_app(state: &OiState, params: AppParams) -> HandlerResult 
     // `last_fired_at` and `next_fire_at` set to null; here we replace those
     // with the values stored in the schedule table and a freshly computed
     // next-fire timestamp.
-    enrich_action_schedules(state, &params.app, &mut actions_json);
+    enrich_action_schedules(state, &params.app, &mut actions_json)?;
 
     // resources — with instance lifecycle state from DB observations.
     // Only query instances for Installed/Uninstalling apps; NotInstalled
@@ -669,110 +692,117 @@ pub(crate) fn describe_app(state: &OiState, params: AppParams) -> HandlerResult 
     let name_owned = params.app.clone();
     let all_faults_clone = all_faults_for_app.clone();
     let stopped_set_clone = stopped_set.clone();
-    let resources_json: Vec<Value> = state.db.call(move |db| {
-        // spec: APPS#description
-        // Read the rate settings once per describe: every instance summary
-        // reports its recent count over the same window.
-        let restart_settings = restarts::settings(db).ok();
-        resource_infos
-            .into_iter()
-            .map(|info| {
-                let instances_json: Vec<Value> = if query_instances {
-                    find_instances_for_group(db, &name_owned, info.kind, Some(&info.name_str))
-                        .unwrap_or_default()
+    let resources_json: Vec<Value> = state
+        .db
+        .call(move |db| {
+            // spec: APPS#description
+            // Read the rate settings once per describe: every instance summary
+            // reports its recent count over the same window.
+            let restart_settings = restarts::settings(db)?;
+            resource_infos
+                .into_iter()
+                .map(|info| {
+                    let instances_json: Vec<Value> = if query_instances {
+                        find_instances_for_group(db, &name_owned, info.kind, Some(&info.name_str))?
+                            .iter()
+                            .map(|inst| {
+                                let observations = query_observations(db, inst)?;
+                                let (lifecycle, transition_time) =
+                                    derive_state_with_transition_time(inst, &observations);
+                                // spec: APPS#description
+                                // Omitted entirely for an instance with no
+                                // restart history, so a resource that has never
+                                // restarted does not read as one that restarted
+                                // zero times just now.
+                                let restart_summary =
+                                    restarts::summary(db, &inst.id.to_hex(), restart_settings)?;
+                                Ok(json!({
+                                    "id": inst.id.to_hex(),
+                                    "display_name": inst.display_name,
+                                    "lifecycle": format!("{lifecycle:?}"),
+                                    "transition_time": transition_time.and_then(|t| {
+                                        jiff::Timestamp::try_from(t).ok().map(|ts| ts.to_string())
+                                    }),
+                                    "restarts": restart_summary,
+                                }))
+                            })
+                            .collect::<rusqlite::Result<_>>()?
+                    } else {
+                        vec![]
+                    };
+
+                    let resource_type_str = format!("{:?}", info.kind).to_lowercase();
+                    let resource_faults: Vec<Value> = all_faults_clone
                         .iter()
-                        .map(|inst| {
-                            let observations = query_observations(db, inst).unwrap_or_default();
-                            let (lifecycle, transition_time) =
-                                derive_state_with_transition_time(inst, &observations);
-                            // spec: APPS#description
-                            // Omitted entirely for an instance with no
-                            // restart history, so a resource that has never
-                            // restarted does not read as one that restarted
-                            // zero times just now.
-                            let restart_summary = restart_settings.and_then(|s| {
-                                restarts::summary(db, &inst.id.to_hex(), s).ok().flatten()
-                            });
+                        .filter(|f| {
+                            f.resource_type.as_deref() == Some(&resource_type_str)
+                                && f.resource_name.as_deref() == Some(&info.name_str)
+                        })
+                        .map(|f| {
                             json!({
-                                "id": inst.id.to_hex(),
-                                "display_name": inst.display_name,
-                                "lifecycle": format!("{lifecycle:?}"),
-                                "transition_time": transition_time.and_then(|t| {
-                                    jiff::Timestamp::try_from(t).ok().map(|ts| ts.to_string())
-                                }),
-                                "restarts": restart_summary,
+                                "id": f.id,
+                                "app": f.app,
+                                "resource_type": f.resource_type,
+                                "resource_name": f.resource_name,
+                                "instance_id": f.instance_id,
+                                "kind": f.kind,
+                                "timestamp": f.timestamp.to_string(),
+                                "description": f.description,
                             })
                         })
-                        .collect()
-                } else {
-                    vec![]
-                };
+                        .collect();
 
-                let resource_type_str = format!("{:?}", info.kind).to_lowercase();
-                let resource_faults: Vec<Value> = all_faults_clone
-                    .iter()
-                    .filter(|f| {
-                        f.resource_type.as_deref() == Some(&resource_type_str)
-                            && f.resource_name.as_deref() == Some(&info.name_str)
-                    })
-                    .map(|f| {
-                        json!({
-                            "id": f.id,
-                            "app": f.app,
-                            "resource_type": f.resource_type,
-                            "resource_name": f.resource_name,
-                            "instance_id": f.instance_id,
-                            "kind": f.kind,
-                            "timestamp": f.timestamp.to_string(),
-                            "description": f.description,
-                        })
-                    })
-                    .collect();
+                    let is_stopped =
+                        stopped_set_clone.contains(&(info.kind, info.name_str.clone()));
 
-                let is_stopped = stopped_set_clone.contains(&(info.kind, info.name_str.clone()));
+                    let mut resource_obj = info.base_json;
+                    resource_obj["instances"] = json!(instances_json);
+                    resource_obj["faults"] = json!(resource_faults);
+                    resource_obj["stopped"] = json!(is_stopped);
 
-                let mut resource_obj = info.base_json;
-                resource_obj["instances"] = json!(instances_json);
-                resource_obj["faults"] = json!(resource_faults);
-                resource_obj["stopped"] = json!(is_stopped);
+                    // spec: CTL#scaling
+                    if let Some((low, high)) = info.scale_bounds {
+                        // spec: AUTO#unreadable-scale
+                        // Null rather than the lower bound. The bounds come from
+                        // the app definition and are known; what the operator
+                        // chose within them is not, and reporting the floor would
+                        // have someone who scaled up read it back as a scale-down
+                        // that never happened.
+                        let current = match scaling::effective_scale(
+                            db,
+                            &name_owned,
+                            &info.name_str,
+                            low,
+                            high,
+                        ) {
+                            Ok(current) => json!(current),
+                            Err(e) => {
+                                tracing::warn!(
+                                    app = %name_owned,
+                                    deployment = %info.name_str,
+                                    "could not read the scaling decision; reporting the current \
+                                     scale as unavailable: {e}"
+                                );
+                                Value::Null
+                            }
+                        };
+                        resource_obj["scale"] = json!({
+                            "low": low,
+                            "high": high,
+                            "current": current,
+                        });
+                    }
 
-                // spec: CTL#scaling
-                if let Some((low, high)) = info.scale_bounds {
-                    // spec: AUTO#unreadable-scale
-                    // Null rather than the lower bound. The bounds come from
-                    // the app definition and are known; what the operator
-                    // chose within them is not, and reporting the floor would
-                    // have someone who scaled up read it back as a scale-down
-                    // that never happened.
-                    let current = match scaling::effective_scale(
-                        db,
-                        &name_owned,
-                        &info.name_str,
-                        low,
-                        high,
-                    ) {
-                        Ok(current) => json!(current),
-                        Err(e) => {
-                            tracing::warn!(
-                                app = %name_owned,
-                                deployment = %info.name_str,
-                                "could not read the scaling decision; reporting the current \
-                                 scale as unavailable: {e}"
-                            );
-                            Value::Null
-                        }
-                    };
-                    resource_obj["scale"] = json!({
-                        "low": low,
-                        "high": high,
-                        "current": current,
-                    });
-                }
-
-                resource_obj
-            })
-            .collect()
-    });
+                    Ok(resource_obj)
+                })
+                .collect::<rusqlite::Result<Vec<Value>>>()
+        })
+        .map_err(|e| {
+            OiError::new(
+                ErrorCode::Internal,
+                format!("could not read the app's resource state: {e}"),
+            )
+        })?;
 
     // Dynamic resources (created inside action closures, not in AppDef).
     // Returned as a separate top-level field so consumers can choose whether
@@ -782,72 +812,80 @@ pub(crate) fn describe_app(state: &OiState, params: AppParams) -> HandlerResult 
     let dynamic_resources_json: Vec<Value> = if query_instances {
         let name_owned = params.app.clone();
         let all_faults_clone2 = all_faults_for_app.clone();
-        state.db.call(move |db| {
-            let dyn_records = list_dynamic_resources_for_app(db, &name_owned).unwrap_or_default();
-            let mut out = Vec::new();
-            for rec in dyn_records {
-                let Some(id) = InstanceId::from_hex(&rec.instance_id) else {
-                    continue;
-                };
-                let Some(kind) = resource_kind_from_debug_str(&rec.kind) else {
-                    continue;
-                };
-                let inst = ResourceInstance {
-                    id,
-                    app: rec.app.clone(),
-                    kind,
-                    name: rec.resource_name.clone(),
-                    variant: InstanceVariant::Singleton,
-                    display_name: rec.display_name.clone(),
-                };
-                let observations = query_observations(db, &inst).unwrap_or_default();
-                let (lifecycle, transition_time) =
-                    derive_state_with_transition_time(&inst, &observations);
-                let kind_str = format!("{:?}", kind).to_lowercase();
-                // Anonymous resources have no `resource_name`; fall back to
-                // the display_name so they have a stable identifier in the
-                // UI (e.g. `tamanu-central--abc12345`).
-                let display_name = rec
-                    .resource_name
-                    .as_deref()
-                    .unwrap_or(&rec.display_name)
-                    .to_owned();
-                let instance_faults: Vec<Value> = all_faults_clone2
-                    .iter()
-                    .filter(|f| f.instance_id.as_deref() == Some(&rec.instance_id))
-                    .map(|f| {
-                        json!({
-                            "id": f.id,
-                            "app": f.app,
-                            "resource_type": f.resource_type,
-                            "resource_name": f.resource_name,
-                            "instance_id": f.instance_id,
-                            "kind": f.kind,
-                            "timestamp": f.timestamp.to_string(),
-                            "description": f.description,
+        state
+            .db
+            .call(move |db| {
+                let dyn_records = list_dynamic_resources_for_app(db, &name_owned)?;
+                let mut out = Vec::new();
+                for rec in dyn_records {
+                    let Some(id) = InstanceId::from_hex(&rec.instance_id) else {
+                        continue;
+                    };
+                    let Some(kind) = resource_kind_from_debug_str(&rec.kind) else {
+                        continue;
+                    };
+                    let inst = ResourceInstance {
+                        id,
+                        app: rec.app.clone(),
+                        kind,
+                        name: rec.resource_name.clone(),
+                        variant: InstanceVariant::Singleton,
+                        display_name: rec.display_name.clone(),
+                    };
+                    let observations = query_observations(db, &inst)?;
+                    let (lifecycle, transition_time) =
+                        derive_state_with_transition_time(&inst, &observations);
+                    let kind_str = format!("{:?}", kind).to_lowercase();
+                    // Anonymous resources have no `resource_name`; fall back to
+                    // the display_name so they have a stable identifier in the
+                    // UI (e.g. `tamanu-central--abc12345`).
+                    let display_name = rec
+                        .resource_name
+                        .as_deref()
+                        .unwrap_or(&rec.display_name)
+                        .to_owned();
+                    let instance_faults: Vec<Value> = all_faults_clone2
+                        .iter()
+                        .filter(|f| f.instance_id.as_deref() == Some(&rec.instance_id))
+                        .map(|f| {
+                            json!({
+                                "id": f.id,
+                                "app": f.app,
+                                "resource_type": f.resource_type,
+                                "resource_name": f.resource_name,
+                                "instance_id": f.instance_id,
+                                "kind": f.kind,
+                                "timestamp": f.timestamp.to_string(),
+                                "description": f.description,
+                            })
                         })
-                    })
-                    .collect();
-                out.push(json!({
-                    "name": display_name,
-                    "type": kind_str,
-                    "anonymous": rec.resource_name.is_none(),
-                    "operation_id": rec.operation_id,
-                    // spec: BSL#descriptions
-                    "description": rec.description,
-                    "instances": [{
-                        "id": rec.instance_id,
-                        "display_name": rec.display_name,
-                        "lifecycle": format!("{lifecycle:?}"),
-                        "transition_time": transition_time.and_then(|t| {
-                            jiff::Timestamp::try_from(t).ok().map(|ts| ts.to_string())
-                        }),
-                    }],
-                    "faults": instance_faults,
-                }));
-            }
-            out
-        })
+                        .collect();
+                    out.push(json!({
+                        "name": display_name,
+                        "type": kind_str,
+                        "anonymous": rec.resource_name.is_none(),
+                        "operation_id": rec.operation_id,
+                        // spec: BSL#descriptions
+                        "description": rec.description,
+                        "instances": [{
+                            "id": rec.instance_id,
+                            "display_name": rec.display_name,
+                            "lifecycle": format!("{lifecycle:?}"),
+                            "transition_time": transition_time.and_then(|t| {
+                                jiff::Timestamp::try_from(t).ok().map(|ts| ts.to_string())
+                            }),
+                        }],
+                        "faults": instance_faults,
+                    }));
+                }
+                Ok::<_, rusqlite::Error>(out)
+            })
+            .map_err(|e| {
+                OiError::new(
+                    ErrorCode::Internal,
+                    format!("could not read the app's dynamic resources: {e}"),
+                )
+            })?
     } else {
         Vec::new()
     };
@@ -911,9 +949,15 @@ pub(crate) fn describe_app(state: &OiState, params: AppParams) -> HandlerResult 
         // alongside its started_at_secs timestamp.
         let barrier_json = {
             let op_id_for_load = op_id.clone();
-            let entries = state.db.call(move |db| {
-                crate::runtime::history::load_action_log(db, &op_id_for_load).unwrap_or_default()
-            });
+            let entries = state
+                .db
+                .call(move |db| crate::runtime::history::load_action_log(db, &op_id_for_load))
+                .map_err(|e| {
+                    OiError::new(
+                        ErrorCode::Internal,
+                        format!("could not read the running operation's log: {e}"),
+                    )
+                })?;
             entries
                 .into_iter()
                 .filter_map(|e| {
@@ -1195,7 +1239,8 @@ pub(crate) fn dry_run_plan(state: &OiState, params: PlanParams, ctx: &RequestCtx
     let cipher = std::sync::Arc::clone(&state.cipher);
     let current_params = state
         .db
-        .call(move |db| crate::runtime::apps::load_all_params_for_app(db, &cipher, &name_owned));
+        .call(move |db| crate::runtime::apps::load_all_params_for_app(db, &cipher, &name_owned))
+        .map_err(|e| OiError::internal(format!("db params: {e}")))?;
 
     // Build the proposed param map from current with the proposals overlaid.
     let mut proposed_param_map = current_params.clone();
@@ -1672,7 +1717,7 @@ pub(crate) fn update_app(
     let (current_params, previous_is_secret) = state
         .db
         .call(move |db| -> rusqlite::Result<_> {
-            let values = crate::runtime::apps::load_all_params_for_app(db, &cipher, &name_owned);
+            let values = crate::runtime::apps::load_all_params_for_app(db, &cipher, &name_owned)?;
             let stored_secret = match &changing {
                 Some(name) => {
                     crate::runtime::apps::secret_params::is_stored_secret(db, &name_owned, name)?

@@ -377,6 +377,8 @@ pub fn settings(db: &Db) -> rusqlite::Result<RestartSettings> {
 pub enum SettingsError {
     ThresholdTooLow,
     WindowTooShort,
+    /// The stored settings could not be read or written; nothing was changed.
+    Unavailable(String),
 }
 
 impl std::fmt::Display for SettingsError {
@@ -384,6 +386,7 @@ impl std::fmt::Display for SettingsError {
         match self {
             Self::ThresholdTooLow => write!(f, "threshold must be at least {MIN_THRESHOLD}"),
             Self::WindowTooShort => write!(f, "window_secs must be at least {MIN_WINDOW_SECS}"),
+            Self::Unavailable(why) => write!(f, "the crash-loop settings are unavailable: {why}"),
         }
     }
 }
@@ -408,20 +411,27 @@ pub fn set_settings(
     {
         return Err(SettingsError::WindowTooShort);
     }
-    let current = settings(db).unwrap_or(RestartSettings {
-        threshold: 5,
-        window_secs: 1800,
-    });
+    // An omitted field keeps the stored value, so a stored value that cannot
+    // be read is not stood in for by the defaults and written back.
+    let current = settings(db).map_err(|e| SettingsError::Unavailable(e.to_string()))?;
     let next = RestartSettings {
         threshold: threshold.unwrap_or(current.threshold),
         window_secs: window_secs.unwrap_or(current.window_secs),
     };
-    let _ = db.conn.execute(
-        "UPDATE restart_settings
-            SET threshold = ?1, window_secs = ?2, updated_at = ?3
-          WHERE singleton = 1",
-        rusqlite::params![next.threshold, next.window_secs, now_ms()],
-    );
+    let changed = db
+        .conn
+        .execute(
+            "UPDATE restart_settings
+                SET threshold = ?1, window_secs = ?2, updated_at = ?3
+              WHERE singleton = 1",
+            rusqlite::params![next.threshold, next.window_secs, now_ms()],
+        )
+        .map_err(|e| SettingsError::Unavailable(e.to_string()))?;
+    if changed == 0 {
+        return Err(SettingsError::Unavailable(
+            "the settings record is missing".to_owned(),
+        ));
+    }
     Ok(next)
 }
 

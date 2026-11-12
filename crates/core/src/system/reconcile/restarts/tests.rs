@@ -318,3 +318,19 @@ fn gc_drops_bookkeeping_for_instances_that_no_longer_exist() {
         None
     );
 }
+
+// spec: AUTO#crash-loop-detection
+#[test]
+fn unreadable_settings_declare_no_crash_loop_but_still_record() {
+    let db = Db::open_in_memory().expect("open");
+    let inst = instance();
+    tick(&db, &inst, 0, None);
+    db.conn
+        .execute_batch("ALTER TABLE restart_settings RENAME TO gone;")
+        .unwrap();
+
+    // Far beyond any threshold; with none readable, none is invented.
+    let loops = tick(&db, &inst, 50, None);
+    assert!(loops.is_empty());
+    assert_eq!(records(&db, &inst).len(), 50);
+}

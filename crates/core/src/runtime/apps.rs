@@ -29,7 +29,7 @@ pub mod status;
 pub use params::{
     delete_app_params, delete_one_param, load_params_for_app, sync_script_error_fault, upsert_param,
 };
-pub use registry_faults::sync_registry_faults;
+pub use registry_faults::{sync_registry_faults, sync_used_registries};
 
 #[derive(Debug)]
 pub struct ScriptError(pub String);
@@ -371,7 +371,13 @@ impl AppRegistry {
                     continue;
                 }
             };
-            let stored = load_all_params_for_app(db, cipher, &name);
+            let stored = match load_all_params_for_app(db, cipher, &name) {
+                Ok(stored) => stored,
+                Err(e) => {
+                    tracing::warn!(app = %name, "failed to load stored params: {e}");
+                    continue;
+                }
+            };
             // spec: APPS#persistence — reload runs no validators: the stored
             // combination was validated when it was written.
             let (app, raw_error) = evaluate(&name, &bundle, &stored, limits);
@@ -534,17 +540,21 @@ pub fn transition_phase(
 
 /// Load both plaintext and secret params, merging into a single map.
 /// Used before script evaluation, when schema isn't known yet.
+///
+/// Either table failing to read fails the whole call: a map missing the
+/// values that could not be read would evaluate the script as though they
+/// were unset.
+// spec: PARAM#values
 pub fn load_all_params_for_app(
     db: &Db,
     cipher: &Cipher,
     app_name: &AppName,
-) -> BTreeMap<String, String> {
-    let mut merged = params::load_params_for_app(db, app_name).unwrap_or_default();
-    match secret_params::load_secret_params_for_app(db, cipher, app_name) {
-        Ok(secrets) => merged.extend(secrets),
-        Err(e) => tracing::warn!(app = %app_name, "failed to load secret params: {e}"),
-    }
-    merged
+) -> rusqlite::Result<BTreeMap<String, String>> {
+    let mut merged = params::load_params_for_app(db, app_name)?;
+    merged.extend(secret_params::load_secret_params_for_app(
+        db, cipher, app_name,
+    )?);
+    Ok(merged)
 }
 
 /// Store or clear one parameter value, in whichever table its secrecy puts

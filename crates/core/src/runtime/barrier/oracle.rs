@@ -7,8 +7,17 @@ use crate::defs::resource::ResourceKind;
 use crate::runtime::history::WorldObservation;
 use crate::runtime::{LifecycleState, ResourceInstance};
 
+/// An instance's lifecycle state could not be derived, because its
+/// observation history could not be read. Not an empty history, and not any
+/// state.
+// spec: LCY#derivation
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Undetermined;
+
 pub trait WorldStateOracle: Send + Sync {
-    fn lifecycle_state(&self, resource: &ResourceInstance) -> LifecycleState;
+    /// The instance's lifecycle state, or [`Undetermined`] while it cannot be
+    /// read. A barrier is not decided on an undetermined instance.
+    fn lifecycle_state(&self, resource: &ResourceInstance) -> Result<LifecycleState, Undetermined>;
 
     /// Returns true if a TLS certificate has been observed valid for the given
     /// ingress resource. Used by `rt.warm_certs(...).ready()` to wait on cert
@@ -100,12 +109,13 @@ impl Default for TestWorldOracle {
 }
 
 impl WorldStateOracle for TestWorldOracle {
-    fn lifecycle_state(&self, resource: &ResourceInstance) -> LifecycleState {
-        self.states
+    fn lifecycle_state(&self, resource: &ResourceInstance) -> Result<LifecycleState, Undetermined> {
+        Ok(self
+            .states
             .lock()
             .get(&(resource.kind, resource.name.clone()))
             .copied()
-            .unwrap_or(LifecycleState::Pending)
+            .unwrap_or(LifecycleState::Pending))
     }
 
     fn cert_valid_for(&self, resource: &ResourceInstance) -> bool {
@@ -132,9 +142,10 @@ impl WorldStateOracle for TestWorldOracle {
             | ResourceKind::ExternalVolume => {
                 // Non-container resources: termination itself is success.
                 // Only claim success once the resource is actually terminated.
-                if self.lifecycle_state(resource) == LifecycleState::Terminated
-                    || self.lifecycle_state(resource) == LifecycleState::Unscheduled
-                {
+                if matches!(
+                    self.lifecycle_state(resource),
+                    Ok(LifecycleState::Terminated | LifecycleState::Unscheduled)
+                ) {
                     Some(true)
                 } else {
                     None
@@ -160,14 +171,19 @@ impl DbWorldOracle {
 }
 
 impl WorldStateOracle for DbWorldOracle {
-    fn lifecycle_state(&self, resource: &ResourceInstance) -> LifecycleState {
+    fn lifecycle_state(&self, resource: &ResourceInstance) -> Result<LifecycleState, Undetermined> {
         let resource = resource.clone();
         self.db.call(move |db| {
-            let observations = match crate::runtime::history::query_observations(db, &resource) {
-                Ok(obs) => obs,
-                Err(_) => return LifecycleState::Pending,
-            };
-            derive_lifecycle_state(&resource, &observations)
+            match crate::runtime::history::query_observations(db, &resource) {
+                Ok(observations) => Ok(derive_lifecycle_state(&resource, &observations)),
+                Err(e) => {
+                    tracing::warn!(
+                        instance = %resource.display_name,
+                        "cannot read an observation history; its lifecycle state is undetermined: {e}"
+                    );
+                    Err(Undetermined)
+                }
+            }
         })
     }
 
@@ -221,17 +237,14 @@ impl WorldStateOracle for DbWorldOracle {
                 // Non-container resources: once terminated, treat as success.
                 let resource_for_state = resource.clone();
                 let state = self.db.call(move |db| {
-                    let observations = match crate::runtime::history::query_observations(
-                        db,
-                        &resource_for_state,
-                    ) {
-                        Ok(obs) => obs,
-                        Err(_) => return LifecycleState::Pending,
-                    };
-                    derive_lifecycle_state(&resource_for_state, &observations)
+                    crate::runtime::history::query_observations(db, &resource_for_state)
+                        .map(|observations| {
+                            derive_lifecycle_state(&resource_for_state, &observations)
+                        })
+                        .ok()
                 });
                 match state {
-                    LifecycleState::Terminated | LifecycleState::Unscheduled => Some(true),
+                    Some(LifecycleState::Terminated | LifecycleState::Unscheduled) => Some(true),
                     _ => None,
                 }
             }

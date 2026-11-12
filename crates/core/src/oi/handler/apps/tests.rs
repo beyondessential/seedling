@@ -1244,3 +1244,41 @@ fn a_static_job_is_judged_by_how_its_run_ended() {
     assert_eq!(run(0), "running");
     assert_eq!(run(1), "degraded");
 }
+
+// spec: APPS#description
+#[test]
+fn describing_an_app_whose_state_cannot_be_read_is_internal() {
+    let oi = TestOi::with_app("demo");
+    oi.install("demo");
+    oi.state
+        .db
+        .call(|db| db.conn.execute_batch("DROP TABLE faults;").unwrap());
+
+    let (code, _) = oi.call("/apps/show", json!({ "app": "demo" })).unwrap_err();
+    assert_eq!(code, "internal");
+}
+
+// spec: APPS#actions
+#[test]
+fn an_unreadable_schedule_record_makes_the_description_internal() {
+    let oi = TestOi::new();
+    oi.call(
+        "/apps/create",
+        json!({
+            "app": "demo",
+            "script": r#"
+                app.deployment("web").image("docker.io/library/nginx:1.29");
+                app.on_action("tick", |rt, p| {}).on_schedule("* * * * *");
+            "#,
+        }),
+    )
+    .unwrap();
+    oi.state.db.call(|db| {
+        db.conn
+            .execute("UPDATE action_schedules SET last_fired_at = 'garbage'", [])
+            .unwrap()
+    });
+
+    let (code, _) = oi.call("/apps/show", json!({ "app": "demo" })).unwrap_err();
+    assert_eq!(code, "internal");
+}

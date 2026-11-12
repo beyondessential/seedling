@@ -5,7 +5,6 @@ use std::sync::Arc;
 use rhai::{CustomType, Dynamic, FnPtr, Map, TypeBuilder};
 use seedling_protocol::names::{ActionName, AppName, ParamName, ShellName};
 
-use crate::runtime::barrier::runtime::action_def;
 use crate::runtime::definition::Bundle;
 
 use super::{
@@ -172,17 +171,20 @@ pub(crate) trait StaticResource: Clone {
     fn freeze(&mut self);
 }
 
-/// The static resource `name` of type `T`, as a frozen reference.
+/// The static resource `name` of type `T` in `app`, as a frozen reference.
 ///
 /// Every named-resource method resolves the same way in the action context, so
 /// the lookup lives here rather than in each of them: one diagnosis for a name
-/// that is not there, and nothing for the next resource type to copy.
+/// that is not there, and nothing for the next resource type to copy. It reads
+/// the definition of the `App` it was called on, so `old` in a change handler
+/// answers from the previous generation rather than the current one.
 // spec: APP#named-resources
-pub(crate) fn static_ref<T: StaticResource>(name: &str) -> Result<T, Box<rhai::EvalAltResult>> {
-    let adef = action_def().ok_or_else(|| -> Box<rhai::EvalAltResult> {
-        "internal: action context but no action AppDef set".into()
-    })?;
-    let def = adef.load();
+// spec: PARAM#change-handlers
+pub(crate) fn static_ref<T: StaticResource>(
+    app: &App,
+    name: &str,
+) -> Result<T, Box<rhai::EvalAltResult>> {
+    let def = app.def.load();
     let id = ResourceId {
         kind: T::KIND,
         name: Arc::new(name.to_owned()),

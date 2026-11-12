@@ -79,7 +79,10 @@ pub(crate) fn set_settings(state: &OiState, params: SetSettingsParams) -> Handle
     let s = state
         .db
         .call(move |db| restarts::set_settings(db, threshold, window_secs))
-        .map_err(|e| OiError::new(ErrorCode::RequirementsInvalid, e.to_string()))?;
+        .map_err(|e| match e {
+            restarts::SettingsError::Unavailable(_) => OiError::internal(e.to_string()),
+            _ => OiError::new(ErrorCode::RequirementsInvalid, e.to_string()),
+        })?;
     Ok(json!({ "threshold": s.threshold, "window_secs": s.window_secs }))
 }
 
