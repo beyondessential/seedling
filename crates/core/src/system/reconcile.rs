@@ -228,6 +228,7 @@ const OBS_KINDS: &[&str] = &[
     "image_pull_started",
     "stop_sent",
     "unit_failed",
+    "unit_inactive",
     "volume_created",
     "volume_ready",
     "volume_removed",
@@ -1164,7 +1165,17 @@ impl Reconciler {
         );
 
         // --- Process pod results ---
-        let running_pods_by_app = self.ingest_pod_results(&apps, pod_updates);
+        let (running_pods_by_app, failed_units) = self.ingest_pod_results(&apps, pod_updates);
+
+        // spec: LINUX#supervised-units
+        // A failed unit stays loaded until its result is on record, so that a
+        // unit gone without one is a unit the supervisor reported succeeded.
+        for instance in &failed_units {
+            let unit = crate::system::actuator::unit_name(instance);
+            if let Err(e) = self.driver.process.reset_failed_unit(&unit).await {
+                warn!(unit = %unit, error = %e, "could not discard failed unit; retrying next tick");
+            }
+        }
 
         // --- Process volume results ---
         self.ingest_volume_results(&apps, vol_observations);
@@ -1663,8 +1674,12 @@ impl Reconciler {
         &mut self,
         apps: &[AppSnapshot],
         pod_updates: Vec<(AppName, pods::PodActuationUpdate)>,
-    ) -> HashMap<AppName, Vec<RunningPod>> {
+    ) -> (
+        HashMap<AppName, Vec<RunningPod>>,
+        Vec<crate::runtime::ResourceInstance>,
+    ) {
         let mut running_pods_by_app = HashMap::new();
+        let mut recorded_failures = Vec::new();
         // spec: UPD#rolling-updates
         // Rebuild rolling_updates from scratch each tick so that completed
         // rollouts are automatically cleared.
@@ -1691,7 +1706,18 @@ impl Reconciler {
                 self.rolling_updates
                     .insert((app_name.clone(), dep_name.clone()));
             }
-            self.persist_obs(pod_update.observations);
+            let recorded = self.persist_obs(pod_update.observations);
+            // spec: LINUX#supervised-units
+            recorded_failures.extend(
+                pod_update
+                    .failed_units
+                    .iter()
+                    .filter(|i| {
+                        recorded.contains(&(i.id, "unit_failed"))
+                            || recorded.contains(&(i.id, "unit_start_limit_hit"))
+                    })
+                    .cloned(),
+            );
             for instance in &pod_update.started_instances {
                 self.written_obs.retain(|(id, _)| *id != instance.id);
                 // spec: AUTO#job-completion
@@ -1712,7 +1738,7 @@ impl Reconciler {
             running_pods_by_app.insert(app_name, pod_update.running);
         }
         self.update_replace_state(apps, &running_pods_by_app);
-        running_pods_by_app
+        (running_pods_by_app, recorded_failures)
     }
 
     // spec: AUTO#health-check-replacement

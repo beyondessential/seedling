@@ -307,6 +307,9 @@ fn warm_results_refuse_barriers_other_than_ready() {
             ),
             "warm",
         );
-        assert!(err.contains("use ready() or ready_eventually()"), "{warm}.{barrier}: {err}");
+        assert!(
+            err.contains("use ready() or ready_eventually()"),
+            "{warm}.{barrier}: {err}"
+        );
     }
 }

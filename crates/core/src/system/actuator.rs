@@ -36,6 +36,8 @@ use crate::{
 };
 
 mod pod;
+
+pub(crate) use pod::unit_name;
 mod pull;
 
 use pod::{ContainerVolume, collect_container_volumes, map_on_exit};

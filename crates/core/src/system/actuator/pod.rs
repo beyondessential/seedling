@@ -27,7 +27,7 @@ fn pod_network_name(instance: &ResourceInstance) -> String {
 }
 
 // spec: LINUX#supervised-units
-fn unit_name(instance: &ResourceInstance) -> String {
+pub(crate) fn unit_name(instance: &ResourceInstance) -> String {
     format!("seedling-{}.service", instance.display_name)
 }
 

@@ -849,6 +849,11 @@ pub enum ObservationFact {
     /// nothing running under it, and only the latter is broken.
     // spec: AUTO#restart-pacing
     UnitActivating,
+    /// The unit is stopping; the supervisor has not yet given its result.
+    UnitDeactivating,
+    /// The unit is inactive, or gone: with failed units kept loaded until
+    /// their result is recorded, either is the supervisor reporting success.
+    // spec: LINUX#exit-status
     UnitInactive,
     UnitFailed,
     /// The unit reached `failed` state with sub-state `start-limit-hit`:
@@ -920,6 +925,12 @@ impl ObservationFact {
             // secondary signal from systemd for crashes/OOMs/signals that
             // podman --rm cleans up before we can observe them.
             ObservationFact::UnitFailed => vec![("unit_failed", json!({}))],
+            // spec: RT#termination
+            // The supervisor's success, which decides how a run ended when
+            // its exit status was never captured.
+            ObservationFact::UnitInactive | ObservationFact::UnitGone => {
+                vec![("unit_inactive", json!({}))]
+            }
             // spec: AUTO#restart-pacing
             // Persisted so the per-instance crash_loop fault path can identify
             // the cause distinctly from a one-off unit failure.
@@ -940,8 +951,7 @@ impl ObservationFact {
             | ObservationFact::RouteAbsent { .. }
             | ObservationFact::UnitActive
             | ObservationFact::UnitActivating
-            | ObservationFact::UnitInactive
-            | ObservationFact::UnitGone
+            | ObservationFact::UnitDeactivating
             // Restart counters are reconciled against a stored baseline and
             // written to instance_restarts, not to the observation oracle.
             | ObservationFact::UnitRestartCounter { .. } => vec![],

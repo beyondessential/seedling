@@ -378,30 +378,40 @@ impl Reconciler {
     // `batch` is collected from probing real podman/systemd state during the
     // current tick — every entry persisted here corresponds to a check or
     // event actually observed, never a synthesised or expected value.
+    ///
+    /// Returns the observations of `batch` that are on record, whether written
+    /// now or before.
     pub(super) fn persist_obs(
         &mut self,
         batch: Vec<(ResourceInstance, &'static str, serde_json::Value)>,
-    ) {
+    ) -> HashSet<(InstanceId, &'static str)> {
+        let mut recorded = HashSet::new();
         for (instance, kind, payload) in batch {
-            if !self.written_obs.insert((instance.id, kind)) {
+            let id = instance.id;
+            if !self.written_obs.insert((id, kind)) {
                 tracing::trace!(
                     instance = %instance.display_name,
                     obs = kind,
                     "persist_obs: skipping already-written observation"
                 );
+                recorded.insert((id, kind));
                 continue;
             }
-            if let Err(e) = self
+            match self
                 .db
                 .call(move |db| insert_observation(db, &instance, kind, &payload))
             {
-                error!(
+                Ok(()) => {
+                    recorded.insert((id, kind));
+                }
+                Err(e) => error!(
                     error = %e,
                     obs = kind,
                     "reconciler: failed to persist observation"
-                );
+                ),
             }
         }
+        recorded
     }
 }
 

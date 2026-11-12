@@ -185,7 +185,7 @@ Available inside action closures:
 
 ```rhai
 rt.start(resources)             // schedule resources, returns Started
-rt.stop(resources, deadline?)   // unschedule and block until terminated
+rt.stop(resources, deadline?)   // unschedule and block until terminated; default deadline is the longest stop timeout + 30s
 rt.query(resources)             // returns Started without scheduling
 rt.restart(deployment)          // rotate a Deployment's instances per on_update
 rt.signal(target, "SIGHUP")     // deliver a POSIX signal to PID 1 of every running instance
@@ -201,6 +201,8 @@ started.ready(deadline?)
 started.terminated(deadline?)   // six-hour deadline, returns Termination
 started.terminated_eventually() // no deadline, returns Termination
 started.ready_eventually()      // no deadline, returns Started
+// On what rt.warm_certs or rt.warm_images returned, only ready() and
+// ready_eventually() are allowed; the other barriers throw.
 
 termination.ensure_success()    // throws if the resource failed
 

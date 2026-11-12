@@ -34,6 +34,10 @@ pub(super) struct PodActuationUpdate {
     pub unit_failures: Vec<ResourceInstance>,
     /// Instances whose backing unit was observed active/activating (clears prior failures).
     pub unit_healthy: Vec<ResourceInstance>,
+    /// Instances whose unit was observed failed, whatever their desired
+    /// state. Each is discarded once its failure is recorded.
+    // spec: LINUX#supervised-units
+    pub failed_units: Vec<ResourceInstance>,
     /// Instances whose backing unit reached `failed/start-limit-hit` —
     /// systemd has given up restarting and the runtime treats this as a
     /// hard fault rather than auto-recovering. The rate-derived crash loops
@@ -106,6 +110,8 @@ struct PodInstanceResult {
     image_pull_success: Option<(ResourceInstance, String)>,
     unit_failure: Option<ResourceInstance>,
     unit_healthy: Option<ResourceInstance>,
+    // spec: LINUX#supervised-units
+    failed_unit: Option<ResourceInstance>,
     // spec: AUTO#restart-pacing
     crash_loop: Option<CrashLoop>,
     // spec: AUTO#restart-record
@@ -194,6 +200,7 @@ async fn observe_one_pod<'a>(
         image_pull_success: None,
         unit_failure: None,
         unit_healthy: None,
+        failed_unit: None,
         crash_loop: None,
         restart_counter: None,
         health_check_failure: None,
@@ -277,6 +284,10 @@ async fn observe_one_pod<'a>(
     let unit_start_limit_hit = facts
         .iter()
         .any(|(f, _)| matches!(f, ObservationFact::UnitStartLimitHit));
+    // spec: LINUX#supervised-units
+    if unit_failed || unit_start_limit_hit {
+        result.failed_unit = Some(dr.instance.clone());
+    }
     // spec: FLT#workload-faults
     // `ContainerUnhealthy` is only ever emitted when podman's own healthcheck
     // state machine reports `Unhealthy`, i.e. after the container's configured
@@ -917,6 +928,7 @@ pub(super) async fn observe_and_actuate(
         image_pull_successes: Vec::new(),
         unit_failures: Vec::new(),
         unit_healthy: Vec::new(),
+        failed_units: Vec::new(),
         crash_loops: Vec::new(),
         restart_counters: Vec::new(),
         health_check_failures: Vec::new(),
@@ -947,6 +959,9 @@ pub(super) async fn observe_and_actuate(
         }
         if let Some(h) = result.unit_healthy {
             update.unit_healthy.push(h);
+        }
+        if let Some(f) = result.failed_unit {
+            update.failed_units.push(f);
         }
         if let Some(c) = result.crash_loop {
             update.crash_loops.push(c);

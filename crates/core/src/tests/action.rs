@@ -472,7 +472,10 @@ fn declaring_an_action_twice_throws() {
         r#"app.on_start(|rt, _p| {}); app.on_action("start", |rt, _p| {}, #{});"#,
     ] {
         let err = run_test_script_err(script);
-        assert!(err.to_string().contains("already declared"), "{script}: {err}");
+        assert!(
+            err.to_string().contains("already declared"),
+            "{script}: {err}"
+        );
     }
 }
 

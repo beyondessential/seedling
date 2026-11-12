@@ -281,3 +281,27 @@ fn scale_rejects_an_inverted_range() {
     let err = run_test_script_err(r#"app.deployment("web").scale(5..=2);"#);
     assert!(err.to_string().contains("must not exceed"), "{err}");
 }
+
+// spec: CTR#privileges
+#[test]
+fn a_user_spec_with_surrounding_whitespace_throws() {
+    for user in [" 1000", "1000 ", "1000:1000\t"] {
+        let err = run_test_script_err(&format!(
+            r#"app.deployment("web").image("docker.io/library/nginx:1").user("{user}");"#
+        ));
+        assert!(err.to_string().contains("whitespace"), "{user:?}: {err}");
+    }
+}
+
+// spec: CTR#image
+#[test]
+fn a_declared_container_with_no_image_fails_evaluation() {
+    let (_, err) = crate::runtime::apps::evaluate_script(
+        &seedling_protocol::names::AppName::new_unchecked("demo"),
+        r#"app.deployment("web").image("docker.io/library/nginx:1"); app.job("migrate");"#,
+        &Default::default(),
+        &crate::ScriptLimits::default(),
+    );
+    let err = err.expect("the definition fails to evaluate");
+    assert!(err.0.contains("job 'migrate'"), "{err}");
+}

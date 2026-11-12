@@ -50,9 +50,7 @@ fn pod_network_name(instance: &ResourceInstance) -> String {
     format!("seedling-{}", instance.display_name)
 }
 
-fn unit_name(instance: &ResourceInstance) -> String {
-    format!("seedling-{}.service", instance.display_name)
-}
+use crate::system::actuator::unit_name;
 
 // ---------------------------------------------------------------------------
 // Observer
@@ -268,7 +266,8 @@ fn unit_fact(unit_state: Option<&UnitState>) -> ObservationFact {
             ObservationFact::UnitStartLimitHit
         }
         Some(s) => match s.active {
-            ActiveState::Inactive | ActiveState::Deactivating => ObservationFact::UnitInactive,
+            ActiveState::Inactive => ObservationFact::UnitInactive,
+            ActiveState::Deactivating => ObservationFact::UnitDeactivating,
             ActiveState::Active => ObservationFact::UnitActive,
             // spec: AUTO#restart-pacing
             // `activating` covers both the unit's first start and the
@@ -351,6 +350,27 @@ mod tests {
             ObservationFact::UnitFailed
         ));
         assert!(matches!(unit_fact(None), ObservationFact::UnitGone));
+    }
+
+    // spec: LINUX#exit-status
+    // A stopping unit has not given its result; an inactive or gone one has
+    // reported success, and that is recorded.
+    #[test]
+    fn only_a_unit_that_has_finished_reports_success() {
+        let deactivating = unit_fact(Some(&unit(ActiveState::Deactivating, "stop-sigterm")));
+        assert!(matches!(deactivating, ObservationFact::UnitDeactivating));
+        assert!(deactivating.to_obs_kinds().is_empty());
+        for finished in [
+            unit_fact(Some(&unit(ActiveState::Inactive, "dead"))),
+            unit_fact(None),
+        ] {
+            let kinds: Vec<_> = finished
+                .to_obs_kinds()
+                .into_iter()
+                .map(|(k, _)| k)
+                .collect();
+            assert_eq!(kinds, vec!["unit_inactive"]);
+        }
     }
 
     fn unit_spec(name: &str) -> TransientUnitSpec {

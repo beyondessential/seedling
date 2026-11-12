@@ -738,10 +738,10 @@ fn db_oracle_termination_success_volume_terminated_is_success() {
 }
 
 // spec: RT#termination
+// spec: LINUX#exit-status
 // Jobs run with `podman --rm` auto-remove on exit. The observer then sees
 // ContainerMissing rather than ContainerExited, so no container_exited
-// observation is ever written. A healthy unit exit must still report
-// success — otherwise ensure_success() fails on every such job.
+// observation is ever written. The supervisor's success decides it.
 #[test]
 fn db_oracle_termination_success_rm_clean_exit_is_success() {
     let db = Db::open_in_memory().expect("open");
@@ -750,8 +750,25 @@ fn db_oracle_termination_success_rm_clean_exit_is_success() {
         .expect("insert");
     insert_observation(&db, &resource, "container_removed", &serde_json::json!({}))
         .expect("insert");
+    insert_observation(&db, &resource, "unit_inactive", &serde_json::json!({})).expect("insert");
     let oracle = DbWorldOracle::new(DbHandle::from_db(db));
     assert_eq!(oracle.termination_success(&resource), Some(true));
+}
+
+// spec: RT#termination
+// With no exit status and no word from the supervisor, the run is not known
+// to have succeeded.
+#[test]
+fn db_oracle_termination_without_the_supervisors_success_is_not_success() {
+    let db = Db::open_in_memory().expect("open");
+    let resource = dep("app", "job");
+    insert_observation(&db, &resource, "unit_inactive", &serde_json::json!({})).expect("insert");
+    insert_observation(&db, &resource, "container_running", &serde_json::json!({}))
+        .expect("insert");
+    insert_observation(&db, &resource, "container_removed", &serde_json::json!({}))
+        .expect("insert");
+    let oracle = DbWorldOracle::new(DbHandle::from_db(db));
+    assert_ne!(oracle.termination_success(&resource), Some(true));
 }
 
 // spec: RT#termination
@@ -796,8 +813,7 @@ fn db_oracle_termination_success_exit_code_wins_over_unit_success() {
 
 // spec: RT#termination
 // A container_exited with exit_code = -1 (podman didn't tell us) is an
-// unknown outcome. If no unit_failed is observed, fall through to the
-// terminal-seen fallback and succeed.
+// unknown outcome, which the supervisor's success then decides.
 #[test]
 fn db_oracle_termination_success_exit_code_unknown_falls_through() {
     let db = Db::open_in_memory().expect("open");
@@ -811,6 +827,7 @@ fn db_oracle_termination_success_exit_code_unknown_falls_through() {
         &serde_json::json!({ "exit_code": -1 }),
     )
     .expect("insert");
+    insert_observation(&db, &resource, "unit_inactive", &serde_json::json!({})).expect("insert");
     let oracle = DbWorldOracle::new(DbHandle::from_db(db));
     assert_eq!(oracle.termination_success(&resource), Some(true));
 }

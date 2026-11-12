@@ -669,7 +669,6 @@ impl ContainerDef {
             "user",
             move |this: &mut T, spec: String| -> Result<T, Box<EvalAltResult>> {
                 this.ensure_unfrozen()?;
-                let spec = spec.trim().to_string();
                 if spec.is_empty() {
                     return Err("user must not be empty".into());
                 }
@@ -740,3 +739,29 @@ fn normalise_signal(input: &str) -> Result<String, Box<EvalAltResult>> {
 
 #[cfg(test)]
 mod tests;
+
+/// Refuse a definition declaring a container whose image is never set.
+// spec: CTR#image
+pub(crate) fn check_images_declared(def: &super::app::AppDef) -> Result<(), String> {
+    use super::resource::Resource;
+    for (id, resource) in &def.resources {
+        let (kind, has_image) = match resource {
+            Resource::Deployment(d) => (
+                "deployment",
+                d.def.lock().pod.lock().container.lock().image.is_some(),
+            ),
+            Resource::Job(j) => (
+                "job",
+                j.def.lock().pod.lock().container.lock().image.is_some(),
+            ),
+            _ => continue,
+        };
+        if !has_image {
+            return Err(format!(
+                "{kind} '{}' declares a container with no image; call .image(...) on it",
+                id.name
+            ));
+        }
+    }
+    Ok(())
+}

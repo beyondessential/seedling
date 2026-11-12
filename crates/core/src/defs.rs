@@ -193,7 +193,8 @@ fn read_mem_total_bytes() -> i64 {
 /// earlier one depends on.
 // spec: BSL#evaluation
 pub fn check_evaluated(def: &app::AppDef) -> Result<(), String> {
-    ingress::check_redirect_terminations(def)
+    ingress::check_redirect_terminations(def)?;
+    container::check_images_declared(def)
 }
 
 pub fn scope(bundle: Arc<crate::runtime::definition::Bundle>) -> (Scope<'static>, app::App) {

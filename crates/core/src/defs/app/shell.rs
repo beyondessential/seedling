@@ -16,7 +16,11 @@ fn declare_shell(
     params: BTreeMap<ParamName, super::super::install::ParamDef>,
 ) -> Result<(), Box<EvalAltResult>> {
     if this.def.load().shells.contains_key(&shell_name) {
-        return Err(format!("a shell named {:?} is already declared", shell_name.as_str()).into());
+        return Err(format!(
+            "a shell named {:?} is already declared",
+            shell_name.as_str()
+        )
+        .into());
     }
     this.def.rcu(|d| {
         let mut d = (**d).clone();

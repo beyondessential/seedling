@@ -325,17 +325,21 @@ pub fn container_run_succeeded(observations: &[WorldObservation]) -> Option<bool
         return Some(false);
     }
 
-    // Fallback: the container was observed gone (container_removed)
-    // and we have no explicit failure signal. This is the
-    // common --rm-auto-removed case for jobs that exit 0 too
-    // quickly to inspect. Treat as success.
-    let terminal_seen = tail.iter().any(|o| {
+    // Fallback: the exit status was never captured, as for a job removed
+    // before it could be inspected. The run succeeded only if the supervisor
+    // reported it so once it ended; until it reports either way the outcome
+    // is not known.
+    // spec: LINUX#exit-status
+    let ended = tail.iter().rposition(|o| {
         matches!(
             o.obs_kind.as_str(),
             "container_exited" | "container_removed"
         )
-    });
-    if terminal_seen { Some(true) } else { None }
+    })?;
+    tail[ended..]
+        .iter()
+        .any(|o| o.obs_kind == "unit_inactive")
+        .then_some(true)
 }
 
 /// Whether instances of `kind` have a lifecycle state derived from what is

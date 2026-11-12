@@ -279,13 +279,13 @@ impl SystemdManager {
             },
             // spec: LINUX#supervised-units
             // Garbage-collect the transient unit (and remove its file from
-            // /run/systemd/transient/) as soon as it reaches inactive or
-            // failed state with no pending restart jobs. Without this the
-            // default CollectMode=inactive leaves units stuck in
-            // failed/start-limit-hit loaded indefinitely.
+            // /run/systemd/transient/) once it is inactive with no pending
+            // restart job. A failed unit stays loaded until the reconciler
+            // has recorded its result and discards it, so a unit that went
+            // away on its own is one whose result was success.
             UnitProperty {
                 name: "CollectMode",
-                value: Value::from("inactive-or-failed"),
+                value: Value::from("inactive"),
             },
         ];
 
