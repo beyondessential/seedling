@@ -15,7 +15,7 @@ Each issue is worked on its own and committed on its own, with a test that fails
 - [ ] Failed reads become definite answers
 - [x] Database and internal failures reported with the wrong error code
 - [x] Malformed script input coerced or ignored
-- [ ] Crash recovery and replay
+- [x] Crash recovery and replay
 - [ ] Faults out of line with the fault catalogue
 - [ ] Action, shell and change-handler dispatch
 - [ ] Host startup ordering, addressing and the web listener
@@ -103,3 +103,4 @@ Each is done once, in whichever issue is worked first, and the later issue notes
 - A run whose exit status was never captured succeeded only if `unit_inactive` (the unit inactive or gone, failed units being kept loaded) is recorded after it ended.
 - Shell and forward events carry the actor of the request that opened the session, including the session's end however it came about; `FaultCleared` carries the clearing request's actor when an operator clears it, and none when the runtime does.
 - ARI is re-fetched by its own task, waking for the soonest due certificate and at least hourly; Retry-After is held between one minute and one day, and any failed fetch waits six hours.
+- A stop that fails its deadline keeps its call slot, so a script that catches the failure reaches the next call at the next position; the deadline's start is read from the call's own log record, never by matching resources.
