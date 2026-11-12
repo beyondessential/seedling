@@ -14,7 +14,7 @@ Each issue is worked on its own and committed on its own, with a test that fails
 - [x] BSL throws, reserved names and defaults (and its correction)
 - [ ] Failed reads become definite answers
 - [x] Database and internal failures reported with the wrong error code
-- [ ] Malformed script input coerced or ignored
+- [x] Malformed script input coerced or ignored
 - [ ] Crash recovery and replay
 - [ ] Faults out of line with the fault catalogue
 - [ ] Action, shell and change-handler dispatch
@@ -91,6 +91,7 @@ Each is done once, in whichever issue is worked first, and the later issue notes
 - ARI renewal-information re-fetch on the RFC 9773 §4.3 schedule, keeping the stored window on failure (round 2 part 2): done with the wire shapes issue.
 - The operation trigger list (wire shapes issue): already held; replay uses `replay`, and `boot` arrives with the start action in the operations issue.
 - Database errors answering `internal` in scale, stop, unstop, restart settings and faults (round 3 part 1, round 2 part 2), image discovery's `script_error` (round 3 part 1), and volume shells' `internal` (round 3 part 1): done with the error codes issue.
+- `on_action("start", ...)` with `params` throwing, `on_schedule` outside the static context, and the reserved `install` name (dispatch issue, round 2 part 2) were done with the BSL issue; the malformed-input issue added the unknown-key checks.
 
 ## Decisions
 
