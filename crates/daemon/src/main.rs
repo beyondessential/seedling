@@ -19,6 +19,7 @@ use seedling_core::{
     },
     system::{
         System,
+        host_probes::{Fact, HostProbes, HostSource},
         nat64::should_activate_nat64,
         netinfo::{detect_ipv4_egress, detect_ipv6_egress},
         node_prefix_from_machine_id,
@@ -295,14 +296,13 @@ async fn main() {
 
     let cipher = {
         let key_path = data_dir.join("seedling.db.key");
-        let c = seedling_core::runtime::secrets::Cipher::load_or_create(&key_path).unwrap_or_else(
-            |e| {
+        let c = seedling_core::runtime::secrets::Cipher::load_or_create(&key_path, &db)
+            .unwrap_or_else(|e| {
                 fatal!(
                     "cannot load or create secret key {}: {e}",
                     key_path.display()
                 )
-            },
-        );
+            });
         std::sync::Arc::new(c)
     };
 
@@ -317,14 +317,19 @@ async fn main() {
 
     // spec: NAT64#mode
     // spec: NAT64#detection
-    let nat64_active = if args.stub_backends {
-        false
+    let nat64_decision = if args.stub_backends {
+        seedling_core::system::nat64::Activation {
+            active: false,
+            undetermined: None,
+        }
     } else {
         should_activate_nat64(args.nat64).await
     };
+    let nat64_active = nat64_decision.active;
     tracing::info!(
         nat64_mode = %args.nat64,
         nat64_active,
+        nat64_detection_undetermined = nat64_decision.undetermined.as_deref(),
         stub_backends = args.stub_backends,
         "NAT64 decision",
     );
@@ -347,17 +352,30 @@ async fn main() {
     };
 
     // spec: NAT64#ipv6-egress
-    // spec: CONST#host-constants
-    let (ipv4_egress, ipv6_egress) = if args.stub_backends {
-        (false, false)
+    // spec: CONST#determining-host-constants
+    // An egress probe that cannot be made leaves the constant false and is
+    // looked for again by the reconciler on each iteration, which files a
+    // fault until it is.
+    let (ipv4_fact, ipv6_fact) = if args.stub_backends {
+        (Fact::Determined(false), Fact::Determined(false))
     } else {
-        (detect_ipv4_egress().await, detect_ipv6_egress().await)
+        (
+            Fact::from_result(detect_ipv4_egress().await),
+            Fact::from_result(detect_ipv6_egress().await),
+        )
     };
+    let nat64_detection_fact = nat64_decision.undetermined.clone().map(Fact::Undetermined);
+    let host_probes = HostProbes::new(
+        Arc::new(HostSource),
+        nat64_detection_fact,
+        ipv4_fact.clone(),
+        ipv6_fact.clone(),
+    );
 
     // spec: CONST#host-constants
     seedling_core::sysconst::set(seedling_core::sysconst::SystemFacts {
-        ipv4_egress,
-        ipv6_egress,
+        ipv4_egress: ipv4_fact.determined().unwrap_or(false),
+        ipv6_egress: ipv6_fact.determined().unwrap_or(false),
         nat64_active,
         has_snapshots: use_btrfs,
         node_name: whoami::devicename().unwrap_or_default(),
@@ -368,7 +386,7 @@ async fn main() {
     // Force DNS64 to translate all names only when seedling is itself
     // providing NAT64 and the host cannot route native IPv6. If an external
     // NAT64+DNS64 setup is in play, trust its own policy.
-    let force_dns64_translation = nat64_active && !ipv6_egress;
+    let force_dns64_translation = nat64_active && !ipv6_fact.determined().unwrap_or(false);
     tracing::info!(
         nat64_active,
         force_dns64_translation,
@@ -741,7 +759,8 @@ async fn main() {
         reconciler.with_translator_down()
     } else {
         reconciler
-    };
+    }
+    .with_host_probes(host_probes);
 
     // The reconciler and schedule ticker are spawned below, after OiState is
     // constructed, so that scheduled-action fires can spawn lifecycle operations.
@@ -1019,7 +1038,13 @@ async fn main() {
                     }
                 }
 
-                match AssertUnwindSafe(reconciler.tick()).catch_unwind().await {
+                let tick = AssertUnwindSafe(reconciler.tick()).catch_unwind().await;
+                if reconciler.take_host_facts_changed() {
+                    seedling_core::oi::handler::registries::re_evaluate_all_apps(
+                        &oi_state_for_sched,
+                    );
+                }
+                match tick {
                     Ok(active) => {
                         if !active {
                             idle = true;

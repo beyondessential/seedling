@@ -13,6 +13,37 @@ use crate::runtime::{
 
 pub const UNSUPPORTED: &str = "definition_unsupported";
 pub const SOURCE_MOVED: &str = "definition_source_moved";
+pub const RECHECK_FAILED: &str = "definition_recheck_failed";
+
+/// How many re-checks in a row fail before `definition_recheck_failed` is filed.
+// spec: RCK#back-off
+pub const RECHECK_FAULT_AFTER: u32 = 5;
+
+/// Hold `definition_recheck_failed` against the app, stating the latest
+/// failure, once its re-checks have failed `RECHECK_FAULT_AFTER` times in a row.
+// spec: FLT#app-faults
+pub fn file_recheck_failed(db: &Db, app: &AppName, failures: u32, latest: &str) {
+    let key = FaultKey::app_wide(app, RECHECK_FAILED);
+    let description = format!(
+        "the last {failures} re-checks of the app's definition failed; the latest: {latest}"
+    );
+    match faults::file_once(db, &key, &FaultMeta::default(), &description) {
+        Ok(true) => {}
+        Ok(false) => {
+            let _ = faults::update_description(db, &key, &description);
+        }
+        Err(e) => tracing::error!(app = %app, "could not file {RECHECK_FAILED}: {e}"),
+    }
+}
+
+/// Clear `definition_recheck_failed`: a re-check succeeded, or the definition
+/// was replaced.
+// spec: FLT#app-faults
+pub fn clear_recheck_failed(db: &Db, app: &AppName) {
+    if let Err(e) = faults::clear_fault_by_key(db, &FaultKey::app_wide(app, RECHECK_FAILED)) {
+        tracing::error!(app = %app, "could not clear {RECHECK_FAILED}: {e}");
+    }
+}
 
 /// Hold `definition_unsupported` exactly while `running` does not satisfy the
 /// app's definition's requirement. The condition only changes when the
@@ -46,6 +77,7 @@ pub fn sync_unsupported(db: &Db, app: &AppName, bundle: &Bundle, running: &Versi
 // spec: FLT#app-faults
 pub fn clear_source_moved(db: &Db, app: &AppName) {
     sync_source_moved(db, app, None);
+    clear_recheck_failed(db, app);
 }
 
 /// A tag's re-check found it selecting a digest other than the running one.

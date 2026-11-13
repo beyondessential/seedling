@@ -1282,3 +1282,47 @@ fn an_unreadable_schedule_record_makes_the_description_internal() {
     let (code, _) = oi.call("/apps/show", json!({ "app": "demo" })).unwrap_err();
     assert_eq!(code, "internal");
 }
+
+// spec: APPS#redacted-environment-values
+#[test]
+fn an_env_value_containing_a_secret_parameter_is_null_and_a_plan_carries_no_values() {
+    let oi = TestOi::new();
+    let script = |tag: &str| {
+        format!(
+            r#"
+            let key = app.param("api-key").kind("password").required(false);
+            let web = app.deployment("web").image("docker.io/library/nginx:{tag}");
+            if key.is_set() {{
+                web.env("TOKEN", "Bearer " + key.value());
+            }}
+            web.env("PLAIN", "visible");
+        "#
+        )
+    };
+    oi.call(
+        "/apps/create",
+        json!({ "app": "demo", "script": script("1.29") }),
+    )
+    .unwrap();
+    oi.call(
+        "/apps/params/set",
+        json!({ "app": "demo", "name": "api-key", "value": "hunter2hunter2" }),
+    )
+    .unwrap();
+
+    let shown = oi.call("/apps/show", json!({ "app": "demo" })).unwrap();
+    let env = &shown["resources"][0]["def"]["container"]["env"];
+    assert_eq!(env["TOKEN"], json!(null), "{env}");
+    assert_eq!(env["PLAIN"], json!("visible"));
+
+    let plan = oi
+        .call(
+            "/apps/plan",
+            json!({ "app": "demo", "proposed_script": script("1.30") }),
+        )
+        .unwrap();
+    assert!(
+        !plan.to_string().contains("hunter2"),
+        "a plan names fields, never values: {plan}"
+    );
+}

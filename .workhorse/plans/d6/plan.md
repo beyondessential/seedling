@@ -23,7 +23,7 @@ Each issue is worked on its own and committed on its own, with a test that fails
 - [x] Wire, event and ACME protocol shapes
 - [ ] Operations: start action, persisted queue, unreadable state, intent-before-effect
 - [x] OI error codes and request validation
-- [ ] Host: new faults, key file, permissions, reserved prefix and env redaction
+- [x] Host: new faults, key file, permissions, reserved prefix and env redaction
 - [ ] Batch 5: runtime and fault code
 - [ ] Batch 6: collections, validators, CLI, web, uninstall and image pulls
 - [ ] Requirements restored by the fidelity review
@@ -126,3 +126,5 @@ Each is done once, in whichever issue is worked first, and the later issue notes
 - Revoked key fingerprints are kept in `revoked_keys` (v73) so the bootstrap file does not authorise one again; bootstrap fingerprints are normalised and a bad line stops the daemon.
 - Every Cargo, npm, GitHub Actions and container image dependency is at its latest release except `rhai`, which is held at 1.25.1: from 1.26 a closure that captures `app` cannot be passed to a method called on `app`, which every BSL script does, so each fails with ErrorDataRace.
 - The proxy image moves to Caddy 2.11.9 and caddy-l4 0.1.3 with tag `2.11.9-1`, and the runtime pulls that tag, so it must be published before this reaches a host.
+- Host facts that cannot be determined at start (NAT64 detection, IPv4 and IPv6 egress) are held in `HostProbes`, looked for again each iteration, and fault until found (`nat64_detection_failed`, `ipv4_egress_undetermined`, `ipv6_egress_undetermined`). Undetermined egress constants read `false`; NAT64 stays active while detection is undetermined, and a later answer does not deactivate it. A fact found later re-evaluates every installed app. A failed idle NAT64 teardown files `nat64_teardown_failed`, which has no test since teardown runs the host's translator.
+- The secret key is only created when no database holds protected values; a missing key beside protected values is a startup error (`Cipher::load_or_create`). Audit entries that cannot be written hold `audit_log_unavailable` with a count of those lost, and the file is reopened for each entry. Five failed definition rechecks file `recheck_failed`. External volumes named `seedling-op-*` are refused at creation.

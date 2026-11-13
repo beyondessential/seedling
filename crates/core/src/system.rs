@@ -11,6 +11,7 @@ use crate::system::types::{
 
 pub mod actuator;
 pub mod backends;
+pub mod host_probes;
 pub mod nat64;
 pub mod netinfo;
 pub mod observer;

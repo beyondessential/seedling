@@ -82,7 +82,9 @@ pub(crate) fn remove_registry(state: &OiState, params: RegistryParams) -> Handle
     Ok(json!({ "ok": true }))
 }
 
-fn re_evaluate_all_apps(state: &OiState) {
+/// Evaluate every installed app's definition again, for a change that moves
+/// what its scripts read (a registry's settings, a host constant).
+pub fn re_evaluate_all_apps(state: &OiState) {
     let app_names: Vec<AppName> = {
         let reg = state.registry.read();
         reg.names()

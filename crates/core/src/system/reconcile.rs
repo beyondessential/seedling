@@ -439,6 +439,18 @@ pub struct Reconciler {
     /// the only way the pod can reach dual-stack remotes.
     // spec: NAT64#dns64
     force_dns64_translation: bool,
+    /// The host facts that may be undetermined, and are looked for again on
+    /// each iteration until they are.
+    // spec: NAT64#detection
+    // spec: NAT64#ipv6-egress
+    host_probes: crate::system::host_probes::HostProbes,
+    /// Whether the faults for `host_probes` have been brought up to date since
+    /// they last moved.
+    host_faults_synced: bool,
+    /// A host fact has been determined since the daemon last asked, so the
+    /// installed apps' definitions are due to be evaluated again.
+    // spec: CONST#determining-host-constants
+    host_facts_changed: bool,
     /// Upstream DNS servers CoreDNS forwards to. When `--dns-upstreams`
     /// is set, these are the operator-supplied servers; otherwise it's
     /// a single entry pointing at seedling's in-process forwarder on
@@ -525,6 +537,91 @@ fn units_possibly_of<'a>(units: &'a [UnitSummary], app: &AppName) -> Vec<&'a Uni
 }
 
 impl Reconciler {
+    /// This reconciler, for a host with facts still to determine: it looks for
+    /// them again on each iteration, and files a fault for each until it finds
+    /// them.
+    // spec: NAT64#detection
+    // spec: NAT64#ipv6-egress
+    pub fn with_host_probes(mut self, probes: crate::system::host_probes::HostProbes) -> Self {
+        self.force_dns64_translation = self.force_dns64_for(&probes);
+        self.host_probes = probes;
+        self
+    }
+
+    /// Whether the resolver translates every name: NAT64 is this runtime's own
+    /// and the host has no IPv6 egress, which it is taken to lack while that is
+    /// undetermined.
+    // spec: NAT64#dns64
+    fn force_dns64_for(&self, probes: &crate::system::host_probes::HostProbes) -> bool {
+        self.nat64_active && !probes.ipv6_egress.determined().unwrap_or(false)
+    }
+
+    /// Whether a host fact was determined since this was last asked, and so
+    /// the installed apps' definitions are due to be evaluated again.
+    pub fn take_host_facts_changed(&mut self) -> bool {
+        std::mem::take(&mut self.host_facts_changed)
+    }
+
+    /// Look again for the host facts that are undetermined, and hold a fault
+    /// for each that still is.
+    // spec: NAT64#detection
+    // spec: NAT64#ipv6-egress
+    // spec: CONST#determining-host-constants
+    async fn retry_host_probes(&mut self) {
+        use crate::system::host_probes::Fact;
+
+        if self.host_probes.pending() {
+            let moved = self.host_probes.retry().await;
+            let ipv4 = self
+                .host_probes
+                .ipv4_egress
+                .determined()
+                .filter(|_| moved.ipv4_egress);
+            let ipv6 = self
+                .host_probes
+                .ipv6_egress
+                .determined()
+                .filter(|_| moved.ipv6_egress);
+            if ipv4.is_some() || ipv6.is_some() {
+                crate::sysconst::determined(ipv4, ipv6);
+                self.host_facts_changed = true;
+            }
+            self.force_dns64_translation = self.force_dns64_for(&self.host_probes);
+            self.host_faults_synced = false;
+        }
+        if self.host_faults_synced {
+            return;
+        }
+        let nat64 = self.host_probes.nat64_detection.clone();
+        let ipv4 = self.host_probes.ipv4_egress.clone();
+        let ipv6 = self.host_probes.ipv6_egress.clone();
+        for (kind, fact, what) in [
+            (
+                "nat64_detection_failed",
+                nat64,
+                "whether the network provides NAT64",
+            ),
+            (
+                "ipv4_egress_undetermined",
+                Some(ipv4),
+                "whether the host has IPv4 egress",
+            ),
+            (
+                "ipv6_egress_undetermined",
+                Some(ipv6),
+                "whether the host has IPv6 egress",
+            ),
+        ] {
+            match fact {
+                Some(Fact::Undetermined(why)) => {
+                    self.file_system_fault(kind, &format!("cannot determine {what}: {why}"))
+                }
+                _ => self.clear_system_fault(kind),
+            }
+        }
+        self.host_faults_synced = true;
+    }
+
     /// This reconciler, for a host whose NAT64 translator could not be set up
     /// at startup: it sets it up again on its iterations, and keeps workloads
     /// offline until that succeeds.
@@ -596,6 +693,9 @@ impl Reconciler {
             // `nat64_active`; mirror that in our tracking flag.
             nat64_installed: nat64_active,
             force_dns64_translation,
+            host_probes: crate::system::host_probes::HostProbes::settled(false, false),
+            host_faults_synced: false,
+            host_facts_changed: false,
             dns_upstreams,
             resolver_addr: None,
             shells,
@@ -1072,6 +1172,8 @@ impl Reconciler {
         // Both backends are reachable, so the fault no longer holds.
         self.clear_system_fault("container_runtime_unavailable");
 
+        self.retry_host_probes().await;
+
         self.reconcile_stray_shells().await;
 
         let (apps, dropped_apps) = self.snapshot_all_apps();
@@ -1110,6 +1212,10 @@ impl Reconciler {
                 Ok(()) => {
                     self.nat64_installed = true;
                     self.clear_system_fault("nat64_setup_failed");
+                    // spec: FLT#host-faults
+                    // A translator that is set up again is no longer one a
+                    // teardown failed to remove.
+                    self.clear_system_fault("nat64_teardown_failed");
                 }
                 Err(e) => {
                     error!(error = %e, "NAT64 re-setup failed; skipping tick to keep pods offline");
@@ -1699,8 +1805,17 @@ impl Reconciler {
         // spec: NAT64#translator-lifecycle
         if self.nat64_installed {
             match crate::system::jool::teardown_nat64().await {
-                Ok(()) => self.nat64_installed = false,
+                Ok(()) => {
+                    self.nat64_installed = false;
+                    // spec: FLT#host-faults
+                    self.clear_system_fault("nat64_teardown_failed");
+                }
                 Err(e) => {
+                    // spec: NAT64#translator-lifecycle
+                    self.file_system_fault(
+                        "nat64_teardown_failed",
+                        &format!("tearing down the NAT64 translator failed: {e}"),
+                    );
                     // Left installed as far as the runtime knows, so the
                     // next idle tick tries the teardown again rather than
                     // concluding the translator is gone, and a non-idle tick
@@ -3048,6 +3163,80 @@ mod tests {
         system.backends.probe_now();
         oi.block_on(reconciler.tick());
         assert!(!held(&oi), "cleared once both are reachable");
+    }
+
+    /// A host whose probes fail until told to answer, and then say the host has
+    /// none of NAT64, IPv4 or IPv6. The facts match the defaults every other
+    /// test reads, so determining them here moves nothing there.
+    struct ProbesThatSettle(std::sync::atomic::AtomicBool);
+
+    impl crate::system::host_probes::ProbeSource for ProbesThatSettle {
+        fn external_nat64(&self) -> crate::system::BoxFuture<'_, Result<bool, String>> {
+            Box::pin(async move { self.answer() })
+        }
+        fn ipv4_egress(&self) -> crate::system::BoxFuture<'_, Result<bool, String>> {
+            Box::pin(async move { self.answer() })
+        }
+        fn ipv6_egress(&self) -> crate::system::BoxFuture<'_, Result<bool, String>> {
+            Box::pin(async move { self.answer() })
+        }
+    }
+
+    impl ProbesThatSettle {
+        fn answer(&self) -> Result<bool, String> {
+            if self.0.load(std::sync::atomic::Ordering::SeqCst) {
+                Ok(false)
+            } else {
+                Err("cannot be read".to_owned())
+            }
+        }
+    }
+
+    // spec: NAT64#detection
+    // spec: NAT64#ipv6-egress
+    // spec: CONST#determining-host-constants
+    // spec: FLT#host-faults
+    #[test]
+    fn undetermined_host_facts_are_faulted_and_looked_for_on_each_tick() {
+        use crate::system::host_probes::{Fact, HostProbes};
+
+        let source = Arc::new(ProbesThatSettle(std::sync::atomic::AtomicBool::new(false)));
+        let oi = crate::oi::test_support::TestOi::with_app("demo");
+        let mut reconciler = test_reconciler(&oi).with_host_probes(HostProbes::new(
+            source.clone(),
+            Some(Fact::Undetermined("no answer".into())),
+            Fact::Undetermined("no routes".into()),
+            Fact::Undetermined("no routes".into()),
+        ));
+        let kinds = |oi: &crate::oi::test_support::TestOi| -> Vec<String> {
+            let mut kinds: Vec<String> = active_kinds(oi, "_system")
+                .into_iter()
+                .map(|(k, _)| k)
+                .filter(|k| k.contains("egress") || k == "nat64_detection_failed")
+                .collect();
+            kinds.sort();
+            kinds
+        };
+
+        oi.block_on(reconciler.tick());
+        assert_eq!(
+            kinds(&oi),
+            [
+                "ipv4_egress_undetermined",
+                "ipv6_egress_undetermined",
+                "nat64_detection_failed"
+            ],
+        );
+        assert!(!reconciler.take_host_facts_changed());
+
+        source.0.store(true, std::sync::atomic::Ordering::SeqCst);
+        oi.block_on(reconciler.tick());
+        assert!(kinds(&oi).is_empty(), "{:?}", kinds(&oi));
+        assert!(
+            reconciler.take_host_facts_changed(),
+            "a determined fact is due to re-evaluate the installed apps"
+        );
+        assert!(!reconciler.take_host_facts_changed());
     }
 
     // spec: AUTO#unreadable-scale

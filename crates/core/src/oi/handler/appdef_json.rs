@@ -46,6 +46,28 @@ pub(crate) fn scale_bounds_of(resource: &Resource) -> Option<(u16, u16)> {
 ///
 /// Callers building a richer view (/apps/show) augment the returned object
 /// with live `instances`, `faults`, `stopped`, and a `scale.current`.
+/// Report as null each environment value, in the described resources, that
+/// contains one of `secrets`.
+// spec: APPS#redacted-environment-values
+pub(crate) fn redact_secret_env(resources: &mut [Value], secrets: &[&str]) {
+    if secrets.is_empty() {
+        return;
+    }
+    for resource in resources {
+        let Some(Value::Object(env)) = resource.pointer_mut("/def/container/env") else {
+            continue;
+        };
+        for value in env.values_mut() {
+            if value
+                .as_str()
+                .is_some_and(|v| secrets.iter().any(|s| v.contains(s)))
+            {
+                *value = Value::Null;
+            }
+        }
+    }
+}
+
 pub(crate) fn resource_static_json(
     kind: ResourceKind,
     name: &str,

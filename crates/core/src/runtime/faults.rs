@@ -451,6 +451,22 @@ impl FaultScope {
     }
 }
 
+/// Replace the description of the active fault holding `key`, and say whether
+/// one did. For a fault whose description carries a count that moves while it
+/// stays active.
+pub fn update_description(
+    db: &crate::runtime::db::Db,
+    key: &FaultKey,
+    description: &str,
+) -> rusqlite::Result<bool> {
+    let changed = db.conn.execute(
+        "UPDATE faults SET description = ?1
+         WHERE app = ?2 AND kind = ?3 AND subject = ?4 AND cleared_at IS NULL",
+        rusqlite::params![description, key.app, key.kind, key.subject],
+    )?;
+    Ok(changed > 0)
+}
+
 /// Whether any active fault of `kind` is filed, anywhere.
 ///
 /// For a sweep that would otherwise do its whole pass only to find nothing to

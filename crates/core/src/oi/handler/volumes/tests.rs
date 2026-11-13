@@ -305,6 +305,23 @@ fn app_and_exported_volume_lists_reflect_registered_apps() {
     assert_eq!(exported[0]["app"], "vol-app");
 }
 
+// spec: IDN#reserved-names
+#[test]
+fn a_mapping_cannot_be_made_under_a_name_operation_volumes_use() {
+    let oi = TestOi::new();
+    let (code, _) = oi
+        .call(
+            "/volumes/external/map",
+            json!({
+                "app": "consumer",
+                "external_name": "seedling-op-abcd1234-data",
+                "target": { "kind": "site", "name": "store" },
+            }),
+        )
+        .unwrap_err();
+    assert_eq!(code, "requirements_invalid");
+}
+
 // spec: SITE#external-mappings
 #[test]
 fn external_volume_mapping_map_remap_unmap_flow() {

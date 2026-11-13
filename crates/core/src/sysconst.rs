@@ -6,7 +6,7 @@
 //! cached here once at daemon startup and read synchronously from
 //! `defs::scope()` on every script execution.
 
-use std::sync::OnceLock;
+use parking_lot::RwLock;
 
 /// Snapshot of host facts captured at daemon startup.
 ///
@@ -48,18 +48,32 @@ pub fn detect_timezone() -> String {
     iana_time_zone::get_timezone().unwrap_or_else(|_| "UTC".to_owned())
 }
 
-static FACTS: OnceLock<SystemFacts> = OnceLock::new();
+static FACTS: RwLock<Option<SystemFacts>> = RwLock::new(None);
 
 /// Record the host facts. First call wins; subsequent calls are ignored.
 pub fn set(facts: SystemFacts) {
-    let _ = FACTS.set(facts);
+    let mut held = FACTS.write();
+    if held.is_none() {
+        *held = Some(facts);
+    }
 }
 
-/// Borrow the recorded facts, or a default snapshot if [`set`] was never
-/// called.
-pub fn get() -> &'static SystemFacts {
-    static DEFAULT: OnceLock<SystemFacts> = OnceLock::new();
-    FACTS
-        .get()
-        .unwrap_or_else(|| DEFAULT.get_or_init(SystemFacts::default))
+/// The recorded facts, or a default snapshot if [`set`] was never called.
+pub fn get() -> SystemFacts {
+    FACTS.read().clone().unwrap_or_default()
+}
+
+/// Record host facts that were undetermined when the rest were set and have
+/// since been determined. An egress fact is only ever moved out of
+/// undetermined, never changed once it holds.
+// spec: CONST#determining-host-constants
+pub fn determined(ipv4_egress: Option<bool>, ipv6_egress: Option<bool>) {
+    let mut held = FACTS.write();
+    let facts = held.get_or_insert_with(SystemFacts::default);
+    if let Some(v4) = ipv4_egress {
+        facts.ipv4_egress = v4;
+    }
+    if let Some(v6) = ipv6_egress {
+        facts.ipv6_egress = v6;
+    }
 }

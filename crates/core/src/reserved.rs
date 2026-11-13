@@ -19,7 +19,7 @@
 //! collisions impossible going forward; ownership checks make them harmless
 //! regardless of history.
 
-use seedling_protocol::names::{AppName, SiteIngressName, SiteVolumeName};
+use seedling_protocol::names::{AppName, ExternalVolumeName, SiteIngressName, SiteVolumeName};
 
 /// Site-volume name prefixes the daemon claims.
 ///
@@ -28,6 +28,13 @@ use seedling_protocol::names::{AppName, SiteIngressName, SiteVolumeName};
 /// daemon start.
 pub const RESERVED_SITE_VOLUME_PREFIXES: &[&str] =
     &[crate::system::leftover_snapshots::SNAPSHOT_NAME_PREFIX];
+
+/// External volume mapping name prefixes the daemon claims.
+///
+/// Operation-scoped volume bindings are named `seedling-op-<operation>-<key>`
+/// and resolved before the mapping table, so a mapping an operator made under
+/// one of these names would be shadowed, or would shadow a binding.
+pub const RESERVED_EXTERNAL_VOLUME_PREFIXES: &[&str] = &["seedling-op-"];
 
 /// Site-ingress names the daemon claims.
 pub const RESERVED_SITE_INGRESS_NAMES: &[&str] =
@@ -70,6 +77,25 @@ pub fn check_site_volume_name(name: &SiteVolumeName) -> Result<(), ReservedName>
                 reason: format!(
                     "site volume names beginning {prefix:?} belong to leftover backup \
                      snapshots, which are deleted at daemon startup"
+                ),
+            });
+        }
+    }
+    Ok(())
+}
+
+/// Reject an external volume mapping name the daemon claims.
+///
+/// Creation only, for the same reason as above.
+// spec: IDN#reserved-names
+pub fn check_external_volume_name(name: &ExternalVolumeName) -> Result<(), ReservedName> {
+    for prefix in RESERVED_EXTERNAL_VOLUME_PREFIXES {
+        if name.as_str().starts_with(prefix) {
+            return Err(ReservedName {
+                name: name.as_str().to_owned(),
+                reason: format!(
+                    "external volume names beginning {prefix:?} belong to the volumes bound \
+                     to a running operation"
                 ),
             });
         }
@@ -133,6 +159,15 @@ mod tests {
         assert!(check_app_name(&reserved).is_err());
         let ordinary = AppName::new("infra-tools").unwrap();
         assert!(check_app_name(&ordinary).is_ok());
+    }
+
+    // spec: IDN#reserved-names
+    #[test]
+    fn operation_scoped_volume_names_are_reserved_for_mappings() {
+        let reserved = ExternalVolumeName::new("seedling-op-abcd1234-data").unwrap();
+        assert!(check_external_volume_name(&reserved).is_err());
+        let ordinary = ExternalVolumeName::new("seedling-data").unwrap();
+        assert!(check_external_volume_name(&ordinary).is_ok());
     }
 
     // spec: IDN#reserved-names

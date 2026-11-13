@@ -785,6 +785,10 @@ pub(crate) fn map_external_volume(
 ) -> HandlerResult {
     use crate::runtime::external_volume_mappings::{self, ExternalVolumeMapping};
 
+    // spec: IDN#reserved-names
+    crate::reserved::check_external_volume_name(&params.external_name)
+        .map_err(|e| OiError::new(ErrorCode::RequirementsInvalid, e.to_string()))?;
+
     let app = params.app.clone();
     let external_name = params.external_name.clone();
     let event_target = params.target.clone();

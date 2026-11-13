@@ -71,7 +71,7 @@ mod images;
 mod ingresses;
 mod key_mgmt;
 mod params;
-mod registries;
+pub mod registries;
 mod restarts;
 mod services;
 mod status;

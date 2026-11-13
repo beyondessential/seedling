@@ -545,18 +545,26 @@ pub(crate) fn describe_app(state: &OiState, params: AppParams) -> HandlerResult 
     })?;
 
     // Names come from AppDef; values come from the params table. A value in
-    // secret storage is never returned, so only its name is read.
+    // secret storage is never returned: it is read only to find where else it
+    // shows, and the names of those params are what the listing keeps.
     // spec: SEC#redaction
     let name_owned = params.app.clone();
-    let (plain_params, secret_param_names) = state
+    let cipher = Arc::clone(&state.cipher);
+    let (plain_params, secret_params) = state
         .db
         .call(move |db| {
             Ok::<_, rusqlite::Error>((
                 crate::runtime::apps::load_params_for_app(db, &name_owned)?,
-                crate::runtime::apps::secret_params::secret_param_names(db, &name_owned)?,
+                crate::runtime::apps::secret_params::load_secret_params_for_app(
+                    db,
+                    &cipher,
+                    &name_owned,
+                )?,
             ))
         })
         .map_err(|e| OiError::new(ErrorCode::Internal, format!("failed to read params: {e}")))?;
+    let secret_param_names: std::collections::BTreeSet<String> =
+        secret_params.keys().cloned().collect();
 
     // Fetch all active faults for this app once, then split by level.
     let name_owned = params.app.clone();
@@ -692,7 +700,7 @@ pub(crate) fn describe_app(state: &OiState, params: AppParams) -> HandlerResult 
     let name_owned = params.app.clone();
     let all_faults_clone = all_faults_for_app.clone();
     let stopped_set_clone = stopped_set.clone();
-    let resources_json: Vec<Value> = state
+    let mut resources_json: Vec<Value> = state
         .db
         .call(move |db| {
             // spec: APPS#description
@@ -803,6 +811,23 @@ pub(crate) fn describe_app(state: &OiState, params: AppParams) -> HandlerResult 
                 format!("could not read the app's resource state: {e}"),
             )
         })?;
+
+    // spec: APPS#redacted-environment-values
+    // An environment value that contains the stored value of a parameter whose
+    // effective secret flag is true is reported as null.
+    let secret_values: Vec<&str> = def
+        .params
+        .iter()
+        .filter(|(_, schema)| schema.is_secret())
+        .flat_map(|(k, _)| {
+            plain_params
+                .get(k.as_str())
+                .or_else(|| secret_params.get(k.as_str()))
+        })
+        .map(String::as_str)
+        .filter(|v| !v.is_empty())
+        .collect();
+    super::appdef_json::redact_secret_env(&mut resources_json, &secret_values);
 
     // Dynamic resources (created inside action closures, not in AppDef).
     // Returned as a separate top-level field so consumers can choose whether

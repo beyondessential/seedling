@@ -1,9 +1,9 @@
 //! Observational probes for host network capabilities.
 //!
 //! These functions inspect the kernel's routing and address tables; they
-//! do not send packets and do not depend on DNS. Errors are treated as
-//! "not available" rather than propagated, so they are safe to run at
-//! daemon startup without gating the rest of initialisation on them.
+//! do not send packets and do not depend on DNS. A probe that cannot be made
+//! returns an error, not "not available": it is undetermined, and the caller
+//! decides what that stands for.
 
 use std::net::IpAddr;
 
@@ -20,33 +20,18 @@ use rtnetlink::packet_route::{
 /// inspected: RFC1918 hosts behind NAT still have egress, and a host that
 /// has configured a default gateway has implicitly declared egress intent.
 ///
-/// Returns `false` on any rtnetlink error.
-pub async fn detect_ipv4_egress() -> bool {
-    let (connection, handle, _) = match rtnetlink::new_connection() {
-        Ok(v) => v,
-        Err(e) => {
-            tracing::warn!(
-                error = %e,
-                "IPv4 egress probe: failed to open rtnetlink; assuming no egress"
-            );
-            return false;
-        }
-    };
+/// `Err` when the routes cannot be read: that is undetermined, not "no egress".
+// spec: CONST#determining-host-constants
+pub async fn detect_ipv4_egress() -> Result<bool, String> {
+    let (connection, handle, _) = rtnetlink::new_connection()
+        .map_err(|e| format!("IPv4 egress probe: failed to open rtnetlink: {e}"))?;
     tokio::spawn(connection);
 
-    match has_default_v4_route(&handle).await {
-        Ok(v) => {
-            tracing::info!(egress = v, "IPv4 egress probe result");
-            v
-        }
-        Err(e) => {
-            tracing::warn!(
-                error = %e,
-                "IPv4 egress probe: failed to enumerate routes; assuming no egress"
-            );
-            false
-        }
-    }
+    let egress = has_default_v4_route(&handle)
+        .await
+        .map_err(|e| format!("IPv4 egress probe: failed to enumerate routes: {e}"))?;
+    tracing::info!(egress, "IPv4 egress probe result");
+    Ok(egress)
 }
 
 /// Probes whether the host has working IPv6 egress to the internet.
@@ -60,42 +45,20 @@ pub async fn detect_ipv4_egress() -> bool {
 ///
 /// The check is observational only: no DNS, no outbound packets.
 ///
-/// Returns `false` on any rtnetlink error; an unreachable kernel
-/// interface is treated as the more conservative "no egress" case.
+/// `Err` when the route or address state cannot be read: that is undetermined,
+/// not "no egress".
 // spec: NAT64#ipv6-egress
-pub async fn detect_ipv6_egress() -> bool {
-    let (connection, handle, _) = match rtnetlink::new_connection() {
-        Ok(v) => v,
-        Err(e) => {
-            tracing::warn!(
-                error = %e,
-                "IPv6 egress probe: failed to open rtnetlink; assuming no egress"
-            );
-            return false;
-        }
-    };
+pub async fn detect_ipv6_egress() -> Result<bool, String> {
+    let (connection, handle, _) = rtnetlink::new_connection()
+        .map_err(|e| format!("IPv6 egress probe: failed to open rtnetlink: {e}"))?;
     tokio::spawn(connection);
 
-    let has_route = match has_default_v6_route(&handle).await {
-        Ok(v) => v,
-        Err(e) => {
-            tracing::warn!(
-                error = %e,
-                "IPv6 egress probe: failed to enumerate routes; assuming no egress"
-            );
-            return false;
-        }
-    };
-    let has_gua = match has_global_v6_source(&handle).await {
-        Ok(v) => v,
-        Err(e) => {
-            tracing::warn!(
-                error = %e,
-                "IPv6 egress probe: failed to enumerate addresses; assuming no egress"
-            );
-            return false;
-        }
-    };
+    let has_route = has_default_v6_route(&handle)
+        .await
+        .map_err(|e| format!("IPv6 egress probe: failed to enumerate routes: {e}"))?;
+    let has_gua = has_global_v6_source(&handle)
+        .await
+        .map_err(|e| format!("IPv6 egress probe: failed to enumerate addresses: {e}"))?;
 
     let egress = has_route && has_gua;
     tracing::info!(
@@ -104,7 +67,7 @@ pub async fn detect_ipv6_egress() -> bool {
         egress,
         "IPv6 egress probe result"
     );
-    egress
+    Ok(egress)
 }
 
 async fn has_default_v4_route(handle: &rtnetlink::Handle) -> Result<bool, rtnetlink::Error> {
