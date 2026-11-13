@@ -565,6 +565,27 @@ fn transition_time_works_for_service() {
     assert_eq!(time, Some(UNIX_EPOCH + Duration::from_millis(ts_ms as u64)));
 }
 
+// spec: LCY#services
+#[test]
+fn a_ready_service_whose_pool_empties_returns_to_scheduled_and_back() {
+    let resource = svc("lb");
+    let mut observations = vec![obs_at("network_created", 1), obs_at("backend_healthy", 2)];
+    assert_eq!(
+        derive_state_with_transition_time(&resource, &observations).0,
+        LifecycleState::Ready
+    );
+    observations.push(obs_at("backend_lost", 3));
+    assert_eq!(
+        derive_state_with_transition_time(&resource, &observations).0,
+        LifecycleState::Scheduled
+    );
+    observations.push(obs_at("backend_healthy", 4));
+    assert_eq!(
+        derive_state_with_transition_time(&resource, &observations).0,
+        LifecycleState::Ready
+    );
+}
+
 // -----------------------------------------------------------------------
 // DbWorldOracle (DB-backed)
 // -----------------------------------------------------------------------

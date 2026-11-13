@@ -317,6 +317,13 @@ fn spec_from_pod(
                 }
             }
 
+            // spec: VOL#storage-options
+            // A volume declared read-only is mounted read-only into every
+            // container that mounts it.
+            let read_only = match vm {
+                VolumeMount::Volume(v) => v.def.lock().read_only,
+                VolumeMount::ExternalVolume(_) => false,
+            };
             let source = match vm {
                 VolumeMount::Volume(v) => {
                     let name = match &v.name {
@@ -358,7 +365,7 @@ fn spec_from_pod(
             Mount {
                 source,
                 target: path.to_string_lossy().into_owned(),
-                read_only: false,
+                read_only,
             }
         })
         .collect();

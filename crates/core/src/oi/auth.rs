@@ -113,8 +113,14 @@ pub fn load_from_db(db: &Db, trusted: &TrustedKeys) -> rusqlite::Result<()> {
 }
 
 /// Read `$data_dir/authorized_keys` and import any entries not already in
-/// the DB. Lines have the form `<fingerprint> <label>`; `#` and blank lines
-/// are ignored.
+/// the DB and not revoked. Lines have the form `<fingerprint> <label>`; `#`
+/// and blank lines are ignored.
+///
+/// The fingerprint is taken as an operator typed it: with surrounding
+/// whitespace, in either case, with or without a `sha256:` prefix. It is
+/// stored as 64 lowercase hexadecimal digits. A line that is not blank, a
+/// comment or an entry with an acceptable fingerprint is an error naming it.
+// spec: TRN#client-authentication
 pub fn import_bootstrap_file(data_dir: &Path, db: &Db, trusted: &TrustedKeys) -> io::Result<()> {
     let path = data_dir.join("authorized_keys");
     if !path.exists() {
@@ -127,27 +133,41 @@ pub fn import_bootstrap_file(data_dir: &Path, db: &Db, trusted: &TrustedKeys) ->
         .as_secs() as i64;
 
     let mut imported = 0u32;
-    for line in content.lines() {
+    for (index, line) in content.lines().enumerate() {
         let line = line.trim();
         if line.is_empty() || line.starts_with('#') {
             continue;
         }
         let mut parts = line.splitn(2, ' ');
-        let fp = match parts.next().filter(|s| !s.is_empty()) {
-            Some(f) => f,
-            None => continue,
-        };
-        let label = parts.next().unwrap_or("bootstrap").trim();
-
-        let already: bool = db
-            .conn
-            .query_row(
-                "SELECT COUNT(*) FROM authorized_keys WHERE fingerprint = ?1",
-                [fp],
-                |r| r.get::<_, i64>(0),
+        let raw = parts.next().unwrap_or_default();
+        let fp = keys::parse_fingerprint(raw).map_err(|e| {
+            io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!(
+                    "{} line {}: {line:?} is not an acceptable fingerprint: {e}",
+                    path.display(),
+                    index + 1
+                ),
             )
-            .unwrap_or(0)
-            > 0;
+        })?;
+        let fp = fp.as_str();
+        let label = parts
+            .next()
+            .map(str::trim)
+            .filter(|l| !l.is_empty())
+            .unwrap_or("bootstrap");
+
+        let recorded = |table: &str| -> io::Result<bool> {
+            db.conn
+                .query_row(
+                    &format!("SELECT COUNT(*) FROM {table} WHERE fingerprint = ?1"),
+                    [fp],
+                    |r| r.get::<_, i64>(0),
+                )
+                .map(|n| n > 0)
+                .map_err(io::Error::other)
+        };
+        let already = recorded("authorized_keys")? || recorded("revoked_keys")?;
 
         if !already {
             match db.conn.execute(
@@ -222,6 +242,17 @@ pub fn revoke_key(db: &Db, trusted: &TrustedKeys, fp: &str) -> rusqlite::Result<
         .conn
         .execute("DELETE FROM authorized_keys WHERE fingerprint = ?1", [fp])?;
     if rows > 0 {
+        // spec: TRN#client-authentication
+        // Recorded durably, so the bootstrap file does not bring it back.
+        let revoked_at = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs() as i64;
+        db.conn.execute(
+            "INSERT INTO revoked_keys (fingerprint, revoked_at) VALUES (?1, ?2) \
+             ON CONFLICT (fingerprint) DO NOTHING",
+            rusqlite::params![fp, revoked_at],
+        )?;
         // spec: KEY#revoking-a-key — out of the set the verifier reads, and the
         // signal that goes with it ends the connections it had authorised.
         trusted.remove(fp);
@@ -324,6 +355,54 @@ impl ClientCertVerifier for SeedlingClientVerifier {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    const FP: &str = "ab12ab12ab12ab12ab12ab12ab12ab12ab12ab12ab12ab12ab12ab12ab12ab12";
+
+    fn bootstrap(contents: &str) -> (tempfile::TempDir, Db, TrustedKeys) {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("authorized_keys"), contents).unwrap();
+        (dir, Db::open_in_memory().unwrap(), new_trusted_keys())
+    }
+
+    // spec: TRN#client-authentication
+    #[test]
+    fn bootstrap_fingerprints_are_normalised_before_they_are_stored() {
+        let upper = FP.to_uppercase();
+        let (dir, db, trusted) = bootstrap(&format!(
+            "  sha256:{upper} laptop\n# a comment\n\nSHA256:{FP}\n"
+        ));
+        import_bootstrap_file(dir.path(), &db, &trusted).unwrap();
+
+        assert!(
+            trusted.contains(FP),
+            "a prefixed uppercase entry never matches"
+        );
+        let keys = list_keys(&db).unwrap();
+        assert_eq!(keys.len(), 1, "both lines name one key: {keys:?}");
+        assert_eq!(keys[0].0, FP);
+        assert_eq!(keys[0].1, "laptop", "an entry in the set keeps its label");
+    }
+
+    // spec: TRN#client-authentication
+    #[test]
+    fn a_bootstrap_line_that_is_not_an_acceptable_entry_is_an_error_naming_it() {
+        let (dir, db, trusted) = bootstrap(&format!("{FP}\nnot-a-fingerprint laptop\n"));
+        let err = import_bootstrap_file(dir.path(), &db, &trusted).unwrap_err();
+        assert!(err.to_string().contains("line 2"), "{err}");
+    }
+
+    // spec: TRN#client-authentication
+    #[test]
+    fn a_revoked_key_is_not_authorised_again_by_the_bootstrap_file() {
+        let (dir, db, trusted) = bootstrap(&format!("{FP} laptop\n"));
+        import_bootstrap_file(dir.path(), &db, &trusted).unwrap();
+        assert!(revoke_key(&db, &trusted, FP).unwrap());
+
+        // The next start reads the same file.
+        import_bootstrap_file(dir.path(), &db, &trusted).unwrap();
+        assert!(!trusted.contains(FP));
+        assert!(list_keys(&db).unwrap().is_empty());
+    }
 
     // spec: KEY#listing-keys
     #[test]

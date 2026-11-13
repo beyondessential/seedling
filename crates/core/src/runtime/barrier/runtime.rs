@@ -1566,6 +1566,15 @@ impl RuntimeInstance {
             argv: &argv,
         });
 
+        // spec: RT#command-execution
+        // The target is a running container, or the call throws before it is
+        // on record.
+        if let Some(executor) = ctx.lock().executor.clone() {
+            executor
+                .check_running(&target)
+                .map_err(|e| -> Box<EvalAltResult> { format!("rt.exec: {e}").into() })?;
+        }
+
         // spec: SUSP#side-effecting-calls
         let call_index = ctx.lock().call_index;
         let mut entry = ActionLogEntry {
@@ -1585,7 +1594,7 @@ impl RuntimeInstance {
         let executor = ctx.lock().executor.clone();
         let exit_code = if let Some(executor) = executor {
             executor
-                .exec(&target.display_name, &argv, &env)
+                .exec(&target, &argv, &env)
                 .map_err(|e| -> Box<EvalAltResult> { format!("rt.exec: {e}").into() })?
         } else {
             0

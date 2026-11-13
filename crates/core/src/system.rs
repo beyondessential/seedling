@@ -5,8 +5,8 @@ use sha2::{Digest, Sha256};
 
 use crate::system::types::{
     ContainerFilter, ContainerSpec, ContainerState, ContainerSummary, DataPlaneRules, ExecHandle,
-    ImageSummary, NetworkSummary, ProxyConfig, ServiceRoute, SliceSpec, TransientUnitSpec,
-    UnitState, UnitSummary,
+    ExecOutput, ImageSummary, NetworkSummary, ProxyConfig, ServiceRoute, SliceSpec,
+    TransientUnitSpec, UnitState, UnitSummary,
 };
 
 pub mod actuator;
@@ -187,14 +187,14 @@ pub trait ContainerRuntime: Send + Sync + 'static {
     // spec: RT#command-execution
     /// Run a command (`argv`) inside the running container `name` and wait
     /// for it to exit. `extra_env` is layered on top of the container's
-    /// environment. Stdout and stderr are forwarded to the container's log
-    /// sink, not captured. Returns the command's exit code.
+    /// environment. Returns what the command wrote and its exit code; the
+    /// caller records the output with the container's logs.
     fn exec_command<'a>(
         &'a self,
         name: &'a str,
         argv: &'a [String],
         extra_env: &'a [(String, String)],
-    ) -> BoxFuture<'a, Result<i32, BoxError>>;
+    ) -> BoxFuture<'a, Result<ExecOutput, BoxError>>;
 }
 
 pub trait ProcessManager: Send + Sync + 'static {

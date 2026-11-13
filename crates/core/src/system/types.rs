@@ -170,6 +170,14 @@ pub struct ContainerSpec {
     pub stop_timeout_secs: Option<u32>,
 }
 
+/// What a command run inside a container wrote and how it ended.
+#[derive(Debug, Clone)]
+pub struct ExecOutput {
+    pub exit_code: i32,
+    pub stdout: Vec<u8>,
+    pub stderr: Vec<u8>,
+}
+
 #[derive(Debug, Clone)]
 pub struct Mount {
     pub source: MountSource,

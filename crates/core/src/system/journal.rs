@@ -2,6 +2,77 @@ use std::collections::BTreeMap;
 
 use serde::Serialize;
 
+use crate::{defs::resource::ResourceKind, runtime::identity::ResourceInstance};
+
+/// How the journal and the unit descriptions name a resource kind.
+pub(crate) fn resource_kind_slug(kind: ResourceKind) -> &'static str {
+    match kind {
+        ResourceKind::Parameter => "parameter",
+        ResourceKind::Service => "service",
+        ResourceKind::Ingress => "ingress",
+        ResourceKind::Deployment => "deployment",
+        ResourceKind::Job => "job",
+        ResourceKind::Volume => "volume",
+        ResourceKind::ExternalVolume => "external_volume",
+        ResourceKind::ExternalService => "external_service",
+        ResourceKind::Action => "action",
+    }
+}
+
+/// The journal fields that tie an entry to a workload instance, which is how
+/// its logs are found. The unit of the instance's container carries them, and
+/// so does anything else recorded with that container's logs.
+// spec: LINUX#logs
+pub(crate) fn instance_log_fields(instance: &ResourceInstance) -> Vec<(String, String)> {
+    let kind = resource_kind_slug(instance.kind);
+    let resource = instance.name.as_deref().unwrap_or(&instance.display_name);
+    vec![
+        ("SEEDLING_APP".to_owned(), instance.app.as_str().to_owned()),
+        ("SEEDLING_RESOURCE_KIND".to_owned(), kind.to_owned()),
+        ("SEEDLING_RESOURCE".to_owned(), resource.to_owned()),
+        (
+            "SEEDLING_INSTANCE".to_owned(),
+            instance.display_name.clone(),
+        ),
+    ]
+}
+
+/// The journal entries that record what a command run in `instance`'s
+/// container wrote: one per line, on the stream it was written to.
+///
+/// Stderr is recorded at error priority, which is how a reader tells the two
+/// apart.
+// spec: RT#command-execution
+pub(crate) fn exec_output_entries(
+    instance: &ResourceInstance,
+    stdout: &[u8],
+    stderr: &[u8],
+) -> Vec<Vec<String>> {
+    let fields = instance_log_fields(instance);
+    let mut entries = Vec::new();
+    for (priority, bytes) in [(6, stdout), (3, stderr)] {
+        for line in String::from_utf8_lossy(bytes).lines() {
+            let mut entry: Vec<String> = fields.iter().map(|(k, v)| format!("{k}={v}")).collect();
+            entry.push(format!("PRIORITY={priority}"));
+            entry.push(format!("MESSAGE={line}"));
+            entries.push(entry);
+        }
+    }
+    entries
+}
+
+/// Record what a command run in `instance`'s container wrote with that
+/// container's logs.
+// spec: RT#command-execution
+pub(crate) fn record_exec_output(instance: &ResourceInstance, stdout: &[u8], stderr: &[u8]) {
+    for entry in exec_output_entries(instance, stdout, stderr) {
+        let refs: Vec<&str> = entry.iter().map(String::as_str).collect();
+        // Without a running journald (a development host) the entries are
+        // lost, as the breadcrumbs are.
+        let _ = systemd::journal::send(&refs);
+    }
+}
+
 /// Specifies which journal entries to read.
 #[derive(Debug, Clone)]
 pub enum LogTarget {
@@ -241,6 +312,34 @@ fn record_to_entry(timestamp_us: u64, fields: &BTreeMap<String, String>) -> LogE
         infra: fields.get("SEEDLING_INFRA").cloned(),
         rt_call: fields.get("SEEDLING_RT_CALL").cloned(),
         script_pos: fields.get("SEEDLING_SCRIPT_POS").cloned(),
+    }
+}
+
+#[cfg(test)]
+mod exec_output_tests {
+    use super::*;
+
+    // spec: RT#command-execution
+    #[test]
+    fn exec_output_is_recorded_under_the_containers_own_fields_by_line_and_stream() {
+        let instance = ResourceInstance::new_singleton(
+            seedling_protocol::names::AppName::new("demo").unwrap(),
+            ResourceKind::Deployment,
+            "api",
+        );
+        let entries = exec_output_entries(&instance, b"one\ntwo\n", b"oops\n");
+        assert_eq!(entries.len(), 3);
+        let has = |entry: &[String], field: &str| entry.iter().any(|f| f == field);
+        for entry in &entries {
+            for (k, v) in instance_log_fields(&instance) {
+                assert!(
+                    has(entry, &format!("{k}={v}")),
+                    "{k} missing from {entry:?}"
+                );
+            }
+        }
+        assert!(has(&entries[0], "MESSAGE=one") && has(&entries[0], "PRIORITY=6"));
+        assert!(has(&entries[2], "MESSAGE=oops") && has(&entries[2], "PRIORITY=3"));
     }
 }
 

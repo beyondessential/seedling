@@ -22,8 +22,8 @@ use parking_lot::Mutex;
 use super::{
     BoxError, BoxFuture, ContainerFilter, ContainerHealth, ContainerRuntime, ContainerSpec,
     ContainerState, ContainerStatus, ContainerSummary, DataPlane, DataPlaneRules, ExecHandle,
-    ImageSummary, NetworkProxy, NetworkSummary, ProcessManager, ProxyConfig, ServiceRoute,
-    TransientUnitSpec, UnitState, UnitSummary,
+    ExecOutput, ImageSummary, NetworkProxy, NetworkSummary, ProcessManager, ProxyConfig,
+    ServiceRoute, TransientUnitSpec, UnitState, UnitSummary,
     types::{ActiveState, SPEC_HASH_LABEL, SliceSpec, UnitExit},
 };
 
@@ -498,8 +498,15 @@ impl ContainerRuntime for StubContainerRuntime {
         _name: &'a str,
         _argv: &'a [String],
         _extra_env: &'a [(String, String)],
-    ) -> BoxFuture<'a, Result<i32, BoxError>> {
-        async move { Ok(0) }.boxed()
+    ) -> BoxFuture<'a, Result<ExecOutput, BoxError>> {
+        async move {
+            Ok(ExecOutput {
+                exit_code: 0,
+                stdout: Vec::new(),
+                stderr: Vec::new(),
+            })
+        }
+        .boxed()
     }
 }
 

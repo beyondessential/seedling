@@ -8,7 +8,7 @@ use seedling_protocol::{
 use tokio::io::AsyncWriteExt;
 
 use super::{
-    registry::{ForwardEntry, ForwardProto, ForwardStatus, plural},
+    registry::{ForwardEntry, ForwardProto, ForwardStatus, TcpTarget, plural},
     target::declares_port,
 };
 use crate::{
@@ -331,22 +331,41 @@ pub(crate) async fn handle_forward_stream(
     leftover: Vec<u8>,
     state: Arc<OiState>,
 ) {
+    // spec: FWD#tcp-tunnelling
+    // A stream naming no live forward is reset, not dropped: a stream that
+    // is merely finished would read to the other end as a truncated transfer
+    // that completed.
     let forward_id: ForwardId = match forward_id_str.parse() {
         Ok(id) => id,
         Err(_) => {
             tracing::warn!(fwd = %forward_id_str, "invalid forward_id in stream header");
+            abort_forward_stream(&mut send, &mut recv);
             return;
         }
     };
 
-    let Some((target_addr, port, status_tx)) = state.forwards.lock().get_target(&forward_id) else {
+    let Some(TcpTarget {
+        addr: target_addr,
+        port,
+        status_tx,
+        mut stopped,
+    }) = state.forwards.lock().get_target(&forward_id)
+    else {
         tracing::warn!(fwd = %forward_id, "TCP forward stream for unknown forward");
+        abort_forward_stream(&mut send, &mut recv);
         return;
     };
 
     let target = format!("[{target_addr}]:{port}");
     tracing::debug!(fwd = %forward_id, %target, "TCP relay: connecting");
-    let mut tcp = match tokio::net::TcpStream::connect(&target).await {
+    let connected = tokio::select! {
+        connected = tokio::net::TcpStream::connect(&target) => connected,
+        _ = stopped.wait_for(|ended| *ended) => {
+            abort_forward_stream(&mut send, &mut recv);
+            return;
+        }
+    };
+    let mut tcp = match connected {
         Ok(t) => t,
         Err(e) => {
             tracing::warn!(fwd = %forward_id, "TCP connect to {target} failed: {e}");
@@ -370,14 +389,23 @@ pub(crate) async fn handle_forward_stream(
         return;
     }
 
-    match relay_forward_stream(
-        (&mut send, &mut recv),
-        (&mut tcp_recv, &mut tcp_send),
-        |_| {},
-        |_| {},
-    )
-    .await
-    {
+    // spec: FWD#forward-lifetime
+    // The relay lasts as long as its forward: when the forward ends, however
+    // it ends, every tunnelled connection is closed with it.
+    let relayed = tokio::select! {
+        relayed = relay_forward_stream(
+            (&mut send, &mut recv),
+            (&mut tcp_recv, &mut tcp_send),
+            |_| {},
+            |_| {},
+        ) => relayed,
+        _ = stopped.wait_for(|ended| *ended) => {
+            tracing::debug!(fwd = %forward_id, "TCP relay: the forward ended");
+            abort_forward_stream(&mut send, &mut recv);
+            return;
+        }
+    };
+    match relayed {
         Ok(()) => tracing::debug!(fwd = %forward_id, "TCP relay: closed"),
         Err(e) => tracing::debug!(fwd = %forward_id, "TCP relay failed: {e}"),
     }

@@ -31,7 +31,7 @@ use crate::system::{
     translate::container::podman_args,
     types::{
         ContainerFilter, ContainerHealth, ContainerSpec, ContainerState, ContainerStatus,
-        ContainerSummary, ExecHandle, ImageSummary, NetworkSummary, SPEC_HASH_LABEL,
+        ContainerSummary, ExecHandle, ExecOutput, ImageSummary, NetworkSummary, SPEC_HASH_LABEL,
     },
 };
 
@@ -1094,16 +1094,16 @@ impl ContainerRuntime for PodmanRuntime {
         name: &'a str,
         argv: &'a [String],
         extra_env: &'a [(String, String)],
-    ) -> BoxFuture<'a, Result<i32, BoxError>> {
+    ) -> BoxFuture<'a, Result<ExecOutput, BoxError>> {
         Box::pin(async move {
             // Subprocess `podman exec` is the simplest path that satisfies the
-            // BSL contract: run the command, forward stdio to the daemon's log
-            // sink (journald in production), and return the exit code. The
-            // libpod REST exec/start endpoint upgrades to a streaming protocol
-            // we don't need; subprocess avoids parsing it.
+            // BSL contract: run the command, capture what it wrote for the
+            // caller to record with the container's logs, and return the exit
+            // code. The libpod REST exec/start endpoint upgrades to a
+            // streaming protocol we don't need; subprocess avoids parsing it.
             let mut cmd = tokio::process::Command::new("podman");
             cmd.args(exec_argv(name, argv, extra_env));
-            let status = cmd.status().await.map_err(|e| -> BoxError {
+            let output = cmd.output().await.map_err(|e| -> BoxError {
                 ProtocolSnafu {
                     message: format!("podman exec spawn failed: {e}"),
                 }
@@ -1113,10 +1113,16 @@ impl ContainerRuntime for PodmanRuntime {
             // status.code() is None when the process was killed by a signal;
             // mirror the Unix convention of 128 + signum so callers see a
             // non-zero exit and don't silently treat it as success.
-            Ok(status.code().unwrap_or_else(|| {
+            let status = output.status;
+            let exit_code = status.code().unwrap_or_else(|| {
                 use std::os::unix::process::ExitStatusExt;
                 128 + status.signal().unwrap_or(0)
-            }))
+            });
+            Ok(ExecOutput {
+                exit_code,
+                stdout: output.stdout,
+                stderr: output.stderr,
+            })
         })
     }
 }

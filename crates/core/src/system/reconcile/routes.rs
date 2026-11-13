@@ -82,13 +82,25 @@ pub(super) fn build(
             service_ip,
             backends: backends.clone(),
         });
-        if !backends.is_empty() {
-            observations.push((
-                svc_instance.clone(),
-                "backend_healthy",
-                serde_json::json!({}),
-            ));
-        }
+        // spec: LCY#services
+        // Ready while every port's pool has a backend; a pool that empties
+        // returns the service to Scheduled.
+        let ports = service_ports(snapshot, svc_name);
+        let ready = !backends.is_empty()
+            && ports.iter().all(|port| {
+                running_pods
+                    .iter()
+                    .any(|pod| pod_backs_port(pod, svc_name, *port))
+            });
+        observations.push((
+            svc_instance.clone(),
+            if ready {
+                "backend_healthy"
+            } else {
+                "backend_lost"
+            },
+            serde_json::json!({}),
+        ));
     }
 
     // spec: SITE#external-mappings External-service slots get
@@ -154,13 +166,15 @@ pub(super) fn build(
             service_ip,
             backends: backends.clone(),
         });
-        if !backends.is_empty() {
-            observations.push((
-                svc_instance.clone(),
-                "backend_healthy",
-                serde_json::json!({}),
-            ));
-        }
+        observations.push((
+            svc_instance.clone(),
+            if backends.is_empty() {
+                "backend_lost"
+            } else {
+                "backend_healthy"
+            },
+            serde_json::json!({}),
+        ));
     }
 
     // Emit termination observations for services desired at Unscheduled.
@@ -208,6 +222,57 @@ fn pod_backs_service(pod: &RunningPod, service_name: &str) -> bool {
         }
         _ => false,
     }
+}
+
+/// The ports of `service_name` that some pod of the app binds.
+// spec: LCY#services
+fn service_ports(snapshot: &AppDef, service_name: &str) -> std::collections::BTreeSet<u16> {
+    let mut ports = std::collections::BTreeSet::new();
+    for resource in snapshot.resources.values() {
+        match resource {
+            Resource::Deployment(dep) => {
+                let def = dep.def.lock();
+                collect_ports(&def.pod.lock(), service_name, &mut ports);
+            }
+            Resource::Job(job) => {
+                let def = job.def.lock();
+                collect_ports(&def.pod.lock(), service_name, &mut ports);
+            }
+            _ => {}
+        }
+    }
+    ports
+}
+
+fn collect_ports(pod: &PodDef, service_name: &str, ports: &mut std::collections::BTreeSet<u16>) {
+    for b in pod
+        .tcp_bindings
+        .iter()
+        .chain(pod.udp_bindings.iter())
+        .filter(|b| b.service_port.service.name().as_str() == service_name)
+    {
+        ports.insert(b.service_port.port.get());
+    }
+    for b in pod
+        .http_bindings
+        .iter()
+        .filter(|b| b.route.http.service.name().as_str() == service_name)
+    {
+        ports.insert(b.route.http.port.get());
+    }
+}
+
+/// Whether the running pod is a backend for `port` of `service_name`.
+fn pod_backs_port(pod: &RunningPod, service_name: &str, port: u16) -> bool {
+    let mut ports = std::collections::BTreeSet::new();
+    match &pod.resource {
+        Resource::Deployment(dep) => {
+            collect_ports(&dep.def.lock().pod.lock(), service_name, &mut ports)
+        }
+        Resource::Job(job) => collect_ports(&job.def.lock().pod.lock(), service_name, &mut ports),
+        _ => {}
+    }
+    ports.contains(&port)
 }
 
 fn pod_def_backs_service(pod: &PodDef, service_name: &str) -> bool {

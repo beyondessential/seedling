@@ -107,6 +107,7 @@ pub(super) struct RestartCounter {
     pub exit: Option<crate::system::types::UnitExit>,
 }
 
+#[derive(Default)]
 struct PodInstanceResult {
     running: Option<RunningPod>,
     observations: Vec<(ResourceInstance, &'static str, serde_json::Value)>,
@@ -415,6 +416,7 @@ async fn actuate_one_pod(
     app_priority: AppPriority,
     mut obs: ObservedInstance<'_>,
     inhibit_stop: bool,
+    hold_start: bool,
     written_obs: &HashSet<(InstanceId, &'static str)>,
     started_jobs: &HashSet<InstanceId>,
     completed_jobs: &HashSet<InstanceId>,
@@ -438,22 +440,29 @@ async fn actuate_one_pod(
         let previously_ran = written_obs.contains(&(dr.instance.id, "container_running"))
             || started_jobs.contains(&dr.instance.id);
         let already_completed = completed_jobs.contains(&dr.instance.id);
+        // spec: JOB#deadline
+        let past_deadline = obs.is_running && job_deadline_passed(db, &dr.instance, &dr.definition);
         let is_done = obs.has_exited
             || (!obs.container_exists && !obs.is_running && previously_ran)
-            || already_completed;
+            || already_completed
+            || past_deadline;
         if is_done {
             // Always call stop: even when the container is already gone (--rm)
             // and the unit is merely Inactive, the pod network must be removed.
             // stop_pod_instance tolerates missing containers; the network
             // removal is the critical side-effect here.
-            let rule = if obs.has_exited {
+            let rule = if past_deadline {
+                "Job instance ran past its deadline; JOB#deadline requires it be stopped"
+            } else if obs.has_exited {
                 "Job container exited; AUTO#job-completion requires no restart, only cleanup"
             } else if previously_ran {
                 "Job container previously ran and is now gone; AUTO#job-completion requires cleanup of pod network"
             } else {
                 "Job instance previously recorded as completed but found running; AUTO#job-completion requires stop"
             };
-            let op_kind = if already_completed {
+            let op_kind = if past_deadline {
+                "job_deadline_stop"
+            } else if already_completed {
                 "job_terminal_defense"
             } else {
                 "job_terminal_stop"
@@ -607,6 +616,17 @@ async fn actuate_one_pod(
                     }
                 };
                 op.complete(&outcome);
+                return Some(obs.result);
+            }
+
+            // spec: UPD#replace-updates
+            // A replace update starts no replacement until every stale
+            // instance has fully stopped.
+            if hold_start {
+                tracing::debug!(
+                    instance = %dr.instance.display_name,
+                    "pods: holding a start until the stale instances have stopped"
+                );
                 return Some(obs.result);
             }
 
@@ -772,6 +792,25 @@ fn image_ref_for_instance(definition: &Resource) -> Option<String> {
         Resource::Job(job) => job.def.lock().pod.lock().container.lock().image.clone(),
         _ => None,
     }
+}
+
+/// The instances of a Deployment whose start waits, because the replace
+/// strategy starts no replacement until every stale instance has fully
+/// stopped. An instance is stale for as long as a container of the old
+/// configuration exists, so this holds until the last of them is gone.
+// spec: UPD#replace-updates
+fn starts_held_by_stale_instances(
+    on_update: OnUpdate,
+    instances: &[&ObservedInstance<'_>],
+) -> Vec<String> {
+    if !matches!(on_update, OnUpdate::Replace) || !instances.iter().any(|o| o.spec_stale) {
+        return Vec::new();
+    }
+    instances
+        .iter()
+        .filter(|o| !o.spec_stale)
+        .map(|o| o.dr.instance.display_name.clone())
+        .collect()
 }
 
 /// Returns a set of instance display names that must NOT be stopped this tick,
@@ -945,6 +984,7 @@ pub(super) async fn observe_and_actuate(
     }
 
     let mut inhibited_instances: HashSet<String> = HashSet::new();
+    let mut held_starts: HashSet<String> = HashSet::new();
     let mut rolling_deployments: HashSet<String> = HashSet::new();
 
     for (dep_name, indices) in &deployment_groups {
@@ -960,6 +1000,7 @@ pub(super) async fn observe_and_actuate(
             compute_stop_inhibitions(dep_name, on_update, &group_refs);
 
         inhibited_instances.extend(inhibited);
+        held_starts.extend(starts_held_by_stale_instances(on_update, &group_refs));
         if rolling_active {
             rolling_deployments.insert(dep_name.clone());
         }
@@ -969,12 +1010,14 @@ pub(super) async fn observe_and_actuate(
     let mut actuate_futures = Vec::with_capacity(observed.len());
     for obs in observed {
         let inhibit = inhibited_instances.contains(&obs.dr.instance.display_name);
+        let hold_start = held_starts.contains(&obs.dr.instance.display_name);
         actuate_futures.push(actuate_one_pod(
             actuator,
             db,
             app_priority,
             obs,
             inhibit,
+            hold_start,
             written_obs,
             started_jobs,
             completed_jobs,
@@ -1077,4 +1120,154 @@ pub(super) async fn observe_and_actuate(
     }
 
     update
+}
+
+/// Whether the Job instance has been running for longer than its deadline,
+/// counted from the moment it last reached Running.
+// spec: JOB#deadline
+fn job_deadline_passed(db: &DbHandle, instance: &ResourceInstance, definition: &Resource) -> bool {
+    let Resource::Job(job) = definition else {
+        return false;
+    };
+    let Some(deadline_secs) = job.def.lock().deadline else {
+        return false;
+    };
+    let inst = instance.clone();
+    match db.call(move |db| crate::runtime::history::query_observations(db, &inst)) {
+        Ok(observations) => deadline_passed(
+            &observations,
+            deadline_secs,
+            jiff::Timestamp::now().as_millisecond(),
+        ),
+        // A history that cannot be read does not say how long it has run.
+        Err(e) => {
+            tracing::warn!(instance = %instance.display_name, "cannot read the history to check a Job's deadline: {e}");
+            false
+        }
+    }
+}
+
+/// Whether `deadline_secs` have passed since the latest `container_running`
+/// observation.
+// spec: JOB#deadline
+fn deadline_passed(
+    observations: &[crate::runtime::history::WorldObservation],
+    deadline_secs: u64,
+    now_ms: i64,
+) -> bool {
+    observations
+        .iter()
+        .filter(|o| o.obs_kind == "container_running")
+        .map(|o| o.recorded_at)
+        .max()
+        .is_some_and(|at| now_ms.saturating_sub(at) >= (deadline_secs as i64).saturating_mul(1000))
+}
+
+#[cfg(test)]
+mod deadline_tests {
+    use super::*;
+    use crate::{defs::resource::ResourceKind, runtime::history::WorldObservation};
+
+    fn observed(kind: &str, at: i64) -> WorldObservation {
+        WorldObservation {
+            id: 0,
+            recorded_at: at,
+            resource: ResourceInstance::new_singleton(
+                seedling_protocol::names::AppName::new("demo").unwrap(),
+                ResourceKind::Job,
+                "migrate",
+            ),
+            obs_kind: kind.to_owned(),
+            payload: serde_json::json!({}),
+        }
+    }
+
+    // spec: JOB#deadline
+    #[test]
+    fn a_job_is_past_its_deadline_once_it_has_run_that_long_since_it_last_reached_running() {
+        let obs = [
+            observed("container_created", 0),
+            observed("container_running", 1_000),
+        ];
+        assert!(!deadline_passed(&obs, 60, 60_999));
+        assert!(deadline_passed(&obs, 60, 61_000));
+        // A restart counts from the new run, not the old one.
+        let obs = [
+            observed("container_running", 1_000),
+            observed("container_exited", 5_000),
+            observed("container_running", 100_000),
+        ];
+        assert!(!deadline_passed(&obs, 60, 120_000));
+        // Never seen running: nothing to count from.
+        assert!(!deadline_passed(
+            &[observed("container_created", 0)],
+            1,
+            i64::MAX / 2
+        ));
+    }
+}
+
+#[cfg(test)]
+mod update_tests {
+    use super::*;
+    use crate::{defs::resource::ResourceKind, runtime::lifecycle::LifecycleState};
+
+    fn desired(name: &str) -> DesiredResource {
+        let instance = ResourceInstance::new_singleton(
+            seedling_protocol::names::AppName::new("demo").unwrap(),
+            ResourceKind::Deployment,
+            name,
+        );
+        DesiredResource {
+            instance,
+            desired: LifecycleState::Ready,
+            definition: Resource::Deployment(crate::defs::deployment::Deployment {
+                name: std::sync::Arc::new(name.to_owned()),
+                def: Default::default(),
+                frozen: false,
+            }),
+            demoted: false,
+        }
+    }
+
+    fn observed(dr: &DesiredResource, stale: bool, running: bool) -> ObservedInstance<'_> {
+        ObservedInstance {
+            dr,
+            is_running: running,
+            spec_stale: stale,
+            unit_failed: false,
+            unit_active: running,
+            unit_activating: false,
+            unit_start_limit_hit: false,
+            container_exists: running,
+            has_exited: false,
+            network_exists: running,
+            observed_unhealthy: false,
+            observed_healthy: running,
+            result: PodInstanceResult::default(),
+        }
+    }
+
+    // spec: UPD#replace-updates
+    #[test]
+    fn a_replace_update_starts_nothing_while_any_stale_instance_remains() {
+        let (a, b) = (desired("a"), desired("b"));
+        // `a` is stale and still stopping; `b` has already stopped and is due a
+        // replacement, which must wait for `a`.
+        let (oa, ob) = (observed(&a, true, true), observed(&b, false, false));
+        let held = starts_held_by_stale_instances(OnUpdate::Replace, &[&oa, &ob]);
+        assert_eq!(held, vec![b.instance.display_name.clone()]);
+
+        // Once the last stale instance is gone, nothing is held.
+        let (oa, ob) = (observed(&a, false, false), observed(&b, false, false));
+        assert!(starts_held_by_stale_instances(OnUpdate::Replace, &[&oa, &ob]).is_empty());
+    }
+
+    // spec: UPD#rolling-updates
+    #[test]
+    fn a_rolling_update_is_not_held_by_this_rule() {
+        let (a, b) = (desired("a"), desired("b"));
+        let (oa, ob) = (observed(&a, true, true), observed(&b, false, false));
+        assert!(starts_held_by_stale_instances(OnUpdate::Rolling, &[&oa, &ob]).is_empty());
+    }
 }

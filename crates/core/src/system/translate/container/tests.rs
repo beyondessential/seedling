@@ -442,6 +442,62 @@ fn node_mount_endpoint_is_fffe_one() {
     assert_eq!(octets[15], 0x01);
 }
 
+// spec: VOL#storage-options
+#[test]
+fn a_volume_declared_read_only_is_mounted_read_only() {
+    use std::sync::Arc;
+
+    use crate::defs::resource::ResourceKind;
+    use crate::defs::{container::VolumeMount, deployment::DeploymentDef, volume::Volume};
+    use crate::runtime::identity::{InstanceId, InstanceVariant, ResourceInstance};
+
+    let writable = Volume::new(Some(Arc::new("rw".to_string())));
+    let readonly = Volume::new(Some(Arc::new("ro".to_string())));
+    readonly.def.lock().read_only = true;
+    let dep_def = DeploymentDef::default();
+    {
+        let pod = dep_def.pod.lock();
+        let mut container = pod.container.lock();
+        container.image = Some("img".to_string());
+        container.volume_mounts.insert(
+            std::path::PathBuf::from("/mnt/rw"),
+            VolumeMount::Volume(writable),
+        );
+        container.volume_mounts.insert(
+            std::path::PathBuf::from("/mnt/ro"),
+            VolumeMount::Volume(readonly),
+        );
+    }
+    let instance = ResourceInstance {
+        id: InstanceId::generate(),
+        app: seedling_protocol::names::AppName::new("myapp").unwrap(),
+        kind: ResourceKind::Deployment,
+        name: Some("web".to_string()),
+        variant: InstanceVariant::Singleton,
+        display_name: "myapp-web".to_string(),
+    };
+    let prefix: ipnet::Ipv6Net = "fd5e:ed12:3456:0100::/64".parse().unwrap();
+    let spec = deployment_spec(
+        &dep_def,
+        &instance,
+        &std::collections::BTreeMap::new(),
+        &("seedling-myapp-web".to_string(), prefix),
+        &[],
+        &[],
+        None,
+        &std::collections::HashMap::new(),
+        0,
+    );
+    let flagged = |target: &str| {
+        spec.mounts
+            .iter()
+            .find(|m| m.target == target)
+            .map(|m| m.read_only)
+    };
+    assert_eq!(flagged("/mnt/ro"), Some(true));
+    assert_eq!(flagged("/mnt/rw"), Some(false));
+}
+
 #[test]
 fn volume_mount_uses_app_prefixed_display_name() {
     use std::sync::Arc;

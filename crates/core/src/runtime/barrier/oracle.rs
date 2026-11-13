@@ -266,10 +266,28 @@ fn drive_observations(
     observations: &[WorldObservation],
     obs_to_state: impl Fn(&str) -> Option<LifecycleState>,
 ) -> (LifecycleState, Option<i64>) {
+    drive_observations_with(observations, obs_to_state, |_| None)
+}
+
+/// As [`drive_observations`], for a kind of resource whose state can also go
+/// back: `regression` names, for an observation kind, the state it takes a
+/// resource out of and the one it returns it to.
+fn drive_observations_with(
+    observations: &[WorldObservation],
+    obs_to_state: impl Fn(&str) -> Option<LifecycleState>,
+    regression: impl Fn(&str) -> Option<(LifecycleState, LifecycleState)>,
+) -> (LifecycleState, Option<i64>) {
     let mut state = LifecycleState::Pending;
     let mut transition_ms: Option<i64> = None;
 
     for obs in observations {
+        if let Some((from, to)) = regression(&obs.obs_kind)
+            && state == from
+        {
+            state = to;
+            transition_ms = Some(obs.recorded_at);
+            continue;
+        }
         let Some(next) = obs_to_state(&obs.obs_kind) else {
             continue;
         };
@@ -462,14 +480,22 @@ fn derive_container_lifecycle(observations: &[WorldObservation]) -> (LifecycleSt
 
 // spec: LCY#services
 fn derive_service_lifecycle(observations: &[WorldObservation]) -> (LifecycleState, Option<i64>) {
-    drive_observations(observations, |kind| match kind {
-        "network_created" => Some(LifecycleState::Scheduled),
-        "backend_healthy" => Some(LifecycleState::Ready),
-        "stop_sent" => Some(LifecycleState::Terminating),
-        "network_removed" => Some(LifecycleState::Terminated),
-        "network_cleaned_up" => Some(LifecycleState::Unscheduled),
-        _ => None,
-    })
+    drive_observations_with(
+        observations,
+        |kind| match kind {
+            "network_created" => Some(LifecycleState::Scheduled),
+            "backend_healthy" => Some(LifecycleState::Ready),
+            "stop_sent" => Some(LifecycleState::Terminating),
+            "network_removed" => Some(LifecycleState::Terminated),
+            "network_cleaned_up" => Some(LifecycleState::Unscheduled),
+            _ => None,
+        },
+        // A pool that has emptied takes a Ready service back to Scheduled.
+        |kind| match kind {
+            "backend_lost" => Some((LifecycleState::Ready, LifecycleState::Scheduled)),
+            _ => None,
+        },
+    )
 }
 
 // spec: LCY#ingresses

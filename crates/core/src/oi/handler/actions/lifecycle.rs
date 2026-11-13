@@ -141,21 +141,52 @@ struct OperationExecutor {
 }
 
 impl crate::runtime::barrier::Executor for OperationExecutor {
+    fn check_running(&self, target: &crate::runtime::ResourceInstance) -> Result<(), String> {
+        let container = Arc::clone(&self.container);
+        let name = target.display_name.clone();
+        let state = tokio::task::block_in_place(|| {
+            tokio::runtime::Handle::current()
+                .block_on(async move { container.inspect(&name).await })
+        });
+        match state {
+            Ok(Some(s)) if matches!(s.status, crate::system::types::ContainerStatus::Running) => {
+                Ok(())
+            }
+            Ok(Some(s)) => Err(format!(
+                "{} is not running (it is {:?})",
+                target.display_name, s.status
+            )),
+            Ok(None) => Err(format!(
+                "{} is not running: no such container",
+                target.display_name
+            )),
+            Err(e) => Err(format!(
+                "cannot tell whether {} is running: {e}",
+                target.display_name
+            )),
+        }
+    }
+
     fn exec(
         &self,
-        name: &str,
+        target: &crate::runtime::ResourceInstance,
         argv: &[String],
         extra_env: &[(String, String)],
     ) -> Result<i32, String> {
         let container = Arc::clone(&self.container);
-        let name = name.to_owned();
+        let name = target.display_name.clone();
         let argv: Vec<String> = argv.to_vec();
         let extra_env: Vec<(String, String)> = extra_env.to_vec();
         let result = tokio::task::block_in_place(|| {
             tokio::runtime::Handle::current()
                 .block_on(async move { container.exec_command(&name, &argv, &extra_env).await })
         });
-        result.map_err(|e| e.to_string())
+        let output = result.map_err(|e| e.to_string())?;
+        // spec: RT#command-execution
+        // What the command wrote goes with the container's logs, not to the
+        // script and not to the daemon's own.
+        crate::system::journal::record_exec_output(target, &output.stdout, &output.stderr);
+        Ok(output.exit_code)
     }
 }
 
@@ -794,6 +825,10 @@ async fn cleanup_dynamic_resources(
 pub fn set_phase_and_persist(state: &OiState, app_name: &AppName, new_phase: AppPhase) {
     use crate::oi::handler::apps::{extract_persist_fields, persist_app_fields};
     let phase_str = phase_event_name(&new_phase);
+    // spec: FWD#forward-lifetime
+    if !matches!(new_phase, AppPhase::Installed) {
+        crate::oi::forwards::end_forwards_of_app(state, app_name.as_str());
+    }
     {
         let mut reg = state.registry.write();
         if let Some(entry) = reg.get_mut(app_name.as_str()) {

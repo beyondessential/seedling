@@ -22,7 +22,13 @@ pub struct AuditWriter {
 impl AuditWriter {
     // spec: AUD#storage
     pub fn open(path: &Path) -> io::Result<Self> {
-        if let Some(parent) = path.parent() {
+        if let Some(parent) = path.parent()
+            && !parent.as_os_str().is_empty()
+            && !parent.exists()
+        {
+            // Only a directory made here is this log's to give a mode: an
+            // existing one, such as `/var/log` itself, belongs to the host and
+            // is not reset on every open.
             fs::create_dir_all(parent)?;
             fs::set_permissions(parent, fs::Permissions::from_mode(0o750))?;
         }
@@ -135,6 +141,23 @@ mod tests {
             generation: 1,
             actor: None,
         }
+    }
+
+    // spec: AUD#storage
+    #[test]
+    fn an_existing_parent_directory_keeps_its_mode_and_a_new_one_is_made_private() {
+        let dir = TempDir::new().unwrap();
+        let existing = dir.path().join("shared");
+        fs::create_dir(&existing).unwrap();
+        fs::set_permissions(&existing, fs::Permissions::from_mode(0o755)).unwrap();
+
+        AuditWriter::open(&existing.join("audit.log")).unwrap();
+        let mode = |p: &Path| fs::metadata(p).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode(&existing), 0o755, "an existing directory was reset");
+
+        let fresh = dir.path().join("made-here");
+        AuditWriter::open(&fresh.join("audit.log")).unwrap();
+        assert_eq!(mode(&fresh), 0o750);
     }
 
     #[test]

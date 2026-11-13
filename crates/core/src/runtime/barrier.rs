@@ -363,12 +363,21 @@ pub trait VolumeWriter: Send + Sync {
 /// language-only tests where no real container runtime is present.
 // spec: RT#command-execution
 pub trait Executor: Send + Sync {
+    /// Whether `target` is a running container right now. Asked before the
+    /// call is put on record, so a target that is not running leaves nothing
+    /// behind to be mistaken, on replay, for a command that may have run.
+    // spec: RT#command-execution
+    fn check_running(&self, target: &ResourceInstance) -> Result<(), String> {
+        let _ = target;
+        Ok(())
+    }
+
     /// Run `argv` inside the running container `name`, layering `extra_env`
     /// on top of the container's environment. Blocks until the command exits
     /// and returns the exit code.
     fn exec(
         &self,
-        name: &str,
+        target: &ResourceInstance,
         argv: &[String],
         extra_env: &[(String, String)],
     ) -> Result<i32, String>;

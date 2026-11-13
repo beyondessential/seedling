@@ -471,7 +471,7 @@ impl crate::runtime::barrier::VolumeWriter for HostProbe {
 impl crate::runtime::barrier::Executor for HostProbe {
     fn exec(
         &self,
-        _name: &str,
+        _target: &crate::runtime::ResourceInstance,
         _argv: &[String],
         _env: &[(String, String)],
     ) -> Result<i32, String> {

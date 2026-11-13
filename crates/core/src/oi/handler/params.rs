@@ -108,6 +108,9 @@ fn reload_and_persist_apperror(
             sync_fault_state(&state.db, entry);
         }
     }
+    // spec: FWD#forward-lifetime
+    // The re-evaluation may have dropped a service or port a forward reaches.
+    crate::oi::forwards::end_undeclared_forwards(state, app.as_str());
     {
         let mut reg = state.registry.write();
         if let Some(entry) = reg.get_mut(app.as_str()) {

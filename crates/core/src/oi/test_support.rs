@@ -7,6 +7,7 @@ use std::sync::{Arc, OnceLock};
 use std::time::Instant;
 
 use parking_lot::{Mutex, RwLock};
+use rustls_pki_types::PrivatePkcs8KeyDer;
 use seedling_protocol::actor::Actor;
 use seedling_protocol::events::{EventSenderWithActor, new_event_channel};
 use serde_json::{Value, json};
@@ -646,5 +647,51 @@ mod tests {
         // Wrong type.
         let (code, _) = oi.call("/apps/show", json!({ "app": 42 })).unwrap_err();
         assert_eq!(code, "requirements_invalid");
+    }
+}
+
+/// A connected QUIC pair over loopback. The server side is what a shell session
+/// runs on, the client side is the operator's end of it.
+pub(crate) struct Loopback {
+    pub(crate) server: quinn::Connection,
+    pub(crate) client: quinn::Connection,
+    _endpoints: (quinn::Endpoint, quinn::Endpoint),
+}
+
+pub(crate) async fn loopback() -> Loopback {
+    let _ = rustls::crypto::ring::default_provider().install_default();
+
+    let cert = rcgen::generate_simple_self_signed(vec!["localhost".to_owned()]).expect("cert");
+    let key = PrivatePkcs8KeyDer::from(cert.signing_key.serialize_der());
+    let server_config =
+        quinn::ServerConfig::with_single_cert(vec![cert.cert.der().clone()], key.into())
+            .expect("server config");
+    let server_endpoint =
+        quinn::Endpoint::server(server_config, "127.0.0.1:0".parse().unwrap()).expect("server");
+    let addr = server_endpoint.local_addr().expect("addr");
+
+    let mut roots = rustls::RootCertStore::empty();
+    roots.add(cert.cert.der().clone()).expect("root");
+    let mut client_endpoint =
+        quinn::Endpoint::client("127.0.0.1:0".parse().unwrap()).expect("client");
+    client_endpoint.set_default_client_config(
+        quinn::ClientConfig::with_root_certificates(Arc::new(roots)).expect("client config"),
+    );
+
+    let accept = {
+        let endpoint = server_endpoint.clone();
+        tokio::spawn(async move { endpoint.accept().await.expect("incoming").await })
+    };
+    let client = client_endpoint
+        .connect(addr, "localhost")
+        .expect("connect")
+        .await
+        .expect("client connection");
+    let server = accept.await.unwrap().expect("server connection");
+
+    Loopback {
+        server,
+        client,
+        _endpoints: (server_endpoint, client_endpoint),
     }
 }

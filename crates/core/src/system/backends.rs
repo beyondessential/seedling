@@ -17,8 +17,8 @@ use parking_lot::{Mutex, RwLock};
 use crate::system::{
     BoxError, BoxFuture, ContainerRuntime, ProcessManager,
     types::{
-        ContainerFilter, ContainerSpec, ContainerState, ContainerSummary, ExecHandle, ImageSummary,
-        NetworkSummary, SliceSpec, TransientUnitSpec, UnitState, UnitSummary,
+        ContainerFilter, ContainerSpec, ContainerState, ContainerSummary, ExecHandle, ExecOutput,
+        ImageSummary, NetworkSummary, SliceSpec, TransientUnitSpec, UnitState, UnitSummary,
     },
 };
 
@@ -190,7 +190,7 @@ impl ContainerRuntime for Switchable<dyn ContainerRuntime> {
         name: &'a str,
         argv: &'a [String],
         extra_env: &'a [(String, String)],
-    ) -> BoxFuture<'a, Result<i32, BoxError>> {
+    ) -> BoxFuture<'a, Result<ExecOutput, BoxError>> {
         let inner = self.get();
         async move { inner.exec_command(name, argv, extra_env).await }.boxed()
     }

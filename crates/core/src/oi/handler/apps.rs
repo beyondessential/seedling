@@ -1609,6 +1609,9 @@ pub(crate) fn uninstall_app(state: &OiState, params: AppParams) -> HandlerResult
     state.db.call(move |db| {
         transition_phase(&phase_arc, AppPhase::Uninstalling, db, &name_owned, "");
     });
+    // spec: FWD#forward-lifetime
+    // The app has left `Installed`.
+    crate::oi::forwards::end_forwards_of_app(state, name);
     // The app now reads `Uninstalling`, so an operation waiting on this lock
     // is refused by the scheduler's own gate.
     drop(scheduled);
@@ -1899,24 +1902,7 @@ pub(crate) fn update_app(
 
     // spec: FWD#forward-lifetime — tear down any forward whose target service,
     // or port for its proto, is no longer declared in the new AppDef.
-    {
-        // Collected before the forwards lock is taken: that lock is on the
-        // per-datagram path, and the walk takes a lock per pod that a
-        // concurrent script evaluation may hold.
-        let declared = state
-            .registry
-            .read()
-            .get(name)
-            .map(|e| crate::oi::forwards::target::declared_ports(&e.app.def.load()));
-        let stale = state.forwards.lock().remove_stale_for_app(name, |fwd| {
-            declared.as_ref().is_none_or(|declared| {
-                !declared.contains(&(fwd.service.clone(), fwd.port, fwd.proto.clone()))
-            })
-        });
-        for entry in stale {
-            let _ = entry.stop_tx.send(true);
-        }
-    }
+    crate::oi::forwards::end_undeclared_forwards(state, name);
 
     // spec: SCHED#schedule-records
     sync_action_schedules(state, &params.app);

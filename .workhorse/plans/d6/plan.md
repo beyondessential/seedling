@@ -19,7 +19,7 @@ Each issue is worked on its own and committed on its own, with a test that fails
 - [x] Faults out of line with the fault catalogue
 - [x] Action, shell and change-handler dispatch
 - [x] Host startup ordering, addressing and the web listener
-- [ ] Resource and lifecycle behaviour the code does not enforce
+- [x] Resource and lifecycle behaviour the code does not enforce
 - [x] Wire, event and ACME protocol shapes
 - [ ] Operations: start action, persisted queue, unreadable state, intent-before-effect
 - [x] OI error codes and request validation
@@ -120,3 +120,7 @@ Each is done once, in whichever issue is worked first, and the later issue notes
 - The resolver is brought up before the iteration's pods phase and stops the iteration while it is down, as NAT64 does.
 - The proxy image check already existed (`caddy-config.yml`, `check-caddy-image.sh`, the `--ignored` image test that first shows an undeclared field rejected); it was built and run here with podman and passed, so no code changed for it.
 - The web interface does not start with no daemon fingerprint in any build; `--daemon-trust-any` remains an explicit debug-build option.
+- A Job's deadline is enforced by the reconciler from the latest `container_running` observation. A replace update holds every start of the Deployment until no stale instance remains. A service whose pool empties records `backend_lost`, which takes it from Ready back to Scheduled.
+- `rt.exec` asks the executor whether the target is running before the call is recorded, and what the command wrote is recorded under the container's own journal fields (`ExecOutput`).
+- Forwards end when their app leaves `Installed` or a definition drops their port, whether by update or parameter change, and a relay ends with its forward. A stream naming no live forward is reset.
+- Revoked key fingerprints are kept in `revoked_keys` (v73) so the bootstrap file does not authorise one again; bootstrap fingerprints are normalised and a bad line stops the daemon.

@@ -5,7 +5,6 @@ use std::{
     task::{Context, Poll},
 };
 
-use rustls_pki_types::PrivatePkcs8KeyDer;
 use seedling_protocol::{actor::Actor, events::EventSenderWithActor, names::SessionId};
 use tokio::io::AsyncWrite;
 
@@ -14,55 +13,12 @@ use super::{
     session::{LiveShell, SessionStreams, run_to_exit},
 };
 use crate::{
-    oi::{state::OiState, test_support::TestOi},
+    oi::{
+        state::OiState,
+        test_support::{Loopback, TestOi, loopback},
+    },
     system::types::ExecHandle,
 };
-
-/// A connected QUIC pair over loopback. The server side is what a shell session
-/// runs on, the client side is the operator's end of it.
-struct Loopback {
-    server: quinn::Connection,
-    client: quinn::Connection,
-    _endpoints: (quinn::Endpoint, quinn::Endpoint),
-}
-
-async fn loopback() -> Loopback {
-    let _ = rustls::crypto::ring::default_provider().install_default();
-
-    let cert = rcgen::generate_simple_self_signed(vec!["localhost".to_owned()]).expect("cert");
-    let key = PrivatePkcs8KeyDer::from(cert.signing_key.serialize_der());
-    let server_config =
-        quinn::ServerConfig::with_single_cert(vec![cert.cert.der().clone()], key.into())
-            .expect("server config");
-    let server_endpoint =
-        quinn::Endpoint::server(server_config, "127.0.0.1:0".parse().unwrap()).expect("server");
-    let addr = server_endpoint.local_addr().expect("addr");
-
-    let mut roots = rustls::RootCertStore::empty();
-    roots.add(cert.cert.der().clone()).expect("root");
-    let mut client_endpoint =
-        quinn::Endpoint::client("127.0.0.1:0".parse().unwrap()).expect("client");
-    client_endpoint.set_default_client_config(
-        quinn::ClientConfig::with_root_certificates(Arc::new(roots)).expect("client config"),
-    );
-
-    let accept = {
-        let endpoint = server_endpoint.clone();
-        tokio::spawn(async move { endpoint.accept().await.expect("incoming").await })
-    };
-    let client = client_endpoint
-        .connect(addr, "localhost")
-        .expect("connect")
-        .await
-        .expect("client connection");
-    let server = accept.await.unwrap().expect("server connection");
-
-    Loopback {
-        server,
-        client,
-        _endpoints: (server_endpoint, client_endpoint),
-    }
-}
 
 /// Opens a session stream the way the daemon sees one, returning the server's
 /// streams for the session and the client's read side of the session stream.

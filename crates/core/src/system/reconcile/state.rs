@@ -443,6 +443,7 @@ impl Reconciler {
             "health_check_pass" | "health_check_fail" => {
                 &["health_check_pass", "health_check_fail"]
             }
+            "backend_healthy" | "backend_lost" => &["backend_healthy", "backend_lost"],
             "unit_failed" | "unit_start_limit_hit" | "unit_inactive" => {
                 &["unit_failed", "unit_start_limit_hit", "unit_inactive"]
             }

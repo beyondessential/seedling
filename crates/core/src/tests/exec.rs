@@ -32,12 +32,12 @@ impl RecordingExecutor {
 impl crate::runtime::barrier::Executor for RecordingExecutor {
     fn exec(
         &self,
-        name: &str,
+        target: &crate::runtime::ResourceInstance,
         argv: &[String],
         extra_env: &[(String, String)],
     ) -> Result<i32, String> {
         self.calls.lock().push(RecordedExec {
-            name: name.to_owned(),
+            name: target.display_name.clone(),
             argv: argv.to_vec(),
             env: extra_env.to_vec(),
         });
@@ -462,5 +462,52 @@ fn rt_exec_skipped_on_replay_recovers_exit_code() {
         exec.calls.lock().len(),
         1,
         "rt.exec must be at-most-once across replays"
+    );
+}
+
+/// An executor whose target is never running.
+struct NotRunning;
+
+impl crate::runtime::barrier::Executor for NotRunning {
+    fn check_running(&self, target: &crate::runtime::ResourceInstance) -> Result<(), String> {
+        Err(format!("{} is not running", target.display_name))
+    }
+
+    fn exec(
+        &self,
+        _target: &crate::runtime::ResourceInstance,
+        _argv: &[String],
+        _extra_env: &[(String, String)],
+    ) -> Result<i32, String> {
+        panic!("a command was run in a container that is not running");
+    }
+}
+
+// spec: RT#command-execution
+#[test]
+fn rt_exec_throws_before_anything_is_recorded_when_the_target_is_not_running() {
+    let log = InMemoryActionLog::new();
+    let result = run_action_with(
+        r#"
+        let api = app.deployment("api").image("docker.io/library/busybox:latest");
+        app.on_action("ping", |rt, _param| {
+            rt.exec(api, ["echo", "hi"]);
+        });
+        "#,
+        &[],
+        "ping",
+        Some(&log),
+        ActionHooks {
+            executor: Some(Arc::new(NotRunning)),
+            ..Default::default()
+        },
+    );
+    match result {
+        OperationResult::Failed(e) => assert!(e.to_string().contains("is not running"), "{e}"),
+        other => panic!("expected a failure, got {other:?}"),
+    }
+    assert!(
+        crate::runtime::ActionLog::load(&log).unwrap().is_empty(),
+        "the call was put on record although it never ran"
     );
 }

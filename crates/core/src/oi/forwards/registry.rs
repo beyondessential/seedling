@@ -92,6 +92,15 @@ pub struct ForwardEntry {
     pub udp_dropped: u64,
 }
 
+/// Where a TCP forward's tunnelled connections go.
+pub struct TcpTarget {
+    pub addr: Ipv6Addr,
+    pub port: u16,
+    pub status_tx: mpsc::Sender<ForwardStatus>,
+    /// Becomes true when the forward ends, however it ends.
+    pub stopped: watch::Receiver<bool>,
+}
+
 // spec: FWD#listing-forwards
 pub struct ForwardRecord {
     pub forward_id: ForwardId,
@@ -225,15 +234,15 @@ impl ForwardRegistry {
         }
     }
 
-    /// Look up where a TCP forward's tunneled connections go, and where to
-    /// report a failure to reach it.
-    pub fn get_target(
-        &self,
-        id: &ForwardId,
-    ) -> Option<(Ipv6Addr, u16, mpsc::Sender<ForwardStatus>)> {
-        self.by_id
-            .get(id)
-            .map(|e| (e.target_addr, e.port, e.status_tx.clone()))
+    /// Look up where a TCP forward's tunneled connections go, where to report a
+    /// failure to reach it, and the signal that the forward has ended.
+    pub fn get_target(&self, id: &ForwardId) -> Option<TcpTarget> {
+        self.by_id.get(id).map(|e| TcpTarget {
+            addr: e.target_addr,
+            port: e.port,
+            status_tx: e.status_tx.clone(),
+            stopped: e.stop_tx.subscribe(),
+        })
     }
 
     // spec: FWD#listing-forwards

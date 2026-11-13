@@ -235,6 +235,7 @@ const OBS_KINDS: &[&str] = &[
     "volume_cleaned_up",
     "network_created",
     "backend_healthy",
+    "backend_lost",
     "network_removed",
     "network_cleaned_up",
     "ingress_configured",
