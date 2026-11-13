@@ -46,7 +46,7 @@ jobs:
       # checked against each other, including before a bumped tag exists in the
       # registry. Never published from here; caddy-image.yml owns that.
       - name: Build the proxy image
-        uses: docker/build-push-action@v7.3.0
+        uses: docker/build-push-action@v7.4.0
         with:
           context: docker/caddy
           file: docker/caddy/Containerfile
