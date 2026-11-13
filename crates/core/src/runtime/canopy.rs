@@ -145,7 +145,7 @@ async fn report_once(state: &Arc<OiState>) -> Outcome {
         return Outcome::Skipped;
     }
 
-    let client = CanopyClient::with_transport(OiCanopyTransport::new(Arc::clone(&state.canopy)));
+    let client = CanopyClient::new(OiCanopyTransport::new(Arc::clone(&state.canopy)));
 
     let server_id = match server_id(state, &client).await {
         Ok(id) => id,
@@ -155,6 +155,13 @@ async fn report_once(state: &Arc<OiState>) -> Outcome {
     let payload = match build_payload(state).await {
         Ok(payload) => payload,
         Err(e) => return Outcome::Failed(e),
+    };
+    // The payload is built as JSON and handed over as the typed body the
+    // client sends; a document that is not one fails the report before it is
+    // sent.
+    let payload: bestool_canopy::schema::StatusPayload = match serde_json::from_value(payload) {
+        Ok(payload) => payload,
+        Err(e) => return Outcome::Failed(format!("the status report is malformed: {e}")),
     };
     match client.status(&server_id, &payload).await {
         // spec: CNR#report-response — the response carries return-path

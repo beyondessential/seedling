@@ -62,13 +62,13 @@ impl Cipher {
                 });
             }
             let bytes = std::fs::read(path)?;
-            let key = aead::SecretKey::from_slice(&bytes)?;
+            let key = aead::SecretKey::try_from(bytes.as_slice())?;
             return Ok(Self { key });
         }
 
-        let key = aead::SecretKey::default();
+        let key = aead::SecretKey::generate()?;
         // spec: INFRA#file-permissions
-        seedling_protocol::keys::write_new_private_file(path, key.unprotected_as_bytes())?;
+        seedling_protocol::keys::write_new_private_file(path, key.unprotected_as_ref())?;
         Ok(Self { key })
     }
 
@@ -85,7 +85,7 @@ impl Cipher {
 
     #[cfg(test)]
     pub fn for_tests() -> Self {
-        let key = aead::SecretKey::from_slice(&[42u8; 32]).expect("valid test key");
+        let key = aead::SecretKey::try_from(&[42u8; 32]).expect("valid test key");
         Self { key }
     }
 }
@@ -122,7 +122,7 @@ mod tests {
             .encrypt(&SecretString::new("secret".into()))
             .expect("encrypt");
         let other = Cipher {
-            key: aead::SecretKey::from_slice(&[1u8; 32]).expect("valid key"),
+            key: aead::SecretKey::try_from(&[1u8; 32]).expect("valid key"),
         };
         assert!(other.decrypt(&ct).is_err());
     }

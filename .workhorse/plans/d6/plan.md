@@ -124,3 +124,5 @@ Each is done once, in whichever issue is worked first, and the later issue notes
 - `rt.exec` asks the executor whether the target is running before the call is recorded, and what the command wrote is recorded under the container's own journal fields (`ExecOutput`).
 - Forwards end when their app leaves `Installed` or a definition drops their port, whether by update or parameter change, and a relay ends with its forward. A stream naming no live forward is reset.
 - Revoked key fingerprints are kept in `revoked_keys` (v73) so the bootstrap file does not authorise one again; bootstrap fingerprints are normalised and a bad line stops the daemon.
+- Every Cargo, npm, GitHub Actions and container image dependency is at its latest release except `rhai`, which is held at 1.25.1: from 1.26 a closure that captures `app` cannot be passed to a method called on `app`, which every BSL script does, so each fails with ErrorDataRace.
+- The proxy image moves to Caddy 2.11.9 and caddy-l4 0.1.3 with tag `2.11.9-1`, and the runtime pulls that tag, so it must be published before this reaches a host.

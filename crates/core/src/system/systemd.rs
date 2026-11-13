@@ -1,10 +1,7 @@
 use std::sync::Arc;
 
 use snafu::{IntoError, ResultExt, Snafu};
-use zbus::{
-    Connection,
-    zvariant::{Array, OwnedObjectPath, Signature, StructureBuilder, Value},
-};
+use zbus::{Array, Connection, OwnedObjectPath, Signature, Structure, Variant as Value};
 
 use crate::system::{
     BoxError, BoxFuture, ProcessManager,
@@ -92,19 +89,19 @@ fn validate_unit_name(name: &str) -> Result<(), SystemdError> {
 // D-Bus proxy — systemd Manager interface
 // ---------------------------------------------------------------------------
 
-#[derive(serde::Serialize, zbus::zvariant::Type)]
+#[derive(serde::Serialize, zbus::Type)]
 struct UnitProperty<'a> {
     name: &'a str,
     value: Value<'a>,
 }
 
-#[derive(serde::Serialize, zbus::zvariant::Type)]
+#[derive(serde::Serialize, zbus::Type)]
 struct AuxUnit<'a> {
     name: &'a str,
     properties: Vec<UnitProperty<'a>>,
 }
 
-#[derive(Debug, serde::Deserialize, zbus::zvariant::Type)]
+#[derive(Debug, serde::Deserialize, zbus::Type)]
 struct ListedUnit {
     name: String,
 
@@ -606,9 +603,7 @@ impl SystemdManager {
 
         let unit_proxy = Systemd1UnitProxy::builder(&self.conn)
             .destination("org.freedesktop.systemd1")
-            .context(DBusSnafu)?
             .path(unit_path.clone())
-            .context(DBusSnafu)?
             .build()
             .await
             .context(DBusSnafu)?;
@@ -645,9 +640,7 @@ impl SystemdManager {
     ) -> Result<(Option<u32>, Option<UnitExit>), SystemdError> {
         let proxy = Systemd1ServiceProxy::builder(&self.conn)
             .destination("org.freedesktop.systemd1")
-            .context(DBusSnafu)?
             .path(unit_path.clone())
-            .context(DBusSnafu)?
             .build()
             .await
             .context(DBusSnafu)?;
@@ -825,7 +818,7 @@ fn build_exec_start(exec_start: &[String]) -> Result<Value<'static>, SystemdErro
     // Value directly) rather than add_field (which routes through Value::new and
     // wraps any Value<'_> as a variant because Value::SIGNATURE == "v").
     let entry = Value::Structure(
-        StructureBuilder::new()
+        Structure::builder()
             .append_field(Value::from(path))
             .append_field(Value::Array(argv_arr))
             .append_field(Value::from(false))

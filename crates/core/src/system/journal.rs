@@ -464,7 +464,8 @@ mod tests {
             systemd::journal::send(&[
                 &format!("MESSAGE=entry {i}"),
                 &format!("{MARKER_FIELD}={marker}"),
-            ]);
+            ])
+            .expect("the journal accepts an entry");
         }
         let deadline = Instant::now() + Duration::from_secs(10);
         while count_marked(&marker) < 3 {

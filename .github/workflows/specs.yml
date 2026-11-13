@@ -11,7 +11,7 @@ jobs:
     name: Spec links and anchors
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7.0.0
+      - uses: actions/checkout@v7.0.1
       - name: Check links and heading anchors
         uses: lycheeverse/lychee-action@v2.9.0
         with:
@@ -22,7 +22,7 @@ jobs:
     name: Spec style and citations
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7.0.0
+      - uses: actions/checkout@v7.0.1
       - name: Spec style
         run: etc/ci/check-spec-style.sh
       - name: Code citations resolve

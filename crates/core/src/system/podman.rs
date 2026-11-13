@@ -739,7 +739,11 @@ struct AsyncPtyHalf(AsyncFd<OwnedFd>);
 
 impl AsyncPtyHalf {
     fn new(fd: OwnedFd) -> io::Result<Self> {
-        Ok(Self(AsyncFd::new(fd)?))
+        // SAFETY: `fd` is an open descriptor that the `AsyncFd` takes
+        // ownership of, so it stays open, and the same one, for as long as the
+        // `AsyncFd` lives.
+        let registered = unsafe { AsyncFd::register(fd) }.map_err(|e| e.into_parts().1)?;
+        Ok(Self(registered))
     }
 }
 

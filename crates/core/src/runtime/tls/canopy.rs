@@ -91,11 +91,11 @@ impl CertificateRelay for CanopyRelay {
         csr_der_b64: &str,
         app_type: Option<&str>,
     ) -> std::result::Result<CertificateResponse, RelayFailure> {
-        use bestool_canopy::{CanopyClient, CanopyHttpError, schema::RequestCertificateArgs};
+        use bestool_canopy::{CanopyClient, schema::RequestCertificateArgs};
 
-        let client = CanopyClient::with_transport(crate::oi::canopy::OiCanopyTransport::new(
-            Arc::clone(&self.canopy),
-        ));
+        let client = CanopyClient::new(crate::oi::canopy::OiCanopyTransport::new(Arc::clone(
+            &self.canopy,
+        )));
         let args = RequestCertificateArgs::builder()
             .name(name.to_owned())
             .csr(csr_der_b64.to_owned())
@@ -103,10 +103,10 @@ impl CertificateRelay for CanopyRelay {
             .build();
         match client.certificates_request(&args).await {
             Ok(response) => Ok(response),
-            Err(report) => Err(match report.downcast_ref::<CanopyHttpError>() {
+            Err(report) => Err(match report.http() {
                 Some(e) => RelayFailure::Status {
                     status: e.status.as_u16(),
-                    body: e.body.clone(),
+                    body: e.body_text().into_owned(),
                 },
                 None => RelayFailure::Unreachable(format!("{report}")),
             }),
