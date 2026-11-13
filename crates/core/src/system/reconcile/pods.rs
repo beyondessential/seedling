@@ -1,7 +1,6 @@
 use std::{collections::HashMap, collections::HashSet, sync::Arc};
 
 use futures_util::future::join_all;
-use ipnet::Ipv6Net;
 use serde_json::json;
 use tracing::{debug, error};
 
@@ -15,10 +14,7 @@ use crate::{
         lifecycle::LifecycleState,
         priority::AppPriority,
     },
-    system::{
-        System, actuator::Actuator, observer::Observer, translate::proxy::pod_network_prefix,
-        types::ObservationFact,
-    },
+    system::{System, actuator::Actuator, observer::Observer, types::ObservationFact},
 };
 
 use super::RunningPod;
@@ -202,7 +198,6 @@ async fn observe_one_pod<'a>(
     actuator: &Actuator,
     driver: &Arc<System>,
     dr: &'a DesiredResource,
-    node_prefix: &Ipv6Net,
 ) -> PodObservation<'a> {
     let mut result = PodInstanceResult {
         running: None,
@@ -354,20 +349,28 @@ async fn observe_one_pod<'a>(
         match driver.container.inspect(&dr.instance.display_name).await {
             Ok(Some(state)) => {
                 if let Some(pod_ip) = state.pod_addr {
-                    let pod_prefix = pod_network_prefix(node_prefix, &dr.instance);
-                    // spec: LCY#routing-pool
-                    // observed_unhealthy + observed_healthy are derived above
-                    // from this tick's facts. A pod that's running but in
-                    // start-period (no health fact yet) is reported as
-                    // not-healthy here so the routing layer can keep it out of
-                    // the pool until podman confirms.
-                    result.running = Some(RunningPod {
-                        instance: dr.instance.clone(),
-                        pod_prefix,
-                        pod_ip,
-                        resource: dr.definition.clone(),
-                        observed_healthy: observed_healthy && !observed_unhealthy,
-                    });
+                    // A pod running without a recorded network is not routable:
+                    // its prefix is not one the runtime can vouch for.
+                    if let Some(pod_prefix) = actuator.recorded_pod_prefix(&dr.instance) {
+                        // spec: LCY#routing-pool
+                        // observed_unhealthy + observed_healthy are derived above
+                        // from this tick's facts. A pod that's running but in
+                        // start-period (no health fact yet) is reported as
+                        // not-healthy here so the routing layer can keep it out of
+                        // the pool until podman confirms.
+                        result.running = Some(RunningPod {
+                            instance: dr.instance.clone(),
+                            pod_prefix,
+                            pod_ip,
+                            resource: dr.definition.clone(),
+                            observed_healthy: observed_healthy && !observed_unhealthy,
+                        });
+                    } else {
+                        tracing::warn!(
+                            instance = %dr.instance.display_name,
+                            "a running pod has no recorded pod network; leaving it out of routing"
+                        );
+                    }
                 }
             }
             Ok(None) => {}
@@ -882,7 +885,6 @@ pub(super) async fn observe_and_actuate(
     db: &DbHandle,
     desired: &DesiredState,
     app_priority: AppPriority,
-    node_prefix: &Ipv6Net,
     written_obs: &HashSet<(InstanceId, &'static str)>,
     started_jobs: &HashSet<InstanceId>,
     completed_jobs: &HashSet<InstanceId>,
@@ -897,7 +899,7 @@ pub(super) async fn observe_and_actuate(
 
     let observe_futures: Vec<_> = pod_resources
         .iter()
-        .map(|dr| observe_one_pod(observer, actuator, driver, dr, node_prefix))
+        .map(|dr| observe_one_pod(observer, actuator, driver, dr))
         .collect();
 
     // spec: OBS#failed-observation — instances whose observation

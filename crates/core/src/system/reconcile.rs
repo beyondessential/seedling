@@ -1142,9 +1142,44 @@ impl Reconciler {
             out
         });
 
+        // spec: DNS#resolver-lifecycle
+        // The resolver is running and healthy before any workload container
+        // starts, so it is brought up ahead of the phase that starts them, not
+        // alongside it. While it is not, the iteration goes no further.
+        let resolver_result = tokio::time::timeout(
+            INFRA_ENSURE_TIMEOUT,
+            resolver::ensure_resolver_running(
+                &*self.driver.container,
+                &*self.driver.process,
+                &self.node_prefix,
+                &self.data_dir,
+                &self.dns_upstreams,
+                self.nat64_active,
+                self.force_dns64_translation,
+                &self.resolver_health_fail_count,
+            ),
+        )
+        .await;
+        match resolver_result {
+            Ok(Ok(addrs)) => {
+                self.clear_system_fault("resolver_failed");
+                self.resolver_addr = Some(addrs.v6);
+            }
+            Ok(Err(e)) => {
+                error!(error = %e, "resolver startup failed this tick; no workload is started");
+                self.file_system_fault("resolver_failed", &format!("resolver startup failed: {e}"));
+                return true;
+            }
+            Err(_) => {
+                warn!("resolver startup timed out this tick; no workload is started");
+                self.file_system_fault("resolver_failed", "resolver startup timed out");
+                return true;
+            }
+        }
+
         // spec: RCN#reconciliation-loop
-        // --- Concurrent phase: pods ∥ volumes ∥ caddy ∥ resolver ---
-        let (pod_updates, vol_observations, caddy_result, resolver_result) = tokio::join!(
+        // --- Concurrent phase: pods ∥ volumes ∥ caddy ---
+        let (pod_updates, vol_observations, caddy_result) = tokio::join!(
             // spec: AUTO#job-completion
             // Pass written_obs so the pod phase can detect completed Jobs: if
             // container_running was previously written for a Job instance but
@@ -1155,7 +1190,6 @@ impl Reconciler {
                 &self.driver,
                 &self.db,
                 &apps,
-                &self.node_prefix,
                 &self.written_obs,
                 &self.started_jobs,
                 &self.completed_jobs,
@@ -1169,20 +1203,6 @@ impl Reconciler {
                     &*self.driver.process,
                     &self.node_prefix,
                     &self.data_dir,
-                ),
-            ),
-            // spec: DNS#resolver-lifecycle
-            tokio::time::timeout(
-                INFRA_ENSURE_TIMEOUT,
-                resolver::ensure_resolver_running(
-                    &*self.driver.container,
-                    &*self.driver.process,
-                    &self.node_prefix,
-                    &self.data_dir,
-                    &self.dns_upstreams,
-                    self.nat64_active,
-                    self.force_dns64_translation,
-                    &self.resolver_health_fail_count,
                 ),
             ),
         );
@@ -1207,22 +1227,6 @@ impl Reconciler {
         // spec: IMG#image-warming, IMG#pins, IMG#image-usage-tracking
         self.reconcile_images(running_pods_by_app.values().flatten())
             .await;
-
-        // --- Process resolver result ---
-        match resolver_result {
-            Ok(Ok(addrs)) => {
-                self.clear_system_fault("resolver_failed");
-                self.resolver_addr = Some(addrs.v6);
-            }
-            Ok(Err(e)) => {
-                error!(error = %e, "resolver startup failed this tick");
-                self.file_system_fault("resolver_failed", &format!("resolver startup failed: {e}"));
-            }
-            Err(_) => {
-                warn!("resolver startup timed out this tick");
-                self.file_system_fault("resolver_failed", "resolver startup timed out");
-            }
-        }
 
         // --- Process caddy result ---
         // spec: AUTO#ingress-and-network-repair
@@ -1666,6 +1670,13 @@ impl Reconciler {
                     .await;
                 let net_name = format!("seedling-{display_name}");
                 let _ = self.driver.container.remove_network(&net_name).await;
+                let released = net_name.clone();
+                if let Err(e) = self
+                    .db
+                    .call(move |db| crate::runtime::pod_networks::release(db, &released))
+                {
+                    tracing::warn!(%net_name, "cannot free a pod network prefix: {e}");
+                }
             }
         }
     }
@@ -2955,6 +2966,47 @@ mod tests {
         assert!(active_kinds(&oi, "demo").is_empty());
         assert!(restarted.replace_failed.is_empty());
         let _ = &mut reconciler;
+    }
+
+    // spec: DNS#resolver-lifecycle
+    #[test]
+    fn no_workload_is_started_while_the_resolver_is_not_up() {
+        // Reachable backends that cannot bring a resolver up: its container
+        // runtime fails every call, as one that has gone away mid-run does.
+        let dir = tempfile::tempdir().unwrap();
+        let container: Arc<dyn crate::system::ContainerRuntime> =
+            Arc::new(crate::system::unavailable::UnavailableContainerRuntime);
+        let process = Arc::new(crate::system::stub::StubProcessManager::new(Arc::new(
+            crate::system::stub::StubContainerRuntime::new(dir.path().join("vols")),
+        )));
+        let backends = crate::system::backends::Backends::working(container, process);
+        let system = Arc::new(crate::system::System {
+            container: backends.container(),
+            process: backends.process(),
+            proxy: Arc::new(crate::system::stub::StubNetworkProxy),
+            data_plane: Arc::new(crate::system::stub::StubDataPlane),
+            volume_store: crate::system::volume_store::VolumeStore::new(dir.path(), false).unwrap(),
+            backends,
+        });
+        let oi = crate::oi::test_support::TestOi::with_driver(system);
+        oi.call(
+            "/apps/create",
+            serde_json::json!({
+                "app": "demo",
+                "script": r#"app.deployment("web").image("docker.io/library/nginx:1.29");"#,
+            }),
+        )
+        .unwrap();
+        *oi.state.registry.read().get("demo").unwrap().phase.lock() = AppPhase::Installed;
+        let mut reconciler = test_reconciler(&oi);
+
+        assert!(oi.block_on(reconciler.tick()));
+        let held = active_kinds(&oi, "_system");
+        assert!(held.iter().any(|(k, _)| k == "resolver_failed"), "{held:?}");
+        assert!(
+            active_kinds(&oi, "demo").is_empty(),
+            "a workload was started without a healthy resolver"
+        );
     }
 
     // spec: INFRA#unavailable-backends

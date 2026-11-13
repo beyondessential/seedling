@@ -18,7 +18,7 @@ Each issue is worked on its own and committed on its own, with a test that fails
 - [x] Crash recovery and replay
 - [x] Faults out of line with the fault catalogue
 - [x] Action, shell and change-handler dispatch
-- [ ] Host startup ordering, addressing and the web listener
+- [x] Host startup ordering, addressing and the web listener
 - [ ] Resource and lifecycle behaviour the code does not enforce
 - [x] Wire, event and ACME protocol shapes
 - [ ] Operations: start action, persisted queue, unreadable state, intent-before-effect
@@ -116,3 +116,7 @@ Each is done once, in whichever issue is worked first, and the later issue notes
 - The `registry_error` split into `desired_state_unreadable` and `instance_identity_unreadable` is left to round 2 part 1; only the over-broad clear was fixed here.
 - A shell's params are validated by the same code as an action's (`validate_shell_params`), and a `volume` param is bound through `bind_volume_params`, which both dispatches use; a binding that cannot be made fails the dispatch before the closure runs. `shell.error`'s message is the reason the client is given.
 - A change handler is called with as many of `rt` and `old` as it declares, read from its definition in the script.
+- Pod network prefixes are allocated and recorded in `pod_networks` (v72), unique per resource kind, and released when the network is removed or found gone at startup; a kind holds at most 256 networks at once. A pod running with no record is left out of routing.
+- The resolver is brought up before the iteration's pods phase and stops the iteration while it is down, as NAT64 does.
+- The proxy image check already existed (`caddy-config.yml`, `check-caddy-image.sh`, the `--ignored` image test that first shows an undeclared field rejected); it was built and run here with podman and passed, so no code changed for it.
+- The web interface does not start with no daemon fingerprint in any build; `--daemon-trust-any` remains an explicit debug-build option.

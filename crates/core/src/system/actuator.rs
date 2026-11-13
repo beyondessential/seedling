@@ -28,10 +28,7 @@ use crate::{
     system::{
         System,
         priority::WorkloadStanding,
-        translate::{
-            container::{deployment_spec, job_spec, podman_args, spec_hash},
-            proxy::pod_network_prefix,
-        },
+        translate::container::{deployment_spec, job_spec, podman_args, spec_hash},
     },
 };
 
@@ -70,6 +67,11 @@ pub enum ActuateError {
     #[snafu(display("data plane: {source}"))]
     DataPlane {
         source: Box<dyn std::error::Error + Send + Sync + 'static>,
+        backtrace: snafu::Backtrace,
+    },
+    #[snafu(display("{source}"))]
+    PodNetwork {
+        source: crate::runtime::pod_networks::AllocationError,
         backtrace: snafu::Backtrace,
     },
     #[snafu(display("image {reference} not found and pull failed"))]
@@ -641,6 +643,56 @@ impl Actuator {
         Ok(())
     }
 
+    /// The /64 of the instance's pod network, allocated and recorded now if
+    /// it has none.
+    // spec: INFRA#pod-networks
+    pub(crate) fn allocate_pod_prefix(
+        &self,
+        instance: &ResourceInstance,
+    ) -> Result<ipnet::Ipv6Net, ActuateError> {
+        let node_prefix = self.node_prefix;
+        let net_name = format!("seedling-{}", instance.display_name);
+        let kind = instance.kind;
+        self.db
+            .call(move |db| {
+                crate::runtime::pod_networks::allocated_prefix(db, &node_prefix, &net_name, kind)
+            })
+            .context(PodNetworkSnafu)
+    }
+
+    /// The /64 recorded for the instance's pod network, or `None` when it has
+    /// none or the record cannot be read.
+    // spec: INFRA#pod-networks
+    pub(crate) fn recorded_pod_prefix(
+        &self,
+        instance: &ResourceInstance,
+    ) -> Option<ipnet::Ipv6Net> {
+        let node_prefix = self.node_prefix;
+        let net_name = format!("seedling-{}", instance.display_name);
+        let kind = instance.kind;
+        match self.db.call(move |db| {
+            crate::runtime::pod_networks::recorded_prefix(db, &node_prefix, &net_name, kind)
+        }) {
+            Ok(prefix) => prefix,
+            Err(e) => {
+                tracing::warn!(instance = %instance.display_name, "cannot read the pod network record: {e}");
+                None
+            }
+        }
+    }
+
+    /// Free the instance's pod network prefix, once its network is gone.
+    // spec: INFRA#pod-networks
+    pub(crate) fn release_pod_prefix(&self, instance: &ResourceInstance) {
+        let net_name = format!("seedling-{}", instance.display_name);
+        if let Err(e) = self
+            .db
+            .call(move |db| crate::runtime::pod_networks::release(db, &net_name))
+        {
+            tracing::warn!(instance = %instance.display_name, "cannot free a pod network prefix: {e}");
+        }
+    }
+
     /// Compute the spec hash that would be used if this instance were started
     /// right now. Returns `None` for resource kinds that have no container spec.
     ///
@@ -652,7 +704,9 @@ impl Actuator {
         resource: &Resource,
     ) -> Option<String> {
         let net_name = format!("seedling-{}", instance.display_name);
-        let net_prefix = pod_network_prefix(&self.node_prefix, instance);
+        // A pod network that has no recorded prefix has no container running
+        // on it to have drifted from anything.
+        let net_prefix = self.recorded_pod_prefix(instance)?;
 
         let spec = match resource {
             Resource::Deployment(dep) => {

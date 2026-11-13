@@ -75,8 +75,8 @@ async fn handle_incoming(incoming: wtransport::endpoint::IncomingSession, state:
 
     let path = session_request.path().to_owned();
 
-    // Only accept /wt path.
-    if !path.starts_with("/wt") {
+    // Only accept the /wt path, exactly: `/wtx` and `/wt/x` are other paths.
+    if !is_wt_path(&path) {
         session_request.not_found().await;
         return;
     }
@@ -354,6 +354,15 @@ fn parse_heartbeat_mode(peeked_line: &[u8]) -> Option<SafetyMode> {
     let value: serde_json::Value = serde_json::from_slice(peeked_line).ok()?;
     let raw = value.get("params")?.get("safety_mode")?.as_str();
     Some(SafetyMode::parse(raw))
+}
+
+// spec: WEB#session-establishment
+/// Whether a request path, query included, is the WebTransport session path.
+fn is_wt_path(path_with_query: &str) -> bool {
+    path_with_query
+        .split_once('?')
+        .map_or(path_with_query, |(p, _)| p)
+        == "/wt"
 }
 
 fn extract_query_param(path_with_query: &str, key: &str) -> Option<String> {

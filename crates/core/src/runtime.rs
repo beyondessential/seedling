@@ -21,6 +21,7 @@ pub mod identity;
 pub mod images;
 pub mod lifecycle;
 pub mod nat64_prefix;
+pub mod pod_networks;
 pub mod priority;
 pub mod probe;
 pub mod registries;

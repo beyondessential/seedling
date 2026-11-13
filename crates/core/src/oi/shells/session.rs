@@ -23,10 +23,7 @@ use crate::{
         registry::{DbInstanceRegistry, InstanceRegistry, RegistryError},
     },
     system::{
-        translate::{
-            container::job_spec,
-            proxy::{instance_ipv6, pod_network_prefix},
-        },
+        translate::{container::job_spec, proxy::instance_ipv6},
         types::ExecHandle,
     },
 };
@@ -395,7 +392,7 @@ pub(super) async fn abort_startup(
     streams: SessionStreams,
 ) {
     if let Some(network) = &failure.network {
-        let _ = state.container_runtime.remove_network(network).await;
+        super::remove_session_network(state, network).await;
     }
     state.shells.remove(&session_id);
     // spec: SHL#session-end
@@ -651,12 +648,14 @@ pub(super) async fn start_app_shell(
     }
 
     let net_name = format!("seedling-{}", instance.display_name);
-    let net_prefix = pod_network_prefix(&state.node_prefix, &instance);
+    let net_prefix = super::allocate_session_prefix(state, &net_name, instance.kind)
+        .map_err(|e| StartupFailure::failed(format!("create network failed: {e}"), None))?;
     if let Err(e) = state
         .container_runtime
         .create_network(&net_name, net_prefix, None)
         .await
     {
+        super::remove_session_network(state, &net_name).await;
         tracing::warn!(app = %app_name, shell = %shell_name, %net_name, "create network failed: {e}");
         return Err(StartupFailure::failed(
             format!("create network failed: {e}"),
@@ -834,7 +833,7 @@ pub(super) async fn run_to_exit(
     state.shells.remove(&session_id);
     // spec: SHL#session-end
     events.shell_exited(session_id, exit_code);
-    let _ = state.container_runtime.remove_network(&live.net_name).await;
+    super::remove_session_network(state, &live.net_name).await;
     streams.end(exit_code, None).await;
     exit_code
 }

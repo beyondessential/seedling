@@ -15,10 +15,7 @@ use crate::{
     defs::resource::ResourceKind,
     oi::state::OiState,
     runtime::identity::{InstanceId, InstanceVariant, ResourceInstance},
-    system::{
-        translate::proxy::pod_network_prefix,
-        types::{ContainerSpec, Mount, MountSource},
-    },
+    system::types::{ContainerSpec, Mount, MountSource},
 };
 
 #[derive(serde::Deserialize)]
@@ -233,12 +230,19 @@ pub(crate) async fn open_volume_shell_session(
     }
 
     let net_name = format!("seedling-{container_name}");
-    let net_prefix = pod_network_prefix(&state.node_prefix, &instance);
+    let net_prefix = match super::allocate_session_prefix(&state, &net_name, instance.kind) {
+        Ok(prefix) => prefix,
+        Err(e) => {
+            tracing::warn!(%net_name, "volume shell: allocating the pod network failed: {e}");
+            err!("internal", format!("create network failed: {e}"));
+        }
+    };
     if let Err(e) = state
         .container_runtime
         .create_network(&net_name, net_prefix, None)
         .await
     {
+        super::remove_session_network(&state, &net_name).await;
         tracing::warn!(%net_name, "volume shell: create network failed: {e}");
         err!("internal", format!("create network failed: {e}"));
     }
@@ -252,7 +256,7 @@ pub(crate) async fn open_volume_shell_session(
         Err(e) => {
             tracing::warn!("volume shell: open stdout uni: {e}");
             let _ = send.finish();
-            let _ = state.container_runtime.remove_network(&net_name).await;
+            super::remove_session_network(&state, &net_name).await;
             return;
         }
     };
@@ -264,7 +268,7 @@ pub(crate) async fn open_volume_shell_session(
         Err(e) => {
             tracing::warn!("volume shell: open stderr uni: {e}");
             let _ = send.finish();
-            let _ = state.container_runtime.remove_network(&net_name).await;
+            super::remove_session_network(&state, &net_name).await;
             return;
         }
     };
@@ -294,7 +298,7 @@ pub(crate) async fn open_volume_shell_session(
     )
     .await
     {
-        let _ = state.container_runtime.remove_network(&net_name).await;
+        super::remove_session_network(&state, &net_name).await;
         return;
     }
     let streams = SessionStreams {

@@ -15,7 +15,7 @@ use crate::{
     system::{
         System,
         priority::WorkloadStanding,
-        translate::proxy::{instance_ipv6, pod_network_prefix},
+        translate::proxy::instance_ipv6,
         types::{ActiveState, TransientRestart, TransientUnitSpec},
     },
 };
@@ -296,7 +296,7 @@ impl Actuator {
 
         // Set up volumes and network concurrently — neither depends on the other.
         let net_name = pod_network_name(instance);
-        let net_prefix = pod_network_prefix(&self.node_prefix, instance);
+        let net_prefix = self.allocate_pod_prefix(instance)?;
 
         let ((), bridge_name) = tokio::try_join!(
             ensure_volumes(&self.driver, volumes),
@@ -476,6 +476,8 @@ impl Actuator {
                 .await
                 .context(ContainerSnafu)?;
         }
+        // The network is gone, so its prefix is free for another.
+        self.release_pod_prefix(instance);
 
         for vol in anon_volumes {
             if let Some(host_path) = &vol.host_path {

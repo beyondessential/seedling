@@ -31,6 +31,28 @@ pub async fn sweep_orphaned_workloads(
     remove_orphaned_networks(container).await;
 }
 
+/// Free the prefix of each pod network that no longer exists.
+///
+/// A network removed while the daemon was not running leaves its allocation
+/// held. A listing that cannot be read frees nothing: a network that could not
+/// be seen is not one that is gone.
+// spec: INFRA#pod-networks
+pub async fn forget_removed_pod_networks(
+    container: &dyn ContainerRuntime,
+    db: &crate::runtime::db::DbHandle,
+) {
+    let existing: Vec<String> = match container.list_networks("seedling-").await {
+        Ok(nets) => nets.into_iter().map(|n| n.name).collect(),
+        Err(e) => {
+            tracing::warn!(error = %e, "could not list pod networks; keeping every recorded prefix");
+            return;
+        }
+    };
+    if let Err(e) = db.call(move |db| crate::runtime::pod_networks::retain_only(db, &existing)) {
+        tracing::warn!(error = %e, "could not free the prefixes of removed pod networks");
+    }
+}
+
 async fn remove_orphaned_containers(
     container: &dyn ContainerRuntime,
     known_apps: &HashSet<AppName>,
@@ -222,5 +244,33 @@ mod tests {
         sweep_orphaned_workloads(&rt, &HashSet::new()).await;
 
         assert_eq!(network_names(&rt).await.len(), 2);
+    }
+
+    // spec: INFRA#pod-networks
+    #[tokio::test]
+    async fn prefixes_of_networks_that_are_gone_are_freed_and_an_unreadable_listing_frees_none() {
+        let rt = runtime();
+        let db = crate::runtime::db::DbHandle::open_in_memory().unwrap();
+        db.call(|db| {
+            crate::runtime::pod_networks::allocate(db, "seedling-kept", 4).unwrap();
+            crate::runtime::pod_networks::allocate(db, "seedling-gone", 4).unwrap();
+        });
+        network(&rt, "seedling-kept").await;
+
+        forget_removed_pod_networks(&rt, &db).await;
+        let held = |name: &'static str| {
+            db.call(move |db| {
+                crate::runtime::pod_networks::recorded(db, name)
+                    .unwrap()
+                    .is_some()
+            })
+        };
+        assert!(held("seedling-kept"));
+        assert!(!held("seedling-gone"));
+
+        // With the runtime unreachable nothing can be said to be gone.
+        let down = crate::system::unavailable::UnavailableContainerRuntime;
+        forget_removed_pod_networks(&down, &db).await;
+        assert!(held("seedling-kept"));
     }
 }

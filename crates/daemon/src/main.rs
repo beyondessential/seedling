@@ -561,12 +561,18 @@ async fn main() {
 
         let driver_ref = Arc::clone(&driver);
         tokio::task::block_in_place(|| {
-            tokio::runtime::Handle::current().block_on(
+            tokio::runtime::Handle::current().block_on(async {
                 seedling_core::system::startup_cleanup::sweep_orphaned_workloads(
                     &*driver_ref.container,
                     &known_apps,
-                ),
-            )
+                )
+                .await;
+                seedling_core::system::startup_cleanup::forget_removed_pod_networks(
+                    &*driver_ref.container,
+                    &db,
+                )
+                .await;
+            })
         });
     }
 

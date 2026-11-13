@@ -110,6 +110,10 @@ pub(crate) enum CaddyStartupError {
 
 fn caddy_db_open(data_dir: &std::path::Path) -> Result<rusqlite::Connection, rusqlite::Error> {
     let conn = rusqlite::Connection::open(data_dir.join("seedling.db"))?;
+    // spec: INFRA#database
+    // Another connection holds the write lock for moments at a time; waiting
+    // for it is not a failure.
+    conn.busy_timeout(std::time::Duration::from_secs(5))?;
     conn.execute_batch("PRAGMA journal_mode=WAL;")?;
     Ok(conn)
 }
@@ -670,4 +674,18 @@ pub(crate) async fn ensure_caddy_running(
     write_active_container(&conn, &active).context(DbSnafu)?;
 
     Ok(addrs)
+}
+
+#[cfg(test)]
+mod db_tests {
+    // spec: INFRA#database
+    #[test]
+    fn the_proxys_database_connection_waits_for_a_lock() {
+        let dir = tempfile::tempdir().unwrap();
+        let conn = super::caddy_db_open(dir.path()).unwrap();
+        let ms: i64 = conn
+            .query_row("PRAGMA busy_timeout", [], |r| r.get(0))
+            .unwrap();
+        assert!(ms > 0);
+    }
 }
