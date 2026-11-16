@@ -10,11 +10,6 @@ use crate::{
     system::System,
 };
 
-/// Run autonomous image GC at most once per this interval. Matches the
-/// background GC cadence (see `runtime::gc::GcConfig::interval`).
-// spec: IMG#image-garbage-collection
-const GC_INTERVAL: Duration = Duration::from_secs(60 * 60);
-
 /// Retain images for this long without observed use before autonomous GC
 /// is allowed to remove them.
 // spec: IMG#image-garbage-collection
@@ -198,12 +193,13 @@ impl Reconciler {
     }
 
     // spec: IMG#image-garbage-collection
+    /// Collect images once per collection interval.
     async fn maybe_run_image_gc(&self, driver: &Arc<System>, db: &DbHandle) {
         let now = std::time::Instant::now();
         {
             let mut guard = self.image_phase_state.last_gc.lock().await;
             match *guard {
-                Some(last) if now.duration_since(last) < GC_INTERVAL => return,
+                Some(last) if now.duration_since(last) < self.instance_gc.interval => return,
                 _ => *guard = Some(now),
             }
         }
@@ -351,6 +347,32 @@ mod tests {
 
         rt.block_on(reconciler.maybe_run_image_gc(&reconciler.driver, &reconciler.db));
         assert_eq!(image_count(&rt, &oi), 0);
+    }
+
+    // spec: IMG#image-garbage-collection
+    #[test]
+    fn collection_runs_once_per_the_configured_interval() {
+        let oi = TestOi::new();
+        let (mut reconciler, rt) = unused_image(&oi);
+        reconciler.instance_gc.interval = Duration::from_secs(3600);
+        rt.block_on(reconciler.maybe_run_image_gc(&reconciler.driver, &reconciler.db));
+        assert_eq!(image_count(&rt, &oi), 0);
+
+        rt.block_on(oi.state.container_runtime.pull_image(REF)).unwrap();
+        rt.block_on(reconciler.reconcile_images(std::iter::empty()));
+        oi.state
+            .db
+            .call(|db| {
+                db.conn
+                    .execute("UPDATE image_tracking SET last_used_at = 0", [])
+            })
+            .unwrap();
+        rt.block_on(reconciler.maybe_run_image_gc(&reconciler.driver, &reconciler.db));
+        assert_eq!(image_count(&rt, &oi), 1, "still inside the interval");
+
+        reconciler.instance_gc.interval = Duration::ZERO;
+        rt.block_on(reconciler.maybe_run_image_gc(&reconciler.driver, &reconciler.db));
+        assert_eq!(image_count(&rt, &oi), 0, "the shorter interval has elapsed");
     }
 
     // spec: IMG#image-garbage-collection

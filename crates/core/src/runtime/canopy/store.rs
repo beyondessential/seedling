@@ -11,6 +11,9 @@ pub struct CanopySettings {
     /// What Canopy answered when asked which server the offering client's
     /// identity is enrolled as. `None` until first resolved.
     pub server_id: Option<String>,
+    /// Fingerprint of the key the offering client authenticated with when
+    /// `server_id` was resolved through it.
+    pub server_id_key: Option<String>,
     pub updated_at: i64,
     /// The last moment an offer was live, in unix seconds. `None` if none ever has been.
     pub last_offer_live_at: Option<i64>,
@@ -39,7 +42,7 @@ pub(super) fn now_secs() -> i64 {
 // spec: CNR#canopy-access
 pub fn get_settings(db: &Db) -> rusqlite::Result<CanopySettings> {
     db.conn.query_row(
-        "SELECT enabled, server_id, updated_at, last_offer_live_at, enabled_at \
+        "SELECT enabled, server_id, updated_at, last_offer_live_at, enabled_at, server_id_key \
          FROM canopy_settings WHERE singleton = 1",
         [],
         |row| {
@@ -49,6 +52,7 @@ pub fn get_settings(db: &Db) -> rusqlite::Result<CanopySettings> {
             Ok(CanopySettings {
                 enabled: row.get::<_, i64>(0)? != 0,
                 server_id: server_id.filter(|s| !s.is_empty()),
+                server_id_key: row.get(5)?,
                 updated_at: row.get(2)?,
                 last_offer_live_at: row.get(3)?,
                 enabled_at: row.get(4)?,
@@ -152,20 +156,43 @@ pub fn list_apps(db: &Db) -> rusqlite::Result<Vec<CanopyApp>> {
 }
 
 // spec: CNR#server-identity
-/// Cache the server identifier Canopy resolved, so the resolution is not
+/// Cache the server identifier Canopy resolved through the offering client
+/// that authenticated with the key `key_fingerprint`, so the resolution is not
 /// repeated on every report.
 ///
 /// Deliberately leaves `updated_at` alone. That field is part of the settings
 /// surface and reports when an operator last changed the setting; the runtime
 /// refreshing its own cache is not such a change, and stamping it here would
 /// have the interface report a configuration change that never happened.
-pub fn set_server_id(db: &Db, server_id: Option<&str>) -> rusqlite::Result<()> {
-    let stored = server_id.map(str::trim).filter(|s| !s.is_empty());
+pub fn cache_server_id(db: &Db, server_id: &str, key_fingerprint: &str) -> rusqlite::Result<()> {
     db.conn.execute(
-        "UPDATE canopy_settings SET server_id = ?1 WHERE singleton = 1",
-        params![stored],
+        "UPDATE canopy_settings SET server_id = ?1, server_id_key = ?2 WHERE singleton = 1",
+        params![server_id.trim(), key_fingerprint],
     )?;
     Ok(())
+}
+
+// spec: CNR#server-identity
+/// Forget the cached server identifier, so the next report resolves it again.
+pub fn discard_server_id(db: &Db) -> rusqlite::Result<()> {
+    db.conn.execute(
+        "UPDATE canopy_settings SET server_id = NULL, server_id_key = NULL WHERE singleton = 1",
+        [],
+    )?;
+    Ok(())
+}
+
+impl CanopySettings {
+    // spec: CNR#server-identity
+    /// The cached server identifier, if it was resolved through a client that
+    /// authenticated with `offer_key`. A cache with no recorded key, or an
+    /// offer whose key is unknown, is not one that can be told to match.
+    pub fn server_id_for(&self, offer_key: Option<&str>) -> Option<&str> {
+        match (&self.server_id, &self.server_id_key, offer_key) {
+            (Some(id), Some(cached), Some(offer)) if cached == offer => Some(id),
+            _ => None,
+        }
+    }
 }
 
 #[cfg(test)]
@@ -209,18 +236,33 @@ mod tests {
 
     // spec: CNR#server-identity
     #[test]
-    fn a_resolved_server_id_round_trips_and_can_be_cleared() {
+    fn a_resolved_server_id_round_trips_with_its_key_and_can_be_discarded() {
         let db = db();
-        set_server_id(&db, Some("srv-123")).unwrap();
-        assert_eq!(
-            get_settings(&db).unwrap().server_id.as_deref(),
-            Some("srv-123")
-        );
+        cache_server_id(&db, "srv-123", "key-a").unwrap();
+        let settings = get_settings(&db).unwrap();
+        assert_eq!(settings.server_id.as_deref(), Some("srv-123"));
+        assert_eq!(settings.server_id_key.as_deref(), Some("key-a"));
 
-        set_server_id(&db, None).unwrap();
+        discard_server_id(&db).unwrap();
+        let settings = get_settings(&db).unwrap();
         assert!(
-            get_settings(&db).unwrap().server_id.is_none(),
-            "clearing lets the next report re-resolve"
+            settings.server_id.is_none() && settings.server_id_key.is_none(),
+            "discarding lets the next report re-resolve"
+        );
+    }
+
+    // spec: CNR#server-identity
+    #[test]
+    fn the_cache_serves_only_the_key_it_was_resolved_through() {
+        let db = db();
+        cache_server_id(&db, "srv-123", "key-a").unwrap();
+        let settings = get_settings(&db).unwrap();
+        assert_eq!(settings.server_id_for(Some("key-a")), Some("srv-123"));
+        assert_eq!(settings.server_id_for(Some("key-b")), None);
+        assert_eq!(
+            settings.server_id_for(None),
+            None,
+            "an offer whose key is unknown cannot be matched to the cache"
         );
     }
 
@@ -228,7 +270,7 @@ mod tests {
     #[test]
     fn a_blank_server_id_reads_as_unresolved() {
         let db = db();
-        set_server_id(&db, Some("   ")).unwrap();
+        cache_server_id(&db, "   ", "key-a").unwrap();
         assert!(
             get_settings(&db).unwrap().server_id.is_none(),
             "whitespace is not an identity"
@@ -245,7 +287,7 @@ mod tests {
         let after_change = get_settings(&db).unwrap().updated_at;
         assert!(after_change > 0);
 
-        set_server_id(&db, Some("srv-123")).unwrap();
+        cache_server_id(&db, "srv-123", "key-a").unwrap();
         let settings = get_settings(&db).unwrap();
         assert_eq!(settings.server_id.as_deref(), Some("srv-123"));
         assert_eq!(
@@ -258,7 +300,7 @@ mod tests {
     #[test]
     fn the_server_id_and_the_setting_do_not_disturb_each_other() {
         let db = db();
-        set_server_id(&db, Some("srv-1")).unwrap();
+        cache_server_id(&db, "srv-1", "key-a").unwrap();
         set_enabled(&db, false).unwrap();
         let settings = get_settings(&db).unwrap();
         assert!(!settings.enabled);

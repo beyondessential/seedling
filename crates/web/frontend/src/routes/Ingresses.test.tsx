@@ -52,6 +52,9 @@ const staleDiscovery: SiteIngressDiscoveryStatus = {
   providers: [
     {
       name: "tailscale",
+      healthy: false,
+      last_poll_at: "2026-07-09T10:00:00Z",
+      last_error: "tailscaled is not running",
       ingresses: [
         {
           name: "ts-shop",
@@ -136,22 +139,108 @@ describe("Ingresses", () => {
     expect(screen.getByText("↦ https://new.example.com (308)")).toBeTruthy();
     expect(screen.getByText("(no attachments)")).toBeTruthy();
 
-    // Tailscale discovery being stale surfaces the warning banner.
-    expect(screen.getByText(/Tailscale discovery is currently unhealthy/)).toBeTruthy();
   });
 
-  it("disables delete for discovered ingresses even in dangerous mode", async () => {
+  // spec: UI#operator-capabilities
+  it("warns while discovery is unhealthy and shows each provider's status", async () => {
+    renderWithSession(<Ingresses />, { fixtures: populated });
+    const warning = await screen.findByText(/Ingress discovery is unhealthy for/);
+    expect(warning.textContent).toContain("tailscale");
+    expect(warning.textContent).toContain("tailscaled is not running");
+    const status = screen.getByText("Discovery providers").closest("div")!;
+    expect(within(status).getByText("unhealthy")).toBeTruthy();
+    expect(within(status).getByText(/last polled/)).toBeTruthy();
+  });
+
+  // spec: UI#operator-capabilities
+  it("does not warn for a provider that has not polled yet, or a healthy one", async () => {
+    const providers = (healthy: boolean | null) => ({
+      providers: [{ name: "tailscale", healthy, ingresses: [] }],
+    });
+    const first = renderWithSession(<Ingresses />, {
+      fixtures: { ...populated, "/ingresses/site/discovery/status": providers(null) },
+    });
+    expect(await screen.findByText("not polled yet")).toBeTruthy();
+    expect(screen.queryByText(/Ingress discovery is unhealthy/)).toBeNull();
+    first.unmount();
     renderWithSession(<Ingresses />, {
+      fixtures: { ...populated, "/ingresses/site/discovery/status": providers(true) },
+    });
+    expect(await screen.findByText("healthy")).toBeTruthy();
+    expect(screen.queryByText(/Ingress discovery is unhealthy/)).toBeNull();
+  });
+
+  const deleteButton = (name: string) =>
+    rowOf(name).querySelector('[data-testid="DeleteOutlineOutlinedIcon"]')!.closest("button") as HTMLButtonElement;
+
+  // spec: UI#operator-capabilities
+  it("offers to delete a stale discovered ingress but not one its provider still reports", async () => {
+    const live: SiteIngress = { ...discoveredIngress, name: "ts-live", stale: false };
+    renderWithSession(<Ingresses />, {
+      fixtures: { ...populated, "/ingresses/site/list": [manualIngress, discoveredIngress, live] },
+      safetyMode: "dangerous",
+    });
+    await screen.findByText("ts-shop");
+    expect(deleteButton("ts-shop").disabled).toBe(false);
+    expect(deleteButton("ts-live").disabled).toBe(true);
+  });
+
+  // spec: UI#operator-capabilities
+  it("deletes a stale discovered ingress after confirmation", async () => {
+    const { request } = renderWithSession(<Ingresses />, {
       fixtures: populated,
       safetyMode: "dangerous",
     });
     await screen.findByText("ts-shop");
-    const row = rowOf("ts-shop");
-    const deleteBtn = row.querySelector(
-      '[data-testid="DeleteOutlineOutlinedIcon"]',
-    )?.closest("button");
-    expect(deleteBtn).not.toBeNull();
-    expect((deleteBtn as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.click(deleteButton("ts-shop"));
+    const dialog = await screen.findByRole("dialog");
+    fireEvent.click(within(dialog).getByRole("button", { name: "Delete" }));
+    await waitFor(() =>
+      expect(request.mock.calls.filter(([m]) => m === "/ingresses/site/delete").map(([, p]) => p)).toEqual([
+        { name: "ts-shop" },
+      ]),
+    );
+  });
+
+  // spec: UI#operator-capabilities
+  it("updates a manual ingress's description and TLS mode, sending only what changed", async () => {
+    const { request } = renderWithSession(<Ingresses />, {
+      fixtures: populated,
+      safetyMode: "write",
+    });
+    await screen.findByText("old-site");
+    expect(screen.queryAllByLabelText("Edit description and TLS")).toHaveLength(1);
+    fireEvent.click(buttonByTooltip(rowOf("old-site"), "Edit description and TLS"));
+    const dialog = await screen.findByRole("dialog");
+    expect((within(dialog).getByRole("button", { name: "Save" }) as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.change(within(dialog).getByLabelText("Description"), {
+      target: { value: "Old marketing site" },
+    });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Save" }));
+    await waitFor(() =>
+      expect(request.mock.calls.filter(([m]) => m === "/ingresses/site/update").map(([, p]) => p)).toEqual([
+        { name: "old-site", description: "Old marketing site" },
+      ]),
+    );
+  });
+
+  // spec: UI#operator-capabilities
+  it("clears a description with null", async () => {
+    const described = { ...manualIngress, description: "Old marketing site" };
+    const { request } = renderWithSession(<Ingresses />, {
+      fixtures: { ...populated, "/ingresses/site/list": [described] },
+      safetyMode: "write",
+    });
+    await screen.findByText("old-site");
+    fireEvent.click(buttonByTooltip(rowOf("old-site"), "Edit description and TLS"));
+    const dialog = await screen.findByRole("dialog");
+    fireEvent.change(within(dialog).getByLabelText("Description"), { target: { value: "" } });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Save" }));
+    await waitFor(() =>
+      expect(request.mock.calls.filter(([m]) => m === "/ingresses/site/update").map(([, p]) => p)).toEqual([
+        { name: "old-site", description: null },
+      ]),
+    );
   });
 
   it("keeps the create button disabled in read mode", async () => {

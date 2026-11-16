@@ -205,7 +205,7 @@ describe("Volumes", () => {
     fireEvent.click(iconButton(row("uploads"), "Open shell"));
     expect(openVolumeShell).toHaveBeenCalledWith(
       [{ kind: "app", app: "shop", volume: "uploads" }],
-      "shop/uploads",
+      "shop.uploads",
       { readOnly: false },
     );
   });
@@ -268,6 +268,18 @@ describe("Volumes", () => {
     expect(within(dialog).getByText(/bind-mount reference/)).toBeTruthy();
     expect(within(dialog).getByRole("button", { name: "Delete reference" })).toBeTruthy();
     expect(callsTo(request, "/volumes/site/delete")).toHaveLength(0);
+  });
+
+  // spec: UI#shells
+  it("labels a held volume shell with its display name", async () => {
+    const { openVolumeShell } = renderWithSession(<Volumes />, { fixtures: populated });
+    await screen.findByText("Held Volumes");
+    fireEvent.click(iconButton(row("olddata"), "Open shell (read-only)"));
+    expect(openVolumeShell).toHaveBeenCalledWith(
+      [{ kind: "held", id: "h-1" }],
+      "held-shop-olddata",
+      { readOnly: true },
+    );
   });
 
   // spec: UI#volumes
@@ -470,7 +482,7 @@ describe("Volumes", () => {
         { kind: "site", name: "data" },
         { kind: "app", app: "shop", volume: "uploads" },
       ],
-      "2 volumes",
+      "data, shop.uploads",
       { readOnly: true },
     );
   });

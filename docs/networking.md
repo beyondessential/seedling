@@ -236,8 +236,8 @@ slot, configured, and health-checked before traffic is switched over.
 
 ### nftables ingress rules
 
-Every ingress port gets nftables DNAT rules in both the prerouting and
-output chains that redirect traffic to Caddy. For IPv6:
+Every ingress port gets nftables DNAT rules in the prerouting chain, and
+IPv6 ones in the output chain, that redirect traffic to Caddy. For IPv6:
 
     meta nfproto ipv6 fib daddr type local tcp dport <port>
     dnat ip6 to [<caddy_ipv6>]:<port>
@@ -247,9 +247,11 @@ For IPv4 (dual-stack):
     meta nfproto ipv4 fib daddr type local tcp dport <port>
     dnat ip to <caddy_ipv4>:<port>
 
-Both prerouting and output chains carry identical rules. The output
-chain rules catch host-originated traffic (e.g., `curl localhost:80`)
-via the `fib daddr type local` guard.
+The prerouting chain carries both the IPv6 and the IPv4 rules. The
+output chain carries the IPv6 rules only, for the same ports and
+protocols, so it catches host-originated IPv6 traffic (e.g.,
+`curl http://[::1]:80`) via the `fib daddr type local` guard and leaves
+host-originated IPv4 traffic alone.
 
 The `fib daddr type local` guard is essential: without it, the
 prerouting dport rule would catch Caddy's own upstream traffic to

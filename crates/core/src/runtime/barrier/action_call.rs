@@ -58,6 +58,7 @@ pub fn call_action(
     }
 
     // spec: OPS#cycles
+    // spec: ACN#action-invocation
     if let Some(stack) = action_call_stack()
         && stack.iter().any(|n| n == action_name)
     {
@@ -386,17 +387,17 @@ fn open_secret_params(cipher: &Cipher, sealed: &str) -> Result<JsonMap<String, J
     }
 }
 
+// spec: ACN#action-invocation
 fn cycle_error(action_name: &ActionName, stack: &[ActionName]) -> Box<EvalAltResult> {
-    let chain = stack
+    let start = stack.iter().position(|n| n == action_name).unwrap_or(0);
+    let chain = stack[start..]
         .iter()
-        .map(|n| n.as_str().to_string())
+        .chain(std::iter::once(action_name))
+        .map(ActionName::as_str)
         .collect::<Vec<_>>()
         .join(" → ");
-    format!(
-        "Action.invoke: cycle detected — {chain} → {} would re-enter an action already on the call stack",
-        action_name.as_str()
-    )
-    .into()
+    format!("Action.invoke: cycle detected — {chain} would re-enter an action already on the call stack")
+        .into()
 }
 
 fn validation_to_eval(e: ParamValidationError) -> Box<EvalAltResult> {
@@ -484,6 +485,22 @@ impl VolumeLookup for RtVolumeLookup<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // spec: ACN#action-invocation
+    #[test]
+    fn cycle_error_names_only_the_actions_that_form_the_cycle() {
+        let names = |list: &[&str]| -> Vec<ActionName> {
+            list.iter().map(|n| ActionName::new_unchecked(*n)).collect()
+        };
+        let stack = names(&["outer", "alpha", "bravo"]);
+        let message = cycle_error(&ActionName::new_unchecked("alpha"), &stack).to_string();
+        assert!(message.contains("alpha → bravo → alpha"), "{message}");
+        assert!(!message.contains("outer"), "{message}");
+
+        let stack = names(&["loop"]);
+        let message = cycle_error(&ActionName::new_unchecked("loop"), &stack).to_string();
+        assert!(message.contains("loop → loop"), "{message}");
+    }
 
     // spec: SEC#redaction
     #[test]

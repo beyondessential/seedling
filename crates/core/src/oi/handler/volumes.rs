@@ -655,30 +655,29 @@ fn resolve_snapshot_source(
         }
         Err(e) => return Err(internal("failed to look at the source's storage", e)),
     }
-    require_btrfs_subvolume(state, Some(source_path), "snapshotting")
+    require_btrfs_subvolume(state, source_path)
 }
 
-/// `requirements_invalid` on a host whose data directory is not on BTRFS, or
-/// when `path` is not a subvolume.
+/// `requirements_invalid` when the volume at `path` is not stored as a BTRFS
+/// subvolume, wherever the data directory is.
 // spec: SITE#site-volume-snapshots
-fn require_btrfs_subvolume(
-    state: &OiState,
-    path: Option<&std::path::Path>,
-    what: &str,
-) -> Result<(), OiError> {
-    let store = &state.driver.volume_store;
-    if !store.uses_btrfs() {
+fn require_btrfs_subvolume(state: &OiState, path: &std::path::Path) -> Result<(), OiError> {
+    if !run(state.driver.volume_store.is_subvolume(path)) {
         return Err(OiError::new(
             ErrorCode::RequirementsInvalid,
-            format!("{what} needs the data directory to be on BTRFS, and it is not"),
+            "snapshotting needs a BTRFS subvolume, and this volume is not stored as one",
         ));
     }
-    if let Some(path) = path
-        && !run(store.is_subvolume(path))
-    {
+    Ok(())
+}
+
+/// `requirements_invalid` on a host whose data directory is not on BTRFS.
+// spec: SITE#snapshot-promotion
+fn require_btrfs_data_dir(state: &OiState) -> Result<(), OiError> {
+    if !state.driver.volume_store.uses_btrfs() {
         return Err(OiError::new(
             ErrorCode::RequirementsInvalid,
-            format!("{what} needs a BTRFS subvolume, and this volume is not stored as one"),
+            "promotion needs the data directory to be on BTRFS, and it is not",
         ));
     }
     Ok(())
@@ -725,7 +724,7 @@ pub(crate) fn promote_site_volume(
     // spec: SITE#site-volume-names
     let _claim = check_site_name_free(state, &params.name)?;
 
-    require_btrfs_subvolume(state, None, "promotion")?;
+    require_btrfs_data_dir(state)?;
 
     let source_path = state.driver.volume_store.site_path(params.source.as_str());
     let def = SiteVolumeDef {

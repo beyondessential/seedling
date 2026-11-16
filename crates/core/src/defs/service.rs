@@ -20,6 +20,8 @@ pub use proxy::{
     default_content_types, resolve,
 };
 
+pub(crate) use proxy::check_route_balances;
+
 mod proxy;
 
 // spec: SVC#declaration

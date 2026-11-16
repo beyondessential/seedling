@@ -1,6 +1,7 @@
 // spec: UI#operator-capabilities
 import AddIcon from "@mui/icons-material/Add";
 import DeleteOutlineIcon from "@mui/icons-material/DeleteOutlineOutlined";
+import EditIcon from "@mui/icons-material/Edit";
 import LinkOffIcon from "@mui/icons-material/LinkOff";
 import RefreshIcon from "@mui/icons-material/Refresh";
 import {
@@ -46,6 +47,7 @@ import type {
   AttachmentProtocol,
   SiteIngress,
   SiteIngressAttachment,
+  SiteIngressDiscoveryProvider,
   SiteIngressDiscoveryStatus,
   SiteIngressTlsProvider,
 } from "../lib/types";
@@ -161,6 +163,77 @@ function CreateSiteIngressDialog({
   );
 }
 
+// spec: UI#operator-capabilities
+function EditSiteIngressDialog({
+  ingress,
+  onCancel,
+  onUpdated,
+}: {
+  ingress: SiteIngress;
+  onCancel: () => void;
+  onUpdated: () => void;
+}) {
+  const [description, setDescription] = useState(ingress.description ?? "");
+  const [tlsProvider, setTlsProvider] = useState<SiteIngressTlsProvider>(ingress.tls_provider);
+  const { execute, loading, error } = useOiAction();
+  const descriptionChanged = description.trim() !== (ingress.description ?? "");
+  const tlsChanged = tlsProvider !== ingress.tls_provider;
+  const onSubmit = async () => {
+    const params: Record<string, unknown> = { name: ingress.name };
+    if (descriptionChanged) params.description = description.trim() === "" ? null : description.trim();
+    if (tlsChanged) params.tls_provider = tlsProvider;
+    if ((await execute("/ingresses/site/update", params)) === null) return;
+    onUpdated();
+  };
+  return (
+    <Dialog open onClose={loading ? undefined : onCancel} maxWidth="sm" fullWidth>
+      <DialogTitle>Edit {ingress.name}</DialogTitle>
+      <DialogContent>
+        <Stack spacing={2} sx={{ mt: 1 }}>
+          <TextField
+            label="Description"
+            value={description}
+            onChange={(e) => setDescription(e.target.value)}
+            size="small"
+            multiline
+            minRows={1}
+            maxRows={3}
+            autoFocus
+          />
+          <FormControl size="small">
+            <InputLabel id="edit-tls-provider-label">TLS</InputLabel>
+            <Select
+              labelId="edit-tls-provider-label"
+              label="TLS"
+              value={tlsProvider}
+              onChange={(e) => setTlsProvider(e.target.value as SiteIngressTlsProvider)}
+            >
+              {TLS_PROVIDERS.map((p) => (
+                <MenuItem key={p} value={p}>
+                  {tlsLabel(p)}
+                </MenuItem>
+              ))}
+            </Select>
+          </FormControl>
+          {error && <OiErrorAlert error={error} />}
+        </Stack>
+      </DialogContent>
+      <DialogActions>
+        <Button onClick={onCancel} disabled={loading}>
+          Cancel
+        </Button>
+        <SolidActionButton
+          safety="write"
+          onClick={onSubmit}
+          disabled={loading || (!descriptionChanged && !tlsChanged)}
+        >
+          {loading ? "Saving…" : "Save"}
+        </SolidActionButton>
+      </DialogActions>
+    </Dialog>
+  );
+}
+
 function ConfirmDeleteSiteIngressDialog({
   ingress,
   onCancel,
@@ -181,8 +254,7 @@ function ConfirmDeleteSiteIngressDialog({
           <Box component="span" sx={{ fontFamily: "monospace" }}>
             {ingress.name}
           </Box>
-          ? All attachments are removed. Discovered ingresses are managed by
-          the daemon and cannot be deleted while their source is active.
+          ? All attachments are removed.
         </Typography>
       </DialogContent>
       <DialogActions>
@@ -405,18 +477,31 @@ function AttachDialog({
 function IngressRow({
   ingress,
   onAttach,
+  onEdit,
   onDetach,
   onDelete,
 }: {
   ingress: SiteIngress;
   onAttach: (i: SiteIngress) => void;
+  onEdit: (i: SiteIngress) => void;
   onDetach: (i: SiteIngress, att: SiteIngressAttachment) => void;
   onDelete: (i: SiteIngress) => void;
 }) {
   const isDiscovered = ingress.source === "discovered";
+  // spec: UI#operator-capabilities
+  // A discovered site ingress can be deleted only once its provider no longer
+  // reports it.
+  const deletable = !isDiscovered || ingress.stale;
   return (
     <TableRow>
-      <TableCell sx={{ fontFamily: "monospace" }}>{ingress.name}</TableCell>
+      <TableCell sx={{ fontFamily: "monospace" }}>
+        {ingress.name}
+        {ingress.description && (
+          <Typography variant="caption" component="div" sx={{ color: "text.secondary" }}>
+            {ingress.description}
+          </Typography>
+        )}
+      </TableCell>
       <TableCell sx={{ fontFamily: "monospace" }}>{ingress.hostname}</TableCell>
       <TableCell>
         <Stack direction="row" spacing={0.5}>
@@ -476,21 +561,75 @@ function IngressRow({
           >
             <AddIcon fontSize="small" />
           </IconActionButton>
+          {!isDiscovered && (
+            <IconActionButton
+              safety="write"
+              tooltip="Edit description and TLS"
+              onClick={() => onEdit(ingress)}
+            >
+              <EditIcon fontSize="small" />
+            </IconActionButton>
+          )}
           <IconActionButton
             safety="dangerous"
             tooltip={
-              isDiscovered
-                ? "Discovered ingresses are managed by the provider and cannot be deleted here"
-                : "Delete this manual site ingress"
+              !isDiscovered
+                ? "Delete this manual site ingress"
+                : ingress.stale
+                  ? "Delete this stale discovered site ingress"
+                  : "A discovered ingress its provider still reports cannot be deleted"
             }
             onClick={() => onDelete(ingress)}
-            disabled={isDiscovered}
+            disabled={!deletable}
           >
             <DeleteOutlineIcon fontSize="small" />
           </IconActionButton>
         </Box>
       </TableCell>
     </TableRow>
+  );
+}
+
+// spec: UI#operator-capabilities
+function DiscoveryProviders({ providers }: { providers: SiteIngressDiscoveryProvider[] }) {
+  if (providers.length === 0) return null;
+  return (
+    <Paper variant="outlined" sx={{ p: 2, mb: 2 }}>
+      <Typography variant="subtitle1" sx={{ fontWeight: 600, mb: 1 }}>
+        Discovery providers
+      </Typography>
+      <Stack spacing={1}>
+        {providers.map((p) => (
+          <Box
+            key={p.name}
+            sx={{ display: "flex", flexDirection: "row", gap: 1, alignItems: "center", flexWrap: "wrap" }}
+          >
+            <Typography sx={{ fontFamily: "monospace" }}>{p.name}</Typography>
+            <Chip
+              size="small"
+              label={p.healthy === null ? "not polled yet" : p.healthy ? "healthy" : "unhealthy"}
+              color={p.healthy === null ? "default" : p.healthy ? "success" : "error"}
+            />
+            {p.last_poll_at && (
+              <Typography variant="caption" sx={{ color: "text.secondary" }}>
+                last polled {new Date(p.last_poll_at).toLocaleString()}
+              </Typography>
+            )}
+            {p.identity && (
+              <Typography variant="caption" sx={{ color: "text.secondary", fontFamily: "monospace" }}>
+                {p.identity.hostname}
+                {p.identity.backend_running ? "" : " (not logged in)"}
+              </Typography>
+            )}
+            {p.last_error && (
+              <Typography variant="caption" sx={{ color: "error.main" }}>
+                {p.last_error}
+              </Typography>
+            )}
+          </Box>
+        ))}
+      </Stack>
+    </Paper>
   );
 }
 
@@ -508,6 +647,7 @@ export default function Ingresses() {
   } = useOiAction();
   const [createOpen, setCreateOpen] = useState(false);
   const [attachTarget, setAttachTarget] = useState<SiteIngress | null>(null);
+  const [editTarget, setEditTarget] = useState<SiteIngress | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<SiteIngress | null>(null);
 
   const refresh = () => {
@@ -536,9 +676,9 @@ export default function Ingresses() {
   const ingresses = list.data ?? [];
   const manual = ingresses.filter((i) => i.source === "manual");
   const discovered = ingresses.filter((i) => i.source === "discovered");
-  const tailscaleStaleOnly = discovery.data?.providers
-    .find((p) => p.name === "tailscale")
-    ?.ingresses.find((e) => e.stale);
+  // spec: UI#operator-capabilities
+  // A provider before its first poll reports no health and is not unhealthy.
+  const unhealthyProviders = (discovery.data?.providers ?? []).filter((p) => p.healthy === false);
 
   return (
     <Box sx={{ p: 3, maxWidth: 1400, mx: "auto" }}>
@@ -572,11 +712,20 @@ export default function Ingresses() {
         </SolidActionButton>
       </Box>
 
-      {tailscaleStaleOnly && (
+      {unhealthyProviders.length > 0 && (
         <Alert severity="warning" sx={{ mb: 2 }}>
-          Tailscale discovery is currently unhealthy (logged out or
-          unreachable). Existing attachments are preserved and will resume
-          serving once tailscaled comes back.
+          Ingress discovery is unhealthy for{" "}
+          {unhealthyProviders.map((p) => p.name).join(", ")}
+          {unhealthyProviders.some((p) => p.last_error) && (
+            <>
+              {": "}
+              {unhealthyProviders
+                .filter((p) => p.last_error)
+                .map((p) => `${p.name}: ${p.last_error}`)
+                .join("; ")}
+            </>
+          )}
+          . Existing attachments are preserved.
         </Alert>
       )}
       {detachError && (
@@ -600,6 +749,8 @@ export default function Ingresses() {
         </Box>
       )}
 
+      {discovery.data && <DiscoveryProviders providers={discovery.data.providers} />}
+
       {list.loading ? (
         <CircularProgress />
       ) : (
@@ -609,15 +760,17 @@ export default function Ingresses() {
             description="Operator-defined ingresses, e.g. for URL migration redirects."
             ingresses={manual}
             onAttach={setAttachTarget}
+            onEdit={setEditTarget}
             onDetach={onDetach}
             onDelete={setDeleteTarget}
           />
           <Divider />
           <Section
             title="Discovered"
-            description="Auto-managed by a provider (currently Tailscale). Operators can attach apps or redirects but cannot delete these entries."
+            description="Auto-managed by a provider (currently Tailscale). Operators can attach apps or redirects, and delete an entry once its provider no longer reports it."
             ingresses={discovered}
             onAttach={setAttachTarget}
+            onEdit={setEditTarget}
             onDetach={onDetach}
             onDelete={setDeleteTarget}
           />
@@ -643,6 +796,16 @@ export default function Ingresses() {
           }}
         />
       )}
+      {editTarget && (
+        <EditSiteIngressDialog
+          ingress={editTarget}
+          onCancel={() => setEditTarget(null)}
+          onUpdated={() => {
+            setEditTarget(null);
+            refresh();
+          }}
+        />
+      )}
       {deleteTarget && (
         <ConfirmDeleteSiteIngressDialog
           ingress={deleteTarget}
@@ -660,6 +823,7 @@ function Section({
   description,
   ingresses,
   onAttach,
+  onEdit,
   onDetach,
   onDelete,
 }: {
@@ -667,6 +831,7 @@ function Section({
   description: string;
   ingresses: SiteIngress[];
   onAttach: (i: SiteIngress) => void;
+  onEdit: (i: SiteIngress) => void;
   onDetach: (i: SiteIngress, att: SiteIngressAttachment) => void;
   onDelete: (i: SiteIngress) => void;
 }) {
@@ -703,6 +868,7 @@ function Section({
                   key={i.name}
                   ingress={i}
                   onAttach={onAttach}
+                  onEdit={onEdit}
                   onDetach={onDetach}
                   onDelete={onDelete}
                 />

@@ -269,15 +269,16 @@ pub struct VolumeParamSpec {
 /// `_filename` params for a set of logical keys.
 ///
 /// Each entry `(logical_key, spec)` produces:
-///  - a generated name of the form `seedling-op-<short-operation-id>-<key>`,
+///  - a generated name of the form `seedling-op-<operation-id>-<n>`, with the
+///    whole operation id (hyphens dropped) and `n` counting the bindings made,
 ///  - an [`OperationVolumeBinding`] entry under that generated name,
 ///  - `param["<logical_key>_volume"]` = the generated name,
 ///  - `param["<logical_key>_filename"]` = `spec.filename` when present.
 ///
-/// The generated name is derived deterministically from the operation id, so
-/// two invocations of the helper with the same operation id and keys produce
-/// the same names (useful for replay safety and debuggability) while still
-/// being unique across operations.
+/// Operation ids are unique, so a name never repeats across operations, and
+/// the count keeps one operation's bindings apart, so no name is another
+/// binding's. The name stays within the 63 characters a volume name allows
+/// whatever the keys are called.
 // spec: OPS#operation-scoped-volumes
 pub fn build_operation_volume_params<I, K>(
     operation_id: &str,
@@ -290,12 +291,12 @@ where
     I: IntoIterator<Item = (K, VolumeParamSpec)>,
     K: AsRef<str>,
 {
-    let short = &operation_id[..8.min(operation_id.len())];
+    let operation: String = operation_id.chars().filter(|c| *c != '-').collect();
     let mut out_bindings = std::collections::HashMap::new();
     let mut out_params = serde_json::Map::new();
-    for (key, spec) in bindings {
+    for (n, (key, spec)) in bindings.into_iter().enumerate() {
         let key = key.as_ref();
-        let volume_name = format!("seedling-op-{short}-{key}");
+        let volume_name = format!("seedling-op-{operation}-{n}");
         out_bindings.insert(
             volume_name.clone(),
             OperationVolumeBinding {
@@ -439,9 +440,11 @@ mod tests {
         let source_name = params["source_volume"].as_str().unwrap();
         let output_name = params["output_volume"].as_str().unwrap();
         assert_ne!(source_name, output_name);
-        assert!(source_name.starts_with("seedling-op-abcd1234-"));
-        assert!(source_name.ends_with("-source"));
-        assert!(output_name.ends_with("-output"));
+        for name in [source_name, output_name] {
+            assert!(name.starts_with("seedling-op-abcd12345678"), "{name}");
+            seedling_protocol::names::ExternalVolumeName::new(name)
+                .expect("a generated name is a valid volume name");
+        }
 
         assert_eq!(
             params["output_filename"].as_str().unwrap(),
@@ -483,5 +486,30 @@ mod tests {
             )],
         );
         assert_ne!(params_a["source_volume"], params_b["source_volume"]);
+    }
+
+    // spec: OPS#operation-scoped-volumes
+    #[test]
+    fn operations_sharing_an_id_prefix_get_different_names_however_long_the_keys_are() {
+        let key = "k".repeat(61);
+        let spec = || VolumeParamSpec {
+            host_path: "/x".into(),
+            read_only: true,
+            filename: None,
+        };
+        let (_, one) = build_operation_volume_params(
+            "abcd1234-1111-4000-8000-000000000001",
+            [(key.as_str(), spec())],
+        );
+        let (_, two) = build_operation_volume_params(
+            "abcd1234-2222-4000-8000-000000000002",
+            [(key.as_str(), spec())],
+        );
+        let name = |p: &serde_json::Map<String, serde_json::Value>| {
+            p[&format!("{key}_volume")].as_str().unwrap().to_owned()
+        };
+        assert_ne!(name(&one), name(&two));
+        seedling_protocol::names::ExternalVolumeName::new(name(&one))
+            .expect("a long key does not make the name invalid");
     }
 }

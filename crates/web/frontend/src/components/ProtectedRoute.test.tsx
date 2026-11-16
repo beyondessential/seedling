@@ -80,4 +80,19 @@ describe("ProtectedRoute", () => {
     expect(screen.getByTestId("events-sidebar")).toBeTruthy();
     expect(screen.getByTestId("shells-sidebar")).toBeTruthy();
   });
+
+  // spec: UI#shells
+  it("places the shells sidebar to the left of the content and the events sidebar to its right", () => {
+    renderProtected({
+      session,
+      sidebarOpen: true,
+      shellTabs: [{ id: "s1" }] as unknown as Ctx["shellTabs"],
+    });
+    const shells = screen.getByTestId("shells-sidebar");
+    const content = screen.getByText("secret content");
+    const events = screen.getByTestId("events-sidebar");
+    const before = Node.DOCUMENT_POSITION_FOLLOWING;
+    expect(shells.compareDocumentPosition(content) & before).toBeTruthy();
+    expect(content.compareDocumentPosition(events) & before).toBeTruthy();
+  });
 });

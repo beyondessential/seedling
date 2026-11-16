@@ -231,6 +231,37 @@ pub fn runtime_holdings(db: &Db, hostnames: &[String], cache: &LeafFactsCache) -
     RuntimeHoldings { served, ordering }
 }
 
+/// The most recent acquisition error of each of `hostnames` that has one: the
+/// error of its latest issuance attempt when that attempt failed, otherwise
+/// the reason its responsible strategy last failed to produce a certificate.
+///
+/// A hostname with no error recorded is absent, and a store that could not be
+/// read is an error, so a caller does not report either as the other.
+// spec: FLT#certificate-faults
+pub fn latest_acquisition_errors(
+    db: &Db,
+    hostnames: &[String],
+) -> rusqlite::Result<BTreeMap<String, String>> {
+    let chain_rows = super::store::get_chain_rows(db, hostnames)?;
+    let mut errors = BTreeMap::new();
+    for hostname in hostnames {
+        let attempt_error = super::store::list_attempts(db, Some(hostname), 1)?
+            .into_iter()
+            .next()
+            .filter(|attempt| attempt.outcome == super::AttemptOutcome::Failure)
+            .and_then(|attempt| attempt.error);
+        let error = attempt_error.or_else(|| {
+            chain_rows
+                .get(hostname)
+                .and_then(|row| row.last_error.clone())
+        });
+        if let Some(error) = error {
+            errors.insert(hostname.clone(), error);
+        }
+    }
+    Ok(errors)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -330,6 +361,55 @@ mod tests {
         assert_eq!(
             holdings.ordering,
             Some(BTreeSet::from(["ordering.example.com".to_owned()]))
+        );
+    }
+
+    // spec: FLT#certificate-faults
+    #[test]
+    fn the_latest_acquisition_error_is_the_failed_attempts_or_the_strategys() {
+        use crate::runtime::tls::{AttemptOutcome, AttemptTrigger};
+
+        let db = Db::open_in_memory().unwrap();
+        let attempt = store::insert_attempt(&db, "failed.example.com", AttemptTrigger::Manual)
+            .unwrap();
+        store::finalize_attempt(
+            &db,
+            attempt,
+            AttemptOutcome::Failure,
+            None,
+            Some("dns challenge timed out"),
+        )
+        .unwrap();
+        store::put_chain_row(
+            &db,
+            "refused.example.com",
+            &chain::Row {
+                identity: chain::Identity::NONE,
+                step: 0,
+                since: 1,
+                open_order_since: None,
+                retry_not_before: Some(5),
+            },
+            Some("canopy refused the csr"),
+        )
+        .unwrap();
+
+        let hostnames: Vec<String> = ["failed.example.com", "refused.example.com", "quiet.example.com"]
+            .map(String::from)
+            .into();
+        let errors = latest_acquisition_errors(&db, &hostnames).unwrap();
+        assert_eq!(
+            errors,
+            BTreeMap::from([
+                (
+                    "failed.example.com".to_owned(),
+                    "dns challenge timed out".to_owned()
+                ),
+                (
+                    "refused.example.com".to_owned(),
+                    "canopy refused the csr".to_owned()
+                ),
+            ])
         );
     }
 

@@ -52,6 +52,16 @@ On first install the daemon starts immediately with sensible defaults
 (`--data-dir /var/lib/seedling`). Workloads keep running while the daemon is
 restarted, so upgrades (`apt-get upgrade`) are non-disruptive.
 
+### Garbage collection
+
+The daemon deletes stale operational records, and removes images that nothing has
+used for 30 days, once per collection interval (`--gc-interval-secs`, default
+3600). Retention is set with `--gc-retain-action-log-secs` (24 hours),
+`--gc-retain-cleared-faults-secs` (7 days), `--gc-retain-completed-operations-secs`
+(7 days), `--gc-retain-unscheduled-instances-secs` (10 minutes) and
+`--gc-retain-restart-records` (the 50 most recent restart records of each
+resource instance).
+
 ## Known host issue: AppArmor denies container signals
 
 On hosts where AppArmor mediates signals between the container stack's

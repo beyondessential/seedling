@@ -3086,7 +3086,27 @@ mod exit_code_tests {
 
 #[cfg(test)]
 mod tests {
-    use super::{DEFAULT_READY_DEADLINE_SECS, DEFAULT_TERMINATED_DEADLINE_SECS, resolve_deadline};
+    use super::{
+        DEFAULT_READY_DEADLINE_SECS, DEFAULT_RUNNING_DEADLINE_SECS, DEFAULT_SCHEDULED_DEADLINE_SECS,
+        DEFAULT_TERMINATED_DEADLINE_SECS, STOP_DEADLINE_MARGIN_SECS, resolve_deadline,
+    };
+
+    // spec: RT#barriers
+    #[test]
+    fn default_deadlines_are_tens_of_seconds_and_hours() {
+        for short in [
+            DEFAULT_SCHEDULED_DEADLINE_SECS,
+            DEFAULT_RUNNING_DEADLINE_SECS,
+            DEFAULT_READY_DEADLINE_SECS,
+        ] {
+            assert!((10..100).contains(&short), "{short}");
+        }
+        assert!(
+            (3_600..=24 * 3_600).contains(&DEFAULT_TERMINATED_DEADLINE_SECS),
+            "{DEFAULT_TERMINATED_DEADLINE_SECS}"
+        );
+        assert!(STOP_DEADLINE_MARGIN_SECS > 0);
+    }
 
     // spec: RT#barriers
     // Zero used to become `Some(0)`, which the `elapsed >= d` check trips on

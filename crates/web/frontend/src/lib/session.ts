@@ -8,13 +8,25 @@ export interface Session {
   wt: WebTransport;
 }
 
+let heldToken: string | null = null;
+
+/** The body `/connect` is sent: at most one of `token` and `password`, with a
+ *  held session token standing in for a credential the caller supplies none of. */
+// spec: WEB#authentication
+export function connectBody(credential: ConnectRequest, held: string | null): ConnectRequest {
+  if (credential.password !== undefined) return { password: credential.password };
+  const token = credential.token ?? held;
+  return token === null ? {} : { token };
+}
+
 export async function connect(credential: ConnectRequest): Promise<Session> {
+  const body = connectBody(credential, heldToken);
   let res: Response;
   try {
     res = await fetch("/connect", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(credential),
+      body: JSON.stringify(body),
     });
   } catch (e) {
     // Network-level failure (DNS, refused, TLS, abort) — the backend
@@ -24,6 +36,7 @@ export async function connect(credential: ConnectRequest): Promise<Session> {
   }
 
   if (res.status === 401) {
+    if (body.token !== undefined) heldToken = null;
     throw new AuthRequired(await authRequiredCredential(res));
   }
   if (res.status >= 500) {
@@ -34,6 +47,7 @@ export async function connect(credential: ConnectRequest): Promise<Session> {
   }
 
   const data = (await res.json()) as ConnectResponse;
+  heldToken = data.token;
   const wt = await openWebTransport(data.wt_url, data.cert_hashes);
   const client = new WtClient(wt, data.actor);
   return { token: data.token, actor: data.actor, client, wt };
@@ -71,6 +85,11 @@ export function sessionDropped(heartbeat: unknown): boolean {
     heartbeat !== null &&
     (heartbeat as { alive?: unknown }).alive === false
   );
+}
+
+/** Forget the held session token, as when the operator signs out. */
+export function forgetSessionToken() {
+  heldToken = null;
 }
 
 export class BackendUnreachable extends Error {

@@ -20,7 +20,7 @@ use seedling_protocol::names::{AppName, ExternalVolumeName, SiteIngressName};
 
 /// External volume mapping name prefixes the daemon claims.
 ///
-/// Operation-scoped volume bindings are named `seedling-op-<operation>-<key>`
+/// Operation-scoped volume bindings are named `seedling-op-` followed by the operation and a count
 /// and resolved before the mapping table, so a mapping an operator made under
 /// one of these names would be shadowed, or would shadow a binding.
 pub const RESERVED_EXTERNAL_VOLUME_PREFIXES: &[&str] = &["seedling-op-"];

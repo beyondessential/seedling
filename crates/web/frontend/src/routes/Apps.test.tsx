@@ -73,6 +73,45 @@ describe("Apps", () => {
     expect(screen.getByText("2 faults")).toBeTruthy();
   });
 
+  // spec: UI#app-status
+  it("shows a fault count in the fault colour beside the status, and none at zero faults", async () => {
+    renderWithSession(<Apps />, {
+      fixtures: {
+        "/apps/list": [
+          { name: "shop", status: "running", fault_count: 2 },
+          { name: "blog", status: "degraded", fault_count: 0 },
+        ],
+        "/connected-clients/list": noClients,
+      },
+    });
+    const count = await screen.findByText("2 faults");
+    expect(count.closest(".MuiChip-root")!.className).toContain("MuiChip-colorError");
+    const cell = count.closest("td")!;
+    expect(within(cell).getByText("running")).toBeTruthy();
+    expect(screen.queryByText(/^0 fault/)).toBeNull();
+    expect(within(screen.getByText("blog").closest("tr")!).queryByText(/fault/)).toBeNull();
+  });
+
+  // spec: UI#priority
+  it("marks a raised or lowered priority beside the status by colour, and marks none at normal", async () => {
+    renderWithSession(<Apps />, {
+      fixtures: {
+        "/apps/list": [
+          { name: "shop", status: "running", priority: "high" },
+          { name: "blog", status: "running", priority: "low" },
+          { name: "wiki", status: "running", priority: "normal" },
+        ],
+        "/connected-clients/list": noClients,
+      },
+    });
+    const high = await screen.findByText("high priority");
+    const low = screen.getByText("low priority");
+    expect(high.closest(".MuiChip-root")!.className).toContain("MuiChip-colorSuccess");
+    expect(low.closest(".MuiChip-root")!.className).toContain("MuiChip-colorWarning");
+    expect(within(high.closest("td")!).getByText("running")).toBeTruthy();
+    expect(within(screen.getByText("wiki").closest("tr")!).queryByText(/priority/)).toBeNull();
+  });
+
   it("shows an error alert when the app list query fails", async () => {
     renderWithSession(<Apps />, {
       fixtures: {

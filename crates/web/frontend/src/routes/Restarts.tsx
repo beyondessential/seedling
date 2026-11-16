@@ -57,7 +57,7 @@ export default function Restarts() {
     "/restarts/list",
     params,
   );
-  const { data: apps } = useOiQuery<AppSummary[]>("/apps/list", {});
+  const { data: apps, error: appsError } = useOiQuery<AppSummary[]>("/apps/list", {});
   const {
     data: settings,
     error: settingsError,
@@ -106,6 +106,7 @@ export default function Restarts() {
       </Typography>
 
       {settingsError && <OiErrorAlert error={settingsError} />}
+      {appsError && <OiErrorAlert error={appsError} />}
       {mutateError && <OiErrorAlert error={mutateError} />}
 
       <Paper variant="outlined" sx={{ p: 2, mb: 3 }}>

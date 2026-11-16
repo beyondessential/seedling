@@ -131,7 +131,7 @@ fn zero_try_duration_survives_resolution() {
 
 // spec: HTTP#balancing
 #[test]
-fn zero_interval_meeting_a_nonzero_duration_across_levels_is_not_emitted() {
+fn zero_interval_meeting_a_nonzero_duration_across_levels_resolves_as_spinning() {
     // Neither level is invalid on its own, so parsing cannot catch this.
     let service = ProxySettings {
         balance: BalanceSettings {
@@ -150,7 +150,28 @@ fn zero_interval_meeting_a_nonzero_duration_across_levels_is_not_emitted() {
     };
     let r = resolve(&service, Some(&route));
     assert_eq!(r.balance.try_duration_secs, 10.0);
-    assert_eq!(r.balance.interval_secs, DEFAULT_INTERVAL_SECS);
+    assert_eq!(r.balance.interval_secs, 0.0, "no fallback to the default");
+    assert!(r.balance.spins());
+    assert!(!resolve(&service, None).balance.spins());
+}
+
+// spec: HTTP#compression
+#[test]
+fn default_content_types_cover_text_and_text_like_media() {
+    let types = default_content_types();
+    for expected in [
+        "text/*",
+        "application/json*",
+        "application/javascript*",
+        "application/xml*",
+        "application/xhtml+xml*",
+        "image/svg+xml*",
+        "font/ttf*",
+        "font/otf*",
+        "application/vnd.ms-fontobject*",
+    ] {
+        assert!(types.iter().any(|t| t == expected), "{expected}");
+    }
 }
 
 // ---------------------------------------------------------------------------

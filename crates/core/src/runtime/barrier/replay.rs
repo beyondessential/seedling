@@ -578,13 +578,7 @@ pub fn run_operation<W: WorldStateOracle + 'static>(
         // spec: ACN#start-action
         "__bsl_rt.start(__bsl_app)"
     } else if is_param_change {
-        match change_handler_arity {
-            Some(0) => "__bsl_closure.call()",
-            Some(1) => "__bsl_closure.call(__bsl_rt)",
-            // Two, or more: a closure declaring more than two parameters
-            // fails when called, as it must.
-            _ => "__bsl_closure.call(__bsl_rt, __bsl_old_app)",
-        }
+        change_handler_call_script(change_handler_arity)
     } else if is_shell {
         "__bsl_closure.call(__bsl_rt, __bsl_shell, __bsl_param)"
     } else {
@@ -696,9 +690,22 @@ fn check_idempotent(fresh: &AppDef, stored: &AppDef) {
 #[cfg(test)]
 mod tests;
 
+/// The script that calls a change handler declaring `arity` parameters with as
+/// many of `rt` and `old` as it takes. A handler whose arity is unknown, or
+/// above two, is called with both, so one declaring more than two fails when
+/// called, as it must.
+// spec: PARAM#change-handlers
+pub(crate) fn change_handler_call_script(arity: Option<usize>) -> &'static str {
+    match arity {
+        Some(0) => "__bsl_closure.call()",
+        Some(1) => "__bsl_closure.call(__bsl_rt)",
+        _ => "__bsl_closure.call(__bsl_rt, __bsl_old_app)",
+    }
+}
+
 /// How many parameters the closure `closure` declares, not counting the
 /// variables it captured, or `None` if `ast` does not hold it.
-fn closure_arity(ast: &rhai::AST, closure: &rhai::FnPtr) -> Option<usize> {
+pub(crate) fn closure_arity(ast: &rhai::AST, closure: &rhai::FnPtr) -> Option<usize> {
     ast.iter_functions()
         .find(|f| f.name == closure.fn_name())
         .map(|f| f.params.len().saturating_sub(closure.curry().len()))

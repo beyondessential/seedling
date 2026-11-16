@@ -71,11 +71,23 @@ fn invalid_termination_combo_throws() {
         app.service("web").ingress("example.com", 443).tls(Terminate.Https, Output.Tcp);
     "#,
     );
+    let message = err.to_string();
     assert!(
-        err.to_string()
-            .contains("invalid termination/output combination"),
+        message.contains("invalid termination/output combination"),
         "expected combo error, got: {err}"
     );
+    assert!(
+        message.contains("Terminate.Https + Output.Tcp"),
+        "pairing supplied: {message}"
+    );
+    for valid in [
+        "Terminate.Tls + Output.Tcp",
+        "Terminate.Dtls + Output.Udp",
+        "Terminate.Https + Output.Http1",
+        "Terminate.Https + Output.Http2",
+    ] {
+        assert!(message.contains(valid), "valid pairing {valid}: {message}");
+    }
 }
 
 // spec: ING#redirect-to-https

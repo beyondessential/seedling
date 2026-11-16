@@ -14,14 +14,6 @@ use serde::Serialize;
 
 use crate::runtime::db::Db;
 
-/// Most-recent restart records kept per instance.
-///
-/// The bound is per instance rather than global, and applied on write rather
-/// than by rate-limiting what gets recorded: a hard crash loop produces rows
-/// fastest exactly when the per-attempt exit codes are the diagnostic.
-// spec: GC#restart-records
-pub const RETAIN_PER_INSTANCE: usize = 50;
-
 /// Why a restart happened.
 ///
 /// Deliberately not "who performed it". On Linux systemd actions recovery
@@ -155,14 +147,22 @@ pub struct RestartSubject {
 }
 
 // spec: AUTO#restart-record
-/// Record one restart. `at_ms` lets a caller recording a burst of counter
-/// deltas stamp them apart rather than collapsing them onto one instant.
+/// Record one restart, then keep only the `retain` most recent records of the
+/// instance.
+///
+/// The bound is per instance rather than global, and applied on write rather
+/// than by rate-limiting what gets recorded: a hard crash loop produces rows
+/// fastest exactly when the per-attempt exit codes are the diagnostic.
+/// `at_ms` lets a caller recording a burst of counter deltas stamp them apart
+/// rather than collapsing them onto one instant.
+// spec: GC#restart-records
 pub fn record(
     db: &Db,
     subject: &RestartSubject,
     cause: Cause,
     exit: Option<ExitStatus>,
     at_ms: i64,
+    retain: usize,
 ) -> rusqlite::Result<i64> {
     db.conn.execute(
         "INSERT INTO instance_restarts
@@ -182,7 +182,7 @@ pub fn record(
         ],
     )?;
     let id = db.conn.last_insert_rowid();
-    prune_instance(db, &subject.instance_id, RETAIN_PER_INSTANCE)?;
+    prune_instance(db, &subject.instance_id, retain)?;
     Ok(id)
 }
 

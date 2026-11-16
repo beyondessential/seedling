@@ -87,6 +87,31 @@ describe("AppDetail params", () => {
     );
   });
 
+  // spec: UI#operator-capabilities
+  it("plans a param change without applying it", async () => {
+    const { request } = mount(
+      {
+        ...baseFixtures(makeDetail()),
+        "/apps/plan": {
+          diff: [],
+          on_change_would_fire: ["domain"],
+          errors: [],
+          rejections: [{ name: "domain", reason: "must be a hostname" }],
+        },
+      },
+      "write",
+    );
+    expect(await screen.findByText("domain")).toBeTruthy();
+    fireEvent.click(screen.getAllByRole("button", { name: "Edit" })[0]);
+    fireEvent.change(screen.getByDisplayValue("example.com"), { target: { value: "x" } });
+    fireEvent.click(screen.getByRole("button", { name: "Plan this change" }));
+    expect(await screen.findByText(/must be a hostname/)).toBeTruthy();
+    expect(callsTo(request, "/apps/plan")).toEqual([
+      ["/apps/plan", { app: "myapp", proposed_params: [{ name: "domain", value: "x" }] }],
+    ]);
+    expect(callsTo(request, "/apps/params/set")).toEqual([]);
+  });
+
   it("adds a new param through the add row", async () => {
     const { request } = mount(baseFixtures(makeDetail()), "write");
     expect(await screen.findByText("domain")).toBeTruthy();
@@ -229,20 +254,61 @@ describe("AppDetail resources", () => {
   });
 
   // spec: UI#app-status
-  it("shows a healthy healthcheck indicator for a ready instance", async () => {
+  it("shows the healthcheck's on_failure and check state beside the lifecycle state", async () => {
     const dep = makeWebDeployment();
     if (dep.def?.kind === "deployment") dep.def.container.healthcheck = healthcheck;
+    dep.instances = [{ ...dep.instances[0], health: "passing" }];
     mount(baseFixtures(makeDetail({ resources: [dep] })));
-    expect(await screen.findByText("healthy")).toBeTruthy();
-    // The declared healthcheck and its on_failure response are visible on the
-    // resource definition chip.
-    expect(
-      screen.getByText("healthcheck (command), restart on failure"),
-    ).toBeTruthy();
+    const indicator = await screen.findByText("healthcheck: healthy · replace");
+    const chip = indicator.closest(".MuiChip-root")!;
+    expect(chip.className).toContain("MuiChip-colorSuccess");
+    expect(chip.getAttribute("tabindex")).toBe("0");
+    expect(chip.closest("td")!.textContent).toContain("ready");
+    expect(screen.getByText("healthcheck (command), replace on failure")).toBeTruthy();
   });
 
   // spec: UI#app-status
-  it("shows an unhealthy indicator when a health_check_failed fault targets the instance", async () => {
+  it("colours a failing check in the error colour and a starting check in the warning colour", async () => {
+    const colourOf = async (health: "failing" | "starting") => {
+      const dep = makeWebDeployment();
+      if (dep.def?.kind === "deployment") dep.def.container.healthcheck = healthcheck;
+      dep.instances = [{ ...dep.instances[0], health }];
+      const view = mount(baseFixtures(makeDetail({ resources: [dep] })));
+      const text = await screen.findByText(
+        health === "failing"
+          ? "healthcheck: unhealthy · replace"
+          : "healthcheck: starting · replace",
+      );
+      const cls = text.closest(".MuiChip-root")!.className;
+      view.unmount();
+      return cls;
+    };
+    expect(await colourOf("failing")).toContain("MuiChip-colorError");
+    expect(await colourOf("starting")).toContain("MuiChip-colorWarning");
+  });
+
+  // spec: UI#app-status
+  it("reveals the kind, on_failure and a truncated command on hover", async () => {
+    const dep = makeWebDeployment();
+    if (dep.def?.kind === "deployment") {
+      dep.def.container.healthcheck = {
+        ...healthcheck,
+        cmd: ["sh", "-c", "x".repeat(200)],
+      };
+    }
+    dep.instances = [{ ...dep.instances[0], health: "passing" }];
+    mount(baseFixtures(makeDetail({ resources: [dep] })));
+    const chip = (await screen.findByText(/^healthcheck: healthy/)).closest(".MuiChip-root")!;
+    fireEvent.mouseOver(chip);
+    const tooltip = await screen.findByRole("tooltip");
+    expect(tooltip.textContent).toContain("healthcheck (command)");
+    expect(tooltip.textContent).toContain("on_failure: replace");
+    expect(tooltip.textContent).toContain("…");
+    expect(tooltip.textContent!.length).toBeLessThan(160);
+  });
+
+  // spec: UI#app-status
+  it("shows a failing check from the instance's health, not from its faults alone", async () => {
     const dep = makeWebDeployment({
       faults: [
         makeFault({
@@ -254,7 +320,30 @@ describe("AppDetail resources", () => {
     });
     if (dep.def?.kind === "deployment") dep.def.container.healthcheck = healthcheck;
     mount(baseFixtures(makeDetail({ resources: [dep] })));
-    expect(await screen.findByText("unhealthy")).toBeTruthy();
+    expect(await screen.findByText("healthcheck: unhealthy · replace")).toBeTruthy();
+  });
+
+  // spec: UI#priority
+  it("shows a Deployment's declared priority beside its lifecycle state in the app priority colours", async () => {
+    const dep = makeWebDeployment({ priority: "elevated" });
+    const first = mount(baseFixtures(makeDetail({ resources: [dep] })));
+    const mark = (await screen.findByText("elevated")).closest(".MuiChip-root")!;
+    expect(mark.className).toContain("MuiChip-colorSuccess");
+    expect(mark.closest("td")!.textContent).toContain("ready");
+    expect(mark.closest("td")).toBe(screen.getByText("ready").closest("td"));
+
+    first.unmount();
+
+    mount(baseFixtures(makeDetail({ resources: [makeWebDeployment({ priority: "low" })] })));
+    const lowMark = (await screen.findByText("low")).closest(".MuiChip-root")!;
+    expect(lowMark.className).toContain("MuiChip-colorWarning");
+  });
+
+  // spec: UI#priority
+  it("does not mark a Deployment declared at normal", async () => {
+    mount(baseFixtures(makeDetail({ resources: [makeWebDeployment({ priority: "normal" })] })));
+    await screen.findByText("web-0");
+    expect(screen.queryByText("normal")).toBeNull();
   });
 });
 

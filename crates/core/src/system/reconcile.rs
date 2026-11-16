@@ -3407,6 +3407,7 @@ mod tests {
             crate::runtime::gc::InstanceGcConfig {
                 interval: std::time::Duration::from_secs(3600),
                 retain: std::time::Duration::from_secs(3600),
+                retain_restart_records: 50,
             },
         )
     }

@@ -19,6 +19,7 @@ function ShellInstance({ tab, active }: { tab: ShellTab; active: boolean }) {
   const { session, uniRouter, closeShell } = useSessionContext();
   const [exitCode, setExitCode] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [attempt, setAttempt] = useState(0);
 
   // Refit when becoming active so xterm knows the correct size.
   useEffect(() => {
@@ -120,7 +121,9 @@ function ShellInstance({ tab, active }: { tab: ShellTab; active: boolean }) {
         void pumpStream(stderr);
 
         exitPromise.then((code) => {
-          if (!closed) setExitCode(code);
+          if (closed) return;
+          sessionIdRef.current = null;
+          setExitCode(code);
         });
       })
       .catch((e: unknown) => {
@@ -139,11 +142,15 @@ function ShellInstance({ tab, active }: { tab: ShellTab; active: boolean }) {
       }
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [session, uniRouter]);
+  }, [session, uniRouter, attempt]);
 
+  // spec: UI#shells
+  // Reopening runs the same open again, under the mounts the tab was opened
+  // with, so the safety mode at first open keeps governing them.
   const handleReopen = () => {
     setExitCode(null);
     setError(null);
+    setAttempt((n) => n + 1);
   };
 
   return (
@@ -188,7 +195,7 @@ function ShellInstance({ tab, active }: { tab: ShellTab; active: boolean }) {
                 "&:hover": { borderColor: "#aaa" },
               }}
             >
-              Close tab
+              Close
             </Box>
           </Box>
         </Box>

@@ -106,11 +106,6 @@ pub fn take_array_of<T: std::any::Any + Clone>(
         .collect()
 }
 
-/// Range-check an integer a builder already received as `i64`, or throw.
-///
-/// The builders' rhai signatures take `i64` because that is rhai's integer
-/// type; the domain is narrower. Without the check, `pids_limit(4294967297)`
-/// wraps to 1 and the container cannot start a workload.
 /// Refuse a map carrying a key other than `allowed`, naming the keys it does
 /// not take and the ones it does.
 pub fn reject_unknown_keys(
@@ -128,29 +123,35 @@ pub fn reject_unknown_keys(
     }
     unknown.sort_unstable();
     Err(format!(
-        "{what} has unknown key(s) {}; it takes {}",
+        "`{what}` has unknown key(s) {}; it takes {}",
         unknown.join(", "),
         allowed.join(", ")
     )
     .into())
 }
 
+/// Range-check an integer a builder already received as `i64`, or throw.
+///
+/// The builders' rhai signatures take `i64` because that is rhai's integer
+/// type; the domain is narrower. Without the check, `pids_limit(4294967297)`
+/// wraps to 1 and the container cannot start a workload.
 pub fn take_int_in_range<T: TryFrom<i64>>(
     what: &str,
     n: i64,
     range: RangeInclusive<i64>,
 ) -> Result<T, Box<EvalAltResult>> {
-    if !range.contains(&n) {
-        return Err(format!(
+    let out_of_range = || -> Box<EvalAltResult> {
+        format!(
             "`{what}` must be between {} and {}, got {n}",
             range.start(),
             range.end()
         )
-        .into());
+        .into()
+    };
+    if !range.contains(&n) {
+        return Err(out_of_range());
     }
-    T::try_from(n).map_err(|_| -> Box<EvalAltResult> {
-        format!("`{what}` is out of range for its type, got {n}").into()
-    })
+    T::try_from(n).map_err(|_| out_of_range())
 }
 
 #[cfg(test)]
@@ -187,5 +188,80 @@ mod tests {
         let message = err.to_string();
         assert!(message.contains("`description`"), "{message}");
         assert!(message.contains("must be a string"), "{message}");
+    }
+
+    // spec: BSL#arguments
+    fn assert_names(message: &str, argument: &str, expected: &str, supplied: &str) {
+        assert!(message.contains(&format!("`{argument}`")), "{message}");
+        assert!(message.contains(expected), "{message}");
+        assert!(message.contains(supplied), "{message}");
+    }
+
+    // spec: BSL#arguments
+    #[test]
+    fn scalar_helpers_name_argument_expected_and_supplied_types() {
+        let err = take_string("name", Dynamic::from(42_i64)).unwrap_err();
+        assert_names(&err.to_string(), "name", "must be a string", "i64");
+
+        let err = take_bool("enabled", Dynamic::from("yes".to_owned())).unwrap_err();
+        assert_names(&err.to_string(), "enabled", "must be a boolean", "string");
+
+        let err = take_map("options", Dynamic::from(1_i64)).unwrap_err();
+        assert_names(&err.to_string(), "options", "must be a map", "i64");
+
+        let err = take_array("items", Dynamic::from(true)).unwrap_err();
+        assert_names(&err.to_string(), "items", "must be an array", "bool");
+    }
+
+    // spec: BSL#arguments
+    #[test]
+    fn array_helpers_name_argument_expected_and_supplied_types() {
+        let err = take_string_array("command", Dynamic::from(1_i64)).unwrap_err();
+        assert_names(&err.to_string(), "command", "must be an array", "i64");
+
+        let value = Dynamic::from(vec![Dynamic::from("a".to_owned()), Dynamic::from(2_i64)]);
+        let err = take_string_array("command", value).unwrap_err();
+        assert_names(
+            &err.to_string(),
+            "command",
+            "must be an array of strings",
+            "element 1 is a i64",
+        );
+
+        let err = take_array_of::<u8>("types", Dynamic::from("x".to_owned())).unwrap_err();
+        assert_names(&err.to_string(), "types", "must be an array", "string");
+
+        let value = Dynamic::from(vec![Dynamic::from("x".to_owned())]);
+        let err = take_array_of::<u8>("types", value).unwrap_err();
+        assert_names(
+            &err.to_string(),
+            "types",
+            "must be an array of u8",
+            "element 0 is a string",
+        );
+    }
+
+    // spec: BSL#arguments
+    #[test]
+    fn range_errors_name_argument_range_and_value() {
+        let err = take_int_in_range::<u8>("scale", 300, 1..=255).unwrap_err();
+        assert_names(&err.to_string(), "scale", "between 1 and 255", "got 300");
+
+        let err = take_int_in_range::<u8>("scale", 300, 0..=400).unwrap_err();
+        assert_names(&err.to_string(), "scale", "between 0 and 400", "got 300");
+    }
+
+    // spec: BSL#arguments
+    #[test]
+    fn unknown_keys_name_argument_unknown_keys_and_accepted_keys() {
+        let mut map = rhai::Map::new();
+        map.insert("descripton".into(), Dynamic::from(1_i64));
+        let err = reject_unknown_keys("exported options", &map, &["description"]).unwrap_err();
+        assert_names(
+            &err.to_string(),
+            "exported options",
+            "it takes description",
+            "descripton",
+        );
     }
 }

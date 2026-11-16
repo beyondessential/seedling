@@ -406,6 +406,9 @@ pub struct ChainDecision {
     pub proxy: Option<ProxyHolding>,
     /// Why the responsible strategy last failed to produce a certificate.
     pub last_error: Option<String>,
+    /// The last answer Canopy gave for the hostname rejected the runtime's
+    /// signing request.
+    pub csr_rejected: bool,
 }
 
 /// The least of a certificate's lifetime the proxy is left to renew in, so that
@@ -833,6 +836,7 @@ struct ChainContext {
     serving: Option<(chain::Serving, ServingSource)>,
     row: Option<chain::Row>,
     last_error: Option<String>,
+    csr_rejected: bool,
     /// The proxy's cache holds something for this hostname that could not be
     /// read. Not a certificate, and not an absence either.
     proxy_unreadable: bool,
@@ -918,6 +922,7 @@ impl ChainContext {
             serving,
             row: chain_row.map(|r| r.row.clone()),
             last_error: chain_row.and_then(|r| r.last_error.clone()),
+            csr_rejected: chain_row.is_some_and(|r| r.csr_rejected),
             proxy: snap.env.proxy.get(hostname).cloned(),
             proxy_unreadable: matches!(
                 snap.env.proxy.get(hostname),
@@ -1059,6 +1064,7 @@ fn decide_chain(ctx: &ChainContext, strategies: Vec<Strategy>) -> Decision {
         serving: ctx.serving.map(|(_, source)| source),
         proxy: ctx.proxy.clone(),
         last_error: ctx.last_error.clone(),
+        csr_rejected: ctx.csr_rejected,
     }))
 }
 
@@ -1623,6 +1629,7 @@ mod tests {
                 retry_not_before: Some(2000),
             },
             last_error: Some("refused".to_owned()),
+            csr_rejected: false,
             updated_at: 1000,
         }
     }
@@ -2203,6 +2210,7 @@ mod tests {
                 retry_not_before: Some(3840),
             },
             last_error: Some("refused".to_owned()),
+            csr_rejected: false,
             updated_at: 240,
         }];
         let st = compute_state(&s, "host.example.com");
@@ -2233,6 +2241,7 @@ mod tests {
                 retry_not_before: None,
             },
             last_error: Some("revoked".to_owned()),
+            csr_rejected: false,
             updated_at: 240,
         }];
 

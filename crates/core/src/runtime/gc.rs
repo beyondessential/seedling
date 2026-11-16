@@ -9,11 +9,16 @@ use tracing::{debug, error};
 use crate::runtime::db::{Db, DbHandle};
 use crate::runtime::identity::InstanceId;
 
+/// Restart records kept per resource instance unless the operator says otherwise.
+// spec: GC#restart-records
+pub const DEFAULT_RETAIN_RESTART_RECORDS: usize = 50;
+
 pub struct GcConfig {
     pub interval: Duration,
     pub retain_action_log: Duration,
     pub retain_cleared_faults: Duration,
     pub retain_completed_operations: Duration,
+    pub retain_restart_records: usize,
 }
 
 impl Default for GcConfig {
@@ -23,6 +28,7 @@ impl Default for GcConfig {
             retain_action_log: Duration::from_secs(24 * 60 * 60),
             retain_cleared_faults: Duration::from_secs(7 * 24 * 60 * 60),
             retain_completed_operations: Duration::from_secs(7 * 24 * 60 * 60),
+            retain_restart_records: DEFAULT_RETAIN_RESTART_RECORDS,
         }
     }
 }
@@ -68,7 +74,7 @@ fn run_gc_cycle(db: &Db, config: &GcConfig) {
         _ => {}
     }
     // spec: GC#restart-records
-    match crate::system::reconcile::gc_restart_records(db) {
+    match crate::system::reconcile::gc_restart_records(db, config.retain_restart_records) {
         Ok(n) if n > 0 => debug!(rows = n, "gc: pruned restart records"),
         Err(e) => error!(error = %e, "gc: restart records cleanup failed"),
         _ => {}
@@ -156,12 +162,14 @@ pub(crate) fn is_torn_down(
             .is_some_and(|o| UNSCHEDULED_OBS_KINDS.contains(&o.obs_kind.as_str()))
 }
 
-/// Cadence and retention for the unscheduled-instance sweep, which the
-/// reconciler runs because only it knows each app's active desired state.
+/// Collection settings the reconciler applies itself: the unscheduled-instance
+/// sweep (only the reconciler knows each app's active desired state), image
+/// collection (on the same interval), and the restart records it writes.
 #[derive(Clone, Copy)]
 pub struct InstanceGcConfig {
     pub interval: Duration,
     pub retain: Duration,
+    pub retain_restart_records: usize,
 }
 
 /// The instances each app's active desired state holds, for the apps whose

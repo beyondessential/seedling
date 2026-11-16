@@ -50,11 +50,22 @@ pub(crate) fn exec_output_entries(
 /// container's logs.
 // spec: RT#command-execution
 pub(crate) fn record_exec_output(instance: &ResourceInstance, stdout: &[u8], stderr: &[u8]) {
+    let mut failed = 0_usize;
+    let mut first_error = None;
     for entry in exec_output_entries(instance, stdout, stderr) {
         let refs: Vec<&str> = entry.iter().map(String::as_str).collect();
-        // Without a running journald (a development host) the entries are
-        // lost, as the breadcrumbs are.
-        let _ = systemd::journal::send(&refs);
+        if let Err(e) = systemd::journal::send(&refs) {
+            failed += 1;
+            first_error.get_or_insert(e);
+        }
+    }
+    if let Some(e) = first_error {
+        tracing::error!(
+            app = %instance.app,
+            instance = %instance.display_name,
+            failed,
+            "command output could not be recorded with the container's logs: {e}"
+        );
     }
 }
 
@@ -467,5 +478,61 @@ mod tests {
         assert_eq!(read_window(&marker, 2), ["entry 1", "entry 2"]);
         assert_eq!(read_window(&marker, 3), ["entry 0", "entry 1", "entry 2"]);
         assert_eq!(read_window(&marker, 10), ["entry 0", "entry 1", "entry 2"]);
+    }
+
+    // spec: RT#command-execution
+    #[test]
+    #[ignore = "needs a running journald"]
+    fn exec_output_is_read_back_as_the_containers_own_log_entries() {
+        let unique = format!(
+            "exec{}",
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        );
+        let instance = ResourceInstance::new_singleton(
+            seedling_protocol::names::AppName::new("demo").unwrap(),
+            crate::defs::resource::ResourceKind::Deployment,
+            &unique,
+        );
+        record_exec_output(&instance, b"out line\n", b"err line\n");
+
+        let read = || {
+            let mut journal = OpenOptions::default()
+                .current_user(true)
+                .open()
+                .expect("open journal");
+            journal
+                .match_add("SEEDLING_RESOURCE", unique.as_bytes())
+                .expect("match");
+            let mut entries = Vec::new();
+            while let Some(fields) = journal.next_entry().expect("read") {
+                let at = journal.timestamp_usec().unwrap_or(0);
+                entries.push(record_to_entry(at, &fields));
+            }
+            entries
+        };
+        let deadline = Instant::now() + Duration::from_secs(10);
+        let mut entries = read();
+        while entries.len() < 2 {
+            assert!(
+                Instant::now() < deadline,
+                "entries never reached the journal"
+            );
+            std::thread::sleep(Duration::from_millis(100));
+            entries = read();
+        }
+
+        let out = entries.iter().find(|e| e.message == "out line").unwrap();
+        let err = entries.iter().find(|e| e.message == "err line").unwrap();
+        assert_eq!(out.stream, "stdout");
+        assert_eq!(err.stream, "stderr");
+        for entry in [out, err] {
+            assert_eq!(entry.app.as_deref(), Some("demo"));
+            assert_eq!(entry.resource.as_deref(), Some(unique.as_str()));
+            assert_eq!(entry.instance.as_deref(), Some(instance.display_name.as_str()));
+            assert!(entry.rt_call.is_none(), "not a breadcrumb");
+        }
     }
 }

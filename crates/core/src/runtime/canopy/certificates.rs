@@ -579,22 +579,41 @@ fn sync_faults(state: &Arc<OiState>, managed: &[ManagedIngress], snap: &Snapshot
 /// Why Canopy cannot provide a hostname's certificate, if it cannot and an
 /// operator should be told.
 ///
-/// A hostname that holds a usable certificate and is still inside a strategy's
-/// window is not in trouble: the chain is still working on it.
+/// A hostname that is served a usable certificate while its responsible
+/// strategy still has a fall-through point ahead is not in trouble: the chain
+/// is still working on it.
+// spec: TCAN#faults
 fn trouble(hostname: &str, c: &ChainDecision) -> Option<String> {
-    if c.act == ChainAct::CannotAskCanopy {
-        return Some(match c.canopy {
-            CanopyStanding::NotPublicName => format!(
-                "{hostname} is bound to the Canopy-only policy but no public CA can issue for it"
-            ),
-            _ => format!(
-                "{hostname} is bound to the Canopy-only policy but no app declaring it has a \
-                 Canopy type, so Canopy cannot be asked"
-            ),
+    let canopy_only = c.strategies == [Strategy::Canopy];
+    let (responsible, fall_through_ahead) = match &c.cycle {
+        chain::Cycle::Running(r) => (r.responsible, r.fall_through_at.is_some()),
+        // No cycle is running, so the strategy that will act is the first, and
+        // its fall-through point is ahead if there is a next strategy.
+        chain::Cycle::Idle { .. } => (*c.strategies.first()?, c.strategies.len() > 1),
+    };
+    if c.serving.is_some() && fall_through_ahead {
+        return None;
+    }
+
+    if !c.canopy.applies() && (canopy_only || responsible == Strategy::Canopy) {
+        let why = match c.canopy {
+            CanopyStanding::NotPublicName => "no public CA can issue for it",
+            _ => "no app declaring it has a Canopy type, so Canopy cannot be asked",
+        };
+        return Some(if canopy_only {
+            format!("{hostname} is bound to the Canopy-only policy but {why}")
+        } else {
+            format!("Canopy is the responsible strategy for {hostname} but {why}")
         });
     }
     if !c.strategies.contains(&Strategy::Canopy) {
         return None;
+    }
+    if c.csr_rejected {
+        let reason = c.last_error.as_deref().unwrap_or("no reason was given");
+        return Some(format!(
+            "Canopy rejected the certificate signing request for {hostname}: {reason}"
+        ));
     }
     let chain::Cycle::Running(running) = &c.cycle else {
         return None;

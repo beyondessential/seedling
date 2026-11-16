@@ -14,7 +14,7 @@ use seedling_core::{
     runtime::{
         AppRegistry, InstanceRegistry, Scheduler, audit,
         db::{Db, DbHandle},
-        gc::{GcConfig, InstanceGcConfig},
+        gc::{DEFAULT_RETAIN_RESTART_RECORDS, GcConfig, InstanceGcConfig},
         registry::DbInstanceRegistry,
     },
     system::{
@@ -134,6 +134,10 @@ struct GcArgs {
     /// How long to retain unscheduled resource instances, in seconds.
     #[arg(long, default_value_t = 600)]
     gc_retain_unscheduled_instances_secs: u64,
+
+    /// How many of the most recent restart records to keep per resource instance.
+    #[arg(long, default_value_t = DEFAULT_RETAIN_RESTART_RECORDS)]
+    gc_retain_restart_records: usize,
 }
 
 impl From<GcArgs> for GcConfig {
@@ -143,6 +147,7 @@ impl From<GcArgs> for GcConfig {
             retain_action_log: Duration::from_secs(a.gc_retain_action_log_secs),
             retain_cleared_faults: Duration::from_secs(a.gc_retain_cleared_faults_secs),
             retain_completed_operations: Duration::from_secs(a.gc_retain_completed_operations_secs),
+            retain_restart_records: a.gc_retain_restart_records,
         }
     }
 }
@@ -152,6 +157,7 @@ impl From<&GcArgs> for InstanceGcConfig {
         Self {
             interval: Duration::from_secs(a.gc_interval_secs),
             retain: Duration::from_secs(a.gc_retain_unscheduled_instances_secs),
+            retain_restart_records: a.gc_retain_restart_records,
         }
     }
 }

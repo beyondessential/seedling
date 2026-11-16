@@ -361,7 +361,7 @@ function MapExternalServiceDialog({
   prefill?: { app: string; name: string };
 }) {
   const { execute, loading, error, clearError } = useOiAction();
-  const { data: appServices } = useOiQuery<AppService[]>("/services/app/list", {});
+  const { data: appServices, error: appServicesError } = useOiQuery<AppService[]>("/services/app/list", {});
 
   const isRemap = existing != null;
   const isFixed = isRemap || prefill != null;
@@ -417,6 +417,7 @@ function MapExternalServiceDialog({
       <DialogContent>
         <Stack spacing={2} sx={{ mt: 0.5 }}>
           {error && <OiErrorAlert error={error} />}
+          {appServicesError && <OiErrorAlert error={appServicesError} />}
           {isFixed ? (
             <TextField
               label="App / Slot"
@@ -601,7 +602,7 @@ export default function Services() {
     error: declaredError,
     refetch: refetchDeclared,
   } = useOiQuery<DeclaredExternalService[]>("/services/external/declared", {});
-  const { data: resolverStatus } = useOiQuery<SiteServiceResolverStatus>(
+  const { data: resolverStatus, error: resolverError } = useOiQuery<SiteServiceResolverStatus>(
     "/services/site/resolver-status",
     {},
   );

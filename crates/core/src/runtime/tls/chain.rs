@@ -716,6 +716,24 @@ mod tests {
 
     // spec: CHAIN#proxy-strategies
     #[test]
+    fn the_proxy_may_order_as_soon_as_a_refusal_makes_it_responsible() {
+        let row = Row {
+            identity: serving().identity,
+            step: 1,
+            since: 61 * DAY,
+            open_order_since: None,
+            retry_not_before: None,
+        };
+        let cycle = resolve(&inputs(&TWO, 62 * DAY, Some(serving()), Some(&row)));
+        assert_eq!(
+            proxy_from(&TWO, Some(serving()), &cycle),
+            ProxyFrom::Always,
+            "Canopy's fall-through point is later, but it is no longer responsible"
+        );
+    }
+
+    // spec: CHAIN#proxy-strategies
+    #[test]
     fn a_chain_with_no_earlier_strategy_leaves_the_proxy_alone() {
         let chain = [Strategy::Http01];
         let idle = resolve(&inputs(&chain, 10 * DAY, Some(serving()), None));

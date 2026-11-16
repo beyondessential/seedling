@@ -2509,3 +2509,37 @@ fn a_change_handler_taking_one_parameter_is_called_with_one() {
         "a one-parameter handler must run: {result:?}"
     );
 }
+
+// spec: PARAM#change-handlers
+#[test]
+fn a_change_handler_taking_no_parameters_is_called_with_none() {
+    let result = run_change_handler(
+        Some(r#"app.deployment("legacy").image("docker.io/library/nginx:1.0");"#),
+        r#"
+        app.deployment("web").image("docker.io/library/nginx:latest");
+        app.param("greeting").on_change(|| { });
+    "#,
+        false,
+    );
+    assert!(
+        matches!(result, OperationResult::Completed),
+        "a zero-parameter handler must run: {result:?}"
+    );
+}
+
+// spec: PARAM#change-handlers
+#[test]
+fn a_change_handler_taking_three_parameters_fails_when_called() {
+    let result = run_change_handler(
+        Some(r#"app.deployment("legacy").image("docker.io/library/nginx:1.0");"#),
+        r#"
+        app.deployment("web").image("docker.io/library/nginx:latest");
+        app.param("greeting").on_change(|rt, old, extra| { });
+    "#,
+        false,
+    );
+    assert!(
+        matches!(&result, OperationResult::Failed(e) if !e.to_string().contains("cannot be rebuilt")),
+        "a three-parameter handler must fail when called: {result:?}"
+    );
+}

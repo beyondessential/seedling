@@ -1470,7 +1470,7 @@ pub fn list_force_retries(db: &Db) -> rusqlite::Result<Vec<TlsCertForceRetry>> {
 // ---------------------------------------------------------------------------
 
 const CHAIN_COLUMNS: &str = "hostname, replacing_cert_id, replacing_not_after, step, step_since, \
-     open_order_since, last_error, updated_at, retry_not_before";
+     open_order_since, last_error, updated_at, retry_not_before, csr_rejected";
 
 /// Reads the columns of [`CHAIN_COLUMNS`], positionally and in that order.
 fn row_to_chain(row: &rusqlite::Row<'_>) -> rusqlite::Result<TlsChainRow> {
@@ -1490,6 +1490,7 @@ fn row_to_chain(row: &rusqlite::Row<'_>) -> rusqlite::Result<TlsChainRow> {
             retry_not_before: row.get(8)?,
         },
         last_error: row.get(6)?,
+        csr_rejected: row.get(9)?,
         updated_at: row.get(7)?,
     })
 }
@@ -1514,7 +1515,9 @@ pub fn get_chain_row(db: &Db, hostname: &str) -> rusqlite::Result<Option<TlsChai
         .optional()
 }
 
-/// Record a hostname's chain position, replacing whatever was recorded.
+/// Record a hostname's chain position, replacing whatever was recorded. The
+/// position is recorded as not holding a rejected signing request, which
+/// [`set_csr_rejected`] records after it.
 // spec: CHAIN#fall-through
 pub fn put_chain_row(
     db: &Db,
@@ -1525,8 +1528,8 @@ pub fn put_chain_row(
     db.conn.execute(
         "INSERT INTO tls_chain_state
             (hostname, replacing_cert_id, replacing_not_after, step, step_since,
-             open_order_since, last_error, updated_at, retry_not_before)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+             open_order_since, last_error, updated_at, retry_not_before, csr_rejected)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, 0)
          ON CONFLICT(hostname) DO UPDATE SET
              replacing_cert_id = excluded.replacing_cert_id,
              replacing_not_after = excluded.replacing_not_after,
@@ -1535,7 +1538,8 @@ pub fn put_chain_row(
              open_order_since = excluded.open_order_since,
              last_error = excluded.last_error,
              updated_at = excluded.updated_at,
-             retry_not_before = excluded.retry_not_before",
+             retry_not_before = excluded.retry_not_before,
+             csr_rejected = 0",
         params![
             hostname,
             row.identity.cert_id,
@@ -1547,6 +1551,18 @@ pub fn put_chain_row(
             now_secs(),
             row.retry_not_before,
         ],
+    )?;
+    Ok(())
+}
+
+/// Record that the last answer Canopy gave for the hostname rejected the
+/// runtime's signing request, against the position [`put_chain_row`] just
+/// recorded.
+// spec: TCAN#faults
+pub fn set_csr_rejected(db: &Db, hostname: &str) -> rusqlite::Result<()> {
+    db.conn.execute(
+        "UPDATE tls_chain_state SET csr_rejected = 1 WHERE hostname = ?1",
+        [hostname],
     )?;
     Ok(())
 }

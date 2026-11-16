@@ -243,6 +243,53 @@ fn balance_rejects_spinning_interval() {
     let _ = run_test_script_err(r#"app.service("web").http(80).balance(#{ interval: 0 });"#);
 }
 
+fn evaluate(script: &str) -> Option<crate::runtime::apps::ScriptError> {
+    crate::runtime::apps::evaluate_script(
+        &seedling_protocol::names::AppName::new_unchecked("demo"),
+        script,
+        &Default::default(),
+        &crate::ScriptLimits::default(),
+    )
+    .1
+}
+
+// spec: HTTP#balancing
+#[test]
+fn a_route_resolving_to_a_spinning_balance_fails_evaluation_naming_the_route() {
+    for script in [
+        r#"let web = app.service("web").http(80)
+            .balance(#{ try_duration: 0, interval: 0 });
+        web.route("/api").balance(#{ try_duration: 10 });"#,
+        r#"let web = app.service("web").http(80);
+        web.route("/api").balance(#{ interval: 0, try_duration: 0 });
+        web.balance(#{ interval: 0, try_duration: 0 });
+        web.route("/api").balance(#{ try_duration: 3 });"#,
+        r#"let web = app.external_service("web").http(80)
+            .balance(#{ try_duration: 0, interval: 0 });
+        web.route("/v1").balance(#{ try_duration: 10 });"#,
+    ] {
+        let err = evaluate(script).expect("the definition fails to evaluate");
+        assert!(err.0.contains("route `/"), "names the route: {err}");
+        assert!(err.0.contains("'web'"), "names the service: {err}");
+    }
+}
+
+// spec: HTTP#balancing
+#[test]
+fn a_route_resolving_to_a_balance_that_does_not_spin_evaluates() {
+    for script in [
+        r#"let web = app.service("web").http(80)
+            .balance(#{ try_duration: 0, interval: 0 });
+        web.route("/api").balance(#{ try_duration: 10, interval: 1 });"#,
+        r#"let web = app.service("web").http(80)
+            .balance(#{ try_duration: 0, interval: 0 });
+        web.route("/api").compress(false);"#,
+        r#"app.service("web").http(80).balance(#{ try_duration: 7 });"#,
+    ] {
+        assert!(evaluate(script).is_none(), "{script}");
+    }
+}
+
 // spec: APPS#proxy-settings
 // spec: PRX#settings-inspection
 #[test]

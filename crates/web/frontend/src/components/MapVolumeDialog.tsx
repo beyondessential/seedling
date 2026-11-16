@@ -66,9 +66,9 @@ export function MapVolumeDialog({ open, onClose, onSuccess, existing, prefill }:
   );
   const [readOnly, setReadOnly] = useState(existing?.read_only ?? false);
 
-  const { data: siteVolumes } = useOiQuery<SiteVolume[]>("/volumes/site/list", {});
-  const { data: exportedVolumes } = useOiQuery<ExportedVolume[]>("/volumes/exported/list", {});
-  const { data: declared } = useOiQuery<DeclaredExternalVolume[]>("/volumes/external/declared", {});
+  const { data: siteVolumes, error: siteVolumesError } = useOiQuery<SiteVolume[]>("/volumes/site/list", {});
+  const { data: exportedVolumes, error: exportedError } = useOiQuery<ExportedVolume[]>("/volumes/exported/list", {});
+  const { data: declared, error: declaredError } = useOiQuery<DeclaredExternalVolume[]>("/volumes/external/declared", {});
 
   const resolvedApp = isFixed ? initialApp : selectedRequest.split("\0")[0] ?? "";
   const resolvedName = isFixed ? initialName : selectedRequest.split("\0")[1] ?? "";
@@ -110,6 +110,9 @@ export function MapVolumeDialog({ open, onClose, onSuccess, existing, prefill }:
       <DialogContent>
         <Stack spacing={2} sx={{ mt: 0.5 }}>
           {error && <OiErrorAlert error={error} />}
+          {[siteVolumesError, exportedError, declaredError].map(
+            (e) => e && <OiErrorAlert key={e.method} error={e} />,
+          )}
 
           {isFixed ? (
             <TextField

@@ -271,6 +271,7 @@ fn take_command_cmd(map: &mut rhai::Map) -> Result<Vec<String>, Box<EvalAltResul
     let value = map.remove("cmd").ok_or_else(|| -> Box<EvalAltResult> {
         "healthcheck of kind \"command\" requires a `cmd` field".into()
     })?;
+    let value_type = value.type_name();
     let cmd = if let Some(s) = value.clone().try_cast::<String>() {
         if s.is_empty() {
             return Err("healthcheck `cmd` must not be empty".into());
@@ -283,7 +284,10 @@ fn take_command_cmd(map: &mut rhai::Map) -> Result<Vec<String>, Box<EvalAltResul
         }
         parts
     } else {
-        return Err("healthcheck `cmd` must be a string or array of strings".into());
+        return Err(format!(
+            "healthcheck `cmd` must be a string or array of strings, got {value_type}"
+        )
+        .into());
     };
     Ok(cmd)
 }
@@ -326,9 +330,11 @@ pub(super) fn parse_healthcheck(mut map: rhai::Map) -> Result<HealthcheckDef, Bo
     let on_failure = take_on_failure(&mut map)?;
 
     if !map.is_empty() {
-        let extras: Vec<String> = map.keys().map(|k| k.to_string()).collect();
+        let mut extras: Vec<String> = map.keys().map(|k| k.to_string()).collect();
+        extras.sort_unstable();
         return Err(format!(
-            "healthcheck map contains unknown keys: {}",
+            "healthcheck map contains unknown keys: {}; it takes kind, cmd, interval, timeout, \
+             start_period, retries, on_failure",
             extras.join(", ")
         )
         .into());

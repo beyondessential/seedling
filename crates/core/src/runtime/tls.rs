@@ -285,6 +285,9 @@ pub struct TlsChainRow {
     pub row: chain::Row,
     /// Why the responsible strategy last failed to produce a certificate.
     pub last_error: Option<String>,
+    /// The last answer Canopy gave for the hostname rejected the runtime's
+    /// certificate signing request.
+    pub csr_rejected: bool,
     pub updated_at: i64,
 }
 

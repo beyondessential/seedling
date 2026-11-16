@@ -158,6 +158,7 @@ mod tests {
             "test".into(),
             "https://example.invalid".into(),
             None,
+            None,
             DuplexPeer::new(move |mut stream: DuplexStream| {
                 let tx = tx.clone();
                 tokio::spawn(async move {

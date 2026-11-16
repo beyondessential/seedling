@@ -41,7 +41,12 @@ export interface ResourceInstance {
   lifecycle: string;
   transition_time?: string;
   restarts?: RestartSummary | null;
+  /** The instance's health check state, `null` where none has been observed.
+   *  Absent from a server that predates it. */
+  health?: InstanceHealth | null;
 }
+
+export type InstanceHealth = "starting" | "passing" | "failing";
 
 export type RestartCause = "recovery" | "deliberate";
 
@@ -106,7 +111,7 @@ export interface HealthcheckSummary {
   timeout_secs: number;
   retries: number;
   start_period_secs: number;
-  on_failure: "none" | "kill" | "restart" | "stop";
+  on_failure: "replace" | "monitor";
 }
 
 export interface PodSummary {
@@ -258,6 +263,7 @@ export interface InstallRequirement {
   required: boolean;
   description: string;
   default_value: string | null;
+  secret?: boolean;
 }
 
 /** Who pushed a definition, as the OI records the request's actor. */
@@ -281,6 +287,23 @@ export type DefinitionProvenance = (
   content_hash: string;
   seedling_versions: string | null;
 };
+
+export type GenerationKind = "register" | "script_update" | "param_set" | "param_unset";
+
+export interface GenerationEntry {
+  generation: number;
+  timestamp: string;
+  kind: GenerationKind;
+  definition?: DefinitionProvenance;
+  param_name?: string;
+  previous_value?: string | null;
+  new_value?: string | null;
+  redacted?: boolean;
+  script_changed: boolean;
+  operation_id: string | null;
+  outcome: "pending" | "succeeded" | "cancelled" | "failed" | null;
+  error?: string;
+}
 
 export interface AppDetail {
   status: AppStatus;
@@ -584,8 +607,24 @@ export interface SiteIngressDiscoveryEntry {
   stale: boolean;
 }
 
+export interface SiteIngressDiscoveryIdentity {
+  hostname: string;
+  node_id: string;
+  backend_running: boolean;
+}
+
+export interface SiteIngressDiscoveryProvider {
+  name: string;
+  /** `null` before the provider's first poll. */
+  healthy: boolean | null;
+  last_poll_at?: string;
+  last_error?: string;
+  identity?: SiteIngressDiscoveryIdentity;
+  ingresses: SiteIngressDiscoveryEntry[];
+}
+
 export interface SiteIngressDiscoveryStatus {
-  providers: { name: string; ingresses: SiteIngressDiscoveryEntry[] }[];
+  providers: SiteIngressDiscoveryProvider[];
 }
 
 export interface ExportedService {

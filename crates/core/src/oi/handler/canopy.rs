@@ -70,6 +70,7 @@ pub(crate) fn offer(
         params.agent,
         params.endpoint,
         params.via,
+        crate::oi::server::extract_client_fp(conn),
         QuicPeer::shared(conn.clone()),
     );
     tracing::info!(
@@ -353,6 +354,7 @@ mod tests {
             "test-agent".into(),
             "https://example.invalid".into(),
             None,
+            None,
             crate::oi::canopy::test_peer(),
         );
         assert_eq!(oi.call("/canopy/status", json!({})).unwrap()["offers"], 1);
@@ -373,6 +375,7 @@ mod tests {
             1,
             "test-agent".into(),
             "https://example.invalid".into(),
+            None,
             None,
             crate::oi::canopy::test_peer(),
         );
@@ -395,6 +398,7 @@ mod tests {
             "bestool 9.9.9".into(),
             "https://canopy.invalid".into(),
             Some("mtls".into()),
+            None,
             crate::oi::canopy::test_peer(),
         );
 
@@ -441,6 +445,7 @@ mod tests {
             "test".into(),
             "https://example.invalid".into(),
             None,
+            None,
             crate::oi::canopy::test_peer(),
         );
         file_report_fault(&oi);
@@ -461,6 +466,7 @@ mod tests {
                 conn,
                 "test".into(),
                 "https://example.invalid".into(),
+                None,
                 None,
                 crate::oi::canopy::test_peer(),
             );

@@ -155,6 +155,10 @@ const SQL_V72: &str = include_str!("db/migrations/v72.sql");
 const SQL_V73: &str = include_str!("db/migrations/v73.sql");
 const SQL_V74: &str = include_str!("db/migrations/v74.sql");
 const SQL_V75: &str = include_str!("db/migrations/v75.sql");
+// spec: CNR#server-identity
+const SQL_V76: &str = include_str!("db/migrations/v76.sql");
+// spec: TCAN#faults
+const SQL_V77: &str = include_str!("db/migrations/v77.sql");
 
 const MIGRATIONS: &[Migration] = &[
     Migration {
@@ -525,6 +529,16 @@ const MIGRATIONS: &[Migration] = &[
     Migration {
         version: 75,
         sql: SQL_V75,
+        custom_run: None,
+    },
+    Migration {
+        version: 76,
+        sql: SQL_V76,
+        custom_run: None,
+    },
+    Migration {
+        version: 77,
+        sql: SQL_V77,
         custom_run: None,
     },
 ];

@@ -1,0 +1,182 @@
+import {
+  Box,
+  Button,
+  Chip,
+  CircularProgress,
+  Paper,
+  Table,
+  TableBody,
+  TableCell,
+  TableContainer,
+  TableHead,
+  TableRow,
+  Typography,
+} from "@mui/material";
+import { useCallback, useEffect, useState } from "react";
+import { useEventRefresh } from "../hooks/useEventRefresh";
+import { useOiQuery } from "../hooks/useOi";
+import { useOiAction } from "../hooks/useOiAction";
+import type { DefinitionProvenance, GenerationEntry, SeedlingEvent } from "../lib/types";
+import { OiErrorAlert } from "./OiErrorAlert";
+
+const PAGE = 50;
+const mono = { fontFamily: "monospace" } as const;
+
+const GENERATION_EVENTS: Set<string> = new Set([
+  "AppRegistered",
+  "AppUpdated",
+  "ParamSet",
+  "ParamUnset",
+  "OperationCompleted",
+  "OperationFailed",
+  "OperationCancelled",
+]);
+
+const KIND_LABEL: Record<GenerationEntry["kind"], string> = {
+  register: "registered",
+  script_update: "script updated",
+  param_set: "param set",
+  param_unset: "param unset",
+};
+
+function outcomeColor(outcome: NonNullable<GenerationEntry["outcome"]>): "success" | "error" | "warning" | "info" {
+  switch (outcome) {
+    case "succeeded":
+      return "success";
+    case "failed":
+      return "error";
+    case "cancelled":
+      return "warning";
+    case "pending":
+      return "info";
+  }
+}
+
+function provenanceLabel(def: DefinitionProvenance): string {
+  return def.kind === "fetched"
+    ? def.reference
+    : `pushed ${def.content_hash.slice(0, 12)}`;
+}
+
+function shown(value: string | null | undefined): string {
+  return value === null || value === undefined ? "(unset)" : value;
+}
+
+function Detail({ entry }: { entry: GenerationEntry }) {
+  return (
+    <>
+      {entry.definition && (
+        <Box component="div" sx={mono}>
+          {provenanceLabel(entry.definition)}
+        </Box>
+      )}
+      {entry.param_name !== undefined && (
+        <Box component="div" sx={mono}>
+          {entry.param_name}
+          {entry.redacted ? (
+            <Typography component="span" variant="caption" sx={{ color: "text.secondary", ml: 1 }}>
+              values withheld
+            </Typography>
+          ) : (
+            <>
+              {": "}
+              {shown(entry.previous_value)} → {shown(entry.new_value)}
+            </>
+          )}
+        </Box>
+      )}
+    </>
+  );
+}
+
+/** The changes made to an app, newest first, each with the outcome of the
+ *  operation it triggered. */
+// spec: UI#operator-capabilities
+export function GenerationHistory({ appName }: { appName: string }) {
+  const first = useOiQuery<GenerationEntry[]>("/apps/generations", { app: appName, limit: PAGE });
+  const { execute, loading: loadingMore, error: moreError } = useOiAction();
+  const [older, setOlder] = useState<GenerationEntry[]>([]);
+  const [exhausted, setExhausted] = useState(false);
+
+  const matches = useCallback(
+    (ev: SeedlingEvent) => GENERATION_EVENTS.has(ev.type) && (!ev.app || ev.app === appName),
+    [appName],
+  );
+  useEventRefresh(first.refetch, matches);
+
+  useEffect(() => {
+    setOlder([]);
+    setExhausted(false);
+  }, [first.data]);
+
+  const entries = [...(first.data ?? []), ...older];
+  const lastPageFull =
+    older.length > 0 ? !exhausted : (first.data?.length ?? 0) >= PAGE && !exhausted;
+
+  const loadMore = async () => {
+    const last = entries[entries.length - 1];
+    const page = (await execute("/apps/generations", {
+      app: appName,
+      limit: PAGE,
+      before: last.generation,
+    })) as GenerationEntry[] | null;
+    if (page === null) return;
+    setOlder((o) => [...o, ...page]);
+    if (page.length < PAGE) setExhausted(true);
+  };
+
+  if (first.error) return <OiErrorAlert error={first.error} />;
+  if (first.loading && !first.data) return <CircularProgress size={20} />;
+  if (entries.length === 0) {
+    return (
+      <Typography sx={{ color: "text.secondary" }}>No generations.</Typography>
+    );
+  }
+
+  return (
+    <Box>
+      <TableContainer component={Paper} variant="outlined">
+        <Table size="small">
+          <TableHead>
+            <TableRow>
+              <TableCell width={80}>Generation</TableCell>
+              <TableCell>When</TableCell>
+              <TableCell>Change</TableCell>
+              <TableCell>Outcome</TableCell>
+            </TableRow>
+          </TableHead>
+          <TableBody>
+            {entries.map((e) => (
+              <TableRow key={e.generation}>
+                <TableCell sx={mono}>{e.generation}</TableCell>
+                <TableCell sx={{ color: "text.secondary" }}>
+                  {new Date(e.timestamp).toLocaleString()}
+                </TableCell>
+                <TableCell>
+                  <Box>{KIND_LABEL[e.kind]}</Box>
+                  <Detail entry={e} />
+                </TableCell>
+                <TableCell>
+                  {e.outcome !== null && (
+                    <Chip label={e.outcome} size="small" color={outcomeColor(e.outcome)} variant="outlined" />
+                  )}
+                  {e.error && (
+                    <Typography variant="caption" component="div" sx={{ color: "error.main" }}>
+                      {e.error}
+                    </Typography>
+                  )}
+                </TableCell>
+              </TableRow>
+            ))}
+          </TableBody>
+        </Table>
+      </TableContainer>
+      {moreError && <OiErrorAlert error={moreError} />}
+      {lastPageFull && (
+        <Button size="small" sx={{ mt: 1 }} onClick={() => void loadMore()} disabled={loadingMore}>
+          Show older
+        </Button>
+      )}
+    </Box>
+  );
+}

@@ -7,6 +7,7 @@ import { Offline } from "./Offline";
 import { useSafetyMode } from "./SafetyModeProvider";
 
 const EVENTS_CACHE_SIZE = 200;
+const HEARTBEAT_INTERVAL_MS = 2 * 60 * 1000;
 const SIDEBAR_STORAGE_KEY = "seedling.eventsSidebar";
 const SIDEBAR_WIDTH_STORAGE_KEY = "seedling.eventsSidebarWidth";
 const SHELLS_SIDEBAR_WIDTH_STORAGE_KEY = "seedling.shellsSidebarWidth";
@@ -318,35 +319,24 @@ export function SessionProvider({ children }: { children: ReactNode }) {
   }, [session]);
 
   // spec: WEB#session-tracking
-  // Ping the server every two minutes so the session's last_seen stays fresh.
-  // The 10-minute stale cutoff tolerates four missed heartbeats before
-  // reaping; with a single missed heartbeat being the common transient case,
-  // a healthy session never ages out.
+  // Every heartbeat carries the current safety mode, read through a ref so the
+  // interval does not restart on a change; a change of mode sends its own
+  // heartbeat at once below. A heartbeat goes out as the session opens and
+  // then every two minutes, inside the 200 seconds the web interface allows.
   //
-  // The pagehide handler additionally attempts a deliberate WT close so
-  // navigating away or closing the tab does not leave a session waiting for
-  // the cutoff. Best-effort — the browser may have already torn down the
-  // transport.
-  //
-  // spec: UI#guarded-controls
-  // Each heartbeat carries the local safety mode so peers can render an
-  // accurate per-session indicator. The current mode is read through a ref to
-  // avoid restarting the interval on every change; the ad-hoc heartbeat
-  // triggered by mode changes (below) handles immediate propagation.
-  useEffect(() => {
-    if (!session) return;
-    setWebSessionId(null);
-    const sendHeartbeat = () => {
-      void session.client
+  // The pagehide handler closes the web session without waiting, so leaving
+  // the page does not leave it waiting to be reaped as stale.
+  const sendHeartbeat = useCallback(
+    (s: Session) => {
+      void s.client
         .request("/connected-clients/heartbeat", {
           safety_mode: safetyModeRef.current,
         })
         .then((res) => {
-          // spec: WEB#session-tracking
           // A session the web interface no longer records is closed; closing
-          // it makes the reconnect path below open a new one.
+          // it makes the reconnect path above open a new one.
           if (res.ok && sessionDropped(res.value)) {
-            session.wt.close();
+            s.wt.close();
             return;
           }
           if (res.ok && res.value && typeof res.value === "object") {
@@ -355,9 +345,15 @@ export function SessionProvider({ children }: { children: ReactNode }) {
           }
         })
         .catch(() => undefined);
-    };
-    sendHeartbeat();
-    const id = window.setInterval(sendHeartbeat, 2 * 60 * 1000);
+    },
+    [],
+  );
+
+  useEffect(() => {
+    if (!session) return;
+    setWebSessionId(null);
+    sendHeartbeat(session);
+    const id = window.setInterval(() => sendHeartbeat(session), HEARTBEAT_INTERVAL_MS);
     const onPagehide = () => {
       try {
         session.wt.close();
@@ -370,13 +366,12 @@ export function SessionProvider({ children }: { children: ReactNode }) {
       window.clearInterval(id);
       window.removeEventListener("pagehide", onPagehide);
     };
-  }, [session]);
+  }, [session, sendHeartbeat]);
 
-  // spec: UI#guarded-controls
-  // Send an ad-hoc heartbeat the moment the operator changes mode so peers
-  // see the new state without waiting for the next two-minute tick. The
-  // initial-mount heartbeat is already covered by the effect above; we skip
-  // duplicating it here by tracking the previous mode.
+  // spec: WEB#session-tracking
+  // A change of safety mode sends a heartbeat at once so peers see it without
+  // waiting for the next tick. The heartbeat as the session opens already
+  // carries the mode then in force.
   const lastSentModeRef = useRef<typeof safetyMode | null>(null);
   useEffect(() => {
     if (!session) {
@@ -389,10 +384,8 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     }
     if (lastSentModeRef.current === safetyMode) return;
     lastSentModeRef.current = safetyMode;
-    void session.client
-      .request("/connected-clients/heartbeat", { safety_mode: safetyMode })
-      .catch(() => undefined);
-  }, [session, safetyMode]);
+    sendHeartbeat(session);
+  }, [session, safetyMode, sendHeartbeat]);
 
   return (
     <SessionContext.Provider value={{

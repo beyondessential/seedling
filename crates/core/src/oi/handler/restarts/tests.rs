@@ -17,7 +17,7 @@ fn seed(oi: &TestOi, app: &str, instance: &str, cause: Cause, exit: Option<ExitS
     let at = jiff::Timestamp::now().as_millisecond();
     oi.state
         .db
-        .call(move |db| record(db, &subject, cause, exit, at))
+        .call(move |db| record(db, &subject, cause, exit, at, 50))
         .expect("record");
 }
 

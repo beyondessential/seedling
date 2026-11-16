@@ -744,6 +744,8 @@ fn apply(
             row.open_order_since = None;
             row.retry_not_before = Some(now + AUTO_RETRY_DEBOUNCE_SECS);
             store::put_chain_row(db, &ask.hostname, &row, Some(&reason))?;
+            // spec: TCAN#faults
+            store::set_csr_rejected(db, &ask.hostname)?;
             Ok(ApplyResult::Done(Outcome::Rejected(reason)))
         }
         Answer::Revoked { reason } => Ok(ApplyResult::Replaced(apply_revocation(
@@ -785,7 +787,14 @@ fn unavailable(
     reason: String,
 ) -> rusqlite::Result<ApplyResult> {
     row.retry_not_before = None;
+    // Nothing was answered, so what Canopy last answered still stands.
+    let rejected = store::get_chain_row(db, &ask.hostname)?
+        .filter(|r| r.row.identity == ask.replacing)
+        .is_some_and(|r| r.csr_rejected);
     store::put_chain_row(db, &ask.hostname, &row, Some(&reason))?;
+    if rejected {
+        store::set_csr_rejected(db, &ask.hostname)?;
+    }
     Ok(ApplyResult::Done(Outcome::Failed(reason)))
 }
 

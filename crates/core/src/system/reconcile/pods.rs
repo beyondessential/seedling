@@ -49,6 +49,9 @@ pub(super) struct PodActuationUpdate {
     pub health_check_failures: Vec<ResourceInstance>,
     /// Instances whose healthcheck was observed as passing this tick.
     pub health_check_passes: Vec<ResourceInstance>,
+    /// Instances whose container was observed removed this tick, so they are
+    /// unscheduled and can no longer be unhealthy.
+    pub unscheduled: Vec<ResourceInstance>,
     /// Instances whose registry lookup failed during start.
     pub registry_failures: Vec<ResourceInstance>,
     /// Instances blocked from starting because a required external volume has no mapping.
@@ -123,6 +126,7 @@ struct PodInstanceResult {
     restart_counter: Option<(ResourceInstance, RestartCounter)>,
     health_check_failure: Option<ResourceInstance>,
     health_check_pass: Option<ResourceInstance>,
+    unscheduled: Option<ResourceInstance>,
     registry_failure: Option<ResourceInstance>,
     external_volume_failure: Option<(ResourceInstance, String)>,
     start_failure: Option<(ResourceInstance, String)>,
@@ -152,6 +156,9 @@ struct ObservedInstance<'a> {
     container_exists: bool,
     /// Container has exited but not yet been removed (ContainerExited fact present).
     has_exited: bool,
+    /// No container was found (ContainerMissing fact present): the instance is
+    /// unscheduled.
+    container_missing: bool,
     /// The pod's dedicated podman network is present. A network can outlive its
     /// container (e.g. when `podman --rm` removes the container but the network
     /// was left behind), so the Unscheduled stop path must key on this instead
@@ -212,6 +219,7 @@ async fn observe_one_pod<'a>(
         restart_counter: None,
         health_check_failure: None,
         health_check_pass: None,
+        unscheduled: None,
         registry_failure: None,
         external_volume_failure: None,
         start_failure: None,
@@ -320,6 +328,9 @@ async fn observe_one_pod<'a>(
                 | ObservationFact::ContainerPresentIndeterminate
         )
     });
+    let container_missing = facts
+        .iter()
+        .any(|(f, _)| matches!(f, ObservationFact::ContainerMissing));
     let has_exited = facts
         .iter()
         .any(|(f, _)| matches!(f, ObservationFact::ContainerExited { .. }));
@@ -395,6 +406,7 @@ async fn observe_one_pod<'a>(
         unit_start_limit_hit,
         container_exists,
         has_exited,
+        container_missing,
         network_exists,
         observed_unhealthy,
         observed_healthy,
@@ -556,6 +568,8 @@ async fn actuate_one_pod(
         result.health_check_failure = Some(dr.instance.clone());
     } else if obs.observed_healthy {
         result.health_check_pass = Some(dr.instance.clone());
+    } else if obs.container_missing {
+        result.unscheduled = Some(dr.instance.clone());
     }
 
     // spec: AUTO#restarts
@@ -589,6 +603,11 @@ async fn actuate_one_pod(
             // container is not running), or the running container has a
             // stale spec, tear it down so the next tick can start a fresh
             // unit with the current AppDef config.
+            // spec: UPD#jobs
+            // A stale Job takes no part in a rolling or replace update: once
+            // it has stopped it starts again in the same pass, as a Job that
+            // finished a tick ago would otherwise read as completed.
+            let restart_at_once = obs.spec_stale && matches!(dr.definition, Resource::Job(_));
             if obs.unit_failed || obs.unit_active || obs.spec_stale {
                 result.running = None;
                 let rule = if obs.spec_stale {
@@ -616,7 +635,9 @@ async fn actuate_one_pod(
                     }
                 };
                 op.complete(&outcome);
-                return Some(obs.result);
+                if !restart_at_once || result.stop_failure.is_some() {
+                    return Some(obs.result);
+                }
             }
 
             // spec: UPD#replace-updates
@@ -637,7 +658,9 @@ async fn actuate_one_pod(
             // spec: HIST#autonomous-operations
             // Repeated starts of one instance are spaced, so one that exits
             // as soon as it starts is not restarted at full speed.
-            if let Some(wait) = autonomous_ops::back_off(db, &dr.instance, "start") {
+            if !restart_at_once
+                && let Some(wait) = autonomous_ops::back_off(db, &dr.instance, "start")
+            {
                 tracing::debug!(
                     instance = %dr.instance.display_name,
                     wait_secs = wait.as_secs(),
@@ -1044,6 +1067,7 @@ pub(super) async fn observe_and_actuate(
         restart_counters: Vec::new(),
         health_check_failures: Vec::new(),
         health_check_passes: Vec::new(),
+        unscheduled: Vec::new(),
         registry_failures: Vec::new(),
         external_volume_failures: Vec::new(),
         start_failures: Vec::new(),
@@ -1088,6 +1112,9 @@ pub(super) async fn observe_and_actuate(
         }
         if let Some(h) = result.health_check_pass {
             update.health_check_passes.push(h);
+        }
+        if let Some(u) = result.unscheduled {
+            update.unscheduled.push(u);
         }
         if let Some(f) = result.registry_failure {
             update.registry_failures.push(f);
@@ -1242,6 +1269,7 @@ mod update_tests {
             unit_start_limit_hit: false,
             container_exists: running,
             has_exited: false,
+            container_missing: !running,
             network_exists: running,
             observed_unhealthy: false,
             observed_healthy: running,
@@ -1262,6 +1290,61 @@ mod update_tests {
         // Once the last stale instance is gone, nothing is held.
         let (oa, ob) = (observed(&a, false, false), observed(&b, false, false));
         assert!(starts_held_by_stale_instances(OnUpdate::Replace, &[&oa, &ob]).is_empty());
+    }
+
+    // spec: UPD#jobs
+    #[test]
+    fn a_stale_job_is_stopped_and_started_again_in_the_same_pass() {
+        use crate::system::reconcile::tests::test_reconciler;
+
+        const IMAGE: &str = "docker.io/library/nginx:1.29";
+        let oi = crate::oi::test_support::TestOi::new();
+        let reconciler = test_reconciler(&oi);
+        let job = crate::defs::job::Job {
+            name: std::sync::Arc::new("migrate".to_owned()),
+            def: Default::default(),
+            frozen: false,
+            anon_id: None,
+        };
+        job.def.lock().pod.lock().container.lock().image = Some(IMAGE.to_owned());
+        let dr = DesiredResource {
+            instance: ResourceInstance::new_singleton(
+                seedling_protocol::names::AppName::new("demo").unwrap(),
+                ResourceKind::Job,
+                "migrate",
+            ),
+            desired: LifecycleState::Ready,
+            definition: Resource::Job(job),
+            demoted: false,
+        };
+        let mut running = observed(&dr, true, true);
+        running.has_exited = false;
+
+        let result = oi.block_on(async {
+            oi.state.container_runtime.pull_image(IMAGE).await.unwrap();
+            let none = HashSet::new();
+            actuate_one_pod(
+                &reconciler.actuator,
+                &reconciler.db,
+                AppPriority::default(),
+                running,
+                false,
+                false,
+                &HashSet::from([(dr.instance.id, "container_running")]),
+                &none,
+                &none,
+                &none,
+            )
+            .await
+        })
+        .expect("the instance is acted on");
+
+        assert!(result.stop_failure.is_none());
+        assert_eq!(
+            result.started_instance.as_ref().map(|i| i.id),
+            Some(dr.instance.id),
+            "a stale Job is started again in the pass that stopped it"
+        );
     }
 
     // spec: UPD#rolling-updates

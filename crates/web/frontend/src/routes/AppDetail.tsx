@@ -28,10 +28,8 @@ import {
   DialogTitle,
   Divider,
   FormControl,
-  FormHelperText,
   IconButton,
   InputAdornment,
-  InputLabel,
   MenuItem,
   Paper,
   Select,
@@ -58,9 +56,12 @@ import {
   ImageReferencesCell,
   primaryReference,
 } from "../components/ImageReferences";
+import { GenerationHistory } from "../components/GenerationHistory";
 import { Markdown } from "../components/Markdown";
 import { MapVolumeDialog } from "../components/MapVolumeDialog";
 import { OiErrorAlert } from "../components/OiErrorAlert";
+import { PlanParamDialog } from "../components/PlanParamDialog";
+import { ParamFields } from "../components/ParamFields";
 import { useSafetyMode } from "../components/SafetyModeProvider";
 import { useSessionContext } from "../components/SessionProvider";
 import { SnapshotVolumeDialog } from "../components/SnapshotVolumeDialog";
@@ -73,6 +74,7 @@ import {
   logsUrlForTarget,
   parseFaultTargets,
 } from "../lib/faultTargets";
+import { generateRandomHex, initialParamValues, paramFieldType, paramsBlocker, type ParamEntries } from "../lib/params";
 import { isStrongPassword, passwordScore } from "../lib/passwordStrength";
 import {
   appPriorityColor,
@@ -98,11 +100,10 @@ import type {
   HealthcheckSummary,
   ImagePin,
   ImageSummary,
-  InstallRequirement,
   ResourceDef,
+  ResourceInstance,
   RestartSummary,
   SeedlingEvent,
-  SiteVolume,
 } from "../lib/types";
 
 /** Restart count for an instance, linking through to its full history. The
@@ -190,8 +191,9 @@ function AppPriorityControl({
 }
 
 function lifecycleColor(
-  state: string,
+  lifecycle: string,
 ): "success" | "warning" | "error" | "default" {
+  const state = lifecycle.toLowerCase();
   if (state === "ready" || state === "active") return "success";
   if (state === "failed") return "error";
   if (state === "excluded") return "warning";
@@ -200,15 +202,20 @@ function lifecycleColor(
 
 type HealthcheckState = "passing" | "failing" | "starting" | "idle";
 
+// spec: UI#app-status
+// The instance's own `health` is the check state. A server that does not
+// report it leaves the state to be read from the instance's lifecycle and its
+// health check faults.
 function healthcheckState(
-  lifecycle: string,
-  instanceId: string,
+  instance: ResourceInstance,
   faults: FaultRecord[],
 ): HealthcheckState {
+  if (instance.health !== undefined) return instance.health ?? "idle";
   const failing = faults.some(
-    (f) => f.kind === "health_check_failed" && f.instance_id === instanceId,
+    (f) => f.kind === "health_check_failed" && f.instance_id === instance.id,
   );
   if (failing) return "failing";
+  const lifecycle = instance.lifecycle.toLowerCase();
   if (lifecycle === "ready") return "passing";
   if (lifecycle === "running") return "starting";
   return "idle";
@@ -232,37 +239,34 @@ function healthcheckChipColor(
 // spec: UI#app-status
 function HealthcheckIndicator({
   hc,
-  lifecycle,
-  instanceId,
+  instance,
   faults,
 }: {
   hc: HealthcheckSummary;
-  lifecycle: string;
-  instanceId: string;
+  instance: ResourceInstance;
   faults: FaultRecord[];
 }) {
-  const state = healthcheckState(lifecycle, instanceId, faults);
-  const cmdPreview =
-    hc.kind === "command" && hc.cmd ? hc.cmd.join(" ") : hc.kind;
-  const truncated =
-    cmdPreview.length > 80 ? `${cmdPreview.slice(0, 77)}…` : cmdPreview;
+  const state = healthcheckState(instance, faults);
   const tooltip = [
     `healthcheck (${hc.kind}): ${state}`,
     `on_failure: ${hc.on_failure}`,
-    truncated,
+    ...(hc.kind === "command" && hc.cmd
+      ? [truncateCommand(hc.cmd.join(" "), 80)]
+      : []),
   ].join("\n");
-  const label =
+  const stateLabel =
     state === "failing"
       ? "unhealthy"
       : state === "starting"
         ? "starting"
         : state === "passing"
           ? "healthy"
-          : "check";
+          : "unchecked";
   return (
     <Tooltip title={<span style={{ whiteSpace: "pre-line" }}>{tooltip}</span>}>
       <Chip
-        label={label}
+        label={`healthcheck: ${stateLabel} · ${hc.on_failure}`}
+        tabIndex={0}
         color={healthcheckChipColor(state)}
         size="small"
         variant="outlined"
@@ -309,11 +313,14 @@ function DeploymentPriorityIndicator({
   );
 }
 
+function truncateCommand(command: string, max: number): string {
+  return command.length > max ? `${command.slice(0, max - 3)}…` : command;
+}
+
 function containerHealthcheck(
   def: ResourceDef | undefined,
 ): HealthcheckSummary | null {
-  if (!def) return null;
-  if (def.kind !== "deployment" && def.kind !== "job") return null;
+  if (!def || def.kind !== "deployment") return null;
   return def.container.healthcheck ?? null;
 }
 
@@ -321,10 +328,7 @@ function healthcheckTooltip(hc: HealthcheckSummary): string {
   const lines: string[] = [];
   lines.push(`kind: ${hc.kind}`);
   if (hc.kind === "command" && hc.cmd) {
-    const joined = hc.cmd.join(" ");
-    lines.push(
-      `cmd: ${joined.length > 120 ? `${joined.slice(0, 117)}…` : joined}`,
-    );
+    lines.push(`cmd: ${truncateCommand(hc.cmd.join(" "), 120)}`);
   }
   lines.push(
     `interval=${hc.interval_secs}s · timeout=${hc.timeout_secs}s · retries=${hc.retries} · start_period=${hc.start_period_secs}s`,
@@ -336,14 +340,10 @@ function healthcheckTooltip(hc: HealthcheckSummary): string {
 function healthcheckChipLabel(hc: HealthcheckSummary): string {
   const base = `healthcheck (${hc.kind})`;
   switch (hc.on_failure) {
-    case "none":
-      return base;
-    case "restart":
-      return `${base}, restart on failure`;
-    case "kill":
-      return `${base}, kill on failure`;
-    case "stop":
-      return `${base}, stop on failure`;
+    case "replace":
+      return `${base}, replace on failure`;
+    case "monitor":
+      return `${base}, monitor only`;
   }
 }
 
@@ -602,7 +602,7 @@ function ResourceDefDetail({ def }: { def: ResourceDef }) {
             variant="outlined"
           />
         )}
-        {def.container.healthcheck && (
+        {def.kind === "deployment" && def.container.healthcheck && (
           <Tooltip
             title={
               <span style={{ whiteSpace: "pre-line" }}>
@@ -921,6 +921,11 @@ function ResourcesSection({
                   <TableRow>
                     <TableCell colSpan={3} sx={{ color: "text.secondary" }}>
                       No instances.
+                      {r.priority !== undefined && r.priority !== "normal" && (
+                        <Box component="span" sx={{ ml: 1 }}>
+                          <DeploymentPriorityIndicator priority={r.priority} />
+                        </Box>
+                      )}
                     </TableCell>
                   </TableRow>
                 ) : (
@@ -952,8 +957,7 @@ function ResourcesSection({
                           {containerHealthcheck(r.def) && (
                             <HealthcheckIndicator
                               hc={containerHealthcheck(r.def)!}
-                              lifecycle={inst.lifecycle}
-                              instanceId={inst.id}
+                              instance={inst}
                               faults={r.faults}
                             />
                           )}
@@ -1021,6 +1025,7 @@ function ParamsSection({
   const [adding, setAdding] = useState(false);
   const [addName, setAddName] = useState("");
   const [addValue, setAddValue] = useState("");
+  const [planning, setPlanning] = useState<{ name: string; value: string } | null>(null);
 
   const startEdit = (p: AppParam) => {
     setEditing(p.name);
@@ -1115,6 +1120,14 @@ function ParamsSection({
         />
       </TableCell>
       <TableCell align="right" sx={{ whiteSpace: "nowrap" }}>
+        <IconActionButton
+          safety="read"
+          tooltip="Plan this change"
+          onClick={() => setPlanning({ name: addName.trim(), value: addValue })}
+          disabled={!addName.trim()}
+        >
+          <ArticleIcon fontSize="small" />
+        </IconActionButton>
         <IconActionButton
           safety="write"
           tooltip="Save"
@@ -1268,6 +1281,17 @@ function ParamsSection({
                                   </IconButton>
                                 </Tooltip>
                               )}
+                              <Tooltip title="Plan this change">
+                                <IconButton
+                                  size="small"
+                                  aria-label="Plan this change"
+                                  onClick={() =>
+                                    setPlanning({ name: p.name, value: draft })
+                                  }
+                                >
+                                  <ArticleIcon fontSize="small" />
+                                </IconButton>
+                              </Tooltip>
                               <Tooltip title="Save">
                                 <span>
                                   <IconButton
@@ -1394,23 +1418,16 @@ function ParamsSection({
           </TableBody>
         </Table>
       </TableContainer>
+      {planning && (
+        <PlanParamDialog
+          appName={appName}
+          name={planning.name}
+          value={planning.value}
+          onClose={() => setPlanning(null)}
+        />
+      )}
     </Stack>
   );
-}
-
-function paramFieldType(kind: string, secret?: boolean): string {
-  if (secret || kind === "password" || kind === "weak-password")
-    return "password";
-  if (kind === "email") return "email";
-  return "text";
-}
-
-// spec: ACN#param-kinds
-// Default `random` generator output: 32 bytes, lowercase hex (64 chars).
-function generateRandomHex(): string {
-  const bytes = new Uint8Array(32);
-  crypto.getRandomValues(bytes);
-  return Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
 }
 
 function ActionInvokeDialog({
@@ -1427,22 +1444,10 @@ function ActionInvokeDialog({
   onSuccess: () => void;
 }) {
   const { execute, loading, error, clearError } = useOiAction();
+  const paramEntries = Object.entries(action.params) as ParamEntries;
   const [values, setValues] = useState<Record<string, string>>(() =>
-    Object.fromEntries(
-      Object.entries(action.params).map(
-        ([k, def]: [string, InstallRequirement]) => [
-          k,
-          def.default_value ?? "",
-        ],
-      ),
-    ),
+    initialParamValues(paramEntries),
   );
-  const [showPasswords, setShowPasswords] = useState<Record<string, boolean>>(
-    {},
-  );
-
-  const toggleShow = (key: string) =>
-    setShowPasswords((s) => ({ ...s, [key]: !s[key] }));
 
   const handleClose = () => {
     clearError();
@@ -1463,27 +1468,6 @@ function ActionInvokeDialog({
     handleClose();
   };
 
-  const paramEntries = Object.entries(action.params) as [
-    string,
-    InstallRequirement,
-  ][];
-
-  const hasWeakPassword = paramEntries.some(
-    ([key, def]) =>
-      def.kind === "password" &&
-      values[key] != null &&
-      !isStrongPassword(values[key]),
-  );
-
-  // spec: ACN#volume-params
-  // The dialog opens on demand, so the extra round-trip when the action has
-  // no volume params is acceptable; the alternative is a conditional hook
-  // (which useOiQuery doesn't support).
-  const { data: siteVolumes } = useOiQuery<SiteVolume[]>(
-    "/volumes/site/list",
-    {},
-  );
-
   return (
     <Dialog open={open} onClose={handleClose} maxWidth="sm" fullWidth>
       <DialogTitle sx={{ fontFamily: "monospace", pb: 1 }}>
@@ -1502,135 +1486,11 @@ function ActionInvokeDialog({
               No params required.
             </Typography>
           ) : (
-            paramEntries.map(([key, def]) => {
-              if (def.kind === "volume") {
-                return (
-                  <FormControl
-                    key={key}
-                    size="small"
-                    required={def.required}
-                    fullWidth
-                  >
-                    <InputLabel id={`volume-${key}-label`}>{key}</InputLabel>
-                    <Select
-                      labelId={`volume-${key}-label`}
-                      label={key}
-                      value={values[key] ?? ""}
-                      onChange={(e) =>
-                        setValues((v) => ({
-                          ...v,
-                          [key]: e.target.value as string,
-                        }))
-                      }
-                    >
-                      {(siteVolumes ?? []).map((v) => (
-                        <MenuItem key={v.name} value={v.name}>
-                          <Box
-                            sx={{ fontFamily: "monospace", display: "inline" }}
-                          >
-                            {v.name}
-                          </Box>
-                          <Box
-                            component="span"
-                            sx={{ ml: 1, color: "text.secondary" }}
-                          >
-                            {v.kind}
-                          </Box>
-                        </MenuItem>
-                      ))}
-                    </Select>
-                    {def.description && (
-                      <FormHelperText>{def.description}</FormHelperText>
-                    )}
-                  </FormControl>
-                );
-              }
-              const isPassword =
-                def.kind === "password" || def.kind === "weak-password";
-              const isRandom = def.kind === "random";
-              const isMultiline = def.kind === "multiline";
-              const val = values[key] ?? "";
-              const weak =
-                def.kind === "password" &&
-                val.length > 0 &&
-                !isStrongPassword(val);
-              const helperText =
-                def.kind === "password" && val.length > 0
-                  ? weak
-                    ? "Password is too weak"
-                    : (def.description ?? undefined)
-                  : def.kind === "weak-password" && val.length > 0
-                    ? `Strength: ${passwordScore(val)}/4${def.description ? ` — ${def.description}` : ""}`
-                    : (def.description ?? undefined);
-              return (
-                <TextField
-                  key={key}
-                  label={key}
-                  size="small"
-                  value={val}
-                  onChange={(e) =>
-                    setValues((v) => ({ ...v, [key]: e.target.value }))
-                  }
-                  helperText={helperText}
-                  error={weak}
-                  multiline={isMultiline}
-                  minRows={isMultiline ? 3 : undefined}
-                  type={
-                    isMultiline
-                      ? undefined
-                      : showPasswords[key]
-                        ? "text"
-                        : paramFieldType(def.kind)
-                  }
-                  required={def.required}
-                  slotProps={{
-                    input:
-                      isPassword || isRandom
-                        ? {
-                            endAdornment: (
-                              <InputAdornment position="end">
-                                {isRandom && (
-                                  <Tooltip title="Generate (32 bytes, hex)">
-                                    <IconButton
-                                      size="small"
-                                      onClick={() =>
-                                        setValues((v) => ({
-                                          ...v,
-                                          [key]: generateRandomHex(),
-                                        }))
-                                      }
-                                    >
-                                      <CasinoIcon fontSize="small" />
-                                    </IconButton>
-                                  </Tooltip>
-                                )}
-                                {isPassword && (
-                                  <Tooltip
-                                    title={showPasswords[key] ? "Hide" : "Show"}
-                                  >
-                                    <IconButton
-                                      size="small"
-                                      onClick={() => toggleShow(key)}
-                                      edge="end"
-                                    >
-                                      {showPasswords[key] ? (
-                                        <VisibilityOffIcon fontSize="small" />
-                                      ) : (
-                                        <VisibilityIcon fontSize="small" />
-                                      )}
-                                    </IconButton>
-                                  </Tooltip>
-                                )}
-                              </InputAdornment>
-                            ),
-                          }
-                        : undefined,
-
-                    htmlInput: { style: { fontFamily: "monospace" } },
-                  }}
-                />
-              );
-            })
+            <ParamFields
+              entries={paramEntries}
+              values={values}
+              onChange={(key, value) => setValues((v) => ({ ...v, [key]: value }))}
+            />
           )}
         </Stack>
       </DialogContent>
@@ -1641,7 +1501,7 @@ function ActionInvokeDialog({
         <SolidActionButton
           safety="write"
           onClick={handleSubmit}
-          disabled={loading || hasWeakPassword}
+          disabled={loading || paramsBlocker(paramEntries, values) !== null}
         >
           {loading ? "Running…" : action.kind === "install" ? "Install" : "Run"}
         </SolidActionButton>
@@ -2007,32 +1867,9 @@ function ShellOpenDialog({
   onClose: () => void;
   onOpen: (params: Record<string, string>) => void;
 }) {
+  const paramEntries = Object.entries(action.params) as ParamEntries;
   const [values, setValues] = useState<Record<string, string>>(() =>
-    Object.fromEntries(
-      Object.entries(action.params).map(
-        ([k, def]: [string, InstallRequirement]) => [
-          k,
-          def.default_value ?? "",
-        ],
-      ),
-    ),
-  );
-  const [showPasswords, setShowPasswords] = useState<Record<string, boolean>>(
-    {},
-  );
-
-  const toggleShow = (key: string) =>
-    setShowPasswords((s) => ({ ...s, [key]: !s[key] }));
-
-  const paramEntries = Object.entries(action.params) as [
-    string,
-    InstallRequirement,
-  ][];
-  const hasWeakPassword = paramEntries.some(
-    ([key, def]) =>
-      def.kind === "password" &&
-      values[key] != null &&
-      !isStrongPassword(values[key]),
+    initialParamValues(paramEntries),
   );
 
   return (
@@ -2042,93 +1879,11 @@ function ShellOpenDialog({
       </DialogTitle>
       <DialogContent>
         <Stack spacing={2} sx={{ mt: 0.5 }}>
-          {paramEntries.map(([key, def]) => {
-            const isPassword =
-              def.kind === "password" || def.kind === "weak-password";
-            const isRandom = def.kind === "random";
-            const isMultiline = def.kind === "multiline";
-            const val = values[key] ?? "";
-            const weak =
-              def.kind === "password" &&
-              val.length > 0 &&
-              !isStrongPassword(val);
-            const helperText =
-              def.kind === "password" && val.length > 0
-                ? weak
-                  ? "Password is too weak"
-                  : (def.description ?? undefined)
-                : def.kind === "weak-password" && val.length > 0
-                  ? `Strength: ${passwordScore(val)}/4${def.description ? ` — ${def.description}` : ""}`
-                  : (def.description ?? undefined);
-            return (
-              <TextField
-                key={key}
-                label={key}
-                size="small"
-                value={val}
-                onChange={(e) =>
-                  setValues((v) => ({ ...v, [key]: e.target.value }))
-                }
-                helperText={helperText}
-                error={weak}
-                multiline={isMultiline}
-                minRows={isMultiline ? 3 : undefined}
-                type={
-                  isMultiline
-                    ? undefined
-                    : showPasswords[key]
-                      ? "text"
-                      : paramFieldType(def.kind)
-                }
-                required={def.required}
-                slotProps={{
-                  input:
-                    isPassword || isRandom
-                      ? {
-                          endAdornment: (
-                            <InputAdornment position="end">
-                              {isRandom && (
-                                <Tooltip title="Generate (32 bytes, hex)">
-                                  <IconButton
-                                    size="small"
-                                    onClick={() =>
-                                      setValues((v) => ({
-                                        ...v,
-                                        [key]: generateRandomHex(),
-                                      }))
-                                    }
-                                  >
-                                    <CasinoIcon fontSize="small" />
-                                  </IconButton>
-                                </Tooltip>
-                              )}
-                              {isPassword && (
-                                <Tooltip
-                                  title={showPasswords[key] ? "Hide" : "Show"}
-                                >
-                                  <IconButton
-                                    size="small"
-                                    onClick={() => toggleShow(key)}
-                                    edge="end"
-                                  >
-                                    {showPasswords[key] ? (
-                                      <VisibilityOffIcon fontSize="small" />
-                                    ) : (
-                                      <VisibilityIcon fontSize="small" />
-                                    )}
-                                  </IconButton>
-                                </Tooltip>
-                              )}
-                            </InputAdornment>
-                          ),
-                        }
-                      : undefined,
-
-                  htmlInput: { style: { fontFamily: "monospace" } },
-                }}
-              />
-            );
-          })}
+          <ParamFields
+            entries={paramEntries}
+            values={values}
+            onChange={(key, value) => setValues((v) => ({ ...v, [key]: value }))}
+          />
         </Stack>
       </DialogContent>
       <DialogActions>
@@ -2136,7 +1891,7 @@ function ShellOpenDialog({
         <SolidActionButton
           safety="write"
           onClick={() => onOpen(values)}
-          disabled={hasWeakPassword}
+          disabled={paramsBlocker(paramEntries, values) !== null}
         >
           shell
         </SolidActionButton>
@@ -2189,10 +1944,18 @@ function AppImagesSection({
   resources: AppResource[];
   onRefresh: () => void;
 }) {
-  const { data: imagesData, refetch: refetchImages } = useOiQuery<{
+  const {
+    data: imagesData,
+    error: imagesError,
+    refetch: refetchImages,
+  } = useOiQuery<{
     images: ImageSummary[];
   }>("/images/list", {});
-  const { data: pinsData, refetch: refetchPins } = useOiQuery<{
+  const {
+    data: pinsData,
+    error: pinsError,
+    refetch: refetchPins,
+  } = useOiQuery<{
     pins: ImagePin[];
   }>("/images/pins/list", { app: appName });
   const {
@@ -2399,6 +2162,8 @@ function AppImagesSection({
           </OutlinedActionButton>
         )}
       </Box>
+      {imagesError && <OiErrorAlert error={imagesError} />}
+      {pinsError && <OiErrorAlert error={pinsError} />}
       {mutateError && <OiErrorAlert error={mutateError} />}
       {discoverResult && <DiscoverSummary result={discoverResult} />}
       <TableContainer component={Paper} variant="outlined">
@@ -2733,6 +2498,7 @@ const APP_DETAIL_EVENTS: Set<string> = new Set([
   "ParamSet",
   "ParamUnset",
   "ResourceStateChanged",
+  "InstanceHealthChanged",
   "FaultFiled",
   "FaultCleared",
   "ScaleChanged",
@@ -2754,7 +2520,7 @@ export default function AppDetail() {
     "/apps/show",
     { app: name },
   );
-  const { data: mappings, refetch: refetchMappings } = useOiQuery<
+  const { data: mappings, error: mappingsError, refetch: refetchMappings } = useOiQuery<
     ExternalMapping[]
   >("/volumes/external/list", { app: name });
   const [mapDialogState, setMapDialogState] = useState<
@@ -2986,6 +2752,7 @@ export default function AppDetail() {
             <>
               <Divider />
               <Section title="External Volumes">
+                {mappingsError && <OiErrorAlert error={mappingsError} />}
                 <TableContainer component={Paper} variant="outlined">
                   <Table size="small">
                     <TableHead>
@@ -3044,7 +2811,7 @@ export default function AppDetail() {
                                       color: "text.secondary",
                                     }}
                                   >
-                                    Not mapped
+                                    {mappingsError ? "Unknown" : "Not mapped"}
                                   </Typography>
                                 )}
                               </TableCell>
@@ -3166,6 +2933,12 @@ export default function AppDetail() {
               </Box>
             </>
           )}
+
+          <Divider />
+
+          <Section title="Generation history">
+            <GenerationHistory appName={name!} />
+          </Section>
         </Stack>
       )}
       {mapDialogState && (

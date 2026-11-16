@@ -31,7 +31,7 @@ mod applications;
 pub mod certificates;
 pub mod store;
 
-pub use store::{CanopySettings, get_settings, set_enabled, set_server_id};
+pub use store::{CanopySettings, get_settings, set_enabled};
 
 // spec: CNR#report-schedule
 /// How often a report is sent.
@@ -141,13 +141,13 @@ async fn report_once(state: &Arc<OiState>) -> Outcome {
     if !state.canopy.is_enabled() {
         return Outcome::Skipped;
     }
-    if state.canopy.current().is_none() {
+    let Some(offer) = state.canopy.current() else {
         return Outcome::Skipped;
-    }
+    };
 
     let client = CanopyClient::new(OiCanopyTransport::new(Arc::clone(&state.canopy)));
 
-    let server_id = match server_id(state, &client).await {
+    let server_id = match server_id(state, &client, offer.key_fingerprint.as_deref()).await {
         Ok(id) => id,
         Err(e) => return Outcome::Failed(e),
     };
@@ -171,28 +171,43 @@ async fn report_once(state: &Arc<OiState>) -> Outcome {
         // do" and acted on.
         Ok(response) => Outcome::Reported(Box::new(response.names)),
         Err(e) => {
-            // The cached identity is the most likely thing to be wrong when a
-            // report is rejected, so drop it and let the next attempt re-resolve
-            // rather than retrying the same bad address forever.
-            state.db.call(|db| {
-                let _ = store::set_server_id(db, None);
-            });
+            // spec: CNR#server-identity
+            // Whatever the failure, the cached identifier is the likeliest thing
+            // to be wrong, so drop it and let the next report resolve it again.
+            discard_cached_server_id(state);
             Outcome::Failed(format!("{e}"))
         }
     }
 }
 
+fn discard_cached_server_id(state: &Arc<OiState>) {
+    if let Err(e) = state.db.call(store::discard_server_id) {
+        tracing::warn!("cannot discard the cached Canopy server identifier: {e}");
+    }
+}
+
 // spec: CNR#server-identity
 /// The server identifier Canopy knows this instance by, from cache or resolved.
+///
+/// `offer_key` is the fingerprint of the key the selected offer's client
+/// authenticated with. The cache serves only that key; an identifier cached
+/// for another one is discarded, and one that cannot be tied to the offer's key
+/// is not used.
 async fn server_id(
     state: &Arc<OiState>,
     client: &CanopyClient<OiCanopyTransport>,
+    offer_key: Option<&str>,
 ) -> Result<String, String> {
-    let cached = state
-        .db
-        .call(|db| store::get_settings(db).ok().and_then(|s| s.server_id));
-    if let Some(id) = cached {
-        return Ok(id);
+    match state.db.call(store::get_settings) {
+        Ok(settings) => {
+            if let Some(id) = settings.server_id_for(offer_key) {
+                return Ok(id.to_owned());
+            }
+            if settings.server_id.is_some() {
+                discard_cached_server_id(state);
+            }
+        }
+        Err(e) => tracing::warn!("cannot read the cached Canopy server identifier: {e}"),
     }
 
     let resolved = client
@@ -200,10 +215,20 @@ async fn server_id(
         .await
         .map_err(|e| format!("cannot resolve which server this instance is: {e}"))?;
     let id = resolved.server_id.to_string();
-    let to_store = id.clone();
-    state.db.call(move |db| {
-        let _ = store::set_server_id(db, Some(&to_store));
-    });
+    match offer_key {
+        Some(key) => {
+            let (to_store, key) = (id.clone(), key.to_owned());
+            if let Err(e) = state
+                .db
+                .call(move |db| store::cache_server_id(db, &to_store, &key))
+            {
+                tracing::warn!("cannot cache the Canopy server identifier: {e}");
+            }
+        }
+        None => tracing::debug!(
+            "the offering client's key is unknown, so the Canopy server identifier is not cached"
+        ),
+    }
     Ok(id)
 }
 
@@ -812,6 +837,7 @@ mod tests {
             "test".into(),
             "https://example.invalid".into(),
             None,
+            None,
             crate::oi::canopy::test_peer(),
         );
 
@@ -854,6 +880,7 @@ mod tests {
             "test".into(),
             "https://example.invalid".into(),
             None,
+            None,
             crate::oi::canopy::test_peer(),
         );
 
@@ -870,5 +897,105 @@ mod tests {
             1,
             "successive failures of one condition are one fault with the latest detail"
         );
+    }
+
+    const SERVER: &str = "6f8a2b1c-0000-4000-8000-000000000000";
+
+    /// Offer a client that authenticated with `key` and answers
+    /// `/servers/self` with the server `SERVER` and rejects every report,
+    /// returning the paths it was asked for in order.
+    fn offer_rejecting_reports(
+        oi: &TestOi,
+        key: Option<&str>,
+    ) -> Arc<parking_lot::Mutex<Vec<String>>> {
+        let seen = Arc::new(parking_lot::Mutex::new(Vec::new()));
+        let log = Arc::clone(&seen);
+        oi.state.canopy.offer(
+            1,
+            "test".into(),
+            "https://example.invalid".into(),
+            None,
+            key.map(str::to_owned),
+            crate::oi::canopy::test_peer_answering(move |path| {
+                log.lock().push(path.to_owned());
+                if path == "/servers/self" {
+                    (200, format!(r#"{{"server_id":"{SERVER}"}}"#).into_bytes())
+                } else {
+                    (500, b"{}".to_vec())
+                }
+            }),
+        );
+        seen
+    }
+
+    fn cached(oi: &TestOi) -> Option<String> {
+        oi.state
+            .db
+            .call(store::get_settings)
+            .unwrap()
+            .server_id
+    }
+
+    // spec: CNR#server-identity
+    #[test]
+    fn the_cached_identifier_is_used_only_for_the_key_it_was_resolved_through() {
+        let oi = TestOi::new();
+        oi.state
+            .db
+            .call(|db| store::cache_server_id(db, "cached-server", "key-a"))
+            .unwrap();
+        let seen = offer_rejecting_reports(&oi, Some("key-a"));
+
+        let _ = oi.block_on(report(&oi.state));
+        assert_eq!(
+            *seen.lock(),
+            ["/status/cached-server"],
+            "the same key reports without resolving"
+        );
+    }
+
+    // spec: CNR#server-identity
+    #[test]
+    fn an_identifier_cached_for_another_key_is_discarded_and_resolved_again() {
+        let oi = TestOi::new();
+        oi.state
+            .db
+            .call(|db| store::cache_server_id(db, "cached-server", "key-a"))
+            .unwrap();
+        let seen = offer_rejecting_reports(&oi, Some("key-b"));
+
+        let _ = oi.block_on(report(&oi.state));
+        assert_eq!(
+            *seen.lock(),
+            ["/servers/self".to_owned(), format!("/status/{SERVER}")],
+            "another key resolves the server for itself"
+        );
+    }
+
+    // spec: CNR#server-identity
+    #[test]
+    fn a_failed_report_discards_the_cached_identifier() {
+        let oi = TestOi::new();
+        let _seen = offer_rejecting_reports(&oi, Some("key-a"));
+        oi.block_on(report(&oi.state)).expect_err("rejected");
+        assert_eq!(cached(&oi), None);
+    }
+
+    // spec: CNR#server-identity
+    #[test]
+    fn a_resolved_identifier_is_cached_with_the_key_that_resolved_it() {
+        let oi = TestOi::new();
+        let seen = offer_rejecting_reports(&oi, Some("key-a"));
+        // The report is rejected, which discards what was just cached, so what
+        // is cached is read back from a resolution that is not followed by a send.
+        let client = CanopyClient::new(OiCanopyTransport::new(Arc::clone(&oi.state.canopy)));
+        let id = oi
+            .block_on(server_id(&oi.state, &client, Some("key-a")))
+            .unwrap();
+        assert_eq!(id, SERVER);
+        let settings = oi.state.db.call(store::get_settings).unwrap();
+        assert_eq!(settings.server_id_for(Some("key-a")), Some(SERVER));
+        assert_eq!(settings.server_id_for(Some("key-b")), None);
+        assert_eq!(*seen.lock(), ["/servers/self"]);
     }
 }

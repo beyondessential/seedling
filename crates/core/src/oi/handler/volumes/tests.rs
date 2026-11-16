@@ -829,7 +829,7 @@ fn snapshot_sources_are_checked_before_the_host_is() {
         .unwrap_err();
     assert_eq!(code, "requirements_invalid");
 
-    // A managed site volume on a host that is not on BTRFS.
+    // A managed site volume that is not stored as a BTRFS subvolume.
     make_site_volume(&oi, "managed");
     let (code, msg) = oi
         .call(
@@ -838,7 +838,11 @@ fn snapshot_sources_are_checked_before_the_host_is() {
         )
         .unwrap_err();
     assert_eq!(code, "requirements_invalid");
-    assert!(msg.contains("BTRFS"), "{msg}");
+    assert!(msg.contains("BTRFS subvolume"), "{msg}");
+    assert!(
+        !msg.contains("data directory"),
+        "the refusal is about the volume, not where the data directory is: {msg}"
+    );
     assert!(!oi.state.driver.volume_store.site_exists("snap"));
 }
 

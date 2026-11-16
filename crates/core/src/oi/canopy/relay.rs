@@ -115,6 +115,7 @@ mod tests {
             "test".into(),
             "https://example.invalid".into(),
             None,
+            None,
             DuplexPeer::new(respond),
         );
         (state, offer)
@@ -266,6 +267,7 @@ mod tests {
             0,
             "test".into(),
             "https://example.invalid".into(),
+            None,
             None,
             DuplexPeer::failing(),
         );

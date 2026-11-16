@@ -495,7 +495,9 @@ pub(crate) fn unset_param(
 
     // spec: PRM#parameter-storage
     // spec: SEC#generation-history
-    if previous_is_secret {
+    // spec: SEC#redaction — a value is withheld if the parameter is secret now
+    // as well as if it was protected when it was recorded.
+    if is_secret || previous_is_secret {
         ctx.events
             .param_change(app.clone(), generation, previous_generation)
             .unset_redacted(param_name);

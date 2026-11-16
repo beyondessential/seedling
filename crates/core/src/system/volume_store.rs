@@ -487,17 +487,12 @@ impl VolumeStore {
 
     // spec: SITE#site-volume-snapshots
     /// Create a read-only BTRFS snapshot at `site-{name}` from `source_path`.
-    /// Errors if BTRFS is not in use.
+    /// Errors if `source_path` is not a BTRFS subvolume.
     pub async fn snapshot_site(
         &self,
         name: &str,
         source_path: &std::path::Path,
     ) -> std::io::Result<()> {
-        if !self.use_btrfs {
-            return Err(std::io::Error::other(
-                "snapshotting requires BTRFS; restart without --without-btrfs",
-            ));
-        }
         if !source_path.exists() {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::NotFound,

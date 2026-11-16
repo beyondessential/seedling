@@ -78,6 +78,20 @@ fn on_change_two_arg_closure_registers() {
 
 // spec: PARAM#change-handlers
 #[test]
+fn on_change_zero_arg_closure_registers() {
+    let app = run_test_script_app(r#"app.param("domain").on_change(|| {});"#);
+    assert!(app.def.load().param_changes.contains("domain"));
+}
+
+// spec: PARAM#change-handlers
+#[test]
+fn on_change_without_a_closure_throws() {
+    let err = run_test_script_err(r#"app.param("domain").on_change(42);"#);
+    assert!(err.to_string().contains("on_change"), "{err}");
+}
+
+// spec: PARAM#change-handlers
+#[test]
 fn on_change_different_params_each_register() {
     let app = run_test_script_app(
         r#"

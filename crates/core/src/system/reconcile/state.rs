@@ -5,7 +5,7 @@ use std::{collections::BTreeMap, time::Duration};
 use seedling_protocol::names::AppName;
 use tracing::{error, warn};
 
-use super::{AppSnapshot, Reconciler};
+use super::{AppSnapshot, Reconciler, faults::AcquisitionError};
 use crate::{
     defs::resource::ResourceKind,
     runtime::{
@@ -19,7 +19,7 @@ use crate::{
         },
         identity::{InstanceId, ResourceInstance},
         lifecycle::LifecycleState,
-        tls::env::{RuntimeHoldings, runtime_holdings},
+        tls::env::{RuntimeHoldings, latest_acquisition_errors, runtime_holdings},
     },
 };
 
@@ -29,6 +29,16 @@ use crate::{
 /// generous margin for transient network issues.
 // spec: FLT#certificate-faults
 const CERT_ACQUISITION_DEADLINE: Duration = Duration::from_secs(180);
+
+/// What the observation of one ingress's certificates found.
+struct IngressCerts {
+    instance: ResourceInstance,
+    /// A certificate was observed for every hostname.
+    all_observed: bool,
+    /// Hostnames with no certificate observed past the deadline, with no
+    /// acquisition in progress.
+    failing: Vec<String>,
+}
 
 /// Input to the DB lookup performed in emit_state_changes.
 #[derive(Clone)]
@@ -267,11 +277,23 @@ impl Reconciler {
             })
             .collect();
 
+        // An ingress fails when any of its hostnames does, and recovers only
+        // once a certificate is observed for every one of them.
+        let mut ingresses: BTreeMap<String, IngressCerts> = BTreeMap::new();
         for (instance, hostname) in &targets {
+            let entry = ingresses
+                .entry(instance.id.to_hex())
+                .or_insert_with(|| IngressCerts {
+                    instance: instance.clone(),
+                    all_observed: true,
+                    failing: Vec::new(),
+                });
             if observed_hostnames.contains(hostname) {
                 self.warm_cert_first_seen.remove(hostname);
-                self.clear_resource_fault(instance, "cert_acquisition_failed");
-            } else if path.is_none() || !runtime_known || undetermined.contains(hostname) {
+                continue;
+            }
+            entry.all_observed = false;
+            if path.is_none() || !runtime_known || undetermined.contains(hostname) {
                 // The proxy's cache, or the runtime's own store, could not be
                 // read, so whether a certificate is held for this hostname is
                 // unknown. Unknown is not absent, and faulting a hostname that is
@@ -286,14 +308,44 @@ impl Reconciler {
             } else if let Some(first) = self.warm_cert_first_seen.get(hostname)
                 && now.duration_since(*first) >= CERT_ACQUISITION_DEADLINE
             {
-                self.file_resource_fault(
-                    instance,
-                    "cert_acquisition_failed",
-                    &format!(
-                        "TLS certificate for {hostname} not observed valid after {}s",
-                        CERT_ACQUISITION_DEADLINE.as_secs()
-                    ),
-                );
+                entry.failing.push(hostname.clone());
+            }
+        }
+
+        let failing_hostnames: Vec<String> = ingresses
+            .values()
+            .flat_map(|i| i.failing.iter().cloned())
+            .collect();
+        let errors = if failing_hostnames.is_empty() {
+            Ok(BTreeMap::new())
+        } else {
+            let hostnames = failing_hostnames.clone();
+            self.db
+                .call(move |db| latest_acquisition_errors(db, &hostnames))
+        };
+        if let Err(e) = &errors {
+            warn!(error = %e, "warm_certs: cannot read the latest acquisition errors");
+        }
+
+        for ingress in ingresses.values() {
+            if ingress.all_observed {
+                self.clear_resource_fault(&ingress.instance, "cert_acquisition_failed");
+            } else if !ingress.failing.is_empty() {
+                let failing: Vec<(String, AcquisitionError)> = ingress
+                    .failing
+                    .iter()
+                    .map(|hostname| {
+                        let error = match &errors {
+                            Ok(errors) => match errors.get(hostname) {
+                                Some(error) => AcquisitionError::Recorded(error.clone()),
+                                None => AcquisitionError::None,
+                            },
+                            Err(_) => AcquisitionError::Unreadable,
+                        };
+                        (hostname.clone(), error)
+                    })
+                    .collect();
+                self.file_cert_acquisition_fault(&ingress.instance, &failing);
             }
         }
 

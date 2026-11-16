@@ -67,7 +67,7 @@ fn build_tls_config(
     Ok(tls_config)
 }
 
-fn extract_client_fp(conn: &quinn::Connection) -> Option<String> {
+pub(crate) fn extract_client_fp(conn: &quinn::Connection) -> Option<String> {
     let id = conn.peer_identity()?;
     let certs = id
         .downcast::<Vec<rustls_pki_types::CertificateDer<'static>>>()

@@ -8,41 +8,19 @@ use crate::runtime::{
 };
 
 impl Reconciler {
-    /// File a fault scoped to a specific resource instance, if no active fault
-    /// of the same kind already exists for that instance. Used by callers that
-    /// don't have a typed update struct (e.g. cert observation).
-    // spec: FLT#filing-and-clearing
-    // spec: FLT#fault-records
-    pub(super) fn file_resource_fault(
+    /// File `cert_acquisition_failed` for an ingress instance, or bring the
+    /// description of the one already active up to date with the hostnames
+    /// failing now and their latest errors.
+    // spec: FLT#certificate-faults
+    pub(super) fn file_cert_acquisition_fault(
         &self,
         instance: &ResourceInstance,
-        fault_kind: &str,
-        description: &str,
+        failing: &[(String, AcquisitionError)],
     ) {
         let instance = instance.clone();
-        let fault_kind = fault_kind.to_owned();
-        let description = description.to_owned();
-        self.db.call(move |db| {
-            let inst_hex = instance.id.to_hex();
-            let kind_str = instance.kind.type_name().to_owned();
-            let already_filed = faults::list_active_faults(db, Some(&instance.app))
-                .unwrap_or_default()
-                .iter()
-                .any(|f| f.kind == fault_kind && f.instance_id.as_deref() == Some(&inst_hex));
-            if !already_filed
-                && let Err(e) = faults::file_fault(
-                    db,
-                    &instance.app,
-                    Some(&kind_str),
-                    instance.name.as_deref(),
-                    Some(&inst_hex),
-                    &fault_kind,
-                    &description,
-                )
-            {
-                tracing::warn!(app = %instance.app, instance = %inst_hex, kind = %fault_kind, "failed to file resource fault: {e}");
-            }
-        });
+        let description = describe_cert_acquisition(failing);
+        self.db
+            .call(move |db| apply_cert_acquisition_fault(db, &instance, &description));
     }
 
     /// Clear all active faults of the given kind for a specific resource
@@ -201,53 +179,14 @@ impl Reconciler {
     ) {
         let app = app.clone();
         let failures: Vec<ResourceInstance> = update.health_check_failures.to_vec();
-        let passes: Vec<ResourceInstance> = update.health_check_passes.to_vec();
-        self.db.call(move |db| {
-            for instance in &failures {
-                let inst_hex = instance.id.to_hex();
-                let kind_str = instance.kind.type_name().to_owned();
-                let already_filed = faults::list_active_faults(db, Some(&app))
-                    .unwrap_or_default()
-                    .iter()
-                    .any(|f| {
-                        f.kind == "health_check_failed"
-                            && f.instance_id.as_deref() == Some(&inst_hex)
-                    });
-                if !already_filed {
-                    let desc = format!(
-                        "healthcheck for {} has been failing past its grace window",
-                        instance.display_name,
-                    );
-                    if let Err(e) = faults::file_fault(
-                        db,
-                        &app,
-                        Some(&kind_str),
-                        instance.name.as_deref(),
-                        Some(&inst_hex),
-                        "health_check_failed",
-                        &desc,
-                    ) {
-                        tracing::warn!(app = %app, instance = %inst_hex, "failed to file health_check_failed fault: {e}");
-                    }
-                }
-            }
-            for instance in &passes {
-                let inst_hex = instance.id.to_hex();
-                let cleared: Vec<_> = faults::list_active_faults(db, Some(&app))
-                    .unwrap_or_default()
-                    .into_iter()
-                    .filter(|f| {
-                        f.kind == "health_check_failed"
-                            && f.instance_id.as_deref() == Some(&inst_hex)
-                    })
-                    .collect();
-                for f in cleared {
-                    if let Err(e) = faults::clear_fault(db, &f.id, &app) {
-                        tracing::warn!(app = %app, fault_id = %f.id, "failed to clear health_check_failed fault: {e}");
-                    }
-                }
-            }
-        });
+        let cleared: Vec<ResourceInstance> = update
+            .health_check_passes
+            .iter()
+            .chain(&update.unscheduled)
+            .cloned()
+            .collect();
+        self.db
+            .call(move |db| apply_health_check_faults(db, &app, &failures, &cleared));
     }
 
     // spec: FLT#workload-faults
@@ -1082,6 +1021,114 @@ impl Reconciler {
     }
 }
 
+/// What is known of a hostname's latest acquisition error.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) enum AcquisitionError {
+    Recorded(String),
+    /// No attempt or strategy has recorded a failure for the hostname.
+    None,
+    /// The store holding the errors could not be read.
+    Unreadable,
+}
+
+/// A `cert_acquisition_failed` description naming each failing hostname and
+/// its most recent acquisition error.
+// spec: FLT#certificate-faults
+pub(super) fn describe_cert_acquisition(failing: &[(String, AcquisitionError)]) -> String {
+    let hostnames: Vec<String> = failing
+        .iter()
+        .map(|(hostname, error)| match error {
+            AcquisitionError::Recorded(error) => {
+                format!("{hostname} (latest acquisition error: {error})")
+            }
+            AcquisitionError::None => format!("{hostname} (no acquisition error recorded)"),
+            AcquisitionError::Unreadable => {
+                format!("{hostname} (latest acquisition error could not be read)")
+            }
+        })
+        .collect();
+    format!(
+        "no usable TLS certificate has been observed for {}",
+        hostnames.join(", ")
+    )
+}
+
+// spec: FLT#certificate-faults
+pub(super) fn apply_cert_acquisition_fault(
+    db: &Db,
+    instance: &ResourceInstance,
+    description: &str,
+) {
+    let inst_hex = instance.id.to_hex();
+    let key = faults::FaultKey::new(&instance.app, "cert_acquisition_failed", inst_hex.clone());
+    let meta = faults::FaultMeta {
+        resource_type: Some(instance.kind.type_name().to_owned()),
+        resource_name: instance.name.clone(),
+        instance_id: Some(inst_hex),
+    };
+    match faults::file_once(db, &key, &meta, description) {
+        Ok(true) => {}
+        Ok(false) => {
+            if let Err(e) = faults::update_description(db, &key, description) {
+                tracing::warn!(app = %instance.app, error = %e, "failed to refresh cert_acquisition_failed description");
+            }
+        }
+        Err(e) => {
+            tracing::warn!(app = %instance.app, error = %e, "failed to file cert_acquisition_failed fault");
+        }
+    }
+}
+
+// spec: FLT#workload-faults
+/// The database side of [`Reconciler::file_health_check_faults`]: a
+/// `health_check_failed` fault is filed for each failing instance and cleared
+/// for each instance observed healthy or unscheduled.
+pub(super) fn apply_health_check_faults(
+    db: &Db,
+    app: &AppName,
+    failures: &[ResourceInstance],
+    cleared: &[ResourceInstance],
+) {
+    for instance in failures {
+        let inst_hex = instance.id.to_hex();
+        let kind_str = instance.kind.type_name().to_owned();
+        let already_filed = faults::list_active_faults(db, Some(app))
+            .unwrap_or_default()
+            .iter()
+            .any(|f| f.kind == "health_check_failed" && f.instance_id.as_deref() == Some(&inst_hex));
+        if !already_filed {
+            let desc = format!(
+                "healthcheck for {} has been failing past its grace window",
+                instance.display_name,
+            );
+            if let Err(e) = faults::file_fault(
+                db,
+                app,
+                Some(&kind_str),
+                instance.name.as_deref(),
+                Some(&inst_hex),
+                "health_check_failed",
+                &desc,
+            ) {
+                tracing::warn!(app = %app, instance = %inst_hex, "failed to file health_check_failed fault: {e}");
+            }
+        }
+    }
+    for instance in cleared {
+        let inst_hex = instance.id.to_hex();
+        let to_clear: Vec<_> = faults::list_active_faults(db, Some(app))
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|f| f.kind == "health_check_failed" && f.instance_id.as_deref() == Some(&inst_hex))
+            .collect();
+        for f in to_clear {
+            if let Err(e) = faults::clear_fault(db, &f.id, app) {
+                tracing::warn!(app = %app, fault_id = %f.id, "failed to clear health_check_failed fault: {e}");
+            }
+        }
+    }
+}
+
 // spec: FLT#workload-faults
 /// The database side of [`Reconciler::file_crash_loop_faults`], split out so
 /// the filing and clearing policy can be exercised against a database without
@@ -1150,3 +1197,9 @@ pub(super) fn apply_crash_loop_faults(
 
 #[cfg(test)]
 mod crash_loop_tests;
+
+#[cfg(test)]
+mod health_check_tests;
+
+#[cfg(test)]
+mod cert_acquisition_tests;
