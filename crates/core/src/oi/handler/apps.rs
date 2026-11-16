@@ -1842,11 +1842,12 @@ pub(crate) fn update_app(
                 recorded.as_ref().map(|c| (c, cipher.as_ref())),
             )?;
             // spec: SEC#migration
-            crate::runtime::apps::migrate_newly_secret_params(
+            crate::runtime::apps::migrate_param_storage(
                 db,
                 &cipher,
                 &name_owned,
                 &app_for_migration,
+                true,
             );
             tx.commit()?;
             Ok(generation)

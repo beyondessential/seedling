@@ -898,3 +898,59 @@ fn a_param_table_that_cannot_be_read_fails_the_load_rather_than_reading_as_unset
         "the plaintext half must not stand in for both"
     );
 }
+
+fn evaluated(script: &str) -> App {
+    let (app, err) = evaluate_script(
+        &app("myapp"),
+        script,
+        &BTreeMap::new(),
+        &crate::ScriptLimits::default(),
+    );
+    assert!(err.is_none(), "{err:?}");
+    app
+}
+
+// spec: SEC#migration
+#[test]
+fn a_param_moves_between_storages_as_its_secret_flag_changes() {
+    let db = Db::open_in_memory().expect("open");
+    let cipher = crate::runtime::secrets::Cipher::for_tests();
+    let name = app("myapp");
+    upsert_param(&db, &name, &param("token"), "the-value").expect("upsert");
+
+    let secret = evaluated(r#"app.param("token").secret(true);"#);
+    migrate_param_storage(&db, &cipher, &name, &secret, true);
+    assert!(load_params_for_app(&db, &name).unwrap().is_empty());
+    assert!(secret_params::is_stored_secret(&db, &name, &param("token")).unwrap());
+
+    let plain = evaluated(r#"app.param("token").secret(false);"#);
+    migrate_param_storage(&db, &cipher, &name, &plain, true);
+    assert_eq!(
+        load_params_for_app(&db, &name)
+            .unwrap()
+            .get("token")
+            .map(String::as_str),
+        Some("the-value")
+    );
+    assert!(!secret_params::is_stored_secret(&db, &name, &param("token")).unwrap());
+}
+
+// spec: SEC#migration
+#[test]
+fn a_definition_that_threw_part_way_moves_no_value_out_of_secret_storage() {
+    let db = Db::open_in_memory().expect("open");
+    let cipher = crate::runtime::secrets::Cipher::for_tests();
+    let name = app("myapp");
+    secret_params::upsert_secret_param(
+        &db,
+        &cipher,
+        &name,
+        &param("token"),
+        &secrecy::SecretString::new("the-value".to_owned().into()),
+    )
+    .expect("upsert");
+
+    let declared_only = evaluated(r#"app.param("token");"#);
+    migrate_param_storage(&db, &cipher, &name, &declared_only, false);
+    assert!(secret_params::is_stored_secret(&db, &name, &param("token")).unwrap());
+}

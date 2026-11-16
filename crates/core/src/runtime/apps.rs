@@ -383,7 +383,7 @@ impl AppRegistry {
             let (app, raw_error) = evaluate(&name, &bundle, &stored, limits);
             // spec: SEC#migration — after the script declares which params are secret,
             // migrate any plaintext rows that should now be encrypted.
-            migrate_newly_secret_params(db, cipher, &name, &app);
+            migrate_param_storage(db, cipher, &name, &app, raw_error.is_none());
             // spec: AUTO#clamping
             // A definition that threw part-way declares only what ran before
             // it, so its bounds are not ones to clamp to.
@@ -600,7 +600,8 @@ pub fn store_param_value(
 }
 
 /// Re-evaluate `name`'s current definition with `params`, and move the stored
-/// value of any param the definition now declares secret into secret storage.
+/// value of any param whose `secret` flag changed to the storage it now calls
+/// for.
 ///
 /// Migration follows only a definition that was applied: a reload that keeps
 /// the previous one changes no param's `secret` flag.
@@ -621,7 +622,7 @@ pub fn reload(
             let name = name.clone();
             let cipher = Arc::clone(cipher);
             db.call(move |db| {
-                migrate_newly_secret_params(db, &cipher, &name, &running);
+                migrate_param_storage(db, &cipher, &name, &running, true);
                 // spec: AUTO#clamping
                 if let Err(e) = scaling::clamp_to_definition(db, &name, &running) {
                     tracing::error!(app = %name, error = %e, "failed to clamp scaling decisions");
@@ -632,17 +633,41 @@ pub fn reload(
     outcome
 }
 
+/// Move each declared parameter's stored value to the storage its definition
+/// now calls for: secret storage for a secret parameter, plain storage for one
+/// that is not.
+///
+/// `evaluated_in_full` is false for a definition that threw part-way: a
+/// parameter it declared before throwing may have been going to be marked
+/// secret by a call it never reached, so none is moved out of secret storage.
 // spec: SEC#migration
-pub(crate) fn migrate_newly_secret_params(db: &Db, cipher: &Cipher, app_name: &AppName, app: &App) {
+pub(crate) fn migrate_param_storage(
+    db: &Db,
+    cipher: &Cipher,
+    app_name: &AppName,
+    app: &App,
+    evaluated_in_full: bool,
+) {
     let def = app.def.load();
     for (param_name, param_def) in &def.params {
-        if param_def.is_secret()
-            && let Err(e) = secret_params::migrate_to_secret(db, cipher, app_name, param_name)
-        {
+        let (moved, to) = if param_def.is_secret() {
+            (
+                secret_params::migrate_to_secret(db, cipher, app_name, param_name),
+                "secret",
+            )
+        } else if evaluated_in_full {
+            (
+                secret_params::migrate_to_plain(db, cipher, app_name, param_name),
+                "plain",
+            )
+        } else {
+            continue;
+        };
+        if let Err(e) = moved {
             tracing::warn!(
                 app = %app_name,
                 param = %param_name,
-                "failed to migrate param to secret storage: {e}"
+                "failed to migrate param to {to} storage: {e}"
             );
         }
     }
