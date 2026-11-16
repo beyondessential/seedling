@@ -1,5 +1,6 @@
 use std::collections::BTreeMap;
 
+use jiff::Timestamp;
 use seedling_protocol::names::AppName;
 
 use super::{Reconciler, pods, volumes};
@@ -1209,22 +1210,74 @@ pub(super) fn apply_crash_loop_faults(
             }
         }
     }
-    // Once the unit is back up healthy, clear any prior crash_loop fault —
-    // operator clearing the fault and the unit recovering are both valid paths
-    // out of this state.
+    // A crash_loop fault is latched: it clears once the instance has stayed
+    // running, with no recovery restart, for the restart window, or when an
+    // operator clears it. Being up this iteration is not enough, since the
+    // supervisor brings a crashing instance up between its crashes.
     for instance in unit_healthy {
         let inst_hex = instance.id.to_hex();
-        let cleared: Vec<_> = faults::list_active_faults(db, Some(app))
+        let held: Vec<_> = faults::list_active_faults(db, Some(app))
             .unwrap_or_default()
             .into_iter()
             .filter(|f| f.kind == "crash_loop" && f.instance_id.as_deref() == Some(&inst_hex))
             .collect();
-        for f in cleared {
+        if held.is_empty() {
+            continue;
+        }
+        match stayed_running_for_the_restart_window(db, instance) {
+            Ok(true) => {}
+            Ok(false) => continue,
+            Err(e) => {
+                tracing::warn!(app = %app, instance = %inst_hex, "could not tell whether the instance has stayed running; leaving its crash_loop fault: {e}");
+                continue;
+            }
+        }
+        for f in held {
             if let Err(e) = faults::clear_fault(db, &f.id, app) {
                 tracing::warn!(app = %app, fault_id = %f.id, "failed to clear crash_loop fault: {e}");
             }
         }
     }
+}
+
+/// When the run the observations end in began: the first `container_running`
+/// after the last observation that ended or restarted a run. `None` while the
+/// container is not running.
+// spec: FLT#workload-faults
+fn current_run_started_at(
+    observations: &[crate::runtime::history::WorldObservation],
+) -> Option<i64> {
+    let mut since = None;
+    for obs in observations {
+        match obs.obs_kind.as_str() {
+            "container_created"
+            | "container_exited"
+            | "container_removed"
+            | "unit_failed"
+            | "unit_start_limit_hit" => since = None,
+            "container_running" if since.is_none() => since = Some(obs.recorded_at),
+            _ => {}
+        }
+    }
+    since
+}
+
+/// Whether the instance has been running for the whole of the restart window,
+/// with no recovery restart recorded in it.
+// spec: FLT#workload-faults
+// spec: AUTO#crash-loop-detection
+fn stayed_running_for_the_restart_window(
+    db: &Db,
+    instance: &ResourceInstance,
+) -> rusqlite::Result<bool> {
+    let window_secs = crate::runtime::restarts::settings(db)?.window_secs;
+    let inst_hex = instance.id.to_hex();
+    if crate::runtime::restarts::recent_recovery_count(db, &inst_hex, window_secs)? > 0 {
+        return Ok(false);
+    }
+    let observations = crate::runtime::history::query_observations(db, instance)?;
+    let cutoff = Timestamp::now().as_millisecond() - window_secs * 1000;
+    Ok(current_run_started_at(&observations).is_some_and(|started| started <= cutoff))
 }
 
 #[cfg(test)]
