@@ -68,6 +68,23 @@ pub fn invalid_request_response(why: &str) -> Vec<u8> {
     response
 }
 
+/// The refusal for a method the web interface cannot relay, as one JSON object
+/// followed by a newline.
+///
+/// A port forward needs a direct Operator Interface connection, and a Canopy
+/// offer needs a connection that can answer relay streams.
+// spec: WEB#request-relay
+pub fn unrelayable_method_response(method: &str) -> Option<Vec<u8>> {
+    let why = match method {
+        "/forwards/start" => "a port forward needs a direct Operator Interface connection",
+        "/canopy/offer" | "/canopy/withdraw" => {
+            "a Canopy offer needs a direct Operator Interface connection that can answer relay streams"
+        }
+        _ => return None,
+    };
+    Some(invalid_request_response(why))
+}
+
 /// Check a request line and set its top-level `actor`, returning the request's
 /// method and the line to relay.
 // spec: WEB#request-relay
@@ -155,7 +172,30 @@ pub async fn proxy_from_peeked(
 
 #[cfg(test)]
 mod tests {
-    use super::{Actor, invalid_request_response, prepare_request_line, read_bounded_line};
+    use super::{
+        Actor, invalid_request_response, prepare_request_line, read_bounded_line,
+        unrelayable_method_response,
+    };
+
+    // spec: WEB#request-relay
+    #[test]
+    fn forwards_and_canopy_offers_are_refused_as_needing_a_direct_connection() {
+        for method in ["/forwards/start", "/canopy/offer", "/canopy/withdraw"] {
+            let response = unrelayable_method_response(method).expect(method);
+            assert_eq!(response.last(), Some(&b'\n'));
+            let body: serde_json::Value =
+                serde_json::from_slice(&response[..response.len() - 1]).unwrap();
+            assert_eq!(body["error"]["code"], "requirements_invalid", "{method}");
+            assert!(
+                body["error"]["message"]
+                    .as_str()
+                    .unwrap()
+                    .contains("direct Operator Interface connection"),
+                "{method}"
+            );
+        }
+        assert!(unrelayable_method_response("/apps/list").is_none());
+    }
 
     // spec: WEB#request-relay
     #[test]

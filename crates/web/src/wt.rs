@@ -256,6 +256,13 @@ async fn handle_incoming(incoming: wtransport::endpoint::IncomingSession, state:
                 return;
             }
 
+            // spec: WEB#request-relay
+            if let Some(response) = proxy::unrelayable_method_response(&peeked.method) {
+                let _ = wt_send.write_all(&response).await;
+                let _ = wt_send.shutdown().await;
+                return;
+            }
+
             // Intercept /logs/stream: the daemon opens a server-initiated uni
             // stream to push entries, which the transparent proxy cannot forward.
             // Accept that uni stream here and relay entries over the WT bidi send.

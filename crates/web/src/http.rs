@@ -109,6 +109,17 @@ pub(crate) fn hostname_from_host_header(host: &str) -> &str {
     }
 }
 
+// A CSP host-source cannot carry a bracketed IPv6 literal, and a browser
+// discards a source it cannot parse, so an IPv6 host is named by a wildcard.
+// spec: WEB#security-headers
+fn connect_src(hostname: &str, wt_port: u16) -> String {
+    if hostname.starts_with('[') {
+        format!("connect-src 'self' https://*:{wt_port}")
+    } else {
+        format!("connect-src 'self' https://{hostname}:{wt_port}")
+    }
+}
+
 async fn content_security_policy(State(wt_port): State<u16>, req: Request, next: Next) -> Response {
     // A request with no Host header is advertised the WebTransport origin the
     // `wt_url` names for one: `localhost`.
@@ -118,7 +129,7 @@ async fn content_security_policy(State(wt_port): State<u16>, req: Request, next:
         .and_then(|v| v.to_str().ok())
         .map(hostname_from_host_header)
         .unwrap_or(DEFAULT_HOSTNAME);
-    let connect_src = format!("connect-src 'self' https://{hostname}:{wt_port}");
+    let connect_src = connect_src(hostname, wt_port);
 
     let mut res = next.run(req).await;
     if let Ok(value) = HeaderValue::from_str(&format!("{CSP_BASE}; {connect_src}")) {
@@ -228,6 +239,29 @@ mod tests {
         // plus wt_port) and must not regress to a scheme wildcard.
         assert!(csp.contains("connect-src 'self' https://console.example:8443"));
         assert!(!csp.contains("https:;") && !csp.ends_with("https:"));
+    }
+
+    // spec: WEB#security-headers
+    #[tokio::test]
+    async fn an_ipv6_host_is_named_by_a_wildcard_in_connect_src() {
+        let router: Router<()> =
+            security_headers(Router::new().route("/", get(|| async { "ok" })), 8443);
+        let res = router
+            .oneshot(
+                Request::builder()
+                    .uri("/")
+                    .header(header::HOST, "[2001:db8::5]:7894")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        let csp = res.headers()[header::CONTENT_SECURITY_POLICY]
+            .to_str()
+            .unwrap();
+        assert!(csp.contains("connect-src 'self' https://*:8443"), "{csp}");
+        assert!(!csp.contains('['), "{csp}");
     }
 
     // spec: WEB#security-headers

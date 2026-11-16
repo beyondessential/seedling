@@ -238,21 +238,30 @@ fn choose_daemon_pin(
     }
 }
 
-/// The port the WebTransport listener's interface-derived addresses take.
-///
-/// `--wt-port` is refused alongside an address the listener binds explicitly,
-/// which carries its own port: it would be a port nothing is bound to.
+/// Refuse `--wt-port` alongside an address the WebTransport listener binds
+/// explicitly, which carries its own port: it would be a port nothing is bound
+/// to. Those addresses are `--wt-listen`, and `--listen` while the listener
+/// binds the shared addresses, that is, while neither `--wt-interface` nor
+/// `--wt-listen` is given.
 // spec: WEB#listen-addresses
-fn wt_bind_port(explicit_addrs: &[SocketAddr], wt_port: Option<u16>) -> Result<u16, String> {
-    match (explicit_addrs.is_empty(), wt_port) {
-        (false, Some(_)) => Err(
+fn check_wt_port(
+    wt_port: Option<u16>,
+    listen: &[SocketAddr],
+    wt_interface: &[String],
+    wt_listen: &[SocketAddr],
+) -> Result<(), String> {
+    if wt_port.is_none() {
+        return Ok(());
+    }
+    let shared = wt_interface.is_empty() && wt_listen.is_empty();
+    if !wt_listen.is_empty() || (shared && !listen.is_empty()) {
+        return Err(
             "--wt-port cannot be given with an address the WebTransport listener binds \
              explicitly (--wt-listen, or --listen while it binds the shared addresses)"
                 .to_owned(),
-        ),
-        (_, Some(port)) => Ok(port),
-        (_, None) => Ok(DEFAULT_WT_PORT),
+        );
     }
+    Ok(())
 }
 
 fn wt_bind_sources<'a>(
@@ -329,10 +338,17 @@ async fn main() {
     );
     // Only interface-derived addresses take this port; explicit addresses
     // carry their own.
-    let wt_bind_port = wt_bind_port(wt_listen, args.wt_port).unwrap_or_else(|e| {
+    check_wt_port(
+        args.wt_port,
+        &args.listen,
+        &args.wt_interface,
+        &args.wt_listen,
+    )
+    .unwrap_or_else(|e| {
         eprintln!("error: {e}");
         std::process::exit(1);
     });
+    let wt_bind_port = args.wt_port.unwrap_or(DEFAULT_WT_PORT);
     let wt_addrs = resolve_bind_addrs(wt_interface, wt_listen, wt_bind_port).unwrap_or_else(|e| {
         eprintln!("error: {e}");
         std::process::exit(1);
@@ -457,12 +473,19 @@ mod bind_tests {
 
     // spec: WEB#listen-addresses
     #[test]
-    fn wt_port_is_refused_with_an_explicit_address_and_defaults_without_one() {
-        let explicit: Vec<SocketAddr> = vec!["127.0.0.1:1".parse().unwrap()];
-        assert!(wt_bind_port(&explicit, Some(9000)).is_err());
-        assert_eq!(wt_bind_port(&explicit, None), Ok(DEFAULT_WT_PORT));
-        assert_eq!(wt_bind_port(&[], Some(9000)), Ok(9000));
-        assert_eq!(wt_bind_port(&[], None), Ok(DEFAULT_WT_PORT));
+    fn wt_port_is_refused_with_an_address_the_wt_listener_binds_explicitly() {
+        let addr: Vec<SocketAddr> = vec!["127.0.0.1:1".parse().unwrap()];
+        let iface = vec!["lo".to_owned()];
+        let none_a: Vec<SocketAddr> = vec![];
+        let none_i: Vec<String> = vec![];
+
+        assert!(check_wt_port(Some(9000), &none_a, &none_i, &addr).is_err());
+        assert!(check_wt_port(Some(9000), &addr, &none_i, &none_a).is_err());
+        // A WebTransport-specific interface means --listen is not what it binds.
+        assert!(check_wt_port(Some(9000), &addr, &iface, &none_a).is_ok());
+        assert!(check_wt_port(Some(9000), &none_a, &iface, &none_a).is_ok());
+        assert!(check_wt_port(Some(9000), &none_a, &none_i, &none_a).is_ok());
+        assert!(check_wt_port(None, &addr, &none_i, &addr).is_ok());
     }
 
     // spec: WEB#listen-addresses
