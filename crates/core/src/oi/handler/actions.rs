@@ -38,7 +38,11 @@ pub(crate) struct CancelActionParams {
 /// Request cancellation of the currently-active operation for `app`.
 // spec: OPS#cancellation
 // spec: ACI#cancellation
-pub(crate) fn cancel_action(state: &Arc<OiState>, params: CancelActionParams) -> HandlerResult {
+pub(crate) fn cancel_action(
+    state: &Arc<OiState>,
+    params: CancelActionParams,
+    ctx: &RequestCtx,
+) -> HandlerResult {
     let app_name = &params.app;
     let outcome = state.scheduler.lock().request_cancel(app_name);
     match outcome {
@@ -81,7 +85,12 @@ pub(crate) fn cancel_action(state: &Arc<OiState>, params: CancelActionParams) ->
             };
             match stuck_phase {
                 Some(AppPhase::Installing) => {
-                    lifecycle::set_phase_and_persist(state, app_name, AppPhase::Uninstalling);
+                    lifecycle::set_phase_and_persist(
+                        state,
+                        app_name,
+                        AppPhase::Uninstalling,
+                        Some(Arc::clone(&ctx.events.actor)),
+                    );
                     tracing::warn!(
                         app = %app_name,
                         "no active operation but phase was Installing; transitioning to Uninstalling for teardown"
@@ -224,6 +233,7 @@ pub(crate) fn invoke_action(
             current_generation,
             "operator",
             &phase_handle,
+            Some(Arc::clone(&ctx.events.actor)),
         );
         let op_id = match &result {
             ScheduleResult::Accepted => sched.active().map(|a| a.operation_id.clone()),
@@ -258,7 +268,6 @@ pub(crate) fn invoke_action(
             lifecycle::persist_queued(
                 state,
                 &crate::runtime::barrier::OperationId(op_id_str.clone()),
-                Some(Arc::clone(&ctx.events.actor)),
             )?;
             tracing::info!(app = %app_name, action = %action_name, schedule = "queued", "invoke_action");
             Ok(json!({ "schedule": "queued", "operation_id": op_id_str }))

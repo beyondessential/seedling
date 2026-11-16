@@ -141,13 +141,20 @@ pub(crate) fn invoke_install(
             }
         }
         // spec: EVT#event-types
-        state
-            .event_tx
-            .app_phase_changed(app_name, "installed", None);
+        state.event_tx.app_phase_changed(
+            app_name,
+            "installed",
+            Some(Arc::clone(&ctx.events.actor)),
+        );
         // spec: ACN#start-action
         // An app with no install action moves to Installed without an install
         // operation, and its start action runs as it does after one.
-        crate::oi::handler::actions::lifecycle::initiate_start(state, app_name, "install");
+        crate::oi::handler::actions::lifecycle::initiate_start(
+            state,
+            app_name,
+            "install",
+            Some(Arc::clone(&ctx.events.actor)),
+        );
         state.tick_notify.notify_one();
         tracing::info!(app = %app_name, schedule = "accepted", "invoke_install (immediate)");
         return Ok(json!({ "schedule": "accepted" }));
@@ -181,6 +188,7 @@ pub(crate) fn invoke_install(
             current_generation,
             "operator",
             &phase_handle,
+            Some(Arc::clone(&ctx.events.actor)),
         );
         let op_id = match &result {
             ScheduleResult::Accepted => sched.active().map(|a| a.operation_id.clone()),
@@ -217,7 +225,6 @@ pub(crate) fn invoke_install(
             super::lifecycle::persist_queued(
                 state,
                 &crate::runtime::barrier::OperationId(op_id_str.clone()),
-                Some(Arc::clone(&ctx.events.actor)),
             )?;
             tracing::info!(app = %app_name, schedule = "queued", "invoke_install");
             Ok(json!({ "schedule": "queued", "operation_id": op_id_str }))

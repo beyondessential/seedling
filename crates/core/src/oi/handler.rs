@@ -228,7 +228,7 @@ fn parse_and_dispatch(state: &Arc<OiState>, buf: &[u8], ctx: &RequestCtx) -> Han
         // spec: ACI#invoking-an-action
         "/apps/action/invoke" => actions::invoke_action(state, parse_params(req.params)?, ctx),
         // spec: ACI#cancellation
-        "/apps/action/cancel" => actions::cancel_action(state, parse_params(req.params)?),
+        "/apps/action/cancel" => actions::cancel_action(state, parse_params(req.params)?, ctx),
         // spec: ACI#install
         "/apps/install/invoke" => {
             actions::install::invoke_install(state, parse_params(req.params)?, ctx)

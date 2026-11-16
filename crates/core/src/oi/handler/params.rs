@@ -236,6 +236,7 @@ pub(crate) fn schedule_on_change(
         generation,
         "param_change",
         &phase_handle,
+        Some(Arc::clone(actor)),
     );
     match result {
         // A queued handler runs when the other app's operation ends, and is
@@ -274,7 +275,7 @@ pub(crate) fn schedule_on_change(
                     Some(Arc::clone(actor)),
                 );
             } else {
-                super::actions::lifecycle::persist_queued(state, &op_id, Some(Arc::clone(actor)))
+                super::actions::lifecycle::persist_queued(state, &op_id)
                     .map_err(|e| refused_after_commit(&e.message))?;
             }
             tick_notify.notify_one();

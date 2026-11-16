@@ -208,6 +208,7 @@ pub fn check_due_schedules(
                 generation,
                 "schedule",
                 &phase,
+                None,
             );
 
             let accepted = matches!(result, ScheduleResult::Accepted);

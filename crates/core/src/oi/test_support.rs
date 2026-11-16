@@ -273,6 +273,7 @@ mod tests {
             1,
             "test",
             &parking_lot::Mutex::new(crate::runtime::apps::AppPhase::Installed),
+            None,
         );
 
         let busy = oi.call("/server/status", json!({})).unwrap();
@@ -306,6 +307,7 @@ mod tests {
             1,
             "test",
             &parking_lot::Mutex::new(crate::runtime::apps::AppPhase::Installed),
+            None,
         );
         oi
     }

@@ -251,16 +251,29 @@ fn an_app_moving_to_installed_without_an_install_action_has_its_start_action_run
     oi.call("/apps/install/invoke", json!({ "app": "demo" }))
         .unwrap();
 
-    let started = oi.block_on(async {
+    let (phase_actor, started) = oi.block_on(async {
         let wait = async {
+            let mut phase_actor = None;
             loop {
                 match events.recv().await {
+                    Ok(OiEvent::AppPhaseChanged { actor, phase, .. }) if phase == "installed" => {
+                        phase_actor = Some(actor.and_then(|a| a.id.clone()));
+                    }
                     Ok(OiEvent::OperationStarted {
                         action_name,
                         trigger,
                         actor,
                         ..
-                    }) => break (action_name.to_string(), trigger, actor.is_some()),
+                    }) => {
+                        break (
+                            phase_actor,
+                            (
+                                action_name.to_string(),
+                                trigger,
+                                actor.and_then(|a| a.id.clone()),
+                            ),
+                        );
+                    }
                     Ok(_) => {}
                     Err(e) => panic!("event stream ended: {e}"),
                 }
@@ -270,7 +283,22 @@ fn an_app_moving_to_installed_without_an_install_action_has_its_start_action_run
             .await
             .expect("the start action starts")
     });
-    assert_eq!(started, ("start".to_owned(), "install".to_owned(), false));
+    // spec: WIRE#actor-attribution
+    // The start action is caused by the install request, and so is its phase
+    // change: both carry that request's actor.
+    assert_eq!(
+        phase_actor,
+        Some(Some("test-suite".to_owned())),
+        "the AppPhaseChanged event"
+    );
+    assert_eq!(
+        started,
+        (
+            "start".to_owned(),
+            "install".to_owned(),
+            Some("test-suite".to_owned())
+        )
+    );
 }
 
 // spec: ACN#param-delivery

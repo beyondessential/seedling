@@ -528,6 +528,7 @@ fn a_queued_on_change_handler_is_recorded_against_its_generation() {
         1,
         "test",
         &parking_lot::Mutex::new(crate::runtime::apps::AppPhase::Installed),
+        None,
     );
 
     let result = oi

@@ -860,7 +860,12 @@ async fn cleanup_dynamic_resources(
 /// acquires registry.read(), so registry.write() + db.lock() in either order
 /// deadlocks with it.
 // spec: EVT#event-types
-pub fn set_phase_and_persist(state: &OiState, app_name: &AppName, new_phase: AppPhase) {
+pub fn set_phase_and_persist(
+    state: &OiState,
+    app_name: &AppName,
+    new_phase: AppPhase,
+    actor: Option<Arc<seedling_protocol::actor::Actor>>,
+) {
     use crate::oi::handler::apps::{extract_persist_fields, persist_app_fields};
     let phase_str = phase_event_name(&new_phase);
     // spec: FWD#forward-lifetime
@@ -893,7 +898,7 @@ pub fn set_phase_and_persist(state: &OiState, app_name: &AppName, new_phase: App
             }
         }
     }
-    state.event_tx.app_phase_changed(app_name, phase_str, None);
+    state.event_tx.app_phase_changed(app_name, phase_str, actor);
     state.tick_notify.notify_one();
 }
 
@@ -907,8 +912,12 @@ fn phase_event_name(phase: &AppPhase) -> &'static str {
 }
 
 // spec: ACI#install
-fn enter_installing_phase(state: &OiState, app_name: &AppName) {
-    set_phase_and_persist(state, app_name, AppPhase::Installing);
+fn enter_installing_phase(
+    state: &OiState,
+    app_name: &AppName,
+    actor: Option<Arc<seedling_protocol::actor::Actor>>,
+) {
+    set_phase_and_persist(state, app_name, AppPhase::Installing, actor);
     tracing::info!(app = %app_name, "install started; entering Installing phase");
 }
 
@@ -943,16 +952,24 @@ pub(crate) fn clear_install_interrupted(state: &OiState, app_name: &AppName) {
 }
 
 // spec: ACI#install-completion
-fn finalize_install(state: &OiState, app_name: &AppName) {
+fn finalize_install(
+    state: &OiState,
+    app_name: &AppName,
+    actor: Option<Arc<seedling_protocol::actor::Actor>>,
+) {
     record_install_completed(state, app_name);
     clear_install_interrupted(state, app_name);
-    set_phase_and_persist(state, app_name, AppPhase::Installed);
+    set_phase_and_persist(state, app_name, AppPhase::Installed, actor);
     tracing::info!(app = %app_name, "install completed; app is now installed");
 }
 
 // spec: ACI#install-completion
-fn revert_install_phase(state: &OiState, app_name: &AppName) {
-    set_phase_and_persist(state, app_name, AppPhase::NotInstalled);
+fn revert_install_phase(
+    state: &OiState,
+    app_name: &AppName,
+    actor: Option<Arc<seedling_protocol::actor::Actor>>,
+) {
+    set_phase_and_persist(state, app_name, AppPhase::NotInstalled, actor);
     tracing::info!(app = %app_name, "install failed; reverted to NotInstalled");
 }
 
@@ -993,6 +1010,8 @@ pub fn spawn_accepted_operation(
     let is_install = action_name == "install";
     let is_start = action_name == "start";
 
+    let requester = actor.clone();
+
     tokio::spawn(async move {
         // spec: WIRE#actor-attribution
         let op_ctx = event_tx.operation(
@@ -1019,7 +1038,7 @@ pub fn spawn_accepted_operation(
         // (covers both directly-accepted and later-dequeued installs because
         // both paths funnel through spawn_accepted_operation).
         if is_install {
-            enter_installing_phase(&state, &app_name);
+            enter_installing_phase(&state, &app_name, requester.clone());
         }
 
         let operation_id_str = operation_id.0.clone();
@@ -1100,9 +1119,9 @@ pub fn spawn_accepted_operation(
         // spec: ACI#install-completion
         if is_install {
             if success {
-                finalize_install(&state, &app_name);
+                finalize_install(&state, &app_name, requester.clone());
             } else {
-                revert_install_phase(&state, &app_name);
+                revert_install_phase(&state, &app_name, requester.clone());
             }
         }
 
@@ -1125,7 +1144,7 @@ pub fn spawn_accepted_operation(
         // The install has finished and its slot is free, so the start action
         // can be admitted: before this, the install itself held the app's.
         if is_install && success {
-            initiate_start(&state, &app_name, "install");
+            initiate_start(&state, &app_name, "install", requester);
         }
     });
 }
@@ -1163,7 +1182,7 @@ pub fn recover_unreplayable_install(state: &OiState, app_name: &AppName) {
         }
     });
     if was_installing {
-        set_phase_and_persist(state, app_name, AppPhase::Uninstalling);
+        set_phase_and_persist(state, app_name, AppPhase::Uninstalling, None);
     }
 }
 
@@ -1178,13 +1197,8 @@ pub fn recover_unreplayable_install(state: &OiState, app_name: &AppName) {
 pub fn persist_queued(
     state: &OiState,
     operation_id: &OperationId,
-    actor: Option<Arc<seedling_protocol::actor::Actor>>,
 ) -> Result<(), seedling_protocol::error::OiError> {
-    let queued = {
-        let mut sched = state.scheduler.lock();
-        sched.set_queued_actor(operation_id, actor);
-        sched.queued(operation_id).cloned()
-    };
+    let queued = state.scheduler.lock().queued(operation_id).cloned();
     let Some(queued) = queued else {
         return Ok(());
     };
@@ -1240,6 +1254,7 @@ pub fn restore_queue(
             op.target_generation,
             &op.trigger,
             op.operation_id.clone(),
+            op.actor.clone(),
         );
         match result {
             ScheduleResult::Accepted => {
@@ -1262,10 +1277,6 @@ pub fn restore_queue(
                 if op.action == "start" {
                     start_pending.store(true, std::sync::atomic::Ordering::Release);
                 }
-                state
-                    .scheduler
-                    .lock()
-                    .set_queued_actor(&op.operation_id, op.actor);
             }
             ScheduleResult::Rejected(reason) => {
                 tracing::warn!(app = %op.app, action = %op.action, ?reason, "restored queued operation refused; discarding");
@@ -1291,7 +1302,7 @@ pub fn persist_queued_fire(
     let Some(operation_id) = &fire.operation_id else {
         return;
     };
-    match persist_queued(state, operation_id, None) {
+    match persist_queued(state, operation_id) {
         Ok(()) => {
             let (app, action, cron) =
                 (fire.app.clone(), fire.action.clone(), fire.cronexpr.clone());
@@ -1317,7 +1328,12 @@ pub fn persist_queued_fire(
 // spec: OPS#initiating-events
 // spec: ACN#start-action
 // spec: RCN#desired-state
-pub fn initiate_start(state: &Arc<OiState>, app_name: &AppName, trigger: &str) {
+pub fn initiate_start(
+    state: &Arc<OiState>,
+    app_name: &AppName,
+    trigger: &str,
+    actor: Option<Arc<seedling_protocol::actor::Actor>>,
+) {
     let (generation, phase_handle, start_pending) = {
         let reg = state.registry.read();
         let Some(entry) = reg.get(app_name.as_str()) else {
@@ -1341,6 +1357,7 @@ pub fn initiate_start(state: &Arc<OiState>, app_name: &AppName, trigger: &str) {
             generation,
             trigger,
             &phase_handle,
+            actor.clone(),
         );
         let op_id = match &result {
             crate::runtime::scheduler::ScheduleResult::Accepted => {
@@ -1365,11 +1382,11 @@ pub fn initiate_start(state: &Arc<OiState>, app_name: &AppName, trigger: &str) {
                 generation,
                 generation,
                 trigger.to_owned(),
-                None,
+                actor,
             )
         }
         (crate::runtime::scheduler::ScheduleResult::Queued, Some(operation_id)) => {
-            match persist_queued(state, &operation_id, None) {
+            match persist_queued(state, &operation_id) {
                 Ok(()) => tracing::info!(app = %app_name, trigger, "start action queued"),
                 Err(e) => {
                     tracing::error!(app = %app_name, trigger, "start action refused: {}", e.message);

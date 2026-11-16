@@ -347,6 +347,7 @@ fn uninstall_is_refused_while_an_action_holds_the_app() {
         1,
         "test",
         &parking_lot::Mutex::new(crate::runtime::apps::AppPhase::Installed),
+        None,
     );
 
     let (code, message) = oi
@@ -397,6 +398,7 @@ fn the_refusal_names_a_queued_action_as_well_as_a_running_one() {
         1,
         "test",
         &installed(),
+        None,
     );
     let queued = sched.admit(
         &demo,
@@ -406,6 +408,7 @@ fn the_refusal_names_a_queued_action_as_well_as_a_running_one() {
         1,
         "test",
         &installed(),
+        None,
     );
     assert_eq!(queued, crate::runtime::scheduler::ScheduleResult::Queued);
     drop(sched);
@@ -1299,6 +1302,7 @@ fn admit(oi: &TestOi, app: &str, action: &str) {
         1,
         "test",
         &parking_lot::Mutex::new(crate::runtime::apps::AppPhase::Installed),
+        None,
     );
 }
 

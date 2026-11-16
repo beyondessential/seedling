@@ -1470,6 +1470,7 @@ async fn resume_operations(oi_state: &Arc<OiState>) {
                 oi_state,
                 &app_name,
                 AppPhase::Uninstalling,
+                None,
             );
         }
     }
@@ -1496,7 +1497,7 @@ async fn resume_operations(oi_state: &Arc<OiState>) {
         };
         for app_name in installed {
             seedling_core::oi::handler::actions::lifecycle::initiate_start(
-                oi_state, &app_name, "boot",
+                oi_state, &app_name, "boot", None,
             );
         }
     }
@@ -1651,6 +1652,7 @@ fn start_replay(
         op.target_generation,
         "replay",
         op.operation_id.clone(),
+        None,
     );
     if !matches!(sched_result, ScheduleResult::Accepted) {
         tracing::error!(

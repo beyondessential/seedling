@@ -256,6 +256,7 @@ impl Scheduler {
         target_generation: u64,
         trigger: &str,
         phase: &Mutex<AppPhase>,
+        actor: Option<Arc<seedling_protocol::actor::Actor>>,
     ) -> ScheduleResult {
         if matches!(*phase.lock(), AppPhase::Uninstalling) {
             return ScheduleResult::Rejected(RejectReason::AppUninstalling);
@@ -267,6 +268,7 @@ impl Scheduler {
             source_generation,
             target_generation,
             trigger,
+            actor,
         )
     }
 
@@ -278,6 +280,10 @@ impl Scheduler {
     ///
     /// The queue mechanic alone, with no view of the app's phase: reach it
     /// through [`Self::admit`], which decides whether the app may have one.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "the operation's request, as admit() takes it"
+    )]
     // spec: OPS#concurrency
     fn request(
         &mut self,
@@ -287,6 +293,7 @@ impl Scheduler {
         source_generation: u64,
         target_generation: u64,
         trigger: &str,
+        actor: Option<Arc<seedling_protocol::actor::Actor>>,
     ) -> ScheduleResult {
         self.request_with_id(
             app,
@@ -296,6 +303,7 @@ impl Scheduler {
             target_generation,
             trigger,
             OperationId::new(),
+            actor,
         )
     }
 
@@ -315,6 +323,7 @@ impl Scheduler {
         target_generation: u64,
         trigger: &str,
         operation_id: OperationId,
+        actor: Option<Arc<seedling_protocol::actor::Actor>>,
     ) -> ScheduleResult {
         // spec: OPS#unreadable-operation-state
         if self.state_unreadable {
@@ -354,7 +363,7 @@ impl Scheduler {
                     source_generation,
                     target_generation,
                     trigger: trigger.to_owned(),
-                    actor: None,
+                    actor,
                 });
                 ScheduleResult::Queued
             }
@@ -364,21 +373,6 @@ impl Scheduler {
     /// The queued request with `operation_id`, if it is still queued.
     pub fn queued(&self, operation_id: &OperationId) -> Option<&QueuedOperation> {
         self.queue.iter().find(|q| q.operation_id == *operation_id)
-    }
-
-    /// Record who asked for the queued request `operation_id`.
-    pub fn set_queued_actor(
-        &mut self,
-        operation_id: &OperationId,
-        actor: Option<Arc<seedling_protocol::actor::Actor>>,
-    ) {
-        if let Some(q) = self
-            .queue
-            .iter_mut()
-            .find(|q| q.operation_id == *operation_id)
-        {
-            q.actor = actor;
-        }
     }
 
     /// Take the queued request `operation_id` back out of the queue, if it is
@@ -490,6 +484,7 @@ impl AppHold {
         target_generation: u64,
         trigger: &str,
         phase: &Mutex<AppPhase>,
+        actor: Option<Arc<seedling_protocol::actor::Actor>>,
     ) -> (ScheduleResult, Option<OperationId>) {
         self.released = true;
         let mut scheduler = self.scheduler.lock();
@@ -502,6 +497,7 @@ impl AppHold {
             target_generation,
             trigger,
             phase,
+            actor,
         );
         let operation_id = match result {
             ScheduleResult::Accepted => scheduler.active().map(|a| a.operation_id.clone()),
