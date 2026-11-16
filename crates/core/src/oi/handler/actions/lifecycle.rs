@@ -272,10 +272,11 @@ pub(crate) fn bind_volume_params(
         .collect();
     for key in &volume_keys {
         let val = match params.remove(key.as_str()) {
-            Some(serde_json::Value::String(s)) => s,
+            Some(serde_json::Value::String(s)) if !s.is_empty() => s,
+            // An optional volume param that was not supplied, or was left
+            // empty, binds nothing.
+            Some(serde_json::Value::String(_)) | None => continue,
             Some(_) => return Err(format!("volume param {key:?} is not a string")),
-            // An optional volume param that was not supplied binds nothing.
-            None => continue,
         };
         let site_name = SiteVolumeName::new(&val).map_err(|e| {
             format!("volume param {key:?} names {val:?}, which is not a volume name: {e}")

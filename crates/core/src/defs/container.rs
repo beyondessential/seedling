@@ -11,8 +11,10 @@ const FORBIDDEN_MOUNTPOINTS: &[&str] = &[
     "/run",
 ];
 
+/// The canonical form of a mountpoint, which is the key a mount is held under,
+/// so a second mount at a spelling of the same place replaces the first.
 // spec: CTR#volume-mounts
-fn validate_mountpoint(path: &str) -> Result<(), Box<EvalAltResult>> {
+fn canonical_mountpoint(path: &str) -> Result<PathBuf, Box<EvalAltResult>> {
     if path.contains('\0') {
         return Err("mountpoint must not contain null bytes".into());
     }
@@ -45,7 +47,7 @@ fn validate_mountpoint(path: &str) -> Result<(), Box<EvalAltResult>> {
         }
     }
 
-    Ok(())
+    Ok(canonical)
 }
 
 // spec: CTR#image
@@ -222,22 +224,24 @@ fn validate_capability(cap: &str) -> Result<String, Box<EvalAltResult>> {
     }
 }
 
-fn take_nonneg_secs(
+/// A healthcheck's number of seconds, which may not be below `least`.
+// spec: DEP#check-timing
+fn take_secs(
     map: &mut rhai::Map,
     key: &str,
     default: u64,
+    least: u64,
 ) -> Result<u64, Box<EvalAltResult>> {
     let Some(value) = map.remove(key) else {
         return Ok(default);
     };
     let n = value.as_int().map_err(|t| -> Box<EvalAltResult> {
-        format!("healthcheck `{key}` must be a non-negative integer number of seconds, got {t}")
-            .into()
+        format!("healthcheck `{key}` must be an integer number of seconds, got {t}").into()
     })?;
-    if n < 0 {
-        return Err(format!("healthcheck `{key}` must not be negative, got {n}").into());
+    match u64::try_from(n) {
+        Ok(secs) if secs >= least => Ok(secs),
+        _ => Err(format!("healthcheck `{key}` must be at least {least}, got {n}").into()),
     }
-    Ok(n as u64)
 }
 
 fn take_retries(map: &mut rhai::Map) -> Result<u32, Box<EvalAltResult>> {
@@ -318,12 +322,13 @@ pub(super) fn parse_healthcheck(mut map: rhai::Map) -> Result<HealthcheckDef, Bo
     };
 
     // spec: DEP#check-timing
-    let interval_secs = take_nonneg_secs(&mut map, "interval", HEALTHCHECK_DEFAULT_INTERVAL_SECS)?;
-    let timeout_secs = take_nonneg_secs(&mut map, "timeout", HEALTHCHECK_DEFAULT_TIMEOUT_SECS)?;
-    let start_period_secs = take_nonneg_secs(
+    let interval_secs = take_secs(&mut map, "interval", HEALTHCHECK_DEFAULT_INTERVAL_SECS, 1)?;
+    let timeout_secs = take_secs(&mut map, "timeout", HEALTHCHECK_DEFAULT_TIMEOUT_SECS, 1)?;
+    let start_period_secs = take_secs(
         &mut map,
         "start_period",
         HEALTHCHECK_DEFAULT_START_PERIOD_SECS,
+        0,
     )?;
     let retries = take_retries(&mut map)?;
     // spec: DEP#failure-response
@@ -565,11 +570,11 @@ impl ContainerDef {
                 "mount",
                 move |this: &mut T, path: &str, volume: Volume| -> Result<T, Box<EvalAltResult>> {
                     this.ensure_unfrozen()?;
-                    validate_mountpoint(path)?;
+                    let mountpoint = canonical_mountpoint(path)?;
                     ext(this)
                         .lock()
                         .volume_mounts
-                        .insert(path.into(), VolumeMount::Volume(volume));
+                        .insert(mountpoint, VolumeMount::Volume(volume));
                     Ok(this.clone())
                 },
             )
@@ -580,11 +585,11 @@ impl ContainerDef {
                       volume: ExternalVolume|
                       -> Result<T, Box<EvalAltResult>> {
                     this.ensure_unfrozen()?;
-                    validate_mountpoint(path)?;
+                    let mountpoint = canonical_mountpoint(path)?;
                     ext(this)
                         .lock()
                         .volume_mounts
-                        .insert(path.into(), VolumeMount::ExternalVolume(volume));
+                        .insert(mountpoint, VolumeMount::ExternalVolume(volume));
                     Ok(this.clone())
                 },
             );

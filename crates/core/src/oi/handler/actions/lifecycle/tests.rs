@@ -320,4 +320,12 @@ fn a_volume_param_that_cannot_be_bound_fails_the_dispatch_rather_than_being_skip
     let none = super::bind_volume_params(&oi.state, &schema, serde_json::Map::new(), "op-1")
         .expect("an absent optional volume param is not a failure");
     assert!(none.bindings.is_empty());
+
+    // An empty one is an absent one, not a volume named "".
+    let mut params = serde_json::Map::new();
+    params.insert("data".into(), serde_json::json!(""));
+    let empty = super::bind_volume_params(&oi.state, &schema, params, "op-1")
+        .expect("an empty optional volume param is not a failure");
+    assert!(empty.bindings.is_empty());
+    assert!(!empty.params.contains_key("data"));
 }
