@@ -139,14 +139,18 @@ fn validate_remote_host(host: &str) -> Result<(), OiError> {
     match host.parse::<std::net::IpAddr>() {
         Ok(std::net::IpAddr::V4(v4)) => {
             if v4.is_loopback() || v4.is_unspecified() {
-                return Err(invalid("is a loopback or unspecified address, which names the pod"));
+                return Err(invalid(
+                    "is a loopback or unspecified address, which names the pod",
+                ));
             }
             Ok(())
         }
         Ok(std::net::IpAddr::V6(v6)) => {
             let mapped_loopback = v6.to_ipv4_mapped().is_some_and(|v4| v4.is_loopback());
             if v6.is_loopback() || v6.is_unspecified() || mapped_loopback {
-                return Err(invalid("is a loopback or unspecified address, which names the pod"));
+                return Err(invalid(
+                    "is a loopback or unspecified address, which names the pod",
+                ));
             }
             Ok(())
         }
@@ -216,7 +220,10 @@ pub(crate) fn create_site_service(
     if !created {
         return Err(OiError::new(
             ErrorCode::RequirementsInvalid,
-            format!("a site service named {:?} already exists", params.name.as_str()),
+            format!(
+                "a site service named {:?} already exists",
+                params.name.as_str()
+            ),
         ));
     }
 
@@ -869,7 +876,7 @@ mod tests {
         let (code, _) = oi
             .call("/services/site/delete", json!({ "name": "lab-db" }))
             .unwrap_err();
-        assert_eq!(code, "requirements_invalid");
+        assert_eq!(code, "not_found");
     }
 
     // spec: SITE#endpoint-addressing
@@ -982,13 +989,14 @@ mod tests {
         );
 
         let (code, _) = oi.call("/services/site/endpoint/remove", ep).unwrap_err();
-        assert_eq!(code, "requirements_invalid");
+        assert_eq!(code, "not_found");
     }
 
     // spec: SITE#site-service-lifecycle
     #[test]
     fn site_service_delete_blocked_while_mapped() {
         let oi = TestOi::new();
+        register_app(&oi, "consumer", "");
         oi.call("/services/site/create", json!({ "name": "shared-api" }))
             .unwrap();
         oi.call(
@@ -1005,7 +1013,10 @@ mod tests {
             .call("/services/site/delete", json!({ "name": "shared-api" }))
             .unwrap_err();
         assert_eq!(code, "requirements_invalid");
-        assert!(msg.contains("still mapped"), "{msg}");
+        assert!(
+            msg.contains("consumer") && msg.contains("api-slot"),
+            "{msg}"
+        );
 
         oi.call(
             "/services/external/unmap",
@@ -1070,6 +1081,8 @@ mod tests {
     #[test]
     fn external_service_mapping_map_remap_unmap_flow() {
         let oi = TestOi::new();
+        register_app(&oi, "consumer", "");
+        register_app(&oi, "postgres", r#"app.service("sql");"#);
         oi.call("/services/site/create", json!({ "name": "lab-db" }))
             .unwrap();
 
@@ -1117,7 +1130,7 @@ mod tests {
                 }),
             )
             .unwrap_err();
-        assert_eq!(code, "requirements_invalid");
+        assert_eq!(code, "not_found");
 
         assert_eq!(
             oi.call(
@@ -1133,7 +1146,7 @@ mod tests {
                 json!({ "app": "consumer", "external_name": "db-conn" }),
             )
             .unwrap_err();
-        assert_eq!(code, "requirements_invalid");
+        assert_eq!(code, "not_found");
     }
 
     #[test]
@@ -1176,5 +1189,295 @@ mod tests {
             .unwrap_err();
         assert_eq!(code, "requirements_invalid");
         assert!(msg.contains("declared by app"), "{msg}");
+    }
+
+    fn endpoint(service_port: u16, host: &str, remote_port: u16) -> Value {
+        json!({
+            "service_port": service_port,
+            "protocol": "tcp",
+            "remote_host": host,
+            "remote_port": remote_port,
+        })
+    }
+
+    // spec: SVCM#endpoint-objects
+    #[test]
+    fn remote_hosts_that_name_the_pod_or_are_malformed_are_refused() {
+        for host in [
+            "::1",
+            "::",
+            "::ffff:127.0.0.1",
+            "::ffff:127.255.0.9",
+            "127.0.0.1",
+            "127.1.2.3",
+            "0.0.0.0",
+            "localhost",
+            "LOCALHOST",
+            "db.localhost",
+            "Db.LocalHost",
+            "[2001:db8::1]",
+            "fe80::1%eth0",
+            "010.0.0.1",
+            "1.2.3",
+            ".example.com",
+            "example.com.",
+            "a..b",
+            "-lead.example",
+            "trail-.example",
+        ] {
+            let oi = TestOi::new();
+            let (code, msg) = oi
+                .call(
+                    "/services/site/create",
+                    json!({ "name": "bad-host", "endpoints": [endpoint(80, host, 80)] }),
+                )
+                .unwrap_err();
+            assert_eq!(code, "requirements_invalid", "{host}: {msg}");
+            assert!(msg.contains("remote_host"), "{host}: {msg}");
+        }
+        for host in [
+            "::2",
+            "::ffff:128.0.0.1",
+            "126.255.255.255",
+            "db.example.com",
+        ] {
+            let oi = TestOi::new();
+            oi.call(
+                "/services/site/create",
+                json!({ "name": "good-host", "endpoints": [endpoint(80, host, 80)] }),
+            )
+            .unwrap_or_else(|e| panic!("{host}: {e:?}"));
+        }
+    }
+
+    // spec: SVCM#site-service-creation
+    #[test]
+    fn creating_a_site_service_checks_the_name_and_the_endpoints() {
+        let oi = TestOi::new();
+        oi.call("/services/site/create", json!({ "name": "lab-db" }))
+            .unwrap();
+        let (code, _) = oi
+            .call("/services/site/create", json!({ "name": "lab-db" }))
+            .unwrap_err();
+        assert_eq!(code, "requirements_invalid", "a name already taken");
+
+        let (code, _) = oi
+            .call(
+                "/services/site/create",
+                json!({
+                    "name": "twice",
+                    "endpoints": [endpoint(80, "10.0.0.1", 80), endpoint(80, "10.0.0.1", 80)],
+                }),
+            )
+            .unwrap_err();
+        assert_eq!(code, "requirements_invalid", "two identical endpoints");
+        assert_eq!(site_services(&oi).len(), 1, "nothing was stored");
+
+        // The same pair on different remotes is one service across backends.
+        oi.call(
+            "/services/site/create",
+            json!({
+                "name": "pooled",
+                "endpoints": [endpoint(80, "10.0.0.1", 80), endpoint(80, "10.0.0.2", 80)],
+            }),
+        )
+        .unwrap();
+    }
+
+    // spec: SVCM#site-service-endpoint-changes
+    #[test]
+    fn endpoint_changes_check_the_service_and_the_endpoint() {
+        let oi = TestOi::new();
+        let with = |name: &str| {
+            let mut e = endpoint(53, "10.0.0.5", 53);
+            e["name"] = json!(name);
+            e
+        };
+        let (code, _) = oi
+            .call("/services/site/endpoint/add", with("ghost"))
+            .unwrap_err();
+        assert_eq!(code, "not_found", "adding to a service that is not there");
+        let (code, _) = oi
+            .call("/services/site/endpoint/remove", with("ghost"))
+            .unwrap_err();
+        assert_eq!(
+            code, "not_found",
+            "removing from a service that is not there"
+        );
+
+        oi.call("/services/site/create", json!({ "name": "dns" }))
+            .unwrap();
+        oi.call("/services/site/endpoint/add", with("dns")).unwrap();
+        let (code, _) = oi
+            .call("/services/site/endpoint/add", with("dns"))
+            .unwrap_err();
+        assert_eq!(code, "requirements_invalid", "an endpoint it already has");
+        assert_eq!(
+            site_services(&oi)[0]["endpoints"].as_array().unwrap().len(),
+            1
+        );
+    }
+
+    // spec: SVCM#mapping-creation
+    #[test]
+    fn mapping_checks_the_app_the_target_and_duplicates() {
+        let oi = TestOi::new();
+        let map = |app: &str, target: Value| {
+            oi.call(
+                "/services/external/map",
+                json!({ "app": app, "external_name": "dbsvc", "target": target }),
+            )
+        };
+        let site = |name: &str| json!({ "kind": "site", "name": name });
+
+        let (code, _) = map("ghost", site("lab")).unwrap_err();
+        assert_eq!(code, "not_found", "an app that is not registered");
+
+        register_app(&oi, "consumer", "");
+        let (code, _) = map("consumer", site("lab")).unwrap_err();
+        assert_eq!(
+            code, "requirements_invalid",
+            "a site service that is not there"
+        );
+        let (code, _) = map(
+            "consumer",
+            json!({ "kind": "app", "app": "ghost", "service": "sql" }),
+        )
+        .unwrap_err();
+        assert_eq!(
+            code, "requirements_invalid",
+            "a target app that is not registered"
+        );
+
+        register_app(&oi, "postgres", r#"app.service("sql");"#);
+        let (code, _) = map(
+            "consumer",
+            json!({ "kind": "app", "app": "postgres", "service": "missing" }),
+        )
+        .unwrap_err();
+        assert_eq!(
+            code, "requirements_invalid",
+            "a service the app does not declare"
+        );
+        map(
+            "consumer",
+            json!({ "kind": "app", "app": "postgres", "service": "sql" }),
+        )
+        .unwrap();
+
+        oi.call("/services/site/create", json!({ "name": "lab" }))
+            .unwrap();
+        let (code, _) = map("consumer", site("lab")).unwrap_err();
+        assert_eq!(code, "requirements_invalid", "already mapped");
+    }
+
+    // spec: SVCM#remapping
+    #[test]
+    fn remapping_checks_the_app_the_mapping_and_the_target() {
+        let oi = TestOi::new();
+        oi.call("/services/site/create", json!({ "name": "lab" }))
+            .unwrap();
+        let remap = |app: &str, target: Value| {
+            oi.call(
+                "/services/external/remap",
+                json!({ "app": app, "external_name": "dbsvc", "target": target }),
+            )
+        };
+        let (code, _) = remap("ghost", json!({ "kind": "site", "name": "lab" })).unwrap_err();
+        assert_eq!(code, "not_found", "an app that is not registered");
+
+        register_app(&oi, "consumer", "");
+        oi.call(
+            "/services/external/map",
+            json!({
+                "app": "consumer",
+                "external_name": "dbsvc",
+                "target": { "kind": "site", "name": "lab" },
+            }),
+        )
+        .unwrap();
+        let (code, _) = remap("consumer", json!({ "kind": "site", "name": "ghost" })).unwrap_err();
+        assert_eq!(code, "requirements_invalid");
+        let list = oi.call("/services/external/list", json!({})).unwrap();
+        assert_eq!(list[0]["target"]["name"], "lab", "unchanged");
+    }
+
+    // spec: SVCM#unmapping
+    #[test]
+    fn unmapping_for_an_app_that_is_not_registered_is_not_found_and_begins_an_iteration() {
+        let oi = TestOi::new();
+        let (code, _) = oi
+            .call(
+                "/services/external/unmap",
+                json!({ "app": "ghost", "external_name": "dbsvc" }),
+            )
+            .unwrap_err();
+        assert_eq!(code, "not_found");
+
+        register_app(&oi, "consumer", "");
+        oi.call("/services/site/create", json!({ "name": "lab" }))
+            .unwrap();
+        oi.call(
+            "/services/external/map",
+            json!({
+                "app": "consumer",
+                "external_name": "dbsvc",
+                "target": { "kind": "site", "name": "lab" },
+            }),
+        )
+        .unwrap();
+        oi.block_on(oi.state.tick_notify.notified());
+        oi.call(
+            "/services/external/unmap",
+            json!({ "app": "consumer", "external_name": "dbsvc" }),
+        )
+        .unwrap();
+        oi.block_on(async {
+            tokio::time::timeout(
+                std::time::Duration::from_secs(1),
+                oi.state.tick_notify.notified(),
+            )
+            .await
+            .expect("an iteration was asked for")
+        });
+    }
+
+    // spec: SVCM#app-service-listing
+    #[test]
+    fn app_services_are_listed_by_app_then_service() {
+        let oi = TestOi::new();
+        register_app(
+            &oi,
+            "zeta",
+            r#"app.service("aaa").exported(#{ description: "x" });"#,
+        );
+        register_app(
+            &oi,
+            "alpha",
+            r#"app.service("zzz").exported(#{ description: "x" }); app.service("bbb").exported(#{ description: "x" });"#,
+        );
+        for method in ["/services/app/list", "/services/exported/list"] {
+            let list = oi.call(method, json!({})).unwrap();
+            let keys: Vec<(String, String)> = list
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|s| {
+                    (
+                        s["app"].as_str().unwrap().to_owned(),
+                        s["service_name"].as_str().unwrap().to_owned(),
+                    )
+                })
+                .collect();
+            assert_eq!(
+                keys,
+                [
+                    ("alpha".to_owned(), "bbb".to_owned()),
+                    ("alpha".to_owned(), "zzz".to_owned()),
+                    ("zeta".to_owned(), "aaa".to_owned()),
+                ],
+                "{method}"
+            );
+        }
     }
 }

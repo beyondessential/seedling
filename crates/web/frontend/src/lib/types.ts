@@ -522,8 +522,8 @@ export interface SiteServiceResolverEntry {
   aaaa: string[];
   a: string[];
   last_attempt_failed: boolean;
-  /// The record type whose lookup keeps failing while the other answers.
-  degraded_family: "A" | "AAAA" | null;
+  /// The record types whose most recent lookup failed, in ascending byte order.
+  failed_families: ("A" | "AAAA")[];
   age_seconds: number;
   ttl_remaining_seconds: number;
 }

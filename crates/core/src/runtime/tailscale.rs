@@ -11,13 +11,17 @@
 use std::{path::PathBuf, sync::Arc, time::Duration};
 
 use jiff::Timestamp;
-use seedling_protocol::names::SiteIngressName;
+use seedling_protocol::{
+    events::{AttachmentTargetRef, EventSender},
+    names::SiteIngressName,
+};
 use serde::Deserialize;
 use tokio::{sync::Notify, task::JoinHandle};
 use tracing::{debug, info, warn};
 
 use crate::runtime::{
     db::DbHandle,
+    site_ingress_attachments::AttachmentTarget,
     site_ingresses::{self, DiscoveryProvider, SiteIngressDef, SiteIngressSource, TlsProvider},
 };
 
@@ -90,7 +94,8 @@ impl std::error::Error for TailscaleError {}
 /// Public-shape of the discovery snapshot the OI handler exposes.
 #[derive(Debug, Clone)]
 pub struct DiscoveryStatusSnapshot {
-    pub healthy: bool,
+    /// Whether the most recent poll was healthy, `None` before the first poll.
+    pub healthy: Option<bool>,
     pub last_poll_at: Option<Timestamp>,
     pub identity: Option<DiscoveredIdentity>,
     pub last_error: Option<String>,
@@ -105,7 +110,7 @@ impl DiscoveryStatus {
     fn new() -> Self {
         Self {
             inner: parking_lot::RwLock::new(DiscoveryStatusSnapshot {
-                healthy: false,
+                healthy: None,
                 last_poll_at: None,
                 identity: None,
                 last_error: None,
@@ -127,15 +132,19 @@ pub struct TailscaleProvider {
     config: TailscaleConfig,
     kick: Notify,
     status: Arc<DiscoveryStatus>,
+    /// Where the changes a poll makes to the discovered site ingress are
+    /// reported. They carry no actor: they are the provider's own.
+    events: EventSender,
 }
 
 impl TailscaleProvider {
-    pub fn new(db: DbHandle, config: TailscaleConfig) -> Arc<Self> {
+    pub fn new(db: DbHandle, config: TailscaleConfig, events: EventSender) -> Arc<Self> {
         Arc::new(Self {
             db,
             config,
             kick: Notify::new(),
             status: Arc::new(DiscoveryStatus::new()),
+            events,
         })
     }
 
@@ -178,7 +187,7 @@ impl TailscaleProvider {
                         "tailscale: poll failed: {e}"
                     );
                     self.status.record(DiscoveryStatusSnapshot {
-                        healthy: false,
+                        healthy: Some(false),
                         last_poll_at: Some(Timestamp::now()),
                         identity: None,
                         last_error: Some(e.to_string()),
@@ -294,13 +303,17 @@ impl TailscaleProvider {
             Some(id) if id.backend_running => {
                 let now = Timestamp::now();
                 let id_for_db = id.clone();
-                self.db.call(move |db| {
-                    if let Err(e) = upsert_discovered_row(db, &id_for_db, &now) {
+                let changes = self.db.call(move |db| {
+                    upsert_discovered_row(db, &id_for_db, &now).unwrap_or_else(|e| {
                         warn!(error = %e, "tailscale: db upsert failed");
-                    }
+                        Vec::new()
+                    })
                 });
+                for change in &changes {
+                    self.report(change);
+                }
                 self.status.record(DiscoveryStatusSnapshot {
-                    healthy: true,
+                    healthy: Some(true),
                     last_poll_at: Some(now),
                     identity: Some(id.clone()),
                     last_error: None,
@@ -312,7 +325,7 @@ impl TailscaleProvider {
                 // operator's attachments survive the outage.
                 self.mark_existing_stale(true);
                 self.status.record(DiscoveryStatusSnapshot {
-                    healthy: false,
+                    healthy: Some(false),
                     last_poll_at: Some(Timestamp::now()),
                     identity: identity.clone(),
                     last_error: Some(if identity.is_none() {
@@ -321,6 +334,64 @@ impl TailscaleProvider {
                         "tailscale backend not running (logged out)".to_owned()
                     }),
                 });
+            }
+        }
+    }
+
+    /// Report a change the provider made, as an event with no actor.
+    // spec: SITE#site-ingresses
+    fn report(&self, change: &Change) {
+        match change {
+            Change::Created(def) => {
+                let (provider, source) = match &def.source {
+                    SiteIngressSource::Discovered { provider, .. } => {
+                        (Some(provider.as_str()), "discovered")
+                    }
+                    SiteIngressSource::Manual => (None, "manual"),
+                };
+                self.events.site_ingress_created(
+                    &def.name,
+                    &def.hostname,
+                    source,
+                    provider,
+                    def.tls_provider.as_str(),
+                    def.description.as_deref(),
+                    None,
+                );
+            }
+            Change::Renamed(def) => self.events.site_ingress_updated(
+                &def.name,
+                &def.hostname,
+                def.tls_provider.as_str(),
+                def.description.as_deref(),
+                None,
+            ),
+            Change::Deleted { def, attachments } => {
+                for att in attachments {
+                    let target = match &att.target {
+                        AttachmentTarget::Forward { app, service } => {
+                            AttachmentTargetRef::Forward { app, service }
+                        }
+                        AttachmentTarget::Redirect {
+                            url,
+                            code,
+                            preserve_path,
+                        } => AttachmentTargetRef::Redirect {
+                            url,
+                            code: *code,
+                            preserve_path: *preserve_path,
+                        },
+                    };
+                    self.events.site_ingress_attachment_removed(
+                        &def.name,
+                        att.port,
+                        att.protocol.as_str(),
+                        target,
+                        None,
+                    );
+                }
+                self.events
+                    .site_ingress_deleted(&def.name, "discovered", None);
             }
         }
     }
@@ -406,11 +477,23 @@ fn parse_identity(payload: &StatusPayload) -> Option<DiscoveredIdentity> {
     })
 }
 
+/// A change to the discovered site ingress, for the provider to report.
+enum Change {
+    Created(SiteIngressDef),
+    /// The hostname changed in place.
+    Renamed(SiteIngressDef),
+    Deleted {
+        def: SiteIngressDef,
+        attachments: Vec<crate::runtime::site_ingress_attachments::SiteIngressAttachment>,
+    },
+}
+
 fn upsert_discovered_row(
     db: &crate::runtime::db::Db,
     identity: &DiscoveredIdentity,
     now: &Timestamp,
-) -> rusqlite::Result<()> {
+) -> rusqlite::Result<Vec<Change>> {
+    let mut changes = Vec::new();
     // First, see if there's already a discovered Tailscale row keyed by
     // this node id. If so, update its hostname in place (rename case) and
     // clear the stale flag.
@@ -429,11 +512,14 @@ fn upsert_discovered_row(
                 new = %identity.hostname,
                 "tailscale: hostname renamed in place"
             );
+            let mut renamed = existing.clone();
+            renamed.hostname = identity.hostname.clone();
+            changes.push(Change::Renamed(renamed));
         }
         if existing.stale {
             site_ingresses::set_stale(db, &existing.name, false)?;
         }
-        return Ok(());
+        return Ok(changes);
     }
 
     // No row for this node id. If a row already exists under the operator-
@@ -454,9 +540,14 @@ fn upsert_discovered_row(
                  {TAILSCALE_INGRESS_NAME:?}; not creating the discovered one. Rename or remove \
                  it to let discovery take over."
             );
-            return Ok(());
+            return Ok(changes);
         }
+        let attachments = crate::runtime::site_ingress_attachments::list_for_ingress(db, &name)?;
         site_ingresses::delete(db, &name)?;
+        changes.push(Change::Deleted {
+            def: existing.clone(),
+            attachments,
+        });
         info!(
             stale_node_id = ?match &existing.source {
                 SiteIngressSource::Discovered { key, .. } => key.as_str(),
@@ -485,7 +576,8 @@ fn upsert_discovered_row(
         node_id = %identity.node_id,
         "tailscale: discovered ingress created"
     );
-    Ok(())
+    changes.push(Change::Created(def));
+    Ok(changes)
 }
 
 #[cfg(test)]
@@ -516,6 +608,7 @@ mod tests {
                 socket_path: dir.path().join("no-such.sock"),
                 poll_interval: Duration::from_millis(5),
             },
+            seedling_protocol::events::new_event_channel(),
         );
         let handle = Arc::clone(&provider).spawn();
 
@@ -636,5 +729,56 @@ mod tests {
         upsert_discovered_row(&db, &id, &Timestamp::now()).unwrap();
         let row = site_ingresses::get(&db, &name).unwrap().unwrap();
         assert!(!row.stale);
+    }
+
+    // spec: INGM#discovery-refresh
+    // The provider's own changes are events with no actor: whatever started the
+    // poll, the changes are the provider's.
+    #[test]
+    fn a_polls_changes_are_reported_without_an_actor() {
+        let db = mkdb();
+        let events = seedling_protocol::events::new_event_channel();
+        let mut rx = events.subscribe();
+        let provider = TailscaleProvider::new(
+            DbHandle::open_in_memory().expect("open"),
+            TailscaleConfig::default(),
+            events,
+        );
+        let types =
+            |rx: &mut tokio::sync::broadcast::Receiver<seedling_protocol::events::OiEvent>| {
+                let mut out = Vec::new();
+                while let Ok(e) = rx.try_recv() {
+                    out.push(serde_json::to_value(&e).unwrap());
+                }
+                out
+            };
+        let apply = |host: &str, node: &str| {
+            for change in
+                upsert_discovered_row(&db, &fake_identity(host, node), &Timestamp::now()).unwrap()
+            {
+                provider.report(&change);
+            }
+        };
+
+        apply("a.ts.net", "n-1");
+        apply("a.ts.net", "n-1");
+        apply("b.ts.net", "n-1");
+        apply("c.ts.net", "n-2");
+        let seen = types(&mut rx);
+        let kinds: Vec<_> = seen.iter().map(|e| e["type"].as_str().unwrap()).collect();
+        assert_eq!(
+            kinds,
+            [
+                "SiteIngressCreated",
+                "SiteIngressUpdated",
+                "SiteIngressDeleted",
+                "SiteIngressCreated"
+            ]
+        );
+        assert_eq!(seen[0]["source"], "discovered");
+        assert_eq!(seen[0]["discovered_provider"], "tailscale");
+        assert_eq!(seen[1]["hostname"], "b.ts.net");
+        assert_eq!(seen[2]["source"], "discovered");
+        assert!(seen.iter().all(|e| e.get("actor").is_none()), "{seen:?}");
     }
 }

@@ -458,22 +458,18 @@ pub(crate) fn delete_site_volume(
             .volume_store
             .hold_site(params.name.as_str(), "site volume deleted by operator"))
         .map_err(|e| internal("failed to hold site volume for review", e)),
-        SiteVolumeKind::Snapshot { .. } => run(state
-            .driver
-            .volume_store
-            .remove_site(params.name.as_str()))
-        .map(|()| None)
-        .map_err(|e| internal("failed to remove site snapshot", e)),
+        SiteVolumeKind::Snapshot { .. } => {
+            run(state.driver.volume_store.remove_site(params.name.as_str()))
+                .map(|()| None)
+                .map_err(|e| internal("failed to remove site snapshot", e))
+        }
         SiteVolumeKind::Bind { .. } => Ok(None),
     };
     let held_meta = match storage {
         Ok(held) => held,
         Err(e) => {
             let restore = def.clone();
-            if let Err(undo) = state
-                .db
-                .call(move |db| site_volumes::create(db, &restore))
-            {
+            if let Err(undo) = state.db.call(move |db| site_volumes::create(db, &restore)) {
                 tracing::error!(
                     site_volume = %params.name,
                     error = %undo,
@@ -863,14 +859,17 @@ fn check_mapping_target(state: &OiState, target: &VolumeRef) -> Result<(), OiErr
         .get(app.as_str())
         .ok_or_else(|| invalid(format!("no app named {:?} is registered", app.as_str())))?;
     let def = entry.app.def.load();
-    let exported = def.resources.iter().find_map(|(id, resource)| match resource {
-        Resource::Volume(vol)
-            if id.kind == ResourceKind::Volume && id.name.as_str() == volume.as_str() =>
-        {
-            Some(vol.def.lock().exported.is_some())
-        }
-        _ => None,
-    });
+    let exported = def
+        .resources
+        .iter()
+        .find_map(|(id, resource)| match resource {
+            Resource::Volume(vol)
+                if id.kind == ResourceKind::Volume && id.name.as_str() == volume.as_str() =>
+            {
+                Some(vol.def.lock().exported.is_some())
+            }
+            _ => None,
+        });
     match exported {
         None => Err(invalid(format!(
             "app {:?} declares no volume named {:?}",

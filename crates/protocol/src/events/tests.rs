@@ -756,11 +756,10 @@ fn site_ingress_events_wire_shape() {
             &name,
             443,
             "https",
-            "forward",
-            Some(&app),
-            Some(&service),
-            None,
-            None,
+            AttachmentTargetRef::Forward {
+                app: &app,
+                service: &service,
+            },
             None,
         )),
         json!({
@@ -779,11 +778,11 @@ fn site_ingress_events_wire_shape() {
             &name,
             443,
             "https",
-            "redirect",
-            None,
-            None,
-            Some("https://example.org/"),
-            Some(301),
+            AttachmentTargetRef::Redirect {
+                url: "https://example.org/",
+                code: 301,
+                preserve_path: false,
+            },
             None,
         )),
         json!({
@@ -794,16 +793,29 @@ fn site_ingress_events_wire_shape() {
             "target_kind": "redirect",
             "redirect_url": "https://example.org/",
             "redirect_code": 301,
+            "redirect_preserve_path": false,
         })
     );
 
     assert_eq!(
-        shape(|tx| tx.site_ingress_attachment_removed(&name, 443, "https", None)),
+        shape(|tx| tx.site_ingress_attachment_removed(
+            &name,
+            443,
+            "https",
+            AttachmentTargetRef::Forward {
+                app: &app,
+                service: &service,
+            },
+            None,
+        )),
         json!({
             "type": "SiteIngressAttachmentRemoved",
             "name": "front",
             "port": 443,
             "protocol": "https",
+            "target_kind": "forward",
+            "target_app": "web",
+            "target_service": "api",
         })
     );
 }
@@ -853,6 +865,7 @@ fn event_sender_with_actor_attaches_actor_to_every_event() {
     let ext_svc = ExternalServiceName::new("upstream").unwrap();
     let ingress = SiteIngressName::new("front").unwrap();
     let template = TemplateName::new("postgres-stack").unwrap();
+    let app_service = AppServiceName::new("api").unwrap();
     let vol_ref = VolumeRef::Site {
         name: SiteVolumeName::new("shared").unwrap(),
     };
@@ -919,27 +932,22 @@ fn event_sender_with_actor_attaches_actor_to_every_event() {
     sender.site_ingress_created(&ingress, "example.com", "manual", None, "acme", None);
     sender.site_ingress_updated(&ingress, "example.com", "acme", None);
     sender.site_ingress_deleted(&ingress, "manual");
-    sender.site_ingress_attachment_added(
-        &ingress,
-        443,
-        "https",
-        "forward",
-        Some(&app),
-        None,
-        None,
-        None,
-    );
+    let forward = AttachmentTargetRef::Forward {
+        app: &app,
+        service: &app_service,
+    };
+    sender.site_ingress_attachment_added(&ingress, 443, "https", forward);
     sender.site_ingress_attachment_updated(
         &ingress,
         443,
         "https",
-        "redirect",
-        None,
-        None,
-        Some("https://example.org/"),
-        Some(301),
+        AttachmentTargetRef::Redirect {
+            url: "https://example.org/",
+            code: 301,
+            preserve_path: true,
+        },
     );
-    sender.site_ingress_attachment_removed(&ingress, 443, "https");
+    sender.site_ingress_attachment_removed(&ingress, 443, "https", forward);
     sender.template_created(&template);
     sender.template_updated(&template);
     sender.template_removed(&template);

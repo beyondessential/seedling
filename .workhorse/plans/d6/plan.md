@@ -30,7 +30,7 @@ Each issue is worked on its own and committed on its own, with a test that fails
 - [ ] Blocking shell.attach, withholding-fault app status, rt.write to mapped external volumes
 - [ ] Review round 2, part 1
 - [ ] Review round 2, part 2
-- [ ] VOLM, SVCM and INGM handlers
+- [x] VOLM, SVCM and INGM handlers
 - [ ] Review round 3, part 1
 - [ ] Review round 3, part 2
 
@@ -128,3 +128,10 @@ Each is done once, in whichever issue is worked first, and the later issue notes
 - The proxy image moves to Caddy 2.11.9 and caddy-l4 0.1.3 with tag `2.11.9-1`, and the runtime pulls that tag, so it must be published before this reaches a host.
 - Host facts that cannot be determined at start (NAT64 detection, IPv4 and IPv6 egress) are held in `HostProbes`, looked for again each iteration, and fault until found (`nat64_detection_failed`, `ipv4_egress_undetermined`, `ipv6_egress_undetermined`). Undetermined egress constants read `false`; NAT64 stays active while detection is undetermined, and a later answer does not deactivate it. A fact found later re-evaluates every installed app. A failed idle NAT64 teardown files `nat64_teardown_failed`, which has no test since teardown runs the host's translator.
 - The secret key is only created when no database holds protected values; a missing key beside protected values is a startup error (`Cipher::load_or_create`). Audit entries that cannot be written hold `audit_log_unavailable` with a count of those lost, and the file is reopened for each entry. Five failed definition rechecks file `recheck_failed`. External volumes named `seedling-op-*` are refused at creation.
+- The site-volume sweep and the `backup-snap-` reservation are gone. A new site volume's record is written before its storage and removed again if the storage fails; deleting a site volume deletes the record (refused while a mapping targets it, in one step) and puts it back if the hold fails. An app target of an external volume mapping that is unregistered, undeclared or unexported is `requirements_invalid`, as VOLM says, though the issue text says `not_found` for the undeclared case.
+- A held volume's record that cannot be read fails the list and every lookup of that id; `restore_held_to_site` moves the data back if the record cannot be removed.
+- A site service that has endpoints, the mapping tables and site ingress attachments are written through single-step helpers (`create_if_absent`, `delete_unmapped`, `create_unique`, `update_existing`, `set_target`) so each check and write happen together.
+- The resolver treats a lookup that returned no records from either family as unanswered, whether or not a family failed, names every failed family in `failed_families` (replacing `degraded_family`), wakes for the soonest due entry, and reads the system DNS configuration again on each refresh until it can; its unanswered lookups then reach `site_service_endpoint_unresolvable`. A failed read of the site services in `refresh_due_hosts` is logged at error level and tried again at the next wake: the fault catalogue has no kind for it.
+- Attachment events carry the target (a redirect's `redirect_preserve_path` too), including `SiteIngressAttachmentRemoved`. The Tailscale provider reports its changes as events with no actor, and discovery status lists a provider only if the runtime runs it, with `healthy` null before its first poll.
+- `redirect_preserve_path` is the wire name; the CLI and web console send it.
+- CLI additions: `volumes app`, `volumes external map|remap|unmap|list|declared`, `services site create --endpoint`, `ingresses site discovery refresh`.

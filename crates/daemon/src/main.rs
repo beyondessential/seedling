@@ -639,6 +639,7 @@ async fn main() {
     let tailscale_provider = seedling_core::runtime::tailscale::TailscaleProvider::new(
         db.clone(),
         seedling_core::runtime::tailscale::TailscaleConfig::default(),
+        event_tx.clone(),
     );
     let _tailscale_handle = Arc::clone(&tailscale_provider).spawn();
 

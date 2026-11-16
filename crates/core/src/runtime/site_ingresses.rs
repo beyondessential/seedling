@@ -221,6 +221,17 @@ pub fn create(db: &Db, def: &SiteIngressDef) -> rusqlite::Result<()> {
     Ok(())
 }
 
+/// Create a site ingress unless one of either source already has the name.
+/// Gives `false` when one does, and then stores nothing.
+// spec: INGM#creation
+pub fn create_if_absent(db: &Db, def: &SiteIngressDef) -> rusqlite::Result<bool> {
+    if get(db, &def.name)?.is_some() {
+        return Ok(false);
+    }
+    create(db, def)?;
+    Ok(true)
+}
+
 pub fn list(db: &Db) -> rusqlite::Result<Vec<SiteIngressDef>> {
     let mut stmt = db.conn.prepare(
         "SELECT name, hostname, description, source,
@@ -312,6 +323,77 @@ pub fn set_stale(db: &Db, name: &SiteIngressName, stale: bool) -> rusqlite::Resu
         params![name, stale as i64],
     )?;
     Ok(count > 0)
+}
+
+/// What [`delete_unreported`] did.
+#[derive(Debug)]
+pub enum Deletion {
+    /// The site ingress was deleted, with the attachments it took with it.
+    Deleted {
+        def: SiteIngressDef,
+        attachments: Vec<crate::runtime::site_ingress_attachments::SiteIngressAttachment>,
+    },
+    /// No site ingress has the name.
+    Absent,
+    /// The site ingress is discovered and its provider still reports it.
+    StillReported(SiteIngressDef),
+}
+
+/// Delete a site ingress and its attachments, unless it is discovered and its
+/// provider still reports it, as one step.
+// spec: INGM#deletion
+pub fn delete_unreported(db: &Db, name: &SiteIngressName) -> rusqlite::Result<Deletion> {
+    let Some(def) = get(db, name)? else {
+        return Ok(Deletion::Absent);
+    };
+    if def.source.is_discovered() && !def.stale {
+        return Ok(Deletion::StillReported(def));
+    }
+    let attachments = crate::runtime::site_ingress_attachments::list_for_ingress(db, name)?;
+    delete(db, name)?;
+    Ok(Deletion::Deleted { def, attachments })
+}
+
+/// What [`update_manual`] did.
+#[derive(Debug)]
+pub enum Update {
+    Absent,
+    /// The site ingress is discovered, so an operator cannot update it.
+    Discovered,
+    /// The update changed neither description nor mode.
+    Unchanged(SiteIngressDef),
+    /// The update changed something; this is the site ingress as it now is.
+    Changed(SiteIngressDef),
+}
+
+/// Update a manual site ingress's description or TLS provisioning mode, as one
+/// step. `description` is `Some(None)` to clear it and `None` to leave it.
+// spec: INGM#update
+pub fn update_manual(
+    db: &Db,
+    name: &SiteIngressName,
+    description: Option<Option<&str>>,
+    tls_provider: Option<TlsProvider>,
+) -> rusqlite::Result<Update> {
+    let Some(mut def) = get(db, name)? else {
+        return Ok(Update::Absent);
+    };
+    if def.source.is_discovered() {
+        return Ok(Update::Discovered);
+    }
+    let new_description = match description {
+        Some(d) => d.map(str::to_owned),
+        None => def.description.clone(),
+    };
+    let new_tls = tls_provider.unwrap_or(def.tls_provider);
+    if new_description == def.description && new_tls == def.tls_provider {
+        return Ok(Update::Unchanged(def));
+    }
+    update_description(db, name, new_description.as_deref())?;
+    update_tls_provider(db, name, new_tls)?;
+    def.description = new_description;
+    def.tls_provider = new_tls;
+    Ok(Update::Changed(def))
 }
 
 /// Delete a site ingress unconditionally. Callers must enforce the

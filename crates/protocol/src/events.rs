@@ -494,16 +494,9 @@ pub enum OiEvent {
         name: SiteIngressName,
         port: u16,
         protocol: String,
-        /// "forward" | "redirect"
-        target_kind: String,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        target_app: Option<AppName>,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        target_service: Option<AppServiceName>,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        redirect_url: Option<String>,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        redirect_code: Option<u16>,
+        /// The target the attachment has, or had when it was removed.
+        #[serde(flatten)]
+        target: AttachmentTargetFields,
         #[serde(skip_serializing_if = "Option::is_none")]
         actor: Option<Arc<Actor>>,
     },
@@ -513,15 +506,9 @@ pub enum OiEvent {
         name: SiteIngressName,
         port: u16,
         protocol: String,
-        target_kind: String,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        target_app: Option<AppName>,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        target_service: Option<AppServiceName>,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        redirect_url: Option<String>,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        redirect_code: Option<u16>,
+        /// The target the attachment has, or had when it was removed.
+        #[serde(flatten)]
+        target: AttachmentTargetFields,
         #[serde(skip_serializing_if = "Option::is_none")]
         actor: Option<Arc<Actor>>,
     },
@@ -531,6 +518,9 @@ pub enum OiEvent {
         name: SiteIngressName,
         port: u16,
         protocol: String,
+        /// The target the attachment has, or had when it was removed.
+        #[serde(flatten)]
+        target: AttachmentTargetFields,
         #[serde(skip_serializing_if = "Option::is_none")]
         actor: Option<Arc<Actor>>,
     },
@@ -563,6 +553,63 @@ pub enum OiEvent {
         #[serde(skip_serializing_if = "Option::is_none")]
         actor: Option<Arc<Actor>>,
     },
+}
+
+/// The target of a site ingress attachment, as an event reports it.
+#[derive(Debug, Clone, Copy)]
+pub enum AttachmentTargetRef<'a> {
+    Forward {
+        app: &'a AppName,
+        service: &'a AppServiceName,
+    },
+    Redirect {
+        url: &'a str,
+        code: u16,
+        preserve_path: bool,
+    },
+}
+
+/// The members of an attachment's target that its events carry.
+#[derive(Debug, Clone, Serialize)]
+pub struct AttachmentTargetFields {
+    target_kind: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    target_app: Option<AppName>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    target_service: Option<AppServiceName>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    redirect_url: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    redirect_code: Option<u16>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    redirect_preserve_path: Option<bool>,
+}
+
+impl From<AttachmentTargetRef<'_>> for AttachmentTargetFields {
+    fn from(target: AttachmentTargetRef<'_>) -> Self {
+        match target {
+            AttachmentTargetRef::Forward { app, service } => Self {
+                target_kind: "forward".to_owned(),
+                target_app: Some(app.clone()),
+                target_service: Some(service.clone()),
+                redirect_url: None,
+                redirect_code: None,
+                redirect_preserve_path: None,
+            },
+            AttachmentTargetRef::Redirect {
+                url,
+                code,
+                preserve_path,
+            } => Self {
+                target_kind: "redirect".to_owned(),
+                target_app: None,
+                target_service: None,
+                redirect_url: Some(url.to_owned()),
+                redirect_code: Some(code),
+                redirect_preserve_path: Some(preserve_path),
+            },
+        }
+    }
 }
 
 /// Newtype over `broadcast::Sender<OiEvent>` that carries event-emission methods.
@@ -1188,17 +1235,12 @@ impl EventSender {
     }
 
     // spec: SITE#attachments
-    #[allow(clippy::too_many_arguments)]
     pub fn site_ingress_attachment_added(
         &self,
         name: &SiteIngressName,
         port: u16,
         protocol: &str,
-        target_kind: &str,
-        target_app: Option<&AppName>,
-        target_service: Option<&AppServiceName>,
-        redirect_url: Option<&str>,
-        redirect_code: Option<u16>,
+        target: AttachmentTargetRef<'_>,
         actor: Option<Arc<Actor>>,
     ) {
         self.emit(OiEvent::SiteIngressAttachmentAdded {
@@ -1206,27 +1248,18 @@ impl EventSender {
             name: name.clone(),
             port,
             protocol: protocol.to_owned(),
-            target_kind: target_kind.to_owned(),
-            target_app: target_app.cloned(),
-            target_service: target_service.cloned(),
-            redirect_url: redirect_url.map(str::to_owned),
-            redirect_code,
+            target: target.into(),
             actor,
         });
     }
 
     // spec: SITE#attachments
-    #[allow(clippy::too_many_arguments)]
     pub fn site_ingress_attachment_updated(
         &self,
         name: &SiteIngressName,
         port: u16,
         protocol: &str,
-        target_kind: &str,
-        target_app: Option<&AppName>,
-        target_service: Option<&AppServiceName>,
-        redirect_url: Option<&str>,
-        redirect_code: Option<u16>,
+        target: AttachmentTargetRef<'_>,
         actor: Option<Arc<Actor>>,
     ) {
         self.emit(OiEvent::SiteIngressAttachmentUpdated {
@@ -1234,11 +1267,7 @@ impl EventSender {
             name: name.clone(),
             port,
             protocol: protocol.to_owned(),
-            target_kind: target_kind.to_owned(),
-            target_app: target_app.cloned(),
-            target_service: target_service.cloned(),
-            redirect_url: redirect_url.map(str::to_owned),
-            redirect_code,
+            target: target.into(),
             actor,
         });
     }
@@ -1249,6 +1278,7 @@ impl EventSender {
         name: &SiteIngressName,
         port: u16,
         protocol: &str,
+        target: AttachmentTargetRef<'_>,
         actor: Option<Arc<Actor>>,
     ) {
         self.emit(OiEvent::SiteIngressAttachmentRemoved {
@@ -1256,6 +1286,7 @@ impl EventSender {
             name: name.clone(),
             port,
             protocol: protocol.to_owned(),
+            target: target.into(),
             actor,
         });
     }
@@ -1795,53 +1826,35 @@ impl EventSenderWithActor {
     }
 
     // spec: SITE#attachments
-    #[allow(clippy::too_many_arguments)]
     pub fn site_ingress_attachment_added(
         &self,
         name: &SiteIngressName,
         port: u16,
         protocol: &str,
-        target_kind: &str,
-        target_app: Option<&AppName>,
-        target_service: Option<&AppServiceName>,
-        redirect_url: Option<&str>,
-        redirect_code: Option<u16>,
+        target: AttachmentTargetRef<'_>,
     ) {
         self.inner.site_ingress_attachment_added(
             name,
             port,
             protocol,
-            target_kind,
-            target_app,
-            target_service,
-            redirect_url,
-            redirect_code,
+            target,
             Some(Arc::clone(&self.actor)),
         );
     }
 
     // spec: SITE#attachments
-    #[allow(clippy::too_many_arguments)]
     pub fn site_ingress_attachment_updated(
         &self,
         name: &SiteIngressName,
         port: u16,
         protocol: &str,
-        target_kind: &str,
-        target_app: Option<&AppName>,
-        target_service: Option<&AppServiceName>,
-        redirect_url: Option<&str>,
-        redirect_code: Option<u16>,
+        target: AttachmentTargetRef<'_>,
     ) {
         self.inner.site_ingress_attachment_updated(
             name,
             port,
             protocol,
-            target_kind,
-            target_app,
-            target_service,
-            redirect_url,
-            redirect_code,
+            target,
             Some(Arc::clone(&self.actor)),
         );
     }
@@ -1852,11 +1865,13 @@ impl EventSenderWithActor {
         name: &SiteIngressName,
         port: u16,
         protocol: &str,
+        target: AttachmentTargetRef<'_>,
     ) {
         self.inner.site_ingress_attachment_removed(
             name,
             port,
             protocol,
+            target,
             Some(Arc::clone(&self.actor)),
         );
     }

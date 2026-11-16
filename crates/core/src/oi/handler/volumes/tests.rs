@@ -680,7 +680,12 @@ fn restoring_a_held_volume_emits_no_site_volume_creation_event() {
 
     let mut seen = Vec::new();
     while let Ok(e) = events.try_recv() {
-        seen.push(serde_json::to_value(&e).unwrap()["type"].as_str().unwrap().to_owned());
+        seen.push(
+            serde_json::to_value(&e).unwrap()["type"]
+                .as_str()
+                .unwrap()
+                .to_owned(),
+        );
     }
     assert!(seen.contains(&"HeldVolumeRestored".to_owned()), "{seen:?}");
     assert!(!seen.contains(&"SiteVolumeCreated".to_owned()), "{seen:?}");
@@ -923,7 +928,10 @@ fn mapping_checks_the_app_the_target_and_duplicates() {
 
     register_app(&oi, "consumer", "");
     let (code, _) = map("consumer", site("store")).unwrap_err();
-    assert_eq!(code, "requirements_invalid", "a site volume that is not there");
+    assert_eq!(
+        code, "requirements_invalid",
+        "a site volume that is not there"
+    );
 
     register_app(
         &oi,
@@ -943,7 +951,10 @@ fn mapping_checks_the_app_the_target_and_duplicates() {
         json!({ "kind": "app", "app": "ghost", "volume": "data" }),
     )
     .unwrap_err();
-    assert_eq!(code, "requirements_invalid", "a target app that is not registered");
+    assert_eq!(
+        code, "requirements_invalid",
+        "a target app that is not registered"
+    );
 
     make_site_volume(&oi, "store");
     map("consumer", site("store")).unwrap();
@@ -951,7 +962,14 @@ fn mapping_checks_the_app_the_target_and_duplicates() {
     assert_eq!(code, "requirements_invalid", "a name the app already maps");
 
     // A name the definition does not declare is accepted.
-    assert_eq!(oi.call("/volumes/external/list", json!({})).unwrap().as_array().unwrap().len(), 1);
+    assert_eq!(
+        oi.call("/volumes/external/list", json!({}))
+            .unwrap()
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
 }
 
 // spec: VOLM#remapping-an-external-volume

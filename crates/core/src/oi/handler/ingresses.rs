@@ -1,4 +1,5 @@
 use seedling_protocol::error::{ErrorCode, HandlerResult, OiError};
+use seedling_protocol::events::AttachmentTargetRef;
 use seedling_protocol::names::{AppName, AppServiceName, SiteIngressName};
 use serde::Deserialize;
 use serde_json::json;
@@ -58,6 +59,33 @@ fn validate_hostname(hostname: &str) -> Result<(), OiError> {
         }
     }
     Ok(())
+}
+
+fn internal(what: &str, e: impl std::fmt::Display) -> OiError {
+    OiError::new(ErrorCode::Internal, format!("{what}: {e}"))
+}
+
+fn no_site_ingress(name: &SiteIngressName) -> OiError {
+    OiError::new(
+        ErrorCode::NotFound,
+        format!("no site ingress named {:?}", name.as_str()),
+    )
+}
+
+/// An attachment's target, as its events report it.
+fn event_target(target: &AttachmentTarget) -> AttachmentTargetRef<'_> {
+    match target {
+        AttachmentTarget::Forward { app, service } => AttachmentTargetRef::Forward { app, service },
+        AttachmentTarget::Redirect {
+            url,
+            code,
+            preserve_path,
+        } => AttachmentTargetRef::Redirect {
+            url,
+            code: *code,
+            preserve_path: *preserve_path,
+        },
+    }
 }
 
 fn render_ingress(
@@ -196,7 +224,7 @@ fn default_manual_tls_provider() -> TlsProvider {
     TlsProvider::Acme
 }
 
-// spec: SITE#sources
+// spec: INGM#creation
 pub(crate) fn create_site_ingress(
     state: &OiState,
     params: CreateSiteIngressParams,
@@ -225,15 +253,19 @@ pub(crate) fn create_site_ingress(
         created_at: jiff::Timestamp::now().to_string(),
     };
     let def_for_db = def.clone();
-    state
+    let created = state
         .db
-        .call(move |db| site_ingresses::create(db, &def_for_db))
-        .map_err(|e| {
-            OiError::new(
-                ErrorCode::Internal,
-                format!("failed to create site ingress: {e}"),
-            )
-        })?;
+        .call(move |db| site_ingresses::create_if_absent(db, &def_for_db))
+        .map_err(|e| internal("failed to create site ingress", e))?;
+    if !created {
+        return Err(OiError::new(
+            ErrorCode::RequirementsInvalid,
+            format!(
+                "a site ingress named {:?} already exists",
+                params.name.as_str()
+            ),
+        ));
+    }
 
     // spec: SITE#attachments
     ctx.events.site_ingress_created(
@@ -254,60 +286,46 @@ pub(crate) struct DeleteSiteIngressParams {
     pub name: SiteIngressName,
 }
 
-// spec: SITE#sources
+// spec: INGM#deletion
 pub(crate) fn delete_site_ingress(
     state: &OiState,
     params: DeleteSiteIngressParams,
     ctx: &RequestCtx,
 ) -> HandlerResult {
-    let name_for_get = params.name.clone();
-    let existing = state
-        .db
-        .call(move |db| site_ingresses::get(db, &name_for_get))
-        .map_err(|e| {
-            OiError::new(
-                ErrorCode::Internal,
-                format!("failed to look up site ingress: {e}"),
-            )
-        })?;
-    let Some(existing) = existing else {
-        return Err(OiError::new(
-            ErrorCode::NotFound,
-            format!("no site ingress named {:?}", params.name.as_str()),
-        ));
-    };
-    if existing.source.is_discovered() {
-        return Err(OiError::new(
-            ErrorCode::RequirementsInvalid,
-            format!(
-                "site ingress {:?} is owned by a discovery provider \
-                 and cannot be deleted while its source is active",
-                params.name.as_str()
-            ),
-        ));
-    }
-
     let name_for_db = params.name.clone();
-    let deleted = state
+    let (def, attachments) = match state
         .db
-        .call(move |db| site_ingresses::delete(db, &name_for_db))
-        .map_err(|e| {
-            OiError::new(
-                ErrorCode::Internal,
-                format!("failed to delete site ingress: {e}"),
-            )
-        })?;
-    if !deleted {
-        // Could happen if a parallel request raced us; treat as NotFound
-        // for consistency with the `existing` lookup above.
-        return Err(OiError::new(
-            ErrorCode::NotFound,
-            format!("no site ingress named {:?}", params.name.as_str()),
-        ));
-    }
+        .call(move |db| site_ingresses::delete_unreported(db, &name_for_db))
+        .map_err(|e| internal("failed to delete site ingress", e))?
+    {
+        site_ingresses::Deletion::Deleted { def, attachments } => (def, attachments),
+        site_ingresses::Deletion::Absent => return Err(no_site_ingress(&params.name)),
+        site_ingresses::Deletion::StillReported(_) => {
+            return Err(OiError::new(
+                ErrorCode::RequirementsInvalid,
+                format!(
+                    "site ingress {:?} is owned by a discovery provider that still reports it, \
+                     so it cannot be deleted",
+                    params.name.as_str()
+                ),
+            ));
+        }
+    };
 
     // spec: SITE#attachments
-    ctx.events.site_ingress_deleted(&existing.name, "manual");
+    for att in &attachments {
+        ctx.events.site_ingress_attachment_removed(
+            &def.name,
+            att.port,
+            att.protocol.as_str(),
+            event_target(&att.target),
+        );
+    }
+    let source = match def.source {
+        SiteIngressSource::Manual => "manual",
+        SiteIngressSource::Discovered { .. } => "discovered",
+    };
+    ctx.events.site_ingress_deleted(&def.name, source);
 
     state.tick_notify.notify_one();
     Ok(json!({ "deleted": true }))
@@ -326,38 +344,12 @@ pub(crate) struct UpdateSiteIngressParams {
     pub tls_provider: Option<TlsProvider>,
 }
 
-// spec: SITE#sources
+// spec: INGM#update
 pub(crate) fn update_site_ingress(
     state: &OiState,
     params: UpdateSiteIngressParams,
     ctx: &RequestCtx,
 ) -> HandlerResult {
-    let name_for_get = params.name.clone();
-    let existing = state
-        .db
-        .call(move |db| site_ingresses::get(db, &name_for_get))
-        .map_err(|e| {
-            OiError::new(
-                ErrorCode::Internal,
-                format!("failed to look up site ingress: {e}"),
-            )
-        })?;
-    let Some(existing) = existing else {
-        return Err(OiError::new(
-            ErrorCode::NotFound,
-            format!("no site ingress named {:?}", params.name.as_str()),
-        ));
-    };
-    if existing.source.is_discovered() {
-        return Err(OiError::new(
-            ErrorCode::RequirementsInvalid,
-            format!(
-                "site ingress {:?} is managed by a discovery provider; \
-                 description and TLS provider are not editable",
-                params.name.as_str()
-            ),
-        ));
-    }
     if let Some(p) = params.tls_provider
         && matches!(p, TlsProvider::Tailscale)
     {
@@ -367,39 +359,45 @@ pub(crate) fn update_site_ingress(
         ));
     }
 
-    let new_description = match &params.description {
-        Some(opt) => opt.clone(),
-        None => existing.description.clone(),
-    };
-    let new_tls = params.tls_provider.unwrap_or(existing.tls_provider);
-
-    let name_d = params.name.clone();
-    let desc_for_db = new_description.clone();
-    let tls_for_db = new_tls;
-    state
+    let name = params.name.clone();
+    let description = params.description.clone();
+    let tls_provider = params.tls_provider;
+    let updated = state
         .db
         .call(move |db| {
-            if params.description.is_some() {
-                site_ingresses::update_description(db, &name_d, desc_for_db.as_deref())?;
-            }
-            site_ingresses::update_tls_provider(db, &name_d, tls_for_db)?;
-            Ok::<_, rusqlite::Error>(())
-        })
-        .map_err(|e| {
-            OiError::new(
-                ErrorCode::Internal,
-                format!("failed to update site ingress: {e}"),
+            site_ingresses::update_manual(
+                db,
+                &name,
+                description.as_ref().map(|d| d.as_deref()),
+                tls_provider,
             )
-        })?;
+        })
+        .map_err(|e| internal("failed to update site ingress", e))?;
 
-    ctx.events.site_ingress_updated(
-        &existing.name,
-        &existing.hostname,
-        new_tls.as_str(),
-        new_description.as_deref(),
-    );
+    match updated {
+        site_ingresses::Update::Absent => return Err(no_site_ingress(&params.name)),
+        site_ingresses::Update::Discovered => {
+            return Err(OiError::new(
+                ErrorCode::RequirementsInvalid,
+                format!(
+                    "site ingress {:?} is managed by a discovery provider; \
+                     description and TLS provider are not editable",
+                    params.name.as_str()
+                ),
+            ));
+        }
+        site_ingresses::Update::Unchanged(_) => {}
+        site_ingresses::Update::Changed(def) => {
+            ctx.events.site_ingress_updated(
+                &def.name,
+                &def.hostname,
+                def.tls_provider.as_str(),
+                def.description.as_deref(),
+            );
+            state.tick_notify.notify_one();
+        }
+    }
 
-    state.tick_notify.notify_one();
     Ok(json!({ "updated": true }))
 }
 
@@ -421,7 +419,7 @@ pub(crate) struct AttachmentRedirectParams {
     #[serde(default = "default_redirect_code")]
     pub redirect_code: u16,
     #[serde(default = "default_preserve_path")]
-    pub preserve_path: bool,
+    pub redirect_preserve_path: bool,
 }
 
 fn default_redirect_code() -> u16 {
@@ -437,28 +435,6 @@ pub(crate) struct DetachAttachmentParams {
     pub name: SiteIngressName,
     pub port: u16,
     pub protocol: AttachmentProtocol,
-}
-
-fn ensure_ingress_exists(
-    state: &OiState,
-    name: &SiteIngressName,
-) -> Result<SiteIngressDef, OiError> {
-    let n = name.clone();
-    let def = state
-        .db
-        .call(move |db| site_ingresses::get(db, &n))
-        .map_err(|e| {
-            OiError::new(
-                ErrorCode::Internal,
-                format!("failed to look up site ingress: {e}"),
-            )
-        })?;
-    def.ok_or_else(|| {
-        OiError::new(
-            ErrorCode::NotFound,
-            format!("no site ingress named {:?}", name.as_str()),
-        )
-    })
 }
 
 fn validate_redirect_code(code: u16) -> Result<(), OiError> {
@@ -481,57 +457,79 @@ fn validate_redirect_url(url: &str) -> Result<(), OiError> {
     Ok(())
 }
 
-// spec: SITE#attachments
+/// Give an attachment's `(port, protocol)` its target and emit the event for
+/// what that did.
+// spec: INGM#attachments
+fn attach(state: &OiState, att: SiteIngressAttachment, ctx: &RequestCtx) -> Result<(), OiError> {
+    let name = att.site_ingress.clone();
+    let att_for_db = att.clone();
+    let attached = state
+        .db
+        .call(move |db| site_ingress_attachments::set_target(db, &att_for_db))
+        .map_err(|e| internal("failed to set the site ingress attachment", e))?;
+    let target = event_target(&att.target);
+    match attached {
+        site_ingress_attachments::Attached::NoIngress => return Err(no_site_ingress(&name)),
+        site_ingress_attachments::Attached::Unchanged => return Ok(()),
+        site_ingress_attachments::Attached::Added => {
+            ctx.events
+                .site_ingress_attachment_added(&name, att.port, att.protocol.as_str(), target)
+        }
+        site_ingress_attachments::Attached::Updated => ctx.events.site_ingress_attachment_updated(
+            &name,
+            att.port,
+            att.protocol.as_str(),
+            target,
+        ),
+    }
+    state.tick_notify.notify_one();
+    Ok(())
+}
+
+/// `not_found` unless the site ingress exists, so a request for one that does
+/// not is refused before its other members are looked at.
+fn require_site_ingress(state: &OiState, name: &SiteIngressName) -> Result<(), OiError> {
+    let n = name.clone();
+    state
+        .db
+        .call(move |db| site_ingresses::get(db, &n))
+        .map_err(|e| internal("failed to look up site ingress", e))?
+        .map(|_| ())
+        .ok_or_else(|| no_site_ingress(name))
+}
+
+// spec: INGM#attachments
 pub(crate) fn attach_forward(
     state: &OiState,
     params: AttachmentForwardParams,
     ctx: &RequestCtx,
 ) -> HandlerResult {
-    let _ = ensure_ingress_exists(state, &params.name)?;
+    require_site_ingress(state, &params.name)?;
     super::validate_port("port", params.port)?;
-    let att = SiteIngressAttachment {
-        site_ingress: params.name.clone(),
-        port: params.port,
-        protocol: params.protocol,
-        target: AttachmentTarget::Forward {
-            app: params.target_app.clone(),
-            service: params.target_service.clone(),
+    attach(
+        state,
+        SiteIngressAttachment {
+            site_ingress: params.name,
+            port: params.port,
+            protocol: params.protocol,
+            target: AttachmentTarget::Forward {
+                app: params.target_app,
+                service: params.target_service,
+            },
+            created_at: jiff::Timestamp::now().to_string(),
         },
-        created_at: jiff::Timestamp::now().to_string(),
-    };
-    let att_for_db = att.clone();
-    state
-        .db
-        .call(move |db| site_ingress_attachments::attach(db, &att_for_db))
-        .map_err(|e| {
-            OiError::new(
-                ErrorCode::Internal,
-                format!("failed to add site ingress attachment: {e}"),
-            )
-        })?;
-
-    ctx.events.site_ingress_attachment_added(
-        &params.name,
-        params.port,
-        params.protocol.as_str(),
-        "forward",
-        Some(&params.target_app),
-        Some(&params.target_service),
-        None,
-        None,
-    );
-
-    state.tick_notify.notify_one();
+        ctx,
+    )?;
     Ok(json!({ "attached": true }))
 }
 
-// spec: SITE#attachments
+// spec: INGM#attachments
 pub(crate) fn attach_redirect(
     state: &OiState,
     params: AttachmentRedirectParams,
     ctx: &RequestCtx,
 ) -> HandlerResult {
-    let _ = ensure_ingress_exists(state, &params.name)?;
+    require_site_ingress(state, &params.name)?;
     super::validate_port("port", params.port)?;
     validate_redirect_code(params.redirect_code)?;
     validate_redirect_url(&params.redirect_url)?;
@@ -548,44 +546,25 @@ pub(crate) fn attach_redirect(
         ));
     }
 
-    let att = SiteIngressAttachment {
-        site_ingress: params.name.clone(),
-        port: params.port,
-        protocol: params.protocol,
-        target: AttachmentTarget::Redirect {
-            url: params.redirect_url.clone(),
-            code: params.redirect_code,
-            preserve_path: params.preserve_path,
+    attach(
+        state,
+        SiteIngressAttachment {
+            site_ingress: params.name,
+            port: params.port,
+            protocol: params.protocol,
+            target: AttachmentTarget::Redirect {
+                url: params.redirect_url,
+                code: params.redirect_code,
+                preserve_path: params.redirect_preserve_path,
+            },
+            created_at: jiff::Timestamp::now().to_string(),
         },
-        created_at: jiff::Timestamp::now().to_string(),
-    };
-    let att_for_db = att.clone();
-    state
-        .db
-        .call(move |db| site_ingress_attachments::attach(db, &att_for_db))
-        .map_err(|e| {
-            OiError::new(
-                ErrorCode::Internal,
-                format!("failed to add site ingress attachment: {e}"),
-            )
-        })?;
-
-    ctx.events.site_ingress_attachment_added(
-        &params.name,
-        params.port,
-        params.protocol.as_str(),
-        "redirect",
-        None,
-        None,
-        Some(&params.redirect_url),
-        Some(params.redirect_code),
-    );
-
-    state.tick_notify.notify_one();
+        ctx,
+    )?;
     Ok(json!({ "attached": true }))
 }
 
-// spec: SITE#attachments
+// spec: INGM#attachments
 pub(crate) fn detach(
     state: &OiState,
     params: DetachAttachmentParams,
@@ -596,28 +575,26 @@ pub(crate) fn detach(
     let protocol = params.protocol;
     let removed = state
         .db
-        .call(move |db| site_ingress_attachments::detach(db, &name, port, protocol))
-        .map_err(|e| {
-            OiError::new(
-                ErrorCode::Internal,
-                format!("failed to remove site ingress attachment: {e}"),
-            )
-        })?;
-    if !removed {
+        .call(move |db| site_ingress_attachments::detach_returning(db, &name, port, protocol))
+        .map_err(|e| internal("failed to remove site ingress attachment", e))?;
+    let Some(removed) = removed else {
         return Err(OiError::new(
             ErrorCode::NotFound,
             format!(
-                "no attachment {}:{} ({}) on site ingress {:?}",
+                "site ingress {:?} has no attachment on {}:{}",
                 params.name.as_str(),
                 params.port,
-                params.protocol,
-                params.name.as_str()
+                params.protocol
             ),
         ));
-    }
+    };
 
-    ctx.events
-        .site_ingress_attachment_removed(&params.name, params.port, params.protocol.as_str());
+    ctx.events.site_ingress_attachment_removed(
+        &params.name,
+        params.port,
+        params.protocol.as_str(),
+        event_target(&removed.target),
+    );
 
     state.tick_notify.notify_one();
     Ok(json!({ "detached": true }))
@@ -655,12 +632,15 @@ pub(crate) fn discovery_status(state: &OiState) -> HandlerResult {
         })
         .collect();
 
-    let mut tailscale_obj = json!({
-        "name": "tailscale",
-        "ingresses": tailscale_ingresses,
-    });
+    // One object for each provider the runtime runs.
+    let mut providers = Vec::new();
     if let Some(provider) = &state.tailscale_provider {
+        let mut tailscale_obj = json!({
+            "name": "tailscale",
+            "ingresses": tailscale_ingresses,
+        });
         let snap = provider.status().snapshot();
+        // `null` until the provider's first poll has finished.
         tailscale_obj["healthy"] = json!(snap.healthy);
         if let Some(ts) = snap.last_poll_at {
             tailscale_obj["last_poll_at"] = json!(ts.to_string());
@@ -675,14 +655,10 @@ pub(crate) fn discovery_status(state: &OiState) -> HandlerResult {
                 "backend_running": id.backend_running,
             });
         }
-    } else {
-        tailscale_obj["healthy"] = json!(false);
-        tailscale_obj["last_error"] = json!("Tailscale provider is not configured");
+        providers.push(tailscale_obj);
     }
 
-    Ok(json!({
-        "providers": [tailscale_obj]
-    }))
+    Ok(json!({ "providers": providers }))
 }
 
 /// Force the Tailscale provider's poll loop to run now instead of

@@ -58,9 +58,7 @@ pub enum Written {
 
 fn site_target_missing(db: &Db, target: &VolumeRef) -> rusqlite::Result<bool> {
     match target {
-        VolumeRef::Site { name } => {
-            Ok(crate::runtime::site_volumes::get(db, name)?.is_none())
-        }
+        VolumeRef::Site { name } => Ok(crate::runtime::site_volumes::get(db, name)?.is_none()),
         VolumeRef::App { .. } => Ok(false),
     }
 }

@@ -190,11 +190,14 @@ up promptly.
 The A and AAAA queries are independent: when one fails and the other
 returns records, the host resolves from those records, the failed family
 keeps its last answer, and the host is looked up again after a few
-seconds. Only a host with no records from either family, and at least
-one failed query, counts towards the unresolvable threshold. The
-resolver-status entry names the failing family in `degraded_family`, so
-a host resolving on one family alone is visible as such rather than
-looking healthy; a lookup where both families fail clears it.
+seconds. Only a lookup that returned no records from either family counts
+towards the unresolvable threshold, whether a query failed or both found
+none; a lookup that returned records ends the run. The resolver-status
+entry lists every family whose most recent lookup failed in
+`failed_families`, so a host resolving on one family alone is visible as
+such rather than looking healthy. A system DNS configuration that cannot
+be read is read again on each refresh, and until it can be, every lookup
+is unanswered.
 
 Endpoints that can't be turned into a routable address surface as
 faults on the affected site service:

@@ -81,8 +81,8 @@ function renderResolverBadge(
       label = "failed";
       color = "error";
     } else if (entry.aaaa.length > 0 || entry.a.length > 0) {
-      if (entry.degraded_family) {
-        label = `${entry.degraded_family} failing`;
+      if (entry.failed_families.length > 0) {
+        label = `${entry.failed_families.join(" and ")} failing`;
         color = "warning";
       } else {
         label = "resolved";

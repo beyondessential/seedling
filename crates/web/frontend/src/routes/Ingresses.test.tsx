@@ -261,7 +261,7 @@ describe("Ingresses", () => {
       protocol: "http",
       redirect_url: "https://new.example.com/",
       redirect_code: 307,
-      preserve_path: true,
+      redirect_preserve_path: true,
     });
   });
 

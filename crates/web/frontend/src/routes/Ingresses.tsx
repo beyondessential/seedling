@@ -238,7 +238,7 @@ function AttachDialog({
             protocol,
             redirect_url: redirectUrl,
             redirect_code: redirectCode,
-            preserve_path: preservePath,
+            redirect_preserve_path: preservePath,
           });
     if (result === null) return;
     onAttached();

@@ -156,7 +156,8 @@ impl Lookup {
     /// whether a family's query failed or both found none.
     // spec: SITE#endpoint-addressing
     fn unanswered(&self) -> bool {
-        self.aaaa.as_ref().map_or(true, Vec::is_empty) && self.a.as_ref().map_or(true, Vec::is_empty)
+        self.aaaa.as_ref().map_or(true, Vec::is_empty)
+            && self.a.as_ref().map_or(true, Vec::is_empty)
     }
 
     fn first_error(&self) -> Option<&str> {
@@ -651,8 +652,14 @@ fn combine_families(
     now: Instant,
 ) -> Lookup {
     let valid_until = [
-        aaaa.as_ref().ok().and_then(|(r, v)| (!r.is_empty()).then_some(*v)).flatten(),
-        a.as_ref().ok().and_then(|(r, v)| (!r.is_empty()).then_some(*v)).flatten(),
+        aaaa.as_ref()
+            .ok()
+            .and_then(|(r, v)| (!r.is_empty()).then_some(*v))
+            .flatten(),
+        a.as_ref()
+            .ok()
+            .and_then(|(r, v)| (!r.is_empty()).then_some(*v))
+            .flatten(),
     ]
     .into_iter()
     .flatten()
@@ -845,7 +852,7 @@ mod tests {
         let partial = lookup(Err("servfail".to_owned()), v4(&["10.0.0.2"]));
         let recorded = r.inner.record("dual.example", &partial);
         assert!(recorded.changed);
-        assert!(recorded.newly_failing);
+        assert!(!recorded.newly_failing, "AAAA was already failing");
         assert!(!r.unresolved_hosts().contains("dual.example"));
 
         let res = r.lookup("dual.example").unwrap();

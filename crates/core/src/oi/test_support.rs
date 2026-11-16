@@ -57,12 +57,23 @@ pub(crate) struct TestOi {
 
 impl TestOi {
     pub fn new() -> Self {
-        Self::build(None, None)
+        Self::build(None, None, None)
+    }
+
+    /// A harness whose daemon runs the Tailscale discovery provider, which has
+    /// not polled.
+    pub fn with_tailscale_provider() -> Self {
+        let provider = crate::runtime::tailscale::TailscaleProvider::new(
+            DbHandle::open_in_memory().expect("open in-memory db"),
+            crate::runtime::tailscale::TailscaleConfig::default(),
+            new_event_channel(),
+        );
+        Self::build(None, None, Some(provider))
     }
 
     /// A harness running over `driver` rather than the stub system.
     pub fn with_driver(driver: Arc<System>) -> Self {
-        Self::build(Some(driver), None)
+        Self::build(Some(driver), None, None)
     }
 
     /// A harness whose container runtime fails every call, as when podman
@@ -73,12 +84,14 @@ impl TestOi {
             Some(Arc::new(
                 crate::system::unavailable::UnavailableContainerRuntime,
             )),
+            None,
         )
     }
 
     fn build(
         driver: Option<Arc<System>>,
         container_runtime: Option<Arc<dyn crate::system::ContainerRuntime>>,
+        tailscale_provider: Option<Arc<crate::runtime::tailscale::TailscaleProvider>>,
     ) -> Self {
         let data_dir = tempfile::tempdir().expect("create temp data dir");
         let driver = driver.unwrap_or_else(|| {
@@ -119,7 +132,7 @@ impl TestOi {
             cipher: Arc::clone(&cipher),
             tls_coordinator: Coordinator::new(db, cipher),
             caddy_data_path: tokio::sync::OnceCell::new(),
-            tailscale_provider: None,
+            tailscale_provider,
             site_resolver: None,
             definition_registry: Arc::clone(&registry) as _,
         });
