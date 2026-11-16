@@ -76,6 +76,13 @@ pub(crate) fn set_settings(state: &OiState, params: SetSettingsParams) -> Handle
         threshold,
         window_secs,
     } = params;
+    // spec: FLTS#crash-loop-settings
+    if threshold.is_none() && window_secs.is_none() {
+        return Err(OiError::new(
+            ErrorCode::RequirementsInvalid,
+            "give threshold, window_secs or both",
+        ));
+    }
     let s = state
         .db
         .call(move |db| restarts::set_settings(db, threshold, window_secs))

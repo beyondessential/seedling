@@ -127,3 +127,15 @@ fn settings_round_trip_and_reject_out_of_bounds() {
     assert_eq!(s["threshold"], 3);
     assert_eq!(s["window_secs"], 600);
 }
+
+// spec: FLTS#crash-loop-settings
+#[test]
+fn settings_set_with_neither_member_is_refused() {
+    let oi = TestOi::new();
+    for params in [json!({}), json!({ "threshold": null, "window_secs": null })] {
+        let (code, _) = oi
+            .call("/restarts/settings/set", params.clone())
+            .unwrap_err();
+        assert_eq!(code, "requirements_invalid", "{params}");
+    }
+}
