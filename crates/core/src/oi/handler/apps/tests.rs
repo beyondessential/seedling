@@ -1504,7 +1504,7 @@ fn an_env_value_containing_a_secret_parameter_is_null_and_a_plan_carries_no_valu
 fn an_instance_reports_the_state_of_its_health_check() {
     use crate::{
         defs::resource::ResourceKind,
-        runtime::history::{find_instances_for_group, insert_observation},
+        runtime::{history::insert_observation, identity::ResourceInstance},
     };
     use seedling_protocol::names::AppName;
 
@@ -1534,19 +1534,21 @@ fn an_instance_reports_the_state_of_its_health_check() {
             .unwrap()["instances"][0]["health"]
             .clone()
     };
+    let instances: std::collections::HashMap<&str, ResourceInstance> = ["checked", "unchecked"]
+        .into_iter()
+        .map(|name| {
+            let instance = ResourceInstance::new_singleton(
+                AppName::new_unchecked("demo"),
+                ResourceKind::Deployment,
+                name,
+            );
+            (name, instance)
+        })
+        .collect();
     let observe = |name: &str, kinds: &[&str]| {
         let kinds: Vec<String> = kinds.iter().map(|k| (*k).to_owned()).collect();
-        let name = name.to_owned();
+        let instance = instances[name].clone();
         oi.state.db.call(move |db| {
-            let instance = find_instances_for_group(
-                db,
-                &AppName::new_unchecked("demo"),
-                ResourceKind::Deployment,
-                Some(&name),
-            )
-            .unwrap()
-            .pop()
-            .unwrap();
             for kind in kinds {
                 insert_observation(db, &instance, &kind, &json!({})).unwrap();
             }
