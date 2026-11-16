@@ -382,7 +382,7 @@ export interface SeedlingEvent {
   // ScaleChanged
   deployment?: string;
   scale?: number;
-  previous_scale?: number;
+  previous_scale?: number | null;
   bounds_low?: number;
   bounds_high?: number;
   // AppPriorityChanged

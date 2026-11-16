@@ -2143,8 +2143,13 @@ pub(crate) fn scale_app(state: &OiState, params: ScaleParams, ctx: &RequestCtx) 
     let deployment_name_owned = deployment_name.to_owned();
     let new_scale_clamped = params.scale.clamp(low, high);
     let (previous_scale, new_scale) = state.db.call(move |db| -> Result<_, OiError> {
+        // spec: CTL#scaling — an unreadable earlier scale is reported as unknown
+        // rather than refusing the request.
         let current = scaling::effective_scale(db, &name_owned, &deployment_name_owned, low, high)
-            .map_err(|e| OiError::internal(format!("db error: {e}")))?;
+            .inspect_err(|e| {
+                tracing::warn!(app = %name_owned, deployment = %deployment_name_owned, error = %e, "cannot read the scale before the change");
+            })
+            .ok();
         // spec: CTL#scaling
         scaling::save_scaling_decision(db, &name_owned, &deployment_name_owned, new_scale_clamped)
             .map_err(|e| OiError::internal(format!("db error: {e}")))?;

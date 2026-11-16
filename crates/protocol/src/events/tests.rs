@@ -423,7 +423,7 @@ fn scale_and_server_busy_events_wire_shape() {
     let app = app();
 
     assert_eq!(
-        shape(|tx| tx.scale(app.clone(), "srv", 1, 5, None).changed(3, 1)),
+        shape(|tx| tx.scale(app.clone(), "srv", 1, 5, None).changed(3, Some(1))),
         json!({
             "type": "ScaleChanged",
             "app": "web",
@@ -920,7 +920,7 @@ fn event_sender_with_actor_attaches_actor_to_every_event() {
     sender.app_deregistered(&app);
     sender.app_updated(&app, 2, Some(1), json!({"kind": "pushed"}), None);
     sender.app_phase_changed(&app, "installed");
-    sender.scale(app.clone(), "srv", 0, 4).changed(2, 1);
+    sender.scale(app.clone(), "srv", 0, 4).changed(2, Some(1));
     sender
         .operation(app.clone(), action.clone(), "op-1", 1, 1)
         .started("operator");

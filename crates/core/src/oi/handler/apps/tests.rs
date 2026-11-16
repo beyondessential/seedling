@@ -572,6 +572,43 @@ fn scale_persists_decision_within_bounds() {
 }
 
 // spec: CTL#scaling
+// spec: EVT#app-events
+#[test]
+fn an_unreadable_earlier_scale_is_reported_as_null() {
+    use seedling_protocol::events::OiEvent;
+
+    let oi = TestOi::with_app("demo");
+    oi.state.db.call(|db| {
+        db.conn
+            .execute(
+                "INSERT INTO scaling_decisions (app, deployment, scale, updated_at) \
+                 VALUES ('demo', 'web', 'many', '')",
+                [],
+            )
+            .unwrap()
+    });
+    let mut events = oi.state.event_tx.subscribe();
+    let result = oi
+        .call(
+            "/apps/scale",
+            json!({ "app": "demo", "deployment": "web", "scale": 2 }),
+        )
+        .unwrap();
+    assert_eq!(result["scale"], 2);
+
+    let previous = std::iter::from_fn(|| events.try_recv().ok())
+        .find_map(|ev| match ev {
+            OiEvent::ScaleChanged { previous_scale, .. } => Some(previous_scale),
+            _ => None,
+        })
+        .expect("a ScaleChanged event");
+    assert_eq!(previous, None);
+
+    let desc = oi.call("/apps/show", json!({ "app": "demo" })).unwrap();
+    assert_eq!(desc["resources"][0]["scale"]["current"], 2);
+}
+
+// spec: CTL#scaling
 #[test]
 fn scale_clamps_to_bounds_and_validates_targets() {
     let oi = TestOi::with_app("demo");

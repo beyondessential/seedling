@@ -245,7 +245,9 @@ pub enum OiEvent {
         app: AppName,
         deployment: String,
         scale: u16,
-        previous_scale: u16,
+        /// `None` where the effective scale before the change cannot be read.
+        // spec: EVT#app-events
+        previous_scale: Option<u16>,
         bounds_low: u16,
         bounds_high: u16,
         #[serde(skip_serializing_if = "Option::is_none")]
@@ -2079,7 +2081,7 @@ pub struct ScaleEventCtx {
 }
 
 impl ScaleEventCtx {
-    pub fn changed(&self, scale: u16, previous_scale: u16) {
+    pub fn changed(&self, scale: u16, previous_scale: Option<u16>) {
         self.tx.emit(OiEvent::ScaleChanged {
             timestamp: now(),
             app: self.app.clone(),
