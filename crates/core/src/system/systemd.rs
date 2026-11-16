@@ -11,6 +11,8 @@ use crate::system::{
     },
 };
 
+mod slice_files;
+
 const UNIT_DIR: &str = "/etc/systemd/system";
 
 // ---------------------------------------------------------------------------
@@ -237,14 +239,21 @@ fn parse_exec_main(code: i32, status: i32) -> Option<UnitExit> {
 
 pub(crate) struct SystemdManager {
     conn: Arc<Connection>,
+    /// The record of the slice unit files this runtime has written, in the data
+    /// directory.
+    slice_record: std::path::PathBuf,
 }
+
+/// The file in the data directory that records the slice unit files written.
+const SLICE_RECORD: &str = "slice-units";
 
 impl SystemdManager {
     /// Connect to the system D-Bus. Called once at startup.
-    pub(crate) async fn connect() -> Result<Self, SystemdError> {
+    pub(crate) async fn connect(data_dir: &std::path::Path) -> Result<Self, SystemdError> {
         let conn = Connection::system().await.context(DBusSnafu)?;
         Ok(Self {
             conn: Arc::new(conn),
+            slice_record: data_dir.join(SLICE_RECORD),
         })
     }
 
@@ -420,46 +429,28 @@ impl SystemdManager {
         )
     }
 
-    /// Whether `name` is a slice this runtime owns, and so may write or unlink.
+    /// Whether `name` has the shape of a slice this runtime names.
     ///
     /// The unit directory is shared with the operator and with every other
-    /// package on the host. Generated names all have this shape, and the only
-    /// names offered for removal are ones read back out of the directory, so
-    /// this is what keeps a malformed or unexpected entry from being unlinked.
+    /// package on the host, so this only vets the names the runtime writes; the
+    /// names it may remove are the ones it recorded writing.
     // spec: PRIO#resource-control-groups
     // spec: LINUX#resource-control-groups
     fn is_owned_slice(name: &str) -> bool {
         name.starts_with("seedling-") && name.ends_with(".slice")
     }
 
-    /// Names of the slices this runtime owns that currently exist on disk.
-    async fn existing_owned_slices(&self) -> Result<Vec<String>, SystemdError> {
-        let mut found = Vec::new();
-        let mut dir = match tokio::fs::read_dir(UNIT_DIR).await {
-            Ok(d) => d,
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(found),
-            Err(e) => return Err(IoSnafu.into_error(e)),
-        };
-        while let Some(entry) = dir.next_entry().await.map_err(|e| IoSnafu.into_error(e))? {
-            let name = entry.file_name().to_string_lossy().into_owned();
-            if Self::is_owned_slice(&name) {
-                found.push(name);
-            }
-        }
-        Ok(found)
-    }
-
     // spec: PRIO#resource-control-groups
     // spec: LINUX#resource-control-groups
     /// Bring the set of owned slices on this host into line with `desired`.
     ///
-    /// The unit directory is the state, not any record this process keeps: what
-    /// is written is decided by comparing against the files that are actually
-    /// there. That is what makes the first pass after a restart free — the files
-    /// already match, so nothing is written, the supervisor is not asked to
-    /// re-read its units, and no slice is contacted over the bus — and it is
-    /// what lets a slice left behind by an app that went away while this process
-    /// was not running still be collected.
+    /// What is written is decided by comparing against the files that are
+    /// actually there. That is what makes the first pass after a restart free:
+    /// the files already match, so nothing is written, the supervisor is not
+    /// asked to re-read its units, and no slice is contacted over the bus. The
+    /// record of what was written is kept in the data directory, so a slice left
+    /// behind by an app that went away while this process was not running is
+    /// still collected, and a file the runtime did not write never is.
     ///
     /// `prune` is false when the caller could not account for every app, so a
     /// short desired set never unlinks a live app's slice.
@@ -478,43 +469,20 @@ impl SystemdManager {
             }
         }
 
-        let existing = self.existing_owned_slices().await?;
-
-        // Write only what differs, and remember which slices actually changed:
-        // those are the ones whose weights have to be pushed to the live group.
-        let mut changed = Vec::new();
-        for spec in &desired {
-            let wanted = Self::slice_unit_content(spec);
-            let path = std::path::Path::new(UNIT_DIR).join(&spec.name);
-            let current = tokio::fs::read_to_string(&path).await.ok();
-            if current.as_deref() != Some(wanted.as_str()) {
-                self.write_unit_impl(&spec.name, &wanted).await?;
-                changed.push(spec);
-            }
-        }
-
         // Unlink rather than stop. Stopping a slice stops every unit still
         // inside it, which would kill running workloads outright, bypassing
         // their stop signal and timeout. Unlinking releases an empty slice and
         // leaves a slice that still has members running.
-        let mut unlinked = false;
-        if prune {
-            let wanted: std::collections::HashSet<&str> =
-                desired.iter().map(|s| s.name.as_str()).collect();
-            for name in &existing {
-                if wanted.contains(name.as_str()) {
-                    continue;
-                }
-                let path = std::path::Path::new(UNIT_DIR).join(name);
-                match tokio::fs::remove_file(&path).await {
-                    Ok(()) => unlinked = true,
-                    Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-                    Err(e) => return Err(IoSnafu.into_error(e)),
-                }
-            }
-        }
+        let changes = slice_files::sync_files(
+            std::path::Path::new(UNIT_DIR),
+            &self.slice_record,
+            &desired,
+            prune,
+            Self::slice_unit_content,
+        )
+        .await?;
 
-        if changed.is_empty() && !unlinked {
+        if changes.written.is_empty() && !changes.removed {
             return Ok(());
         }
         self.daemon_reload_impl().await?;
@@ -522,7 +490,7 @@ impl SystemdManager {
         let proxy = Systemd1ManagerProxy::new(&self.conn)
             .await
             .context(DBusSnafu)?;
-        for spec in changed {
+        for spec in desired.iter().filter(|s| changes.written.contains(&s.name)) {
             proxy
                 .start_unit(&spec.name, "replace")
                 .await

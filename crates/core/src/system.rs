@@ -362,7 +362,9 @@ impl System {
         // in erroring backends, record the reason, and let the OI, database, and
         // reconciler come up so the operator sees a system-wide fault explaining
         // what is broken.
-        let connector = Arc::new(backends::HostConnector);
+        let connector = Arc::new(backends::HostConnector {
+            data_dir: data_dir.to_path_buf(),
+        });
         let backends = backends::Backends::new(
             connector.clone(),
             backends::Connector::container(&*connector).await,

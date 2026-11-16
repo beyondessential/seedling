@@ -273,7 +273,10 @@ pub(crate) trait Connector: Send + Sync + 'static {
 }
 
 /// Connects to the host's podman and systemd.
-pub(crate) struct HostConnector;
+pub(crate) struct HostConnector {
+    /// The data directory, where the process manager keeps its records.
+    pub(crate) data_dir: std::path::PathBuf,
+}
 
 impl Connector for HostConnector {
     fn container(&self) -> BoxFuture<'_, Result<Arc<dyn ContainerRuntime>, BoxError>> {
@@ -286,10 +289,22 @@ impl Connector for HostConnector {
 
     fn process(&self) -> BoxFuture<'_, Result<Arc<dyn ProcessManager>, BoxError>> {
         async {
-            let systemd = crate::system::systemd::SystemdManager::connect().await?;
+            let systemd = crate::system::systemd::SystemdManager::connect(&self.data_dir).await?;
             Ok(Arc::new(systemd) as Arc<dyn ProcessManager>)
         }
         .boxed()
+    }
+}
+
+/// A connector with nothing to connect to, for backends supplied ready-made.
+struct Nowhere;
+
+impl Connector for Nowhere {
+    fn container(&self) -> BoxFuture<'_, Result<Arc<dyn ContainerRuntime>, BoxError>> {
+        async { Err("no container runtime".into()) }.boxed()
+    }
+    fn process(&self) -> BoxFuture<'_, Result<Arc<dyn ProcessManager>, BoxError>> {
+        async { Err("no process manager".into()) }.boxed()
     }
 }
 
@@ -357,20 +372,11 @@ impl Backends {
         container: Arc<dyn ContainerRuntime>,
         process: Arc<dyn ProcessManager>,
     ) -> Self {
-        Self::new(Arc::new(HostConnector), Ok(container), Ok(process))
+        Self::new(Arc::new(Nowhere), Ok(container), Ok(process))
     }
 
     /// Backends that could not be reached, with no one to reach them again.
     pub(crate) fn unreachable(reason: &str) -> Self {
-        struct Nowhere;
-        impl Connector for Nowhere {
-            fn container(&self) -> BoxFuture<'_, Result<Arc<dyn ContainerRuntime>, BoxError>> {
-                async { Err("no container runtime".into()) }.boxed()
-            }
-            fn process(&self) -> BoxFuture<'_, Result<Arc<dyn ProcessManager>, BoxError>> {
-                async { Err("no process manager".into()) }.boxed()
-            }
-        }
         Self::new(Arc::new(Nowhere), Err(reason.into()), Err(reason.into()))
     }
 
