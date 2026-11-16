@@ -385,28 +385,9 @@ async fn handle_bidi_stream(
     stream_semaphore: Arc<Semaphore>,
 ) {
     // spec: WIRE#stream-limit
-    let stream_permit = match stream_semaphore.try_acquire() {
-        Ok(permit) => permit,
-        Err(_) => {
-            tracing::warn!(
-                "stream concurrency limit reached; rejecting stream \
-                 (adjust with --max-streams)"
-            );
-            state
-                .event_tx
-                .server_busy("stream concurrency limit reached");
-            let resp = json!({
-                "error": {
-                    "code": "server_busy",
-                    "message": "stream concurrency limit reached; retry after a delay",
-                }
-            });
-            let bytes = serde_json::to_vec(&resp).expect("response serialisation never fails");
-            let _ = send.write_all(&bytes).await;
-            let _ = send.finish();
-            return;
-        }
-    };
+    // Taken before the opening line is read, so the stream counts from when it
+    // opens; the line is still read, since its kind decides how it is refused.
+    let stream_permit = stream_semaphore.try_acquire().ok();
 
     let (line, leftover) = match read_json_line(&mut recv, 64 * 1024).await {
         Ok(v) => v,
@@ -424,12 +405,39 @@ async fn handle_bidi_stream(
 
     tracing::trace!(line = %String::from_utf8_lossy(&line).trim_end(), "bidi stream dispatch");
 
-    // spec: WIRE#port-forward-data — forward data stream, identified by the "forward" key.
-    if let Some(forward_id) = first_obj
+    let forward_id = first_obj
         .get("forward")
         .and_then(|v| v.as_str())
-        .map(str::to_owned)
-    {
+        .map(str::to_owned);
+
+    // spec: WIRE#stream-limit
+    let Some(stream_permit) = stream_permit else {
+        tracing::warn!(
+            "stream concurrency limit reached; rejecting stream \
+             (adjust with --max-streams)"
+        );
+        state
+            .event_tx
+            .server_busy("stream concurrency limit reached");
+        if forward_id.is_some() {
+            // spec: FWD#tcp-tunnelling
+            seedling_protocol::relay::abort_forward_stream(&mut send, &mut recv);
+            return;
+        }
+        let resp = json!({
+            "error": {
+                "code": "server_busy",
+                "message": "stream concurrency limit reached; retry after a delay",
+            }
+        });
+        let bytes = serde_json::to_vec(&resp).expect("response serialisation never fails");
+        let _ = send.write_all(&bytes).await;
+        let _ = send.finish();
+        return;
+    };
+
+    // spec: WIRE#port-forward-data — forward data stream, identified by the "forward" key.
+    if let Some(forward_id) = forward_id {
         drop(stream_permit);
         handle_forward_stream((send, recv), forward_id, leftover, state).await;
         return;
@@ -793,6 +801,10 @@ mod connection_tests {
 
     /// Run the real connection handler against a real endpoint.
     fn spawn_server(state: Arc<OiState>) -> SocketAddr {
+        spawn_server_with_streams(state, DEFAULT_MAX_STREAMS)
+    }
+
+    fn spawn_server_with_streams(state: Arc<OiState>, max_streams: usize) -> SocketAddr {
         let key = SigningKey::generate(&mut ThreadRng::default());
         let spki = keys::spki_der(&key);
         let tls = build_tls_config(&key, spki, Arc::clone(&state.trusted_keys))
@@ -806,7 +818,7 @@ mod connection_tests {
         let addr = endpoint.local_addr().expect("local addr");
 
         tokio::spawn(async move {
-            let semaphore = Arc::new(tokio::sync::Semaphore::new(DEFAULT_MAX_STREAMS));
+            let semaphore = Arc::new(tokio::sync::Semaphore::new(max_streams));
             while let Some(incoming) = endpoint.accept().await {
                 let state = Arc::clone(&state);
                 let semaphore = Arc::clone(&semaphore);
@@ -943,6 +955,36 @@ mod connection_tests {
 
             let ok = raw_request(&client, b"{\"method\":\"/server/ping\"}\n").await;
             assert!(ok.get("result").is_some(), "{ok}");
+        });
+    }
+
+    // spec: WIRE#stream-limit
+    // spec: FWD#tcp-tunnelling
+    #[test]
+    fn at_the_stream_limit_a_forward_stream_is_reset_and_a_request_is_busy() {
+        let oi = TestOi::new();
+        oi.block_on(async {
+            let _ = rustls::crypto::ring::default_provider().install_default();
+            let identity = ClientIdentity::ephemeral();
+            oi.state.trusted_keys.insert(identity.fingerprint.clone());
+            let addr = spawn_server_with_streams(Arc::clone(&oi.state), 0);
+            let client = OiClient::connect(addr, ClientAuth::TrustAny, &identity, Actor::default())
+                .await
+                .expect("connect");
+
+            let busy = raw_request(&client, b"{\"method\":\"/server/ping\"}\n").await;
+            assert_eq!(busy["error"]["code"], "server_busy", "{busy}");
+
+            let (mut send, mut recv) = client.open_bi().await.expect("open stream");
+            send.write_all(b"{\"forward\":\"00000000-0000-0000-0000-000000000000\"}\n")
+                .await
+                .expect("write the opening line");
+            match recv.read_to_end(1 << 16).await {
+                Err(quinn::ReadToEndError::Read(quinn::ReadError::Reset(code))) => {
+                    assert_eq!(code, quinn::VarInt::from_u32(0));
+                }
+                other => panic!("a forward data stream is reset, not answered: {other:?}"),
+            }
         });
     }
 
