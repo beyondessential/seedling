@@ -68,9 +68,10 @@ pub struct HandlerProbe {
 
 #[derive(Debug, Default, Clone)]
 pub struct ProbeRequest {
-    /// Per-handler supplied param values. Outer key: handler name. Inner
-    /// map: param name → string value.
-    pub action_params: HashMap<String, HashMap<String, String>>,
+    /// Per-handler supplied param values. Outer key: handler kind, as
+    /// [`HandlerKind::as_str`] writes it. Next: handler name. Inner map: param
+    /// name → string value.
+    pub action_params: HashMap<String, HashMap<String, HashMap<String, String>>>,
     /// `true` → handlers with unresolved required params are _skipped_.
     /// `false` → the same condition is reported as an error.
     pub lenient: bool,
@@ -207,7 +208,10 @@ fn probe_handler(
     script_ast: &AST,
 ) -> HandlerProbe {
     // spec: IMG#probe-parameters
-    let supplied = request.action_params.get(handler_name);
+    let supplied = request
+        .action_params
+        .get(kind.as_str())
+        .and_then(|by_name| by_name.get(handler_name));
     let stored = app.stored.lock().clone();
     let (resolved_params, missing_required) = resolve_params(schema, supplied, &stored);
 
@@ -494,6 +498,65 @@ mod tests {
             !response
                 .all_images
                 .contains("registry.example.com/api:2.0.0")
+        );
+    }
+
+    // spec: IMG#probe-parameters
+    #[test]
+    fn supplied_values_are_keyed_by_handler_kind_then_name() {
+        let (engine, ast, app) = setup_engine_and_app(
+            r#"
+            app.on_action("deploy", |rt, param| {
+                rt.start(app.deployment().image(`registry.example.com/api:${param["version"]}`)).ready();
+            });
+        "#,
+        );
+        app.def.rcu(|d| {
+            let mut d = (**d).clone();
+            if let Some(action) = d.actions.get_mut("deploy") {
+                action.params.insert(
+                    ParamName::new("version").unwrap(),
+                    ParamDef {
+                        kind: crate::defs::install::ParamKind::Text,
+                        required: true,
+                        default_value: None,
+                        description: None,
+                        secret: None,
+                    },
+                );
+            }
+            d
+        });
+        let supplied = |kind: &str| ProbeRequest {
+            action_params: HashMap::from([(
+                kind.to_owned(),
+                HashMap::from([(
+                    "deploy".to_owned(),
+                    HashMap::from([("version".to_owned(), "1.2".to_owned())]),
+                )]),
+            )]),
+            lenient: false,
+        };
+
+        let registry: Arc<dyn InstanceRegistry> = Arc::new(EphemeralInstanceRegistry::new());
+        let response = probe_app(
+            &engine,
+            &ast,
+            &app,
+            Arc::clone(&registry),
+            &supplied("action"),
+        )
+        .expect("probe");
+        assert!(
+            response.all_images.contains("registry.example.com/api:1.2"),
+            "{response:?}"
+        );
+
+        let response = probe_app(&engine, &ast, &app, registry, &supplied("shell")).expect("probe");
+        let deploy = &response.per_handler[0];
+        assert!(
+            deploy.error.is_some(),
+            "a value filed under another kind must not reach the action"
         );
     }
 

@@ -373,10 +373,12 @@ pub(crate) struct DiscoverParams {
     /// proposed script would introduce.
     #[serde(default)]
     pub proposed_script: Option<String>,
-    /// Per-handler supplied param values. Outer key = handler name
-    /// (e.g. `"migrate"`, `"install"`), inner = param-name → string.
+    /// Per-handler supplied param values: handler kind (`"install"`,
+    /// `"start"`, `"action"`, `"shell"` or `"param_change"`), then handler
+    /// name, then param name to string.
+    // spec: IMGM#image-discovery
     #[serde(default)]
-    pub action_params: HashMap<String, HashMap<String, String>>,
+    pub action_params: HashMap<String, HashMap<String, HashMap<String, String>>>,
     #[serde(default)]
     pub lenient: bool,
 }
