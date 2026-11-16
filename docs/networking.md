@@ -232,12 +232,24 @@ Caddy runs in one of two container slots — `seedling-caddy-blue` and
 `seedling-caddy-green` — for blue/green upgrades. The active slot is
 recorded in the database; the default for fresh installations is blue.
 During an image upgrade, the new container is started in the inactive
-slot, configured, and health-checked before traffic is switched over.
+slot, configured, and health-checked before traffic is switched over. If
+the replacement rejects the persisted configuration, the upgrade is
+aborted: the replacement is stopped, the running proxy stays active and
+serving, and a `caddy_failed` fault names the rejection until an upgrade
+succeeds. A bring-up failure's `caddy_failed` clears once an iteration
+finds the proxy healthy. Both clear when the proxy is stopped because no
+app is installed or installing, as do `resolver_failed` and the NAT64
+translator.
 
 ### nftables ingress rules
 
 Every ingress port gets nftables DNAT rules in the prerouting chain, and
-IPv6 ones in the output chain, that redirect traffic to Caddy. For IPv6:
+IPv6 ones in the output chain, that redirect traffic to Caddy. The ports
+are those of app ingresses and their HTTP redirects, and of the
+attachments of site ingresses (UDP for a `udp` attachment; otherwise TCP,
+and UDP as well for an `http` or `http2` attachment on a site ingress that
+terminates TLS), except for a site ingress that has lost its source.
+For IPv6:
 
     meta nfproto ipv6 fib daddr type local tcp dport <port>
     dnat ip6 to [<caddy_ipv6>]:<port>
@@ -256,6 +268,23 @@ host-originated IPv4 traffic alone.
 The `fib daddr type local` guard is essential: without it, the
 prerouting dport rule would catch Caddy's own upstream traffic to
 `service_ip:<port>` and loop it back to Caddy.
+
+### Ingress conflicts
+
+When two claims on one `(hostname, port)` meet, the proxy configuration
+leaves one or both out and an `ingress_conflict` fault names the party
+left out:
+
+- an app ingress and a site ingress attachment: both are left out;
+- the ingresses of two apps: the app whose install completed first is
+  served;
+- the attachments of two site ingresses: the attachment created first is
+  served;
+- an app ingress's HTTP redirect and a plaintext site ingress attachment
+  on the redirect's port: the redirect and the attachment are left out,
+  and the ingress itself is still served.
+
+A conflict on one port never affects other ports on the same hostname.
 
 ### Loopback hairpin NAT
 
@@ -429,21 +458,20 @@ that catches matching packets before they reach the routing decision.
 No pool4 is configured, so Jool masquerades translated IPv4 traffic
 using the host's primary IPv4 address.
 
-Translator setup happens at daemon startup, before any pods are
-touched. If NAT64 is required but initialisation fails, the daemon
-exits and files a fault — pods must not come up on a node that cannot
-reach the IPv4 internet.
-
-The translator tracks the workload lifecycle after that. On the
-transition to idle (no workloads registered), the reconciler calls
-`jool instance remove seedling` so an idle node carries no stale
-translator state. On the transition back out of idle, the first tick
-that sees workloads calls `setup_nat64` again before the pod phase
-runs — failure there files a `nat64_setup_failed` fault and short-
-circuits the tick so no pod comes up without NAT64. The jool kernel
-module stays loaded across the idle cycle; only the instance is
-added and removed. Forwarding sysctls are not flipped on idle (they
-are host-wide state).
+The translator is set up by the reconciler, before any pod is touched,
+whenever an app is installed or installing, and torn down when none is
+(an uninstalling app counts as installed for this). The daemon sets
+nothing up at startup: a host that starts with no app installed carries
+no translator, and one left by an earlier run is removed on the first
+idle iteration. If setup fails, the reconciler files a
+`nat64_setup_failed` fault and short-circuits the iteration, so no pod
+comes up without NAT64, and tries again on the next one. A teardown that
+fails files `nat64_teardown_failed` and is tried again on each idle
+iteration. The jool kernel module stays loaded across the idle cycle;
+only the instance is added and removed. Forwarding sysctls are not
+flipped on idle (they are host-wide state). The daemon does not remove
+the translator when it shuts down, since workloads keep running across a
+restart and depend on it.
 
 ### DNS64
 

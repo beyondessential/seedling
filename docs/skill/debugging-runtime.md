@@ -159,7 +159,14 @@ it. The logic lives in `src/runtime/desired.rs`:
   `ensure_scaled_group` which splits instances into `keep` (desired
   `Ready`) and `excess` (desired `Unscheduled`).
 - **During operations**: desired state comes from `OperationProgress`.
-- **Uninstalling**: all instances desired at `Unscheduled`.
+- **Uninstalling**: all instances desired at `Unscheduled`. The uninstall
+  completes, and the recorded instances are forgotten, only once every
+  recorded instance whose kind has a lifecycle is `Unscheduled`. While the
+  recorded identities cannot be read it holds a
+  `teardown_identities_unreadable` fault; with none recorded, a loaded unit
+  under the app's name prefix that exactly matches no other app's recorded
+  identity holds it with `uninstall_unidentifiable_units`, which an operator
+  clears to complete the teardown and leave those units untouched.
 
 If an instance's actual lifecycle matches its desired state, the reconciler
 considers it converged and does nothing. This is the most common reason for

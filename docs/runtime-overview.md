@@ -61,7 +61,7 @@ The cause records why, not who. On Linux systemd actions recovery restarts and s
 Restarts cannot be counted by watching container state. A container that goes down and comes back between two observation ticks looks running at both ends. On Linux the runtime instead reads systemd's own restart counter and records the difference, so what is recorded does not depend on how often the runtime looks.
 
 This log enables:
-- **Crash-loop detection**: a `crash_loop` fault is filed once an instance's recovery restarts within the configured window reach the configured threshold. That threshold and window are operator-settable, because the judgement of what counts as flapping is an operational one.
+- **Crash-loop detection**: a `crash_loop` fault is filed once an instance's recovery restarts within the configured window reach the configured threshold. That threshold and window are operator-settable, because the judgement of what counts as flapping is an operational one. The fault clears only once the instance has stayed running, with no recovery restart, for the whole window, or when an operator clears it: a supervisor brings a crashing instance up between its crashes, so being up is not recovery.
 - **Seeing sub-threshold flapping**: a container that crashes twice a day forever never exhausts systemd's own start limit, so before this history existed it was silent — no fault, no record, nothing to query.
 - **Diagnosis**: the per-attempt exit statuses say whether a workload is being OOM-killed, exiting on a config error, or dying on a signal.
 
