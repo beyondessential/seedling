@@ -1335,6 +1335,50 @@ mod tests {
         assert_eq!(recorder.0.lock().len(), 1, "a replacement was asked for");
     }
 
+    // spec: TCAN#revocation
+    #[test]
+    fn a_revocation_leaves_a_canopy_only_hostname_with_canopy() {
+        let oi = TestOi::new();
+        register(&oi, "shop", &script_for("tamanu", "shop.example.com", 443));
+        oi.call(
+            "/tls/policies/set-canopy",
+            json!({ "hostname": "shop.example.com" }),
+        )
+        .unwrap();
+        let now = jiff::Timestamp::now().as_second();
+        let cert_id = canopy_cert(&oi, "shop.example.com", now - 86_400, now + 89 * 86_400);
+
+        let recorder = Recorder::default();
+        let managed = managed_in(&oi);
+        let names = revoking(&oi, cert_id, "shop.example.com");
+        oi.block_on(async {
+            let snap = snapshot(&oi.state, &managed).expect("the state can be read");
+            replace_condemned(
+                &oi.state,
+                &engine(&oi, &recorder),
+                &snap,
+                &names,
+                &mut Budget::new(),
+            )
+            .await;
+        });
+
+        let row = oi
+            .state
+            .db
+            .call(|db| store::get_chain_row(db, "shop.example.com").unwrap())
+            .expect("a revocation records what the hostname is replacing");
+        assert_eq!(
+            row.row.step, 0,
+            "a chain of Canopy alone has nowhere to pass to"
+        );
+        assert_eq!(
+            recorder.0.lock().len(),
+            1,
+            "Canopy is asked for a replacement"
+        );
+    }
+
     /// The fingerprint Canopy names a stored certificate's key by.
     fn canopy_key_fingerprint(oi: &TestOi, cert_id: i64) -> String {
         let pem = oi
