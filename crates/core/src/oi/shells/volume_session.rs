@@ -189,6 +189,23 @@ pub(crate) async fn open_volume_shell_session(
         });
     }
 
+    // spec: SHL#volume-shells
+    {
+        let mut seen = std::collections::HashSet::new();
+        if let Some(clash) = resolved
+            .iter()
+            .find(|r| !seen.insert(r.display_name.as_str()))
+        {
+            err!(
+                "requirements_invalid",
+                format!(
+                    "two volumes would both mount at /mnt/{}",
+                    clash.display_name
+                )
+            );
+        }
+    }
+
     let session_name = resolved
         .iter()
         .map(|r| r.display_name.as_str())

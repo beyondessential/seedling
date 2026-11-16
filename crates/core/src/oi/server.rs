@@ -1165,6 +1165,55 @@ mod connection_tests {
         });
     }
 
+    // spec: SHL#volume-shells
+    #[test]
+    fn volume_shell_mounts_whose_display_names_clash_are_refused() {
+        let oi = TestOi::new();
+        for name in ["data", "logs"] {
+            oi.call(
+                "/volumes/site/create",
+                json!({ "name": name, "kind": "managed" }),
+            )
+            .unwrap();
+        }
+        oi.block_on(async {
+            let _ = rustls::crypto::ring::default_provider().install_default();
+            let identity = ClientIdentity::ephemeral();
+            oi.state.trusted_keys.insert(identity.fingerprint.clone());
+            let addr = spawn_server(Arc::clone(&oi.state));
+            let client = OiClient::connect(addr, ClientAuth::TrustAny, &identity, Actor::default())
+                .await
+                .expect("connect");
+
+            let (mut send, mut recv) = client.open_bi().await.expect("a stream");
+            let mut line = serde_json::to_vec(&json!({
+                "method": "/volumes/shell",
+                "params": {
+                    "volumes": [
+                        { "kind": "site", "name": "data" },
+                        { "kind": "site", "name": "logs" },
+                        { "kind": "site", "name": "data" },
+                    ],
+                    "rows": 24,
+                    "cols": 80,
+                },
+            }))
+            .unwrap();
+            line.push(b'\n');
+            send.write_all(&line).await.expect("the request is sent");
+            let response = tokio::time::timeout(Duration::from_secs(5), recv.read_to_end(1 << 16))
+                .await
+                .expect("a response")
+                .expect("read the response");
+            let response: serde_json::Value =
+                serde_json::from_slice(&response).expect("a JSON response");
+            assert_eq!(
+                response["error"]["code"], "requirements_invalid",
+                "{response}"
+            );
+        });
+    }
+
     /// Wait for `conn` to close, or give up: the handler notices the key
     /// went on its own schedule, not the test's.
     async fn await_closed(client: &OiClient) -> bool {
