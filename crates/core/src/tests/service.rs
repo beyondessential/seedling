@@ -111,15 +111,20 @@ fn http_service_route_rejects_no_slash() {
 // spec: HTTP#routes
 #[test]
 fn http_service_route_rejects_a_brace_and_control_characters_but_not_a_tab() {
-    for bad in ["/a{id}", "/{", "/a\\nb", "/a\\u0000b", "/a\\u007fb", "/a\\rb"] {
+    for bad in [
+        "/a{id}",
+        "/{",
+        "/a\\nb",
+        "/a\\u0000b",
+        "/a\\u007fb",
+        "/a\\rb",
+    ] {
         let err = run_test_script_err(&format!(
             r#"let h = app.service("web").http(80); h.route("{bad}");"#
         ));
         assert!(err.to_string().contains("route prefix"), "{bad:?}: {err}");
     }
-    run_test_script_app(
-        r#"let h = app.service("web").http(80); h.route("/a\tb");"#,
-    );
+    run_test_script_app(r#"let h = app.service("web").http(80); h.route("/a\tb");"#);
 }
 
 // spec: SVC#export

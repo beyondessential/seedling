@@ -138,9 +138,7 @@ fn declarations_throw_inside_an_action_closure() {
             "op".to_owned(),
             Default::default(),
         );
-        let err = engine
-            .run_with_scope(&mut scope, call)
-            .expect_err(call);
+        let err = engine.run_with_scope(&mut scope, call).expect_err(call);
         assert!(
             err.to_string().contains(name) && err.to_string().contains("action closure"),
             "{call}: {err}"
