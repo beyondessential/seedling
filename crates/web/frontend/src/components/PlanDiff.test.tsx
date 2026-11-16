@@ -15,14 +15,14 @@ describe("PlanDiff", () => {
   it("renders added, modified, and removed entries with their fields", () => {
     const plan: PlanResponse = {
       diff: [
-        { resource_type: "Container", resource_name: "web", change: "added" },
+        { resource_type: "deployment", resource_name: "web", change: "added" },
         {
-          resource_type: "Container",
+          resource_type: "deployment",
           resource_name: "worker",
           change: "modified",
           fields: ["image", "scale"],
         },
-        { resource_type: "Volume", resource_name: "cache", change: "removed" },
+        { resource_type: "volume", resource_name: "cache", change: "removed" },
       ],
     };
     render(<PlanDiff plan={plan} />);

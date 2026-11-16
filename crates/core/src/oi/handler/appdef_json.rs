@@ -74,7 +74,7 @@ pub(crate) fn resource_static_json(
     resource: &Resource,
     app: &crate::defs::app::AppDef,
 ) -> Value {
-    let type_str = format!("{:?}", kind).to_lowercase();
+    let type_str = kind.type_name();
     let mut obj = json!({
         "name": name,
         "type": type_str,

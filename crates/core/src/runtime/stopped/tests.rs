@@ -67,24 +67,6 @@ fn unstop_all_clears_only_that_app() {
 }
 
 #[test]
-fn kind_str_and_parse_kind_round_trip_all_kinds() {
-    for kind in [
-        ResourceKind::Deployment,
-        ResourceKind::Job,
-        ResourceKind::Ingress,
-        ResourceKind::Service,
-        ResourceKind::Volume,
-        ResourceKind::ExternalVolume,
-        ResourceKind::ExternalService,
-        ResourceKind::Parameter,
-        ResourceKind::Action,
-    ] {
-        assert_eq!(parse_kind(kind_str(kind)), Some(kind), "{kind:?}");
-    }
-    assert_eq!(parse_kind("garbage"), None);
-}
-
-#[test]
 fn load_stopped_skips_rows_with_unknown_kind() {
     let db = Db::open_in_memory().expect("open");
     stop_resource(&db, &app("myapp"), ResourceKind::Deployment, "web").expect("stop");

@@ -329,7 +329,7 @@ pub(super) async fn dispatch(client: &OiClient, cmd: AppsCommand) {
                             let vols: Vec<_> = resources
                                 .iter()
                                 .filter(|r| {
-                                    r["type"] == "externalvolume"
+                                    r["type"] == "external_volume"
                                         || (r["type"] == "volume" && r.get("export").is_some())
                                 })
                                 .cloned()

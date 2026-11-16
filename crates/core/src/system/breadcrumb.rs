@@ -176,17 +176,7 @@ impl<'a> Target<'a> {
     }
 
     fn for_instance(inst: &'a ResourceInstance) -> Self {
-        let resource_kind = match inst.kind {
-            crate::defs::resource::ResourceKind::Service => "service",
-            crate::defs::resource::ResourceKind::Ingress => "ingress",
-            crate::defs::resource::ResourceKind::Deployment => "deployment",
-            crate::defs::resource::ResourceKind::Job => "job",
-            crate::defs::resource::ResourceKind::Volume => "volume",
-            crate::defs::resource::ResourceKind::ExternalVolume => "external_volume",
-            crate::defs::resource::ResourceKind::ExternalService => "external_service",
-            crate::defs::resource::ResourceKind::Action => "action",
-            crate::defs::resource::ResourceKind::Parameter => "parameter",
-        };
+        let resource_kind = inst.kind.type_name();
         Self {
             // For named resources we use the BSL-level name; for
             // anonymous resources we fall back to the display name so

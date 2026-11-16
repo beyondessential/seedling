@@ -23,8 +23,7 @@ use crate::{
         priority::{self, AppPriority},
         restart_gens, restarts, scaling,
         scheduler::AppBlocker,
-        stopped::{self, kind_str, parse_kind},
-        transition_phase,
+        stopped, transition_phase,
     },
 };
 
@@ -736,11 +735,11 @@ pub(crate) fn describe_app(state: &OiState, params: AppParams) -> HandlerResult 
                         vec![]
                     };
 
-                    let resource_type_str = format!("{:?}", info.kind).to_lowercase();
+                    let resource_type_str = info.kind.type_name();
                     let resource_faults: Vec<Value> = all_faults_clone
                         .iter()
                         .filter(|f| {
-                            f.resource_type.as_deref() == Some(&resource_type_str)
+                            f.resource_type.as_deref() == Some(resource_type_str)
                                 && f.resource_name.as_deref() == Some(&info.name_str)
                         })
                         .map(|f| {
@@ -855,7 +854,7 @@ pub(crate) fn describe_app(state: &OiState, params: AppParams) -> HandlerResult 
                         display_name: rec.display_name.clone(),
                     };
                     let (lifecycle, transition_time) = read_lifecycle(db, &inst)?;
-                    let kind_str = format!("{:?}", kind).to_lowercase();
+                    let kind_str = kind.type_name();
                     // Anonymous resources have no `resource_name`; fall back to
                     // the display_name so they have a stable identifier in the
                     // UI (e.g. `tamanu-central--abc12345`).
@@ -913,7 +912,7 @@ pub(crate) fn describe_app(state: &OiState, params: AppParams) -> HandlerResult 
     // spec: CTL#resource-stop
     let stopped_resources_json: Vec<Value> = stopped_set
         .iter()
-        .map(|(k, n)| json!({ "kind": kind_str(*k), "name": n }))
+        .map(|(k, n)| json!({ "kind": k.type_name(), "name": n }))
         .collect();
 
     // spec: CTL#app-priority
@@ -1304,7 +1303,7 @@ pub(crate) fn dry_run_plan(state: &OiState, params: PlanParams, ctx: &RequestCtx
     for id in prop_def.resources.keys() {
         if !cur_def.resources.contains_key(id) {
             diff.push(json!({
-                "resource_type": format!("{:?}", id.kind),
+                "resource_type": id.kind.type_name(),
                 "resource_name": id.name.as_str(),
                 "change": "added",
             }));
@@ -1319,7 +1318,7 @@ pub(crate) fn dry_run_plan(state: &OiState, params: PlanParams, ctx: &RequestCtx
             let fields = crate::defs::summary::diff_fields(&cur_summary, &prop_summary);
             if !fields.is_empty() {
                 diff.push(json!({
-                    "resource_type": format!("{:?}", id.kind),
+                    "resource_type": id.kind.type_name(),
                     "resource_name": id.name.as_str(),
                     "change": "modified",
                     "fields": fields,
@@ -1327,7 +1326,7 @@ pub(crate) fn dry_run_plan(state: &OiState, params: PlanParams, ctx: &RequestCtx
             }
         } else {
             diff.push(json!({
-                "resource_type": format!("{:?}", id.kind),
+                "resource_type": id.kind.type_name(),
                 "resource_name": id.name.as_str(),
                 "change": "removed",
             }));
@@ -2204,7 +2203,7 @@ pub(crate) fn stop_resource(
     let app = params.app.as_str();
     let resource_name = params.name.as_str();
 
-    let kind = parse_kind(&params.kind).filter(|k| {
+    let kind = ResourceKind::from_type_name(&params.kind).filter(|k| {
         matches!(
             k,
             ResourceKind::Deployment | ResourceKind::Job | ResourceKind::Ingress
@@ -2243,7 +2242,7 @@ pub(crate) fn stop_resource(
         if !found {
             return Err(OiError::not_found(format!(
                 "resource {}/{resource_name} not found in app {app}",
-                kind_str(kind)
+                kind.type_name()
             )));
         }
     }
@@ -2257,7 +2256,7 @@ pub(crate) fn stop_resource(
 
     entry.tick_notify.notify_one();
 
-    let ks = kind_str(kind);
+    let ks = kind.type_name();
     tracing::info!(app = %app, kind = %ks, name = %resource_name, "resource stopped");
     ctx.events.resource_stopped(&params.app, ks, resource_name);
 
@@ -2273,7 +2272,7 @@ pub(crate) fn unstop_resource(
     let app = params.app.as_str();
     let resource_name = params.name.as_str();
 
-    let kind = parse_kind(&params.kind).ok_or_else(|| {
+    let kind = ResourceKind::from_type_name(&params.kind).ok_or_else(|| {
         OiError::new(
             ErrorCode::RequirementsInvalid,
             format!("unknown resource kind: {:?}", params.kind),
@@ -2299,7 +2298,7 @@ pub(crate) fn unstop_resource(
         .call(move |db| stopped::unstop_resource(db, &app_owned, kind, &resource_name_owned))
         .map_err(|e| OiError::internal(format!("db error: {e}")))?;
 
-    let ks = kind_str(kind);
+    let ks = kind.type_name();
     tracing::info!(app = %app, kind = %ks, name = %resource_name, "resource unstopped");
     ctx.events
         .resource_unstopped(&params.app, ks, resource_name);
@@ -2342,7 +2341,7 @@ pub(crate) fn unstop_all_resources(
     })?;
 
     for (kind, name) in &stopped_list {
-        let ks = kind_str(*kind);
+        let ks = kind.type_name();
         tracing::info!(app = %app, kind = %ks, name = %name, "resource unstopped (unstop-all)");
         ctx.events.resource_unstopped(&params.app, ks, name);
     }

@@ -24,7 +24,7 @@ impl Reconciler {
         let description = description.to_owned();
         self.db.call(move |db| {
             let inst_hex = instance.id.to_hex();
-            let kind_str = format!("{:?}", instance.kind).to_lowercase();
+            let kind_str = instance.kind.type_name().to_owned();
             let already_filed = faults::list_active_faults(db, Some(&instance.app))
                 .unwrap_or_default()
                 .iter()
@@ -205,7 +205,7 @@ impl Reconciler {
         self.db.call(move |db| {
             for instance in &failures {
                 let inst_hex = instance.id.to_hex();
-                let kind_str = format!("{:?}", instance.kind).to_lowercase();
+                let kind_str = instance.kind.type_name().to_owned();
                 let already_filed = faults::list_active_faults(db, Some(&app))
                     .unwrap_or_default()
                     .iter()
@@ -262,7 +262,7 @@ impl Reconciler {
         self.db.call(move |db| {
             for instance in &unit_failures {
                 let inst_hex = instance.id.to_hex();
-                let kind_str = format!("{:?}", instance.kind).to_lowercase();
+                let kind_str = instance.kind.type_name().to_owned();
                 let already_filed = faults::list_active_faults(db, Some(&app))
                     .unwrap_or_default()
                     .iter()
@@ -345,7 +345,7 @@ impl Reconciler {
         self.db.call(move |db| {
             for (instance, vol_name) in &external_volume_failures {
                 let inst_hex = instance.id.to_hex();
-                let kind_str = format!("{:?}", instance.kind).to_lowercase();
+                let kind_str = instance.kind.type_name().to_owned();
                 let already_filed = faults::list_active_faults(db, Some(&app))
                     .unwrap_or_default()
                     .iter()
@@ -970,7 +970,7 @@ impl Reconciler {
         instance: &ResourceInstance,
     ) {
         let inst_hex = instance.id.to_hex();
-        let kind_str = format!("{:?}", instance.kind).to_lowercase();
+        let kind_str = instance.kind.type_name().to_owned();
         let already_filed = faults::list_active_faults(db, Some(app))
             .unwrap_or_default()
             .iter()
@@ -1060,7 +1060,7 @@ impl Reconciler {
     ) {
         for (instance, description) in failures {
             let inst_hex = instance.id.to_hex();
-            let kind_str = format!("{:?}", instance.kind).to_lowercase();
+            let kind_str = instance.kind.type_name().to_owned();
             let already_filed = faults::list_active_faults(db, Some(app))
                 .unwrap_or_default()
                 .iter()
@@ -1095,7 +1095,7 @@ pub(super) fn apply_crash_loop_faults(
     for crash_loop in crash_loops {
         let instance = &crash_loop.instance;
         let inst_hex = instance.id.to_hex();
-        let kind_str = format!("{:?}", instance.kind).to_lowercase();
+        let kind_str = instance.kind.type_name().to_owned();
         let already_filed = faults::list_active_faults(db, Some(app))
             .unwrap_or_default()
             .iter()

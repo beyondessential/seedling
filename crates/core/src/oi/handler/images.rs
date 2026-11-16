@@ -192,11 +192,10 @@ pub(crate) fn pull_image(state: &OiState, params: PullParams) -> HandlerResult {
         }
         let reference_for_pin = params.reference.clone();
         let app_for_pin = app.clone();
-        state.db.call(move |db| {
-            if let Err(e) = images::upsert_pin(db, &app_for_pin, &reference_for_pin) {
-                tracing::warn!(error = %e, "pull_image: failed to upsert pin");
-            }
-        });
+        state
+            .db
+            .call(move |db| images::upsert_pin(db, &app_for_pin, &reference_for_pin))
+            .map_err(|e| OiError::internal(format!("pinning the image failed: {e}")))?;
     }
 
     tokio::task::block_in_place(|| {
@@ -205,7 +204,7 @@ pub(crate) fn pull_image(state: &OiState, params: PullParams) -> HandlerResult {
                 .container_runtime
                 .pull_image(&params.reference)
                 .await
-                .map_err(|e| OiError::new(ErrorCode::NotFound, format!("pull failed: {e}")))
+                .map_err(|e| OiError::new(ErrorCode::FetchFailed, format!("pull failed: {e}")))
         })
     })?;
 

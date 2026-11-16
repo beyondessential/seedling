@@ -95,6 +95,69 @@ fn describe_returns_resources_and_status() {
     assert!(desc["params"].as_array().unwrap().is_empty());
 }
 
+// spec: WIRE#resource-type-names
+// The type names were the Rust names lowercased, which wrote an external
+// volume as `externalvolume`.
+#[test]
+fn describe_and_plan_name_resource_types_as_the_wire_does() {
+    let oi = TestOi::new();
+    let script = r#"
+        app.external_volume("shared");
+        app.external_service("upstream");
+        app.deployment("web");
+        app.job("migrate");
+        app.service("front");
+        app.volume("data");
+    "#;
+    oi.call("/apps/create", json!({ "app": "demo", "script": script }))
+        .unwrap();
+
+    let desc = oi.call("/apps/show", json!({ "app": "demo" })).unwrap();
+    let mut types: Vec<&str> = desc["resources"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|r| r["type"].as_str().unwrap())
+        .collect();
+    types.sort_unstable();
+    assert_eq!(
+        types,
+        [
+            "deployment",
+            "external_service",
+            "external_volume",
+            "job",
+            "service",
+            "volume"
+        ]
+    );
+
+    let plan = oi
+        .call(
+            "/apps/plan",
+            json!({ "app": "demo", "proposed_script": MINIMAL_SCRIPT }),
+        )
+        .unwrap();
+    let mut removed: Vec<&str> = plan["diff"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|d| d["change"] == "removed")
+        .map(|d| d["resource_type"].as_str().unwrap())
+        .collect();
+    removed.sort_unstable();
+    assert_eq!(
+        removed,
+        [
+            "external_service",
+            "external_volume",
+            "job",
+            "service",
+            "volume"
+        ]
+    );
+}
+
 // spec: APPS#description
 #[test]
 fn describe_unknown_app_is_not_found() {
@@ -187,6 +250,55 @@ fn uninstall_requires_installed_phase() {
         .call("/apps/uninstall", json!({ "app": "ghost" }))
         .unwrap_err();
     assert_eq!(code, "not_found");
+}
+
+// spec: ACI#uninstall
+#[test]
+fn uninstall_answers_each_phase_as_the_spec_says() {
+    use crate::runtime::apps::AppPhase;
+    use seedling_protocol::events::OiEvent;
+
+    let oi = TestOi::with_app("demo");
+    oi.install("demo");
+    let mut events = oi.state.event_tx.subscribe();
+
+    let result = oi
+        .call("/apps/uninstall", json!({ "app": "demo" }))
+        .unwrap();
+    assert_eq!(result, json!({}));
+
+    // The app is already `Uninstalling` when the answer arrives.
+    assert!(matches!(
+        *oi.state.registry.read().get("demo").unwrap().phase.lock(),
+        AppPhase::Uninstalling
+    ));
+    let phase_event = loop {
+        if let OiEvent::AppPhaseChanged { app, phase, .. } =
+            events.try_recv().expect("an AppPhaseChanged event")
+        {
+            break (app.to_string(), phase);
+        }
+    };
+    assert_eq!(phase_event, ("demo".to_owned(), "uninstalling".to_owned()));
+
+    let (code, _) = oi
+        .call("/apps/uninstall", json!({ "app": "demo" }))
+        .unwrap_err();
+    assert_eq!(code, "not_installed", "while Uninstalling");
+
+    let installing = TestOi::with_app("fresh");
+    *installing
+        .state
+        .registry
+        .read()
+        .get("fresh")
+        .unwrap()
+        .phase
+        .lock() = AppPhase::Installing;
+    let (code, _) = installing
+        .call("/apps/uninstall", json!({ "app": "fresh" }))
+        .unwrap_err();
+    assert_eq!(code, "operation_in_progress", "while Installing");
 }
 
 // spec: TRD#uninstall-admission
@@ -378,7 +490,7 @@ fn plan_reports_added_removed_and_modified_resources() {
         .iter()
         .find(|d| d["change"] == "added")
         .expect("added entry");
-    assert_eq!(added["resource_type"], "Volume");
+    assert_eq!(added["resource_type"], "volume");
     assert_eq!(added["resource_name"], "data");
     let modified = diff
         .iter()

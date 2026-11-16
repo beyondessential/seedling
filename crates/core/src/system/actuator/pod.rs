@@ -339,7 +339,7 @@ impl Actuator {
             .context(RegistrySnafu)?;
         let argv = build_argv(net_name, net_prefix, &mounts);
 
-        let resource_kind_str = crate::system::journal::resource_kind_slug(instance.kind);
+        let resource_kind_str = instance.kind.type_name();
         let unit_for_breadcrumb = unit.clone();
         self.driver
             .process

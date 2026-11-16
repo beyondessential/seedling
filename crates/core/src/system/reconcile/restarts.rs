@@ -27,7 +27,7 @@ fn subject(instance: &ResourceInstance, generation: Option<i64>) -> RestartSubje
     RestartSubject {
         app: instance.app.clone(),
         instance_id: instance.id.to_hex(),
-        resource_type: Some(format!("{:?}", instance.kind).to_lowercase()),
+        resource_type: Some(instance.kind.type_name().to_owned()),
         resource_name: instance.name.clone(),
         generation,
     }

@@ -62,7 +62,7 @@ fn dedupe_groups(
             app,
             kind,
             res_name,
-            kind_str: format!("{kind:?}").to_lowercase(),
+            kind_str: kind.type_name().to_owned(),
         });
     }
     groups

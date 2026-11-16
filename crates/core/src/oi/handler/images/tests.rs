@@ -37,6 +37,28 @@ fn pull_rejects_empty_reference_and_unknown_app() {
 }
 
 // spec: IMGM#pulling-an-image
+// spec: WIRE#error-codes
+// A failed pull answered `not_found`, which says the reference is unknown to
+// the host rather than that fetching it failed. The pin is kept all the same.
+#[test]
+fn a_failed_pull_answers_fetch_failed_and_keeps_the_pin() {
+    let oi = TestOi::with_unreadable_containers();
+    oi.call(
+        "/apps/create",
+        json!({ "app": "demo", "script": crate::oi::test_support::MINIMAL_SCRIPT }),
+    )
+    .unwrap();
+    let (code, message) = oi
+        .call("/images/pull", json!({ "reference": REF, "app": "demo" }))
+        .unwrap_err();
+    assert_eq!(code, "fetch_failed");
+    assert!(message.contains("pull failed"), "{message}");
+
+    let result = oi.call("/images/pins/list", json!({})).unwrap();
+    assert_eq!(result["pins"].as_array().unwrap().len(), 1);
+}
+
+// spec: IMGM#pulling-an-image
 // spec: IMGM#image-pins
 #[test]
 fn pull_for_app_creates_pin() {

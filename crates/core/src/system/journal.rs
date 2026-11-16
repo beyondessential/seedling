@@ -2,29 +2,14 @@ use std::collections::BTreeMap;
 
 use serde::Serialize;
 
-use crate::{defs::resource::ResourceKind, runtime::identity::ResourceInstance};
-
-/// How the journal and the unit descriptions name a resource kind.
-pub(crate) fn resource_kind_slug(kind: ResourceKind) -> &'static str {
-    match kind {
-        ResourceKind::Parameter => "parameter",
-        ResourceKind::Service => "service",
-        ResourceKind::Ingress => "ingress",
-        ResourceKind::Deployment => "deployment",
-        ResourceKind::Job => "job",
-        ResourceKind::Volume => "volume",
-        ResourceKind::ExternalVolume => "external_volume",
-        ResourceKind::ExternalService => "external_service",
-        ResourceKind::Action => "action",
-    }
-}
+use crate::runtime::identity::ResourceInstance;
 
 /// The journal fields that tie an entry to a workload instance, which is how
 /// its logs are found. The unit of the instance's container carries them, and
 /// so does anything else recorded with that container's logs.
 // spec: LINUX#logs
 pub(crate) fn instance_log_fields(instance: &ResourceInstance) -> Vec<(String, String)> {
-    let kind = resource_kind_slug(instance.kind);
+    let kind = instance.kind.type_name();
     let resource = instance.name.as_deref().unwrap_or(&instance.display_name);
     vec![
         ("SEEDLING_APP".to_owned(), instance.app.as_str().to_owned()),
@@ -318,6 +303,7 @@ fn record_to_entry(timestamp_us: u64, fields: &BTreeMap<String, String>) -> LogE
 #[cfg(test)]
 mod exec_output_tests {
     use super::*;
+    use crate::defs::resource::ResourceKind;
 
     // spec: RT#command-execution
     #[test]

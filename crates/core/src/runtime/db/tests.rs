@@ -12,7 +12,7 @@ fn open_in_memory_succeeds() {
             |r| r.get(0),
         )
         .expect("schema_version should exist");
-    assert_eq!(version, 74);
+    assert_eq!(version, 75);
 }
 
 // spec: HIST#durability
@@ -44,7 +44,7 @@ fn params_table_exists() {
             |r| r.get(0),
         )
         .expect("schema_version should exist");
-    assert_eq!(version, 74);
+    assert_eq!(version, 75);
 }
 
 // spec: APPS#persistence
@@ -432,4 +432,37 @@ fn san_index_migration_indexes_every_stored_certificate() {
             (1, "example.com".to_owned()),
         ]
     );
+}
+
+// spec: WIRE#resource-type-names
+// Records written before the wire named resource types by their wire names
+// hold the Rust names lowercased.
+#[test]
+fn resource_type_records_are_renamed_to_the_wire_names() {
+    let db = Db::open_in_memory().expect("open");
+    db.conn
+        .execute_batch(
+            "INSERT INTO stopped_resources (app, kind, name) VALUES ('a', 'externalvolume', 'v');
+             INSERT INTO stopped_resources (app, kind, name) VALUES ('a', 'deployment', 'd');
+             INSERT INTO faults (id, app, resource_type, resource_name, kind, timestamp, description)
+                VALUES ('f1', 'a', 'externalservice', 's', 'k', 0, 'd');",
+        )
+        .expect("insert old records");
+    db.conn
+        .execute_batch(SQL_V75)
+        .expect("the migration applies to old records");
+    let kinds: Vec<String> = db
+        .conn
+        .prepare("SELECT kind FROM stopped_resources ORDER BY name")
+        .unwrap()
+        .query_map([], |r| r.get(0))
+        .unwrap()
+        .collect::<Result<_, _>>()
+        .unwrap();
+    assert_eq!(kinds, ["deployment", "external_volume"]);
+    let fault_type: String = db
+        .conn
+        .query_row("SELECT resource_type FROM faults", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(fault_type, "external_service");
 }
