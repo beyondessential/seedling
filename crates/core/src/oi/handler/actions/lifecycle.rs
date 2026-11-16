@@ -705,11 +705,13 @@ async fn cleanup_dynamic_resources(
                     name: std::sync::Arc::new(String::new()),
                     def: Default::default(),
                     frozen: false,
+                    anon_id: Some(instance.id),
                 }),
                 ResourceKind::Job => Resource::Job(Job {
                     name: std::sync::Arc::new(String::new()),
                     def: Default::default(),
                     frozen: false,
+                    anon_id: Some(instance.id),
                 }),
                 _ => unreachable!(),
             };

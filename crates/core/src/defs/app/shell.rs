@@ -16,6 +16,7 @@ fn declare_shell(
     description: Option<String>,
     params: BTreeMap<ParamName, super::super::install::ParamDef>,
 ) -> Result<(), Box<EvalAltResult>> {
+    super::ensure_not_validating()?;
     if this.def.load().shells.contains_key(&shell_name) {
         return Err(format!(
             "a shell named {:?} is already declared",

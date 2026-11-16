@@ -525,7 +525,7 @@ fn a_validator_defining_a_resource_rejects() {
         )
         .unwrap_err();
     assert_eq!(code, "validation_failed");
-    assert!(message.contains("must not define resources"), "{message}");
+    assert!(message.contains("must not change the app"), "{message}");
 }
 
 // spec: APPS#update

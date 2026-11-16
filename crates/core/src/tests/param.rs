@@ -609,3 +609,86 @@ fn param_schema_random_kind_with_secret_true_is_secret() {
     assert_eq!(schema.secret, Some(true));
     assert!(schema.is_secret());
 }
+
+// spec: PARAM#validators
+// spec: APP#validator-immutability
+// Only declarations threw in a validator, so a builder call on a captured
+// handle, or any other method that changes the app, went through.
+#[test]
+fn a_validator_cannot_change_the_app_or_its_resources() {
+    let (engine, mut scope, _app, _ast) = run_test_script(
+        r#"
+        let dep = app.deployment("api");
+        let job = app.job("migrate");
+        let svc = app.service("web");
+        let svc_http = svc.http(80);
+        let vol = app.volume("data");
+        let ext_vol = app.external_volume("shared");
+        let ext_svc = app.external_service("upstream");
+        let ing = svc.ingress("example.com", 443);
+        let declared = app.param("declared");
+        let act = app.on_action("mutate", |rt, p| {});
+    "#,
+    );
+    let _frame = crate::defs::app::ValidatorFrame::enter();
+
+    for statement in [
+        r#"app.deployment("other")"#,
+        r#"app.deployment("api")"#,
+        r#"app.job("other")"#,
+        r#"app.service("other")"#,
+        r#"app.volume("other")"#,
+        r#"app.external_volume("other")"#,
+        r#"app.external_service("other")"#,
+        r#"app.param("undeclared")"#,
+        r#"app.description("changed")"#,
+        r#"app.canopy_type("tamanu-central")"#,
+        r#"app.on_action("other", |rt, p| {})"#,
+        r#"app.on_start(|rt, p| {})"#,
+        r#"app.on_shell("other", |s, p| {})"#,
+        r#"app.on_install(|rt, p| {})"#,
+        r#"dep.image("registry.example/api:1")"#,
+        r#"dep.scale(2)"#,
+        r#"dep.env("KEY", "value")"#,
+        r#"dep.arg("--flag")"#,
+        r#"dep.command("run")"#,
+        r#"dep.mount("/data", vol)"#,
+        r#"dep.stop_signal("SIGTERM")"#,
+        r#"dep.description("changed")"#,
+        r#"job.image("registry.example/migrate:1")"#,
+        r#"job.deadline(60)"#,
+        r#"svc.http(8080)"#,
+        r#"svc.description("changed")"#,
+        r#"svc.ingress("other.example.com", 443)"#,
+        r#"svc.exported()"#,
+        r#"svc_http.route("/api")"#,
+        r#"svc_http.ingress("another.example.com", 443)"#,
+        r#"vol.description("changed")"#,
+        r#"vol.tmpfs()"#,
+        r#"ext_vol.description("changed")"#,
+        r#"ext_svc.description("changed")"#,
+        r#"ing.description("changed")"#,
+        r#"declared.description("changed")"#,
+        r#"declared.required(true)"#,
+        r#"declared.default_value("x")"#,
+        r#"declared.secret(true)"#,
+        r#"declared.kind("text")"#,
+        r#"declared.on_change(|rt, old, now| {})"#,
+        r#"declared.validate(|v, all| {})"#,
+        r#"act.on_schedule("0 0 * * *")"#,
+    ] {
+        let err = engine
+            .eval_with_scope::<rhai::Dynamic>(&mut scope, statement)
+            .expect_err(statement);
+        assert!(
+            err.to_string().contains("a validator must not change"),
+            "{statement}: {err}"
+        );
+    }
+
+    // Reading is not changing.
+    let is_set = engine
+        .eval_with_scope::<bool>(&mut scope, r#"app.param("declared").is_set()"#)
+        .expect("a validator may look up a declared parameter");
+    assert!(!is_set);
+}

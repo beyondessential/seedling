@@ -1225,6 +1225,7 @@ mod update_tests {
                 name: std::sync::Arc::new(name.to_owned()),
                 def: Default::default(),
                 frozen: false,
+                anon_id: None,
             }),
             demoted: false,
         }

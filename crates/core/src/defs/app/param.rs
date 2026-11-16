@@ -13,6 +13,11 @@ pub(super) fn on_app(builder: &mut TypeBuilder<App>) {
             let param_name =
                 ParamName::new(name).map_err(|e| -> Box<EvalAltResult> { e.to_string().into() })?;
             let value = this.stored.lock().get(name).cloned();
+            // A validator may look up a parameter the script declared, but
+            // naming one that is not declared would declare it.
+            if !this.def.load().params.contains_key(&param_name) {
+                super::ensure_not_validating()?;
+            }
             let name_for_insert = param_name.clone();
             this.def.rcu(|d| {
                 let mut d = (**d).clone();

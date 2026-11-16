@@ -12,6 +12,7 @@ use super::{
     resource::{Resource, ResourceId, ResourceKind, ResourceName},
     take::take_int_in_range,
 };
+use crate::runtime::identity::InstanceId;
 
 // spec: DEP#declaration
 #[derive(Debug, Clone)]
@@ -45,13 +46,16 @@ pub struct Deployment {
     pub name: ResourceName,
     pub def: Holder<DeploymentDef>,
     pub frozen: bool,
+    /// The identity an anonymous Deployment holds for its lifetime; `None` for a named one.
+    // spec: IDN#anonymous-instances
+    pub anon_id: Option<InstanceId>,
 }
 
 impl Freezable for Deployment {
     // spec: APP#static-resource-immutability
     fn is_frozen(&self) -> bool {
-        // Anonymous deployments use an empty name as a sentinel (see app/deployment.rs).
-        self.frozen || (!self.name.is_empty() && is_in_action_closure())
+        // An anonymous deployment stays mutable inside the action that creates it.
+        self.frozen || (self.anon_id.is_none() && is_in_action_closure())
     }
 }
 

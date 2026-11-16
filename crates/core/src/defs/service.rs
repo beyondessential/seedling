@@ -11,6 +11,7 @@ use super::{
     ingress::Ingress,
     resource::{Resource, ResourceId, ResourceKind, ResourceName},
 };
+use crate::runtime::identity::InstanceId;
 pub use proxy::{
     BalanceSettings, CompressDecl, CompressSettings, DEFAULT_REDIRECT_CODE, Encoding,
     GroupedHeaderOps, HeaderName, HeaderOp, HeaderRules, HeaderSettings, LbPolicy, ProxySettings,
@@ -43,14 +44,16 @@ pub struct Service {
     /// register the created `Ingress` into `app_def.resources`.
     pub(super) app_def: Option<Weak<arc_swap::ArcSwap<AppDef>>>,
     pub frozen: bool,
+    /// The identity an anonymous Service holds for its lifetime; `None` for a named one.
+    // spec: IDN#anonymous-instances
+    pub anon_id: Option<InstanceId>,
 }
 
 impl super::Freezable for Service {
     // spec: APP#static-resource-immutability
     fn is_frozen(&self) -> bool {
-        // Anonymous services use an empty name as a sentinel (see app/service.rs);
-        // they remain mutable inside the action that creates them.
-        self.frozen || (!self.name.is_empty() && is_in_action_closure())
+        // An anonymous service stays mutable inside the action that creates it.
+        self.frozen || (self.anon_id.is_none() && is_in_action_closure())
     }
 }
 
@@ -76,6 +79,14 @@ impl Service {
             def: Default::default(),
             app_def: None,
             frozen: false,
+            anon_id: None,
+        }
+    }
+
+    pub fn anonymous(anon_id: InstanceId) -> Self {
+        Self {
+            anon_id: Some(anon_id),
+            ..Self::new(ResourceName::new(String::new()))
         }
     }
 
@@ -88,6 +99,7 @@ impl Service {
             def: Default::default(),
             app_def: Some(app_def),
             frozen: false,
+            anon_id: None,
         }
     }
 }
@@ -204,7 +216,7 @@ pub(crate) fn declare_ingress(
     // neither conflict-checked nor registered: it would be a handle nothing
     // routes to.
     // spec: ING#declaration
-    if service.name.is_empty() {
+    if service.anon_id.is_some() {
         return Err("ingress() is not available on an anonymous service".into());
     }
     let port = Port::new(port)?;
@@ -534,6 +546,7 @@ impl CustomType for HttpService {
             .with_fn(
                 "route",
                 |this: &mut Self, prefix: &str| -> Result<HttpServiceRoute, Box<EvalAltResult>> {
+                    super::app::ensure_not_validating()?;
                     if prefix.is_empty() || !prefix.starts_with('/') {
                         return Err(
                             "route prefix must be a non-empty string starting with '/'".into()

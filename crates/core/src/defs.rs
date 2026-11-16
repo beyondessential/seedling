@@ -13,11 +13,14 @@ type Holder<T> = Arc<Mutex<T>>;
 
 /// Trait for BSL resource types that can be returned as frozen references
 /// in action context. Builder methods call `ensure_unfrozen()?` to prevent
-/// modification of static resource references inside action closures.
+/// modification of static resource references inside action closures, and
+/// of every resource inside a validator.
 pub trait Freezable {
     fn is_frozen(&self) -> bool;
 
+    // spec: APP#validator-immutability
     fn ensure_unfrozen(&self) -> Result<(), Box<rhai::EvalAltResult>> {
+        app::ensure_not_validating()?;
         if self.is_frozen() {
             Err("cannot modify a static resource reference inside an action closure".into())
         } else {

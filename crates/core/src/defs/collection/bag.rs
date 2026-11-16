@@ -1,11 +1,12 @@
 use rhai::Dynamic;
 
 use crate::defs::app::App;
-use crate::defs::resource::ResourceId;
+
+use super::handle::Member;
 
 pub trait ResourceBag {
-    fn ids(&self) -> Vec<ResourceId>;
-    fn fetch(&self, id: &ResourceId) -> Option<Dynamic>;
+    fn members(&self) -> Vec<Member>;
+    fn fetch(&self, member: &Member) -> Option<Dynamic>;
 }
 
 pub(crate) struct AppBag(pub App);
@@ -16,26 +17,36 @@ pub(crate) struct AppBag(pub App);
 // `col(app)` produce only the App's named resources, and `rt.start(app)`
 // schedules those without ever entering an action's closure.
 impl ResourceBag for AppBag {
-    fn ids(&self) -> Vec<ResourceId> {
-        self.0.def.load().resources.keys().cloned().collect()
+    fn members(&self) -> Vec<Member> {
+        self.0
+            .def
+            .load()
+            .resources
+            .keys()
+            .cloned()
+            .map(Member::Named)
+            .collect()
     }
 
-    fn fetch(&self, id: &ResourceId) -> Option<Dynamic> {
+    fn fetch(&self, member: &Member) -> Option<Dynamic> {
+        let Member::Named(id) = member else {
+            return None;
+        };
         self.0.def.load().resources.get(id).map(|r| r.to_dynamic())
     }
 }
 
 pub(crate) struct ItemBag {
-    pub id: ResourceId,
+    pub member: Member,
     pub value: Dynamic,
 }
 
 impl ResourceBag for ItemBag {
-    fn ids(&self) -> Vec<ResourceId> {
-        vec![self.id.clone()]
+    fn members(&self) -> Vec<Member> {
+        vec![self.member.clone()]
     }
 
-    fn fetch(&self, _id: &ResourceId) -> Option<Dynamic> {
+    fn fetch(&self, _member: &Member) -> Option<Dynamic> {
         Some(self.value.clone())
     }
 }

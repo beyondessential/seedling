@@ -278,6 +278,7 @@ fn service_summary_flags_http_and_export() {
         })),
         app_def: None,
         frozen: false,
+        anon_id: None,
     };
 
     let summary = service.summary(&AppDef::default());

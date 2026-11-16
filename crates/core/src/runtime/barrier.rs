@@ -278,9 +278,6 @@ pub struct ReplayContext {
         crate::runtime::ResourceInstance,
         crate::defs::resource::Resource,
     >,
-    /// Counter for assigning stable operation-scoped IDs to anonymous resources.
-    /// Incremented each time an anonymous resource instance is created.
-    pub anon_counter: u32,
     /// When set, the replay is running in _probe_ mode: all `rt.*` calls that
     /// would normally mutate state or wait on the world are short-circuited,
     /// and image references extracted from `rt.start` / `rt.warm_images`
@@ -395,7 +392,6 @@ impl fmt::Debug for ReplayContext {
                 "dynamic_defs",
                 &self.dynamic_defs.keys().collect::<Vec<_>>(),
             )
-            .field("anon_counter", &self.anon_counter)
             .finish_non_exhaustive()
     }
 }
@@ -423,7 +419,6 @@ impl ReplayContext {
             world,
             cancel_token,
             dynamic_defs: std::collections::HashMap::new(),
-            anon_counter: 0,
             probe_images: None,
             container_signaler: None,
             volume_writer: None,

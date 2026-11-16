@@ -291,6 +291,31 @@ fn clear_operation_volume_bindings() {
 thread_local! {
     static ANON_VOL_OP_ID: RefCell<Option<String>> = const { RefCell::new(None) };
     static ANON_VOL_COUNTER: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+    static ANON_RESOURCE_COUNTER: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+}
+
+/// The identity a new anonymous Deployment, Job or Service holds for its
+/// lifetime.
+///
+/// Derived from the operation and the order anonymous resources are created
+/// in, so a replay pass creates the same resources with the same identities.
+/// Outside an action closure, where nothing replays, it is random.
+// spec: IDN#anonymous-instances
+pub fn next_anon_instance_id(kind: &str) -> crate::runtime::identity::InstanceId {
+    use crate::runtime::identity::InstanceId;
+    ANON_VOL_OP_ID.with(|cell| match cell.borrow().as_deref() {
+        Some(op_id) => {
+            let counter = ANON_RESOURCE_COUNTER.with(|c| {
+                let n = c.get();
+                c.set(n + 1);
+                n
+            });
+            let ns = uuid::Uuid::parse_str(op_id).unwrap_or(uuid::Uuid::nil());
+            let key = format!("anon-{kind}:{counter}");
+            InstanceId(uuid::Uuid::new_v5(&ns, key.as_bytes()))
+        }
+        None => InstanceId(uuid::Uuid::new_v4()),
+    })
 }
 
 /// Generate a stable anonymous volume name for the current operation.
@@ -324,6 +349,7 @@ impl ActionClosureGuard {
         set_action_def(action_def);
         ANON_VOL_OP_ID.with(|cell| *cell.borrow_mut() = Some(op_id));
         ANON_VOL_COUNTER.with(|c| c.set(0));
+        ANON_RESOURCE_COUNTER.with(|c| c.set(0));
         set_operation_volume_bindings(bindings);
         Self
     }
@@ -353,6 +379,7 @@ impl Drop for ActionClosureGuard {
         clear_action_def();
         ANON_VOL_OP_ID.with(|cell| *cell.borrow_mut() = None);
         ANON_VOL_COUNTER.with(|c| c.set(0));
+        ANON_RESOURCE_COUNTER.with(|c| c.set(0));
         clear_operation_volume_bindings();
         clear_active_rt();
     }
@@ -512,16 +539,21 @@ fn record_at_anchor(ctx: &mut ReplayContext, call_index: usize, record: BarrierR
     true
 }
 
-// spec: COL#query-methods
-/// How a `Started`'s resources are matched against another collection: by
-/// type and name, which is all a
-/// [`ResourceId`](crate::defs::resource::ResourceId) carries. Two instances
-/// of one scaled deployment share a key, so naming the deployment selects
-/// every replica of it, which is what naming a deployment means.
+// spec: COL#membership
+/// How a `Started`'s resources are matched against another collection: a
+/// named resource by type and name, which is all a
+/// [`ResourceId`](crate::defs::resource::ResourceId) carries, and an
+/// anonymous one by the identity it holds. Two instances of one scaled
+/// deployment share a key, so naming the deployment selects every replica of
+/// it, which is what naming a deployment means.
 ///
-/// Held as names under their type so an instance can be looked up from the
+/// Names are held under their type so an instance can be looked up from the
 /// name it borrows, without building an owned key per resource tested.
-type ResourceKeys = HashMap<crate::defs::resource::ResourceKind, HashSet<String>>;
+#[derive(Default)]
+struct ResourceKeys {
+    named: HashMap<crate::defs::resource::ResourceKind, HashSet<String>>,
+    anonymous: HashSet<crate::runtime::identity::InstanceId>,
+}
 
 /// The keys of whatever a collection method was given: another `Started`, a
 /// Collection, or a bare resource.
@@ -530,26 +562,46 @@ type ResourceKeys = HashMap<crate::defs::resource::ResourceKind, HashSet<String>
 /// `Dynamic`, which would clone every resource it holds, and the warm pairs
 /// besides, only to read the names off them and drop the copy.
 fn resource_keys(other: Dynamic) -> ResourceKeys {
-    let mut keys = ResourceKeys::new();
+    use crate::defs::collection::Member;
+
+    let mut keys = ResourceKeys::default();
     if let Some(started) = other.read_lock::<Started>() {
         for r in &started.resources {
-            keys.entry(r.kind)
-                .or_default()
-                .insert(r.name.clone().unwrap_or_default());
+            match &r.name {
+                Some(name) => {
+                    keys.named.entry(r.kind).or_default().insert(name.clone());
+                }
+                None => {
+                    keys.anonymous.insert(r.id);
+                }
+            }
         }
         return keys;
     }
     for handle in crate::defs::collection::col(other).resolve() {
-        keys.entry(handle.kind())
-            .or_default()
-            .insert(handle.name().to_owned());
+        match handle.member() {
+            Member::Named(id) => {
+                keys.named
+                    .entry(id.kind)
+                    .or_default()
+                    .insert(id.name.to_string());
+            }
+            Member::Anonymous { id, .. } => {
+                keys.anonymous.insert(*id);
+            }
+        }
     }
     keys
 }
 
 fn keys_hold(keys: &ResourceKeys, instance: &ResourceInstance) -> bool {
-    keys.get(&instance.kind)
-        .is_some_and(|names| names.contains(instance.name.as_deref().unwrap_or("")))
+    match instance.name.as_deref() {
+        Some(name) => keys
+            .named
+            .get(&instance.kind)
+            .is_some_and(|names| names.contains(name)),
+        None => keys.anonymous.contains(&instance.id),
+    }
 }
 
 /// The distinct image references in a resource-to-image pairing, in the
@@ -716,17 +768,7 @@ impl RuntimeInstance {
         use crate::runtime::identity::{InstanceId, InstanceVariant, ResourceInstance};
 
         if let Some(dep) = resources.clone().try_cast::<Deployment>() {
-            if dep.name.is_empty()
-                && let Some(ctx) = &self.ctx
-            {
-                let mut g = ctx.lock();
-                let op_id = g.operation_id.0.clone();
-                let counter = g.anon_counter;
-                g.anon_counter += 1;
-                drop(g);
-                let ns = uuid::Uuid::parse_str(&op_id).unwrap_or(uuid::Uuid::nil());
-                let key = format!("anon-deployment:{counter}");
-                let id = InstanceId(uuid::Uuid::new_v5(&ns, key.as_bytes()));
+            if let Some(id) = dep.anon_id {
                 let display = format!("{}-anon-dep-{}", self.app_name, id.display_suffix());
                 let instance = ResourceInstance {
                     id,
@@ -770,17 +812,7 @@ impl RuntimeInstance {
         }
 
         if let Some(job) = resources.clone().try_cast::<Job>() {
-            if job.name.is_empty()
-                && let Some(ctx) = &self.ctx
-            {
-                let mut g = ctx.lock();
-                let op_id = g.operation_id.0.clone();
-                let counter = g.anon_counter;
-                g.anon_counter += 1;
-                drop(g);
-                let ns = uuid::Uuid::parse_str(&op_id).unwrap_or(uuid::Uuid::nil());
-                let key = format!("anon-job:{counter}");
-                let id = InstanceId(uuid::Uuid::new_v5(&ns, key.as_bytes()));
+            if let Some(id) = job.anon_id {
                 let display = format!("{}-anon-job-{}", self.app_name, id.display_suffix());
                 let instance = ResourceInstance {
                     id,
@@ -832,17 +864,7 @@ impl RuntimeInstance {
         }
 
         if let Some(svc) = resources.clone().try_cast::<Service>() {
-            if svc.name.is_empty()
-                && let Some(ctx) = &self.ctx
-            {
-                let mut g = ctx.lock();
-                let op_id = g.operation_id.0.clone();
-                let counter = g.anon_counter;
-                g.anon_counter += 1;
-                drop(g);
-                let ns = uuid::Uuid::parse_str(&op_id).unwrap_or(uuid::Uuid::nil());
-                let key = format!("anon-service:{counter}");
-                let id = InstanceId(uuid::Uuid::new_v5(&ns, key.as_bytes()));
+            if let Some(id) = svc.anon_id {
                 let display = format!("{}-anon-svc-{}", self.app_name, id.display_suffix());
                 let instance = ResourceInstance {
                     id,
@@ -2858,9 +2880,7 @@ impl CustomType for Started {
                 "select",
                 |this: &mut Self, criterion: Map| -> Result<Self, Box<EvalAltResult>> {
                     let selector = Selector::from_map(&criterion)?;
-                    Ok(this.narrowed_to(|r| {
-                        selector.matches_resource(r.kind, r.name.as_deref().unwrap_or(""))
-                    }))
+                    Ok(this.narrowed_to(|r| selector.matches_resource(r.kind, r.name.as_deref())))
                 },
             );
     }

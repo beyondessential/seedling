@@ -43,6 +43,7 @@ fn make_deployment_with_scale(
         name: rname,
         def: Arc::new(Mutex::new(def)),
         frozen: false,
+        anon_id: None,
     });
     (id, resource)
 }
