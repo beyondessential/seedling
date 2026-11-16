@@ -494,7 +494,6 @@ fn anon_volume_writes_preserved_through_action() {
 fn external_volume_in_action_picks_up_operation_binding() {
     use crate::defs::container::VolumeMount;
     use crate::defs::volume::OperationVolumeBinding;
-    use crate::runtime::barrier::runtime::{ActionClosureGuard, set_operation_volume_bindings};
     use std::collections::HashMap;
     use std::path::PathBuf;
 
@@ -520,16 +519,6 @@ fn external_volume_in_action_picks_up_operation_binding() {
             read_only: true,
         },
     );
-    set_operation_volume_bindings(bindings.clone());
-
-    let _guard = ActionClosureGuard::new(
-        std::sync::Arc::new(arc_swap::ArcSwap::new(std::sync::Arc::new(
-            crate::defs::app::AppDef::default(),
-        ))),
-        String::new(),
-        std::collections::HashMap::new(),
-    );
-
     let result = crate::runtime::barrier::replay::run_operation(
         super::action_context(
             &engine,
