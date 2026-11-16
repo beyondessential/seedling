@@ -156,14 +156,8 @@ async fn report_once(state: &Arc<OiState>) -> Outcome {
         Ok(payload) => payload,
         Err(e) => return Outcome::Failed(e),
     };
-    // The payload is built as JSON and handed over as the typed body the
-    // client sends; a document that is not one fails the report before it is
-    // sent.
-    let payload: bestool_canopy::schema::StatusPayload = match serde_json::from_value(payload) {
-        Ok(payload) => payload,
-        Err(e) => return Outcome::Failed(format!("the status report is malformed: {e}")),
-    };
-    match client.status(&server_id, &payload).await {
+    let sent = send_status(&client, &server_id, &payload).await;
+    match sent {
         // spec: CNR#report-response — the response carries return-path
         // instructions, including backups to run now. That list is addressed to
         // whichever source owns backups on a host, which is never this one, so it
@@ -178,6 +172,31 @@ async fn report_once(state: &Arc<OiState>) -> Outcome {
             Outcome::Failed(format!("{e}"))
         }
     }
+}
+
+/// `POST /status/<server_id>` with the document as built.
+///
+/// The typed status payload the client offers requires a top-level `health`
+/// array, which this report does not carry, and filling one in would put a
+/// member on the wire the spec does not give it.
+// spec: CNR#report-payload
+async fn send_status<T: bestool_canopy::CanopyTransport>(
+    client: &CanopyClient<T>,
+    server_id: &str,
+    payload: &Value,
+) -> Result<bestool_canopy::schema::StatusResponse, bestool_canopy::Error> {
+    if server_id.is_empty() || server_id.contains(['/', '?', '#', '%']) {
+        return Err(bestool_canopy::Error::transport(std::io::Error::other(
+            format!("the server identifier {server_id:?} is not a path segment"),
+        )));
+    }
+    client
+        .call_json(
+            http::Method::POST,
+            &format!("/status/{server_id}"),
+            Some(payload),
+        )
+        .await
 }
 
 fn discard_cached_server_id(state: &Arc<OiState>) {
@@ -496,6 +515,50 @@ pub(crate) fn clear_fault_if_not_expected(state: &Arc<OiState>) {
 mod tests {
     use super::*;
     use crate::oi::test_support::TestOi;
+
+    /// Answers every request with an empty status response, keeping the one it
+    /// was sent.
+    struct Capture(std::sync::Mutex<Option<(String, Vec<u8>)>>);
+
+    #[bestool_canopy::async_trait]
+    impl bestool_canopy::CanopyTransport for Capture {
+        async fn call(
+            &self,
+            request: bestool_canopy::CanopyRequest,
+        ) -> Result<bestool_canopy::CanopyResponse, bestool_canopy::Error> {
+            let (parts, body) = request.into_parts();
+            *self.0.lock().unwrap() = Some((parts.uri.path().to_owned(), body.to_vec()));
+            Ok(http::Response::builder()
+                .status(200)
+                .body(
+                    br#"{"backup_now":[],"check_severities":{},"names":{"certificates":[],"domains":[],"may_manage_dns":false,"may_manage_tls":false,"paused":false,"registered_names":[]},"tags":{}}"#
+                        .to_vec()
+                        .into(),
+                )
+                .unwrap())
+        }
+    }
+
+    // spec: CNR#report-payload
+    // The document is sent as the spec gives it, with no `health` member at the
+    // top level.
+    #[tokio::test]
+    async fn the_report_is_sent_as_built() {
+        let client = CanopyClient::new(Capture(Default::default()));
+        let payload = json!({
+            "source": "seedling",
+            "healthy": true,
+            "machine": { "health": [], "detail": {} },
+            "applications": {},
+        });
+        send_status(&client, "srv-1", &payload).await.unwrap();
+        let (path, body) = client.transport().0.lock().unwrap().take().unwrap();
+        assert_eq!(path, "/status/srv-1");
+        assert_eq!(serde_json::from_slice::<Value>(&body).unwrap(), payload);
+
+        let refused = send_status(&client, "../x", &payload).await;
+        assert!(refused.is_err(), "an identifier that is not a path segment");
+    }
 
     fn app(name: &str, status: AppStatus) -> (AppName, AppStatus) {
         (AppName::new_unchecked(name), status)
