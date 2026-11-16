@@ -396,8 +396,10 @@ fn cycle_error(action_name: &ActionName, stack: &[ActionName]) -> Box<EvalAltRes
         .map(ActionName::as_str)
         .collect::<Vec<_>>()
         .join(" → ");
-    format!("Action.invoke: cycle detected — {chain} would re-enter an action already on the call stack")
-        .into()
+    format!(
+        "Action.invoke: cycle detected — {chain} would re-enter an action already on the call stack"
+    )
+    .into()
 }
 
 fn validation_to_eval(e: ParamValidationError) -> Box<EvalAltResult> {

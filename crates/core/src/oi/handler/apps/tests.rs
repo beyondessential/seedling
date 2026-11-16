@@ -1216,6 +1216,16 @@ fn an_operating_app_is_reported_with_the_action_it_runs() {
     assert_eq!(desc["current_operation"]["action_name"], "backup");
 }
 
+// spec: APPS#status-derivation
+#[test]
+fn an_operation_outranks_the_app_not_being_installed() {
+    let oi = TestOi::with_app("demo");
+    admit(&oi, "demo", "backup");
+
+    let desc = oi.call("/apps/show", json!({ "app": "demo" })).unwrap();
+    assert_eq!(desc["status"], "operating", "{desc}");
+}
+
 // spec: APPS#description
 // An uninstall is reconciler-driven and has no operation, and an operation
 // running for another app is not this one's.

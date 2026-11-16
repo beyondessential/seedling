@@ -10,6 +10,7 @@ import {
 import { useCallback, useEffect, useRef } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { IconActionButton } from "./ActionButton";
+import { OiErrorAlert } from "./OiErrorAlert";
 import { useSessionContext } from "./SessionProvider";
 import { useOiQuery } from "../hooks/useOi";
 import type { SeedlingEvent } from "../lib/types";
@@ -116,7 +117,7 @@ function EventRow({ ev }: { ev: SeedlingEvent }) {
 export function EventsSidebar() {
   const navigate = useNavigate();
   const { events, sidebarWidth, setSidebarWidth } = useSessionContext();
-  const { data: infra, refetch: refetchInfra } = useOiQuery<InfraStatus>("/infra/status", {});
+  const { data: infra, error: infraError, refetch: refetchInfra } = useOiQuery<InfraStatus>("/infra/status", {});
   const dragging = useRef(false);
   const startX = useRef(0);
   const startWidth = useRef(0);
@@ -212,8 +213,9 @@ export function EventsSidebar() {
         <Typography variant="subtitle2" sx={{ fontWeight: 700, mb: 0.75 }}>
           Infrastructure
         </Typography>
+        {infraError && <OiErrorAlert error={infraError} />}
         {(["proxy", "resolver"] as const).map((key) => {
-          const status = infra?.[key] ?? "stopped";
+          const status = infra?.[key] ?? (infraError ? "unknown" : "stopped");
           const label = key === "proxy" ? "Proxy" : "Resolver";
           return (
             <Box key={key} sx={{ display: "flex", alignItems: "center", gap: 0.75, mb: 0.5 }}>

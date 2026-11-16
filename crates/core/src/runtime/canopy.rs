@@ -902,9 +902,9 @@ mod tests {
     const SERVER: &str = "6f8a2b1c-0000-4000-8000-000000000000";
 
     /// Offer a client that authenticated with `key` and answers
-    /// `/servers/self` with the server `SERVER` and rejects every report,
-    /// returning the paths it was asked for in order.
-    fn offer_rejecting_reports(
+    /// `/servers/self` with the server `SERVER`, returning the paths it was
+    /// asked for in order.
+    fn offer_naming_a_server(
         oi: &TestOi,
         key: Option<&str>,
     ) -> Arc<parking_lot::Mutex<Vec<String>>> {
@@ -918,84 +918,72 @@ mod tests {
             key.map(str::to_owned),
             crate::oi::canopy::test_peer_answering(move |path| {
                 log.lock().push(path.to_owned());
-                if path == "/servers/self" {
-                    (200, format!(r#"{{"server_id":"{SERVER}"}}"#).into_bytes())
-                } else {
-                    (500, b"{}".to_vec())
-                }
+                (
+                    200,
+                    format!(
+                        r#"{{"server_id":"{SERVER}","device_id":"1111aaaa-0000-4000-8000-000000000000"}}"#
+                    )
+                    .into_bytes(),
+                )
             }),
         );
         seen
     }
 
-    fn cached(oi: &TestOi) -> Option<String> {
+    fn resolve(oi: &TestOi, key: &str) -> String {
+        let client = CanopyClient::new(OiCanopyTransport::new(Arc::clone(&oi.state.canopy)));
+        oi.block_on(server_id(&oi.state, &client, Some(key)))
+            .expect("the server is resolved")
+    }
+
+    fn cache(oi: &TestOi, key: &'static str) {
         oi.state
             .db
-            .call(store::get_settings)
-            .unwrap()
-            .server_id
+            .call(move |db| store::cache_server_id(db, "cached-server", key))
+            .unwrap();
     }
 
     // spec: CNR#server-identity
     #[test]
     fn the_cached_identifier_is_used_only_for_the_key_it_was_resolved_through() {
         let oi = TestOi::new();
-        oi.state
-            .db
-            .call(|db| store::cache_server_id(db, "cached-server", "key-a"))
-            .unwrap();
-        let seen = offer_rejecting_reports(&oi, Some("key-a"));
+        cache(&oi, "key-a");
+        let seen = offer_naming_a_server(&oi, Some("key-a"));
 
-        let _ = oi.block_on(report(&oi.state));
-        assert_eq!(
-            *seen.lock(),
-            ["/status/cached-server"],
-            "the same key reports without resolving"
-        );
+        assert_eq!(resolve(&oi, "key-a"), "cached-server");
+        assert!(seen.lock().is_empty(), "the same key resolves nothing");
     }
 
     // spec: CNR#server-identity
     #[test]
     fn an_identifier_cached_for_another_key_is_discarded_and_resolved_again() {
         let oi = TestOi::new();
-        oi.state
-            .db
-            .call(|db| store::cache_server_id(db, "cached-server", "key-a"))
-            .unwrap();
-        let seen = offer_rejecting_reports(&oi, Some("key-b"));
+        cache(&oi, "key-a");
+        let seen = offer_naming_a_server(&oi, Some("key-b"));
 
-        let _ = oi.block_on(report(&oi.state));
-        assert_eq!(
-            *seen.lock(),
-            ["/servers/self".to_owned(), format!("/status/{SERVER}")],
-            "another key resolves the server for itself"
-        );
-    }
-
-    // spec: CNR#server-identity
-    #[test]
-    fn a_failed_report_discards_the_cached_identifier() {
-        let oi = TestOi::new();
-        let _seen = offer_rejecting_reports(&oi, Some("key-a"));
-        oi.block_on(report(&oi.state)).expect_err("rejected");
-        assert_eq!(cached(&oi), None);
-    }
-
-    // spec: CNR#server-identity
-    #[test]
-    fn a_resolved_identifier_is_cached_with_the_key_that_resolved_it() {
-        let oi = TestOi::new();
-        let seen = offer_rejecting_reports(&oi, Some("key-a"));
-        // The report is rejected, which discards what was just cached, so what
-        // is cached is read back from a resolution that is not followed by a send.
-        let client = CanopyClient::new(OiCanopyTransport::new(Arc::clone(&oi.state.canopy)));
-        let id = oi
-            .block_on(server_id(&oi.state, &client, Some("key-a")))
-            .unwrap();
-        assert_eq!(id, SERVER);
-        let settings = oi.state.db.call(store::get_settings).unwrap();
-        assert_eq!(settings.server_id_for(Some("key-a")), Some(SERVER));
-        assert_eq!(settings.server_id_for(Some("key-b")), None);
+        assert_eq!(resolve(&oi, "key-b"), SERVER);
         assert_eq!(*seen.lock(), ["/servers/self"]);
+        let settings = oi.state.db.call(store::get_settings).unwrap();
+        assert_eq!(settings.server_id_for(Some("key-b")), Some(SERVER));
+        assert_eq!(settings.server_id_for(Some("key-a")), None);
+    }
+
+    // spec: CNR#server-identity
+    #[test]
+    fn an_offer_with_no_known_key_neither_uses_nor_fills_the_cache() {
+        let oi = TestOi::new();
+        cache(&oi, "key-a");
+        let seen = offer_naming_a_server(&oi, None);
+        let client = CanopyClient::new(OiCanopyTransport::new(Arc::clone(&oi.state.canopy)));
+
+        let id = oi
+            .block_on(server_id(&oi.state, &client, None))
+            .expect("the server is resolved");
+        assert_eq!(id, SERVER);
+        assert_eq!(*seen.lock(), ["/servers/self"]);
+        assert_eq!(
+            oi.state.db.call(store::get_settings).unwrap().server_id,
+            None
+        );
     }
 }

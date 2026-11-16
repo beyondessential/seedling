@@ -652,7 +652,12 @@ mod tests {
             probe_app(&engine, &ast, &app, registry, &ProbeRequest::default()).expect("probe");
         assert_eq!(response.per_handler.len(), 3);
         for handler in &response.per_handler {
-            assert!(handler.error.is_none(), "{}: {:?}", handler.name, handler.error);
+            assert!(
+                handler.error.is_none(),
+                "{}: {:?}",
+                handler.name,
+                handler.error
+            );
         }
         assert!(response.all_images.contains("ghcr.io/example/one:1"));
         assert!(response.all_images.contains("ghcr.io/example/two:1"));

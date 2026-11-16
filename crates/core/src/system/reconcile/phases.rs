@@ -403,6 +403,8 @@ pub(super) fn compute_proxy_config(
             all_pairs.push((app.name.clone(), def, upstream));
         }
         all_l4_routes.extend(build.l4_routes);
+        // spec: ING#certificates
+        all_warm.extend(build.certificate_hostnames);
         observations.extend(build.observations);
         ready_observations.extend(build.ready_observations);
         // spec: RT#certificate-warming

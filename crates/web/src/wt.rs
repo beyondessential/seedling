@@ -149,6 +149,15 @@ async fn handle_incoming(incoming: wtransport::endpoint::IncomingSession, state:
         tokio::spawn(async move {
             let peeked = match proxy::peek_request(wt_recv, &actor2).await {
                 Ok(p) => p,
+                // spec: WEB#request-relay
+                Err(proxy::PeekError::Invalid(why)) => {
+                    tracing::debug!("request refused: {why}");
+                    let _ = wt_send
+                        .write_all(&proxy::invalid_request_response(&why))
+                        .await;
+                    let _ = wt_send.shutdown().await;
+                    return;
+                }
                 Err(e) => {
                     tracing::debug!("peek request failed: {e}");
                     return;

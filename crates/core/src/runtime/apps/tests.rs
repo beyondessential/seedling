@@ -600,7 +600,7 @@ fn transition_phase_updates_shared_state_and_db() {
     let entry = make_entry("myapp", None);
     AppRegistry::persist_app(&db, &entry).expect("persist");
 
-    transition_phase(&entry.phase, AppPhase::Installing, &db, &app("myapp"), "");
+    transition_phase(&entry.phase, AppPhase::Installing, &db, &app("myapp")).expect("persist");
 
     assert_eq!(*entry.phase.lock(), AppPhase::Installing);
     let (installed, uninstalling, installing): (bool, bool, bool) = db
@@ -612,6 +612,22 @@ fn transition_phase_updates_shared_state_and_db() {
         )
         .expect("row");
     assert_eq!((installed, uninstalling, installing), (false, false, true));
+}
+
+// spec: ACI#uninstall
+#[test]
+fn a_phase_that_cannot_be_persisted_is_not_observable() {
+    let db = Db::open_in_memory().expect("open");
+    let entry = make_entry("myapp", None);
+    AppRegistry::persist_app(&db, &entry).expect("persist");
+    db.conn
+        .execute_batch("DROP TABLE registered_apps;")
+        .expect("break the table");
+
+    transition_phase(&entry.phase, AppPhase::Uninstalling, &db, &app("myapp"))
+        .expect_err("the write fails");
+
+    assert_ne!(*entry.phase.lock(), AppPhase::Uninstalling);
 }
 
 // spec: APPS#generations
@@ -726,6 +742,46 @@ fn failed_reload_keeps_the_previous_definition() {
         "the previous definition's volume must still be present"
     );
     assert!(entry.script_error.is_some());
+}
+
+// spec: AUTO#clamping
+#[test]
+fn a_reload_that_moves_a_deployments_bounds_clamps_its_stored_scale() {
+    let script = r#"
+        let top = app.param("top");
+        let high = if top.is_set() { parse_int(top.value()) } else { 10 };
+        app.deployment("web").image("docker.io/library/nginx:1.29").scale(1..=high);
+    "#;
+    let registry = RwLock::new(AppRegistry::new());
+    registry
+        .write()
+        .register(
+            app("myapp"),
+            bundle_of(script),
+            Source::unknown_push(),
+            Arc::new(Notify::new()),
+            &crate::ScriptLimits::default(),
+        )
+        .unwrap();
+    let db = crate::runtime::db::DbHandle::from_db(Db::open_in_memory().expect("open"));
+    db.call(|db| scaling::save_scaling_decision(db, &app("myapp"), "web", 8))
+        .unwrap();
+    let cipher = Arc::new(crate::runtime::secrets::Cipher::for_tests());
+
+    let outcome = reload(
+        &registry,
+        &db,
+        &cipher,
+        &app("myapp"),
+        &BTreeMap::from([("top".to_owned(), "4".to_owned())]),
+        &crate::ScriptLimits::default(),
+    );
+
+    assert!(outcome.is_applied());
+    let stored = db
+        .call(|db| scaling::load_scaling_decision(db, &app("myapp"), "web"))
+        .unwrap();
+    assert_eq!(stored, Some(4), "lowered to the new upper bound");
 }
 
 // spec: APPS#update

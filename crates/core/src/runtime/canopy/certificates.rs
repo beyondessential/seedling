@@ -801,6 +801,106 @@ mod tests {
         assert!(active_faults(&oi).is_empty());
     }
 
+    fn serve_fresh_certificate(oi: &TestOi) {
+        let now = jiff::Timestamp::now().as_second();
+        let pem = crate::runtime::tls::test_support::self_signed_pem(&["shop.example.com"]);
+        oi.state.db.call(move |db| {
+            store::insert_certificate(
+                db,
+                NewCertificate {
+                    hostname: "shop.example.com",
+                    requested_hostnames: None,
+                    state: TlsCertState::Active,
+                    origin: TlsCertOrigin::Canopy,
+                    cert_pem: Some(&pem),
+                    csr_pem: None,
+                    key_ciphertext: &[0u8; 8],
+                    key_type: KeyType::EcdsaP256,
+                    metadata: CertMetadata {
+                        not_before: Some(now - 86_400),
+                        not_after: Some(now + 89 * 86_400),
+                        ..Default::default()
+                    },
+                    note: None,
+                    acme_account_id: None,
+                    renews: None,
+                },
+            )
+            .unwrap();
+        });
+    }
+
+    // spec: TCAN#faults
+    #[test]
+    fn a_canopy_only_hostname_nothing_can_ask_about_is_faulted_though_a_certificate_serves_it() {
+        let oi = TestOi::new();
+        shop(&oi, UNTYPED);
+        oi.call(
+            "/tls/policies/set-canopy",
+            json!({ "hostname": "shop.example.com" }),
+        )
+        .unwrap();
+        serve_fresh_certificate(&oi);
+
+        oi.block_on(async { sync_all_faults(&oi.state) });
+        let filed = active_faults(&oi);
+        assert_eq!(
+            filed.len(),
+            1,
+            "a Canopy-only chain has no fall-through point to wait for"
+        );
+        assert!(
+            filed[0].description.contains("Canopy-only policy"),
+            "{}",
+            filed[0].description
+        );
+    }
+
+    // spec: TCAN#faults
+    #[test]
+    fn a_rejected_signing_request_is_faulted_until_a_later_answer_replaces_it() {
+        let oi = TestOi::new();
+        shop(&oi, TYPED);
+        oi.call(
+            "/tls/policies/set-canopy",
+            json!({ "hostname": "shop.example.com" }),
+        )
+        .unwrap();
+        serve_fresh_certificate(&oi);
+        oi.block_on(async { sync_all_faults(&oi.state) });
+        assert!(active_faults(&oi).is_empty());
+
+        let row = chain::Row {
+            identity: chain::Identity::NONE,
+            step: 0,
+            since: 0,
+            open_order_since: None,
+            retry_not_before: None,
+        };
+        let rejected = row.clone();
+        oi.state.db.call(move |db| {
+            store::put_chain_row(db, "shop.example.com", &rejected, Some("bad csr")).unwrap();
+            store::set_csr_rejected(db, "shop.example.com").unwrap();
+        });
+        oi.block_on(async { sync_all_faults(&oi.state) });
+        let filed = active_faults(&oi);
+        assert_eq!(filed.len(), 1);
+        assert!(
+            filed[0].description.contains("rejected") && filed[0].description.contains("bad csr"),
+            "{}",
+            filed[0].description
+        );
+
+        oi.state.db.call(move |db| {
+            store::put_chain_row(db, "shop.example.com", &row, Some("order failed")).unwrap();
+        });
+        oi.block_on(async { sync_all_faults(&oi.state) });
+        assert!(
+            active_faults(&oi).is_empty(),
+            "a later answer is not a rejection"
+        );
+    }
+
     // spec: TCAN#faults
     #[test]
     fn trouble_while_a_certificate_is_still_usable_files_nothing() {

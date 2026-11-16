@@ -1333,15 +1333,23 @@ pub(crate) fn dry_run_plan(state: &OiState, params: PlanParams, ctx: &RequestCtx
         }
     }
 
-    // Compute on_change_would_fire: for each param with a registered handler
-    // in the proposed AppDef, did its effective value change between current
-    // and proposed maps?
+    // spec: PRM#change-planning
+    // The handlers the change would schedule if committed: the new definition
+    // registers one for a parameter whose stored value would change, and only
+    // while the app is installed.
+    let installed = {
+        let reg = state.registry.read();
+        let entry = reg.get(name).expect("confirmed registered");
+        matches!(*entry.phase.lock(), AppPhase::Installed)
+    };
     let mut on_change_would_fire: Vec<String> = Vec::new();
-    for handler_param in prop_def.param_changes.iter() {
-        let cur = current_params.get(handler_param.as_str());
-        let prop = proposed_param_map.get(handler_param.as_str());
-        if cur != prop {
-            on_change_would_fire.push(handler_param.as_str().to_owned());
+    if installed {
+        for handler_param in prop_def.param_changes.iter() {
+            let cur = current_params.get(handler_param.as_str());
+            let prop = proposed_param_map.get(handler_param.as_str());
+            if cur != prop {
+                on_change_would_fire.push(handler_param.as_str().to_owned());
+            }
         }
     }
     on_change_would_fire.sort();
@@ -1625,9 +1633,10 @@ pub(crate) fn uninstall_app(state: &OiState, params: AppParams) -> HandlerResult
     // Persist the transition before waking the reconciler, and before the
     // scheduler lock goes, so no operation is admitted against the old phase.
     let name_owned = params.app.clone();
-    state.db.call(move |db| {
-        transition_phase(&phase_arc, AppPhase::Uninstalling, db, &name_owned, "");
-    });
+    state
+        .db
+        .call(move |db| transition_phase(&phase_arc, AppPhase::Uninstalling, db, &name_owned))
+        .map_err(|e| OiError::internal(format!("recording the uninstall: {e}")))?;
     // spec: FWD#forward-lifetime
     // The app has left `Installed`.
     crate::oi::forwards::end_forwards_of_app(state, name);
@@ -1887,28 +1896,11 @@ pub(crate) fn update_app(
     }
     // spec: AUTO#clamping
     {
-        let reg = state.registry.read();
-        if let Some(entry) = reg.get(name) {
-            let def = entry.app.def.load();
-            let deployment_bounds: std::collections::BTreeMap<String, (u16, u16)> = def
-                .resources
-                .iter()
-                .filter_map(|(id, resource)| {
-                    if let Resource::Deployment(deployment) = resource {
-                        let dep_def = deployment.def.lock();
-                        Some((
-                            id.name.as_str().to_owned(),
-                            (*dep_def.scale.start(), *dep_def.scale.end()),
-                        ))
-                    } else {
-                        None
-                    }
-                })
-                .collect();
-            drop(def);
+        let running = state.registry.read().get(name).map(|e| e.app.clone());
+        if let Some(running) = running {
             let name_owned = params.app.clone();
             state.db.call(move |db| {
-                if let Err(e) = scaling::clamp_scaling_decisions(db, &name_owned, &deployment_bounds) {
+                if let Err(e) = scaling::clamp_to_definition(db, &name_owned, &running) {
                     tracing::error!(app = %name_owned, error = %e, "failed to clamp scaling decisions");
                 }
             });

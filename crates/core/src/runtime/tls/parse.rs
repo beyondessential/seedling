@@ -53,6 +53,52 @@ pub struct ParsedChain {
     pub leaf_serial_der: Vec<u8>,
 }
 
+/// Rewrite the `CERTIFICATE` blocks of `pem` with the leaf first, where the
+/// leaf is the first certificate whose SubjectPublicKeyInfo is `spki_der` and
+/// the rest follow in the order given. Blocks of other types are dropped.
+///
+/// `Ok(None)` when no certificate has that public key. Every block must be a
+/// parseable certificate, whatever its place in the chain.
+// spec: TLSM#certificates
+pub fn leaf_first(pem: &str, spki_der: &[u8]) -> Result<Option<String>> {
+    let blocks: Vec<pem::Pem> = pem::parse_many(pem.as_bytes())
+        .map_err(|e| {
+            PemSnafu {
+                message: e.to_string(),
+            }
+            .build()
+        })?
+        .into_iter()
+        .filter(|b| b.tag() == "CERTIFICATE")
+        .collect();
+    if blocks.is_empty() {
+        return NoCertBlockSnafu.fail();
+    }
+    let mut leaf = None;
+    for (index, block) in blocks.iter().enumerate() {
+        let (_, cert) = x509_parser::certificate::X509Certificate::from_der(block.contents())
+            .map_err(|e| {
+                X509Snafu {
+                    message: e.to_string(),
+                }
+                .build()
+            })?;
+        if leaf.is_none() && cert.tbs_certificate.subject_pki.raw == spki_der {
+            leaf = Some(index);
+        }
+    }
+    let Some(leaf) = leaf else {
+        return Ok(None);
+    };
+    let mut out = pem::encode(&blocks[leaf]);
+    for (index, block) in blocks.iter().enumerate() {
+        if index != leaf {
+            out.push_str(&pem::encode(block));
+        }
+    }
+    Ok(Some(out))
+}
+
 /// Parse a PEM blob that may contain one or more CERTIFICATE entries
 /// (leaf + intermediates). Returns metadata derived from the leaf.
 pub fn parse_chain(pem: &str) -> Result<ParsedChain> {

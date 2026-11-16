@@ -12,7 +12,7 @@ fn open_in_memory_succeeds() {
             |r| r.get(0),
         )
         .expect("schema_version should exist");
-    assert_eq!(version, 75);
+    assert_eq!(version, 77);
 }
 
 // spec: HIST#durability
@@ -44,7 +44,7 @@ fn params_table_exists() {
             |r| r.get(0),
         )
         .expect("schema_version should exist");
-    assert_eq!(version, 75);
+    assert_eq!(version, 77);
 }
 
 // spec: APPS#persistence
@@ -465,4 +465,25 @@ fn resource_type_records_are_renamed_to_the_wire_names() {
         .query_row("SELECT resource_type FROM faults", [], |r| r.get(0))
         .unwrap();
     assert_eq!(fault_type, "external_service");
+}
+
+// spec: CNR#server-identity
+#[test]
+fn a_cached_canopy_server_id_with_no_recorded_key_is_dropped() {
+    let db = Db::open_in_memory_through(75).expect("open");
+    db.conn
+        .execute("UPDATE canopy_settings SET server_id = 'cached'", [])
+        .expect("cache an identifier before keys were recorded");
+
+    db.finish_migrations().expect("the later migrations apply");
+
+    let (id, key): (Option<String>, Option<String>) = db
+        .conn
+        .query_row(
+            "SELECT server_id, server_id_key FROM canopy_settings",
+            [],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .expect("row");
+    assert_eq!((id, key), (None, None));
 }

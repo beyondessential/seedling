@@ -19,6 +19,10 @@ fn folders_skip_vcs_metadata_and_seedignored_paths() {
     write(root, "notes/todo.md", b"x");
     write(root, ".git/HEAD", b"ref");
     write(root, ".jj/repo", b"x");
+    for dir in [".hg", ".svn", ".bzr", "CVS", "_darcs", ".pijul", ".sl"] {
+        write(root, &format!("{dir}/state"), b"x");
+    }
+    write(root, "pages/.git", b"gitdir: elsewhere");
     write(root, ".seedignore", b"notes/\npages/draft.html\n");
     let files = read_folder(root).unwrap();
     assert_eq!(

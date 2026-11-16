@@ -3087,8 +3087,9 @@ mod exit_code_tests {
 #[cfg(test)]
 mod tests {
     use super::{
-        DEFAULT_READY_DEADLINE_SECS, DEFAULT_RUNNING_DEADLINE_SECS, DEFAULT_SCHEDULED_DEADLINE_SECS,
-        DEFAULT_TERMINATED_DEADLINE_SECS, STOP_DEADLINE_MARGIN_SECS, resolve_deadline,
+        DEFAULT_READY_DEADLINE_SECS, DEFAULT_RUNNING_DEADLINE_SECS,
+        DEFAULT_SCHEDULED_DEADLINE_SECS, DEFAULT_TERMINATED_DEADLINE_SECS,
+        STOP_DEADLINE_MARGIN_SECS, resolve_deadline,
     };
 
     // spec: RT#barriers
@@ -3105,7 +3106,7 @@ mod tests {
             (3_600..=24 * 3_600).contains(&DEFAULT_TERMINATED_DEADLINE_SECS),
             "{DEFAULT_TERMINATED_DEADLINE_SECS}"
         );
-        assert!(STOP_DEADLINE_MARGIN_SECS > 0);
+        const { assert!(STOP_DEADLINE_MARGIN_SECS > 0) };
     }
 
     // spec: RT#barriers

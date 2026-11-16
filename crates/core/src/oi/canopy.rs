@@ -24,7 +24,7 @@ mod peer;
 mod relay;
 mod transport;
 
-pub use peer::{QuicPeer, RelayPeer, RelayStream};
+pub use peer::{QuicPeer, RelayPeer, RelayRecv, RelaySend, RelayStream};
 pub use relay::{RelayFailure, relay_request};
 pub use transport::OiCanopyTransport;
 
@@ -392,9 +392,30 @@ mod tests {
     #[test]
     fn losing_a_connection_drops_only_its_own_offers() {
         let state = CanopyState::new();
-        let a = state.offer(1, "a".into(), "e".into(), None, None, Arc::new(peer::NullPeer));
-        let b = state.offer(1, "b".into(), "e".into(), None, None, Arc::new(peer::NullPeer));
-        let c = state.offer(2, "c".into(), "e".into(), None, None, Arc::new(peer::NullPeer));
+        let a = state.offer(
+            1,
+            "a".into(),
+            "e".into(),
+            None,
+            None,
+            Arc::new(peer::NullPeer),
+        );
+        let b = state.offer(
+            1,
+            "b".into(),
+            "e".into(),
+            None,
+            None,
+            Arc::new(peer::NullPeer),
+        );
+        let c = state.offer(
+            2,
+            "c".into(),
+            "e".into(),
+            None,
+            None,
+            Arc::new(peer::NullPeer),
+        );
 
         let dropped = state.remove_by_conn(1);
         let dropped: Vec<_> = dropped.iter().map(|o| o.offer_id).collect();
@@ -418,9 +439,23 @@ mod tests {
     #[test]
     fn re_offering_after_teardown_leaves_no_stale_index_entry() {
         let state = CanopyState::new();
-        state.offer(7, "a".into(), "e".into(), None, None, Arc::new(peer::NullPeer));
+        state.offer(
+            7,
+            "a".into(),
+            "e".into(),
+            None,
+            None,
+            Arc::new(peer::NullPeer),
+        );
         state.remove_by_conn(7);
-        let again = state.offer(7, "b".into(), "e".into(), None, None, Arc::new(peer::NullPeer));
+        let again = state.offer(
+            7,
+            "b".into(),
+            "e".into(),
+            None,
+            None,
+            Arc::new(peer::NullPeer),
+        );
 
         assert_eq!(state.count(), 1);
         assert_eq!(state.current().unwrap().offer_id, again.offer_id);

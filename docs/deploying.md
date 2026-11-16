@@ -322,8 +322,10 @@ seedling-ctl tls certs retry app.example.com   # start a new cycle now
 ```
 
 A Canopy-only hostname that no app with a Canopy type declares cannot be asked
-about, and is faulted with `canopy_certificate_failed`, as is any hostname whose
-request keeps failing while it has no usable certificate. If Canopy revokes a
+about, and is faulted with `canopy_certificate_failed` even while a certificate
+serves it. So is a hostname whose last answer from Canopy rejected the signing
+request, and any hostname whose request keeps failing while it has no usable
+certificate. If Canopy revokes a
 certificate or condemns its key, Seedling stops serving it, makes a new key and
 asks again, and the hostname passes to the next strategy meanwhile.
 

@@ -1095,7 +1095,9 @@ pub(super) fn apply_health_check_faults(
         let already_filed = faults::list_active_faults(db, Some(app))
             .unwrap_or_default()
             .iter()
-            .any(|f| f.kind == "health_check_failed" && f.instance_id.as_deref() == Some(&inst_hex));
+            .any(|f| {
+                f.kind == "health_check_failed" && f.instance_id.as_deref() == Some(&inst_hex)
+            });
         if !already_filed {
             let desc = format!(
                 "healthcheck for {} has been failing past its grace window",
@@ -1119,7 +1121,9 @@ pub(super) fn apply_health_check_faults(
         let to_clear: Vec<_> = faults::list_active_faults(db, Some(app))
             .unwrap_or_default()
             .into_iter()
-            .filter(|f| f.kind == "health_check_failed" && f.instance_id.as_deref() == Some(&inst_hex))
+            .filter(|f| {
+                f.kind == "health_check_failed" && f.instance_id.as_deref() == Some(&inst_hex)
+            })
             .collect();
         for f in to_clear {
             if let Err(e) = faults::clear_fault(db, &f.id, app) {

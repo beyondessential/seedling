@@ -1320,24 +1320,25 @@ mod update_tests {
         let mut running = observed(&dr, true, true);
         running.has_exited = false;
 
-        let result = oi.block_on(async {
-            oi.state.container_runtime.pull_image(IMAGE).await.unwrap();
-            let none = HashSet::new();
-            actuate_one_pod(
-                &reconciler.actuator,
-                &reconciler.db,
-                AppPriority::default(),
-                running,
-                false,
-                false,
-                &HashSet::from([(dr.instance.id, "container_running")]),
-                &none,
-                &none,
-                &none,
-            )
-            .await
-        })
-        .expect("the instance is acted on");
+        let result = oi
+            .block_on(async {
+                oi.state.container_runtime.pull_image(IMAGE).await.unwrap();
+                let none = HashSet::new();
+                actuate_one_pod(
+                    &reconciler.actuator,
+                    &reconciler.db,
+                    AppPriority::default(),
+                    running,
+                    false,
+                    false,
+                    &HashSet::from([(dr.instance.id, "container_running")]),
+                    &none,
+                    &none,
+                    &none,
+                )
+                .await
+            })
+            .expect("the instance is acted on");
 
         assert!(result.stop_failure.is_none());
         assert_eq!(

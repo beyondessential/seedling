@@ -262,7 +262,7 @@ pub(crate) fn remove_image(state: &OiState, params: RemoveParams) -> HandlerResu
                             && s.image_id.as_deref() == Some(target_id)
                         {
                             return Err(OiError::new(
-                                ErrorCode::RequirementsInvalid,
+                                ErrorCode::ImageInUse,
                                 "image is in use by a running container; pass force=true to remove anyway"
                                     .to_string(),
                             ));
@@ -271,10 +271,13 @@ pub(crate) fn remove_image(state: &OiState, params: RemoveParams) -> HandlerResu
                 }
             }
 
+            // Cleared before the image is looked for, so the pins are gone
+            // whether or not an image is then removed.
             let reference = params.reference.clone();
-            state.db.call(move |db| {
-                let _ = images::clear_pins_by_reference(db, &reference);
-            });
+            state
+                .db
+                .call(move |db| images::clear_pins_by_reference(db, &reference))
+                .map_err(|e| OiError::internal(format!("clearing the pins failed: {e}")))?;
 
             let removed = state
                 .container_runtime

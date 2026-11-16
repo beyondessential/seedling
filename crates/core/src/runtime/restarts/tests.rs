@@ -30,7 +30,15 @@ fn exited(code: i32) -> Option<ExitStatus> {
 fn records_carry_identity_exit_and_cause() {
     let db = Db::open_in_memory().expect("open");
     let now = now_ms();
-    record(&db, &subject("aa"), Cause::Recovery, exited(137), now, RETAIN).expect("record");
+    record(
+        &db,
+        &subject("aa"),
+        Cause::Recovery,
+        exited(137),
+        now,
+        RETAIN,
+    )
+    .expect("record");
 
     let rows = list(&db, None, None, 10).expect("list");
     assert_eq!(rows.len(), 1);
@@ -50,8 +58,24 @@ fn records_carry_identity_exit_and_cause() {
 fn list_is_most_recent_first_and_filters() {
     let db = Db::open_in_memory().expect("open");
     let now = now_ms();
-    record(&db, &subject("aa"), Cause::Recovery, None, now - 2000, RETAIN).expect("record");
-    record(&db, &subject("aa"), Cause::Recovery, None, now - 1000, RETAIN).expect("record");
+    record(
+        &db,
+        &subject("aa"),
+        Cause::Recovery,
+        None,
+        now - 2000,
+        RETAIN,
+    )
+    .expect("record");
+    record(
+        &db,
+        &subject("aa"),
+        Cause::Recovery,
+        None,
+        now - 1000,
+        RETAIN,
+    )
+    .expect("record");
     record(&db, &subject("bb"), Cause::Deliberate, None, now, RETAIN).expect("record");
 
     let all = list(&db, None, None, 10).expect("list");
@@ -74,7 +98,15 @@ fn deliberate_restarts_are_excluded_from_the_rate() {
     let db = Db::open_in_memory().expect("open");
     let now = now_ms();
     for i in 0..4 {
-        record(&db, &subject("aa"), Cause::Deliberate, None, now - i * 100, RETAIN).expect("record");
+        record(
+            &db,
+            &subject("aa"),
+            Cause::Deliberate,
+            None,
+            now - i * 100,
+            RETAIN,
+        )
+        .expect("record");
     }
     assert_eq!(recent_recovery_count(&db, "aa", 1800).expect("count"), 0);
 
@@ -87,7 +119,15 @@ fn deliberate_restarts_are_excluded_from_the_rate() {
 fn restarts_outside_the_window_do_not_count() {
     let db = Db::open_in_memory().expect("open");
     let now = now_ms();
-    record(&db, &subject("aa"), Cause::Recovery, None, now - 3_600_000, RETAIN).expect("record");
+    record(
+        &db,
+        &subject("aa"),
+        Cause::Recovery,
+        None,
+        now - 3_600_000,
+        RETAIN,
+    )
+    .expect("record");
     record(&db, &subject("aa"), Cause::Recovery, None, now, RETAIN).expect("record");
 
     assert_eq!(recent_recovery_count(&db, "aa", 1800).expect("count"), 1);
@@ -100,7 +140,15 @@ fn per_instance_cap_holds_under_a_sustained_crash_loop() {
     let db = Db::open_in_memory().expect("open");
     let now = now_ms();
     for i in 0..(RETAIN as i64 * 3) {
-        record(&db, &subject("aa"), Cause::Recovery, exited(1), now + i, RETAIN).expect("record");
+        record(
+            &db,
+            &subject("aa"),
+            Cause::Recovery,
+            exited(1),
+            now + i,
+            RETAIN,
+        )
+        .expect("record");
     }
     // A second instance's history must not be pruned by the first's churn.
     record(&db, &subject("bb"), Cause::Recovery, None, now, RETAIN).expect("record");
@@ -136,7 +184,15 @@ fn summary_is_absent_until_there_is_history() {
     assert!(summary(&db, "aa", settings).expect("summary").is_none());
 
     let now = now_ms();
-    record(&db, &subject("aa"), Cause::Deliberate, None, now - 1000, RETAIN).expect("record");
+    record(
+        &db,
+        &subject("aa"),
+        Cause::Deliberate,
+        None,
+        now - 1000,
+        RETAIN,
+    )
+    .expect("record");
     record(&db, &subject("aa"), Cause::Recovery, exited(2), now, RETAIN).expect("record");
 
     let s = summary(&db, "aa", settings)

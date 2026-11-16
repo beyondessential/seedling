@@ -362,6 +362,7 @@ app.on_install(|rt, param| {
 });
 
 // on_change fires when a parameter value changes (not on first install).
+// The closure may take 0, 1 or 2 parameters: it is given as many of `rt` and `old` as it declares.
 version.on_change(|rt, old| {
     // old is the app at the previous generation; use it to stop old resources.
     rt.start(app.job()

@@ -72,7 +72,8 @@ pub(crate) fn get_status(state: &OiState) -> HandlerResult {
     });
 
     Ok(json!({
-        "version": env!("CARGO_PKG_VERSION"),        "hostname": hostname,
+        "version": env!("CARGO_PKG_VERSION"),
+        "hostname": hostname,
         "uptime_secs": uptime,
         "spki_fingerprint": state.spki_fingerprint.get().cloned().unwrap_or_default(),
         "apps_total": apps_total,

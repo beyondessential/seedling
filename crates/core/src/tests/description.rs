@@ -270,7 +270,15 @@ fn malformed_canopy_types_throw() {
 // spec: APP#canopy-type
 #[test]
 fn well_formed_canopy_types_are_accepted() {
-    for good in ["a", "tamanu", "tamanu-central", "a1", "tamanu2-v3-x", "a-1", "a-1-2"] {
+    for good in [
+        "a",
+        "tamanu",
+        "tamanu-central",
+        "a1",
+        "tamanu2-v3-x",
+        "a-1",
+        "a-1-2",
+    ] {
         let app = run_test_script_app(&format!(r#"app.canopy_type("{good}");"#));
         assert_eq!(app.def.load().canopy_type.as_deref(), Some(good));
     }

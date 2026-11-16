@@ -23,6 +23,8 @@ pub enum ErrorCode {
     UnsupportedSeedling,
     // spec: DEFN#fetching
     FetchFailed,
+    // spec: IMGM#removing-an-image
+    ImageInUse,
     // spec: DEFN#registry-access
     RegistryNotAllowed,
     Deregistering,
@@ -87,6 +89,7 @@ mod tests {
             (ErrorCode::BundleInvalid, "bundle_invalid"),
             (ErrorCode::UnsupportedSeedling, "unsupported_seedling"),
             (ErrorCode::FetchFailed, "fetch_failed"),
+            (ErrorCode::ImageInUse, "image_in_use"),
             (ErrorCode::RegistryNotAllowed, "registry_not_allowed"),
             (ErrorCode::Deregistering, "deregistering"),
             (ErrorCode::ServerBusy, "server_busy"),

@@ -358,7 +358,8 @@ mod tests {
         rt.block_on(reconciler.maybe_run_image_gc(&reconciler.driver, &reconciler.db));
         assert_eq!(image_count(&rt, &oi), 0);
 
-        rt.block_on(oi.state.container_runtime.pull_image(REF)).unwrap();
+        rt.block_on(oi.state.container_runtime.pull_image(REF))
+            .unwrap();
         rt.block_on(reconciler.reconcile_images(std::iter::empty()));
         oi.state
             .db

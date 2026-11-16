@@ -137,6 +137,64 @@ fn remove_unknown_image_is_not_found() {
     assert!(message.contains("not found locally"), "message: {message}");
 }
 
+// spec: IMGM#removing-an-image
+#[test]
+fn removing_an_image_in_use_is_image_in_use_and_clears_no_pin() {
+    use crate::system::types::{TransientRestart, TransientUnitSpec};
+
+    let oi = TestOi::with_app("demo");
+    oi.call("/images/pull", json!({ "reference": REF, "app": "demo" }))
+        .unwrap();
+    oi.block_on(
+        oi.state.driver.process.start_transient(TransientUnitSpec {
+            name: "seedling-user.service".to_owned(),
+            description: String::new(),
+            exec_start: ["podman", "run", "--name", "seedling-user", REF]
+                .map(str::to_owned)
+                .to_vec(),
+            restart: TransientRestart::Always,
+            log_extra_fields: vec![],
+            kill_signal: None,
+            timeout_stop_secs: None,
+            slice: None,
+            oom_score_adjust: None,
+            restart_sec: None,
+            start_limit_interval_sec: None,
+            start_limit_burst: None,
+        }),
+    )
+    .unwrap();
+
+    let (code, _) = oi
+        .call("/images/remove", json!({ "reference": REF }))
+        .unwrap_err();
+    assert_eq!(code, "image_in_use");
+    let pins = oi.call("/images/pins/list", json!({})).unwrap();
+    assert_eq!(pins["pins"].as_array().unwrap().len(), 1, "{pins}");
+
+    oi.call("/images/remove", json!({ "reference": REF, "force": true }))
+        .unwrap();
+    let pins = oi.call("/images/pins/list", json!({})).unwrap();
+    assert!(pins["pins"].as_array().unwrap().is_empty());
+}
+
+// spec: IMGM#removing-an-image
+#[test]
+fn the_pins_on_a_reference_are_cleared_even_when_it_resolves_to_no_image() {
+    let oi = TestOi::with_app("demo");
+    oi.call("/images/pull", json!({ "reference": REF, "app": "demo" }))
+        .unwrap();
+    oi.block_on(oi.state.container_runtime.remove_image(REF, true))
+        .unwrap();
+
+    let (code, _) = oi
+        .call("/images/remove", json!({ "reference": REF }))
+        .unwrap_err();
+    assert_eq!(code, "not_found");
+    let pins = oi.call("/images/pins/list", json!({})).unwrap();
+    assert!(pins["pins"].as_array().unwrap().is_empty(), "{pins}");
+}
+
 // spec: IMGM#image-discovery
 #[test]
 fn discover_returns_empty_probe_for_handlerless_app() {

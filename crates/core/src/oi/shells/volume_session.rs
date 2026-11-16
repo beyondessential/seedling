@@ -286,7 +286,7 @@ pub(crate) async fn open_volume_shell_session(
         (params.rows, params.cols),
         stop.clone(),
     );
-    let event_name = ShellName::new_unchecked("volume-shell");
+    let event_name = ShellName::new_unchecked(session_name.as_str());
     if !begin_session(
         &state,
         &events,

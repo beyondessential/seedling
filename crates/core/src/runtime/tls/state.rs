@@ -100,7 +100,8 @@ pub fn managed_ingresses(registry: &AppRegistry) -> Vec<ManagedIngress> {
         for resource in def.resources.values() {
             if let Resource::Ingress(ing) = resource {
                 let ing_def = ing.def.lock();
-                if ing_def.tls {
+                // spec: TLS#managed-hostname
+                if ing_def.tls || ing_def.dtls {
                     out.push(ManagedIngress {
                         app: entry.name.clone(),
                         ingress_name: ing.name.as_str().to_owned(),

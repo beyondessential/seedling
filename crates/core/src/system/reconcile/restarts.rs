@@ -217,7 +217,14 @@ impl super::Reconciler {
         let replaced_failed: Vec<ResourceInstance> = update.recovery_starts.to_vec();
         let retain = self.instance_gc.retain_restart_records;
         let rate_loops = self.db.call(move |db| {
-            reconcile_counters(db, &app_owned, &counters, &started, &replaced_failed, retain)
+            reconcile_counters(
+                db,
+                &app_owned,
+                &counters,
+                &started,
+                &replaced_failed,
+                retain,
+            )
         });
 
         for loop_ in rate_loops {

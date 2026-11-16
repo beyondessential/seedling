@@ -892,6 +892,7 @@ export default function Services() {
             </OutlinedActionButton>
           </Box>
           {declaredError && <OiErrorAlert error={declaredError} />}
+          {resolverError && <OiErrorAlert error={resolverError} />}
           {mappingsError && <OiErrorAlert error={mappingsError} />}
           {(declaredLoading || mappingsLoading) && !declared && (
             <CircularProgress size={20} />

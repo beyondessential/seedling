@@ -475,7 +475,7 @@ impl Reconciler {
     // afresh. Kinds that are observed side by side, such as a container's
     // creation and its running, are not here: each would displace the other
     // on every tick.
-    fn contradicting_kinds(kind: &str) -> &'static [&'static str] {
+    pub(super) fn contradicting_kinds(kind: &str) -> &'static [&'static str] {
         match kind {
             "health_check_pass" | "health_check_fail" => {
                 &["health_check_pass", "health_check_fail"]

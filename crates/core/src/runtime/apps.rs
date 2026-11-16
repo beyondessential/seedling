@@ -15,7 +15,7 @@ use crate::{
         db::{Db, DbHandle},
         definition::{Bundle, Source},
         desired::OperationProgress,
-        generations,
+        generations, scaling,
         secrets::Cipher,
     },
     setup_language,
@@ -384,6 +384,14 @@ impl AppRegistry {
             // spec: SEC#migration — after the script declares which params are secret,
             // migrate any plaintext rows that should now be encrypted.
             migrate_newly_secret_params(db, cipher, &name, &app);
+            // spec: AUTO#clamping
+            // A definition that threw part-way declares only what ran before
+            // it, so its bounds are not ones to clamp to.
+            if raw_error.is_none()
+                && let Err(e) = scaling::clamp_to_definition(db, &name, &app)
+            {
+                tracing::error!(app = %name, error = %e, "failed to clamp scaling decisions");
+            }
             let script_error = raw_error.map(|e| {
                 tracing::warn!("failed to reload script for app '{name}': {e}");
                 (e.to_string(), Timestamp::now())
@@ -515,17 +523,19 @@ fn decode_phase(app: &str, installed: bool, uninstalling: bool, installing: bool
     }
 }
 
-/// Update the phase both in the shared Arc and in the database.
+/// Update the phase in the database and then in the shared Arc, so the new
+/// phase is observable only once it is durable.
+///
+/// A phase that cannot be persisted is an error and leaves the shared phase as
+/// it was.
 pub fn transition_phase(
     phase_arc: &Mutex<AppPhase>,
     new_phase: AppPhase,
     db: &Db,
     app_name: &AppName,
-    _script: &str,
-) {
-    *phase_arc.lock() = new_phase.clone();
+) -> rusqlite::Result<()> {
     let (installed, uninstalling, installing) = encode_phase(&new_phase);
-    if let Err(e) = db.conn.execute(
+    db.conn.execute(
         "UPDATE registered_apps SET installed = ?1, uninstalling = ?2, installing = ?3 WHERE name = ?4",
         rusqlite::params![
             installed as i64,
@@ -533,9 +543,9 @@ pub fn transition_phase(
             installing as i64,
             app_name,
         ],
-    ) {
-        tracing::error!(app = %app_name, "failed to persist phase transition: {e}");
-    }
+    )?;
+    *phase_arc.lock() = new_phase;
+    Ok(())
 }
 
 /// Load both plaintext and secret params, merging into a single map.
@@ -610,7 +620,13 @@ pub fn reload(
         if let Some(running) = running {
             let name = name.clone();
             let cipher = Arc::clone(cipher);
-            db.call(move |db| migrate_newly_secret_params(db, &cipher, &name, &running));
+            db.call(move |db| {
+                migrate_newly_secret_params(db, &cipher, &name, &running);
+                // spec: AUTO#clamping
+                if let Err(e) = scaling::clamp_to_definition(db, &name, &running) {
+                    tracing::error!(app = %name, error = %e, "failed to clamp scaling decisions");
+                }
+            });
         }
     }
     outcome

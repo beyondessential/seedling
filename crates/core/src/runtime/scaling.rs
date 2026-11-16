@@ -92,6 +92,39 @@ pub fn clamp_scaling_decisions(
     Ok(())
 }
 
+// spec: AUTO#clamping
+/// Clamp an app's stored scaling decisions to the bounds `app`'s definition
+/// declares, and delete those of Deployments it no longer declares.
+///
+/// Run on every successful re-evaluation of a definition, so a change to the
+/// bounds, whether the definition was replaced or its parameters or the host
+/// moved what it reads, is in the store before reconciliation acts on it.
+pub fn clamp_to_definition(
+    db: &Db,
+    name: &AppName,
+    app: &crate::defs::app::App,
+) -> rusqlite::Result<()> {
+    use crate::defs::resource::Resource;
+
+    let bounds: std::collections::BTreeMap<String, (u16, u16)> = app
+        .def
+        .load()
+        .resources
+        .iter()
+        .filter_map(|(id, resource)| match resource {
+            Resource::Deployment(deployment) => {
+                let def = deployment.def.lock();
+                Some((
+                    id.name.as_str().to_owned(),
+                    (*def.scale.start(), *def.scale.end()),
+                ))
+            }
+            _ => None,
+        })
+        .collect();
+    clamp_scaling_decisions(db, name, &bounds)
+}
+
 /// Every stored scaling decision in the node, keyed by app and deployment.
 pub type ScalingDecisions = HashMap<(AppName, String), u16>;
 

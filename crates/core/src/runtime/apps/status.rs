@@ -159,16 +159,19 @@ fn snapshot_all<T>(
 /// `None` for an installed app with no operation, whose status is its health.
 fn settled(snapshot: &Snapshot, active: Option<&ActiveOperation>) -> Option<AppStatus> {
     match snapshot.phase {
-        AppPhase::Uninstalling => Some(AppStatus::Uninstalling),
-        AppPhase::Installing => Some(AppStatus::Installing),
+        AppPhase::Uninstalling => return Some(AppStatus::Uninstalling),
+        AppPhase::Installing => return Some(AppStatus::Installing),
+        AppPhase::NotInstalled | AppPhase::Installed => {}
+    }
+    // An operation outranks the app not being installed.
+    if let Some(op) = active.filter(|a| a.app == snapshot.name) {
+        return Some(AppStatus::Operating {
+            action_name: op.action.clone(),
+        });
+    }
+    match snapshot.phase {
         AppPhase::NotInstalled => Some(AppStatus::NotInstalled),
-        AppPhase::Installed => {
-            active
-                .filter(|a| a.app == snapshot.name)
-                .map(|op| AppStatus::Operating {
-                    action_name: op.action.clone(),
-                })
-        }
+        _ => None,
     }
 }
 

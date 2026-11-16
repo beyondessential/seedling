@@ -244,9 +244,15 @@ const OBS_KINDS: &[&str] = &[
     "ingress_cleaned_up",
 ];
 
-/// Load all existing `(instance_id, obs_kind)` pairs from the DB so that
+/// Load the `(instance_id, obs_kind)` pairs still on record from the DB so that
 /// observations persisted in a previous session are not re-written with a
 /// fresh timestamp on restart.
+///
+/// A kind that a later recorded kind contradicts is not on record as the fact
+/// last recorded for the instance, so a start-up that read a health result that
+/// had failed and then passed would otherwise take the failure for recorded and
+/// miss its recurrence.
+// spec: OBS#recording
 fn seed_written_obs(db: &DbHandle) -> HashSet<(InstanceId, &'static str)> {
     fn intern(s: &str) -> Option<&'static str> {
         OBS_KINDS.iter().find(|&&k| k == s).copied()
@@ -254,10 +260,10 @@ fn seed_written_obs(db: &DbHandle) -> HashSet<(InstanceId, &'static str)> {
 
     db.call(|db| {
         let mut set = HashSet::new();
-        let Ok(mut stmt) = db
-            .conn
-            .prepare("SELECT DISTINCT instance_id, obs_kind FROM world_observations")
-        else {
+        let Ok(mut stmt) = db.conn.prepare(
+            "SELECT instance_id, obs_kind FROM world_observations \
+             GROUP BY instance_id, obs_kind ORDER BY MAX(id)",
+        ) else {
             return set;
         };
         let Ok(rows) = stmt.query_map([], |row| {
@@ -275,7 +281,11 @@ fn seed_written_obs(db: &DbHandle) -> HashSet<(InstanceId, &'static str)> {
             let Ok(n) = u128::from_str_radix(&id_hex, 16) else {
                 continue;
             };
-            set.insert((InstanceId(uuid::Uuid::from_u128(n)), kind));
+            let id = InstanceId(uuid::Uuid::from_u128(n));
+            for other in Reconciler::contradicting_kinds(kind) {
+                set.remove(&(id, *other));
+            }
+            set.insert((id, kind));
         }
         set
     })
@@ -2281,14 +2291,19 @@ impl Reconciler {
                 Ok(units) if units.is_empty() => {
                     let app_name_owned = app.name.clone();
                     let phase_handle = Arc::clone(&app.phase_handle);
-                    self.db.call(move |db| {
-                        transition_phase(
+                    let moved = self.db.call(move |db| {
+                        if let Err(e) = transition_phase(
                             &phase_handle,
                             AppPhase::NotInstalled,
                             db,
                             &app_name_owned,
-                            "",
-                        );
+                        ) {
+                            error!(
+                                app = %app_name_owned,
+                                "uninstall: could not record that teardown finished; trying again next tick: {e}"
+                            );
+                            return false;
+                        }
                         if let Err(e) = crate::runtime::history::delete_instances_for_app(
                             db,
                             &app_name_owned,
@@ -2303,7 +2318,11 @@ impl Reconciler {
                             &app_name_owned,
                             "uninstall_unidentifiable_units",
                         );
+                        true
                     });
+                    if !moved {
+                        continue;
+                    }
                     // spec: EVT#event-types
                     // Uninstall is reconciler-driven and therefore emits no
                     // OperationCompleted event; this phase change is the only
@@ -3448,6 +3467,37 @@ mod tests {
             2,
             "it flipped back, so it is news again"
         );
+    }
+
+    // spec: OBS#recording
+    #[test]
+    fn a_fact_that_flips_back_after_a_restart_is_recorded_again() {
+        let oi = crate::oi::test_support::TestOi::with_app("demo");
+        let instance = crate::runtime::identity::ResourceInstance::new_singleton(
+            AppName::new("demo").unwrap(),
+            crate::defs::resource::ResourceKind::Deployment,
+            "web",
+        );
+        let mut first = test_reconciler(&oi);
+        for kind in ["health_check_pass", "health_check_fail"] {
+            first.persist_obs(vec![(instance.clone(), kind, serde_json::json!({}))]);
+        }
+
+        let mut restarted = test_reconciler(&oi);
+        restarted.persist_obs(vec![(
+            instance.clone(),
+            "health_check_pass",
+            serde_json::json!({}),
+        )]);
+
+        let passes = oi.state.db.call(move |db| {
+            crate::runtime::history::query_observations(db, &instance)
+                .unwrap()
+                .iter()
+                .filter(|o| o.obs_kind == "health_check_pass")
+                .count()
+        });
+        assert_eq!(passes, 2, "the last fact on record was the failure");
     }
 
     // spec: OBS#recording

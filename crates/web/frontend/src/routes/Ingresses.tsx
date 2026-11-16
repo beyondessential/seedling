@@ -290,7 +290,7 @@ function AttachDialog({
   const [redirectCode, setRedirectCode] = useState<number>(307);
   const [preservePath, setPreservePath] = useState(true);
   const { execute, loading, error } = useOiAction();
-  const { data: appServices } = useOiQuery<AppService[]>("/services/app/list", {});
+  const { data: appServices, error: appServicesError } = useOiQuery<AppService[]>("/services/app/list", {});
   const [targetApp, targetService] = target ? target.split("\0") : ["", ""];
   const onSubmit = async () => {
     const portNum = Number.parseInt(port, 10);
@@ -364,6 +364,7 @@ function AttachDialog({
               </Select>
             </FormControl>
           </Stack>
+          {appServicesError && <OiErrorAlert error={appServicesError} />}
           {kind === "forward" ? (
             (appServices ?? []).length > 0 ? (
               <FormControl size="small" fullWidth>
@@ -412,10 +413,12 @@ function AttachDialog({
                 </Select>
               </FormControl>
             ) : (
-              <Typography variant="body2" sx={{ color: "text.secondary" }}>
-                No app services available. Register an app that exports a
-                service before attaching a forward.
-              </Typography>
+              !appServicesError && (
+                <Typography variant="body2" sx={{ color: "text.secondary" }}>
+                  No app services available. Register an app that exports a
+                  service before attaching a forward.
+                </Typography>
+              )
             )
           ) : (
             <Stack spacing={2}>

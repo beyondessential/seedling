@@ -1065,6 +1065,64 @@ mod connection_tests {
         });
     }
 
+    // spec: SHL#volume-shells
+    #[test]
+    fn a_volume_shells_started_event_names_the_volumes_it_is_registered_under() {
+        use seedling_protocol::events::OiEvent;
+
+        let oi = TestOi::new();
+        for name in ["data", "logs"] {
+            oi.call(
+                "/volumes/site/create",
+                json!({ "name": name, "kind": "managed" }),
+            )
+            .unwrap();
+        }
+        oi.block_on(async {
+            let _ = rustls::crypto::ring::default_provider().install_default();
+            oi.state
+                .container_runtime
+                .pull_image(crate::oi::shells::VOLUME_SHELL_IMAGE)
+                .await
+                .unwrap();
+            let mut events = oi.state.event_tx.subscribe();
+
+            let identity = ClientIdentity::ephemeral();
+            oi.state.trusted_keys.insert(identity.fingerprint.clone());
+            let addr = spawn_server(Arc::clone(&oi.state));
+            let client = OiClient::connect(addr, ClientAuth::TrustAny, &identity, Actor::default())
+                .await
+                .expect("connect");
+
+            let (mut send, _recv) = client.open_bi().await.expect("a stream");
+            let mut line = serde_json::to_vec(&json!({
+                "method": "/volumes/shell",
+                "params": {
+                    "volumes": [
+                        { "kind": "site", "name": "data" },
+                        { "kind": "site", "name": "logs" },
+                    ],
+                    "rows": 24,
+                    "cols": 80,
+                },
+            }))
+            .unwrap();
+            line.push(b'\n');
+            send.write_all(&line).await.expect("the request is sent");
+
+            let started = tokio::time::timeout(Duration::from_secs(5), async {
+                loop {
+                    if let Ok(OiEvent::ShellStarted { app, name, .. }) = events.recv().await {
+                        break (app.to_string(), name.to_string());
+                    }
+                }
+            })
+            .await
+            .expect("a ShellStarted event");
+            assert_eq!(started, ("_volumes".to_owned(), "data, logs".to_owned()));
+        });
+    }
+
     /// Wait for `conn` to close, or give up: the handler notices the key
     /// went on its own schedule, not the test's.
     async fn await_closed(client: &OiClient) -> bool {

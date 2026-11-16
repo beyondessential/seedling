@@ -27,6 +27,11 @@ use super::RunningPod;
 pub(super) struct ProxyBuildOutput {
     pub pairs: Vec<(IngressDef, ServiceUpstream)>,
     pub l4_routes: Vec<L4Route>,
+    /// Hostnames of ingresses that terminate TLS or DTLS without terminating
+    /// HTTP. They have no virtual host for the proxy to acquire a certificate
+    /// through, so each is handed to it as a certificate to obtain.
+    // spec: ING#certificates
+    pub certificate_hostnames: Vec<String>,
     /// Observations to persist regardless of apply outcome (ingress_configured + uninstall).
     pub observations: Vec<(ResourceInstance, &'static str, serde_json::Value)>,
     /// Observations to persist only after successful apply (ingress_ready).
@@ -48,6 +53,7 @@ pub(super) fn collect(
         Vec::new();
     let mut pairs: Vec<(IngressDef, ServiceUpstream)> = Vec::new();
     let mut l4_routes: Vec<L4Route> = Vec::new();
+    let mut certificate_hostnames: Vec<String> = Vec::new();
     let mut service_defs: std::collections::HashMap<String, ServiceProxyDef> =
         std::collections::HashMap::new();
 
@@ -78,6 +84,9 @@ pub(super) fn collect(
         )?;
 
         if def.http_terminate.is_none() {
+            if def.tls || def.dtls {
+                certificate_hostnames.push(def.hostname.clone());
+            }
             let upstream_url = format!("[{}]:{}", service_ip, upstream_port);
 
             if def.dtls {
@@ -178,6 +187,7 @@ pub(super) fn collect(
     Ok(ProxyBuildOutput {
         pairs,
         l4_routes,
+        certificate_hostnames,
         observations,
         ready_observations,
     })
@@ -559,4 +569,37 @@ mod zone_tests {
     // The vhost serving a request is not a parameter of `zone_for` at all, so
     // a budget cannot vary by hostname or termination. That is the structural
     // form of the guarantee, which no test could state more strongly.
+}
+
+#[cfg(test)]
+mod certificate_tests {
+
+    use super::*;
+    use crate::{runtime::EphemeralInstanceRegistry, tests::run_test_script_app};
+
+    // spec: ING#certificates
+    #[test]
+    fn ingresses_terminating_tls_or_dtls_without_http_hand_their_hostnames_to_the_proxy() {
+        let app = run_test_script_app(
+            r#"
+            let web = app.service("web");
+            web.ingress("db.example.com", 5432).tls(Terminate.Tls, Output.Tcp);
+            web.ingress("voip.example.com", 5684).tls(Terminate.Dtls, Output.Udp);
+            web.ingress("site.example.com", 443).tls(Terminate.Https, Output.Http1);
+        "#,
+        );
+        let out = collect(
+            &app.def.load(),
+            &DesiredState::default(),
+            &"fd5e:ed12:3456::/48".parse().unwrap(),
+            &EphemeralInstanceRegistry::new(),
+            &AppName::new_unchecked("demo"),
+            &[],
+        )
+        .expect("collects");
+        let mut hostnames = out.certificate_hostnames;
+        hostnames.sort();
+        assert_eq!(hostnames, ["db.example.com", "voip.example.com"]);
+        assert_eq!(out.pairs.len(), 1, "HTTPS is routed through a vhost");
+    }
 }

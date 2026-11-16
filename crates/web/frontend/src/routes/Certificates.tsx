@@ -1457,12 +1457,23 @@ function CsrBeginDialog({ open, renewing, onClose, onSubmitted }: CsrBeginDialog
   const [hostnames, setHostnames] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const { execute, error, clearError } = useOiAction();
+  const { data: hostnameView, error: hostnameViewError } =
+    useOiQuery<TlsHostnamesResponse>("/tls/hostnames/list", {});
+  const [edited, setEdited] = useState(false);
+  const served = servedHostnames(hostnameView, renewing);
 
   // spec: UI#certificates
-  // A renewal starts from what the CA issued, not from what was requested.
+  // A renewal starts from the certificate's DNS subject alternative names and
+  // the hostnames it currently serves, until the operator edits the list.
+  const prefill = renewing
+    ? [...new Set([...(renewing.san_dns_names ?? []), ...served])].join(", ")
+    : "";
   useEffect(() => {
-    if (open) setHostnames(renewing?.san_dns_names?.join(", ") ?? "");
-  }, [open, renewing]);
+    if (open && !edited) setHostnames(prefill);
+  }, [open, edited, prefill]);
+  useEffect(() => {
+    if (!open) setEdited(false);
+  }, [open]);
 
   const names = hostnames.split(/[\s,]+/).filter((n) => n.length > 0);
 
@@ -1512,14 +1523,17 @@ function CsrBeginDialog({ open, renewing, onClose, onSubmitted }: CsrBeginDialog
             label="Hostnames"
             placeholder="e.g. app.example.com, *.example.com"
             value={hostnames}
-            onChange={(e) => setHostnames(e.target.value)}
+            onChange={(e) => {
+              setEdited(true);
+              setHostnames(e.target.value);
+            }}
             fullWidth
             multiline
             minRows={2}
             slotProps={{ htmlInput: { style: { fontFamily: "monospace" } } }}
             helperText="One or more hostnames, or *.suffix wildcards, separated by commas or spaces. The runtime generates an ECDSA P-256 keypair on the server; only the CSR is returned. Get the CSR signed by your CA, then come back to upload the signed cert."
           />
-          {renewing !== null && <ServedHostnames certId={renewing.id} />}
+          {renewing !== null && hostnameViewError && <OiErrorAlert error={hostnameViewError} />}
         </Stack>
       </DialogContent>
       <DialogActions>
@@ -1534,29 +1548,14 @@ function CsrBeginDialog({ open, renewing, onClose, onSubmitted }: CsrBeginDialog
   );
 }
 
-/** The ingress hostnames a certificate is currently serving, for narrowing a
- * renewal down from its SAN set. */
-function ServedHostnames({ certId }: { certId: number }) {
-  // spec: UI#certificates
-  const { data } = useOiQuery<TlsHostnamesResponse>("/tls/hostnames/list", {});
-  if (data === null) return null;
-  const served = data.hostnames
-    .filter((h) => h.active_cert?.id === certId)
-    .map((h) => h.hostname);
-  return (
-    <Typography variant="body2" sx={{ color: "text.secondary" }}>
-      {served.length === 0 ? (
-        "Serving no hostnames."
-      ) : (
-        <>
-          Serving{" "}
-          <Box component="span" sx={{ fontFamily: "monospace" }}>
-            {served.join(", ")}
-          </Box>
-        </>
-      )}
-    </Typography>
-  );
+/** The ingress hostnames a certificate is currently serving. */
+// spec: UI#certificates
+function servedHostnames(
+  view: TlsHostnamesResponse | null,
+  cert: TlsCertificate | null,
+): string[] {
+  if (view === null || cert === null) return [];
+  return view.hostnames.filter((h) => h.active_cert?.id === cert.id).map((h) => h.hostname);
 }
 
 interface CsrShowDialogProps {

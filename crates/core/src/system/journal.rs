@@ -531,7 +531,10 @@ mod tests {
         for entry in [out, err] {
             assert_eq!(entry.app.as_deref(), Some("demo"));
             assert_eq!(entry.resource.as_deref(), Some(unique.as_str()));
-            assert_eq!(entry.instance.as_deref(), Some(instance.display_name.as_str()));
+            assert_eq!(
+                entry.instance.as_deref(),
+                Some(instance.display_name.as_str())
+            );
             assert!(entry.rt_call.is_none(), "not a breadcrumb");
         }
     }

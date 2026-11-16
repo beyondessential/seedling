@@ -30,6 +30,10 @@ const PERMISSIONS_POLICY: &str = "accelerometer=(), autoplay=(), camera=(), \
 display-capture=(), encrypted-media=(), fullscreen=(), geolocation=(), \
 gyroscope=(), magnetometer=(), microphone=(), midi=(), payment=(), usb=()";
 
+/// The host an advertised WebTransport origin names for a request that carries
+/// no `Host` header.
+pub(crate) const DEFAULT_HOSTNAME: &str = "localhost";
+
 // spec: WEB#console-delivery
 pub fn router(state: AppState) -> Router {
     let wt_port = state.wt_port;
@@ -106,13 +110,15 @@ pub(crate) fn hostname_from_host_header(host: &str) -> &str {
 }
 
 async fn content_security_policy(State(wt_port): State<u16>, req: Request, next: Next) -> Response {
-    let connect_src = req
+    // A request with no Host header is advertised the WebTransport origin the
+    // `wt_url` names for one: `localhost`.
+    let hostname = req
         .headers()
         .get(header::HOST)
         .and_then(|v| v.to_str().ok())
         .map(hostname_from_host_header)
-        .map(|hostname| format!("connect-src 'self' https://{hostname}:{wt_port}"))
-        .unwrap_or_else(|| "connect-src 'self'".to_owned());
+        .unwrap_or(DEFAULT_HOSTNAME);
+    let connect_src = format!("connect-src 'self' https://{hostname}:{wt_port}");
 
     let mut res = next.run(req).await;
     if let Ok(value) = HeaderValue::from_str(&format!("{CSP_BASE}; {connect_src}")) {
@@ -130,8 +136,21 @@ async fn healthz() -> impl IntoResponse {
 async fn connect(
     State(state): State<AppState>,
     headers: HeaderMap,
-    Json(body): Json<ConnectRequest>,
-) -> impl IntoResponse {
+    body: axum::body::Bytes,
+) -> Response {
+    // Refused before any credential source is tried: a request that breaks the
+    // body's rules authenticates by none of them.
+    let body = match ConnectRequest::parse(
+        headers
+            .get(header::CONTENT_TYPE)
+            .and_then(|v| v.to_str().ok()),
+        &body,
+    ) {
+        Ok(body) => body,
+        Err(why) => {
+            return (StatusCode::BAD_REQUEST, Json(json!({ "error": why }))).into_response();
+        }
+    };
     let host = headers
         .get("host")
         .and_then(|v| v.to_str().ok())
@@ -209,5 +228,24 @@ mod tests {
         // plus wt_port) and must not regress to a scheme wildcard.
         assert!(csp.contains("connect-src 'self' https://console.example:8443"));
         assert!(!csp.contains("https:;") && !csp.ends_with("https:"));
+    }
+
+    // spec: WEB#security-headers
+    #[tokio::test]
+    async fn a_request_with_no_host_header_is_given_the_localhost_origin() {
+        let router: Router<()> =
+            security_headers(Router::new().route("/", get(|| async { "ok" })), 8443);
+        let res = router
+            .oneshot(Request::builder().uri("/").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+
+        let csp = res.headers()[header::CONTENT_SECURITY_POLICY]
+            .to_str()
+            .unwrap();
+        assert!(
+            csp.contains("connect-src 'self' https://localhost:8443"),
+            "{csp}"
+        );
     }
 }

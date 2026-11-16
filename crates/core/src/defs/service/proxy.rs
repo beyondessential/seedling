@@ -277,7 +277,10 @@ pub(crate) fn check_route_balances(def: &crate::defs::app::AppDef) -> Result<(),
             prefixes.push("/");
         }
         for prefix in prefixes {
-            if resolve(&service_level, http.settings(prefix)).balance.spins() {
+            if resolve(&service_level, http.settings(prefix))
+                .balance
+                .spins()
+            {
                 return Err(format!(
                     "route `{prefix}` of {kind} '{name}' resolves to a balance `interval` of zero \
                      with a non-zero `try_duration`, which retries without pause; give the \
@@ -823,8 +826,10 @@ pub(super) fn parse_compress(mut map: Map) -> Result<CompressSettings, Box<EvalA
             let arr = value
                 .try_cast::<rhai::Array>()
                 .ok_or_else(|| -> Box<EvalAltResult> {
-                    format!("compress `content_types` must be an array of strings, got {value_type}")
-                        .into()
+                    format!(
+                        "compress `content_types` must be an array of strings, got {value_type}"
+                    )
+                    .into()
                 })?;
             if arr.is_empty() {
                 return Err("compress `content_types` must not be empty".into());

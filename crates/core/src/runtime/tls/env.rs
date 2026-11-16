@@ -370,8 +370,8 @@ mod tests {
         use crate::runtime::tls::{AttemptOutcome, AttemptTrigger};
 
         let db = Db::open_in_memory().unwrap();
-        let attempt = store::insert_attempt(&db, "failed.example.com", AttemptTrigger::Manual)
-            .unwrap();
+        let attempt =
+            store::insert_attempt(&db, "failed.example.com", AttemptTrigger::Manual).unwrap();
         store::finalize_attempt(
             &db,
             attempt,
@@ -394,9 +394,13 @@ mod tests {
         )
         .unwrap();
 
-        let hostnames: Vec<String> = ["failed.example.com", "refused.example.com", "quiet.example.com"]
-            .map(String::from)
-            .into();
+        let hostnames: Vec<String> = [
+            "failed.example.com",
+            "refused.example.com",
+            "quiet.example.com",
+        ]
+        .map(String::from)
+        .into();
         let errors = latest_acquisition_errors(&db, &hostnames).unwrap();
         assert_eq!(
             errors,
