@@ -603,3 +603,64 @@ mod certificate_tests {
         assert_eq!(out.pairs.len(), 1, "HTTPS is routed through a vhost");
     }
 }
+
+#[cfg(test)]
+mod route_emission_tests {
+    use super::*;
+    use crate::tests::run_test_script_app;
+
+    fn running(app: &AppDef, name: &str, ip: &str) -> RunningPod {
+        let resource = app
+            .resources
+            .iter()
+            .find(|(id, _)| id.name.as_str() == name)
+            .map(|(_, r)| r.clone())
+            .unwrap();
+        RunningPod {
+            instance: ResourceInstance::new_singleton(
+                AppName::new_unchecked("demo"),
+                ResourceKind::Deployment,
+                name,
+            ),
+            pod_prefix: "fd00:1:2:3::/64".parse().unwrap(),
+            pod_ip: ip.parse().unwrap(),
+            resource,
+            observed_healthy: true,
+        }
+    }
+
+    // spec: PRX#route-emission
+    #[test]
+    fn two_pods_binding_one_prefix_form_one_route_with_both_upstreams() {
+        let app = run_test_script_app(
+            r#"
+            let svc = app.service("public").http(80);
+            app.deployment("blue").http(3000, svc.route("/api"));
+            app.deployment("green").http(4000, svc.route("/api"));
+            app.deployment("idle").http(5000, svc.route("/idle"));
+        "#,
+        );
+        let def = app.def.load_full();
+        let pods = [
+            running(&def, "blue", "fd00:1:2:3::2"),
+            running(&def, "green", "fd00:1:2:4::2"),
+        ];
+        let service_def = service_proxy_def(&def, "public");
+
+        let routes = collect_http_routes(&def, "public", &pods, &service_def);
+
+        assert_eq!(routes.len(), 2);
+        let api = routes.iter().find(|r| r.prefix == "/api").unwrap();
+        let mut upstreams = api.upstreams.clone();
+        upstreams.sort();
+        assert_eq!(
+            upstreams,
+            vec!["[fd00:1:2:3::2]:3000", "[fd00:1:2:4::2]:4000"]
+        );
+        let idle = routes.iter().find(|r| r.prefix == "/idle").unwrap();
+        assert!(
+            idle.upstreams.is_empty(),
+            "a prefix with no running pod is still emitted"
+        );
+    }
+}
