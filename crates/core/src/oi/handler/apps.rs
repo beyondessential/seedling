@@ -495,6 +495,17 @@ pub(crate) fn list_apps(state: &OiState) -> HandlerResult {
                 format!("could not read app priorities: {e}"),
             )
         })?;
+    // spec: CTL#app-priority
+    // A stored priority that is not a level is as unreadable as no read at all.
+    if let Some((app, why)) = priorities
+        .iter()
+        .find_map(|(app, p)| p.as_ref().err().map(|e| (app, e)))
+    {
+        return Err(OiError::new(
+            ErrorCode::Internal,
+            format!("could not read the priority of {app}: {why}"),
+        ));
+    }
     // spec: APP#app-description
     let standings = app_status::standings(&state.registry, &state.scheduler, &state.db, |entry| {
         entry.app.def.load().description.clone()
@@ -513,7 +524,12 @@ pub(crate) fn list_apps(state: &OiState) -> HandlerResult {
                 "status": standing.status.name(),
                 "has_stopped_resources": standing.has_stopped,
                 "fault_count": standing.fault_count,
-                "priority": priorities.get(&name).copied().unwrap_or_default().as_str(),
+                "priority": priorities
+                    .get(&name)
+                    .and_then(|p| p.as_ref().ok())
+                    .copied()
+                    .unwrap_or_default()
+                    .as_str(),
                 "description": description,
             });
             if let AppStatus::Operating { action_name } = &standing.status {

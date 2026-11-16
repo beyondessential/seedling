@@ -766,7 +766,26 @@ impl Reconciler {
             .call(crate::runtime::priority::load_all_app_priorities)
         {
             Ok(p) => {
-                self.clear_system_fault("app_priorities_unreadable");
+                // spec: FLT#host-faults
+                // Held while any one stored priority cannot be read, and the
+                // app it belongs to is held back below.
+                let mut unreadable: Vec<String> = p
+                    .iter()
+                    .filter_map(|(app, level)| level.as_ref().err().map(|e| format!("{app} ({e})")))
+                    .collect();
+                unreadable.sort();
+                if unreadable.is_empty() {
+                    self.clear_system_fault("app_priorities_unreadable");
+                } else {
+                    self.file_system_fault(
+                        "app_priorities_unreadable",
+                        &format!(
+                            "the stored priority of these apps cannot be read, so they are not \
+                             actuated until it can be: {}",
+                            unreadable.join(", ")
+                        ),
+                    );
+                }
                 p
             }
             Err(e) => {
@@ -833,6 +852,13 @@ impl Reconciler {
                 None => continue,
             };
             let phase = entry.phase.lock().clone();
+            // spec: PRIO#unreadable-priorities
+            // An app whose stored priority cannot be read is not actuated, so
+            // its running workloads keep running as they are.
+            if matches!(priorities.get(&name), Some(Err(_))) && phase != AppPhase::NotInstalled {
+                skipped += 1;
+                continue;
+            }
             // spec: RCN#desired-state
             // Installing apps participate in reconciliation exactly like
             // Installed apps: the install closure's rt.start() / rt.stop()
@@ -929,7 +955,11 @@ impl Reconciler {
             // spec: PRIO#priority-setting
             // Read once for the whole tick above; an app with no stored
             // decision stands at the default.
-            let app_priority = priorities.get(&name).copied().unwrap_or_default();
+            let app_priority = priorities
+                .get(&name)
+                .and_then(|p| p.as_ref().ok())
+                .copied()
+                .unwrap_or_default();
             let steady = phase == AppPhase::Installed
                 && progress.is_none()
                 && !entry
@@ -3850,6 +3880,43 @@ mod tests {
             })
             .unwrap();
         assert!(remaining.is_empty(), "{recorded:?}");
+    }
+
+    // spec: PRIO#unreadable-priorities
+    #[test]
+    fn an_app_whose_stored_priority_cannot_be_read_is_held_back_with_a_fault() {
+        let oi = crate::oi::test_support::TestOi::with_app("fine");
+        oi.install("fine");
+        oi.call(
+            "/apps/create",
+            serde_json::json!({ "app": "odd", "script": crate::oi::test_support::MINIMAL_SCRIPT }),
+        )
+        .unwrap();
+        oi.install("odd");
+        oi.state.db.call(|db| {
+            db.conn
+                .execute(
+                    "INSERT INTO app_priorities (app, priority, updated_at) VALUES ('odd', 'urgent', '')",
+                    [],
+                )
+                .unwrap();
+        });
+        let reconciler = test_reconciler(&oi);
+
+        let (snapshots, dropped) = reconciler.snapshot_all_apps();
+
+        let names: Vec<_> = snapshots.iter().map(|s| s.name.as_str()).collect();
+        assert_eq!(names, vec!["fine"], "the other apps are still actuated");
+        assert_eq!(dropped, 1, "the held-back app is not accounted for");
+        let faults = oi
+            .state
+            .db
+            .call(|db| crate::runtime::faults::list_active_faults(db, None).unwrap());
+        let fault = faults
+            .iter()
+            .find(|f| f.kind == "app_priorities_unreadable")
+            .expect("filed");
+        assert!(fault.description.contains("odd"), "{}", fault.description);
     }
 
     /// A reconciler over `oi`'s stub backends and database.
