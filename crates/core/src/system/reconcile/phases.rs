@@ -317,10 +317,10 @@ pub(super) struct ProxyBuildResult {
     pub unresolved_site_attachments: Vec<super::site_proxy::UnresolvedAttachment>,
 }
 
-/// Resolve all warm-cert ingresses across snapshots into `(instance, hostname)`
-/// pairs. Filters out non-TLS ingresses and ingresses already covered by a
-/// routed vhost (since Caddy will acquire those via the standard server-block
-/// driven path).
+/// The `(instance, hostname)` pairs whose certificates are observed: every
+/// TLS-terminating ingress an app's desired state holds, and each ingress an
+/// operation's `rt.warm_certs` names.
+// spec: OBS#ingresses
 // spec: RT#certificate-warming
 pub(super) fn warm_cert_targets(
     apps: &[AppSnapshot],
@@ -343,7 +343,7 @@ pub(super) fn warm_cert_targets(
             };
             let hostname = {
                 let ing_def = ing.def.lock();
-                if !ing_def.tls {
+                if !(ing_def.tls || ing_def.dtls) {
                     continue;
                 }
                 ing_def.hostname.clone()
@@ -357,6 +357,27 @@ pub(super) fn warm_cert_targets(
                 Err(e) => {
                     tracing::warn!(app = %app.name, ingress = %ing_name, error = %e, "warm_certs: registry lookup failed");
                 }
+            }
+        }
+        for desired in &app.desired.resources {
+            if desired.desired != crate::runtime::lifecycle::LifecycleState::Ready {
+                continue;
+            }
+            let crate::defs::resource::Resource::Ingress(ing) = &desired.definition else {
+                continue;
+            };
+            let hostname = {
+                let ing_def = ing.def.lock();
+                if !(ing_def.tls || ing_def.dtls) {
+                    continue;
+                }
+                ing_def.hostname.clone()
+            };
+            if !out
+                .iter()
+                .any(|(instance, _)| instance.id == desired.instance.id)
+            {
+                out.push((desired.instance.clone(), hostname));
             }
         }
     }

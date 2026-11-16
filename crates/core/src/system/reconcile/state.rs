@@ -278,13 +278,23 @@ impl Reconciler {
         self.warm_cert_first_seen
             .retain(|h, _| active_hostnames.contains(h));
 
-        let (mut observations, undetermined) = match &path {
+        let (proxy_valid, proxy_not_valid, _undetermined) = match &path {
             Some(path) => {
                 let seen =
                     crate::system::caddy::observe_certs(path, &targets, jiff::Timestamp::now());
-                (seen.observations, seen.undetermined)
+                let valid: std::collections::BTreeSet<String> = seen
+                    .observations
+                    .iter()
+                    .filter_map(|(_, _, payload)| {
+                        payload
+                            .get("hostname")
+                            .and_then(|v| v.as_str())
+                            .map(String::from)
+                    })
+                    .collect();
+                (valid, seen.not_valid, seen.undetermined)
             }
-            None => (Vec::new(), std::collections::BTreeSet::new()),
+            None => Default::default(),
         };
 
         // A certificate the runtime holds is served to the proxy by the daemon
@@ -293,35 +303,46 @@ impl Reconciler {
         // from, which also applies the validity window the endpoint does.
         let hostnames: Vec<String> = active_hostnames.iter().cloned().collect();
         let leaf_facts = self.leaf_facts.clone();
-        let RuntimeHoldings { served, ordering } = self
+        let RuntimeHoldings { served, .. } = self
             .db
             .call(move |db| runtime_holdings(db, &hostnames, &leaf_facts));
-        // What could not be read is not what is not held: the deadline below
-        // is for a certificate that is not being acquired, and a store that
-        // could not be asked says nothing of that.
-        let runtime_known = served.is_some() && ordering.is_some();
+        let runtime_known = served.is_some();
         let served = served.unwrap_or_default();
-        let ordering = ordering.unwrap_or_default();
+
+        // Whether a usable certificate is served for each hostname, where that
+        // can be told: served by the runtime, or held by the proxy inside its
+        // validity window, or definitely neither. A store or a cache that could
+        // not be read leaves the hostname out, since unknown is not unserved.
+        let mut observations: Vec<(ResourceInstance, &'static str, serde_json::Value)> = Vec::new();
+        let mut usable: BTreeMap<&str, bool> = BTreeMap::new();
         for (instance, hostname) in &targets {
-            if served.contains(hostname) {
-                observations.push((
-                    instance.clone(),
-                    "cert_valid",
-                    serde_json::json!({ "hostname": hostname }),
-                ));
+            let payload = serde_json::json!({ "hostname": hostname });
+            if served.contains(hostname) || proxy_valid.contains(hostname) {
+                usable.insert(hostname, true);
+                observations.push((instance.clone(), "cert_valid", payload));
+            } else if runtime_known && proxy_not_valid.contains(hostname) {
+                usable.insert(hostname, false);
+                observations.push((instance.clone(), "cert_not_valid", payload));
             }
         }
 
-        let observed_hostnames: std::collections::BTreeSet<String> = observations
-            .iter()
-            .filter_map(|(_, _, payload)| {
-                payload
-                    .get("hostname")
-                    .and_then(|v| v.as_str())
-                    .map(String::from)
-            })
-            .collect();
-
+        // The status, and whether an acquisition is in progress, come from the
+        // one decision the runtime makes for the hostname.
+        let facts = self
+            .tls_coordinator
+            .as_ref()
+            .and_then(|coordinator| coordinator.hostname_facts());
+        if let Some(facts) = &facts {
+            for (instance, hostname) in &targets {
+                if let Some(status) = facts.get(hostname).and_then(|f| f.status) {
+                    observations.push((
+                        instance.clone(),
+                        status.observation_kind(),
+                        serde_json::json!({ "hostname": hostname, "status": status.as_str() }),
+                    ));
+                }
+            }
+        }
         // An ingress fails when any of its hostnames does, and recovers only
         // once a certificate is observed for every one of them.
         let mut ingresses: BTreeMap<String, IngressCerts> = BTreeMap::new();
@@ -333,24 +354,31 @@ impl Reconciler {
                     all_observed: true,
                     failing: Vec::new(),
                 });
-            if observed_hostnames.contains(hostname) {
-                self.warm_cert_first_seen.remove(hostname);
-                continue;
-            }
-            entry.all_observed = false;
-            if path.is_none() || !runtime_known || undetermined.contains(hostname) {
-                // The proxy's cache, or the runtime's own store, could not be
-                // read, so whether a certificate is held for this hostname is
-                // unknown. Unknown is not absent, and faulting a hostname that is
-                // being served perfectly well would report a transient read
+            match usable.get(hostname.as_str()) {
+                Some(true) => {
+                    self.warm_cert_first_seen.remove(hostname);
+                    continue;
+                }
+                Some(false) => entry.all_observed = false,
+                // Whether a usable certificate is served could not be read, so
+                // the hostname is neither failing nor served: faulting one that
+                // is being served perfectly well would report a transient read
                 // failure as the hostname's problem.
-                continue;
-            } else if ordering.contains(hostname) {
-                // An order that is open is an acquisition in progress, and it
-                // can take longer than the proxy's own ordering does: the
-                // deadline is for an acquisition that is not happening.
-                continue;
-            } else if let Some(first) = self.warm_cert_first_seen.get(hostname)
+                None => {
+                    entry.all_observed = false;
+                    continue;
+                }
+            }
+            // The deadline is for an acquisition that is not happening: an
+            // issuance running, an order open or one due is in progress, and
+            // so is the proxy's own ordering. Where that cannot be read it is
+            // not known to be absent either.
+            let in_progress = facts
+                .as_ref()
+                .and_then(|facts| facts.get(hostname))
+                .and_then(|f| f.in_progress);
+            if in_progress == Some(false)
+                && let Some(first) = self.warm_cert_first_seen.get(hostname)
                 && now.duration_since(*first) >= CERT_ACQUISITION_DEADLINE
             {
                 entry.failing.push(hostname.clone());
@@ -528,6 +556,20 @@ impl Reconciler {
                 "health_check_starting",
             ],
             "backend_healthy" | "backend_lost" => &["backend_healthy", "backend_lost"],
+            "cert_valid" | "cert_not_valid" => &["cert_valid", "cert_not_valid"],
+            "cert_status_blocked"
+            | "cert_status_expired"
+            | "cert_status_error"
+            | "cert_status_pending"
+            | "cert_status_active"
+            | "cert_status_none" => &[
+                "cert_status_blocked",
+                "cert_status_expired",
+                "cert_status_error",
+                "cert_status_pending",
+                "cert_status_active",
+                "cert_status_none",
+            ],
             "unit_failed" | "unit_start_limit_hit" | "unit_inactive" => {
                 &["unit_failed", "unit_start_limit_hit", "unit_inactive"]
             }
@@ -638,6 +680,21 @@ mod tests {
 
     fn app(s: &str) -> AppName {
         AppName::new(s).expect("app name")
+    }
+
+    // spec: OBS#recording
+    // spec: OBS#ingresses
+    #[test]
+    fn a_certificate_fact_that_changes_back_is_recorded_again() {
+        use crate::system::reconcile::Reconciler;
+        for kind in ["cert_valid", "cert_not_valid"] {
+            let group = Reconciler::contradicting_kinds(kind);
+            assert!(group.contains(&"cert_valid") && group.contains(&"cert_not_valid"));
+        }
+        for status in ["blocked", "expired", "error", "pending", "active", "none"] {
+            let kind = format!("cert_status_{status}");
+            assert_eq!(Reconciler::contradicting_kinds(&kind).len(), 6, "{kind}");
+        }
     }
 
     // spec: EVT#event-types

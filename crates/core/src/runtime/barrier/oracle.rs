@@ -205,14 +205,15 @@ impl WorldStateOracle for DbWorldOracle {
                 Ok(obs) => obs,
                 Err(_) => return false,
             };
-            // Most recent cert observation determines current validity.
-            // `cert_valid` overrides any earlier `cert_acquisition_failed` and
-            // vice-versa.
+            // spec: OBS#ingresses
+            // The latest observation of whether a usable certificate is served
+            // decides: a certificate that has since expired or been revoked is
+            // no longer one.
             let mut valid = false;
             for obs in &observations {
                 match obs.obs_kind.as_str() {
                     "cert_valid" => valid = true,
-                    "cert_acquisition_failed" => valid = false,
+                    "cert_not_valid" => valid = false,
                     _ => {}
                 }
             }

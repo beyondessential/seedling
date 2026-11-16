@@ -590,6 +590,39 @@ fn a_ready_service_whose_pool_empties_returns_to_scheduled_and_back() {
 // DbWorldOracle (DB-backed)
 // -----------------------------------------------------------------------
 
+// spec: OBS#ingresses
+#[test]
+fn a_certificate_that_stops_being_usable_no_longer_satisfies_a_warm_certs_barrier() {
+    let db = DbHandle::from_db(Db::open_in_memory().expect("open"));
+    let ingress =
+        ResourceInstance::new_singleton(AppName::new("app").unwrap(), ResourceKind::Ingress, "web");
+    let observe = |kind: &'static str| {
+        let ingress = ingress.clone();
+        db.call(move |db| {
+            insert_observation(
+                db,
+                &ingress,
+                kind,
+                &serde_json::json!({ "hostname": "a.example.com" }),
+            )
+        })
+        .expect("insert");
+    };
+    let oracle = DbWorldOracle::new(db.clone());
+
+    observe("cert_valid");
+    assert!(oracle.cert_valid_for(&ingress));
+
+    observe("cert_not_valid");
+    assert!(
+        !oracle.cert_valid_for(&ingress),
+        "the latest observation says no usable certificate is served"
+    );
+
+    observe("cert_valid");
+    assert!(oracle.cert_valid_for(&ingress));
+}
+
 // spec: LCY#derivation
 #[test]
 fn db_oracle_empty_gives_pending() {

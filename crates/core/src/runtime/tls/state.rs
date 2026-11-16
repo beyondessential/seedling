@@ -577,6 +577,19 @@ pub enum CertStatus {
 }
 
 impl CertStatus {
+    /// The kind of the observation that records this status for an ingress.
+    // spec: OBS#ingresses
+    pub fn observation_kind(self) -> &'static str {
+        match self {
+            Self::Blocked => "cert_status_blocked",
+            Self::Expired => "cert_status_expired",
+            Self::Error => "cert_status_error",
+            Self::Pending => "cert_status_pending",
+            Self::Active => "cert_status_active",
+            Self::None => "cert_status_none",
+        }
+    }
+
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Blocked => "blocked",

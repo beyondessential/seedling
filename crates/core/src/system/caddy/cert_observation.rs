@@ -101,6 +101,9 @@ pub fn read_cert_state(caddy_data_path: &Path, hostname: &str) -> CertRead {
 pub(crate) struct Observed {
     /// The `cert_valid` observations to persist.
     pub observations: Vec<(ResourceInstance, &'static str, Value)>,
+    /// Hostnames the cache was read for and holds no certificate inside its
+    /// validity window for: none at all, or one that has expired or not begun.
+    pub not_valid: std::collections::BTreeSet<String>,
     /// Hostnames whose certificate could not be read, so that whether a
     /// usable certificate is held for them is unknown rather than no.
     pub undetermined: std::collections::BTreeSet<String>,
@@ -109,9 +112,9 @@ pub(crate) struct Observed {
 /// For each `(instance, hostname)` pair, check the cert cache and return any
 /// `cert_valid` observation that should be persisted. A certificate is valid
 /// only inside its validity window, so a file that is there but expired, or
-/// not yet valid, produces none. Hostnames whose cert is not yet present
-/// produce no observation here; the fault layer is responsible for filing
-/// `cert_acquisition_failed` after a deadline.
+/// not yet valid, produces none and its hostname is counted as `not_valid`, as
+/// is one the cache holds nothing for. The fault layer is responsible for
+/// filing `cert_acquisition_failed` after a deadline.
 // spec: OBS#ingresses
 pub(crate) fn observe(
     caddy_data_path: &Path,
@@ -120,11 +123,14 @@ pub(crate) fn observe(
 ) -> Observed {
     let mut observed = Observed {
         observations: Vec::new(),
+        not_valid: std::collections::BTreeSet::new(),
         undetermined: std::collections::BTreeSet::new(),
     };
     for (instance, hostname) in targets {
         match read_cert_state(caddy_data_path, hostname) {
-            CertRead::Absent => {}
+            CertRead::Absent => {
+                observed.not_valid.insert(hostname.clone());
+            }
             CertRead::Unreadable => {
                 observed.undetermined.insert(hostname.clone());
             }
@@ -136,6 +142,8 @@ pub(crate) fn observe(
                             "cert_valid",
                             json!({ "hostname": hostname }),
                         ));
+                    } else {
+                        observed.not_valid.insert(hostname.clone());
                     }
                 }
                 _ => {
@@ -219,6 +227,10 @@ mod tests {
         );
         assert_eq!(seen.observations[0].1, "cert_valid");
         assert_eq!(seen.observations[0].2["hostname"], "has-cert.example.com");
+        assert!(
+            seen.not_valid.contains("missing.example.com"),
+            "nothing held is not valid, which is not the same as unreadable"
+        );
         assert!(seen.undetermined.is_empty());
     }
 
@@ -236,6 +248,8 @@ mod tests {
 
         let seen = observe(tmp.path(), &targets, jiff::Timestamp::now());
         assert!(seen.observations.is_empty(), "an expired file is not valid");
+        assert!(seen.not_valid.contains("old.example.com"));
+        assert!(seen.undetermined.is_empty());
     }
 
     // spec: OBS#ingresses

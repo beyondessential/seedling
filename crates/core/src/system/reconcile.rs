@@ -244,6 +244,14 @@ const OBS_KINDS: &[&str] = &[
     "ingress_ready",
     "ingress_removed",
     "ingress_cleaned_up",
+    "cert_valid",
+    "cert_not_valid",
+    "cert_status_blocked",
+    "cert_status_expired",
+    "cert_status_error",
+    "cert_status_pending",
+    "cert_status_active",
+    "cert_status_none",
 ];
 
 /// Load the `(instance_id, obs_kind)` pairs still on record from the DB so that

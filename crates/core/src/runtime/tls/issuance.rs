@@ -163,6 +163,14 @@ pub struct Coordinator {
 /// [`Coordinator::forget_chain_state`].
 const CHAIN_STATE_TTL: std::time::Duration = std::time::Duration::from_secs(30);
 
+/// What is known of a hostname's certificate acquisition, each fact `None`
+/// where it could not be read.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct HostnameFacts {
+    pub status: Option<state::CertStatus>,
+    pub in_progress: Option<bool>,
+}
+
 /// Everything a chain decision is made from, for every hostname at once.
 struct ChainState {
     managed: Vec<state::ManagedIngress>,
@@ -301,6 +309,31 @@ impl Coordinator {
             {
                 out.insert(ingress.hostname.clone(), *c);
             }
+        }
+        Some(out)
+    }
+
+    /// What the certificate-status observation records for each TLS-terminating
+    /// hostname, from the one state every chain decision is made against.
+    ///
+    /// `None` when the decisions could not be made, which says nothing about any
+    /// hostname.
+    // spec: OBS#ingresses
+    pub fn hostname_facts(&self) -> Option<BTreeMap<String, HostnameFacts>> {
+        let state = self.chain_state()?;
+        let mut out = BTreeMap::new();
+        for ingress in &state.managed {
+            if out.contains_key(&ingress.hostname) {
+                continue;
+            }
+            let st = state::compute_state(&state.snapshot, &ingress.hostname);
+            out.insert(
+                ingress.hostname.clone(),
+                HostnameFacts {
+                    status: state::certificate_status(&state.snapshot, &st),
+                    in_progress: state::acquisition_in_progress(&state.snapshot, &st),
+                },
+            );
         }
         Some(out)
     }
