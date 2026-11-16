@@ -885,11 +885,26 @@ impl Reconciler {
             let effective_scales =
                 self.compute_effective_scales(&name, &app_def, &scaling_decisions);
             // spec: CTL#resource-stop
+            // spec: FLT#app-faults
+            // An unreadable set of stops is not "nothing stopped": that would
+            // start every resource an operator stopped.
             let stopped_set = {
                 let app_name_for_stop = name.clone();
-                self.db.call(move |db| {
-                    stopped::load_stopped(db, &app_name_for_stop).unwrap_or_default()
-                })
+                match self
+                    .db
+                    .call(move |db| stopped::load_stopped(db, &app_name_for_stop))
+                {
+                    Ok(set) => set,
+                    Err(e) => {
+                        error!(app = %name, error = %e, "cannot read the app's stopped resources; skipping app this tick");
+                        self.file_desired_state_fault(
+                            &name,
+                            &format!("cannot read the app's stopped resources: {e}"),
+                        );
+                        skipped += 1;
+                        continue;
+                    }
+                }
             };
             let desired = match phase {
                 AppPhase::Uninstalling => compute_uninstalling(&name, &app_def, &*self.registry),
@@ -3628,6 +3643,35 @@ mod tests {
             "a determined fact is due to re-evaluate the installed apps"
         );
         assert!(!reconciler.take_host_facts_changed());
+    }
+
+    // spec: CTL#resource-stop
+    // spec: FLT#app-faults
+    #[test]
+    fn an_app_whose_stops_cannot_be_read_is_not_actuated() {
+        let oi = crate::oi::test_support::TestOi::with_app("demo");
+        oi.install("demo");
+        let reconciler = test_reconciler(&oi);
+        oi.state.db.call(|db| {
+            db.conn
+                .execute_batch("DROP TABLE stopped_resources;")
+                .unwrap()
+        });
+
+        let (apps, skipped) = reconciler.snapshot_all_apps();
+        assert!(
+            apps.is_empty(),
+            "an unreadable set of stops would read as nothing stopped"
+        );
+        assert_eq!(skipped, 1);
+        let kinds: Vec<String> = oi.state.db.call(|db| {
+            crate::runtime::faults::list_active_faults(db, None)
+                .unwrap()
+                .into_iter()
+                .map(|f| f.kind)
+                .collect()
+        });
+        assert_eq!(kinds, vec!["desired_state_unreadable".to_owned()]);
     }
 
     // spec: AUTO#unreadable-scale

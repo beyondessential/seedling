@@ -66,6 +66,29 @@ pub fn unstop_all(db: &Db, app: &AppName) -> rusqlite::Result<()> {
     Ok(())
 }
 
+/// Discard every stop recorded for `app` whose resource is not in `declared`.
+// spec: CTL#resource-stop
+pub fn discard_undeclared(db: &Db, app: &AppName, declared: &StoppedSet) -> rusqlite::Result<()> {
+    let recorded: Vec<(String, String)> = {
+        let mut stmt = db
+            .conn
+            .prepare("SELECT kind, name FROM stopped_resources WHERE app = ?1")?;
+        stmt.query_map(params![app], |row| Ok((row.get(0)?, row.get(1)?)))?
+            .collect::<rusqlite::Result<_>>()?
+    };
+    for (kind_str, name) in recorded {
+        let still_declared = ResourceKind::from_type_name(&kind_str)
+            .is_some_and(|kind| declared.contains(&(kind, name.clone())));
+        if !still_declared {
+            db.conn.execute(
+                "DELETE FROM stopped_resources WHERE app = ?1 AND kind = ?2 AND name = ?3",
+                params![app, kind_str, name],
+            )?;
+        }
+    }
+    Ok(())
+}
+
 /// Delete all stopped records for an app on deregister / uninstall.
 pub fn delete_stopped_for_app(db: &Db, app: &AppName) -> rusqlite::Result<()> {
     unstop_all(db, app)

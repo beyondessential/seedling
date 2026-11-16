@@ -1817,6 +1817,13 @@ pub(crate) fn update_app(
     let change_owned = change.clone();
     let cipher = Arc::clone(&state.cipher);
     let app_for_migration = app.clone();
+    let declared: stopped::StoppedSet = app
+        .def
+        .load()
+        .resources
+        .iter()
+        .map(|(id, _)| (id.kind, id.name.as_str().to_owned()))
+        .collect();
     let generation = state
         .db
         .call(move |db| -> rusqlite::Result<u64> {
@@ -1856,6 +1863,8 @@ pub(crate) fn update_app(
                 &app_for_migration,
                 true,
             );
+            // spec: CTL#resource-stop
+            stopped::discard_undeclared(db, &name_owned, &declared)?;
             tx.commit()?;
             Ok(generation)
         })

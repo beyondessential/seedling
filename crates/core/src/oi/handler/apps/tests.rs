@@ -783,6 +783,52 @@ fn unstopping_a_resource_that_is_not_stopped_emits_no_event() {
 
 // spec: CTL#resource-stop
 #[test]
+fn an_update_discards_stops_of_resources_it_no_longer_declares() {
+    let oi = TestOi::new();
+    oi.call(
+        "/apps/create",
+        json!({ "app": "demo", "script": r#"
+            app.deployment("web").image("docker.io/library/nginx:1.29");
+            app.deployment("worker").image("docker.io/library/nginx:1.29");
+        "# }),
+    )
+    .unwrap();
+    for name in ["web", "worker"] {
+        oi.call(
+            "/apps/resource/stop",
+            json!({ "app": "demo", "kind": "deployment", "name": name }),
+        )
+        .unwrap();
+    }
+
+    oi.call(
+        "/apps/update",
+        json!({ "app": "demo", "script": r#"
+            app.deployment("web").image("docker.io/library/nginx:1.29");
+        "# }),
+    )
+    .unwrap();
+
+    let desc = oi.call("/apps/show", json!({ "app": "demo" })).unwrap();
+    let stopped = desc["stopped_resources"].as_array().unwrap();
+    assert_eq!(stopped.len(), 1, "{stopped:?}");
+    assert_eq!(stopped[0]["name"], "web");
+
+    // Declaring it again does not bring the old stop back.
+    oi.call(
+        "/apps/update",
+        json!({ "app": "demo", "script": r#"
+            app.deployment("web").image("docker.io/library/nginx:1.29");
+            app.deployment("worker").image("docker.io/library/nginx:1.29");
+        "# }),
+    )
+    .unwrap();
+    let desc = oi.call("/apps/show", json!({ "app": "demo" })).unwrap();
+    assert_eq!(desc["stopped_resources"].as_array().unwrap().len(), 1);
+}
+
+// spec: CTL#resource-stop
+#[test]
 fn unstop_all_clears_every_stopped_resource() {
     let oi = TestOi::with_app("demo");
     oi.call(
