@@ -935,12 +935,12 @@ impl Reconciler {
             };
             let desired = match desired {
                 Ok(d) => {
-                    self.clear_registry_faults(&name);
+                    self.clear_desired_state_fault(&name);
                     d
                 }
                 Err(e) => {
                     error!(app = %name, error = %e, "failed to compute desired state; skipping app this tick");
-                    self.file_registry_fault(
+                    self.file_desired_state_fault(
                         &name,
                         &format!("failed to compute desired state: {e}"),
                     );
@@ -3335,7 +3335,7 @@ mod tests {
 
     // spec: FLT#filing-and-clearing
     #[test]
-    fn clearing_the_app_wide_registry_error_leaves_instance_scoped_ones() {
+    fn clearing_desired_state_unreadable_leaves_instance_identity_unreadable() {
         let oi = crate::oi::test_support::TestOi::with_app("demo");
         let reconciler = test_reconciler(&oi);
         let app = AppName::new("demo").unwrap();
@@ -3349,7 +3349,7 @@ mod tests {
                     None,
                     None,
                     None,
-                    "registry_error",
+                    "desired_state_unreadable",
                     "lookup",
                 )
                 .unwrap();
@@ -3359,17 +3359,20 @@ mod tests {
                     Some("deployment"),
                     Some("web"),
                     Some(&instance.id.to_hex()),
-                    "registry_error",
+                    "instance_identity_unreadable",
                     "lookup",
                 )
                 .unwrap();
             }
         });
 
-        reconciler.clear_registry_faults(&app);
+        reconciler.clear_desired_state_fault(&app);
         assert_eq!(
             active_kinds(&oi, "demo"),
-            vec![("registry_error".to_owned(), instance.id.to_hex())]
+            vec![(
+                "instance_identity_unreadable".to_owned(),
+                instance.id.to_hex()
+            )]
         );
     }
 

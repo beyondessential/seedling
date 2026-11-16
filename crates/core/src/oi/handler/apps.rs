@@ -306,22 +306,12 @@ fn sync_action_schedules(state: &OiState, app_name: &AppName) {
         {
             tracing::warn!(app = %app_name_owned, "failed to ensure schedules: {e}");
         }
-        // spec: FLT#app-faults
-        // A schedule the definition no longer declares has no record left to
-        // be unreadable.
-        match faults::list_active_faults(db, Some(&app_name_owned)) {
-            Ok(active) => {
-                for f in active.iter().filter(|f| {
-                    f.kind == "schedule_unreadable"
-                        && !valid_pairs_owned
-                            .iter()
-                            .any(|(a, _)| a.as_str() == f.subject)
-                }) {
-                    let key = faults::FaultKey::new(&app_name_owned, &f.kind, &f.subject);
-                    let _ = faults::clear_fault_by_key(db, &key);
-                }
-            }
-            Err(e) => tracing::warn!(app = %app_name_owned, "failed to read faults: {e}"),
+        if let Err(e) = crate::runtime::schedules::clear_faults_of_unscheduled_actions(
+            db,
+            &app_name_owned,
+            &valid_pairs_owned,
+        ) {
+            tracing::warn!(app = %app_name_owned, "failed to read faults: {e}");
         }
     });
 }

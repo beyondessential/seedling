@@ -276,6 +276,30 @@ pub fn check_due_schedules(
     fired
 }
 
+/// Clear the schedule faults of each action the definition no longer
+/// schedules: it has no record left to be unreadable, and no run to fail
+/// validation.
+// spec: FLT#app-faults
+pub fn clear_faults_of_unscheduled_actions(
+    db: &Db,
+    app: &AppName,
+    scheduled: &[(ActionName, String)],
+) -> rusqlite::Result<()> {
+    for f in faults::list_active_faults(db, Some(app))?
+        .iter()
+        .filter(|f| {
+            matches!(
+                f.kind.as_str(),
+                "schedule_unreadable" | "schedule_params_invalid"
+            ) && !scheduled.iter().any(|(a, _)| a.as_str() == f.subject)
+        })
+    {
+        let key = FaultKey::new(app, &f.kind, &f.subject);
+        faults::clear_fault_by_key(db, &key)?;
+    }
+    Ok(())
+}
+
 /// Check an action's param schema against an invocation that supplies no
 /// params, as a scheduled run is.
 // spec: ACN#scheduled-actions
@@ -616,6 +640,40 @@ mod tests {
             faults::list_active_faults(&db, Some(&app_name("myapp")))
                 .unwrap()
                 .is_empty()
+        );
+    }
+
+    // spec: FLT#app-faults
+    #[test]
+    fn schedule_faults_clear_when_the_definition_stops_scheduling_the_action() {
+        let db = Db::open_in_memory().unwrap();
+        let app = app_name("myapp");
+        for (kind, action) in [
+            ("schedule_params_invalid", "backup"),
+            ("schedule_unreadable", "backup"),
+            ("schedule_params_invalid", "report"),
+        ] {
+            faults::file_once(
+                &db,
+                &FaultKey::new(&app, kind, action),
+                &FaultMeta::default(),
+                "x",
+            )
+            .unwrap();
+        }
+
+        clear_faults_of_unscheduled_actions(
+            &db,
+            &app,
+            &[(action_name("report"), "0 * * * *".to_owned())],
+        )
+        .unwrap();
+
+        let left = faults::list_active_faults(&db, Some(&app)).unwrap();
+        assert_eq!(left.len(), 1);
+        assert_eq!(
+            (left[0].kind.as_str(), left[0].subject.as_str()),
+            ("schedule_params_invalid", "report")
         );
     }
 

@@ -502,19 +502,27 @@ impl Reconciler {
         });
     }
 
-    pub(super) fn file_registry_fault(&self, app: &AppName, description: &str) {
+    // spec: FLT#app-faults
+    pub(super) fn file_desired_state_fault(&self, app: &AppName, description: &str) {
         let app = app.clone();
         let description = description.to_owned();
         self.db.call(move |db| {
             let already_filed = faults::list_active_faults(db, Some(&app))
                 .unwrap_or_default()
                 .iter()
-                .any(|f| f.kind == "registry_error");
+                .any(|f| f.kind == "desired_state_unreadable");
             if !already_filed
-                && let Err(e) =
-                    faults::file_fault(db, &app, None, None, None, "registry_error", &description)
+                && let Err(e) = faults::file_fault(
+                    db,
+                    &app,
+                    None,
+                    None,
+                    None,
+                    "desired_state_unreadable",
+                    &description,
+                )
             {
-                tracing::warn!(app = %app, "failed to file registry fault: {e}");
+                tracing::warn!(app = %app, "failed to file desired_state_unreadable fault: {e}");
             }
         });
     }
@@ -919,15 +927,15 @@ impl Reconciler {
         });
     }
 
-    /// Clear the app-wide `registry_error` fault, and not the instance-scoped
-    /// ones, which clear when their own instance is next started.
+    /// Clear the app's `desired_state_unreadable` fault, which clears when the
+    /// runtime next computes its desired state.
     // spec: FLT#filing-and-clearing
-    pub(super) fn clear_registry_faults(&self, app: &AppName) {
+    pub(super) fn clear_desired_state_fault(&self, app: &AppName) {
         let app = app.clone();
         self.db.call(move |db| {
-            let key = faults::FaultKey::app_wide(&app, "registry_error");
+            let key = faults::FaultKey::app_wide(&app, "desired_state_unreadable");
             if let Err(e) = faults::clear_fault_by_key(db, &key) {
-                tracing::warn!(app = %app, "failed to clear registry fault: {e}");
+                tracing::warn!(app = %app, "failed to clear desired_state_unreadable fault: {e}");
             }
         });
     }
@@ -942,10 +950,13 @@ impl Reconciler {
         let already_filed = faults::list_active_faults(db, Some(app))
             .unwrap_or_default()
             .iter()
-            .any(|f| f.kind == "registry_error" && f.instance_id.as_deref() == Some(&inst_hex));
+            .any(|f| {
+                f.kind == "instance_identity_unreadable"
+                    && f.instance_id.as_deref() == Some(&inst_hex)
+            });
         if !already_filed {
             let desc = format!(
-                "instance registry lookup failed for {}",
+                "the recorded identity of {} cannot be read",
                 instance.display_name,
             );
             if let Err(e) = faults::file_fault(
@@ -954,10 +965,10 @@ impl Reconciler {
                 Some(&kind_str),
                 instance.name.as_deref(),
                 Some(&inst_hex),
-                "registry_error",
+                "instance_identity_unreadable",
                 &desc,
             ) {
-                tracing::warn!(app = %app, instance = %inst_hex, "failed to file registry fault: {e}");
+                tracing::warn!(app = %app, instance = %inst_hex, "failed to file instance_identity_unreadable fault: {e}");
             }
         }
     }
@@ -971,11 +982,14 @@ impl Reconciler {
         let cleared: Vec<_> = faults::list_active_faults(db, Some(app))
             .unwrap_or_default()
             .into_iter()
-            .filter(|f| f.kind == "registry_error" && f.instance_id.as_deref() == Some(&inst_hex))
+            .filter(|f| {
+                f.kind == "instance_identity_unreadable"
+                    && f.instance_id.as_deref() == Some(&inst_hex)
+            })
             .collect();
         for f in cleared {
             if let Err(e) = faults::clear_fault(db, &f.id, app) {
-                tracing::warn!(app = %app, fault_id = %f.id, "failed to clear registry fault: {e}");
+                tracing::warn!(app = %app, fault_id = %f.id, "failed to clear instance_identity_unreadable fault: {e}");
             }
         }
     }
@@ -1282,6 +1296,9 @@ fn stayed_running_for_the_restart_window(
 
 #[cfg(test)]
 mod crash_loop_tests;
+
+#[cfg(test)]
+mod registry_fault_tests;
 
 #[cfg(test)]
 mod health_check_tests;
