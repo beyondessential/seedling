@@ -388,6 +388,10 @@ pub struct Reconciler {
     actuator: Actuator,
     caddy_admin_client: Arc<AsyncRwLock<reqwest::Client>>,
     caddy_v4_addr: Option<Ipv4Addr>,
+    /// Whether the `caddy_failed` fault on file is for a rejected proxy
+    /// upgrade, which clears only when an upgrade succeeds.
+    // spec: FLT#host-faults
+    caddy_upgrade_rejected: bool,
     data_dir: PathBuf,
     db: DbHandle,
     registry: Arc<dyn InstanceRegistry>,
@@ -439,12 +443,11 @@ pub struct Reconciler {
     slice_retry: crate::runtime::retry::RetryGate,
     /// Whether seedling is providing its own NAT64 translator.
     nat64_active: bool,
-    /// Whether the jool translator instance is currently installed on
-    /// this host. The daemon sets up NAT64 at startup when required,
-    /// and the reconciler tears it down on transition to idle and
-    /// re-installs it on the transition back to non-idle.
+    /// What the reconciler knows of the jool translator instance on this host.
+    /// The reconciler sets it up when an app is installed or installing, and
+    /// tears it down when none is.
     // spec: NAT64#translator-lifecycle
-    nat64_installed: bool,
+    nat64_translator: Nat64Translator,
     /// Whether the DNS64 plugin should translate names that already
     /// have a real AAAA record (emits `translate_all` into the
     /// Corefile). Set when NAT64 is seedling-managed and the host has
@@ -645,15 +648,6 @@ impl Reconciler {
         self.host_faults_synced = true;
     }
 
-    /// This reconciler, for a host whose NAT64 translator could not be set up
-    /// at startup: it sets it up again on its iterations, and keeps workloads
-    /// offline until that succeeds.
-    // spec: NAT64#translator-lifecycle
-    pub fn with_translator_down(mut self) -> Self {
-        self.nat64_installed = false;
-        self
-    }
-
     #[expect(
         clippy::too_many_arguments,
         reason = "construction requires all subsystem handles"
@@ -694,6 +688,7 @@ impl Reconciler {
             actuator,
             caddy_admin_client,
             caddy_v4_addr: None,
+            caddy_upgrade_rejected: false,
             data_dir,
             db,
             registry,
@@ -713,9 +708,7 @@ impl Reconciler {
             unhealthy_replace_deployments: HashSet::new(),
             replace_failed: HashSet::new(),
             nat64_active,
-            // Daemon startup has already called `setup_nat64` iff
-            // `nat64_active`; mirror that in our tracking flag.
-            nat64_installed: nat64_active,
+            nat64_translator: Nat64Translator::Unknown,
             force_dns64_translation,
             host_probes: crate::system::host_probes::HostProbes::settled(false, false),
             host_faults_synced: false,
@@ -942,6 +935,65 @@ impl Reconciler {
             });
         }
         (snapshots, skipped)
+    }
+}
+
+/// What the reconciler knows of the NAT64 translator on the host.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Nat64Translator {
+    /// Not yet established: the host may still hold the translator from an
+    /// earlier run of the daemon.
+    Unknown,
+    Installed,
+    Removed,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum Nat64Step {
+    SetUp,
+    TearDown,
+}
+
+/// What an iteration does about the translator. While NAT64 is active it is
+/// kept set up whenever an app is installed or installing, and torn down when
+/// none is; a translator known to be removed is not torn down again.
+// spec: NAT64#translator-lifecycle
+fn nat64_step(active: bool, translator: Nat64Translator, idle: bool) -> Option<Nat64Step> {
+    match (active, idle, translator) {
+        (false, _, _) => None,
+        (true, false, Nat64Translator::Installed) => None,
+        (true, false, _) => Some(Nat64Step::SetUp),
+        (true, true, Nat64Translator::Removed) => None,
+        (true, true, _) => Some(Nat64Step::TearDown),
+    }
+}
+
+/// What to do with `caddy_failed` once an iteration has a proxy serving.
+#[derive(Debug, PartialEq, Eq)]
+enum CaddyFaultAction {
+    File(String),
+    Clear,
+    Hold,
+}
+
+/// The `caddy_failed` fault's handling for a proxy that is up, and whether the
+/// fault now on file is for a rejected upgrade.
+///
+/// A failed bring-up clears once an iteration finds the proxy healthy; a
+/// rejected upgrade leaves the previous proxy healthy and serving, so it
+/// clears only when an upgrade succeeds.
+// spec: FLT#host-faults
+fn caddy_fault_action(
+    image: &caddy::ProxyImageOutcome,
+    upgrade_rejected: bool,
+) -> (CaddyFaultAction, bool) {
+    match image {
+        caddy::ProxyImageOutcome::UpgradeRejected(why) => {
+            (CaddyFaultAction::File(why.clone()), true)
+        }
+        caddy::ProxyImageOutcome::Replaced => (CaddyFaultAction::Clear, false),
+        caddy::ProxyImageOutcome::Current if upgrade_rejected => (CaddyFaultAction::Hold, true),
+        caddy::ProxyImageOutcome::Current => (CaddyFaultAction::Clear, false),
     }
 }
 
@@ -1231,10 +1283,10 @@ impl Reconciler {
         // pod starts. Setup is idempotent (forwarding sysctls already at 1,
         // module already loaded, instance-add handles EEXIST) so it is safe
         // to run on every non-idle tick where `nat64_installed` is false.
-        if self.nat64_active && !self.nat64_installed {
+        if nat64_step(self.nat64_active, self.nat64_translator, false) == Some(Nat64Step::SetUp) {
             match crate::system::jool::setup_nat64().await {
                 Ok(()) => {
-                    self.nat64_installed = true;
+                    self.nat64_translator = Nat64Translator::Installed;
                     self.clear_system_fault("nat64_setup_failed");
                     // spec: FLT#host-faults
                     // A translator that is set up again is no longer one a
@@ -1362,12 +1414,21 @@ impl Reconciler {
         // --- Process caddy result ---
         // spec: AUTO#ingress-and-network-repair
         let caddy_addrs = match caddy_result {
-            Ok(Ok(addrs)) => match caddy::build_client(&addrs.admin_socket) {
+            Ok(Ok(ensured)) => match caddy::build_client(&ensured.addrs.admin_socket) {
                 Ok(client) => {
-                    self.clear_system_fault("caddy_failed");
+                    let (action, rejected) =
+                        caddy_fault_action(&ensured.image, self.caddy_upgrade_rejected);
+                    self.caddy_upgrade_rejected = rejected;
+                    match action {
+                        CaddyFaultAction::File(why) => {
+                            self.file_system_fault("caddy_failed", &why);
+                        }
+                        CaddyFaultAction::Clear => self.clear_system_fault("caddy_failed"),
+                        CaddyFaultAction::Hold => {}
+                    }
                     *self.caddy_admin_client.write().await = client;
-                    self.caddy_v4_addr = addrs.v4;
-                    Some(addrs)
+                    self.caddy_v4_addr = ensured.addrs.v4;
+                    Some(ensured.addrs)
                 }
                 Err(e) => {
                     error!(error = %e, "failed to build caddy admin client");
@@ -1825,12 +1886,18 @@ impl Reconciler {
         resolver::teardown_resolver(&*self.driver.container, &*self.driver.process).await;
         self.caddy_v4_addr = None;
         self.resolver_addr = None;
+        // spec: FLT#host-faults
+        // A stopped proxy and resolver are neither failing to come up nor
+        // holding a rejected upgrade.
+        self.caddy_upgrade_rejected = false;
+        self.clear_system_fault("caddy_failed");
+        self.clear_system_fault("resolver_failed");
 
         // spec: NAT64#translator-lifecycle
-        if self.nat64_installed {
+        if nat64_step(self.nat64_active, self.nat64_translator, true) == Some(Nat64Step::TearDown) {
             match crate::system::jool::teardown_nat64().await {
                 Ok(()) => {
-                    self.nat64_installed = false;
+                    self.nat64_translator = Nat64Translator::Removed;
                     // spec: FLT#host-faults
                     self.clear_system_fault("nat64_teardown_failed");
                 }
@@ -3813,6 +3880,53 @@ mod tests {
 
         assert_eq!(build.coverage, Coverage::Complete);
         assert_eq!(build.routes.len(), 2);
+    }
+
+    // spec: NAT64#translator-lifecycle
+    #[test]
+    fn the_translator_is_set_up_for_apps_and_torn_down_without_them() {
+        use Nat64Translator::{Installed, Removed, Unknown};
+
+        assert_eq!(nat64_step(false, Unknown, false), None);
+        assert_eq!(nat64_step(false, Installed, true), None);
+
+        assert_eq!(nat64_step(true, Unknown, false), Some(Nat64Step::SetUp));
+        assert_eq!(nat64_step(true, Removed, false), Some(Nat64Step::SetUp));
+        assert_eq!(nat64_step(true, Installed, false), None);
+
+        assert_eq!(nat64_step(true, Installed, true), Some(Nat64Step::TearDown));
+        assert_eq!(
+            nat64_step(true, Unknown, true),
+            Some(Nat64Step::TearDown),
+            "a translator left by an earlier run is not known to be gone"
+        );
+        assert_eq!(nat64_step(true, Removed, true), None);
+    }
+
+    // spec: FLT#host-faults
+    #[test]
+    fn a_rejected_upgrades_fault_clears_only_when_an_upgrade_succeeds() {
+        use caddy::ProxyImageOutcome::{Current, Replaced, UpgradeRejected};
+
+        let rejected = UpgradeRejected("rejected".to_owned());
+        assert_eq!(
+            caddy_fault_action(&rejected, false),
+            (CaddyFaultAction::File("rejected".to_owned()), true)
+        );
+        // The previous proxy is healthy, which does not clear it.
+        assert_eq!(
+            caddy_fault_action(&Current, true),
+            (CaddyFaultAction::Hold, true)
+        );
+        assert_eq!(
+            caddy_fault_action(&Replaced, true),
+            (CaddyFaultAction::Clear, false)
+        );
+        // A failed bring-up clears once the proxy is found healthy.
+        assert_eq!(
+            caddy_fault_action(&Current, false),
+            (CaddyFaultAction::Clear, false)
+        );
     }
 
     // spec: RCN#applying-absolute-state

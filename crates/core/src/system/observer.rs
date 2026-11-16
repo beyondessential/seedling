@@ -259,13 +259,13 @@ impl Observer {
 /// the supervisor's vocabulary.
 // spec: AUTO#restart-pacing
 // `start-limit-hit` is systemd's "I gave up" signal — the unit has burned
-// through `StartLimitBurst` restarts within `StartLimitIntervalSec`. It is
-// reported alongside `failed` and is distinct from a transient failure
-// because no further automatic recovery will happen.
+// through `StartLimitBurst` restarts within `StartLimitIntervalSec`. It is the
+// unit's result, not its sub-state (which reads `failed`), and is distinct
+// from a transient failure because no further automatic recovery will happen.
 fn unit_fact(unit_state: Option<&UnitState>) -> ObservationFact {
     match unit_state {
         None => ObservationFact::UnitGone,
-        Some(s) if matches!(s.active, ActiveState::Failed) && s.sub == "start-limit-hit" => {
+        Some(s) if s.result.as_deref() == Some("start-limit-hit") => {
             ObservationFact::UnitStartLimitHit
         }
         Some(s) => match s.active {
@@ -307,6 +307,13 @@ mod tests {
         }
     }
 
+    fn unit_with_result(active: ActiveState, sub: &str, result: &str) -> UnitState {
+        UnitState {
+            result: Some(result.to_owned()),
+            ..unit(active, sub)
+        }
+    }
+
     // spec: AUTO#restart-pacing
     // A unit in `Restart=` backoff sits in `activating (auto-restart)` with
     // no container under it. Folded into `active`, it read to the reconciler
@@ -345,13 +352,28 @@ mod tests {
     #[test]
     fn giving_up_is_distinguished_from_failing() {
         assert!(matches!(
-            unit_fact(Some(&unit(ActiveState::Failed, "start-limit-hit"))),
+            unit_fact(Some(&unit_with_result(
+                ActiveState::Failed,
+                "failed",
+                "start-limit-hit"
+            ))),
             ObservationFact::UnitStartLimitHit
         ));
         assert!(matches!(
-            unit_fact(Some(&unit(ActiveState::Failed, "failed"))),
+            unit_fact(Some(&unit_with_result(
+                ActiveState::Failed,
+                "failed",
+                "exit-code"
+            ))),
             ObservationFact::UnitFailed
         ));
+        assert!(
+            matches!(
+                unit_fact(Some(&unit(ActiveState::Failed, "start-limit-hit"))),
+                ObservationFact::UnitFailed
+            ),
+            "the sub-state does not carry it"
+        );
         assert!(matches!(unit_fact(None), ObservationFact::UnitGone));
     }
 

@@ -537,6 +537,8 @@ struct UnitRecord {
     /// when the unit is recreated. Driven directly by tests.
     restarts: u32,
     last_exit: Option<UnitExit>,
+    /// The unit's `Result` property.
+    result: Option<String>,
 }
 
 impl StubProcessManager {
@@ -653,6 +655,7 @@ impl ProcessManager for StubProcessManager {
                     oom_score_adjust: spec.oom_score_adjust,
                     restarts: 0,
                     last_exit: None,
+                    result: None,
                 },
             );
             drop(spec);
@@ -722,6 +725,7 @@ impl ProcessManager for StubProcessManager {
             Ok(self.state.lock().units.get(name).map(|u| UnitState {
                 active: u.state,
                 sub: u.sub.clone(),
+                result: u.result.clone(),
                 restarts: Some(u.restarts),
                 last_exit: u.last_exit,
             }))
@@ -790,6 +794,7 @@ impl ProcessManager for StubProcessManager {
                 oom_score_adjust: None,
                 restarts: 0,
                 last_exit: None,
+                result: None,
             });
             Ok(())
         }

@@ -198,6 +198,11 @@ trait Systemd1Service {
     #[zbus(property, name = "NRestarts")]
     fn n_restarts(&self) -> zbus::Result<u32>;
 
+    /// Why the unit last ended: `success`, `exit-code`, `start-limit-hit` and
+    /// so on.
+    #[zbus(property, name = "Result")]
+    fn result(&self) -> zbus::Result<String>;
+
     /// The main process's exit status, or the signal number that killed it,
     /// depending on `ExecMainCode`.
     #[zbus(property, name = "ExecMainStatus")]
@@ -617,17 +622,18 @@ impl SystemdManager {
         // SubState per instance. Failures are not fatal: the Service interface
         // only exists on .service units, and a unit that vanished between the
         // GetUnit call and here should still report the state we did read.
-        let (restarts, last_exit) = match self.service_accounting(&unit_path).await {
+        let (restarts, last_exit, result) = match self.service_accounting(&unit_path).await {
             Ok(v) => v,
             Err(e) => {
                 tracing::debug!(unit = %name, error = %e, "systemd: no restart accounting for unit");
-                (None, None)
+                (None, None, None)
             }
         };
 
         Ok(Some(UnitState {
             active: parse_active_state(&active),
             sub,
+            result,
             restarts,
             last_exit,
         }))
@@ -637,7 +643,7 @@ impl SystemdManager {
     async fn service_accounting(
         &self,
         unit_path: &OwnedObjectPath,
-    ) -> Result<(Option<u32>, Option<UnitExit>), SystemdError> {
+    ) -> Result<(Option<u32>, Option<UnitExit>, Option<String>), SystemdError> {
         let proxy = Systemd1ServiceProxy::builder(&self.conn)
             .destination("org.freedesktop.systemd1")
             .path(unit_path.clone())
@@ -646,6 +652,7 @@ impl SystemdManager {
             .context(DBusSnafu)?;
 
         let restarts = proxy.n_restarts().await.context(DBusSnafu)?;
+        let result = proxy.result().await.context(DBusSnafu)?;
         // The exit properties are best-effort on top of the counter: a unit
         // whose main process has not exited reports ExecMainCode 0, which
         // parse_exec_main turns into None.
@@ -653,7 +660,7 @@ impl SystemdManager {
             (Ok(code), Ok(status)) => parse_exec_main(code, status),
             _ => None,
         };
-        Ok((Some(restarts), last_exit))
+        Ok((Some(restarts), last_exit, Some(result)))
     }
 
     async fn list_units_impl(&self, prefix: &str) -> Result<Vec<UnitSummary>, SystemdError> {

@@ -316,6 +316,12 @@ pub enum TransientRestart {
 pub struct UnitState {
     pub active: ActiveState,
     pub sub: String,
+    /// The unit's `Result` property: why it last ended, such as `success`,
+    /// `exit-code` or `start-limit-hit`, where the supervisor reports one.
+    /// `start-limit-hit` is read from here and not from the sub-state, which
+    /// reads `failed` for it as for any other failure.
+    // spec: LINUX#restart-pacing
+    pub result: Option<String>,
     /// The supervisor's own count of how many times it has restarted this
     /// unit. Monotonic while the unit lives, but reset when the unit is
     /// recreated or its failed state is cleared, so a decrease is a reset

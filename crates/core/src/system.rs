@@ -395,7 +395,7 @@ impl System {
         } else {
             match caddy::ensure_caddy_running(&*container, &*process, &node_prefix, data_dir).await
             {
-                Ok(initial) => Arc::new(caddy::CaddyProxy::new(&initial.admin_socket)?),
+                Ok(initial) => Arc::new(caddy::CaddyProxy::new(&initial.addrs.admin_socket)?),
                 Err(e) => {
                     tracing::error!(
                         "initial Caddy bring-up failed: {e} — starting without ingress; \

@@ -14,7 +14,9 @@ pub(crate) use startup::{
     CADDY_BLUE, CADDY_DATA_VOLUME, CADDY_GREEN, CADDY_IMAGE, CaddyStartupError, PROXY_NETWORK,
     proxy_ipv4_subnet, proxy_network_prefix, read_cached_proxy_config,
 };
-pub(crate) use startup::{ensure_caddy_running, teardown_caddy, write_cached_proxy_config};
+pub(crate) use startup::{
+    ProxyImageOutcome, ensure_caddy_running, teardown_caddy, write_cached_proxy_config,
+};
 
 #[cfg(test)]
 mod tests;

@@ -211,6 +211,18 @@ impl From<ScriptLimitArgs> for seedling_core::ScriptLimits {
     }
 }
 
+/// Create the tmpfs-volume root if it is absent. Its contents are left as they
+/// are: a restart of the runtime while the host stays up must not lose them.
+// spec: ACTU#volume-storage
+fn ensure_tmpfs_volumes_root(root: &std::path::Path) {
+    if let Err(e) = std::fs::create_dir_all(root) {
+        tracing::warn!(
+            path = %root.display(),
+            "failed to create tmpfs-volumes root on startup: {e}"
+        );
+    }
+}
+
 #[tokio::main]
 async fn main() {
     let mut _guard = lloggs::PreArgs::parse_with_env("SEEDLING_LOG")
@@ -348,23 +360,6 @@ async fn main() {
         stub_backends = args.stub_backends,
         "NAT64 decision",
     );
-
-    // spec: NAT64#translator
-    // spec: NAT64#translator-lifecycle
-    // A translator that cannot be set up is reported and held against, not
-    // fatal: the reconciler files `nat64_setup_failed`, starts no workload
-    // while it is down, and sets it up again on each iteration.
-    let nat64_translator_down = if !args.stub_backends && nat64_active {
-        match seedling_core::system::jool::setup_nat64().await {
-            Ok(()) => false,
-            Err(e) => {
-                tracing::error!("failed to set up NAT64 translator: {e}");
-                true
-            }
-        }
-    } else {
-        false
-    };
 
     // spec: NAT64#ipv6-egress
     // spec: CONST#determining-host-constants
@@ -513,29 +508,12 @@ async fn main() {
         }
     }
 
-    // spec: ACTU#volume-storage
-    // Reset the tmpfs-volume bind-mount root on startup. /run is tmpfs so
-    // contents are already gone after a host reboot, but a daemon restart
-    // alone leaves the directory tree intact — clear it so each fresh run
-    // starts from an empty slate, matching the spec's "tmpfs contents do not
-    // survive" guarantee. Skipped under --stub-backends since stub volumes
-    // live under {data_dir}/stub-volumes, not /run.
+    // Skipped under --stub-backends since stub volumes live under
+    // {data_dir}/stub-volumes, not /run.
     if !args.stub_backends {
-        let tmpfs_root = std::path::Path::new(seedling_core::system::actuator::TMPFS_VOLUMES_DIR);
-        if tmpfs_root.exists()
-            && let Err(e) = std::fs::remove_dir_all(tmpfs_root)
-        {
-            tracing::warn!(
-                path = %tmpfs_root.display(),
-                "failed to clear tmpfs-volumes root on startup: {e}"
-            );
-        }
-        if let Err(e) = std::fs::create_dir_all(tmpfs_root) {
-            tracing::warn!(
-                path = %tmpfs_root.display(),
-                "failed to (re)create tmpfs-volumes root on startup: {e}"
-            );
-        }
+        ensure_tmpfs_volumes_root(std::path::Path::new(
+            seedling_core::system::actuator::TMPFS_VOLUMES_DIR,
+        ));
     }
 
     // Podman-level scan for orphaned shell-session containers.
@@ -773,12 +751,7 @@ async fn main() {
         Some(Arc::clone(&site_resolver)),
         instance_gc,
     );
-    let reconciler = if nat64_translator_down {
-        reconciler.with_translator_down()
-    } else {
-        reconciler
-    }
-    .with_host_probes(host_probes);
+    let reconciler = reconciler.with_host_probes(host_probes);
 
     // The reconciler and schedule ticker are spawned below, after OiState is
     // constructed, so that scheduled-action fires can spawn lifecycle operations.
@@ -1985,5 +1958,32 @@ mod tests {
                 "10.0.0.5:7891".parse::<SocketAddr>().unwrap(),
             ]
         );
+    }
+}
+
+#[cfg(test)]
+mod tmpfs_root_tests {
+    use super::ensure_tmpfs_volumes_root;
+
+    // spec: ACTU#volume-storage
+    #[test]
+    fn a_tmpfs_volumes_root_keeps_its_contents_across_a_start() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("tmpfs-volumes");
+        std::fs::create_dir_all(root.join("vol")).unwrap();
+        std::fs::write(root.join("vol/data"), b"kept").unwrap();
+
+        ensure_tmpfs_volumes_root(&root);
+
+        assert_eq!(std::fs::read(root.join("vol/data")).unwrap(), b"kept");
+    }
+
+    // spec: ACTU#volume-storage
+    #[test]
+    fn an_absent_tmpfs_volumes_root_is_created() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("run/tmpfs-volumes");
+        ensure_tmpfs_volumes_root(&root);
+        assert!(root.is_dir());
     }
 }
