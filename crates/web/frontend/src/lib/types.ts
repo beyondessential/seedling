@@ -912,7 +912,7 @@ export interface TlsCertAttemptsResponse {
   attempts: TlsCertAttempt[];
 }
 
-export type TlsRetryBlockSource = "auto" | "operator";
+export type TlsRetryBlockSource = "operator";
 
 export interface TlsRetryBlock {
   hostname: string;
@@ -927,8 +927,7 @@ export type TlsHostnameStatus =
   | "error"
   | "pending"
   | "blocked"
-  | "no_cert"
-  | "default";
+  | "none";
 
 export type TlsHostnamePolicy =
   | { strategy: "default" }
@@ -957,14 +956,15 @@ export interface TlsHostnameChain {
 }
 
 export interface TlsHostnameActiveCert {
-  /** Null when the cert is owned by Caddy rather than the runtime DB. */
+  /** Null when the cert is held by the proxy rather than stored by the runtime. */
   id: number | null;
-  /** `caddy` for certs Caddy manages itself; runtime-owned certs use the
+  /** `proxy` for certs the proxy holds itself; runtime-owned certs use the
    * narrower {@link TlsCertOrigin} values. */
-  origin: TlsCertOrigin | "caddy";
-  /** Caddy's issuer-subdir name for `origin: "caddy"`: e.g. `local`
-   * (internal CA) or `acme-v02.api.letsencrypt.org-directory`. */
-  caddy_issuer?: string;
+  origin: TlsCertOrigin | "proxy";
+  /** For `origin: "proxy"`: `local` (the proxy's internal CA), otherwise the
+   * host of the ACME directory that issued it, such as
+   * `acme-v02.api.letsencrypt.org`. */
+  proxy_issuer?: string;
   issuer: string | null;
   not_before: number | null;
   not_after: number | null;
@@ -1001,10 +1001,10 @@ export type TlsHostnameLastIssuance =
     cert_id: number | null;
   }
   | {
-    kind: "caddy";
+    kind: "proxy";
     at: number | null;
     cert_id: null;
-    /** Caddy's issuer-subdir name. */
+    /** The `proxy_issuer` of the certificate. */
     provider: string;
   };
 
@@ -1014,7 +1014,8 @@ export interface TlsHostnameView {
   hostname: string;
   apps: string[];
   policy: TlsHostnamePolicy;
-  status: TlsHostnameStatus;
+  /** Null where the runtime cannot tell. */
+  status: TlsHostnameStatus | null;
   chain: TlsHostnameChain | null;
   active_cert: TlsHostnameActiveCert | null;
   last_issuance: TlsHostnameLastIssuance | null;

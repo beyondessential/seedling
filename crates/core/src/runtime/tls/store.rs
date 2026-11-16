@@ -2932,7 +2932,7 @@ mod tests {
         set_retry_block(
             &db,
             "host.example.com",
-            RetryBlockSource::Auto,
+            RetryBlockSource::Operator,
             Some("dns 5xx"),
         )
         .unwrap();
@@ -2940,10 +2940,10 @@ mod tests {
 
         let rows = list_retry_blocks(&db).unwrap();
         assert_eq!(rows.len(), 1);
-        assert_eq!(rows[0].set_by, RetryBlockSource::Auto);
+        assert_eq!(rows[0].set_by, RetryBlockSource::Operator);
         assert_eq!(rows[0].reason.as_deref(), Some("dns 5xx"));
 
-        // Setting again with the operator source replaces in place.
+        // Setting again replaces in place.
         set_retry_block(
             &db,
             "host.example.com",

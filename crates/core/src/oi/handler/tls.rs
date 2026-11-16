@@ -1060,7 +1060,7 @@ pub(crate) fn list_hostnames(state: &OiState, params: ListHostnamesParams) -> Ha
                 Some(state::ProxyHolding::Holds(cert)) => Some(cert),
                 Some(state::ProxyHolding::Nothing | state::ProxyHolding::Unreadable) | None => None,
             };
-            project_hostname_state(&hostname, &apps, &st, caddy_cert)
+            project_hostname_state(&hostname, &apps, &snapshot, &st, caddy_cert)
         })
         .collect();
 
@@ -1074,6 +1074,7 @@ pub(crate) fn list_hostnames(state: &OiState, params: ListHostnamesParams) -> Ha
 fn project_hostname_state(
     hostname: &str,
     apps: &BTreeSet<String>,
+    snapshot: &state::Snapshot,
     st: &state::HostnameState<'_>,
     caddy_cert: Option<&state::ProxyCert>,
 ) -> Value {
@@ -1106,8 +1107,8 @@ fn project_hostname_state(
         }),
         (None, Some(cc)) => json!({
             "id": null,
-            "origin": "caddy",
-            "caddy_issuer": cc.issuer_kind,
+            "origin": "proxy",
+            "proxy_issuer": state::proxy_issuer(&cc.issuer_kind),
             "issuer": cc.issuer,
             "not_before": cc.not_before,
             "not_after": cc.not_after,
@@ -1128,7 +1129,8 @@ fn project_hostname_state(
             _ => None,
         });
     let chain_json = project_chain(st);
-    let status = decision_status(st, caddy_cert);
+    // spec: TLS#certificate-status
+    let status = state::certificate_status(snapshot, st).map(state::CertStatus::as_str);
     let (next_issuance_at, next_issuance_source) = decision_next_issuance(st);
     let block_json = st.retry_block.map_or(
         Value::Null,
@@ -1149,108 +1151,6 @@ fn project_hostname_state(
         "next_issuance_at": next_issuance_at,
         "next_issuance_source": next_issuance_source,
     })
-}
-
-/// Map the unified [`state::Decision`] (plus the active cert it
-/// resolved against) to a status label for the UI. The label is a
-/// projection of the decision, not a re-computation.
-///
-/// For `Decision::Default`, the runtime has no opinion; the status
-/// reflects whichever cert is actually serving — a SAN-bound manual
-/// cert from the runtime store, or whatever proxy-managed cert is on
-/// disk.
-// spec: TLS#certificate-status
-fn decision_status(
-    st: &state::HostnameState<'_>,
-    caddy_cert: Option<&state::ProxyCert>,
-) -> &'static str {
-    let now = jiff::Timestamp::now().as_second();
-    let active_not_after = st.active_cert.and_then(|c| c.not_after);
-    let serving = serving_status(active_not_after, caddy_cert, now);
-    status_facts(&st.decision, serving).status()
-}
-
-/// Which meanings of the certificate status hold for a hostname at once.
-#[derive(Debug, Default)]
-struct StatusFacts {
-    blocked: bool,
-    expired: bool,
-    error: bool,
-    pending: bool,
-    active: bool,
-}
-
-impl StatusFacts {
-    /// The first status whose meaning holds, in the order the status is
-    /// defined.
-    // spec: TLS#certificate-status
-    fn status(&self) -> &'static str {
-        [
-            (self.blocked, "blocked"),
-            (self.expired, "expired"),
-            (self.error, "error"),
-            (self.pending, "pending"),
-            (self.active, "active"),
-        ]
-        .into_iter()
-        .find_map(|(holds, status)| holds.then_some(status))
-        .unwrap_or("default")
-    }
-}
-
-/// The certificate-status meanings that `decision` and the certificate
-/// serving the hostname, as [`serving_status`] reads it, say hold.
-// spec: TLS#certificate-status
-fn status_facts(decision: &state::Decision, serving: Option<&str>) -> StatusFacts {
-    use state::Decision::*;
-    let mut facts = StatusFacts {
-        expired: serving == Some("expired"),
-        active: serving == Some("active"),
-        ..StatusFacts::default()
-    };
-    match decision {
-        Default => {}
-        Chain(c) => {
-            facts.blocked = matches!(c.act, state::ChainAct::Blocked { .. });
-            // Canopy cannot be asked about it, so the operator has something
-            // to fix.
-            facts.error = c.act == state::ChainAct::CannotAskCanopy;
-            // Canopy being asked is an acquisition in progress, and a failure
-            // it reported is an error.
-            if let chain::Cycle::Running(r) = &c.cycle
-                && r.responsible == Strategy::Canopy
-            {
-                match &c.last_error {
-                    Some(_) => facts.error = true,
-                    None => facts.pending = true,
-                }
-            }
-        }
-        Blocked { .. } => facts.blocked = true,
-        NoContactEmail | Debounced { .. } => facts.error = true,
-        Scheduled { .. } => facts.active = true,
-        // An issuance due now, renewal included, is an acquisition in
-        // progress.
-        IssueNow { .. } => facts.pending = true,
-    }
-    facts
-}
-
-/// The status a hostname reflects from whichever certificate is actually
-/// serving it: a stored one, or whatever the proxy has on disk. `None` when
-/// there is neither.
-fn serving_status(
-    stored_not_after: Option<i64>,
-    caddy_cert: Option<&state::ProxyCert>,
-    now: i64,
-) -> Option<&'static str> {
-    match (stored_not_after, caddy_cert.and_then(|c| c.not_after)) {
-        (Some(na), _) if na < now => Some("expired"),
-        (Some(_), _) => Some("active"),
-        (None, Some(na)) if na < now => Some("expired"),
-        (None, Some(_)) => Some("active"),
-        (None, None) => None,
-    }
 }
 
 /// The `chain` object of the hostname view: the strategy responsible, when it
@@ -1389,10 +1289,10 @@ fn build_last_issuance(
         // rewriting the file for unrelated reasons (restart, metadata
         // refresh, …).
         return json!({
-            "kind": "caddy",
+            "kind": "proxy",
             "at": cc.not_before,
             "cert_id": null,
-            "provider": cc.issuer_kind,
+            "provider": state::proxy_issuer(&cc.issuer_kind),
         });
     }
     Value::Null

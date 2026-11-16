@@ -148,7 +148,6 @@ pub enum TlsCertState {
     CsrPending,
     Active,
     Superseded,
-    Failed,
     /// Canopy reported the certificate revoked or its key condemned. Never
     /// served and never counted as usable.
     // spec: TCAN#revocation
@@ -161,7 +160,6 @@ impl TlsCertState {
             Self::CsrPending => "csr_pending",
             Self::Active => "active",
             Self::Superseded => "superseded",
-            Self::Failed => "failed",
             Self::Revoked => "revoked",
         }
     }
@@ -171,7 +169,6 @@ impl TlsCertState {
             "csr_pending" => Some(Self::CsrPending),
             "active" => Some(Self::Active),
             "superseded" => Some(Self::Superseded),
-            "failed" => Some(Self::Failed),
             "revoked" => Some(Self::Revoked),
             _ => None,
         }
@@ -397,9 +394,6 @@ pub struct TlsCertAttempt {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum RetryBlockSource {
-    /// Set by the runtime after a failed issuance attempt to prevent Caddy
-    /// from re-triggering on every handshake. Cleared by manual retry.
-    Auto,
     /// Set by an operator via the operator interface. Persists until the
     /// operator clears it.
     Operator,
@@ -408,14 +402,12 @@ pub enum RetryBlockSource {
 impl RetryBlockSource {
     pub fn as_str(self) -> &'static str {
         match self {
-            Self::Auto => "auto",
             Self::Operator => "operator",
         }
     }
 
     pub fn parse(s: &str) -> Option<Self> {
         match s {
-            "auto" => Some(Self::Auto),
             "operator" => Some(Self::Operator),
             _ => None,
         }

@@ -40,12 +40,12 @@ const defaultRow: TlsHostnameView = {
   hostname: "blog.example.com",
   apps: ["blog"],
   policy: { strategy: "default" },
-  status: "default",
+  status: "none",
   chain: { responsible: "acme_http01", fall_through_at: null, next_cycle_at: now + 3 * 86400 },
   active_cert: {
     id: null,
-    origin: "caddy",
-    caddy_issuer: "local",
+    origin: "proxy",
+    proxy_issuer: "local",
     issuer: null,
     not_before: now - 3600,
     not_after: now + 7 * 86400,
@@ -53,7 +53,7 @@ const defaultRow: TlsHostnameView = {
     ari_window_start: null,
     ari_window_end: null,
   },
-  last_issuance: { kind: "caddy", at: now - 3600, cert_id: null, provider: "local" },
+  last_issuance: { kind: "proxy", at: now - 3600, cert_id: null, provider: "local" },
   last_error: null,
   retry_block: null,
   force_retry_at: null,
@@ -161,7 +161,7 @@ describe("TlsHostnamesTable", () => {
     expect(within(shopRow).getByText("ARI")).toBeTruthy();
 
     // Default (Caddy-managed) row: proxy status, Caddy issuer, no schedule.
-    expect(screen.getByText("default (proxy)")).toBeTruthy();
+    expect(screen.getByText("none")).toBeTruthy();
     expect(screen.getByText("default — Caddy internal CA")).toBeTruthy();
     expect(screen.getByText("controlled by Caddy")).toBeTruthy();
     expect(screen.getByText("self-signed")).toBeTruthy();

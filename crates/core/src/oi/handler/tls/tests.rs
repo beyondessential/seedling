@@ -1523,6 +1523,7 @@ fn the_last_issuance_is_kinded_by_the_certificate_it_produced() {
         super::project_hostname_state(
             "node.tail1234.ts.net",
             &std::collections::BTreeSet::new(),
+            &snapshot,
             &st,
             None,
         )
@@ -1576,7 +1577,7 @@ fn the_hostname_view_shows_what_the_proxy_holds() {
                 crate::runtime::tls::state::ProxyCert {
                     not_before: Some(1),
                     not_after: Some(i64::MAX / 2),
-                    issuer_kind: "local".to_owned(),
+                    issuer_kind: "acme-staging-v02.api.letsencrypt.org-directory".to_owned(),
                     issuer: Some("CN=Caddy Local Authority".to_owned()),
                     self_signed: true,
                 },
@@ -1592,6 +1593,7 @@ fn the_hostname_view_shows_what_the_proxy_holds() {
     let view = super::project_hostname_state(
         "shop.example.com",
         &std::collections::BTreeSet::from(["shop".to_owned()]),
+        &snapshot,
         &st,
         match snapshot.env.proxy.get("shop.example.com") {
             Some(crate::runtime::tls::state::ProxyHolding::Holds(c)) => Some(c),
@@ -1599,8 +1601,12 @@ fn the_hostname_view_shows_what_the_proxy_holds() {
         },
     );
 
-    assert_eq!(view["active_cert"]["origin"], "caddy");
-    assert_eq!(view["active_cert"]["caddy_issuer"], "local");
+    assert_eq!(view["active_cert"]["origin"], "proxy");
+    assert_eq!(
+        view["active_cert"]["proxy_issuer"],
+        "acme-staging-v02.api.letsencrypt.org"
+    );
+    assert!(view["active_cert"].get("caddy_issuer").is_none());
     assert_eq!(view["active_cert"]["issuer"], "CN=Caddy Local Authority");
     assert_eq!(view["active_cert"]["self_signed"], true);
     assert_eq!(view["status"], "active");
@@ -1608,7 +1614,11 @@ fn the_hostname_view_shows_what_the_proxy_holds() {
         view["chain"]["responsible"], "acme_http01",
         "a public name's chain is HTTP-01, whatever the proxy happens to have served it with"
     );
-    assert_eq!(view["last_issuance"]["kind"], "caddy");
+    assert_eq!(view["last_issuance"]["kind"], "proxy");
+    assert_eq!(
+        view["last_issuance"]["provider"],
+        "acme-staging-v02.api.letsencrypt.org"
+    );
 }
 
 // spec: TLSM#policies
@@ -1704,31 +1714,123 @@ fn the_rollup_does_not_walk_the_proxys_cache_itself() {
 // spec: TLS#certificate-status
 #[test]
 fn the_certificate_status_is_the_first_meaning_that_holds() {
-    use super::status_facts;
-    use crate::runtime::tls::state::{Decision, IssueReason, NextSource};
-
-    // A failed attempt waiting to retry while the served certificate has
-    // expired: expired comes before error.
-    assert_eq!(
-        status_facts(&Decision::Debounced { until: 0 }, Some("expired")).status(),
-        "expired"
-    );
-    // A renewal due now while a usable certificate is served: pending comes
-    // before active.
-    let renewal = Decision::IssueNow {
-        reason: IssueReason::Renewal {
-            scheduled_at: 0,
-            source: NextSource::Fallback,
-        },
+    use crate::runtime::tls::state::{
+        CertStatus, ChainEnv, ProxyCert, ProxyHolding, certificate_status, compute_state,
     };
-    assert_eq!(status_facts(&renewal, Some("active")).status(), "pending");
+
+    let oi = TestOi::new();
+    let load = |oi: &TestOi, proxy: Option<ProxyHolding>| {
+        let env = ChainEnv {
+            known: true,
+            offer_live: false,
+            canopy_types: Default::default(),
+            proxy: proxy
+                .map(|p| std::collections::BTreeMap::from([("shop.example.com".to_owned(), p)]))
+                .unwrap_or_default(),
+        };
+        oi.state
+            .db
+            .call(move |db| crate::runtime::tls::state::Snapshot::load(db, env))
+            .unwrap()
+    };
+    let status = |oi: &TestOi, proxy: Option<ProxyHolding>| {
+        let snapshot = load(oi, proxy);
+        let st = compute_state(&snapshot, "shop.example.com");
+        certificate_status(&snapshot, &st)
+    };
+    let now = jiff::Timestamp::now().as_second();
+    let proxy_cert = |not_before, not_after| {
+        ProxyHolding::Holds(ProxyCert {
+            not_before: Some(not_before),
+            not_after: Some(not_after),
+            issuer_kind: "local".to_owned(),
+            issuer: None,
+            self_signed: true,
+        })
+    };
+
     assert_eq!(
-        status_facts(&Decision::NoContactEmail, Some("active")).status(),
-        "error"
+        status(&oi, Some(ProxyHolding::Nothing)),
+        Some(CertStatus::Pending),
+        "a public name with no certificate has the proxy ordering one"
+    );
+    // A usable certificate the proxy holds is `active`, and one outside its
+    // window is not usable, whatever else is true of it.
+    assert_eq!(
+        status(&oi, Some(proxy_cert(now - 100, now + 100))),
+        Some(CertStatus::Active)
     );
     assert_eq!(
-        status_facts(&Decision::Blocked { reason: None }, Some("expired")).status(),
-        "blocked"
+        status(&oi, Some(proxy_cert(now - 200, now - 100))),
+        Some(CertStatus::Expired),
+        "expired comes before the proxy ordering a replacement"
     );
-    assert_eq!(status_facts(&Decision::Default, None).status(), "default");
+    assert_eq!(
+        status(&oi, Some(proxy_cert(now + 100, now + 200))),
+        Some(CertStatus::None),
+        "a certificate that has not begun is not usable, and nothing is being acquired"
+    );
+
+    // Facts that cannot be read make the status undetermined, never a value.
+    assert_eq!(status(&oi, Some(ProxyHolding::Unreadable)), None);
+    assert_eq!(status(&oi, None), None);
+
+    // An issuance running, or an operator retry not yet consumed, is an
+    // acquisition in progress even where a usable certificate is served.
+    let attempt = oi
+        .state
+        .db
+        .call(|db| {
+            crate::runtime::tls::store::insert_attempt(
+                db,
+                "shop.example.com",
+                crate::runtime::tls::AttemptTrigger::OnDemand,
+            )
+        })
+        .unwrap();
+    assert_eq!(
+        status(&oi, Some(proxy_cert(now - 100, now + 100))),
+        Some(CertStatus::Pending)
+    );
+    oi.state
+        .db
+        .call(move |db| {
+            crate::runtime::tls::store::finalize_attempt(
+                db,
+                attempt,
+                crate::runtime::tls::AttemptOutcome::Success,
+                None,
+                None,
+            )
+        })
+        .unwrap();
+    oi.state
+        .db
+        .call(|db| crate::runtime::tls::store::set_force_retry(db, "shop.example.com"))
+        .unwrap();
+    assert_eq!(
+        status(&oi, Some(proxy_cert(now - 100, now + 100))),
+        Some(CertStatus::Pending)
+    );
+    oi.state
+        .db
+        .call(|db| crate::runtime::tls::store::take_force_retry(db, "shop.example.com"))
+        .unwrap();
+
+    // A hostname with a retry block is `blocked` before anything else.
+    oi.state
+        .db
+        .call(|db| {
+            crate::runtime::tls::store::set_retry_block(
+                db,
+                "shop.example.com",
+                crate::runtime::tls::RetryBlockSource::Operator,
+                None,
+            )
+        })
+        .unwrap();
+    assert_eq!(
+        status(&oi, Some(proxy_cert(now - 200, now - 100))),
+        Some(CertStatus::Blocked)
+    );
 }
