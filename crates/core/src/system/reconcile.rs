@@ -1595,16 +1595,10 @@ impl Reconciler {
 
         // --- Load site-ingress snapshot (DB-backed) once per tick. ---
         // spec: SITE#site-ingresses, SITE#attachments
-        let site_ingress_snapshot = self
-            .db
-            .call(|db| Ok::<_, rusqlite::Error>(site_proxy::load(db)))
-            .unwrap_or_else(|e| {
-                tracing::warn!(error = %e, "site_proxy: load failed; using empty snapshot");
-                site_proxy::SiteIngressSnapshot {
-                    ingresses: Vec::new(),
-                    attachments: Vec::new(),
-                }
-            });
+        // spec: SITE#unreadable-site-ingresses
+        // `None` is not "no site ingresses": every consumer below withholds
+        // what it would otherwise conclude from them.
+        let site_ingress_snapshot = self.load_site_ingresses();
 
         // spec: CHAIN#proxy-strategies
         let renewal_ratios = self.resolve_renewal_ratios();
@@ -1622,12 +1616,12 @@ impl Reconciler {
                 &*self.registry,
                 &ext_snapshot,
                 &make_resolve_ctx(),
-                &site_ingress_snapshot,
+                site_ingress_snapshot.as_ref(),
             );
 
             let proxy_build = phases::compute_proxy_config(
                 &apps,
-                &site_ingress_snapshot,
+                site_ingress_snapshot.as_ref(),
                 &running_pods_by_app,
                 &self.node_prefix,
                 &*self.registry,
@@ -1658,10 +1652,16 @@ impl Reconciler {
                     unresolved_site_attachments,
                 } = proxy_build;
                 let proxy_coverage = proxy_coverage.and(app_coverage);
-                // spec: SITE#ingress-conflicts
-                self.reconcile_ingress_conflicts(&ingress_conflicts);
-                // spec: SITE#attachments
-                self.reconcile_unresolved_site_attachments(&unresolved_site_attachments);
+                // spec: SITE#unreadable-site-ingresses — `None` when the
+                // site ingresses could not be read: neither filed nor cleared.
+                if let Some(ingress_conflicts) = &ingress_conflicts {
+                    // spec: SITE#ingress-conflicts
+                    self.reconcile_ingress_conflicts(ingress_conflicts);
+                }
+                if let Some(unresolved) = &unresolved_site_attachments {
+                    // spec: SITE#attachments
+                    self.reconcile_unresolved_site_attachments(unresolved);
+                }
                 // The TLS-managed-ingress enumeration is shared with
                 // the OI rollup and the expiry sweep so all three call
                 // sites act on exactly the same set of hostnames; the
@@ -1688,20 +1688,27 @@ impl Reconciler {
                     // tailnet hostnames and leaves manual ones to the
                     // ACME pipeline (subject to the operator binding a
                     // policy, same as app ingresses).
-                    for hostname in &site_ingress_tls_hostnames(&site_ingress_snapshot) {
-                        coord.ensure(hostname);
+                    if let Some(snapshot) = &site_ingress_snapshot {
+                        for hostname in &site_ingress_tls_hostnames(snapshot) {
+                            coord.ensure(hostname);
+                        }
                     }
                 }
 
                 // spec: FLT#certificate-faults
                 // A hostname no ingress needs a certificate for has nothing
                 // left to fail at.
-                let needing_certificates: std::collections::BTreeSet<String> = managed_ingresses
-                    .iter()
-                    .map(|mi| mi.hostname.clone())
-                    .chain(site_ingress_tls_hostnames(&site_ingress_snapshot))
-                    .collect();
-                self.clear_cert_issue_faults_not_needed(needing_certificates);
+                // spec: SITE#unreadable-site-ingresses — unless the site
+                // ingresses, which may need it, could not be read.
+                if let Some(snapshot) = &site_ingress_snapshot {
+                    let needing_certificates: std::collections::BTreeSet<String> =
+                        managed_ingresses
+                            .iter()
+                            .map(|mi| mi.hostname.clone())
+                            .chain(site_ingress_tls_hostnames(snapshot))
+                            .collect();
+                    self.clear_cert_issue_faults_not_needed(needing_certificates);
+                }
 
                 // spec: TLS#expiring-certificates
                 // Reconcile cert_expiring_soon faults against the
@@ -1757,12 +1764,7 @@ impl Reconciler {
                             false => None,
                         }
                     },
-                    async {
-                        match rules_coverage.is_complete() {
-                            true => Some(self.driver.data_plane.apply_rules(&dp_rules).await),
-                            false => None,
-                        }
-                    },
+                    apply_rules_plane(&*self.driver.data_plane, &dp_rules, rules_coverage),
                     apply_proxy_plane(&*self.driver.proxy, &proxy_config, proxy_coverage),
                 );
 
@@ -1811,9 +1813,11 @@ impl Reconciler {
                                 })
                             })
                             .collect();
+                        // The proxy config is applied only with the site
+                        // ingresses read, so the snapshot is here.
                         let site_ingress_names: Vec<String> = site_ingress_snapshot
-                            .ingresses
                             .iter()
+                            .flat_map(|snapshot| &snapshot.ingresses)
                             .filter(|ing| !ing.stale)
                             .map(|ing| ing.name.as_str().to_owned())
                             .collect();
@@ -1867,6 +1871,35 @@ impl Reconciler {
         self.sweep_unscheduled_instances(&apps);
 
         true
+    }
+
+    /// The site ingresses and their attachments, or `None` when they cannot
+    /// be read, holding `site_ingresses_unreadable` for as long as they cannot.
+    // spec: SITE#unreadable-site-ingresses
+    // spec: FLT#host-faults
+    fn load_site_ingresses(&self) -> Option<site_proxy::SiteIngressSnapshot> {
+        match self.db.call(site_proxy::load) {
+            Ok(snapshot) => {
+                self.clear_system_fault("site_ingresses_unreadable");
+                Some(snapshot)
+            }
+            Err(e) => {
+                error!(
+                    error = %e,
+                    "could not read the site ingresses or their attachments; holding the \
+                     proxy configuration and packet-filtering rules as last applied"
+                );
+                self.file_system_fault(
+                    "site_ingresses_unreadable",
+                    &format!(
+                        "could not read the site ingresses or their attachments, so the proxy \
+                         configuration and the packet-filtering rules are held as last applied \
+                         rather than withdrawing every site ingress. Error: {e}"
+                    ),
+                );
+                None
+            }
+        }
     }
 
     // -----------------------------------------------------------------------
@@ -2727,6 +2760,20 @@ async fn apply_proxy_plane(
 ) -> Option<Result<(), super::BoxError>> {
     match coverage.is_complete() {
         true => Some(proxy.apply_config(config).await),
+        false => None,
+    }
+}
+
+/// Apply this tick's packet-filtering rules, or `None` when the build did not
+/// cover every contributor and the apply is withheld.
+// spec: RCN#applying-absolute-state
+async fn apply_rules_plane(
+    data_plane: &dyn super::DataPlane,
+    rules: &crate::system::types::DataPlaneRules,
+    coverage: Coverage,
+) -> Option<Result<(), super::BoxError>> {
+    match coverage.is_complete() {
+        true => Some(data_plane.apply_rules(rules).await),
         false => None,
     }
 }
@@ -3988,6 +4035,225 @@ mod tests {
         assert!(
             !filed[0].contains("shop.example.com"),
             "the proxy ordering a certificate is an acquisition in progress: {filed:?}"
+        );
+    }
+
+    /// Records the ingress ports of every rule set applied, and how many proxy
+    /// configurations were applied.
+    #[derive(Default)]
+    struct RecordingPlanes {
+        rules: parking_lot::Mutex<Vec<Vec<u16>>>,
+        proxy_applies: std::sync::atomic::AtomicUsize,
+    }
+
+    impl crate::system::DataPlane for RecordingPlanes {
+        fn apply_rules<'a>(
+            &'a self,
+            rules: &'a crate::system::types::DataPlaneRules,
+        ) -> crate::system::BoxFuture<'a, Result<(), crate::system::BoxError>> {
+            self.rules
+                .lock()
+                .push(rules.ingress.iter().map(|r| r.external_port).collect());
+            Box::pin(async { Ok(()) })
+        }
+
+        fn apply_routes<'a>(
+            &'a self,
+            _routes: &'a [crate::system::types::ServiceRoute],
+        ) -> crate::system::BoxFuture<'a, Result<(), crate::system::BoxError>> {
+            Box::pin(async { Ok(()) })
+        }
+
+        fn clear_all<'a>(
+            &'a self,
+        ) -> crate::system::BoxFuture<'a, Result<(), crate::system::BoxError>> {
+            Box::pin(async { Ok(()) })
+        }
+    }
+
+    impl crate::system::NetworkProxy for RecordingPlanes {
+        fn is_healthy<'a>(
+            &'a self,
+        ) -> crate::system::BoxFuture<'a, Result<bool, crate::system::BoxError>> {
+            Box::pin(async { Ok(true) })
+        }
+
+        fn apply_config<'a>(
+            &'a self,
+            _config: &'a crate::system::types::ProxyConfig,
+        ) -> crate::system::BoxFuture<'a, Result<(), crate::system::BoxError>> {
+            self.proxy_applies
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Box::pin(async { Ok(()) })
+        }
+    }
+
+    fn site_ingress_with_attachment(db: &crate::runtime::db::Db, port: u16) {
+        use crate::runtime::{
+            site_ingress_attachments::{
+                self, AttachmentProtocol, AttachmentTarget, SiteIngressAttachment,
+            },
+            site_ingresses::{self, SiteIngressDef, SiteIngressSource, TlsProvider},
+        };
+        use seedling_protocol::names::{AppServiceName, SiteIngressName};
+
+        let gate = SiteIngressName::new("gate").unwrap();
+        site_ingresses::create(
+            db,
+            &SiteIngressDef {
+                name: gate.clone(),
+                hostname: "gate.example.com".into(),
+                description: None,
+                source: SiteIngressSource::Manual,
+                tls_provider: TlsProvider::None,
+                stale: false,
+                created_at: "2026-11-17T00:00:00Z".into(),
+            },
+        )
+        .unwrap();
+        site_ingress_attachments::attach(
+            db,
+            &SiteIngressAttachment {
+                site_ingress: gate,
+                port,
+                protocol: AttachmentProtocol::Tcp,
+                target: AttachmentTarget::Forward {
+                    app: AppName::new("absent").unwrap(),
+                    service: AppServiceName::new("api").unwrap(),
+                },
+                created_at: "2026-11-17T00:00:00Z".into(),
+            },
+        )
+        .unwrap();
+    }
+
+    fn rename_table(oi: &crate::oi::test_support::TestOi, from: &'static str, to: &'static str) {
+        oi.state.db.call(move |db| {
+            db.conn
+                .execute(&format!("ALTER TABLE {from} RENAME TO {to}"), [])
+                .unwrap();
+        });
+    }
+
+    // spec: SITE#unreadable-site-ingresses
+    // spec: FLT#host-faults
+    #[test]
+    fn site_ingresses_unreadable_is_held_until_they_are_read() {
+        let oi = crate::oi::test_support::TestOi::new();
+        oi.state
+            .db
+            .call(|db| site_ingress_with_attachment(db, 8443));
+        let reconciler = test_reconciler(&oi);
+        let held = |oi: &crate::oi::test_support::TestOi| {
+            active_kinds(oi, "_system")
+                .iter()
+                .any(|(kind, _)| kind == "site_ingresses_unreadable")
+        };
+
+        rename_table(&oi, "site_ingress_attachments", "hidden_attachments");
+        assert!(
+            reconciler.load_site_ingresses().is_none(),
+            "a failed read is not an empty one"
+        );
+        assert!(held(&oi), "filed while the attachments cannot be read");
+
+        rename_table(&oi, "hidden_attachments", "site_ingress_attachments");
+        let snapshot = reconciler.load_site_ingresses().expect("read");
+        assert_eq!(snapshot.attachments.len(), 1);
+        assert!(!held(&oi), "cleared on the next read");
+    }
+
+    // spec: SITE#unreadable-site-ingresses
+    // spec: RCN#applying-absolute-state
+    // A failed read of the site ingresses used to stand in an empty list, so
+    // the iteration applied a proxy configuration and rules with every site
+    // ingress port withdrawn, and cleared the faults about the attachments.
+    #[test]
+    fn unreadable_site_ingresses_withhold_the_proxy_and_rules() {
+        const PORT: u16 = 8443;
+        let oi = crate::oi::test_support::TestOi::new();
+        let apps = vec![snapshot_with_service("web")];
+        let registry = crate::runtime::registry::EphemeralInstanceRegistry::new();
+        let empty_lookup = crate::runtime::site_services::resolve::EmptyLookup;
+        let resolve_ctx = ResolveCtx {
+            nat64_active: false,
+            has_ipv6_egress: true,
+            resolver: &empty_lookup,
+        };
+        let node_prefix: Ipv6Net = "fd5e:ed11:9000::/48".parse().unwrap();
+        let external =
+            crate::runtime::external_service_mappings::ExternalServiceSnapshot::default();
+        let planes = RecordingPlanes::default();
+        let apply = |site: Option<&site_proxy::SiteIngressSnapshot>| {
+            let nft = phases::compute_nftables_rules(
+                &apps,
+                &HashMap::new(),
+                std::net::Ipv6Addr::LOCALHOST,
+                None,
+                &node_prefix,
+                &registry,
+                &external,
+                &resolve_ctx,
+                site,
+            );
+            let proxy = phases::compute_proxy_config(
+                &apps,
+                site,
+                &HashMap::new(),
+                &node_prefix,
+                &registry,
+                None,
+                &std::collections::BTreeMap::new(),
+            );
+            let rules = oi.block_on(apply_rules_plane(&planes, &nft.rules, nft.coverage));
+            let config = oi.block_on(apply_proxy_plane(&planes, &proxy.config, proxy.coverage));
+            (rules.is_some(), config.is_some(), proxy)
+        };
+        let applied_ports = || planes.rules.lock().last().cloned().unwrap_or_default();
+        let proxy_applies = || {
+            planes
+                .proxy_applies
+                .load(std::sync::atomic::Ordering::SeqCst)
+        };
+
+        oi.state
+            .db
+            .call(|db| site_ingress_with_attachment(db, PORT));
+        let read = oi.state.db.call(site_proxy::load).unwrap();
+        let (rules, config, proxy) = apply(Some(&read));
+        assert!(rules && config);
+        assert!(applied_ports().contains(&PORT));
+        assert_eq!(
+            proxy.unresolved_site_attachments.map(|u| u.len()),
+            Some(1),
+            "the attachment's missing target is reported"
+        );
+        assert!(proxy.conflicts.is_some());
+
+        let (rules, config, proxy) = apply(None);
+        assert!(!rules && !config, "both applies are withheld");
+        assert_eq!(planes.rules.lock().len(), 1, "no rule set was applied");
+        assert_eq!(proxy_applies(), 1, "no proxy configuration was applied");
+        assert!(
+            proxy.unresolved_site_attachments.is_none() && proxy.conflicts.is_none(),
+            "nothing is concluded about the attachments' faults"
+        );
+
+        // Read and empty is an answer: the port is withdrawn.
+        oi.state.db.call(|db| {
+            db.conn
+                .execute("DELETE FROM site_ingress_attachments", [])
+                .unwrap();
+        });
+        let read = oi.state.db.call(site_proxy::load).unwrap();
+        let (rules, config, proxy) = apply(Some(&read));
+        assert!(rules && config);
+        assert!(!applied_ports().contains(&PORT));
+        assert_eq!(proxy_applies(), 2);
+        assert_eq!(
+            proxy.unresolved_site_attachments.map(|u| u.len()),
+            Some(0),
+            "the removed attachment's fault clears"
         );
     }
 

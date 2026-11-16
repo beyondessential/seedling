@@ -258,3 +258,13 @@ The runtime MUST raise the `ingress_conflict` fault for the site ingress whose a
 Once the served attachment no longer claims the hostname and port, the runtime MUST serve the other.
 
 A conflict on one port MUST NOT affect the serving of other ports on the same hostname.
+
+### Unreadable site ingresses
+
+While the runtime cannot read the site ingresses or their attachments, it MUST hold a [`site_ingresses_unreadable`](faults.md#host-faults) fault.
+In an iteration that cannot read them, the runtime MUST NOT apply the proxy configuration or the packet-filtering rules, as for an app whose contribution it cannot compute when [applying absolute state](reconciliation.md#applying-absolute-state).
+In such an iteration, the runtime MUST NOT file or clear an [`ingress_conflict`](faults.md#ingress-and-service-faults) or `site_ingress_target_missing` fault.
+In such an iteration, the runtime MUST NOT clear a [`cert_issue_failed`](faults.md#certificate-faults) fault on the ground that no ingress needs a certificate for its hostname.
+
+> [!NOTE]
+> A site ingress that cannot be read and one that has been deleted look the same once applied, so the proxy and the redirected ports stay as last applied until the site ingresses can be read again.

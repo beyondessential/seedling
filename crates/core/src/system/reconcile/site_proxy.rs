@@ -74,20 +74,18 @@ pub(super) struct SiteIngressSnapshot {
     pub attachments: Vec<SiteIngressAttachment>,
 }
 
+/// Read the site ingresses and their attachments for one tick.
+///
+/// A failed read is an error, never an empty snapshot: the snapshot feeds the
+/// proxy configuration and the redirect rules, which are applied wholesale, so
+/// an empty one would withdraw every site ingress port.
 // spec: SITE#site-ingresses, SITE#attachments
-pub(super) fn load(db: &crate::runtime::db::Db) -> SiteIngressSnapshot {
-    let ingresses = site_ingresses::list(db).unwrap_or_else(|e| {
-        tracing::warn!(error = %e, "site_proxy: failed to list site ingresses; using empty");
-        Vec::new()
-    });
-    let attachments = site_ingress_attachments::list_all(db).unwrap_or_else(|e| {
-        tracing::warn!(error = %e, "site_proxy: failed to list site ingress attachments; using empty");
-        Vec::new()
-    });
-    SiteIngressSnapshot {
-        ingresses,
-        attachments,
-    }
+// spec: SITE#unreadable-site-ingresses
+pub(super) fn load(db: &crate::runtime::db::Db) -> rusqlite::Result<SiteIngressSnapshot> {
+    Ok(SiteIngressSnapshot {
+        ingresses: site_ingresses::list(db)?,
+        attachments: site_ingress_attachments::list_all(db)?,
+    })
 }
 
 // spec: SITE#site-ingresses, SITE#attachments

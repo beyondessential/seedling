@@ -203,8 +203,9 @@ pub(super) fn classify_site_service_endpoints(
 pub(super) struct NftablesBuild {
     pub rules: DataPlaneRules,
     pub degraded_services_by_app: HashMap<AppName, std::collections::BTreeSet<String>>,
-    /// `Partial` when an app's rules could not be built. Its DNAT and mount
-    /// rules are absent from `rules`, which is applied wholesale.
+    /// `Partial` when an app's rules could not be built, or the site
+    /// ingresses could not be read. Their rules are absent from `rules`,
+    /// which is applied wholesale.
     pub coverage: Coverage,
 }
 
@@ -221,7 +222,7 @@ pub(super) fn compute_nftables_rules(
     registry: &dyn InstanceRegistry,
     ext_snapshot: &ExternalServiceSnapshot,
     resolve_ctx: &ResolveCtx<'_>,
-    site_snapshot: &site_proxy::SiteIngressSnapshot,
+    site_snapshot: Option<&site_proxy::SiteIngressSnapshot>,
 ) -> NftablesBuild {
     let backends_by_app = rules::collect_backends_by_app(running_pods_by_app);
 
@@ -273,11 +274,18 @@ pub(super) fn compute_nftables_rules(
         }
     }
     // spec: INFRA#ingress-redirection
-    all_ingress.extend(rules::build_site_ingress_rules(
-        site_snapshot,
-        caddy_ip,
-        caddy_v4_addr,
-    ));
+    // spec: SITE#unreadable-site-ingresses
+    let site_coverage = match site_snapshot {
+        Some(snapshot) => {
+            all_ingress.extend(rules::build_site_ingress_rules(
+                snapshot,
+                caddy_ip,
+                caddy_v4_addr,
+            ));
+            Coverage::Complete
+        }
+        None => Coverage::Partial,
+    };
     NftablesBuild {
         rules: DataPlaneRules {
             ingress: all_ingress,
@@ -285,15 +293,15 @@ pub(super) fn compute_nftables_rules(
             service_dnat: all_service_dnat,
         },
         degraded_services_by_app: degraded_by_app,
-        coverage: Coverage::of(dropped),
+        coverage: Coverage::of(dropped).and(site_coverage),
     }
 }
 
 pub(super) struct ProxyBuildResult {
     pub config: crate::system::types::ProxyConfig,
-    /// `Partial` when an app's ingresses could not be built. Its virtual
-    /// hosts and L4 routes are absent from `config`, which replaces the
-    /// proxy's whole configuration.
+    /// `Partial` when an app's ingresses could not be built, or the site
+    /// ingresses could not be read. Their virtual hosts and L4 routes are
+    /// absent from `config`, which replaces the proxy's whole configuration.
     pub coverage: Coverage,
     pub observations: Vec<(
         crate::runtime::identity::ResourceInstance,
@@ -308,13 +316,16 @@ pub(super) struct ProxyBuildResult {
     /// Site-ingress / app-ingress collisions on the same `(hostname, port)`
     /// detected this tick. The reconciler files faults on both parties for
     /// new conflicts and clears them when a `(host, port)` drops out of the
-    /// set. Both sides are dropped from the proxy config.
+    /// set. Both sides are dropped from the proxy config. `None` when the
+    /// site ingresses could not be read, so no conflict can be decided.
     // spec: SITE#ingress-conflicts
-    pub conflicts: super::site_proxy::ConflictReport,
+    // spec: SITE#unreadable-site-ingresses
+    pub conflicts: Option<super::site_proxy::ConflictReport>,
     /// Site-ingress attachments that couldn't be resolved this tick (target
     /// app/service missing, unsupported protocol, etc). Each entry produces
-    /// a `site_ingress_target_missing` fault under the `_system` app.
-    pub unresolved_site_attachments: Vec<super::site_proxy::UnresolvedAttachment>,
+    /// a `site_ingress_target_missing` fault under the `_system` app. `None`
+    /// when the site ingresses could not be read.
+    pub unresolved_site_attachments: Option<Vec<super::site_proxy::UnresolvedAttachment>>,
 }
 
 /// The `(instance, hostname)` pairs whose certificates are observed: every
@@ -386,7 +397,7 @@ pub(super) fn warm_cert_targets(
 
 pub(super) fn compute_proxy_config(
     apps: &[AppSnapshot],
-    site_snapshot: &site_proxy::SiteIngressSnapshot,
+    site_snapshot: Option<&site_proxy::SiteIngressSnapshot>,
     running_pods_by_app: &HashMap<AppName, Vec<RunningPod>>,
     node_prefix: &Ipv6Net,
     registry: &dyn InstanceRegistry,
@@ -456,6 +467,37 @@ pub(super) fn compute_proxy_config(
         }
     }
 
+    // spec: ING#claims-across-apps
+    let install_seqs: HashMap<&AppName, Option<i64>> =
+        apps.iter().map(|a| (&a.name, a.install_seq)).collect();
+    let (all_pairs, lost_app_claims) =
+        site_proxy::resolve_app_claims(all_pairs, |app| install_seqs.get(app).copied().flatten());
+
+    // spec: SITE#unreadable-site-ingresses
+    // Without the site ingresses no conflict can be decided and no attachment
+    // resolved, so neither is reported, and the build is partial: the config
+    // lacks every site ingress, which applied would withdraw them.
+    let Some(site_snapshot) = site_snapshot else {
+        let app_proxy_pairs: Vec<_> = all_pairs
+            .into_iter()
+            .map(|(_app, def, up)| (def, up))
+            .collect();
+        return ProxyBuildResult {
+            config: finish_proxy_config(
+                build_proxy_config(&app_proxy_pairs, &[]),
+                all_l4_routes,
+                all_warm,
+                cert_endpoint_url,
+                renewal_ratios,
+            ),
+            coverage: Coverage::Partial,
+            observations,
+            ready_observations,
+            conflicts: None,
+            unresolved_site_attachments: None,
+        };
+    };
+
     // spec: SITE#site-ingresses, SITE#attachments
     let site_data = site_proxy::collect(
         site_snapshot,
@@ -464,12 +506,6 @@ pub(super) fn compute_proxy_config(
         node_prefix,
         registry,
     );
-
-    // spec: ING#claims-across-apps
-    let install_seqs: HashMap<&AppName, Option<i64>> =
-        apps.iter().map(|a| (&a.name, a.install_seq)).collect();
-    let (all_pairs, lost_app_claims) =
-        site_proxy::resolve_app_claims(all_pairs, |app| install_seqs.get(app).copied().flatten());
 
     // spec: SITE#ingress-conflicts
     let (site_data, lost_site_claims) = site_proxy::resolve_site_claims(site_data);
@@ -506,25 +542,40 @@ pub(super) fn compute_proxy_config(
 
     let mut combined_forwards = app_proxy_pairs;
     combined_forwards.extend(site_forward_pairs);
-    let mut config = build_proxy_config(&combined_forwards, &site_redirect_pairs);
-    config.l4_routes = all_l4_routes;
     // spec: SITE#attachments
-    config.l4_routes.extend(
+    all_l4_routes.extend(
         surviving_site_data
             .l4_routes
             .into_iter()
             .map(|entry| entry.route),
     );
-    crate::system::translate::proxy::augment_with_warm_certs(&mut config, all_warm);
-    config.cert_endpoint_url = cert_endpoint_url.map(str::to_owned);
-    config.renewal_ratios = renewal_ratios.clone();
 
     ProxyBuildResult {
-        config,
+        config: finish_proxy_config(
+            build_proxy_config(&combined_forwards, &site_redirect_pairs),
+            all_l4_routes,
+            all_warm,
+            cert_endpoint_url,
+            renewal_ratios,
+        ),
         coverage: Coverage::of(dropped),
         observations,
         ready_observations,
-        conflicts,
-        unresolved_site_attachments: surviving_site_data.unresolved,
+        conflicts: Some(conflicts),
+        unresolved_site_attachments: Some(surviving_site_data.unresolved),
     }
+}
+
+fn finish_proxy_config(
+    mut config: crate::system::types::ProxyConfig,
+    l4_routes: Vec<crate::system::types::L4Route>,
+    warm: std::collections::BTreeSet<String>,
+    cert_endpoint_url: Option<&str>,
+    renewal_ratios: &std::collections::BTreeMap<String, f64>,
+) -> crate::system::types::ProxyConfig {
+    config.l4_routes = l4_routes;
+    crate::system::translate::proxy::augment_with_warm_certs(&mut config, warm);
+    config.cert_endpoint_url = cert_endpoint_url.map(str::to_owned);
+    config.renewal_ratios = renewal_ratios.clone();
+    config
 }

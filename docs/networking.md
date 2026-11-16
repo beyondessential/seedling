@@ -269,6 +269,13 @@ The `fib daddr type local` guard is essential: without it, the
 prerouting dport rule would catch Caddy's own upstream traffic to
 `service_ip:<port>` and loop it back to Caddy.
 
+While the site ingresses or their attachments cannot be read, neither
+these rules nor the proxy configuration is applied: both stay as last
+applied rather than withdrawing every site ingress port, and a
+`site_ingresses_unreadable` fault is held on `_system` until a read
+succeeds. The `ingress_conflict` and `site_ingress_target_missing` faults
+are left as they are meanwhile.
+
 ### Ingress conflicts
 
 When two claims on one `(hostname, port)` meet, the proxy configuration
