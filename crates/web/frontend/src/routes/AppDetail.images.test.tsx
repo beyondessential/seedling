@@ -42,13 +42,14 @@ const pin: ImagePin = {
 
 describe("AppDetail images", () => {
   // spec: UI#images
+  // spec: UI#guarded-controls
   it("lists in-use and pinned images and clears all pins", async () => {
     const fixtures = {
       ...baseFixtures(makeDetail()),
       "/images/list": { images: [makeImage()] },
       "/images/pins/list": { pins: [pin] },
     };
-    const { request } = mount(fixtures, "write");
+    const { request } = mount(fixtures, "dangerous");
     // The app's deployment renders this same image reference, so waiting on
     // that text is satisfied by the deployment card while the images table is
     // still loading. Wait on the state chip, which only the table renders, and

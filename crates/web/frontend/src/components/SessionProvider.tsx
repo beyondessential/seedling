@@ -1,5 +1,5 @@
 import { createContext, useCallback, useContext, useEffect, useRef, useState, type ReactNode } from "react";
-import { AuthRequired, BackendUnreachable, connect } from "../lib/session";
+import { AuthRequired, BackendUnreachable, connect, sessionDropped } from "../lib/session";
 import type { Session } from "../lib/session";
 import type { SeedlingEvent, VolumeRef } from "../lib/types";
 import { UniRouter } from "../lib/uni-router";
@@ -22,6 +22,8 @@ interface SessionCtx {
   probing: boolean;
   reconnecting: boolean;
   offline: boolean;
+  /** The web interface answered that no credential would authenticate. */
+  signInUnavailable: boolean;
   setSession: (s: Session | null) => void;
   events: SeedlingEvent[];
   sidebarOpen: boolean;
@@ -48,6 +50,7 @@ export const SessionContext = createContext<SessionCtx>({
   probing: true,
   reconnecting: false,
   offline: false,
+  signInUnavailable: false,
   setSession: () => undefined,
   events: [],
   sidebarOpen: false,
@@ -77,6 +80,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
   const [probing, setProbing] = useState(true);
   const [reconnecting, setReconnecting] = useState(false);
   const [offline, setOffline] = useState(false);
+  const [signInUnavailable, setSignInUnavailable] = useState(false);
   const [events, setEvents] = useState<SeedlingEvent[]>([]);
   const [uniRouter, setUniRouter] = useState<UniRouter | null>(null);
   const [sidebarOpen, setSidebarOpenState] = useState<boolean>(() => {
@@ -173,7 +177,9 @@ export function SessionProvider({ children }: { children: ReactNode }) {
       .catch((e) => {
         if (e instanceof BackendUnreachable) {
           setOffline(true);
-        } else if (!(e instanceof AuthRequired)) {
+        } else if (e instanceof AuthRequired) {
+          setSignInUnavailable(e.credential === "none");
+        } else {
           console.warn("connect probe failed:", e);
         }
       })
@@ -233,6 +239,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
       } catch (e) {
         if (e instanceof AuthRequired) {
           if (!cancelled.current) {
+            setSignInUnavailable(e.credential === "none");
             setSession(null);
             setOffline(false);
             setReconnecting(false);
@@ -335,6 +342,13 @@ export function SessionProvider({ children }: { children: ReactNode }) {
           safety_mode: safetyModeRef.current,
         })
         .then((res) => {
+          // spec: WEB#session-tracking
+          // A session the web interface no longer records is closed; closing
+          // it makes the reconnect path below open a new one.
+          if (res.ok && sessionDropped(res.value)) {
+            session.wt.close();
+            return;
+          }
           if (res.ok && res.value && typeof res.value === "object") {
             const sid = (res.value as { session_id?: unknown }).session_id;
             if (typeof sid === "string") setWebSessionId(sid);
@@ -382,7 +396,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
 
   return (
     <SessionContext.Provider value={{
-      session, probing, reconnecting, offline, setSession,
+      session, probing, reconnecting, offline, signInUnavailable, setSession,
       events, sidebarOpen, setSidebarOpen, sidebarWidth, setSidebarWidth,
       uniRouter,
       shellTabs, activeShellId, setActiveShellId, openShell, openVolumeShell, closeShell,

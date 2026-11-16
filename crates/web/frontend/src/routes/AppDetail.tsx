@@ -880,7 +880,7 @@ function ResourcesSection({
                 </IconActionButton>
               ) : (
                 <IconActionButton
-                  safety="write"
+                  safety="dangerous"
                   tooltip="Stop resource"
                   onClick={() => void stopResource(r.type, r.name)}
                   disabled={stopping}
@@ -1366,7 +1366,7 @@ function ParamsSection({
                     </IconActionButton>
                     {p.value != null && !p.required && (
                       <IconActionButton
-                        safety="write"
+                        safety="dangerous"
                         tooltip="Unset"
                         onClick={() => void unset(p.name)}
                         disabled={loading || editsDisabled}
@@ -2386,7 +2386,7 @@ function AppImagesSection({
         </OutlinedActionButton>
         {pins.length > 0 && (
           <OutlinedActionButton
-            safety="write"
+            safety="dangerous"
             tooltip={`Clear all ${pins.length} pin${pins.length === 1 ? "" : "s"} for this app`}
             size="small"
             onClick={() => {
@@ -2544,7 +2544,7 @@ function AppImagesSection({
             Cancel
           </Button>
           <SolidActionButton
-            safety="write"
+            safety="dangerous"
             onClick={submitClearAll}
             disabled={mutating}
           >
@@ -2558,24 +2558,20 @@ function AppImagesSection({
 
 function ClearFaultsButton({
   appName,
-  status,
   onCleared,
 }: {
   appName: string;
-  status: AppStatus;
   onCleared: () => void;
 }) {
-  // spec: FLTS#clearing-faults
-  // Clearing faults from a not-installed app is write-level; from any other
-  // phase it's danger-level because the operator may be silencing live signal
-  // about a running workload's problems.
-  const tier = status === "not_installed" ? "write" : "dangerous";
+  // spec: UI#guarded-controls
+  // Clearing faults removes only their records, and a fault whose condition
+  // still holds is filed again, so it needs write whatever the app's phase.
   const { execute, loading, error, clearError } = useOiAction();
   const [confirming, setConfirming] = useState(false);
   return (
     <>
       <OutlinedActionButton
-        safety={tier}
+        safety="write"
         tooltip="Clear all active faults for this app"
         size="small"
         disabled={loading}
@@ -2597,14 +2593,6 @@ function ClearFaultsButton({
             Faults derived from observable conditions (image pull failures,
             healthcheck failures, etc.) will be re-filed on the next
             reconciliation tick if the underlying problem still exists.
-            {tier === "dangerous" && (
-              <>
-                {" "}
-                This is a danger-level action because the app is currently{" "}
-                <strong>{status}</strong> — clearing live signal can obscure
-                problems that operators need to see.
-              </>
-            )}
           </DialogContentText>
           {error && (
             <Alert severity="error" sx={{ mt: 2 }}>
@@ -2622,7 +2610,6 @@ function ClearFaultsButton({
             Cancel
           </Button>
           <Button
-            color={tier === "dangerous" ? "error" : "primary"}
             variant="contained"
             disabled={loading}
             onClick={async () => {
@@ -2965,7 +2952,6 @@ export default function AppDetail() {
               action={
                 <ClearFaultsButton
                   appName={name!}
-                  status={data.status}
                   onCleared={refetch}
                 />
               }

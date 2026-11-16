@@ -317,7 +317,7 @@ export default function Certificates() {
             : ""
         }
         confirmLabel="Clear"
-        safety="write"
+        safety="dangerous"
         onClose={() => setRemovingPolicy(null)}
         onConfirm={async () => {
           if (!removingPolicy) return;
@@ -592,7 +592,7 @@ function PoliciesSection({
                   </TableCell>
                   <TableCell align="right">
                     <IconActionButton
-                      safety="write"
+                      safety="dangerous"
                       tooltip="Clear policy"
                       onClick={() => onClear(p.hostname)}
                     >
@@ -804,7 +804,7 @@ function ManualCertsSection({
                             Upload cert
                           </OutlinedActionButton>
                           <IconActionButton
-                            safety="write"
+                            safety="dangerous"
                             tooltip="Cancel CSR (deletes the keypair)"
                             onClick={() => onCancelCsr(c)}
                           >

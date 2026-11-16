@@ -38,13 +38,7 @@ pub async fn handle_connect(
 
     let actor = match maybe_actor {
         Some(a) => a,
-        None => {
-            return (
-                StatusCode::UNAUTHORIZED,
-                Json(json!({ "auth_required": "password" })),
-            )
-                .into_response();
-        }
+        None => return unauthorized(state.password_hash.as_deref()),
     };
 
     let session_token =
@@ -67,6 +61,23 @@ pub async fn handle_connect(
         cert_hashes,
     })
     .into_response()
+}
+
+/// The `401` answer to a `/connect` no source authenticated: it names the
+/// credential the client should collect, which is none when password login
+/// could not authenticate any password.
+// spec: WEB#authentication
+fn unauthorized(password_hash: Option<&str>) -> Response {
+    let required = if password::can_authenticate(password_hash) {
+        "password"
+    } else {
+        "none"
+    };
+    (
+        StatusCode::UNAUTHORIZED,
+        Json(json!({ "auth_required": required })),
+    )
+        .into_response()
 }
 
 /// Check credentials in order: Tailscale → dev bypass → session token → password.
@@ -118,4 +129,40 @@ fn resolve_actor(
     }
 
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use argon2::password_hash::SaltString;
+    use argon2::{Argon2, PasswordHasher};
+
+    use super::*;
+
+    async fn body_of(response: Response) -> (StatusCode, serde_json::Value) {
+        let status = response.status();
+        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        (status, serde_json::from_slice(&bytes).unwrap())
+    }
+
+    // spec: WEB#authentication
+    #[tokio::test]
+    async fn unauthenticated_connect_asks_for_a_password_only_when_one_can_work() {
+        let salt = SaltString::encode_b64(b"testsalt0123456").unwrap();
+        let hash = Argon2::default()
+            .hash_password(b"secret", &salt)
+            .unwrap()
+            .to_string();
+
+        let (status, body) = body_of(unauthorized(Some(&hash))).await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED);
+        assert_eq!(body, json!({ "auth_required": "password" }));
+
+        for hash in [None, Some(""), Some("not a phc string")] {
+            let (status, body) = body_of(unauthorized(hash)).await;
+            assert_eq!(status, StatusCode::UNAUTHORIZED);
+            assert_eq!(body, json!({ "auth_required": "none" }), "{hash:?}");
+        }
+    }
 }

@@ -15,6 +15,22 @@ pub fn verify_password(hash_str: &str, password: &str) -> bool {
         .is_ok()
 }
 
+/// Whether password login can authenticate any password: a `password_hash`
+/// is configured and is a valid PHC string.
+// spec: WEB#password-login
+pub fn can_authenticate(hash: Option<&str>) -> bool {
+    let Some(hash) = hash else {
+        return false;
+    };
+    // A PHC string with no hash output names an algorithm and nothing a
+    // password could be checked against.
+    if !PasswordHash::new(hash).is_ok_and(|parsed| parsed.hash.is_some()) {
+        tracing::warn!("configured password_hash is not a valid PHC string");
+        return false;
+    }
+    true
+}
+
 pub struct SessionEntry {
     pub actor: Arc<Actor>,
     pub expires: Instant,
@@ -91,6 +107,15 @@ mod tests {
         // Not a PHC string — must return false, not panic.
         assert!(!verify_password("not a phc hash", "anything"));
         assert!(!verify_password("", "anything"));
+    }
+
+    // spec: WEB#password-login
+    #[test]
+    fn password_login_authenticates_only_with_a_valid_phc_hash() {
+        assert!(can_authenticate(Some(&hash("anything"))));
+        assert!(!can_authenticate(None));
+        assert!(!can_authenticate(Some("")));
+        assert!(!can_authenticate(Some("$argon2id$stub")));
     }
 
     // spec: WEB#password-login

@@ -75,8 +75,9 @@ describe("AppDetail params", () => {
   });
 
   // spec: UI#operator-capabilities
+  // spec: UI#guarded-controls
   it("unsets an optional param", async () => {
-    const { request } = mount(baseFixtures(makeDetail()), "write");
+    const { request } = mount(baseFixtures(makeDetail()), "dangerous");
     expect(await screen.findByText("domain")).toBeTruthy();
     fireEvent.click(iconButton("Unset"));
     await waitFor(() =>
@@ -187,8 +188,9 @@ describe("AppDetail resources", () => {
     expect(callsTo(request, "/apps/scale")).toEqual([]);
   });
 
+  // spec: UI#guarded-controls
   it("restarts and stops a deployment", async () => {
-    const { request } = mount(baseFixtures(makeDetail()), "write");
+    const { request } = mount(baseFixtures(makeDetail()), "dangerous");
     expect(await screen.findByText("web-0")).toBeTruthy();
     fireEvent.click(iconButton("Restart deployment"));
     await waitFor(() =>

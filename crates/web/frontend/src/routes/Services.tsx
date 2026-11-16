@@ -950,7 +950,7 @@ export default function Services() {
                                   <EditIcon sx={{ fontSize: 16 }} />
                                 </IconActionButton>
                                 <IconActionButton
-                                  safety="write"
+                                  safety="dangerous"
                                   tooltip="Unmap"
                                   onClick={() => void unmap(d.app, d.name)}
                                 >

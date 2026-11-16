@@ -326,7 +326,7 @@ export default function Images() {
                   </TableCell>
                   <TableCell align="right">
                     <IconActionButton
-                      safety="write"
+                      safety="dangerous"
                       tooltip="Clear pin"
                       onClick={() => {
                         clearError();
@@ -404,7 +404,7 @@ export default function Images() {
             Cancel
           </Button>
           <SolidActionButton
-            safety="write"
+            safety="dangerous"
             onClick={submitClearPin}
             disabled={mutating}
           >

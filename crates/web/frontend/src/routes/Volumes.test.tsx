@@ -314,10 +314,11 @@ describe("Volumes", () => {
     );
   });
 
+  // spec: UI#guarded-controls
   it("unmaps an external volume from its row", async () => {
     const { request } = renderWithSession(<Volumes />, {
       fixtures: populated,
-      safetyMode: "write",
+      safetyMode: "dangerous",
     });
     await screen.findByText("shared");
     fireEvent.click(iconButton(row("shared"), "Unmap"));

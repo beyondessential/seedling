@@ -24,7 +24,7 @@ export async function connect(credential: ConnectRequest): Promise<Session> {
   }
 
   if (res.status === 401) {
-    throw new AuthRequired();
+    throw new AuthRequired(await authRequiredCredential(res));
   }
   if (res.status >= 500) {
     throw new BackendUnreachable(`POST /connect returned ${res.status}`);
@@ -39,10 +39,38 @@ export async function connect(credential: ConnectRequest): Promise<Session> {
   return { token: data.token, actor: data.actor, client, wt };
 }
 
-export class AuthRequired extends Error {
-  constructor() {
-    super("authentication required");
+/** What the operator must supply for the next `/connect`: a password, or
+ *  nothing, because no credential would authenticate. */
+export type AuthCredential = "password" | "none";
+
+// spec: UI#signing-in
+async function authRequiredCredential(res: Response): Promise<AuthCredential> {
+  try {
+    const body = (await res.json()) as { auth_required?: unknown };
+    return body.auth_required === "none" ? "none" : "password";
+  } catch {
+    return "password";
   }
+}
+
+export class AuthRequired extends Error {
+  readonly credential: AuthCredential;
+
+  constructor(credential: AuthCredential = "password") {
+    super("authentication required");
+    this.credential = credential;
+  }
+}
+
+/** Whether a heartbeat answer says the web session is no longer recorded,
+ *  so the client must close it and open a new one. */
+// spec: WEB#session-tracking
+export function sessionDropped(heartbeat: unknown): boolean {
+  return (
+    typeof heartbeat === "object" &&
+    heartbeat !== null &&
+    (heartbeat as { alive?: unknown }).alive === false
+  );
 }
 
 export class BackendUnreachable extends Error {

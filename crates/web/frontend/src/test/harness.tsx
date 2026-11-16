@@ -122,6 +122,7 @@ export function renderWithSession(ui: ReactElement, options: RenderWithSessionOp
     probing: false,
     reconnecting: false,
     offline: false,
+    signInUnavailable: false,
     setSession: vi.fn(),
     events,
     sidebarOpen: false,

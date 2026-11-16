@@ -443,10 +443,11 @@ describe("Certificates", () => {
   });
 
   // spec: UI#certificates
+  // spec: UI#guarded-controls
   it("clears a policy after confirmation", async () => {
     const { request } = renderWithSession(<Certificates />, {
       fixtures: baseFixtures(),
-      safetyMode: "write",
+      safetyMode: "dangerous",
     });
 
     await screen.findByText("*.example.com");
@@ -823,10 +824,11 @@ describe("Certificates", () => {
     });
   });
 
+  // spec: UI#guarded-controls
   it("cancels a pending CSR from the row action", async () => {
     const { request } = renderWithSession(<Certificates />, {
       fixtures: baseFixtures(),
-      safetyMode: "write",
+      safetyMode: "dangerous",
     });
 
     await screen.findByText("csr.example.com");

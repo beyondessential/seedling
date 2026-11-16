@@ -1072,7 +1072,7 @@ export default function Volumes() {
                                   <EditIcon sx={{ fontSize: 16 }} />
                                 </IconActionButton>
                                 <IconActionButton
-                                  safety="write"
+                                  safety="dangerous"
                                   tooltip="Unmap"
                                   onClick={() => void unmapVolume(d.app, d.name)}
                                 >

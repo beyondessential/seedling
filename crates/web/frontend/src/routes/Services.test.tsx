@@ -327,10 +327,11 @@ describe("Services", () => {
     });
   });
 
+  // spec: UI#guarded-controls
   it("unmaps an external service slot", async () => {
     const { request } = renderWithSession(<Services />, {
       fixtures: populated,
-      safetyMode: "write",
+      safetyMode: "dangerous",
     });
     const row = (await screen.findByText("_site/db")).closest("tr");
     expect(row).not.toBeNull();
