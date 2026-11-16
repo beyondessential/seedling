@@ -408,6 +408,34 @@ mod tests {
         );
     }
 
+    // spec: IMG#image-discovery
+    #[test]
+    fn rt_query_records_no_images_during_a_probe() {
+        let (engine, ast, app) = setup_engine_and_app(
+            r#"
+            app.on_action("look", |rt, _param| {
+                rt.query(app.deployment().image("registry.example.com/queried:1.0")).ready();
+                rt.start(app.deployment().image("registry.example.com/started:1.0")).ready();
+            });
+        "#,
+        );
+
+        let registry: Arc<dyn InstanceRegistry> = Arc::new(EphemeralInstanceRegistry::new());
+        let response =
+            probe_app(&engine, &ast, &app, registry, &ProbeRequest::default()).expect("probe");
+
+        assert!(
+            response
+                .all_images
+                .contains("registry.example.com/started:1.0")
+        );
+        assert!(
+            !response
+                .all_images
+                .contains("registry.example.com/queried:1.0")
+        );
+    }
+
     // spec: IMG#probe-parameters
     #[test]
     fn lenient_skips_action_with_missing_required_param() {

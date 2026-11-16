@@ -140,6 +140,8 @@ exactly what happened:
   `stop_sent` → `ingress_removed` → `ingress_cleaned_up`.
 - **Volumes**: `volume_created` → `volume_ready` → (ready). Teardown:
   `stop_sent` → `volume_removed` → `volume_cleaned_up`.
+- **External volumes**: no observations. The lifecycle state is the desired
+  state (`Ready` or `Unscheduled`), held by the reconciler each iteration.
 
 If observations stopped at an intermediate point, the reconciler may be
 failing silently — check logs.

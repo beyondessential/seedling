@@ -290,6 +290,78 @@ pub fn query_observations(
     rows.collect()
 }
 
+/// Hold an external volume's lifecycle state as its app's desired state has
+/// it. The time of the last change moves only when the state does.
+// spec: LCY#external-volumes
+pub fn set_external_volume_state(
+    db: &Db,
+    instance: &ResourceInstance,
+    state: LifecycleState,
+) -> rusqlite::Result<()> {
+    db.conn.execute(
+        "INSERT INTO external_volume_states (instance_id, state, changed_at)
+         VALUES (?1, ?2, ?3)
+         ON CONFLICT (instance_id) DO UPDATE SET
+             state = excluded.state,
+             changed_at = excluded.changed_at
+         WHERE state != excluded.state",
+        params![instance.id.to_hex(), format!("{state:?}"), now_ms()],
+    )?;
+    Ok(())
+}
+
+/// An external volume's lifecycle state and when it last changed: `Pending`
+/// until the desired state has been held for it.
+// spec: LCY#external-volumes
+fn external_volume_state(
+    db: &Db,
+    instance: &ResourceInstance,
+) -> rusqlite::Result<(LifecycleState, Option<SystemTime>)> {
+    use rusqlite::OptionalExtension as _;
+    let row: Option<(String, i64)> = db
+        .conn
+        .query_row(
+            "SELECT state, changed_at FROM external_volume_states WHERE instance_id = ?1",
+            params![instance.id.to_hex()],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .optional()?;
+    let Some((state, changed_at)) = row else {
+        return Ok((LifecycleState::Pending, None));
+    };
+    let state = match state.as_str() {
+        "Ready" => LifecycleState::Ready,
+        "Unscheduled" => LifecycleState::Unscheduled,
+        other => {
+            return Err(rusqlite::Error::FromSqlConversionFailure(
+                0,
+                rusqlite::types::Type::Text,
+                format!("unknown external volume state {other:?}").into(),
+            ));
+        }
+    };
+    let at = UNIX_EPOCH + std::time::Duration::from_millis(changed_at.max(0) as u64);
+    Ok((state, Some(at)))
+}
+
+/// An instance's current lifecycle state and the time of its last transition,
+/// or an error where what it derives from cannot be read, which is neither an
+/// empty history nor any state.
+///
+/// An external volume's comes from the desired state; every other instance's
+/// from its observation history.
+// spec: LCY#derivation
+pub fn read_lifecycle(
+    db: &Db,
+    instance: &ResourceInstance,
+) -> rusqlite::Result<(LifecycleState, Option<SystemTime>)> {
+    if instance.kind == ResourceKind::ExternalVolume {
+        return external_volume_state(db, instance);
+    }
+    let observations = query_observations(db, instance)?;
+    Ok(crate::runtime::barrier::oracle::derive_state_with_transition_time(instance, &observations))
+}
+
 // spec: HIST#observations
 /// The observations of every instance given, each instance's in the same
 /// order [`query_observations`] returns them.

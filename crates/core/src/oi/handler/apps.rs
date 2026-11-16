@@ -15,11 +15,10 @@ use crate::{
     runtime::{
         AppPhase,
         apps::{AppRegistry, AppStatus, status as app_status},
-        barrier::oracle::derive_state_with_transition_time,
         definition::{Bundle, Source, version},
         desired::list_dynamic_resources_for_app,
         faults,
-        history::{find_instances_for_group, query_observations},
+        history::{find_instances_for_group, read_lifecycle},
         identity::{InstanceId, InstanceVariant, ResourceInstance},
         priority::{self, AppPriority},
         restart_gens, restarts, scaling,
@@ -714,9 +713,7 @@ pub(crate) fn describe_app(state: &OiState, params: AppParams) -> HandlerResult 
                         find_instances_for_group(db, &name_owned, info.kind, Some(&info.name_str))?
                             .iter()
                             .map(|inst| {
-                                let observations = query_observations(db, inst)?;
-                                let (lifecycle, transition_time) =
-                                    derive_state_with_transition_time(inst, &observations);
+                                let (lifecycle, transition_time) = read_lifecycle(db, inst)?;
                                 // spec: APPS#description
                                 // Omitted entirely for an instance with no
                                 // restart history, so a resource that has never
@@ -857,9 +854,7 @@ pub(crate) fn describe_app(state: &OiState, params: AppParams) -> HandlerResult 
                         variant: InstanceVariant::Singleton,
                         display_name: rec.display_name.clone(),
                     };
-                    let observations = query_observations(db, &inst)?;
-                    let (lifecycle, transition_time) =
-                        derive_state_with_transition_time(&inst, &observations);
+                    let (lifecycle, transition_time) = read_lifecycle(db, &inst)?;
                     let kind_str = format!("{:?}", kind).to_lowercase();
                     // Anonymous resources have no `resource_name`; fall back to
                     // the display_name so they have a stable identifier in the

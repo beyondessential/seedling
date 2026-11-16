@@ -48,3 +48,69 @@ fn clear_app_faults_reports_count_and_empties_list() {
     let result = oi.call("/faults/clear", json!({ "app": "demo" })).unwrap();
     assert_eq!(result["cleared"], 0);
 }
+
+fn file_host_fault(oi: &TestOi, app: &str, kind: &str) {
+    let (app, kind) = (
+        seedling_protocol::names::AppName::new_unchecked(app),
+        kind.to_owned(),
+    );
+    oi.state.db.call(move |db| {
+        crate::runtime::faults::file_fault(db, &app, None, None, None, &kind, "filed by a test")
+            .unwrap();
+    });
+}
+
+// spec: FLTS#clearing-faults
+#[test]
+fn clear_accepts_the_host_fault_names_and_clears_every_fault_filed_against_them() {
+    let oi = oi_with_fault();
+    file_host_fault(&oi, "_system", "reconciler_panic");
+    file_host_fault(&oi, "_system", "timezone_undetermined");
+    file_host_fault(&oi, "seedling", "host_note");
+
+    let result = oi
+        .call("/faults/clear", json!({ "app": "_system" }))
+        .unwrap();
+    assert_eq!(result["app"], "_system");
+    assert_eq!(result["cleared"], 2);
+
+    let remaining = oi.call("/faults/list", json!({})).unwrap();
+    let apps: Vec<&str> = remaining
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|f| f["app"].as_str().unwrap())
+        .collect();
+    assert_eq!(apps.len(), 2);
+    assert!(apps.contains(&"broken") && apps.contains(&"seedling"));
+
+    let result = oi
+        .call("/faults/clear", json!({ "app": "seedling" }))
+        .unwrap();
+    assert_eq!(result["cleared"], 1);
+}
+
+// spec: FLTS#listing-faults
+#[test]
+fn list_filters_by_a_host_fault_name() {
+    let oi = oi_with_fault();
+    file_host_fault(&oi, "_system", "reconciler_panic");
+
+    let listed = oi
+        .call("/faults/list", json!({ "app": "_system" }))
+        .unwrap();
+    let listed = listed.as_array().unwrap();
+    assert_eq!(listed.len(), 1);
+    assert_eq!(listed[0]["kind"], "reconciler_panic");
+}
+
+// spec: FLTS#clearing-faults
+// spec: FLTS#listing-faults
+#[test]
+fn an_unregistered_app_is_not_found() {
+    let oi = oi_with_fault();
+    for method in ["/faults/clear", "/faults/list"] {
+        let (code, _) = oi.call(method, json!({ "app": "ghost" })).unwrap_err();
+        assert_eq!(code, "not_found", "{method}");
+    }
+}

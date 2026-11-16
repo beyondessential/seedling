@@ -658,9 +658,8 @@ async fn cleanup_dynamic_resources(
     use crate::defs::job::Job;
     use crate::defs::resource::{Resource, ResourceKind};
     use crate::runtime::LifecycleState;
-    use crate::runtime::barrier::oracle::derive_lifecycle_state;
     use crate::runtime::desired::{delete_dynamic_resources_for_operation, list_dynamic_resources};
-    use crate::runtime::history::query_observations;
+    use crate::runtime::history::read_lifecycle;
     use crate::runtime::identity::{InstanceId, InstanceVariant, ResourceInstance};
 
     let op_id_for_filter = operation_id_str.to_owned();
@@ -747,8 +746,8 @@ async fn cleanup_dynamic_resources(
                 let lifecycles_terminal = cleanup_instances.iter().all(|inst| {
                     let inst = inst.clone();
                     state.db.call(move |db| {
-                        let obs = query_observations(db, &inst).unwrap_or_default();
-                        derive_lifecycle_state(&inst, &obs).has_reached(LifecycleState::Terminated)
+                        read_lifecycle(db, &inst)
+                            .is_ok_and(|(s, _)| s.has_reached(LifecycleState::Terminated))
                     })
                 });
 
@@ -891,9 +890,22 @@ pub(crate) fn record_install_completed(state: &OiState, app_name: &AppName) {
     }
 }
 
+/// An install of the app has completed, so an earlier interrupted one no
+/// longer needs the operator's attention.
+// spec: FLT#app-faults
+pub(crate) fn clear_install_interrupted(state: &OiState, app_name: &AppName) {
+    let name = app_name.clone();
+    if let Err(e) = state.db.call(move |db| {
+        crate::runtime::faults::clear_faults_by_kind(db, &name, "install_interrupted")
+    }) {
+        tracing::error!(app = %app_name, "clear install_interrupted: {e}");
+    }
+}
+
 // spec: ACI#install-completion
 fn finalize_install(state: &OiState, app_name: &AppName) {
     record_install_completed(state, app_name);
+    clear_install_interrupted(state, app_name);
     set_phase_and_persist(state, app_name, AppPhase::Installed);
     tracing::info!(app = %app_name, "install completed; app is now installed");
 }

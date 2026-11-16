@@ -568,8 +568,6 @@ impl Reconciler {
     // spec: NAT64#ipv6-egress
     // spec: CONST#determining-host-constants
     async fn retry_host_probes(&mut self) {
-        use crate::system::host_probes::Fact;
-
         if self.host_probes.pending() {
             let moved = self.host_probes.retry().await;
             let ipv4 = self
@@ -582,8 +580,13 @@ impl Reconciler {
                 .ipv6_egress
                 .determined()
                 .filter(|_| moved.ipv6_egress);
-            if ipv4.is_some() || ipv6.is_some() {
-                crate::sysconst::determined(ipv4, ipv6);
+            let timezone = self
+                .host_probes
+                .timezone
+                .determined()
+                .filter(|_| moved.timezone);
+            if ipv4.is_some() || ipv6.is_some() || timezone.is_some() {
+                crate::sysconst::determined(ipv4, ipv6, timezone);
                 self.host_facts_changed = true;
             }
             self.force_dns64_translation = self.force_dns64_for(&self.host_probes);
@@ -592,31 +595,38 @@ impl Reconciler {
         if self.host_faults_synced {
             return;
         }
-        let nat64 = self.host_probes.nat64_detection.clone();
-        let ipv4 = self.host_probes.ipv4_egress.clone();
-        let ipv6 = self.host_probes.ipv6_egress.clone();
-        for (kind, fact, what) in [
+        let probes = &self.host_probes;
+        let undetermined: [(&str, &str, Option<String>); 4] = [
             (
                 "nat64_detection_failed",
-                nat64,
                 "whether the network provides NAT64",
+                probes
+                    .nat64_detection
+                    .as_ref()
+                    .and_then(|f| f.undetermined().map(str::to_owned)),
             ),
             (
                 "ipv4_egress_undetermined",
-                Some(ipv4),
                 "whether the host has IPv4 egress",
+                probes.ipv4_egress.undetermined().map(str::to_owned),
             ),
             (
                 "ipv6_egress_undetermined",
-                Some(ipv6),
                 "whether the host has IPv6 egress",
+                probes.ipv6_egress.undetermined().map(str::to_owned),
             ),
-        ] {
-            match fact {
-                Some(Fact::Undetermined(why)) => {
+            (
+                "timezone_undetermined",
+                "the host's time zone",
+                probes.timezone.undetermined().map(str::to_owned),
+            ),
+        ];
+        for (kind, what, why) in undetermined {
+            match why {
+                Some(why) => {
                     self.file_system_fault(kind, &format!("cannot determine {what}: {why}"))
                 }
-                _ => self.clear_system_fault(kind),
+                None => self.clear_system_fault(kind),
             }
         }
         self.host_faults_synced = true;
@@ -2126,6 +2136,29 @@ impl Reconciler {
         }
     }
 
+    // spec: LCY#external-volumes
+    fn hold_external_volume_states(
+        &self,
+        states: Vec<(crate::runtime::ResourceInstance, LifecycleState)>,
+    ) {
+        if states.is_empty() {
+            return;
+        }
+        self.db.call(move |db| {
+            for (instance, state) in &states {
+                if let Err(e) =
+                    crate::runtime::history::set_external_volume_state(db, instance, *state)
+                {
+                    error!(
+                        instance = %instance.display_name,
+                        error = %e,
+                        "could not hold an external volume's lifecycle state"
+                    );
+                }
+            }
+        });
+    }
+
     fn ingest_volume_results(
         &mut self,
         apps: &[AppSnapshot],
@@ -2134,6 +2167,7 @@ impl Reconciler {
         for (app_name, vol_update) in vol_updates {
             self.file_volume_actuation_faults(&app_name, &vol_update);
             self.persist_obs(vol_update.observations);
+            self.hold_external_volume_states(vol_update.external_volume_states);
         }
         let _ = apps;
     }
@@ -2813,6 +2847,7 @@ mod tests {
     fn volume_update() -> volumes::VolumeActuationUpdate {
         volumes::VolumeActuationUpdate {
             observations: Vec::new(),
+            external_volume_states: Vec::new(),
             observe_failures: Vec::new(),
             observed: Vec::new(),
             create_failures: Vec::new(),
@@ -3166,7 +3201,7 @@ mod tests {
     }
 
     /// A host whose probes fail until told to answer, and then say the host has
-    /// none of NAT64, IPv4 or IPv6. The facts match the defaults every other
+    /// none of NAT64, IPv4 or IPv6 and a UTC time zone. The facts match the defaults every other
     /// test reads, so determining them here moves nothing there.
     struct ProbesThatSettle(std::sync::atomic::AtomicBool);
 
@@ -3179,6 +3214,9 @@ mod tests {
         }
         fn ipv6_egress(&self) -> crate::system::BoxFuture<'_, Result<bool, String>> {
             Box::pin(async move { self.answer() })
+        }
+        fn timezone(&self) -> crate::system::BoxFuture<'_, Result<String, String>> {
+            Box::pin(async move { self.answer().map(|_| "UTC".to_owned()) })
         }
     }
 
@@ -3207,12 +3245,17 @@ mod tests {
             Some(Fact::Undetermined("no answer".into())),
             Fact::Undetermined("no routes".into()),
             Fact::Undetermined("no routes".into()),
+            Fact::Undetermined("no zone".into()),
         ));
         let kinds = |oi: &crate::oi::test_support::TestOi| -> Vec<String> {
             let mut kinds: Vec<String> = active_kinds(oi, "_system")
                 .into_iter()
                 .map(|(k, _)| k)
-                .filter(|k| k.contains("egress") || k == "nat64_detection_failed")
+                .filter(|k| {
+                    k.contains("egress")
+                        || k == "nat64_detection_failed"
+                        || k == "timezone_undetermined"
+                })
                 .collect();
             kinds.sort();
             kinds
@@ -3224,7 +3267,8 @@ mod tests {
             [
                 "ipv4_egress_undetermined",
                 "ipv6_egress_undetermined",
-                "nat64_detection_failed"
+                "nat64_detection_failed",
+                "timezone_undetermined"
             ],
         );
         assert!(!reconciler.take_host_facts_changed());
@@ -3256,6 +3300,87 @@ mod tests {
             active,
             "an idle loop waits for a notification that nothing sends when a read fails"
         );
+    }
+
+    // spec: LCY#external-volumes
+    // spec: HIST#observations
+    #[test]
+    fn an_external_volume_takes_its_state_from_the_desired_state_and_is_never_observed() {
+        let oi = crate::oi::test_support::TestOi::new();
+        oi.call(
+            "/apps/create",
+            serde_json::json!({ "app": "demo", "script": r#"app.external_volume("data");"# }),
+        )
+        .unwrap();
+        oi.install("demo");
+        let mut reconciler = test_reconciler(&oi);
+        let app = AppName::new("demo").unwrap();
+        async fn volumes_phase(reconciler: &mut Reconciler) {
+            let (apps, _) = reconciler.snapshot_all_apps();
+            let updates = phases::run_volumes_phase(
+                &reconciler.observer,
+                &reconciler.actuator,
+                &reconciler.db,
+                &apps,
+            )
+            .await;
+            reconciler.ingest_volume_results(&apps, updates);
+        }
+        let instance = |oi: &crate::oi::test_support::TestOi| {
+            let app = app.clone();
+            oi.state
+                .db
+                .call(move |db| {
+                    crate::runtime::history::find_instances_for_group(
+                        db,
+                        &app,
+                        crate::defs::resource::ResourceKind::ExternalVolume,
+                        Some("data"),
+                    )
+                })
+                .unwrap()
+                .pop()
+        };
+        let read = |oi: &crate::oi::test_support::TestOi,
+                    inst: crate::runtime::ResourceInstance| {
+            oi.state.db.call(move |db| {
+                let state = crate::runtime::history::read_lifecycle(db, &inst)
+                    .unwrap()
+                    .0;
+                let observations = crate::runtime::history::query_observations(db, &inst)
+                    .unwrap()
+                    .len();
+                (state, observations)
+            })
+        };
+
+        oi.block_on(volumes_phase(&mut reconciler));
+        let inst = instance(&oi).expect("the reconciler gave the declaration an instance");
+        assert_eq!(read(&oi, inst.clone()), (LifecycleState::Ready, 0));
+
+        let app_for_stop = app.clone();
+        oi.state.db.call(move |db| {
+            crate::runtime::stopped::stop_resource(
+                db,
+                &app_for_stop,
+                crate::defs::resource::ResourceKind::ExternalVolume,
+                "data",
+            )
+            .unwrap();
+        });
+        oi.block_on(volumes_phase(&mut reconciler));
+        assert_eq!(read(&oi, inst.clone()), (LifecycleState::Unscheduled, 0));
+
+        let app_for_unstop = app.clone();
+        oi.state.db.call(move |db| {
+            crate::runtime::stopped::unstop_all(db, &app_for_unstop).unwrap();
+        });
+        oi.block_on(volumes_phase(&mut reconciler));
+        assert_eq!(read(&oi, inst.clone()), (LifecycleState::Ready, 0));
+
+        *oi.state.registry.read().get("demo").unwrap().phase.lock() = AppPhase::Uninstalling;
+        oi.block_on(volumes_phase(&mut reconciler));
+        assert_eq!(read(&oi, inst), (LifecycleState::Unscheduled, 0));
     }
 
     /// A reconciler over `oi`'s stub backends and database.

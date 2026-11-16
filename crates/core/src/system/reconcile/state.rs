@@ -12,9 +12,10 @@ use crate::{
         AppPhase,
         apps::{AppEntry, AppRegistry},
         barrier::oracle::derive_lifecycle_state,
-        gc::{KnownDesiredState, gc_unscheduled_instances},
+        gc::{KnownDesiredState, gc_unscheduled_instances, is_torn_down},
         history::{
             delete_instance, find_instances_for_group, insert_observation, query_observations,
+            read_lifecycle,
         },
         identity::{InstanceId, ResourceInstance},
         lifecycle::LifecycleState,
@@ -109,10 +110,10 @@ impl Reconciler {
                         };
                     for inst in instances {
                         let hex = inst.id.to_hex();
-                        let state = match query_observations(db, &inst) {
-                            Ok(obs) => Some(derive_lifecycle_state(&inst, &obs)),
+                        let state = match read_lifecycle(db, &inst) {
+                            Ok((state, _)) => Some(state),
                             Err(e) => {
-                                warn!(app = %g.app, instance = %inst.display_name, error = %e, "state changes: could not read an observation history");
+                                warn!(app = %g.app, instance = %inst.display_name, error = %e, "state changes: could not read what its lifecycle state derives from");
                                 None
                             }
                         };
@@ -320,28 +321,12 @@ impl Reconciler {
                 let read = self.db.call(move |db| {
                     let obs = query_observations(db, &instance)?;
                     let has_obs = !obs.is_empty();
-                    // spec: GC#demoted-instances
-                    // Multiple observations recorded in a single tick may share
-                    // a timestamp, in which case `query_observations` returns
-                    // them in undefined order and `derive_lifecycle_state` can
-                    // wedge at Pending even though terminal observations exist.
-                    // Treat the presence of any terminal observation as proof
-                    // that the actuator successfully tore the instance down.
-                    let has_terminal = obs.iter().any(|o| {
-                        matches!(
-                            o.obs_kind.as_str(),
-                            "container_removed" | "network_cleaned_up"
-                        )
-                    });
-                    Ok::<_, rusqlite::Error>((
-                        derive_lifecycle_state(&instance, &obs),
-                        has_obs,
-                        has_terminal,
-                    ))
+                    let state = derive_lifecycle_state(&instance, &obs);
+                    Ok::<_, rusqlite::Error>((state, has_obs, is_torn_down(state, &obs)))
                 });
                 // A history that cannot be read is not an empty one: the
                 // instance stays until it can be.
-                let (state, has_observations, has_terminal_obs) = match read {
+                let (state, has_observations, torn_down) = match read {
                     Ok(read) => read,
                     Err(e) => {
                         tracing::warn!(
@@ -353,7 +338,7 @@ impl Reconciler {
                         continue;
                     }
                 };
-                let eligible = retire_eligible(state, has_observations, has_terminal_obs);
+                let eligible = retire_eligible(torn_down, has_observations);
                 if !eligible {
                     if matches!(
                         state,
@@ -377,7 +362,7 @@ impl Reconciler {
                             instance = %dr.instance.display_name,
                             ?state,
                             has_observations,
-                            has_terminal_obs,
+                            torn_down,
                             "retired excess instance"
                         );
                     }
@@ -540,8 +525,8 @@ fn known_desired_state(apps: &[AppSnapshot], registry: &AppRegistry) -> KnownDes
 }
 
 // spec: GC#demoted-instances
-fn retire_eligible(state: LifecycleState, has_observations: bool, has_terminal_obs: bool) -> bool {
-    matches!(state, LifecycleState::Unscheduled) || !has_observations || has_terminal_obs
+fn retire_eligible(torn_down: bool, has_observations: bool) -> bool {
+    torn_down || !has_observations
 }
 
 #[cfg(test)]
@@ -595,43 +580,57 @@ mod tests {
     }
     use super::*;
 
-    // spec: GC#demoted-instances
-    #[test]
-    fn unscheduled_state_is_eligible() {
-        assert!(retire_eligible(LifecycleState::Unscheduled, true, false));
+    fn eligible(kinds: &[&str]) -> bool {
+        let resource = crate::runtime::identity::ResourceInstance::new_singleton(
+            app("web"),
+            ResourceKind::Deployment,
+            "api",
+        );
+        let obs: Vec<_> = kinds
+            .iter()
+            .enumerate()
+            .map(|(i, kind)| crate::runtime::history::WorldObservation {
+                id: i as i64,
+                recorded_at: i as i64,
+                resource: resource.clone(),
+                obs_kind: (*kind).to_owned(),
+                payload: serde_json::Value::Null,
+            })
+            .collect();
+        let state = crate::runtime::barrier::oracle::derive_lifecycle_state(&resource, &obs);
+        retire_eligible(is_torn_down(state, &obs), !obs.is_empty())
     }
 
     // spec: GC#demoted-instances
     #[test]
-    fn no_observations_is_eligible() {
-        assert!(retire_eligible(LifecycleState::Pending, false, false));
+    fn a_torn_down_instance_is_eligible() {
+        assert!(eligible(&["container_running", "container_removed"]));
     }
 
     // spec: GC#demoted-instances
     #[test]
-    fn pending_with_terminal_observation_is_eligible() {
-        // The observation-derivation can wedge at Pending when same-tick
-        // observations have ambiguous ordering. A terminal observation is the
-        // ground-truth signal that actuation completed.
-        assert!(retire_eligible(LifecycleState::Pending, true, true));
+    fn an_instance_with_no_observations_is_eligible() {
+        assert!(eligible(&[]));
     }
 
+    // spec: GC#demoted-instances
     #[test]
-    fn pending_with_only_partial_observations_is_not_eligible() {
-        // Instance still actuating: observations exist but none terminal yet.
-        assert!(!retire_eligible(LifecycleState::Pending, true, false));
+    fn an_instance_still_actuating_is_not_eligible() {
+        assert!(!eligible(&["container_created"]));
+        assert!(!eligible(&["container_created", "container_running"]));
     }
 
+    // spec: GC#demoted-instances
+    // A removal observed in an earlier cycle says nothing of an instance that
+    // has started again since.
     #[test]
-    fn running_is_not_eligible() {
-        // An excess instance currently observed running needs its actuator
-        // pass first; retiring before stop would orphan the unit.
-        assert!(!retire_eligible(LifecycleState::Running, true, false));
-    }
-
-    #[test]
-    fn ready_is_not_eligible() {
-        assert!(!retire_eligible(LifecycleState::Ready, true, false));
+    fn an_instance_that_started_a_later_cycle_is_not_eligible() {
+        assert!(!eligible(&[
+            "container_running",
+            "container_removed",
+            "container_created",
+            "container_running",
+        ]));
     }
 
     fn register(reg: &mut AppRegistry, name: &str, phase: AppPhase) {

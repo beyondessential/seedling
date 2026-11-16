@@ -24,8 +24,8 @@ pub struct SystemFacts {
     pub has_snapshots: bool,
     /// Human-readable identifier for the node (empty if not known).
     pub node_name: String,
-    /// IANA timezone name of the host (e.g. `Pacific/Auckland`); defaults to
-    /// `UTC` when the host's local timezone cannot be determined.
+    /// IANA timezone name of the host (e.g. `Pacific/Auckland`); `UTC` while
+    /// the host's local timezone is undetermined.
     pub timezone: String,
 }
 
@@ -42,10 +42,17 @@ impl Default for SystemFacts {
     }
 }
 
-/// Best-effort detection of the host's IANA timezone name. Returns `UTC`
-/// when detection fails (e.g. unusual `/etc/localtime` configuration).
-pub fn detect_timezone() -> String {
-    iana_time_zone::get_timezone().unwrap_or_else(|_| "UTC".to_owned())
+/// The host's IANA timezone name, or why it cannot be determined (e.g. an
+/// unusual `/etc/localtime` configuration). An undetermined time zone is not
+/// `UTC`: the caller decides what stands for it.
+// spec: CONST#determining-host-constants
+pub fn detect_timezone() -> Result<String, String> {
+    let zone = iana_time_zone::get_timezone()
+        .map_err(|e| format!("cannot read the host's time zone: {e}"))?;
+    if zone.is_empty() {
+        return Err("the host's time zone name is empty".to_owned());
+    }
+    Ok(zone)
 }
 
 static FACTS: RwLock<Option<SystemFacts>> = RwLock::new(None);
@@ -64,10 +71,10 @@ pub fn get() -> SystemFacts {
 }
 
 /// Record host facts that were undetermined when the rest were set and have
-/// since been determined. An egress fact is only ever moved out of
-/// undetermined, never changed once it holds.
+/// since been determined. A fact is only ever moved out of undetermined,
+/// never changed once it holds.
 // spec: CONST#determining-host-constants
-pub fn determined(ipv4_egress: Option<bool>, ipv6_egress: Option<bool>) {
+pub fn determined(ipv4_egress: Option<bool>, ipv6_egress: Option<bool>, timezone: Option<String>) {
     let mut held = FACTS.write();
     let facts = held.get_or_insert_with(SystemFacts::default);
     if let Some(v4) = ipv4_egress {
@@ -75,5 +82,8 @@ pub fn determined(ipv4_egress: Option<bool>, ipv6_egress: Option<bool>) {
     }
     if let Some(v6) = ipv6_egress {
         facts.ipv6_egress = v6;
+    }
+    if let Some(zone) = timezone {
+        facts.timezone = zone;
     }
 }

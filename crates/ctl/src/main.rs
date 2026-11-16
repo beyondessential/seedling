@@ -147,7 +147,7 @@ enum Command {
         #[arg(long)]
         app: Option<String>,
     },
-    /// Clear all active faults for an app
+    /// Clear all active faults for an app, or for `_system` or `seedling`
     ClearFaults { app: String },
     /// Container restart history and the crash-loop rate derived from it
     Restarts {

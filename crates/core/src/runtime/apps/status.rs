@@ -10,7 +10,7 @@ use crate::{
         barrier::oracle::{container_run_succeeded, derive_lifecycle_state, has_lifecycle},
         db::{Db, DbHandle},
         faults,
-        history::{find_instances_for_group, query_observations_for},
+        history::{find_instances_for_group, query_observations_for, read_lifecycle},
         identity::ResourceInstance,
         lifecycle::LifecycleState,
         scaling,
@@ -279,7 +279,12 @@ fn at_desired_state(
             .get(&inst.id)
             .map(Vec::as_slice)
             .unwrap_or_default();
-        match (desired, derive_lifecycle_state(inst, obs)) {
+        let state = if inst.kind == ResourceKind::ExternalVolume {
+            read_lifecycle(db, inst)?.0
+        } else {
+            derive_lifecycle_state(inst, obs)
+        };
+        match (desired, state) {
             (Desired::Ready | Desired::Run, LifecycleState::Ready) => reached = true,
             // A Job that has run rests here, removed or not.
             (Desired::Run, LifecycleState::Terminated | LifecycleState::Unscheduled) => {

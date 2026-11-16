@@ -162,8 +162,8 @@ struct ScriptLimitArgs {
     #[arg(long, default_value_t = 100_000)]
     script_max_operations: u64,
 
-    /// Maximum function call nesting depth (0 = unlimited)
-    #[arg(long, default_value_t = 64)]
+    /// Maximum function call nesting depth (at least 1)
+    #[arg(long, default_value_t = 64, value_parser = parse_call_depth)]
     script_max_call_depth: usize,
 
     /// Maximum expression nesting depth (0 = unlimited)
@@ -181,6 +181,15 @@ struct ScriptLimitArgs {
     /// Maximum object map size in entries (0 = unlimited)
     #[arg(long, default_value_t = 10_000)]
     script_max_map_size: usize,
+}
+
+// spec: LIM#limits
+fn parse_call_depth(raw: &str) -> Result<usize, String> {
+    let depth: usize = raw.parse().map_err(|e| format!("{e}"))?;
+    if depth == 0 {
+        return Err("a call depth of 0 would allow no function calls".to_owned());
+    }
+    Ok(depth)
 }
 
 impl From<ScriptLimitArgs> for seedling_core::ScriptLimits {
@@ -364,12 +373,14 @@ async fn main() {
             Fact::from_result(detect_ipv6_egress().await),
         )
     };
+    let timezone_fact = Fact::from_result(seedling_core::sysconst::detect_timezone());
     let nat64_detection_fact = nat64_decision.undetermined.clone().map(Fact::Undetermined);
     let host_probes = HostProbes::new(
         Arc::new(HostSource),
         nat64_detection_fact,
         ipv4_fact.clone(),
         ipv6_fact.clone(),
+        timezone_fact.clone(),
     );
 
     // spec: CONST#host-constants
@@ -379,7 +390,9 @@ async fn main() {
         nat64_active,
         has_snapshots: use_btrfs,
         node_name: whoami::devicename().unwrap_or_default(),
-        timezone: seedling_core::sysconst::detect_timezone(),
+        timezone: timezone_fact
+            .determined()
+            .unwrap_or_else(|| "UTC".to_owned()),
     });
 
     // spec: NAT64#dns64
@@ -1765,7 +1778,31 @@ mod tests {
 
     use if_addrs::{IfAddr, IfOperStatus, Ifv4Addr, Interface};
 
-    use super::select_oi_addrs;
+    use clap::Parser as _;
+
+    use super::{Args, select_oi_addrs};
+
+    // spec: LIM#limits
+    #[test]
+    fn a_call_depth_of_zero_is_refused() {
+        assert!(Args::try_parse_from(["seedling", "--script-max-call-depth", "0"]).is_err());
+        let args = Args::try_parse_from(["seedling", "--script-max-call-depth", "3"]).unwrap();
+        assert_eq!(args.script_limits.script_max_call_depth, 3);
+    }
+
+    // spec: LIM#limits
+    #[test]
+    fn the_other_limits_accept_zero_to_remove_them() {
+        let args = Args::try_parse_from([
+            "seedling",
+            "--script-max-operations",
+            "0",
+            "--script-max-expr-depth",
+            "0",
+        ])
+        .unwrap();
+        assert_eq!(args.script_limits.script_max_operations, 0);
+    }
 
     fn iface(name: &str, ip: [u8; 4]) -> Interface {
         Interface {

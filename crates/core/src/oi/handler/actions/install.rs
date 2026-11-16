@@ -112,6 +112,7 @@ pub(crate) fn invoke_install(
 
     if !has_install_action {
         crate::oi::handler::actions::lifecycle::record_install_completed(state, app_name);
+        crate::oi::handler::actions::lifecycle::clear_install_interrupted(state, app_name);
         {
             let mut reg = state.registry.write();
             if let Some(entry) = reg.get_mut(app_name.as_str()) {

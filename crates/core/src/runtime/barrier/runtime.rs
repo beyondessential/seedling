@@ -1001,13 +1001,16 @@ impl RuntimeInstance {
             resources_with_defs.iter().map(|(r, _)| r.clone()).collect();
 
         // spec: IMG#image-discovery
-        // Probe mode: capture images that would be pulled and return an
-        // already-satisfied Started. No log entries, no DB writes.
+        // Probe mode: `rt.start` captures the images that would be pulled and
+        // `rt.query` does nothing; both return an already-satisfied Started.
+        // No log entries, no DB writes.
         if let Some(ctx) = &self.ctx
             && let Some(probe) = ctx.lock().probe_images.clone()
         {
-            for (_, img) in extract_container_images(&resources_with_defs) {
-                probe.lock().insert(img);
+            if matches!(call_kind, CallKind::Start) {
+                for (_, img) in extract_container_images(&resources_with_defs) {
+                    probe.lock().insert(img);
+                }
             }
             return Ok(Started {
                 ctx: Some(Arc::clone(ctx)),

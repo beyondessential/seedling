@@ -13,6 +13,7 @@ pub trait ProbeSource: Send + Sync {
     fn external_nat64(&self) -> BoxFuture<'_, Result<bool, String>>;
     fn ipv4_egress(&self) -> BoxFuture<'_, Result<bool, String>>;
     fn ipv6_egress(&self) -> BoxFuture<'_, Result<bool, String>>;
+    fn timezone(&self) -> BoxFuture<'_, Result<String, String>>;
 }
 
 /// The host's own resolver and routing tables.
@@ -30,27 +31,39 @@ impl ProbeSource for HostSource {
     fn ipv6_egress(&self) -> BoxFuture<'_, Result<bool, String>> {
         Box::pin(crate::system::netinfo::detect_ipv6_egress())
     }
+
+    fn timezone(&self) -> BoxFuture<'_, Result<String, String>> {
+        Box::pin(async { crate::sysconst::detect_timezone() })
+    }
 }
 
 /// One fact: determined, or why it is not yet.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Fact {
-    Determined(bool),
+pub enum Fact<T = bool> {
+    Determined(T),
     Undetermined(String),
 }
 
-impl Fact {
-    pub fn from_result(result: Result<bool, String>) -> Self {
+impl<T: Clone> Fact<T> {
+    pub fn from_result(result: Result<T, String>) -> Self {
         match result {
             Ok(v) => Self::Determined(v),
             Err(why) => Self::Undetermined(why),
         }
     }
 
-    pub fn determined(&self) -> Option<bool> {
+    pub fn determined(&self) -> Option<T> {
         match self {
-            Self::Determined(v) => Some(*v),
+            Self::Determined(v) => Some(v.clone()),
             Self::Undetermined(_) => None,
+        }
+    }
+
+    /// Why the fact is not determined, if it is not.
+    pub fn undetermined(&self) -> Option<&str> {
+        match self {
+            Self::Determined(_) => None,
+            Self::Undetermined(why) => Some(why),
         }
     }
 }
@@ -61,11 +74,12 @@ pub struct Moved {
     pub nat64_detection: bool,
     pub ipv4_egress: bool,
     pub ipv6_egress: bool,
+    pub timezone: bool,
 }
 
 impl Moved {
     pub fn any(&self) -> bool {
-        self.nat64_detection || self.ipv4_egress || self.ipv6_egress
+        self.nat64_detection || self.ipv4_egress || self.ipv6_egress || self.timezone
     }
 }
 
@@ -77,6 +91,8 @@ pub struct HostProbes {
     pub nat64_detection: Option<Fact>,
     pub ipv4_egress: Fact,
     pub ipv6_egress: Fact,
+    /// The host's IANA time zone name.
+    pub timezone: Fact<String>,
 }
 
 impl HostProbes {
@@ -85,12 +101,14 @@ impl HostProbes {
         nat64_detection: Option<Fact>,
         ipv4_egress: Fact,
         ipv6_egress: Fact,
+        timezone: Fact<String>,
     ) -> Self {
         Self {
             source,
             nat64_detection,
             ipv4_egress,
             ipv6_egress,
+            timezone,
         }
     }
 
@@ -101,6 +119,7 @@ impl HostProbes {
             None,
             Fact::Determined(ipv4_egress),
             Fact::Determined(ipv6_egress),
+            Fact::Determined("UTC".to_owned()),
         )
     }
 
@@ -109,6 +128,7 @@ impl HostProbes {
         matches!(self.nat64_detection, Some(Fact::Undetermined(_)))
             || matches!(self.ipv4_egress, Fact::Undetermined(_))
             || matches!(self.ipv6_egress, Fact::Undetermined(_))
+            || matches!(self.timezone, Fact::Undetermined(_))
     }
 
     /// Look again for every undetermined fact, and say which moved, whether
@@ -129,6 +149,11 @@ impl HostProbes {
             let next = Fact::from_result(self.source.ipv6_egress().await);
             moved.ipv6_egress = next != self.ipv6_egress;
             self.ipv6_egress = next;
+        }
+        if matches!(self.timezone, Fact::Undetermined(_)) {
+            let next = Fact::from_result(self.source.timezone().await);
+            moved.timezone = next != self.timezone;
+            self.timezone = next;
         }
         moved
     }
@@ -174,6 +199,16 @@ pub(crate) mod tests {
         fn ipv6_egress(&self) -> BoxFuture<'_, Result<bool, String>> {
             async move { self.answer(false) }.boxed()
         }
+        fn timezone(&self) -> BoxFuture<'_, Result<String, String>> {
+            async move {
+                if self.answering.load(Ordering::SeqCst) {
+                    Ok("Pacific/Auckland".to_owned())
+                } else {
+                    Err("cannot be read".to_owned())
+                }
+            }
+            .boxed()
+        }
     }
 
     // spec: NAT64#ipv6-egress
@@ -185,6 +220,7 @@ pub(crate) mod tests {
             Some(Fact::Undetermined("no answer".into())),
             Fact::Undetermined("no routes".into()),
             Fact::Undetermined("no routes".into()),
+            Fact::Undetermined("no zone".into()),
         );
         assert!(probes.pending());
 
@@ -195,10 +231,14 @@ pub(crate) mod tests {
 
         source.answering.store(true, Ordering::SeqCst);
         let moved = probes.retry().await;
-        assert!(moved.nat64_detection && moved.ipv4_egress && moved.ipv6_egress);
+        assert!(moved.nat64_detection && moved.ipv4_egress && moved.ipv6_egress && moved.timezone);
         assert!(!probes.pending());
         assert_eq!(probes.ipv6_egress, Fact::Determined(false));
         assert_eq!(probes.ipv4_egress, Fact::Determined(true));
+        assert_eq!(
+            probes.timezone,
+            Fact::Determined("Pacific/Auckland".to_owned())
+        );
 
         // Determined, so not asked again: a different answer is not taken.
         source.answering.store(false, Ordering::SeqCst);

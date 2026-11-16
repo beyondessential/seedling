@@ -173,18 +173,18 @@ impl DbWorldOracle {
 impl WorldStateOracle for DbWorldOracle {
     fn lifecycle_state(&self, resource: &ResourceInstance) -> Result<LifecycleState, Undetermined> {
         let resource = resource.clone();
-        self.db.call(move |db| {
-            match crate::runtime::history::query_observations(db, &resource) {
-                Ok(observations) => Ok(derive_lifecycle_state(&resource, &observations)),
+        self.db.call(
+            move |db| match crate::runtime::history::read_lifecycle(db, &resource) {
+                Ok((state, _)) => Ok(state),
                 Err(e) => {
                     tracing::warn!(
                         instance = %resource.display_name,
-                        "cannot read an observation history; its lifecycle state is undetermined: {e}"
+                        "cannot read what a lifecycle state derives from; it is undetermined: {e}"
                     );
                     Err(Undetermined)
                 }
-            }
-        })
+            },
+        )
     }
 
     // spec: IMG#image-warming
@@ -237,10 +237,8 @@ impl WorldStateOracle for DbWorldOracle {
                 // Non-container resources: once terminated, treat as success.
                 let resource_for_state = resource.clone();
                 let state = self.db.call(move |db| {
-                    crate::runtime::history::query_observations(db, &resource_for_state)
-                        .map(|observations| {
-                            derive_lifecycle_state(&resource_for_state, &observations)
-                        })
+                    crate::runtime::history::read_lifecycle(db, &resource_for_state)
+                        .map(|(state, _)| state)
                         .ok()
                 });
                 match state {
@@ -424,8 +422,9 @@ fn derive_lifecycle_with_ms(
         ResourceKind::Ingress => derive_ingress_lifecycle(observations),
         // spec: LCY#volumes
         ResourceKind::Volume => derive_volume_lifecycle(observations),
+        // An external volume's state is read from the desired state, not
+        // derived from observations.
         // spec: LCY#external-volumes
-        ResourceKind::ExternalVolume => derive_volume_lifecycle(observations),
         _ => (LifecycleState::Pending, None),
     }
 }

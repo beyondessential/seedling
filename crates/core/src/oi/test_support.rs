@@ -522,6 +522,39 @@ mod tests {
         );
     }
 
+    // spec: FLT#app-faults
+    #[test]
+    fn a_completed_install_clears_an_interrupted_install_fault() {
+        let oi = TestOi::with_app("demo");
+        let name = seedling_protocol::names::AppName::new("demo").unwrap();
+        oi.state.db.call(move |db| {
+            crate::runtime::faults::file_fault(
+                db,
+                &name,
+                None,
+                None,
+                None,
+                "install_interrupted",
+                "interrupted",
+            )
+            .unwrap();
+        });
+        let active = |oi: &TestOi| {
+            oi.call("/faults/list", json!({ "app": "demo" }))
+                .unwrap()
+                .as_array()
+                .unwrap()
+                .iter()
+                .filter(|f| f["kind"] == "install_interrupted")
+                .count()
+        };
+        assert_eq!(active(&oi), 1);
+
+        oi.install("demo");
+
+        assert_eq!(active(&oi), 0);
+    }
+
     // spec: OPS#unreadable-operation-state
     #[test]
     fn nothing_starts_while_the_persisted_operation_state_is_unreadable() {

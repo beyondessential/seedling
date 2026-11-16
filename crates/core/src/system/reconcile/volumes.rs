@@ -28,6 +28,9 @@ struct VolumeInstanceResult {
 
 pub(super) struct VolumeActuationUpdate {
     pub observations: Vec<(ResourceInstance, &'static str, serde_json::Value)>,
+    /// The lifecycle state the desired state gives each external volume.
+    // spec: LCY#external-volumes
+    pub external_volume_states: Vec<(ResourceInstance, LifecycleState)>,
     pub observe_failures: Vec<(ResourceInstance, String)>,
     /// Instances observed successfully this tick.
     // spec: OBS#failed-observation
@@ -40,6 +43,28 @@ pub(super) struct VolumeActuationUpdate {
     /// Instances removed or held successfully this tick.
     // spec: FLT#volume-faults
     pub removed: Vec<ResourceInstance>,
+}
+
+impl VolumeActuationUpdate {
+    fn empty() -> Self {
+        Self {
+            observations: Vec::new(),
+            external_volume_states: Vec::new(),
+            observe_failures: Vec::new(),
+            observed: Vec::new(),
+            create_failures: Vec::new(),
+            remove_failures: Vec::new(),
+            present: Vec::new(),
+            removed: Vec::new(),
+        }
+    }
+
+    pub(super) fn external_volumes_only(desired: &DesiredState) -> Self {
+        Self {
+            external_volume_states: external_volume_states(desired),
+            ..Self::empty()
+        }
+    }
 }
 
 async fn process_one_volume(
@@ -215,6 +240,28 @@ async fn process_one_volume(
     result
 }
 
+/// The lifecycle state the desired state gives each external volume.
+///
+/// External volume resources are declarations only: nothing to create or
+/// destroy, and nothing to observe.
+// spec: LCY#external-volumes
+pub(super) fn external_volume_states(
+    desired: &DesiredState,
+) -> Vec<(ResourceInstance, LifecycleState)> {
+    desired
+        .resources
+        .iter()
+        .filter(|dr| matches!(&dr.definition, Resource::ExternalVolume(_)))
+        .filter(|dr| {
+            matches!(
+                dr.desired,
+                LifecycleState::Ready | LifecycleState::Unscheduled
+            )
+        })
+        .map(|dr| (dr.instance.clone(), dr.desired))
+        .collect()
+}
+
 pub(super) async fn observe_and_actuate(
     observer: &Observer,
     actuator: &Actuator,
@@ -230,15 +277,7 @@ pub(super) async fn observe_and_actuate(
 
     let results = join_all(futures).await;
 
-    let mut update = VolumeActuationUpdate {
-        observations: Vec::new(),
-        observe_failures: Vec::new(),
-        observed: Vec::new(),
-        create_failures: Vec::new(),
-        remove_failures: Vec::new(),
-        present: Vec::new(),
-        removed: Vec::new(),
-    };
+    let mut update = VolumeActuationUpdate::empty();
 
     for result in results {
         if result.present
@@ -266,23 +305,7 @@ pub(super) async fn observe_and_actuate(
         }
     }
 
-    // spec: LCY#external-volumes
-    // External volume resources are declarations only — nothing to create or
-    // destroy. Drive them directly to the appropriate lifecycle state.
-    for dr in desired
-        .resources
-        .iter()
-        .filter(|dr| matches!(&dr.definition, Resource::ExternalVolume(_)))
-    {
-        let obs_kind = match dr.desired {
-            LifecycleState::Ready => "volume_ready",
-            LifecycleState::Unscheduled => "volume_cleaned_up",
-            _ => continue,
-        };
-        update
-            .observations
-            .push((dr.instance.clone(), obs_kind, json!({})));
-    }
+    update.external_volume_states = external_volume_states(desired);
 
     update
 }

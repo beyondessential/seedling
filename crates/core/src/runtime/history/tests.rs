@@ -947,3 +947,45 @@ fn the_persisted_operation_state_carries_a_persisted_cancel() {
     assert!(set_cancel_requested(&db, &OperationId("op-cancelled".into())).unwrap());
     assert!(read_operation_state(&db, &cipher).unwrap().cancel_requested);
 }
+
+// spec: LCY#external-volumes
+#[test]
+fn an_external_volumes_state_is_the_one_held_for_it_and_no_observation_changes_it() {
+    let db = Db::open_in_memory().unwrap();
+    let volume =
+        ResourceInstance::new_singleton(app_name("myapp"), ResourceKind::ExternalVolume, "data");
+    insert_instance(&db, &volume).unwrap();
+
+    let state = |db: &Db| read_lifecycle(db, &volume).unwrap();
+    assert_eq!(state(&db), (LifecycleState::Pending, None));
+
+    insert_observation(&db, &volume, "volume_ready", &serde_json::json!({})).unwrap();
+    assert_eq!(
+        state(&db).0,
+        LifecycleState::Pending,
+        "an observation is not where an external volume's state comes from"
+    );
+
+    set_external_volume_state(&db, &volume, LifecycleState::Ready).unwrap();
+    let (held, since) = state(&db);
+    assert_eq!(held, LifecycleState::Ready);
+
+    set_external_volume_state(&db, &volume, LifecycleState::Ready).unwrap();
+    assert_eq!(
+        state(&db).1,
+        since,
+        "holding the same state again is no transition"
+    );
+
+    set_external_volume_state(&db, &volume, LifecycleState::Unscheduled).unwrap();
+    assert_eq!(state(&db).0, LifecycleState::Unscheduled);
+
+    delete_instance(&db, volume.id).unwrap();
+    let rows: i64 = db
+        .conn
+        .query_row("SELECT COUNT(*) FROM external_volume_states", [], |r| {
+            r.get(0)
+        })
+        .unwrap();
+    assert_eq!(rows, 0);
+}

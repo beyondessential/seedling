@@ -139,6 +139,23 @@ pub(crate) const UNSCHEDULED_OBS_KINDS: &[&str] = &[
     "volume_cleaned_up",
 ];
 
+/// Whether an instance is torn down: its lifecycle state is `Unscheduled`, or
+/// its most recent observation is one that moves an instance to `Unscheduled`.
+///
+/// Only the most recent observation counts, as a terminal observation earlier
+/// in the history belongs to a previous cycle of an instance that has since
+/// started again.
+// spec: GC#instances-started-by-actions
+pub(crate) fn is_torn_down(
+    state: crate::runtime::lifecycle::LifecycleState,
+    observations: &[crate::runtime::history::WorldObservation],
+) -> bool {
+    state == crate::runtime::lifecycle::LifecycleState::Unscheduled
+        || observations
+            .last()
+            .is_some_and(|o| UNSCHEDULED_OBS_KINDS.contains(&o.obs_kind.as_str()))
+}
+
 /// Cadence and retention for the unscheduled-instance sweep, which the
 /// reconciler runs because only it knows each app's active desired state.
 #[derive(Clone, Copy)]

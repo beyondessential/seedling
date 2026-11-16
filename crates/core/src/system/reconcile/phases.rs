@@ -66,9 +66,15 @@ pub(super) async fn run_volumes_phase(
 ) -> Vec<(AppName, volumes::VolumeActuationUpdate)> {
     let futures: Vec<_> = apps
         .iter()
-        .filter(|app| app.phase != AppPhase::Uninstalling)
         .map(|app| async move {
-            let update = volumes::observe_and_actuate(observer, actuator, db, &app.desired).await;
+            // An uninstalling app's volumes are torn down by its own phase,
+            // but its external volumes are held Unscheduled as its desired
+            // state has them.
+            let update = if app.phase == AppPhase::Uninstalling {
+                volumes::VolumeActuationUpdate::external_volumes_only(&app.desired)
+            } else {
+                volumes::observe_and_actuate(observer, actuator, db, &app.desired).await
+            };
             (app.name.clone(), update)
         })
         .collect();

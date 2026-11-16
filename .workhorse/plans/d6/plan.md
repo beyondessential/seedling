@@ -24,7 +24,7 @@ Each issue is worked on its own and committed on its own, with a test that fails
 - [ ] Operations: start action, persisted queue, unreadable state, intent-before-effect
 - [x] OI error codes and request validation
 - [x] Host: new faults, key file, permissions, reserved prefix and env redaction
-- [ ] Batch 5: runtime and fault code
+- [x] Batch 5: runtime and fault code
 - [ ] Batch 6: collections, validators, CLI, web, uninstall and image pulls
 - [ ] Requirements restored by the fidelity review
 - [ ] Blocking shell.attach, withholding-fault app status, rt.write to mapped external volumes
@@ -135,3 +135,10 @@ Each is done once, in whichever issue is worked first, and the later issue notes
 - Attachment events carry the target (a redirect's `redirect_preserve_path` too), including `SiteIngressAttachmentRemoved`. The Tailscale provider reports its changes as events with no actor, and discovery status lists a provider only if the runtime runs it, with `healthy` null before its first poll.
 - `redirect_preserve_path` is the wire name; the CLI and web console send it.
 - CLI additions: `volumes app`, `volumes external map|remap|unmap|list|declared`, `services site create --endpoint`, `ingresses site discovery refresh`.
+- `/faults/list` and `/faults/clear` take the app as a string: `_system` and `seedling` are accepted as they are, any other name must be a valid registered app (`not_found` otherwise, `requirements_invalid` if malformed). The CLI and web already send the name through unchanged, so neither needed a restriction removed.
+- `install_interrupted` is cleared on either completion path of an install (the action path and the no-install-action path).
+- During an image probe `rt.query` records nothing; only `rt.start` records images (`rt.warm_images` has its own path).
+- `--script-max-call-depth` is refused at argument parsing with a value parser, so clap reports the error and the daemon never starts.
+- External volumes' lifecycle state is held in `external_volume_states` (v74), written each iteration from the desired state (including for an uninstalling app, whose external volumes are `Unscheduled`) and read through `history::read_lifecycle`, which every reader of a lifecycle state now uses. The v74 migration also deletes the synthetic observations earlier versions recorded of external volumes. The pure `derive_lifecycle_state` reads an external volume as `Pending`.
+- Demoted-instance retirement and the action keep-set share `gc::is_torn_down` (state `Unscheduled`, or the most recent observation moves to `Unscheduled`), so the two cannot disagree. A history that cannot be read still keeps the instance.
+- Host constants: an undetermined time zone reads `UTC`, files `timezone_undetermined`, is retried each iteration and re-evaluates installed apps once found; `sysconst::detect_timezone` returns a `Result`. IPv4 and IPv6 egress, and their faults, were already done with the host faults issue. `AVAILABLE_THREADS`, `AVAILABLE_MEMORY`, `HAS_SNAPSHOTS`, `NODE_NAME` and `host_constant_undetermined` are not part of this issue's item and are left to the issue that names them.
