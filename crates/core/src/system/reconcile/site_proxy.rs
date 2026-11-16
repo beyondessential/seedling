@@ -38,6 +38,10 @@ pub(super) struct SiteProxyData {
     /// `(site_ingress, port, protocol, reason)` for entries that couldn't
     /// be resolved this tick. Used for fault filing.
     pub unresolved: Vec<UnresolvedAttachment>,
+    /// When each site ingress first had an attachment on a port, which orders
+    /// site ingresses claiming the same `(hostname, port)`.
+    // spec: SITE#ingress-conflicts
+    pub created: std::collections::BTreeMap<(SiteIngressName, u16), String>,
 }
 
 #[derive(Debug, Clone)]
@@ -99,6 +103,7 @@ pub(super) fn collect(
         redirects: Vec::new(),
         l4_routes: Vec::new(),
         unresolved: Vec::new(),
+        created: std::collections::BTreeMap::new(),
     };
 
     for ingress in &snapshot.ingresses {
@@ -113,6 +118,14 @@ pub(super) fn collect(
             .iter()
             .filter(|a| a.site_ingress == ingress.name)
         {
+            data.created
+                .entry((ingress.name.clone(), att.port))
+                .and_modify(|first| {
+                    if att.created_at < *first {
+                        first.clone_from(&att.created_at);
+                    }
+                })
+                .or_insert_with(|| att.created_at.clone());
             resolve_attachment(
                 ingress,
                 att,
@@ -399,6 +412,98 @@ pub(super) struct ConflictReport {
     /// `(hostname, port)`.
     // spec: ING#claims-across-apps
     pub app_claims: Vec<LostAppClaim>,
+    /// Site ingress attachments left out because an attachment of another site
+    /// ingress, created first, claims the same `(hostname, port)`.
+    // spec: SITE#ingress-conflicts
+    pub site_claims: Vec<LostSiteClaim>,
+    /// `(hostname, port)` claimed by an app ingress's HTTP redirect and by a
+    /// plaintext site ingress attachment. Only the redirect and the
+    /// attachment are left out; the app ingress itself is served.
+    // spec: PRX#port-scope
+    pub redirect_conflicts: BTreeSet<(String, u16)>,
+}
+
+/// A site ingress attachment left out of the proxy because an attachment of
+/// another site ingress, created first, claims the same `(hostname, port)`.
+// spec: SITE#ingress-conflicts
+#[derive(Debug, Clone)]
+pub(super) struct LostSiteClaim {
+    pub hostname: String,
+    pub port: u16,
+    pub site_ingress: SiteIngressName,
+    /// The site ingress whose attachment is served.
+    pub served: SiteIngressName,
+}
+
+/// Keep, of the site ingresses claiming each `(hostname, port)`, only the one
+/// whose attachment was created first, and report the rest.
+///
+/// The name breaks a tie, so the outcome is the same on every tick.
+// spec: SITE#ingress-conflicts
+pub(super) fn resolve_site_claims(mut data: SiteProxyData) -> (SiteProxyData, Vec<LostSiteClaim>) {
+    use std::collections::BTreeMap;
+
+    let created = |name: &SiteIngressName, port: u16| {
+        data.created
+            .get(&(name.clone(), port))
+            .cloned()
+            .unwrap_or_default()
+    };
+    let claims: Vec<(String, u16, SiteIngressName)> = data
+        .forwards
+        .iter()
+        .map(|(n, d, _)| (d.hostname.clone(), d.port.get(), n.clone()))
+        .chain(
+            data.redirects
+                .iter()
+                .map(|(n, d, _)| (d.hostname.clone(), d.port.get(), n.clone())),
+        )
+        .chain(
+            data.l4_routes
+                .iter()
+                .map(|e| (e.hostname.clone(), e.route.port, e.site_ingress.clone())),
+        )
+        .collect();
+
+    let rank = |name: &SiteIngressName, port: u16| (created(name, port), name.clone());
+    let mut served: BTreeMap<(String, u16), SiteIngressName> = BTreeMap::new();
+    for (hostname, port, name) in &claims {
+        let key = (hostname.clone(), *port);
+        match served.get(&key) {
+            Some(current) if rank(current, *port) <= rank(name, *port) => {}
+            _ => {
+                served.insert(key, name.clone());
+            }
+        }
+    }
+
+    let mut lost: BTreeMap<(String, u16, SiteIngressName), SiteIngressName> = BTreeMap::new();
+    for (hostname, port, name) in &claims {
+        let winner = &served[&(hostname.clone(), *port)];
+        if winner != name {
+            lost.insert((hostname.clone(), *port, name.clone()), winner.clone());
+        }
+    }
+    let is_lost = |hostname: &str, port: u16, name: &SiteIngressName| {
+        lost.contains_key(&(hostname.to_owned(), port, name.clone()))
+    };
+    data.forwards
+        .retain(|(n, d, _)| !is_lost(&d.hostname, d.port.get(), n));
+    data.redirects
+        .retain(|(n, d, _)| !is_lost(&d.hostname, d.port.get(), n));
+    data.l4_routes
+        .retain(|e| !is_lost(&e.hostname, e.route.port, &e.site_ingress));
+
+    let lost = lost
+        .into_iter()
+        .map(|((hostname, port, site_ingress), served)| LostSiteClaim {
+            hostname,
+            port,
+            site_ingress,
+            served,
+        })
+        .collect();
+    (data, lost)
 }
 
 /// An app ingress left out of the proxy because an ingress of an app whose
@@ -471,6 +576,8 @@ pub(super) struct ConflictParties {
     pub apps: Vec<(AppName, String /* ingress resource name */)>,
     /// Site ingresses with a colliding attachment on this `(hostname, port)`.
     pub site: Vec<String /* site ingress name */>,
+    /// The apps' claim is an ingress's HTTP redirect, not the ingress itself.
+    pub redirect: bool,
 }
 
 /// Find every `(hostname, port)` tuple claimed by both an app ingress and a
@@ -521,6 +628,49 @@ pub(super) fn detect_conflicts(
                 port: key.1,
                 apps: apps.clone(),
                 site: site.clone(),
+                redirect: false,
+            });
+        }
+    }
+
+    // spec: PRX#port-scope
+    // An ingress's HTTP redirect claims its hostname on the redirect's port,
+    // and conflicts with a plaintext ingress's claim there.
+    let mut plaintext_index: BTreeMap<(String, u16), Vec<String>> = BTreeMap::new();
+    for (name, def, _) in &site_data.forwards {
+        if !def.tls {
+            plaintext_index
+                .entry((def.hostname.clone(), def.port.get()))
+                .or_default()
+                .push(name.as_str().to_owned());
+        }
+    }
+    for (name, def, _) in &site_data.redirects {
+        if !def.tls {
+            plaintext_index
+                .entry((def.hostname.clone(), def.port.get()))
+                .or_default()
+                .push(name.as_str().to_owned());
+        }
+    }
+    let mut redirect_index: BTreeMap<(String, u16), Vec<(AppName, String)>> = BTreeMap::new();
+    for (app, def, _up) in app_pairs {
+        if let Some(redirect) = &def.redirect {
+            redirect_index
+                .entry((def.hostname.clone(), redirect.port.get()))
+                .or_default()
+                .push((app.clone(), ingress_resource_name(def)));
+        }
+    }
+    for (key, apps) in &redirect_index {
+        if let Some(site) = plaintext_index.get(key) {
+            report.redirect_conflicts.insert(key.clone());
+            report.parties.push(ConflictParties {
+                hostname: key.0.clone(),
+                port: key.1,
+                apps: apps.clone(),
+                site: site.clone(),
+                redirect: true,
             });
         }
     }
@@ -544,6 +694,42 @@ pub(super) fn drop_conflicting_app_pairs(
         .into_iter()
         .filter(|(_app, def, _u)| !conflicts.contains(&(def.hostname.clone(), def.port.get())))
         .collect()
+}
+
+/// Take the HTTP redirect off each app ingress whose redirect claim is in
+/// `conflicts`; the ingress itself stays.
+// spec: PRX#port-scope
+pub(super) fn drop_conflicting_redirects(
+    pairs: Vec<(AppName, IngressDef, ServiceUpstream)>,
+    conflicts: &BTreeSet<(String, u16)>,
+) -> Vec<(AppName, IngressDef, ServiceUpstream)> {
+    pairs
+        .into_iter()
+        .map(|(app, mut def, up)| {
+            if def
+                .redirect
+                .as_ref()
+                .is_some_and(|r| conflicts.contains(&(def.hostname.clone(), r.port.get())))
+            {
+                def.redirect = None;
+            }
+            (app, def, up)
+        })
+        .collect()
+}
+
+/// Drop the plaintext HTTP attachments claiming a `(hostname, port)` in
+/// `conflicts`.
+// spec: PRX#port-scope
+pub(super) fn drop_conflicting_plaintext(
+    mut data: SiteProxyData,
+    conflicts: &BTreeSet<(String, u16)>,
+) -> SiteProxyData {
+    let keep =
+        |def: &IngressDef| def.tls || !conflicts.contains(&(def.hostname.clone(), def.port.get()));
+    data.forwards.retain(|(_n, def, _u)| keep(def));
+    data.redirects.retain(|(_n, def, _r)| keep(def));
+    data
 }
 
 pub(super) fn drop_conflicting_site_data(
@@ -652,6 +838,7 @@ mod tests {
             redirects: vec![],
             l4_routes: vec![],
             unresolved: vec![],
+            created: Default::default(),
         };
         let report = detect_conflicts(&app_pairs, &data);
         assert!(report.conflicts.is_empty());
@@ -666,6 +853,7 @@ mod tests {
             redirects: vec![],
             l4_routes: vec![],
             unresolved: vec![],
+            created: Default::default(),
         };
         let report = detect_conflicts(&app_pairs, &data);
         assert_eq!(report.conflicts.len(), 1);
@@ -693,6 +881,7 @@ mod tests {
             )],
             l4_routes: vec![],
             unresolved: vec![],
+            created: Default::default(),
         };
         let report = detect_conflicts(&app_pairs, &data);
         assert_eq!(report.conflicts.len(), 1);
@@ -707,6 +896,7 @@ mod tests {
             redirects: vec![],
             l4_routes: vec![],
             unresolved: vec![],
+            created: Default::default(),
         };
         let report = detect_conflicts(&app_pairs, &data);
         assert!(report.conflicts.is_empty());
@@ -729,6 +919,7 @@ mod tests {
                 },
             }],
             unresolved: vec![],
+            created: Default::default(),
         };
         let report = detect_conflicts(&app_pairs, &data);
         assert_eq!(report.conflicts.len(), 1);
@@ -764,10 +955,124 @@ mod tests {
                 },
             ],
             unresolved: vec![],
+            created: Default::default(),
         };
         let kept = drop_conflicting_site_data(data, &conflicts);
         assert_eq!(kept.l4_routes.len(), 1);
         assert_eq!(kept.l4_routes[0].hostname, "kept.example.com");
+    }
+
+    fn created(
+        entries: &[(&str, u16, &str)],
+    ) -> std::collections::BTreeMap<(SiteIngressName, u16), String> {
+        entries
+            .iter()
+            .map(|(name, port, at)| ((site(name), *port), (*at).to_owned()))
+            .collect()
+    }
+
+    // spec: SITE#ingress-conflicts
+    #[test]
+    fn the_site_ingress_whose_attachment_was_created_first_is_served() {
+        let data = SiteProxyData {
+            forwards: vec![
+                (site("second"), def("shared.example.com", 443), upstream()),
+                (site("first"), def("shared.example.com", 443), upstream()),
+                (site("second"), def("shared.example.com", 8443), upstream()),
+            ],
+            redirects: vec![],
+            l4_routes: vec![],
+            unresolved: vec![],
+            created: created(&[
+                ("first", 443, "2026-01-01T00:00:00Z"),
+                ("second", 443, "2026-02-01T00:00:00Z"),
+                ("second", 8443, "2026-02-01T00:00:00Z"),
+            ]),
+        };
+
+        let (kept, lost) = resolve_site_claims(data);
+        let served: Vec<_> = kept
+            .forwards
+            .iter()
+            .map(|(n, d, _)| (n.as_str().to_owned(), d.port.get()))
+            .collect();
+        assert_eq!(
+            served,
+            vec![("first".to_owned(), 443), ("second".to_owned(), 8443)],
+            "another port on the same hostname is unaffected"
+        );
+        assert_eq!(lost.len(), 1);
+        assert_eq!(lost[0].site_ingress, site("second"));
+        assert_eq!(lost[0].served, site("first"));
+        assert_eq!(lost[0].port, 443);
+
+        // Once the served attachment no longer claims the pair, the other is
+        // served.
+        let data = SiteProxyData {
+            forwards: vec![(site("second"), def("shared.example.com", 443), upstream())],
+            redirects: vec![],
+            l4_routes: vec![],
+            unresolved: vec![],
+            created: created(&[("second", 443, "2026-02-01T00:00:00Z")]),
+        };
+        let (kept, lost) = resolve_site_claims(data);
+        assert_eq!(kept.forwards.len(), 1);
+        assert!(lost.is_empty());
+    }
+
+    fn plaintext(hostname: &str, port: u16) -> IngressDef {
+        IngressDef {
+            tls: false,
+            ..def(hostname, port)
+        }
+    }
+
+    // spec: PRX#port-scope
+    #[test]
+    fn an_app_ingress_redirect_conflicts_with_a_plaintext_attachment_on_its_port() {
+        let app = AppName::new("web").unwrap();
+        let mut ingress = def("clinic.example.com", 443);
+        ingress.redirect = Some(crate::defs::ingress::RedirectDef {
+            port: Port::new(80).unwrap(),
+            code: 307,
+        });
+        let app_pairs = vec![(app.clone(), ingress, upstream())];
+        let data = SiteProxyData {
+            forwards: vec![
+                (
+                    site("plain"),
+                    plaintext("clinic.example.com", 80),
+                    upstream(),
+                ),
+                // A TLS attachment on the redirect's port is not a plaintext ingress.
+                (site("tls"), def("other.example.com", 80), upstream()),
+            ],
+            redirects: vec![],
+            l4_routes: vec![],
+            unresolved: vec![],
+            created: Default::default(),
+        };
+
+        let report = detect_conflicts(&app_pairs, &data);
+        assert!(
+            report.conflicts.is_empty(),
+            "the ingress's own port is not in conflict"
+        );
+        assert_eq!(
+            report.redirect_conflicts,
+            BTreeSet::from([("clinic.example.com".to_owned(), 80)])
+        );
+        assert_eq!(report.parties.len(), 1);
+        assert!(report.parties[0].redirect);
+        assert_eq!(report.parties[0].site, vec!["plain".to_owned()]);
+
+        // The ingress keeps serving; only its redirect and the attachment go.
+        let kept = drop_conflicting_redirects(app_pairs, &report.redirect_conflicts);
+        assert_eq!(kept.len(), 1);
+        assert!(kept[0].1.redirect.is_none());
+        let kept = drop_conflicting_plaintext(data, &report.redirect_conflicts);
+        assert_eq!(kept.forwards.len(), 1);
+        assert_eq!(kept.forwards[0].0, site("tls"));
     }
 
     #[test]
@@ -785,6 +1090,7 @@ mod tests {
             redirects: vec![],
             l4_routes: vec![],
             unresolved: vec![],
+            created: Default::default(),
         };
         let conflicts: BTreeSet<(String, u16)> = [("dropped.example.com".to_owned(), 443)]
             .into_iter()

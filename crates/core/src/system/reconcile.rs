@@ -1571,6 +1571,7 @@ impl Reconciler {
                 &*self.registry,
                 &ext_snapshot,
                 &make_resolve_ctx(),
+                &site_ingress_snapshot,
             );
 
             let proxy_build = phases::compute_proxy_config(

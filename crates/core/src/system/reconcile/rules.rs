@@ -6,7 +6,7 @@ use std::{
 use ipnet::Ipv6Net;
 use seedling_protocol::names::{AppName, ExternalServiceName, ServiceRef};
 
-use super::RunningPod;
+use super::{RunningPod, site_proxy::SiteIngressSnapshot};
 use crate::{
     defs::{
         app::AppDef,
@@ -17,6 +17,8 @@ use crate::{
         InstanceRegistry,
         external_service_mappings::ExternalServiceSnapshot,
         registry::RegistryError,
+        site_ingress_attachments::AttachmentProtocol,
+        site_ingresses::TlsProvider,
         site_services::{
             SiteServiceProtocol,
             resolve::{ResolveCtx, ResolveOutcome, resolve_endpoint},
@@ -205,6 +207,51 @@ pub(super) fn build_ingress_rules(
     }
 
     rules
+}
+
+/// The redirection of each site ingress attachment's port to the proxy: UDP
+/// for a `udp` attachment, otherwise TCP, and UDP as well for an `http` or
+/// `http2` attachment on a site ingress that terminates TLS. A site ingress
+/// that has lost its source is not served, so its ports are not redirected.
+// spec: INFRA#ingress-redirection
+pub(super) fn build_site_ingress_rules(
+    snapshot: &SiteIngressSnapshot,
+    caddy_ip: Ipv6Addr,
+    caddy_v4: Option<Ipv4Addr>,
+) -> Vec<IngressRule> {
+    let mut by_port: std::collections::BTreeMap<u16, (bool, bool)> =
+        std::collections::BTreeMap::new();
+    for ingress in snapshot.ingresses.iter().filter(|i| !i.stale) {
+        let terminates_tls = !matches!(ingress.tls_provider, TlsProvider::None);
+        for att in snapshot
+            .attachments
+            .iter()
+            .filter(|a| a.site_ingress == ingress.name)
+        {
+            let (tcp, udp) = match att.protocol {
+                AttachmentProtocol::Udp => (false, true),
+                AttachmentProtocol::Tcp => (true, false),
+                AttachmentProtocol::Http | AttachmentProtocol::Http2 => (true, terminates_tls),
+            };
+            let claimed = by_port.entry(att.port).or_default();
+            claimed.0 |= tcp;
+            claimed.1 |= udp;
+        }
+    }
+
+    by_port
+        .into_iter()
+        .map(|(port, (tcp, udp))| IngressRule {
+            external_port: port,
+            proto: match (tcp, udp) {
+                (true, true) => ForwardProto::Both,
+                (false, true) => ForwardProto::Udp,
+                _ => ForwardProto::Tcp,
+            },
+            caddy_v6: SocketAddr::new(IpAddr::V6(caddy_ip), port),
+            caddy_v4: caddy_v4.map(|ip| SocketAddr::new(IpAddr::V4(ip), port)),
+        })
+        .collect()
 }
 
 /// Result of computing DNAT rules: the rules themselves, plus the set of
@@ -791,6 +838,73 @@ mod tests {
             .into_iter()
             .map(|r| r.proto)
             .collect()
+    }
+
+    fn site_ingress(
+        name: &str,
+        tls: TlsProvider,
+        stale: bool,
+    ) -> crate::runtime::site_ingresses::SiteIngressDef {
+        crate::runtime::site_ingresses::SiteIngressDef {
+            name: seedling_protocol::names::SiteIngressName::new(name).unwrap(),
+            hostname: format!("{name}.example.com"),
+            description: None,
+            source: crate::runtime::site_ingresses::SiteIngressSource::Manual,
+            tls_provider: tls,
+            stale,
+            created_at: "2026-01-01T00:00:00Z".to_owned(),
+        }
+    }
+
+    fn attachment(
+        site: &str,
+        port: u16,
+        protocol: AttachmentProtocol,
+    ) -> crate::runtime::site_ingress_attachments::SiteIngressAttachment {
+        crate::runtime::site_ingress_attachments::SiteIngressAttachment {
+            site_ingress: seedling_protocol::names::SiteIngressName::new(site).unwrap(),
+            port,
+            protocol,
+            target: crate::runtime::site_ingress_attachments::AttachmentTarget::Redirect {
+                url: "https://example.com".to_owned(),
+                code: 307,
+                preserve_path: false,
+            },
+            created_at: "2026-01-01T00:00:00Z".to_owned(),
+        }
+    }
+
+    // spec: INFRA#ingress-redirection
+    #[test]
+    fn a_site_ingress_attachments_port_is_redirected_by_its_protocols() {
+        let snapshot = SiteIngressSnapshot {
+            ingresses: vec![
+                site_ingress("tls", TlsProvider::Acme, false),
+                site_ingress("plain", TlsProvider::None, false),
+                site_ingress("gone", TlsProvider::Acme, true),
+            ],
+            attachments: vec![
+                attachment("tls", 8443, AttachmentProtocol::Http),
+                attachment("tls", 5353, AttachmentProtocol::Udp),
+                attachment("tls", 5432, AttachmentProtocol::Tcp),
+                attachment("plain", 8080, AttachmentProtocol::Http2),
+                attachment("gone", 9000, AttachmentProtocol::Http),
+            ],
+        };
+
+        let rules: Vec<_> = build_site_ingress_rules(&snapshot, ipv6("fd5e::ff"), None)
+            .into_iter()
+            .map(|r| (r.external_port, r.proto))
+            .collect();
+        assert_eq!(
+            rules,
+            vec![
+                (5353, ForwardProto::Udp),
+                (5432, ForwardProto::Tcp),
+                (8080, ForwardProto::Tcp),
+                (8443, ForwardProto::Both),
+            ]
+        );
     }
 
     // spec: PRX#plaintext-ingresses

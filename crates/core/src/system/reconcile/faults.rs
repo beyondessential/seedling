@@ -558,6 +558,7 @@ impl Reconciler {
     ) {
         let parties = report.parties.clone();
         let app_claims = report.app_claims.clone();
+        let site_claims = report.site_claims.clone();
         self.db.call(move |db| {
             let system = AppName::new_unchecked("_system");
             let mut current: BTreeMap<faults::FaultKey, (faults::FaultMeta, String)> =
@@ -580,6 +581,22 @@ impl Reconciler {
                 );
             }
 
+            // spec: SITE#ingress-conflicts
+            for lost in &site_claims {
+                current.insert(
+                    faults::FaultKey::new(&system, "ingress_conflict", lost.site_ingress.as_str()),
+                    (
+                        faults::FaultMeta::resource("site_ingress", lost.site_ingress.as_str()),
+                        format!(
+                            "ingress conflict on ({}:{}) with site ingress {}, whose attachment \
+                             was created first; this attachment is left out of the proxy while \
+                             that one claims them",
+                            lost.hostname, lost.port, lost.served
+                        ),
+                    ),
+                );
+            }
+
             for party in &parties {
                 let app_summary: Vec<String> = party
                     .apps
@@ -588,6 +605,17 @@ impl Reconciler {
                     .collect();
                 let site_summary: Vec<String> = party.site.clone();
                 let host_port = format!("{}:{}", party.hostname, party.port);
+
+                let app_claim = if party.redirect {
+                    "the HTTP redirect of an app ingress"
+                } else {
+                    "an app ingress"
+                };
+                let dropped = if party.redirect {
+                    "the redirect and the attachment are"
+                } else {
+                    "both sides are"
+                };
 
                 for (app, ingress_name) in &party.apps {
                     // Subject is the party's own ingress, so one app's fault
@@ -598,7 +626,7 @@ impl Reconciler {
                             faults::FaultMeta::resource("ingress", ingress_name.as_str()),
                             format!(
                                 "ingress conflict on ({host_port}) with site ingress(es) \
-                                 {site_summary:?}; both sides are dropped from the proxy until \
+                                 {site_summary:?}; {dropped} dropped from the proxy until \
                                  resolved"
                             ),
                         ),
@@ -611,8 +639,8 @@ impl Reconciler {
                         (
                             faults::FaultMeta::resource("site_ingress", site_name.as_str()),
                             format!(
-                                "ingress conflict on ({host_port}) with app ingress(es) \
-                                 {app_summary:?}; both sides are dropped from the proxy until \
+                                "ingress conflict on ({host_port}) with {app_claim} \
+                                 {app_summary:?}; {dropped} dropped from the proxy until \
                                  resolved"
                             ),
                         ),

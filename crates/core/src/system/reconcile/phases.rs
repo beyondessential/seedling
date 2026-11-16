@@ -221,6 +221,7 @@ pub(super) fn compute_nftables_rules(
     registry: &dyn InstanceRegistry,
     ext_snapshot: &ExternalServiceSnapshot,
     resolve_ctx: &ResolveCtx<'_>,
+    site_snapshot: &site_proxy::SiteIngressSnapshot,
 ) -> NftablesBuild {
     let backends_by_app = rules::collect_backends_by_app(running_pods_by_app);
 
@@ -271,6 +272,12 @@ pub(super) fn compute_nftables_rules(
             }
         }
     }
+    // spec: INFRA#ingress-redirection
+    all_ingress.extend(rules::build_site_ingress_rules(
+        site_snapshot,
+        caddy_ip,
+        caddy_v4_addr,
+    ));
     NftablesBuild {
         rules: DataPlaneRules {
             ingress: all_ingress,
@@ -444,12 +451,20 @@ pub(super) fn compute_proxy_config(
         site_proxy::resolve_app_claims(all_pairs, |app| install_seqs.get(app).copied().flatten());
 
     // spec: SITE#ingress-conflicts
+    let (site_data, lost_site_claims) = site_proxy::resolve_site_claims(site_data);
+
+    // spec: SITE#ingress-conflicts
     let mut conflicts = site_proxy::detect_conflicts(&all_pairs, &site_data);
     conflicts.app_claims = lost_app_claims;
-    let surviving_app_pairs =
-        site_proxy::drop_conflicting_app_pairs(all_pairs, &conflicts.conflicts);
-    let surviving_site_data =
-        site_proxy::drop_conflicting_site_data(site_data, &conflicts.conflicts);
+    conflicts.site_claims = lost_site_claims;
+    let surviving_app_pairs = site_proxy::drop_conflicting_redirects(
+        site_proxy::drop_conflicting_app_pairs(all_pairs, &conflicts.conflicts),
+        &conflicts.redirect_conflicts,
+    );
+    let surviving_site_data = site_proxy::drop_conflicting_plaintext(
+        site_proxy::drop_conflicting_site_data(site_data, &conflicts.conflicts),
+        &conflicts.redirect_conflicts,
+    );
 
     // build_proxy_config wants the (def, upstream) shape — the app name was
     // only carried along so the conflict report could attribute the apps.
