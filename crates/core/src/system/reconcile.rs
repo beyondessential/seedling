@@ -3930,6 +3930,67 @@ mod tests {
         assert!(fault.description.contains("odd"), "{}", fault.description);
     }
 
+    // spec: FLT#certificate-faults
+    // spec: TLS#certificate-status
+    // The deadline is for an acquisition that is not happening. Only an open
+    // Canopy order used to count as one, so a hostname the proxy was still
+    // ordering for was faulted at the deadline as though nothing were.
+    #[test]
+    fn cert_acquisition_failed_waits_for_any_acquisition_in_progress() {
+        const SCRIPT: &str = r#"
+            let web = app.service("web").exported().http(80);
+            web.ingress("shop.example.com", 443).tls(Terminate.Https, Output.Http1);
+            web.ingress("canopy.example.com", 443).tls(Terminate.Https, Output.Http1);
+            app.deployment("web")
+                .image("docker.io/library/nginx:1.29")
+                .http(80, web.route("/"));
+        "#;
+        let oi = crate::oi::test_support::TestOi::new();
+        oi.call(
+            "/apps/create",
+            serde_json::json!({ "app": "shop", "script": SCRIPT }),
+        )
+        .unwrap();
+        oi.install("shop");
+        // A Canopy-only hostname no typed app declares: Canopy cannot be asked,
+        // so nothing is acquiring its certificate.
+        oi.call(
+            "/tls/policies/set-canopy",
+            serde_json::json!({ "hostname": "canopy.example.com" }),
+        )
+        .unwrap();
+
+        let mut reconciler = test_reconciler(&oi);
+        reconciler.tls_coordinator = Some(Arc::clone(&oi.state.tls_coordinator));
+        let mut snapshot = snapshot_with_priorities("shop", AppPriority::Normal, SCRIPT);
+        snapshot.warm_cert_hostnames = ["shop.example.com:443", "canopy.example.com:443"]
+            .map(str::to_owned)
+            .into();
+        let long_ago = std::time::Instant::now() - std::time::Duration::from_secs(600);
+        for hostname in ["shop.example.com", "canopy.example.com"] {
+            reconciler
+                .warm_cert_first_seen
+                .insert(hostname.to_owned(), long_ago);
+        }
+
+        oi.block_on(reconciler.observe_warm_certs(std::slice::from_ref(&snapshot)));
+
+        let filed: Vec<String> = oi.state.db.call(|db| {
+            crate::runtime::faults::list_active_faults(db, None)
+                .unwrap()
+                .into_iter()
+                .filter(|f| f.kind == "cert_acquisition_failed")
+                .map(|f| f.description)
+                .collect()
+        });
+        assert_eq!(filed.len(), 1, "{filed:?}");
+        assert!(filed[0].contains("canopy.example.com"), "{filed:?}");
+        assert!(
+            !filed[0].contains("shop.example.com"),
+            "the proxy ordering a certificate is an acquisition in progress: {filed:?}"
+        );
+    }
+
     /// A reconciler over `oi`'s stub backends and database.
     pub(super) fn test_reconciler(oi: &crate::oi::test_support::TestOi) -> Reconciler {
         Reconciler::new(
