@@ -5,7 +5,24 @@ use serde::Deserialize;
 use serde_json::json;
 
 use crate::oi::{handler::RequestCtx, state::OiState};
-use crate::runtime::site_services::{SiteServiceDef, SiteServiceEndpoint, SiteServiceProtocol};
+use crate::runtime::site_services::{
+    self, EndpointChange, SiteServiceDef, SiteServiceEndpoint, SiteServiceProtocol,
+};
+
+fn internal(what: &str, e: impl std::fmt::Display) -> OiError {
+    OiError::new(ErrorCode::Internal, format!("{what}: {e}"))
+}
+
+/// `not_found` unless the app is registered.
+fn require_registered(state: &OiState, app: &AppName) -> Result<(), OiError> {
+    if state.registry.read().get(app.as_str()).is_none() {
+        return Err(OiError::new(
+            ErrorCode::NotFound,
+            format!("no app named {:?} is registered", app.as_str()),
+        ));
+    }
+    Ok(())
+}
 
 /// List services that apps have marked with `service.exported()`.
 pub(crate) fn list_exported(state: &OiState) -> HandlerResult {
@@ -35,7 +52,18 @@ pub(crate) fn list_exported(state: &OiState) -> HandlerResult {
         }
     }
 
+    sort_by_app_then_service(&mut exported);
     Ok(json!(exported))
+}
+
+/// Order records by `app`, then `service_name`, each in ascending byte order.
+fn sort_by_app_then_service(records: &mut [serde_json::Value]) {
+    records.sort_by_key(|v| {
+        (
+            v["app"].as_str().unwrap_or_default().to_owned(),
+            v["service_name"].as_str().unwrap_or_default().to_owned(),
+        )
+    });
 }
 
 /// Every named app service, whether or not it is exported. Mirrors
@@ -70,6 +98,7 @@ pub(crate) fn list_app_services(state: &OiState) -> HandlerResult {
         }
     }
 
+    sort_by_app_then_service(&mut services);
     Ok(json!(services))
 }
 
@@ -92,37 +121,56 @@ impl From<EndpointParams> for SiteServiceEndpoint {
     }
 }
 
-/// Validate `remote_host`: accept any IP literal (v4 or v6) or a syntactically
-/// valid DNS name. Names are resolved at runtime by the daemon's
-/// site-service resolver; the reconciler turns failed resolution and
-/// missing-NAT64 routing into structured faults rather than a mysterious
-/// blackhole.
-// spec: SITE#endpoint-addressing
+/// Validate `remote_host` as an endpoint object requires: an IPv6 literal, an
+/// IPv4 literal or a DNS name, none of which names the pod rather than the
+/// operator's machine.
+///
+/// Names are resolved at runtime by the daemon's site-service resolver; the
+/// reconciler turns failed resolution and missing-NAT64 routing into
+/// structured faults rather than a mysterious blackhole.
+// spec: SVCM#endpoint-objects
 fn validate_remote_host(host: &str) -> Result<(), OiError> {
-    if host.parse::<std::net::IpAddr>().is_ok() {
-        return Ok(());
-    }
-    if !is_valid_dns_name(host) {
-        return Err(OiError::new(
+    let invalid = |why: &str| {
+        OiError::new(
             ErrorCode::RequirementsInvalid,
-            format!(
-                "remote_host {host:?} must be an IPv6 literal, an IPv4 literal, \
-                 or a syntactically valid DNS name"
-            ),
-        ));
+            format!("remote_host {host:?} {why}"),
+        )
+    };
+    match host.parse::<std::net::IpAddr>() {
+        Ok(std::net::IpAddr::V4(v4)) => {
+            if v4.is_loopback() || v4.is_unspecified() {
+                return Err(invalid("is a loopback or unspecified address, which names the pod"));
+            }
+            Ok(())
+        }
+        Ok(std::net::IpAddr::V6(v6)) => {
+            let mapped_loopback = v6.to_ipv4_mapped().is_some_and(|v4| v4.is_loopback());
+            if v6.is_loopback() || v6.is_unspecified() || mapped_loopback {
+                return Err(invalid("is a loopback or unspecified address, which names the pod"));
+            }
+            Ok(())
+        }
+        Err(_) if is_valid_dns_name(host) => Ok(()),
+        Err(_) => Err(invalid(
+            "must be an IPv6 literal, an IPv4 literal, or a valid DNS name",
+        )),
     }
-    Ok(())
 }
 
-/// Checks whether `s` is a syntactically plausible DNS name: 1–253 chars
-/// total, dot-separated labels of 1–63 chars each that match
-/// `[A-Za-z0-9-]+` and don't start or end with `-`. Rejects trailing dots,
-/// underscore labels, and `localhost` (the daemon resolves on the host;
-/// localhost would loop back into the daemon's own networking).
+/// A DNS name as an endpoint's `remote_host` takes: the shape every DNS name in
+/// the interface has, other than `localhost` and the `.localhost` names, which
+/// a pod resolves to itself.
 fn is_valid_dns_name(s: &str) -> bool {
-    // A site-service remote host must be reachable from the pod network, and
-    // `localhost` there would name the pod rather than the operator's box.
-    !s.eq_ignore_ascii_case("localhost") && super::is_valid_dns_name(s)
+    let lower = s.to_ascii_lowercase();
+    lower != "localhost" && !lower.ends_with(".localhost") && super::is_valid_dns_name(s)
+}
+
+/// Check an endpoint's members, naming the one that is wrong.
+// spec: SVCM#endpoint-objects
+fn validate_endpoint(ep: &SiteServiceEndpoint) -> Result<(), OiError> {
+    super::validate_port("service_port", ep.service_port)?;
+    super::validate_port("remote_port", ep.remote_port)?;
+    validate_remote_host(&ep.remote_host)
 }
 
 #[derive(Deserialize)]
@@ -134,19 +182,26 @@ pub(crate) struct CreateSiteServiceParams {
     pub endpoints: Vec<EndpointParams>,
 }
 
-// spec: SITE#site-service-lifecycle
+// spec: SVCM#site-service-creation
 pub(crate) fn create_site_service(
     state: &OiState,
     params: CreateSiteServiceParams,
     ctx: &RequestCtx,
 ) -> HandlerResult {
-    for ep in &params.endpoints {
-        validate_remote_host(&ep.remote_host)?;
-        super::validate_port("service_port", ep.service_port)?;
-        super::validate_port("remote_port", ep.remote_port)?;
-    }
     let endpoints: Vec<SiteServiceEndpoint> =
         params.endpoints.into_iter().map(Into::into).collect();
+    for (i, ep) in endpoints.iter().enumerate() {
+        validate_endpoint(ep)?;
+        if endpoints[..i].contains(ep) {
+            return Err(OiError::new(
+                ErrorCode::RequirementsInvalid,
+                format!(
+                    "endpoints holds the endpoint {}/{} -> {}:{} twice",
+                    ep.service_port, ep.protocol, ep.remote_host, ep.remote_port
+                ),
+            ));
+        }
+    }
     let def = SiteServiceDef {
         name: params.name.clone(),
         description: params.description.clone(),
@@ -154,15 +209,16 @@ pub(crate) fn create_site_service(
         created_at: jiff::Timestamp::now().to_string(),
     };
 
-    state
+    let created = state
         .db
-        .call(move |db| crate::runtime::site_services::create(db, &def))
-        .map_err(|e| {
-            OiError::new(
-                ErrorCode::Internal,
-                format!("failed to store site service: {e}"),
-            )
-        })?;
+        .call(move |db| site_services::create_if_absent(db, &def))
+        .map_err(|e| internal("failed to store site service", e))?;
+    if !created {
+        return Err(OiError::new(
+            ErrorCode::RequirementsInvalid,
+            format!("a site service named {:?} already exists", params.name.as_str()),
+        ));
+    }
 
     // spec: SITE#site-service-lifecycle
     ctx.events
@@ -230,55 +286,37 @@ pub(crate) struct DeleteSiteServiceParams {
     pub name: SiteServiceName,
 }
 
-// spec: SITE#site-service-lifecycle
+// spec: SVCM#site-service-deletion
 pub(crate) fn delete_site_service(
     state: &OiState,
     params: DeleteSiteServiceParams,
     ctx: &RequestCtx,
 ) -> HandlerResult {
-    let name_for_check = params.name.clone();
-    let in_use = state
-        .db
-        .call(move |db| {
-            crate::runtime::external_service_mappings::list_for_site_target(db, &name_for_check)
-        })
-        .map_err(|e| {
-            OiError::new(
-                ErrorCode::Internal,
-                format!("failed to check mappings: {e}"),
-            )
-        })?;
-    if !in_use.is_empty() {
-        let first = &in_use[0];
-        return Err(OiError::new(
-            ErrorCode::RequirementsInvalid,
-            format!(
-                "site service {:?} is still mapped by {} external-service slot(s) \
-                 (first: app={:?}, slot={:?}); unmap or remap them first",
-                params.name.as_str(),
-                in_use.len(),
-                first.app.as_str(),
-                first.external_name.as_str(),
-            ),
-        ));
-    }
-
     let name_owned = params.name.clone();
-    let deleted = state
+    match state
         .db
-        .call(move |db| crate::runtime::site_services::delete(db, &name_owned))
-        .map_err(|e| {
-            OiError::new(
-                ErrorCode::Internal,
-                format!("failed to delete site service: {e}"),
-            )
-        })?;
-
-    if !deleted {
-        return Err(OiError::new(
-            ErrorCode::RequirementsInvalid,
-            format!("no site service named {:?}", params.name.as_str()),
-        ));
+        .call(move |db| site_services::delete_unmapped(db, &name_owned))
+        .map_err(|e| internal("failed to delete site service", e))?
+    {
+        site_services::Deletion::Deleted => {}
+        site_services::Deletion::Absent => {
+            return Err(OiError::new(
+                ErrorCode::NotFound,
+                format!("no site service named {:?}", params.name.as_str()),
+            ));
+        }
+        site_services::Deletion::Mapped { app, external_name } => {
+            return Err(OiError::new(
+                ErrorCode::RequirementsInvalid,
+                format!(
+                    "site service {:?} is the target of the mapping of external service {:?} \
+                     of app {:?}; unmap or remap it first",
+                    params.name.as_str(),
+                    external_name.as_str(),
+                    app.as_str(),
+                ),
+            ));
+        }
     }
 
     // spec: SITE#site-service-lifecycle
@@ -300,15 +338,12 @@ pub(crate) struct SiteServiceEndpointParams {
     pub remote_port: u16,
 }
 
-// spec: SITE#site-service-lifecycle
+// spec: SVCM#site-service-endpoint-changes
 pub(crate) fn add_site_service_endpoint(
     state: &OiState,
     params: SiteServiceEndpointParams,
     ctx: &RequestCtx,
 ) -> HandlerResult {
-    validate_remote_host(&params.remote_host)?;
-    super::validate_port("service_port", params.service_port)?;
-    super::validate_port("remote_port", params.remote_port)?;
     let name = params.name.clone();
     let ep = SiteServiceEndpoint {
         service_port: params.service_port,
@@ -316,11 +351,29 @@ pub(crate) fn add_site_service_endpoint(
         remote_host: params.remote_host.clone(),
         remote_port: params.remote_port,
     };
+    validate_endpoint(&ep)?;
     let ep_for_db = ep.clone();
-    state
+    match state
         .db
-        .call(move |db| crate::runtime::site_services::add_endpoint(db, &name, &ep_for_db))
-        .map_err(|e| OiError::new(ErrorCode::Internal, format!("failed to add endpoint: {e}")))?;
+        .call(move |db| site_services::add_endpoint_checked(db, &name, &ep_for_db))
+        .map_err(|e| internal("failed to add endpoint", e))?
+    {
+        EndpointChange::Done => {}
+        EndpointChange::NoService => return Err(no_site_service(&params.name)),
+        EndpointChange::Endpoint => {
+            return Err(OiError::new(
+                ErrorCode::RequirementsInvalid,
+                format!(
+                    "site service {:?} already has the endpoint {}/{} -> {}:{}",
+                    params.name.as_str(),
+                    ep.service_port,
+                    ep.protocol,
+                    ep.remote_host,
+                    ep.remote_port
+                ),
+            ));
+        }
+    }
 
     // spec: SITE#site-service-lifecycle
     ctx.events.site_service_endpoint_added(
@@ -338,7 +391,14 @@ pub(crate) fn add_site_service_endpoint(
     Ok(json!({ "added": true }))
 }
 
-// spec: SITE#site-service-lifecycle
+fn no_site_service(name: &SiteServiceName) -> OiError {
+    OiError::new(
+        ErrorCode::NotFound,
+        format!("no site service named {:?}", name.as_str()),
+    )
+}
+
+// spec: SVCM#site-service-endpoint-changes
 pub(crate) fn remove_site_service_endpoint(
     state: &OiState,
     params: SiteServiceEndpointParams,
@@ -351,29 +411,26 @@ pub(crate) fn remove_site_service_endpoint(
         remote_host: params.remote_host.clone(),
         remote_port: params.remote_port,
     };
-    let removed = state
+    match state
         .db
-        .call(move |db| crate::runtime::site_services::remove_endpoint(db, &name, &ep))
-        .map_err(|e| {
-            OiError::new(
-                ErrorCode::Internal,
-                format!("failed to remove endpoint: {e}"),
-            )
-        })?;
-
-    if !removed {
-        return Err(OiError::new(
-            ErrorCode::RequirementsInvalid,
-            format!(
-                "no endpoint {}:{} ({}) -> {}:{} on site service {:?}",
-                params.name.as_str(),
-                params.service_port,
-                params.protocol,
-                params.remote_host,
-                params.remote_port,
-                params.name.as_str(),
-            ),
-        ));
+        .call(move |db| site_services::remove_endpoint_checked(db, &name, &ep))
+        .map_err(|e| internal("failed to remove endpoint", e))?
+    {
+        EndpointChange::Done => {}
+        EndpointChange::NoService => return Err(no_site_service(&params.name)),
+        EndpointChange::Endpoint => {
+            return Err(OiError::new(
+                ErrorCode::NotFound,
+                format!(
+                    "site service {:?} has no endpoint {}/{} -> {}:{}",
+                    params.name.as_str(),
+                    params.service_port,
+                    params.protocol,
+                    params.remote_host,
+                    params.remote_port,
+                ),
+            ));
+        }
     }
 
     // spec: SITE#site-service-lifecycle
@@ -395,7 +452,7 @@ pub(crate) fn remove_site_service_endpoint(
 /// Snapshot of the site-service DNS resolver cache. Operators inspect
 /// this to confirm what addresses a DNS-named endpoint is currently
 /// routing to.
-// spec: SITE#endpoint-addressing
+// spec: SVCM#resolver-status
 pub(crate) fn site_service_resolver_status(state: &OiState) -> HandlerResult {
     let entries = state
         .site_resolver
@@ -410,7 +467,7 @@ pub(crate) fn site_service_resolver_status(state: &OiState) -> HandlerResult {
                 "aaaa": e.aaaa.iter().map(|a| a.to_string()).collect::<Vec<_>>(),
                 "a":    e.a.iter().map(|a| a.to_string()).collect::<Vec<_>>(),
                 "last_attempt_failed": e.last_attempt_failed,
-                "degraded_family": e.degraded_family.map(|f| f.record_type()),
+                "failed_families": e.failed_families.iter().map(|f| f.record_type()).collect::<Vec<_>>(),
                 "age_seconds": e.age.as_secs(),
                 "ttl_remaining_seconds": e.ttl_remaining.as_secs(),
             })
@@ -426,13 +483,57 @@ pub(crate) struct MapExternalServiceParams {
     pub target: ServiceRef,
 }
 
-// spec: SITE#external-mappings
+/// A service target that must exist, as far as the registry can say: an app
+/// target names a registered app whose current definition declares the service.
+/// A site target is checked where the mapping is written, in the same step.
+// spec: SVCM#service-targets
+fn check_service_target(state: &OiState, target: &ServiceRef) -> Result<(), OiError> {
+    use crate::defs::resource::ResourceKind;
+
+    let ServiceRef::App { app, service } = target else {
+        return Ok(());
+    };
+    let invalid = |why: String| OiError::new(ErrorCode::RequirementsInvalid, why);
+    let reg = state.registry.read();
+    let entry = reg
+        .get(app.as_str())
+        .ok_or_else(|| invalid(format!("no app named {:?} is registered", app.as_str())))?;
+    let def = entry.app.def.load();
+    let declared = def
+        .resources
+        .keys()
+        .any(|id| id.kind == ResourceKind::Service && id.name.as_str() == service.as_str());
+    if !declared {
+        return Err(invalid(format!(
+            "app {:?} declares no service named {:?}",
+            app.as_str(),
+            service.as_str()
+        )));
+    }
+    Ok(())
+}
+
+fn site_target_missing(target: &ServiceRef) -> OiError {
+    let name = match target {
+        ServiceRef::Site { name } => name.as_str(),
+        ServiceRef::App { .. } => unreachable!("only a site target can be missing from the table"),
+    };
+    OiError::new(
+        ErrorCode::RequirementsInvalid,
+        format!("no site service named {name:?}"),
+    )
+}
+
+// spec: SVCM#mapping-creation
 pub(crate) fn map_external_service(
     state: &OiState,
     params: MapExternalServiceParams,
     ctx: &RequestCtx,
 ) -> HandlerResult {
-    use crate::runtime::external_service_mappings::{self, ExternalServiceMapping};
+    use crate::runtime::external_service_mappings::{self, ExternalServiceMapping, Written};
+
+    require_registered(state, &params.app)?;
+    check_service_target(state, &params.target)?;
 
     let app = params.app.clone();
     let external_name = params.external_name.clone();
@@ -443,15 +544,25 @@ pub(crate) fn map_external_service(
         target: params.target,
     };
 
-    state
+    let target = mapping.target.clone();
+    match state
         .db
-        .call(move |db| external_service_mappings::create(db, &mapping))
-        .map_err(|e| {
-            OiError::new(
-                ErrorCode::Internal,
-                format!("failed to create mapping: {e}"),
-            )
-        })?;
+        .call(move |db| external_service_mappings::create_unique(db, &mapping))
+        .map_err(|e| internal("failed to create mapping", e))?
+    {
+        Written::Done => {}
+        Written::Duplicate | Written::Missing => {
+            return Err(OiError::new(
+                ErrorCode::RequirementsInvalid,
+                format!(
+                    "external service {:?} of app {:?} is already mapped",
+                    external_name.as_str(),
+                    app.as_str()
+                ),
+            ));
+        }
+        Written::SiteTargetMissing => return Err(site_target_missing(&target)),
+    }
 
     ctx.events
         .external_service_mapped(&app, &external_name, &event_target);
@@ -466,7 +577,7 @@ pub(crate) struct UnmapExternalServiceParams {
     pub external_name: ExternalServiceName,
 }
 
-// spec: SITE#external-mappings
+// spec: SVCM#unmapping
 pub(crate) fn unmap_external_service(
     state: &OiState,
     params: UnmapExternalServiceParams,
@@ -492,6 +603,11 @@ pub(crate) fn unmap_external_service(
                     ),
                 ));
             }
+        } else {
+            return Err(OiError::new(
+                ErrorCode::NotFound,
+                format!("no app named {:?} is registered", params.app.as_str()),
+            ));
         }
     }
 
@@ -500,16 +616,11 @@ pub(crate) fn unmap_external_service(
     let deleted = state
         .db
         .call(move |db| external_service_mappings::delete(db, &app_owned, &external_name_owned))
-        .map_err(|e| {
-            OiError::new(
-                ErrorCode::Internal,
-                format!("failed to delete mapping: {e}"),
-            )
-        })?;
+        .map_err(|e| internal("failed to delete mapping", e))?;
 
     if !deleted {
         return Err(OiError::new(
-            ErrorCode::RequirementsInvalid,
+            ErrorCode::NotFound,
             format!(
                 "no mapping for {:?} in app {:?}",
                 params.external_name, params.app
@@ -520,16 +631,20 @@ pub(crate) fn unmap_external_service(
     ctx.events
         .external_service_unmapped(&params.app, &params.external_name);
 
+    state.tick_notify.notify_one();
     Ok(json!({ "unmapped": true }))
 }
 
-// spec: SITE#external-mappings
+// spec: SVCM#remapping
 pub(crate) fn remap_external_service(
     state: &OiState,
     params: MapExternalServiceParams,
     ctx: &RequestCtx,
 ) -> HandlerResult {
-    use crate::runtime::external_service_mappings::{self, ExternalServiceMapping};
+    use crate::runtime::external_service_mappings::{self, ExternalServiceMapping, Written};
+
+    require_registered(state, &params.app)?;
+    check_service_target(state, &params.target)?;
 
     let mapping = ExternalServiceMapping {
         app: params.app.clone(),
@@ -537,33 +652,26 @@ pub(crate) fn remap_external_service(
         target: params.target.clone(),
     };
 
-    let app_for_prev = params.app.clone();
-    let external_name_for_prev = params.external_name.clone();
-    let (updated, previous) = state
+    let (written, previous) = state
         .db
-        .call(move |db| {
-            let prev = external_service_mappings::get(db, &app_for_prev, &external_name_for_prev)?;
-            let updated = external_service_mappings::update(db, &mapping)?;
-            Ok::<_, rusqlite::Error>((updated, prev))
-        })
-        .map_err(|e| {
-            OiError::new(
-                ErrorCode::Internal,
-                format!("failed to update mapping: {e}"),
-            )
-        })?;
+        .call(move |db| external_service_mappings::update_existing(db, &mapping))
+        .map_err(|e| internal("failed to update mapping", e))?;
 
-    if !updated {
-        return Err(OiError::new(
-            ErrorCode::RequirementsInvalid,
-            format!(
-                "no existing mapping for {:?} in app {:?}",
-                params.external_name, params.app
-            ),
-        ));
+    match written {
+        Written::Done => {}
+        Written::Missing | Written::Duplicate => {
+            return Err(OiError::new(
+                ErrorCode::NotFound,
+                format!(
+                    "no existing mapping for {:?} in app {:?}",
+                    params.external_name, params.app
+                ),
+            ));
+        }
+        Written::SiteTargetMissing => return Err(site_target_missing(&params.target)),
     }
 
-    let previous = previous.expect("update succeeded so prior row existed");
+    let previous = previous.expect("a mapping that was updated had a previous one");
     ctx.events.external_service_remapped(
         &params.app,
         &params.external_name,

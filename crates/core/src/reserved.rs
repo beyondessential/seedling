@@ -1,33 +1,22 @@
 //! Names Seedling grants itself inside namespaces operators also use.
 //!
-//! Site volumes, site ingresses and apps are operator-facing namespaces, and
-//! the daemon takes names in each: `backup-snap-*` for the snapshots backup
-//! runs of earlier releases left behind, `tailscale` for the ingress the
-//! discovery provider maintains, and the slice component the daemon keeps for
-//! its own infrastructure. The first two are then recognised later *by name*,
-//! and both have a destructive consumer: startup deletes leftover storage
-//! under the snapshot prefix, and the provider disables whatever row holds the
-//! ingress name. Nothing stopped an operator creating an object with either
-//! name first.
+//! Site ingresses, external volume mappings and apps are operator-facing
+//! namespaces, and the daemon takes names in each: `tailscale` for the ingress
+//! the discovery provider maintains, `seedling-op-*` for the volumes bound to a
+//! running operation, and the app names it keeps for its own infrastructure
+//! and reporting. The ingress name is recognised later *by name*, and its
+//! provider disables whatever row holds it. Nothing stopped an operator
+//! creating an object with that name first.
 //!
 //! Two halves are needed and neither suffices alone. Reservation at creation
 //! stops new collisions but cannot repair one that already exists, and does
 //! not protect against a future code path that forgets to ask. So the
-//! destructive consumers also match on *recorded ownership*: the startup
-//! sweep skips names present in `site_volumes`, and the Tailscale provider
-//! acts only on rows whose source is its own discovery. Reservation makes
-//! collisions impossible going forward; ownership checks make them harmless
-//! regardless of history.
+//! destructive consumers also match on *recorded ownership*: the Tailscale
+//! provider acts only on rows whose source is its own discovery. Reservation
+//! makes collisions impossible going forward; ownership checks make them
+//! harmless regardless of history.
 
-use seedling_protocol::names::{AppName, ExternalVolumeName, SiteIngressName, SiteVolumeName};
-
-/// Site-volume name prefixes the daemon claims.
-///
-/// Startup deletes unrecorded site-volume storage under these, so an operator
-/// volume whose record was not yet written would be destroyed on the next
-/// daemon start.
-pub const RESERVED_SITE_VOLUME_PREFIXES: &[&str] =
-    &[crate::system::leftover_snapshots::SNAPSHOT_NAME_PREFIX];
+use seedling_protocol::names::{AppName, ExternalVolumeName, SiteIngressName};
 
 /// External volume mapping name prefixes the daemon claims.
 ///
@@ -64,29 +53,10 @@ impl std::fmt::Display for ReservedName {
     }
 }
 
-/// Reject a site-volume name the daemon claims.
-///
-/// Creation only — never update or delete. An operator with a legacy
-/// `backup-snap-*` volume must still be able to manage it out of existence.
-// spec: IDN#reserved-names
-pub fn check_site_volume_name(name: &SiteVolumeName) -> Result<(), ReservedName> {
-    for prefix in RESERVED_SITE_VOLUME_PREFIXES {
-        if name.as_str().starts_with(prefix) {
-            return Err(ReservedName {
-                name: name.as_str().to_owned(),
-                reason: format!(
-                    "site volume names beginning {prefix:?} belong to leftover backup \
-                     snapshots, which are deleted at daemon startup"
-                ),
-            });
-        }
-    }
-    Ok(())
-}
-
 /// Reject an external volume mapping name the daemon claims.
 ///
-/// Creation only, for the same reason as above.
+/// Creation only — never update or delete. An operator must still be able to
+/// manage out of existence an object that predates the reservation.
 // spec: IDN#reserved-names
 pub fn check_external_volume_name(name: &ExternalVolumeName) -> Result<(), ReservedName> {
     for prefix in RESERVED_EXTERNAL_VOLUME_PREFIXES {
@@ -138,19 +108,6 @@ pub fn check_app_name(name: &AppName) -> Result<(), ReservedName> {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    // spec: IDN#reserved-names
-    #[test]
-    fn snapshot_prefix_is_reserved() {
-        let reserved = SiteVolumeName::new("backup-snap-archive").unwrap();
-        assert!(check_site_volume_name(&reserved).is_err());
-        let ordinary = SiteVolumeName::new("archive").unwrap();
-        assert!(check_site_volume_name(&ordinary).is_ok());
-        // A name that merely contains the prefix is fine — only the claim on
-        // the front of the namespace is the daemon's.
-        let contains = SiteVolumeName::new("my-backup-snap-thing").unwrap();
-        assert!(check_site_volume_name(&contains).is_ok());
-    }
 
     // spec: PRIO#resource-control-groups
     #[test]

@@ -293,6 +293,11 @@ impl VolumeStore {
         Some(data_path)
     }
 
+    /// Every held volume, ordered by app, volume name and then id.
+    ///
+    /// A record that cannot be read or parsed is an error: leaving it out
+    /// would show the operator a host with less held on it than there is.
+    // spec: VOLM#listing-held-volumes
     pub fn list_held(&self) -> std::io::Result<Vec<HeldVolumeMeta>> {
         let held_dir = self.held_dir();
         if !held_dir.exists() {
@@ -304,13 +309,30 @@ impl VolumeStore {
             let entry = entry?;
             let path = entry.path();
             if path.extension().and_then(|e| e.to_str()) == Some("json") {
-                let data = std::fs::read_to_string(&path)?;
-                if let Ok(meta) = serde_json::from_str::<HeldVolumeMeta>(&data) {
-                    results.push(meta);
-                }
+                results.push(read_held_meta(&path)?);
             }
         }
+        results.sort_by(|a, b| {
+            (&a.app, &a.volume_name, a.id.to_string()).cmp(&(
+                &b.app,
+                &b.volume_name,
+                b.id.to_string(),
+            ))
+        });
         Ok(results)
+    }
+
+    /// The held volume with this id, or `None` when no record exists for it.
+    ///
+    /// A record that exists and cannot be read is an error, not `None`.
+    // spec: VOLM#deleting-a-held-volume
+    pub fn held_meta(&self, id: &HeldVolumeId) -> std::io::Result<Option<HeldVolumeMeta>> {
+        let meta_path = self.held_dir().join(format!("{id}.meta.json"));
+        match std::fs::symlink_metadata(&meta_path) {
+            Ok(_) => read_held_meta(&meta_path).map(Some),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+            Err(e) => Err(e),
+        }
     }
 
     /// Move a held volume's data into a fresh managed site volume named
@@ -356,7 +378,19 @@ impl VolumeStore {
             serde_json::from_str(&meta_json).map_err(std::io::Error::other)?;
 
         tokio::fs::rename(&data_path, &dest).await?;
-        tokio::fs::remove_file(&meta_path).await?;
+        // spec: VOLM#requests
+        // A restore that fails leaves the volume held, so the data goes back
+        // where it was rather than standing under a name with no record.
+        if let Err(e) = tokio::fs::remove_file(&meta_path).await {
+            if let Err(undo) = tokio::fs::rename(&dest, &data_path).await {
+                tracing::error!(
+                    held_id = %id,
+                    error = %undo,
+                    "could not move a held volume back after its restore failed"
+                );
+            }
+            return Err(e);
+        }
 
         tracing::info!(
             held_id = %id,
@@ -403,6 +437,16 @@ impl VolumeStore {
         is_subvol == self.use_btrfs
     }
 
+    /// Whether the data directory is on BTRFS, so volumes are subvolumes.
+    pub fn uses_btrfs(&self) -> bool {
+        self.use_btrfs
+    }
+
+    /// Whether `path` is a BTRFS subvolume.
+    pub async fn is_subvolume(&self, path: &Path) -> bool {
+        is_btrfs_subvolume(path).await
+    }
+
     pub fn site_path(&self, name: &str) -> PathBuf {
         self.volumes_dir.join(format!("site-{name}"))
     }
@@ -414,28 +458,6 @@ impl VolumeStore {
     // spec: SITE#site-volume-names
     pub fn site_exists(&self, name: &str) -> bool {
         std::fs::symlink_metadata(self.site_path(name)).is_ok()
-    }
-
-    /// Return the names (without the `site-` prefix) of every site volume
-    /// whose name starts with `prefix`.
-    pub fn list_sites_with_prefix(&self, prefix: &str) -> std::io::Result<Vec<String>> {
-        let mut out = Vec::new();
-        if !self.volumes_dir.exists() {
-            return Ok(out);
-        }
-        for entry in std::fs::read_dir(&self.volumes_dir)? {
-            let entry = entry?;
-            let Some(file_name) = entry.file_name().to_str().map(str::to_owned) else {
-                continue;
-            };
-            let Some(rest) = file_name.strip_prefix("site-") else {
-                continue;
-            };
-            if rest.starts_with(prefix) {
-                out.push(rest.to_owned());
-            }
-        }
-        Ok(out)
     }
 
     // spec: SITE#site-volumes
@@ -520,6 +542,16 @@ pub struct HeldVolumeMeta {
     pub reason: String,
     pub held_at: String,
     pub path: PathBuf,
+}
+
+fn read_held_meta(path: &Path) -> std::io::Result<HeldVolumeMeta> {
+    let data = std::fs::read_to_string(path)?;
+    serde_json::from_str(&data).map_err(|e| {
+        std::io::Error::other(format!(
+            "held volume record {} cannot be read: {e}",
+            path.display()
+        ))
+    })
 }
 
 async fn is_btrfs_subvolume(path: &Path) -> bool {

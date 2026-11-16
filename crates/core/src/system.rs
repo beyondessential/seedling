@@ -26,7 +26,6 @@ pub(crate) mod confined;
 pub(crate) mod data_plane;
 pub mod jool;
 pub(crate) mod journal;
-pub mod leftover_snapshots;
 pub(crate) mod podman;
 pub mod resolver;
 pub mod startup_cleanup;

@@ -104,6 +104,41 @@ pub fn create(db: &Db, def: &SiteServiceDef) -> rusqlite::Result<()> {
     tx.commit()
 }
 
+/// Create a site service and its endpoints in one step, unless one exists under
+/// the name. Gives `false` when one does, and then stores nothing.
+// spec: SVCM#site-service-creation
+pub fn create_if_absent(db: &Db, def: &SiteServiceDef) -> rusqlite::Result<bool> {
+    let tx = db.conn.unchecked_transaction()?;
+    let taken: bool = tx.query_row(
+        "SELECT EXISTS (SELECT 1 FROM site_services WHERE name = ?1)",
+        params![def.name],
+        |row| row.get(0),
+    )?;
+    if taken {
+        return Ok(false);
+    }
+    tx.execute(
+        "INSERT INTO site_services (name, description, created_at) VALUES (?1, ?2, ?3)",
+        params![def.name, def.description, def.created_at],
+    )?;
+    for ep in &def.endpoints {
+        tx.execute(
+            "INSERT INTO site_service_endpoints
+                 (site_service, service_port, protocol, remote_host, remote_port)
+             VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![
+                def.name,
+                ep.service_port,
+                ep.protocol,
+                ep.remote_host,
+                ep.remote_port
+            ],
+        )?;
+    }
+    tx.commit()?;
+    Ok(true)
+}
+
 pub fn list(db: &Db) -> rusqlite::Result<Vec<SiteServiceDef>> {
     let mut stmt = db
         .conn
@@ -160,6 +195,40 @@ pub fn get(db: &Db, name: &SiteServiceName) -> rusqlite::Result<Option<SiteServi
     }
 }
 
+/// What [`delete_unmapped`] did.
+#[derive(Debug, PartialEq, Eq)]
+pub enum Deletion {
+    Deleted,
+    /// No site service exists under the name.
+    Absent,
+    /// An external service mapping targets the site service, and it was left.
+    Mapped {
+        app: seedling_protocol::names::AppName,
+        external_name: seedling_protocol::names::ExternalServiceName,
+    },
+}
+
+/// Delete a site service and its endpoints unless an external service mapping
+/// targets it, looking for a mapping and deleting as one step.
+// spec: SVCM#site-service-deletion
+pub fn delete_unmapped(db: &Db, name: &SiteServiceName) -> rusqlite::Result<Deletion> {
+    if get(db, name)?.is_none() {
+        return Ok(Deletion::Absent);
+    }
+    if let Some(mapping) =
+        crate::runtime::external_service_mappings::list_for_site_target(db, name)?
+            .into_iter()
+            .next()
+    {
+        return Ok(Deletion::Mapped {
+            app: mapping.app,
+            external_name: mapping.external_name,
+        });
+    }
+    delete(db, name)?;
+    Ok(Deletion::Deleted)
+}
+
 pub fn delete(db: &Db, name: &SiteServiceName) -> rusqlite::Result<bool> {
     // Endpoints are cascaded by the `site_service_endpoints` FK (PRAGMA
     // foreign_keys is enabled on every connection in Db::open*).
@@ -187,6 +256,51 @@ pub fn add_endpoint(
         ],
     )?;
     Ok(())
+}
+
+/// What [`add_endpoint_checked`] and [`remove_endpoint_checked`] did.
+#[derive(Debug, PartialEq, Eq)]
+pub enum EndpointChange {
+    Done,
+    /// No site service exists under the name.
+    NoService,
+    /// Adding: the site service already has the endpoint. Removing: it does
+    /// not have it.
+    Endpoint,
+}
+
+/// Add an endpoint to a site service that exists and does not have it.
+// spec: SVCM#site-service-endpoint-changes
+pub fn add_endpoint_checked(
+    db: &Db,
+    name: &SiteServiceName,
+    ep: &SiteServiceEndpoint,
+) -> rusqlite::Result<EndpointChange> {
+    let Some(service) = get(db, name)? else {
+        return Ok(EndpointChange::NoService);
+    };
+    if service.endpoints.contains(ep) {
+        return Ok(EndpointChange::Endpoint);
+    }
+    add_endpoint(db, name, ep)?;
+    Ok(EndpointChange::Done)
+}
+
+/// Remove an endpoint from a site service that exists and has it.
+// spec: SVCM#site-service-endpoint-changes
+pub fn remove_endpoint_checked(
+    db: &Db,
+    name: &SiteServiceName,
+    ep: &SiteServiceEndpoint,
+) -> rusqlite::Result<EndpointChange> {
+    if get(db, name)?.is_none() {
+        return Ok(EndpointChange::NoService);
+    }
+    Ok(if remove_endpoint(db, name, ep)? {
+        EndpointChange::Done
+    } else {
+        EndpointChange::Endpoint
+    })
 }
 
 pub fn remove_endpoint(
