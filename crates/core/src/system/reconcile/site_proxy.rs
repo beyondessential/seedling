@@ -183,6 +183,7 @@ fn resolve_attachment(
                                 port: att.port,
                                 proto,
                                 upstreams: vec![upstream_url],
+                                terminate_tls: false,
                             },
                         });
                     }
@@ -916,6 +917,7 @@ mod tests {
                     port: 5432,
                     proto: L4Proto::Tcp,
                     upstreams: vec!["[fd5e::1]:5432".to_owned()],
+                    terminate_tls: false,
                 },
             }],
             unresolved: vec![],
@@ -942,6 +944,7 @@ mod tests {
                         port: 5432,
                         proto: L4Proto::Tcp,
                         upstreams: vec!["[fd5e::1]:5432".to_owned()],
+                        terminate_tls: false,
                     },
                 },
                 SiteL4Entry {
@@ -951,6 +954,7 @@ mod tests {
                         port: 5432,
                         proto: L4Proto::Tcp,
                         upstreams: vec!["[fd5e::2]:5432".to_owned()],
+                        terminate_tls: false,
                     },
                 },
             ],

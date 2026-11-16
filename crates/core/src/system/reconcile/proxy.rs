@@ -89,24 +89,18 @@ pub(super) fn collect(
             }
             let upstream_url = format!("[{}]:{}", service_ip, upstream_port);
 
-            if def.dtls {
-                l4_routes.push(L4Route {
-                    port: def.port.get(),
-                    proto: L4Proto::Tcp,
-                    upstreams: vec![upstream_url.clone()],
-                });
-                l4_routes.push(L4Route {
-                    port: def.port.get(),
-                    proto: L4Proto::Udp,
-                    upstreams: vec![upstream_url],
-                });
-            } else {
-                l4_routes.push(L4Route {
-                    port: def.port.get(),
-                    proto: L4Proto::Tcp,
-                    upstreams: vec![upstream_url],
-                });
-            };
+            // spec: ING#termination
+            // A DTLS ingress accepts DTLS over UDP and nothing on TCP; one with
+            // no termination forwards TCP alone. A TLS ingress's connection is
+            // terminated by the proxy, so its Service receives the plaintext
+            // stream. The proxy has no DTLS termination, so a DTLS ingress's
+            // datagrams reach the Service as they arrive.
+            l4_routes.push(L4Route {
+                port: def.port.get(),
+                proto: if def.dtls { L4Proto::Udp } else { L4Proto::Tcp },
+                upstreams: vec![upstream_url],
+                terminate_tls: def.tls,
+            });
 
             observations.push((
                 ingress_instance.clone(),
@@ -601,6 +595,42 @@ mod certificate_tests {
         hostnames.sort();
         assert_eq!(hostnames, ["db.example.com", "voip.example.com"]);
         assert_eq!(out.pairs.len(), 1, "HTTPS is routed through a vhost");
+    }
+
+    // spec: ING#termination
+    #[test]
+    fn a_tls_ingress_is_terminated_and_a_dtls_ingress_listens_on_udp_alone() {
+        let app = run_test_script_app(
+            r#"
+            let web = app.service("web");
+            web.ingress("db.example.com", 5432).tls(Terminate.Tls, Output.Tcp);
+            web.ingress("voip.example.com", 5684).tls(Terminate.Dtls, Output.Udp);
+            web.ingress("raw.example.com", 2222);
+        "#,
+        );
+        let out = collect(
+            &app.def.load(),
+            &DesiredState::default(),
+            &"fd5e:ed12:3456::/48".parse().unwrap(),
+            &EphemeralInstanceRegistry::new(),
+            &AppName::new_unchecked("demo"),
+            &[],
+        )
+        .expect("collects");
+        let mut routes: Vec<(u16, L4Proto, bool)> = out
+            .l4_routes
+            .iter()
+            .map(|r| (r.port, r.proto, r.terminate_tls))
+            .collect();
+        routes.sort_by_key(|(port, _, _)| *port);
+        assert_eq!(
+            routes,
+            [
+                (2222, L4Proto::Tcp, false),
+                (5432, L4Proto::Tcp, true),
+                (5684, L4Proto::Udp, false),
+            ]
+        );
     }
 }
 

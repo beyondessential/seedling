@@ -262,16 +262,24 @@ pub(crate) fn build_caddy_config(config: &ProxyConfig) -> Value {
                 .map(|u| json!({ "dial": [u] }))
                 .collect();
 
+            // spec: ING#termination
+            // The proxy's TLS handler takes its certificate from the proxy's
+            // own TLS app, by SNI, as an HTTPS ingress's does: the hostname is
+            // among those the TLS app automates.
+            let mut handle = Vec::with_capacity(2);
+            if route.terminate_tls {
+                handle.push(json!({ "handler": "tls" }));
+            }
+            handle.push(json!({
+                "handler": "proxy",
+                "upstreams": upstreams,
+            }));
+
             l4_servers.insert(
                 server_name,
                 json!({
                     "listen": [listen],
-                    "routes": [{
-                        "handle": [{
-                            "handler": "proxy",
-                            "upstreams": upstreams,
-                        }]
-                    }]
+                    "routes": [{ "handle": handle }]
                 }),
             );
         }

@@ -497,6 +497,11 @@ pub struct L4Route {
     pub proto: L4Proto,
     /// Upstream addresses: `"[fd5e:...]:port"` format.
     pub upstreams: Vec<String>,
+    /// The proxy terminates TLS on the connection and forwards the plaintext
+    /// stream inside it.
+    // spec: ING#termination
+    #[serde(default)]
+    pub terminate_tls: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

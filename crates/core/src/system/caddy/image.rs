@@ -321,11 +321,13 @@ mod tests {
                     port: 5432,
                     proto: L4Proto::Tcp,
                     upstreams: vec!["[fd5e::2]:5432".to_owned()],
+                    terminate_tls: true,
                 },
                 L4Route {
                     port: 5353,
                     proto: L4Proto::Udp,
                     upstreams: vec!["[fd5e::2]:5353".to_owned()],
+                    terminate_tls: false,
                 },
             ],
             warm_cert_hostnames: BTreeSet::from(["warm.example.com".to_owned()]),
