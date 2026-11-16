@@ -453,7 +453,7 @@ fn deployment_restart_and_resource_stop_events_wire_shape() {
             "type": "DeploymentRestarted",
             "app": "web",
             "deployment": "srv",
-            "operation_id": "op-9",
+            "restart_id": "op-9",
         })
     );
 

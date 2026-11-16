@@ -44,18 +44,19 @@ pub fn stop_resource(
     Ok(())
 }
 
+/// Remove a stop, reporting whether one was recorded to remove.
 // spec: CTL#resource-stop
 pub fn unstop_resource(
     db: &Db,
     app: &AppName,
     kind: ResourceKind,
     name: &str,
-) -> rusqlite::Result<()> {
-    db.conn.execute(
+) -> rusqlite::Result<bool> {
+    let removed = db.conn.execute(
         "DELETE FROM stopped_resources WHERE app = ?1 AND kind = ?2 AND name = ?3",
         params![app, kind.type_name(), name],
     )?;
-    Ok(())
+    Ok(removed > 0)
 }
 
 // spec: CTL#resource-stop

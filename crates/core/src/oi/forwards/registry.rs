@@ -20,6 +20,16 @@ pub enum ForwardError {
     KeySpaceExhausted,
 }
 
+impl ForwardError {
+    /// The wire error code for a request this error refused.
+    // spec: FWD#forward-keys
+    pub fn wire_code(&self) -> &'static str {
+        match self {
+            Self::KeySpaceExhausted => "server_busy",
+        }
+    }
+}
+
 impl fmt::Display for ForwardError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -390,10 +400,11 @@ mod tests {
             reg.register(conn, |k| entry(conn, k, ForwardProto::Tcp))
                 .unwrap();
         }
-        assert!(matches!(
-            reg.register(conn, |k| entry(conn, k, ForwardProto::Udp)),
-            Err(ForwardError::KeySpaceExhausted)
-        ));
+        let refused = reg
+            .register(conn, |k| entry(conn, k, ForwardProto::Udp))
+            .expect_err("every key is held");
+        assert!(matches!(refused, ForwardError::KeySpaceExhausted));
+        assert_eq!(refused.wire_code(), "server_busy");
     }
 
     #[test]

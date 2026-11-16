@@ -252,6 +252,31 @@ fn uninstall_requires_installed_phase() {
     assert_eq!(code, "not_found");
 }
 
+// spec: SHL#session-end
+#[test]
+fn uninstalling_an_app_ends_its_shell_sessions() {
+    use crate::oi::shells::{ShellSession, StopSignal};
+    use seedling_protocol::names::SessionId;
+
+    let oi = TestOi::with_app("demo");
+    oi.install("demo");
+    let stop = StopSignal::new();
+    oi.state.shells.insert(ShellSession::starting(
+        SessionId::generate(),
+        seedling_protocol::names::AppName::new("demo").unwrap(),
+        "shell".to_owned(),
+        None,
+        (24, 80),
+        stop.clone(),
+    ));
+
+    oi.call("/apps/uninstall", json!({ "app": "demo" }))
+        .unwrap();
+
+    assert!(stop.is_requested(), "the session outlived the install");
+    assert!(oi.state.shells.list(Some("demo")).is_empty());
+}
+
 // spec: ACI#uninstall
 #[test]
 fn uninstall_answers_each_phase_as_the_spec_says() {
@@ -574,15 +599,17 @@ fn scale_clamps_to_bounds_and_validates_targets() {
 
 // spec: CTL#deployment-restart
 #[test]
-fn restart_returns_operation_id_for_known_deployment() {
+fn restart_returns_restart_id_for_known_deployment() {
     let oi = TestOi::with_app("demo");
+    oi.install("demo");
     let result = oi
         .call(
             "/apps/restart",
             json!({ "app": "demo", "deployment": "web" }),
         )
         .unwrap();
-    assert!(!result["operation_id"].as_str().unwrap().is_empty());
+    assert!(!result["restart_id"].as_str().unwrap().is_empty());
+    assert!(result.get("operation_id").is_none());
 
     let (code, _) = oi
         .call(
@@ -591,6 +618,19 @@ fn restart_returns_operation_id_for_known_deployment() {
         )
         .unwrap_err();
     assert_eq!(code, "not_found");
+}
+
+// spec: CTL#deployment-restart
+#[test]
+fn restart_of_an_app_that_is_not_installed_is_refused() {
+    let oi = TestOi::with_app("demo");
+    let (code, _) = oi
+        .call(
+            "/apps/restart",
+            json!({ "app": "demo", "deployment": "web" }),
+        )
+        .unwrap_err();
+    assert_eq!(code, "not_installed");
 }
 
 // spec: CTL#resource-stop
@@ -672,6 +712,70 @@ fn unstop_resource_clears_stopped_flag() {
         )
         .unwrap_err();
     assert_eq!(code, "requirements_invalid");
+
+    let (code, _) = oi
+        .call(
+            "/apps/resource/unstop",
+            json!({ "app": "demo", "kind": "service", "name": "web" }),
+        )
+        .unwrap_err();
+    assert_eq!(code, "requirements_invalid");
+}
+
+// spec: CTL#resource-stop
+#[test]
+fn unstop_resource_names_only_declared_resources() {
+    let oi = TestOi::with_app("demo");
+    let (code, _) = oi
+        .call(
+            "/apps/resource/unstop",
+            json!({ "app": "demo", "kind": "deployment", "name": "ghost" }),
+        )
+        .unwrap_err();
+    assert_eq!(code, "not_found");
+
+    let (code, _) = oi
+        .call(
+            "/apps/resource/unstop",
+            json!({ "app": "ghost", "kind": "deployment", "name": "web" }),
+        )
+        .unwrap_err();
+    assert_eq!(code, "not_found");
+}
+
+// spec: CTL#resource-stop
+#[test]
+fn unstopping_a_resource_that_is_not_stopped_emits_no_event() {
+    use seedling_protocol::events::OiEvent;
+
+    let oi = TestOi::with_app("demo");
+    let mut events = oi.state.event_tx.subscribe();
+    oi.call(
+        "/apps/resource/unstop",
+        json!({ "app": "demo", "kind": "deployment", "name": "web" }),
+    )
+    .unwrap();
+    assert!(
+        !std::iter::from_fn(|| events.try_recv().ok())
+            .any(|ev| matches!(ev, OiEvent::ResourceUnstopped { .. })),
+        "a no-op unstop emitted an event"
+    );
+
+    oi.call(
+        "/apps/resource/stop",
+        json!({ "app": "demo", "kind": "deployment", "name": "web" }),
+    )
+    .unwrap();
+    oi.call(
+        "/apps/resource/unstop",
+        json!({ "app": "demo", "kind": "deployment", "name": "web" }),
+    )
+    .unwrap();
+    assert!(
+        std::iter::from_fn(|| events.try_recv().ok())
+            .any(|ev| matches!(ev, OiEvent::ResourceUnstopped { .. })),
+        "reversing a stop emitted no event"
+    );
 }
 
 // spec: CTL#resource-stop

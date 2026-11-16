@@ -207,12 +207,7 @@ pub(crate) async fn forward_port_session(
     let forward_key = match registered {
         Ok(k) => k,
         Err(e) => {
-            write_err(
-                &mut send,
-                "internal",
-                &format!("forward key allocation: {e}"),
-            )
-            .await;
+            write_err(&mut send, e.wire_code(), &e.to_string()).await;
             return;
         }
     };
@@ -530,11 +525,8 @@ async fn udp_relay_task(
         }
     }
 
-    // spec: FWD#relay-resilience — nothing else observes this task, so
-    // an unannounced exit left the forward in `/forwards/list` looking
-    // healthy with no relay behind it.
+    // spec: FWD#relay-resilience
+    // The relay ends only with its forward or its connection, neither of which
+    // a status message on the forward's stream could still report.
     tracing::info!(key = forward_key, "UDP relay ended");
-    let _ = status_tx.try_send(ForwardStatus::warn(
-        "UDP relay ended; no further datagrams will be relayed",
-    ));
 }

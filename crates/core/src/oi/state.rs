@@ -110,6 +110,15 @@ impl crate::runtime::tls::env::Environment for OiEnvironment {
 }
 
 impl OiState {
+    // spec: FWD#forward-lifetime
+    // spec: SHL#session-end
+    /// Ends every forward and shell session of `app`, as when it leaves
+    /// `Installed`.
+    pub(crate) fn end_sessions_of_app(&self, app: &str) {
+        crate::oi::forwards::end_forwards_of_app(self, app);
+        self.shells.stop_app(app);
+    }
+
     /// Whether Canopy access is enabled and a client is offering to carry
     /// requests.
     pub fn canopy_offer_live(&self) -> bool {

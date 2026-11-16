@@ -41,7 +41,14 @@ fn unstop_removes_only_the_named_resource() {
     stop_resource(&db, &app("myapp"), ResourceKind::Deployment, "worker").expect("stop worker");
     stop_resource(&db, &app("myapp"), ResourceKind::Service, "web").expect("stop svc");
 
-    unstop_resource(&db, &app("myapp"), ResourceKind::Deployment, "web").expect("unstop");
+    assert!(
+        unstop_resource(&db, &app("myapp"), ResourceKind::Deployment, "web").expect("unstop"),
+        "removing a recorded stop reports it"
+    );
+    assert!(
+        !unstop_resource(&db, &app("myapp"), ResourceKind::Deployment, "web").expect("unstop"),
+        "removing nothing reports it"
+    );
 
     let stopped = load_stopped(&db, &app("myapp")).expect("load");
     assert!(!stopped.contains(&(ResourceKind::Deployment, "web".to_owned())));

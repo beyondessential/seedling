@@ -1649,8 +1649,9 @@ pub(crate) fn uninstall_app(state: &OiState, params: AppParams) -> HandlerResult
         .call(move |db| transition_phase(&phase_arc, AppPhase::Uninstalling, db, &name_owned))
         .map_err(|e| OiError::internal(format!("recording the uninstall: {e}")))?;
     // spec: FWD#forward-lifetime
+    // spec: SHL#session-end
     // The app has left `Installed`.
-    crate::oi::forwards::end_forwards_of_app(state, name);
+    state.end_sessions_of_app(name);
     // The app now reads `Uninstalling`, so an operation waiting on this lock
     // is refused by the scheduler's own gate.
     drop(scheduled);
@@ -2078,7 +2079,14 @@ pub(crate) fn restart_deployment(
         }
     }
 
-    let operation_id = uuid::Uuid::new_v4().to_string();
+    if !matches!(*entry.phase.lock(), AppPhase::Installed) {
+        return Err(OiError::new(
+            ErrorCode::NotInstalled,
+            format!("app is not installed: {name}"),
+        ));
+    }
+
+    let restart_id = uuid::Uuid::new_v4().to_string();
 
     let name_owned = params.app.clone();
     let deployment_name_owned = deployment_name.to_owned();
@@ -2090,9 +2098,9 @@ pub(crate) fn restart_deployment(
     entry.tick_notify.notify_one();
 
     ctx.events
-        .deployment_restarted(&params.app, deployment_name, &operation_id);
+        .deployment_restarted(&params.app, deployment_name, &restart_id);
 
-    Ok(json!({ "operation_id": operation_id }))
+    Ok(json!({ "restart_id": restart_id }))
 }
 
 // spec: CTL#scaling
@@ -2199,6 +2207,25 @@ fn resource_kind_from_debug_str(s: &str) -> Option<ResourceKind> {
 }
 
 // spec: CTL#resource-stop
+fn stoppable_kind(kind: &str) -> Result<ResourceKind, OiError> {
+    ResourceKind::from_type_name(kind)
+        .filter(|k| {
+            matches!(
+                k,
+                ResourceKind::Deployment | ResourceKind::Job | ResourceKind::Ingress
+            )
+        })
+        .ok_or_else(|| {
+            OiError::new(
+                ErrorCode::RequirementsInvalid,
+                format!(
+                    "kind {kind:?} cannot be stopped; only deployment, job, or ingress are stoppable"
+                ),
+            )
+        })
+}
+
+// spec: CTL#resource-stop
 pub(crate) fn stop_resource(
     state: &OiState,
     params: ResourceStopParams,
@@ -2207,21 +2234,7 @@ pub(crate) fn stop_resource(
     let app = params.app.as_str();
     let resource_name = params.name.as_str();
 
-    let kind = ResourceKind::from_type_name(&params.kind).filter(|k| {
-        matches!(
-            k,
-            ResourceKind::Deployment | ResourceKind::Job | ResourceKind::Ingress
-        )
-    });
-    let kind = kind.ok_or_else(|| {
-        OiError::new(
-            ErrorCode::RequirementsInvalid,
-            format!(
-                "kind {:?} cannot be stopped; only deployment, job, or ingress are stoppable",
-                params.kind
-            ),
-        )
-    })?;
+    let kind = stoppable_kind(&params.kind)?;
 
     // spec: CTL#resource-stop
     // Desired-state mutations must not race with a running action, and an
@@ -2276,18 +2289,24 @@ pub(crate) fn unstop_resource(
     let app = params.app.as_str();
     let resource_name = params.name.as_str();
 
-    let kind = ResourceKind::from_type_name(&params.kind).ok_or_else(|| {
-        OiError::new(
-            ErrorCode::RequirementsInvalid,
-            format!("unknown resource kind: {:?}", params.kind),
-        )
-    })?;
+    let kind = stoppable_kind(&params.kind)?;
 
-    {
-        let reg = state.registry.read();
-        if !reg.is_registered(app) {
-            return Err(OiError::not_found(format!("app not found: {app}")));
-        }
+    let reg = state.registry.read();
+    let entry = reg
+        .get(app)
+        .ok_or_else(|| OiError::not_found(format!("app not found: {app}")))?;
+    let declared = entry
+        .app
+        .def
+        .load()
+        .resources
+        .iter()
+        .any(|(id, _)| id.kind == kind && id.name.as_str() == resource_name);
+    if !declared {
+        return Err(OiError::not_found(format!(
+            "resource {}/{resource_name} not found in app {app}",
+            kind.type_name()
+        )));
     }
 
     // spec: CTL#resource-stop
@@ -2297,18 +2316,16 @@ pub(crate) fn unstop_resource(
 
     let app_owned = params.app.clone();
     let resource_name_owned = resource_name.to_owned();
-    state
+    let removed = state
         .db
         .call(move |db| stopped::unstop_resource(db, &app_owned, kind, &resource_name_owned))
         .map_err(|e| OiError::internal(format!("db error: {e}")))?;
 
     let ks = kind.type_name();
-    tracing::info!(app = %app, kind = %ks, name = %resource_name, "resource unstopped");
-    ctx.events
-        .resource_unstopped(&params.app, ks, resource_name);
-
-    let reg = state.registry.read();
-    if let Some(entry) = reg.get(app) {
+    if removed {
+        tracing::info!(app = %app, kind = %ks, name = %resource_name, "resource unstopped");
+        ctx.events
+            .resource_unstopped(&params.app, ks, resource_name);
         entry.tick_notify.notify_one();
     }
 

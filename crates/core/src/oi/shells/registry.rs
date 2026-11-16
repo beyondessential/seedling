@@ -178,6 +178,23 @@ impl ShellRegistry {
         true
     }
 
+    // spec: SHL#session-end
+    /// Stops every session of `app`, as [`stop`](Self::stop) does each one.
+    pub fn stop_app(&self, app: &str) -> usize {
+        let mut sessions = self.sessions.lock();
+        let ids: Vec<SessionId> = sessions
+            .values()
+            .filter(|s| s.app == app)
+            .map(|s| s.session_id)
+            .collect();
+        for id in &ids {
+            if let Some(session) = sessions.remove(id) {
+                session.stop.request();
+            }
+        }
+        ids.len()
+    }
+
     // spec: SHL#listing-sessions
     pub fn list(&self, app: Option<&str>) -> Vec<ShellRecord> {
         self.sessions
@@ -250,6 +267,27 @@ mod tests {
         // SAFETY: `ws` is a valid winsize to write into.
         unsafe { libc::ioctl(fd, libc::TIOCGWINSZ as _, &mut ws) };
         (ws.ws_row, ws.ws_col)
+    }
+
+    // spec: SHL#session-end
+    #[test]
+    fn stopping_an_app_stops_only_its_sessions() {
+        let registry = ShellRegistry::new();
+        let (_, mine) = starting(&registry, (24, 80));
+        let other = StopSignal::new();
+        registry.insert(ShellSession::starting(
+            SessionId::generate(),
+            AppName::new_unchecked("elsewhere"),
+            "shell".to_owned(),
+            None,
+            (24, 80),
+            other.clone(),
+        ));
+
+        assert_eq!(registry.stop_app("app"), 1);
+        assert!(mine.is_requested());
+        assert!(!other.is_requested());
+        assert_eq!(registry.list(None).len(), 1);
     }
 
     // spec: SHL#session-startup

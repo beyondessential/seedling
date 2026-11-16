@@ -864,8 +864,9 @@ pub fn set_phase_and_persist(state: &OiState, app_name: &AppName, new_phase: App
     use crate::oi::handler::apps::{extract_persist_fields, persist_app_fields};
     let phase_str = phase_event_name(&new_phase);
     // spec: FWD#forward-lifetime
+    // spec: SHL#session-end
     if !matches!(new_phase, AppPhase::Installed) {
-        crate::oi::forwards::end_forwards_of_app(state, app_name.as_str());
+        state.end_sessions_of_app(app_name.as_str());
     }
     {
         let mut reg = state.registry.write();

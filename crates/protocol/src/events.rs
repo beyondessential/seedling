@@ -265,7 +265,7 @@ pub enum OiEvent {
         timestamp: Timestamp,
         app: AppName,
         deployment: String,
-        operation_id: String,
+        restart_id: String,
         #[serde(skip_serializing_if = "Option::is_none")]
         actor: Option<Arc<Actor>>,
     },
@@ -1327,14 +1327,14 @@ impl EventSender {
         &self,
         app: &AppName,
         deployment: &str,
-        operation_id: &str,
+        restart_id: &str,
         actor: Option<Arc<Actor>>,
     ) {
         self.emit(OiEvent::DeploymentRestarted {
             timestamp: now(),
             app: app.clone(),
             deployment: deployment.to_owned(),
-            operation_id: operation_id.to_owned(),
+            restart_id: restart_id.to_owned(),
             actor,
         });
     }
