@@ -387,8 +387,8 @@ app.deployment("api")
     .healthcheck(#{
         kind: "command",
         cmd: ["curl", "-fsS", "http://localhost:8080/healthz"],
-        interval: 10,         // seconds between checks (default 30)
-        timeout: 3,           // seconds before a check is considered failed (default 30)
+        interval: 10,         // seconds between checks, at least 1 (default 30)
+        timeout: 3,           // seconds before a check is considered failed, at least 1 (default 30)
         retries: 3,           // consecutive failures before transitioning to unhealthy (default 3)
         start_period: 15,     // seconds of grace after start before failures count (default 0)
         on_failure: "replace",// "replace" (default) or "monitor"

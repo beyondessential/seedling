@@ -349,6 +349,15 @@ service upstream:
 The L4 config is generated as `layer4.servers` entries in the Caddy
 JSON, separate from the `http.servers` entries used for HTTP ingress.
 
+An ingress with no `tls()` gets a TCP listener only. A
+`tls(Terminate.Tls, Output.Tcp)` ingress puts the L4 `tls` handler
+ahead of the proxy, so Caddy terminates TLS with the certificate its
+TLS app holds for the hostname (the same chain as HTTPS ingresses) and
+the service receives the plaintext stream. A
+`tls(Terminate.Dtls, Output.Udp)` ingress gets a UDP listener only;
+the proxy image has no DTLS terminator yet, so its datagrams reach the
+service still encrypted.
+
 Because all ingress flows through Caddy, dual-stack works uniformly
 for both HTTP and TCP/UDP: IPv4 clients connect to Caddy over IPv4,
 and Caddy proxies upstream over IPv6. No IPv4 addresses are needed on
