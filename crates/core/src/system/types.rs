@@ -828,6 +828,9 @@ pub enum ObservationFact {
     },
     ContainerHealthy,
     ContainerUnhealthy,
+    /// A health check is declared and none has passed since the container
+    /// started.
+    ContainerHealthStarting,
     /// The container exists but its state does not correspond to any
     /// lifecycle transition — it is draining, or podman reported a state this
     /// build does not model.
@@ -915,6 +918,10 @@ impl ObservationFact {
             ObservationFact::ContainerHealthy => vec![("health_check_pass", json!({}))],
             // spec: LCY#containers
             ObservationFact::ContainerUnhealthy => vec![("health_check_fail", json!({}))],
+            // spec: APPS#resources
+            ObservationFact::ContainerHealthStarting => {
+                vec![("health_check_starting", json!({}))]
+            }
             ObservationFact::ContainerMissing => vec![("container_removed", json!({}))],
             // A present volume is both created and ready.
             ObservationFact::VolumePresent => {
@@ -1004,7 +1011,14 @@ mod observation_fact_tests {
         assert_eq!(kinds[0].0, "health_check_fail");
     }
 
-    // spec: LCY#containers
+    // spec: APPS#resources
+    #[test]
+    fn container_health_starting_maps_to_health_check_starting() {
+        let kinds = ObservationFact::ContainerHealthStarting.to_obs_kinds();
+        assert_eq!(kinds.len(), 1);
+        assert_eq!(kinds[0].0, "health_check_starting");
+    }
+
     #[test]
     fn container_healthy_maps_to_health_check_pass() {
         let kinds = ObservationFact::ContainerHealthy.to_obs_kinds();

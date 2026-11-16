@@ -312,7 +312,7 @@ fn fault_and_resource_events_wire_shape() {
     );
 
     assert_eq!(
-        shape(|tx| tx.resource_state_changed(&app, "deployment", "srv", "srv-0", "running")),
+        shape(|tx| tx.resource_state_changed(&app, "deployment", Some("srv"), "srv-0", "running")),
         json!({
             "type": "ResourceStateChanged",
             "app": "web",
@@ -320,6 +320,48 @@ fn fault_and_resource_events_wire_shape() {
             "resource_name": "srv",
             "instance_id": "srv-0",
             "state": "running",
+        })
+    );
+
+    assert_eq!(
+        shape(|tx| tx.resource_state_changed(&app, "job", None, "job-0", "Ready")),
+        json!({
+            "type": "ResourceStateChanged",
+            "app": "web",
+            "resource_type": "job",
+            "resource_name": null,
+            "instance_id": "job-0",
+            "state": "Ready",
+        })
+    );
+
+    // spec: APPS#resources
+    assert_eq!(
+        shape(|tx| tx.instance_health_changed(
+            &app,
+            "deployment",
+            Some("srv"),
+            "srv-0",
+            Some("failing")
+        )),
+        json!({
+            "type": "InstanceHealthChanged",
+            "app": "web",
+            "resource_type": "deployment",
+            "resource_name": "srv",
+            "instance_id": "srv-0",
+            "health": "failing",
+        })
+    );
+    assert_eq!(
+        shape(|tx| tx.instance_health_changed(&app, "deployment", None, "srv-0", None)),
+        json!({
+            "type": "InstanceHealthChanged",
+            "app": "web",
+            "resource_type": "deployment",
+            "resource_name": null,
+            "instance_id": "srv-0",
+            "health": null,
         })
     );
 }

@@ -13,6 +13,7 @@ use crate::{
         apps::{AppEntry, AppRegistry},
         barrier::oracle::derive_lifecycle_state,
         gc::{KnownDesiredState, gc_unscheduled_instances, is_torn_down},
+        health::{InstanceHealth, declares_healthcheck, read_health},
         history::{
             delete_instance, find_instances_for_group, insert_observation, query_observations,
             read_lifecycle,
@@ -47,6 +48,7 @@ struct DesiredGroup {
     kind: ResourceKind,
     res_name: Option<String>,
     kind_str: String,
+    declares_healthcheck: bool,
 }
 
 /// The resource groups whose instances could not be listed.
@@ -60,11 +62,11 @@ type UnreadGroups = HashSet<(AppName, ResourceKind, Option<String>)>;
 /// N² entries for one resource, and a client driven by the event feed saw
 /// the same `resource_state_changed` repeated once per replica.
 fn dedupe_groups(
-    raw: impl Iterator<Item = (AppName, ResourceKind, Option<String>)>,
+    raw: impl Iterator<Item = (AppName, ResourceKind, Option<String>, bool)>,
 ) -> Vec<DesiredGroup> {
     let mut seen: HashSet<(AppName, ResourceKind, Option<String>)> = HashSet::new();
     let mut groups = Vec::new();
-    for (app, kind, res_name) in raw {
+    for (app, kind, res_name, declares_healthcheck) in raw {
         if !seen.insert((app.clone(), kind, res_name.clone())) {
             continue;
         }
@@ -73,6 +75,7 @@ fn dedupe_groups(
             kind,
             res_name,
             kind_str: kind.type_name().to_owned(),
+            declares_healthcheck,
         });
     }
     groups
@@ -83,13 +86,17 @@ fn dedupe_groups(
 struct StateEntry {
     app: AppName,
     kind_str: String,
-    res_name: String,
+    res_name: Option<String>,
     hex: String,
     inst_id: InstanceId,
     /// `None` while the instance's observation history cannot be read: its
     /// state is undetermined, not Pending.
     // spec: LCY#derivation
     state: Option<LifecycleState>,
+    /// `None` while the observations the health derives from cannot be read:
+    /// the health is undetermined, not absent.
+    // spec: APPS#resources
+    health: Option<Option<InstanceHealth>>,
 }
 
 impl Reconciler {
@@ -100,6 +107,7 @@ impl Reconciler {
                     app.name.clone(),
                     dr.instance.kind,
                     dr.instance.name.as_deref().map(str::to_owned),
+                    declares_healthcheck(&dr.definition),
                 )
             })
         }));
@@ -127,13 +135,21 @@ impl Reconciler {
                                 None
                             }
                         };
+                        let health = match read_health(db, &inst, g.declares_healthcheck) {
+                            Ok(health) => Some(health),
+                            Err(e) => {
+                                warn!(app = %g.app, instance = %inst.display_name, error = %e, "state changes: could not read what its health derives from");
+                                None
+                            }
+                        };
                         out.push(StateEntry {
                             app: g.app.clone(),
                             kind_str: g.kind_str.clone(),
-                            res_name: g.res_name.as_deref().unwrap_or("").to_owned(),
+                            res_name: g.res_name.clone(),
                             hex,
                             inst_id: inst.id,
                             state,
+                            health,
                         });
                     }
                 }
@@ -157,12 +173,36 @@ impl Reconciler {
                 self.event_tx.resource_state_changed(
                     &entry.app,
                     &entry.kind_str,
-                    &entry.res_name,
+                    entry.res_name.as_deref(),
                     &entry.hex,
                     &format!("{state:?}"),
                 );
             }
             new_states.insert(key, state);
+        }
+
+        // spec: APPS#resources
+        let mut new_health = BTreeMap::new();
+        for entry in &entries {
+            let key = (entry.app.clone(), entry.hex.clone());
+            let Some(health) = entry.health else {
+                if let Some(&prev) = self.prev_health.get(&key) {
+                    new_health.insert(key, prev);
+                }
+                continue;
+            };
+            if let Some(&prev) = self.prev_health.get(&key)
+                && prev != health
+            {
+                self.event_tx.instance_health_changed(
+                    &entry.app,
+                    &entry.kind_str,
+                    entry.res_name.as_deref(),
+                    &entry.hex,
+                    health.map(InstanceHealth::name),
+                );
+            }
+            new_health.insert(key, health);
         }
 
         // For desired resources that had no DB instances yet, mark Pending.
@@ -180,15 +220,20 @@ impl Reconciler {
                 );
                 if unread_groups.contains(&group) {
                     if let Some(&prev) = self.prev_states.get(&key) {
-                        new_states.insert(key, prev);
+                        new_states.insert(key.clone(), prev);
+                    }
+                    if let Some(&prev) = self.prev_health.get(&key) {
+                        new_health.insert(key, prev);
                     }
                 } else {
-                    new_states.insert(key, LifecycleState::Pending);
+                    new_states.insert(key.clone(), LifecycleState::Pending);
+                    new_health.insert(key, None);
                 }
             }
         }
 
         self.prev_states = new_states;
+        self.prev_health = new_health;
     }
 
     // spec: OBS#ingresses
@@ -477,9 +522,11 @@ impl Reconciler {
     // on every tick.
     pub(super) fn contradicting_kinds(kind: &str) -> &'static [&'static str] {
         match kind {
-            "health_check_pass" | "health_check_fail" => {
-                &["health_check_pass", "health_check_fail"]
-            }
+            "health_check_pass" | "health_check_fail" | "health_check_starting" => &[
+                "health_check_pass",
+                "health_check_fail",
+                "health_check_starting",
+            ],
             "backend_healthy" | "backend_lost" => &["backend_healthy", "backend_lost"],
             "unit_failed" | "unit_start_limit_hit" | "unit_inactive" => {
                 &["unit_failed", "unit_start_limit_hit", "unit_inactive"]
@@ -600,9 +647,24 @@ mod tests {
     #[test]
     fn instances_of_one_resource_collapse_to_a_single_group() {
         let raw = vec![
-            (app("web"), ResourceKind::Deployment, Some("api".to_owned())),
-            (app("web"), ResourceKind::Deployment, Some("api".to_owned())),
-            (app("web"), ResourceKind::Deployment, Some("api".to_owned())),
+            (
+                app("web"),
+                ResourceKind::Deployment,
+                Some("api".to_owned()),
+                false,
+            ),
+            (
+                app("web"),
+                ResourceKind::Deployment,
+                Some("api".to_owned()),
+                false,
+            ),
+            (
+                app("web"),
+                ResourceKind::Deployment,
+                Some("api".to_owned()),
+                false,
+            ),
         ];
         let groups = dedupe_groups(raw.into_iter());
         assert_eq!(groups.len(), 1);
@@ -614,19 +676,31 @@ mod tests {
     #[test]
     fn distinct_resources_stay_distinct() {
         let raw = vec![
-            (app("web"), ResourceKind::Deployment, Some("api".to_owned())),
+            (
+                app("web"),
+                ResourceKind::Deployment,
+                Some("api".to_owned()),
+                false,
+            ),
             (
                 app("web"),
                 ResourceKind::Deployment,
                 Some("worker".to_owned()),
+                false,
             ),
-            (app("web"), ResourceKind::Service, Some("api".to_owned())),
+            (
+                app("web"),
+                ResourceKind::Service,
+                Some("api".to_owned()),
+                false,
+            ),
             (
                 app("other"),
                 ResourceKind::Deployment,
                 Some("api".to_owned()),
+                false,
             ),
-            (app("web"), ResourceKind::Volume, None),
+            (app("web"), ResourceKind::Volume, None, false),
         ];
         assert_eq!(dedupe_groups(raw.into_iter()).len(), 5);
     }

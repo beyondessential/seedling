@@ -174,9 +174,20 @@ pub enum OiEvent {
         timestamp: Timestamp,
         app: AppName,
         resource_type: String,
-        resource_name: String,
+        resource_name: Option<String>,
         instance_id: String,
         state: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        actor: Option<Arc<Actor>>,
+    },
+    // spec: APPS#resources
+    InstanceHealthChanged {
+        timestamp: Timestamp,
+        app: AppName,
+        resource_type: String,
+        resource_name: Option<String>,
+        instance_id: String,
+        health: Option<String>,
         #[serde(skip_serializing_if = "Option::is_none")]
         actor: Option<Arc<Actor>>,
     },
@@ -793,7 +804,7 @@ impl EventSender {
         &self,
         app: &AppName,
         resource_type: &str,
-        resource_name: &str,
+        resource_name: Option<&str>,
         instance_id: &str,
         state: &str,
     ) {
@@ -801,9 +812,29 @@ impl EventSender {
             timestamp: now(),
             app: app.clone(),
             resource_type: resource_type.to_owned(),
-            resource_name: resource_name.to_owned(),
+            resource_name: resource_name.map(str::to_owned),
             instance_id: instance_id.to_owned(),
             state: state.to_owned(),
+            actor: None,
+        });
+    }
+
+    // spec: APPS#resources
+    pub fn instance_health_changed(
+        &self,
+        app: &AppName,
+        resource_type: &str,
+        resource_name: Option<&str>,
+        instance_id: &str,
+        health: Option<&str>,
+    ) {
+        self.emit(OiEvent::InstanceHealthChanged {
+            timestamp: now(),
+            app: app.clone(),
+            resource_type: resource_type.to_owned(),
+            resource_name: resource_name.map(str::to_owned),
+            instance_id: instance_id.to_owned(),
+            health: health.map(str::to_owned),
             actor: None,
         });
     }

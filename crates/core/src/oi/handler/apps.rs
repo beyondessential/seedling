@@ -18,6 +18,7 @@ use crate::{
         definition::{Bundle, Source, version},
         desired::list_dynamic_resources_for_app,
         faults,
+        health::{InstanceHealth, declares_healthcheck, read_health},
         history::{find_instances_for_group, read_lifecycle},
         identity::{InstanceId, InstanceVariant, ResourceInstance},
         priority::{self, AppPriority},
@@ -683,6 +684,7 @@ pub(crate) fn describe_app(state: &OiState, params: AppParams) -> HandlerResult 
         name_str: String,
         base_json: Value,
         scale_bounds: Option<(u16, u16)>,
+        declares_healthcheck: bool,
     }
     let resource_infos: Vec<ResourceInfo> = def
         .resources
@@ -692,6 +694,7 @@ pub(crate) fn describe_app(state: &OiState, params: AppParams) -> HandlerResult 
             name_str: id.name.as_str().to_owned(),
             base_json: resource_static_json(id.kind, id.name.as_str(), resource, &def),
             scale_bounds: scale_bounds_of(resource),
+            declares_healthcheck: declares_healthcheck(resource),
         })
         .collect();
 
@@ -728,6 +731,8 @@ pub(crate) fn describe_app(state: &OiState, params: AppParams) -> HandlerResult 
                                         jiff::Timestamp::try_from(t).ok().map(|ts| ts.to_string())
                                     }),
                                     "restarts": restart_summary,
+                                    "health": read_health(db, inst, info.declares_healthcheck)?
+                                        .map(InstanceHealth::name),
                                 }))
                             })
                             .collect::<rusqlite::Result<_>>()?

@@ -1498,3 +1498,95 @@ fn an_env_value_containing_a_secret_parameter_is_null_and_a_plan_carries_no_valu
         "a plan names fields, never values: {plan}"
     );
 }
+
+// spec: APPS#resources
+#[test]
+fn an_instance_reports_the_state_of_its_health_check() {
+    use crate::{
+        defs::resource::ResourceKind,
+        runtime::history::{find_instances_for_group, insert_observation},
+    };
+    use seedling_protocol::names::AppName;
+
+    let oi = TestOi::new();
+    oi.call(
+        "/apps/create",
+        json!({
+            "app": "demo",
+            "script": r#"
+                app.deployment("checked")
+                    .image("docker.io/library/nginx:1.30")
+                    .healthcheck(#{ kind: "command", cmd: ["true"] });
+                app.deployment("unchecked").image("docker.io/library/nginx:1.30");
+            "#,
+        }),
+    )
+    .unwrap();
+    oi.install("demo");
+
+    let health_of = |name: &str| {
+        let desc = oi.call("/apps/show", json!({ "app": "demo" })).unwrap();
+        desc["resources"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|r| r["name"] == name)
+            .unwrap()["instances"][0]["health"]
+            .clone()
+    };
+    let observe = |name: &str, kinds: &[&str]| {
+        let kinds: Vec<String> = kinds.iter().map(|k| (*k).to_owned()).collect();
+        let name = name.to_owned();
+        oi.state.db.call(move |db| {
+            let instance = find_instances_for_group(
+                db,
+                &AppName::new_unchecked("demo"),
+                ResourceKind::Deployment,
+                Some(&name),
+            )
+            .unwrap()
+            .pop()
+            .unwrap();
+            for kind in kinds {
+                insert_observation(db, &instance, &kind, &json!({})).unwrap();
+            }
+        });
+    };
+    let start = ["container_created", "container_running"];
+
+    observe("checked", &["container_created"]);
+    observe("unchecked", &start);
+    assert_eq!(health_of("checked"), json!(null), "no running container");
+
+    observe("checked", &["container_running"]);
+    assert_eq!(
+        health_of("checked"),
+        json!(null),
+        "no check has been observed"
+    );
+
+    observe("checked", &["health_check_starting"]);
+    assert_eq!(health_of("checked"), "starting");
+    observe("checked", &["health_check_pass"]);
+    assert_eq!(health_of("checked"), "passing");
+    observe("checked", &["health_check_fail"]);
+    assert_eq!(health_of("checked"), "failing");
+    observe("checked", &["health_check_pass"]);
+    assert_eq!(health_of("checked"), "passing");
+
+    observe("unchecked", &["health_check_pass"]);
+    assert_eq!(
+        health_of("unchecked"),
+        json!(null),
+        "a Deployment with no health check has no health"
+    );
+
+    observe("checked", &["container_exited", "container_removed"]);
+    assert_eq!(health_of("checked"), json!(null), "no running container");
+    observe("checked", &["container_created", "container_running"]);
+    assert_eq!(
+        health_of("checked"),
+        json!(null),
+        "an earlier container's check is not this one's"
+    );
+}

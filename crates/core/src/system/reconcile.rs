@@ -22,6 +22,7 @@ use crate::{
         db::DbHandle,
         desired::{DesiredState, EffectiveScales, compute, compute_uninstalling},
         gc::InstanceGcConfig,
+        health::InstanceHealth,
         identity::InstanceId,
         lifecycle::LifecycleState,
         priority::AppPriority,
@@ -223,6 +224,7 @@ const OBS_KINDS: &[&str] = &[
     // `health_check_fail` appended with a fresh timestamp on every boot, and
     // the same for a start-limit-hit unit and a mismatched volume backend.
     "health_check_fail",
+    "health_check_starting",
     "unit_start_limit_hit",
     "volume_backend_mismatch",
     "image_pull_started",
@@ -410,6 +412,7 @@ pub struct Reconciler {
     shells: Arc<ShellRegistry>,
     /// Previous tick's lifecycle states, keyed by (app, instance_id_hex).
     prev_states: BTreeMap<(AppName, String), LifecycleState>,
+    prev_health: BTreeMap<(AppName, String), Option<InstanceHealth>>,
     /// Deployments with an active rolling update, keyed by (app, deployment_name).
     /// Set from pod actuation results; read by `compute_effective_scales` to bump
     /// the effective instance count by one during rollouts.
@@ -701,6 +704,7 @@ impl Reconciler {
             crash_looped: HashSet::new(),
             event_tx,
             prev_states: BTreeMap::new(),
+            prev_health: BTreeMap::new(),
             slice_retry: crate::runtime::retry::RetryGate::new(
                 SLICE_BACKOFF_BASE,
                 SLICE_BACKOFF_CAP,
@@ -3429,6 +3433,80 @@ mod tests {
                 retain_restart_records: 50,
             },
         )
+    }
+
+    // spec: APPS#resources
+    #[test]
+    fn a_change_of_an_instances_health_is_an_event_and_an_unchanged_one_is_not() {
+        use crate::runtime::history::insert_observation;
+
+        let oi = crate::oi::test_support::TestOi::new();
+        oi.call(
+            "/apps/create",
+            serde_json::json!({
+                "app": "demo",
+                "script": r#"
+                    app.deployment("web")
+                        .image("docker.io/library/nginx:1.30")
+                        .healthcheck(#{ kind: "command", cmd: ["true"] });
+                "#,
+            }),
+        )
+        .unwrap();
+        oi.install("demo");
+        let mut reconciler = test_reconciler(&oi);
+        let mut events = oi.state.event_tx.subscribe();
+        let instance = crate::runtime::identity::ResourceInstance::new_singleton(
+            AppName::new("demo").unwrap(),
+            crate::defs::resource::ResourceKind::Deployment,
+            "web",
+        );
+
+        let mut tick = |kinds: &[&str]| {
+            let kinds: Vec<String> = kinds.iter().map(|k| (*k).to_owned()).collect();
+            let instance = instance.clone();
+            oi.state.db.call(move |db| {
+                for kind in kinds {
+                    insert_observation(db, &instance, &kind, &serde_json::json!({})).unwrap();
+                }
+            });
+            let (apps, _) = reconciler.snapshot_all_apps();
+            reconciler.emit_state_changes(&apps);
+            let mut health = Vec::new();
+            while let Ok(event) = events.try_recv() {
+                let event = serde_json::to_value(&event).unwrap();
+                if event["type"] == "InstanceHealthChanged" {
+                    assert_eq!(event["resource_type"], "deployment");
+                    assert_eq!(event["resource_name"], "web");
+                    health.push(event["health"].clone());
+                }
+            }
+            health
+        };
+
+        assert!(tick(&[]).is_empty(), "the first sight is not a change");
+        assert!(
+            tick(&["container_created", "container_running"]).is_empty(),
+            "no check has been observed"
+        );
+        assert_eq!(
+            tick(&["health_check_starting"]),
+            vec![serde_json::json!("starting")]
+        );
+        assert!(tick(&[]).is_empty(), "unchanged");
+        assert_eq!(
+            tick(&["health_check_pass"]),
+            vec![serde_json::json!("passing")]
+        );
+        assert_eq!(
+            tick(&["health_check_fail"]),
+            vec![serde_json::json!("failing")]
+        );
+        assert_eq!(
+            tick(&["container_exited", "container_removed"]),
+            vec![serde_json::json!(null)],
+            "with no running container the health is null"
+        );
     }
 
     // spec: OBS#recording
