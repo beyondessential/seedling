@@ -110,6 +110,7 @@ impl CustomType for Param {
             "kind",
             |this: &mut Self, kind_str: &str| -> Result<Self, Box<EvalAltResult>> {
                 ensure_not_validating()?;
+                crate::defs::app::ensure_not_in_action_closure("kind")?;
                 let kind = kind_str
                     .parse::<ParamKind>()
                     .map_err(|_| -> Box<EvalAltResult> {
@@ -146,6 +147,7 @@ impl CustomType for Param {
             "required",
             |this: &mut Self, required: bool| -> Result<Self, Box<EvalAltResult>> {
                 ensure_not_validating()?;
+                crate::defs::app::ensure_not_in_action_closure("required")?;
                 let name_clone = this.name.clone();
                 this.app.def.rcu(|d| {
                     let mut d = (**d).clone();
@@ -163,6 +165,7 @@ impl CustomType for Param {
             "default_value",
             |this: &mut Self, value: &str| -> Result<Self, Box<EvalAltResult>> {
                 ensure_not_validating()?;
+                crate::defs::app::ensure_not_in_action_closure("default_value")?;
                 let name_clone = this.name.clone();
                 let value_owned = value.to_owned();
                 this.app.def.rcu(|d| {
@@ -181,6 +184,7 @@ impl CustomType for Param {
             "description",
             |this: &mut Self, desc: &str| -> Result<Self, Box<EvalAltResult>> {
                 ensure_not_validating()?;
+                crate::defs::app::ensure_not_in_action_closure("description")?;
                 let name_clone = this.name.clone();
                 let desc_owned = desc.to_owned();
                 this.app.def.rcu(|d| {
@@ -199,6 +203,7 @@ impl CustomType for Param {
             "secret",
             |this: &mut Self, secret: bool| -> Result<Self, Box<EvalAltResult>> {
                 ensure_not_validating()?;
+                crate::defs::app::ensure_not_in_action_closure("secret")?;
                 let name_clone = this.name.clone();
                 this.app.def.rcu(|d| {
                     let mut d = (**d).clone();

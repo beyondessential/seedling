@@ -366,11 +366,39 @@ fn rt_exec_rejects_invalid_env_var_name() {
     match result {
         OperationResult::Failed(e) => {
             assert!(
-                e.to_string().contains("env var name"),
-                "error should mention the bad env var name, got: {e}"
+                e.to_string().contains("1BAD"),
+                "error should name the bad env var, got: {e}"
             );
         }
         other => panic!("expected Failed for invalid env var, got {other:?}"),
+    }
+}
+
+// spec: RT#command-execution
+// spec: CTR#environment
+#[test]
+fn rt_exec_env_meets_the_rules_of_a_container_environment() {
+    for (name, value) in [("PATH", "x"), ("LD_PRELOAD", "x"), ("OK", "a\\u0000b")] {
+        let exec = Arc::new(RecordingExecutor::default());
+        let log = InMemoryActionLog::new();
+        let result = run_action_with_executor(
+            &format!(
+                r#"
+                let api = app.deployment("api").image("docker.io/library/busybox:latest");
+                app.on_action("nope", |rt, _param| {{
+                    rt.exec(api, ["echo", "hi"], #{{ env: #{{ "{name}": "{value}" }} }});
+                }});
+                "#
+            ),
+            "nope",
+            Arc::clone(&exec),
+            &log,
+        );
+        assert!(
+            matches!(result, OperationResult::Failed(_)),
+            "{name}: expected Failed, got {result:?}"
+        );
+        assert!(exec.calls.lock().is_empty(), "{name}: the command ran");
     }
 }
 

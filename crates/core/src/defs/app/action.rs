@@ -18,6 +18,11 @@ fn declare_action(
     params: BTreeMap<ParamName, super::super::install::ParamDef>,
 ) -> Result<Action, Box<EvalAltResult>> {
     super::ensure_not_validating()?;
+    super::ensure_not_in_action_closure(if action_name == "start" {
+        "on_start"
+    } else {
+        "on_action"
+    })?;
     if action_name == "install" {
         return Err(
             "the action name \"install\" is reserved for the install action; declare it with \

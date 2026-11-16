@@ -1244,8 +1244,8 @@ impl RouteRedirect {
     }
 }
 
-// spec: HTTP#route-redirects
-fn redirect_code(code: i64) -> Result<u16, Box<EvalAltResult>> {
+// spec: HTTP#redirect-codes
+pub(crate) fn redirect_code(code: i64) -> Result<u16, Box<EvalAltResult>> {
     if !REDIRECT_CODES.contains(&code) {
         return Err(
             format!("redirect `code` must be one of 301, 302, 307, or 308, got {code}").into(),

@@ -15,6 +15,7 @@ fn declare_install(
     requirements: BTreeMap<ParamName, ParamDef>,
 ) -> Result<(), Box<EvalAltResult>> {
     super::ensure_not_validating()?;
+    super::ensure_not_in_action_closure("on_install")?;
     if this.def.load().install.is_some() {
         return Err("the install action is already declared".into());
     }

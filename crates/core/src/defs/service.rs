@@ -20,7 +20,7 @@ pub use proxy::{
     default_content_types, resolve,
 };
 
-pub(crate) use proxy::check_route_balances;
+pub(crate) use proxy::{check_route_balances, redirect_code};
 
 mod proxy;
 
@@ -553,6 +553,24 @@ impl CustomType for HttpService {
                         return Err(
                             "route prefix must be a non-empty string starting with '/'".into()
                         );
+                    }
+                    // spec: HTTP#routes
+                    // The prefix reaches the proxy's matcher, where a brace
+                    // opens a placeholder and a control character has no
+                    // business in a path.
+                    if let Some(bad) = prefix
+                        .chars()
+                        .find(|c| *c == '{' || (c.is_ascii_control() && *c != '\t'))
+                    {
+                        return Err(format!(
+                            "route prefix must not contain {}",
+                            if bad == '{' {
+                                "'{'".to_owned()
+                            } else {
+                                format!("the control character U+{:04X}", bad as u32)
+                            }
+                        )
+                        .into());
                     }
                     // Canonical from here on: every map key, clash check and
                     // matcher downstream reads this spelling, so they agree on

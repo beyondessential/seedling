@@ -393,22 +393,35 @@ fn ingress_same_hostname_different_port_does_not_conflict() {
     assert_eq!(count, 2);
 }
 
-// spec: BSL#arguments
 // spec: ING#redirect-to-https
-// The unchecked `as u16` wrapped, so 65843 became 307 — a redirect to a
-// status code that is not a redirect at all.
+// The unchecked `as u16` wrapped, so 65843 became 307, and the 3xx range check
+// let 303 and 300 through: only 301, 302, 307 and 308 are the codes a redirect
+// may carry.
 #[test]
-fn redirect_code_must_be_a_redirection_status() {
-    let err = run_test_script_err(
-        r#"
-        app.service("web").ingress("example.com", 443)
-            .tls(Terminate.Https, Output.Http1)
-            .redirect(80, 200);
-    "#,
-    );
-    let message = err.to_string();
-    assert!(message.contains("`redirect code`"), "{message}");
-    assert!(message.contains("300"), "{message}");
+fn redirect_code_must_be_one_of_the_four_redirects() {
+    for bad in [200, 300, 303, 304, 305, 399, 65843, -307] {
+        let err = run_test_script_err(&format!(
+            r#"
+            app.service("web").ingress("example.com", 443)
+                .tls(Terminate.Https, Output.Http1)
+                .redirect(80, {bad});
+        "#
+        ));
+        let message = err.to_string();
+        assert!(
+            message.contains("301, 302, 307, or 308"),
+            "{bad}: {message}"
+        );
+    }
+    for good in [301, 302, 307, 308] {
+        run_test_script_app(&format!(
+            r#"
+            app.service("web").ingress("example.com", 443)
+                .tls(Terminate.Https, Output.Http1)
+                .redirect(80, {good});
+        "#
+        ));
+    }
 }
 
 // spec: ING#declaration

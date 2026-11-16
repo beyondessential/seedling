@@ -8,8 +8,7 @@ use super::{
     Freezable, Holder, Port,
     enums::{Output, Terminate},
     resource::ResourceName,
-    service::Service,
-    take::take_int_in_range,
+    service::{Service, redirect_code},
 };
 
 #[derive(Debug, Clone)]
@@ -210,10 +209,8 @@ impl CustomType for Ingress {
                 |this: &mut Self, port: i64, code: i64| -> Result<Ingress, Box<EvalAltResult>> {
                     this.ensure_unfrozen()?;
                     let port = Port::new(port)?;
-                    // spec: ING#redirect-to-https — a redirect to a non-3xx code
-                    // is not a redirect, and the unchecked cast turned 65843
-                    // into a 307 rather than an error.
-                    let code = take_int_in_range::<u16>("redirect code", code, 300..=399)?;
+                    // spec: ING#redirect-to-https
+                    let code = redirect_code(code)?;
                     this.def.lock().redirect = Some(RedirectDef { port, code });
                     Ok(this.clone())
                 },

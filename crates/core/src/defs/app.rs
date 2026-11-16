@@ -151,6 +151,16 @@ pub(crate) fn ensure_not_validating() -> Result<(), Box<rhai::EvalAltResult>> {
     Ok(())
 }
 
+/// Refuse a declaration made from within an action closure, where the
+/// definition is already fixed.
+// spec: APP#action-context
+pub(crate) fn ensure_not_in_action_closure(what: &str) -> Result<(), Box<rhai::EvalAltResult>> {
+    if crate::runtime::barrier::runtime::is_in_action_closure() {
+        return Err(format!("{what} cannot be called from within an action closure").into());
+    }
+    Ok(())
+}
+
 // ---------------------------------------------------------------------------
 // Static resource references
 // ---------------------------------------------------------------------------
@@ -468,6 +478,7 @@ impl CustomType for App {
             "description",
             |this: &mut App, desc: &str| -> Result<App, Box<rhai::EvalAltResult>> {
                 ensure_not_validating()?;
+                ensure_not_in_action_closure("description")?;
                 let desc_owned = desc.to_owned();
                 this.def.rcu(|d| {
                     let mut d = (**d).clone();

@@ -2226,16 +2226,15 @@ fn parse_exec_options(options: Map) -> Result<Vec<(String, String)>, Box<EvalAlt
                     })?;
                 for (k, v) in env_map {
                     let k_str = k.to_string();
-                    if !is_valid_env_var_name(&k_str) {
-                        return Err(format!(
-                            "rt.exec: invalid env var name '{k_str}'; must match [A-Za-z_][A-Za-z0-9_]*"
-                        )
-                        .into());
-                    }
                     let v_str = v.into_string().map_err(|t| -> Box<EvalAltResult> {
                         format!("rt.exec: env value for '{k_str}' must be a string, got {t}").into()
                     })?;
-                    env.push((k_str, v_str));
+                    // The rules a container's environment meets: the name's
+                    // form, the names that cannot be set, and a value with no NUL.
+                    let var = seedling_protocol::env::EnvVar::new(&k_str, v_str).map_err(
+                        |e| -> Box<EvalAltResult> { format!("rt.exec: env '{k_str}': {e}").into() },
+                    )?;
+                    env.push((var.name.as_str().to_owned(), var.value));
                 }
             }
             other => {
@@ -2244,12 +2243,6 @@ fn parse_exec_options(options: Map) -> Result<Vec<(String, String)>, Box<EvalAlt
         }
     }
     Ok(env)
-}
-
-fn is_valid_env_var_name(s: &str) -> bool {
-    let mut chars = s.chars();
-    matches!(chars.next(), Some(c) if c.is_ascii_alphabetic() || c == '_')
-        && chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
 }
 
 // spec: RT#command-execution
