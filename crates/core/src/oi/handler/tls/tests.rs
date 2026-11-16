@@ -62,6 +62,49 @@ fn settings_get_set_roundtrip() {
     assert_eq!(settings["cert_profile"], json!(null));
 }
 
+// spec: TLSM#settings
+#[test]
+fn settings_refuse_a_contact_email_that_is_not_one_and_read_an_empty_profile_as_none() {
+    let oi = TestOi::new();
+    for bad in ["no-at-sign", "@example.com", "ops@", "a@b@c.example", "@"] {
+        let (code, _) = oi
+            .call("/tls/settings/set", json!({ "contact_email": bad }))
+            .unwrap_err();
+        assert_eq!(code, "requirements_invalid", "{bad}");
+    }
+    assert_eq!(
+        oi.call("/tls/settings/get", json!({})).unwrap()["contact_email"],
+        "",
+        "a refused email leaves the setting alone"
+    );
+
+    // An invalid email refuses the whole request, profile included.
+    let (code, _) = oi
+        .call(
+            "/tls/settings/set",
+            json!({ "contact_email": "bad", "cert_profile": "shortlived" }),
+        )
+        .unwrap_err();
+    assert_eq!(code, "requirements_invalid");
+    assert_eq!(
+        oi.call("/tls/settings/get", json!({})).unwrap()["cert_profile"],
+        json!(null)
+    );
+
+    oi.call(
+        "/tls/settings/set",
+        json!({ "contact_email": "ops@example.com", "cert_profile": "shortlived" }),
+    )
+    .unwrap();
+    oi.call("/tls/settings/set", json!({ "contact_email": "" }))
+        .unwrap();
+    oi.call("/tls/settings/set", json!({ "cert_profile": "" }))
+        .unwrap();
+    let settings = oi.call("/tls/settings/get", json!({})).unwrap();
+    assert_eq!(settings["contact_email"], "");
+    assert_eq!(settings["cert_profile"], json!(null));
+}
+
 // spec: TLSM#dns-providers
 #[test]
 fn dns_provider_upsert_list_delete_roundtrip() {
@@ -445,6 +488,25 @@ fn csr_upload_accepts_a_wildcard_that_covers_the_request() {
         "a wildcard covering the requested name meets the request: {uploaded}"
     );
     assert_eq!(cert_row(&oi, id)["hostname"], "*.example.com");
+}
+
+// spec: TLS#operator-supplied-certificates
+#[test]
+fn csr_upload_takes_the_leaf_from_the_certificate_the_stored_key_matches() {
+    let oi = TestOi::new();
+
+    let (id, csr_pem) = begin_csr(&oi, "foo.example.com");
+    let signed = ca_signed_for_csr(&csr_pem, &["foo.example.com"], |_| {});
+    let unrelated = crate::runtime::tls::test_support::self_signed_pem(&["ca.example.net"]);
+    let uploaded = oi
+        .call(
+            "/tls/certificates/csr/upload-cert",
+            json!({ "id": id, "cert_pem": format!("{unrelated}{signed}") }),
+        )
+        .unwrap();
+
+    assert_eq!(uploaded["primary_san"], "foo.example.com");
+    assert_eq!(cert_row(&oi, id)["hostname"], "foo.example.com");
 }
 
 // spec: TLS#coverage
@@ -970,6 +1032,26 @@ fn issue_acme_dns_fails_without_policy() {
         .unwrap_err();
     assert_eq!(code, "requirements_invalid");
     assert!(msg.contains("issuance failed"), "{msg}");
+}
+
+// spec: TLS#issuance
+// spec: TLSM#operator-driven-issuance
+#[test]
+fn issue_acme_dns_is_refused_while_an_issuance_for_the_hostname_is_running() {
+    let oi = TestOi::new();
+    let _running = oi
+        .state
+        .tls_coordinator
+        .hold_running_for_tests("busy.example.com")
+        .expect("the hostname is idle");
+    let (code, msg) = oi
+        .call(
+            "/tls/certificates/issue-acme-dns",
+            json!({ "hostname": "busy.example.com" }),
+        )
+        .unwrap_err();
+    assert_eq!(code, "operation_in_progress");
+    assert!(msg.contains("busy.example.com"), "{msg}");
 }
 
 // spec: TLSM#retry-blocks

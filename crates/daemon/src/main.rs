@@ -642,6 +642,15 @@ async fn main() {
 
     let shells = seedling_core::oi::shells::ShellRegistry::new();
 
+    // spec: TLS#attempt-log
+    // Attempts a stopped runtime left pending are not issuances running now,
+    // and nothing else would ever close them.
+    match db.call(seedling_core::runtime::tls::store::close_interrupted_attempts) {
+        Ok(0) => {}
+        Ok(closed) => tracing::info!(closed, "closed issuance attempts a restart interrupted"),
+        Err(e) => fatal!("cannot close the issuance attempts a restart interrupted: {e}"),
+    }
+
     // spec: TLS#issuance
     // The TLS issuance coordinator owns every ACME-DNS flow: the
     // reconciler hands it the set of TLS-terminating hostnames each

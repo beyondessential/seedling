@@ -1299,6 +1299,33 @@ pub fn finalize_attempt(
     Ok(())
 }
 
+/// Close as `failure` every attempt left `pending` by a runtime that stopped,
+/// other than one recording an open Canopy order, which the order's own answer
+/// closes. Returns how many were closed.
+///
+/// For a hostname with an order open, the newest pending attempt is that
+/// order's; any earlier one belonged to an issuance that cannot still be
+/// running.
+// spec: TLS#attempt-log
+pub fn close_interrupted_attempts(db: &Db) -> rusqlite::Result<usize> {
+    let now = now_secs();
+    db.conn.execute(
+        "UPDATE tls_cert_attempts SET
+            outcome     = 'failure',
+            error       = 'interrupted by a runtime restart',
+            finished_at = ?1
+         WHERE outcome = 'pending'
+           AND NOT (
+               hostname IN (SELECT hostname FROM tls_chain_state
+                            WHERE open_order_since IS NOT NULL)
+               AND id = (SELECT MAX(later.id) FROM tls_cert_attempts later
+                         WHERE later.hostname = tls_cert_attempts.hostname
+                           AND later.outcome = 'pending')
+           )",
+        [now],
+    )
+}
+
 /// The newest attempt for `hostname` that has not finished.
 pub fn latest_pending_attempt(db: &Db, hostname: &str) -> rusqlite::Result<Option<i64>> {
     db.conn
@@ -2880,6 +2907,43 @@ mod tests {
                 .unwrap()
                 .is_none()
         );
+    }
+
+    // spec: TLS#attempt-log
+    #[test]
+    fn a_restart_closes_every_pending_attempt_but_an_open_canopy_order() {
+        let (db, _) = fresh_db();
+        let stale = insert_attempt(&db, "stale.example.com", AttemptTrigger::OnDemand).unwrap();
+        let earlier =
+            insert_attempt(&db, "ordering.example.com", AttemptTrigger::OnDemand).unwrap();
+        let order = insert_attempt(&db, "ordering.example.com", AttemptTrigger::Renewal).unwrap();
+        put_chain_row(
+            &db,
+            "ordering.example.com",
+            &chain::Row {
+                identity: chain::Identity::NONE,
+                step: 0,
+                since: 1,
+                open_order_since: Some(1),
+                retry_not_before: None,
+            },
+            None,
+        )
+        .unwrap();
+
+        assert_eq!(close_interrupted_attempts(&db).unwrap(), 2);
+
+        let outcome = |id| {
+            list_attempts(&db, None, 10)
+                .unwrap()
+                .into_iter()
+                .find(|a| a.id == id)
+                .unwrap()
+        };
+        assert_eq!(outcome(stale).outcome, AttemptOutcome::Failure);
+        assert!(outcome(stale).finished_at.is_some());
+        assert_eq!(outcome(earlier).outcome, AttemptOutcome::Failure);
+        assert_eq!(outcome(order).outcome, AttemptOutcome::Pending);
     }
 
     // spec: TLS#attempt-log

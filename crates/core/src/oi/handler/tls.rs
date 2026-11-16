@@ -391,6 +391,8 @@ pub(crate) fn issue_acme_dns(state: &OiState, params: IssueAcmeDnsParams) -> Han
                 E::NoPolicy { .. } | E::Paused { .. } | E::NoContactEmail => {
                     ErrorCode::RequirementsInvalid
                 }
+                // spec: TLS#issuance
+                E::IssuanceRunning { .. } => ErrorCode::OperationInProgress,
                 _ => ErrorCode::Internal,
             };
             Err(OiError::new(code, format!("acme-dns issuance failed: {e}")))
@@ -1428,6 +1430,19 @@ pub(crate) fn set_settings(state: &OiState, params: SetSettingsParams) -> Handle
         contact_email,
         cert_profile,
     } = params;
+    // spec: TLSM#settings
+    if let Some(email) = contact_email.as_deref()
+        && !valid_contact_email(email)
+    {
+        return Err(OiError::new(
+            ErrorCode::RequirementsInvalid,
+            format!(
+                "contact_email {email:?} must be empty or hold exactly one '@' with text on each side"
+            ),
+        ));
+    }
+    // An empty profile is no profile.
+    let cert_profile = cert_profile.map(|profile| profile.filter(|p| !p.is_empty()));
     state
         .db
         .call(move |db| -> rusqlite::Result<()> {
@@ -1441,6 +1456,20 @@ pub(crate) fn set_settings(state: &OiState, params: SetSettingsParams) -> Handle
         })
         .map_err(db_error)?;
     Ok(json!({ "ok": true }))
+}
+
+/// Whether `email` may be stored as the contact email: empty, which clears it,
+/// or exactly one `@` with at least one character on each side.
+// spec: TLSM#settings
+fn valid_contact_email(email: &str) -> bool {
+    if email.is_empty() {
+        return true;
+    }
+    let mut parts = email.split('@');
+    matches!(
+        (parts.next(), parts.next(), parts.next()),
+        (Some(local), Some(domain), None) if !local.is_empty() && !domain.is_empty()
+    )
 }
 
 // ---------------------------------------------------------------------------
