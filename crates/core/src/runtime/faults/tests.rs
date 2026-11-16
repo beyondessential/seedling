@@ -217,16 +217,49 @@ fn clear_all_faults_for_app_clears_only_that_app() {
 }
 
 #[test]
-fn has_active_faults_reflects_state() {
+fn fault_standing_counts_active_faults_and_spots_withholding_ones() {
     let db = Db::open_in_memory().expect("open");
     init_test_events();
-    assert!(!has_active_faults(&db, &app("myapp")).expect("check"));
+    let standing = |db: &Db| fault_standing(db, &app("myapp")).expect("standing");
+    assert_eq!(
+        standing(&db),
+        FaultStanding {
+            active: 0,
+            withholding: false
+        }
+    );
 
-    let id = file_fault(&db, &app("myapp"), None, None, None, "script_error", "err").expect("file");
-    assert!(has_active_faults(&db, &app("myapp")).expect("check"));
+    let script =
+        file_fault(&db, &app("myapp"), None, None, None, "script_error", "err").expect("file");
+    assert_eq!(
+        standing(&db),
+        FaultStanding {
+            active: 1,
+            withholding: false
+        }
+    );
 
-    clear_fault(&db, &id, &app("myapp")).expect("clear");
-    assert!(!has_active_faults(&db, &app("myapp")).expect("check"));
+    for kind in WITHHOLDING_KINDS {
+        let id = file_fault(&db, &app("myapp"), None, None, None, kind, "held").expect("file");
+        assert_eq!(
+            standing(&db),
+            FaultStanding {
+                active: 2,
+                withholding: true
+            },
+            "{kind}"
+        );
+        clear_fault(&db, &id, &app("myapp")).expect("clear");
+    }
+
+    clear_fault(&db, &script, &app("myapp")).expect("clear");
+    assert_eq!(
+        standing(&db),
+        FaultStanding {
+            active: 0,
+            withholding: false
+        }
+    );
 }
 
 #[test]

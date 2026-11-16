@@ -1279,6 +1279,56 @@ fn a_stopped_resource_does_not_degrade_the_app() {
     assert_eq!(status(&oi), "running");
 }
 
+// spec: APPS#status-derivation, FLT#withholding-faults
+// Any active fault faulted the app, though only a withholding fault stops the
+// runtime acting; the rest are conditions the app runs on through.
+#[test]
+fn only_a_withholding_fault_faults_the_app() {
+    use seedling_protocol::names::AppName;
+
+    let oi = TestOi::with_app("demo");
+    oi.install("demo");
+    oi.call(
+        "/apps/resource/stop",
+        json!({ "app": "demo", "kind": "deployment", "name": "web" }),
+    )
+    .unwrap();
+    let status =
+        |oi: &TestOi| oi.call("/apps/show", json!({ "app": "demo" })).unwrap()["status"].clone();
+    assert_eq!(status(&oi), "running");
+
+    let file = |kind: &'static str| {
+        oi.state.db.call(move |db| {
+            crate::runtime::faults::file_fault(
+                db,
+                &AppName::new_unchecked("demo"),
+                None,
+                None,
+                None,
+                kind,
+                "filed by the test",
+            )
+            .unwrap()
+        })
+    };
+    let clear = |id: String| {
+        oi.state.db.call(move |db| {
+            crate::runtime::faults::clear_fault(db, &id, &AppName::new_unchecked("demo")).unwrap()
+        })
+    };
+
+    let other = file("image_pull_failed");
+    assert_eq!(status(&oi), "degraded", "an ordinary fault degrades");
+    for kind in crate::runtime::faults::WITHHOLDING_KINDS {
+        let held = file(kind);
+        assert_eq!(status(&oi), "faulted", "{kind}");
+        clear(held);
+        assert_eq!(status(&oi), "degraded", "{kind} cleared, the other remains");
+    }
+    clear(other);
+    assert_eq!(status(&oi), "running");
+}
+
 // spec: APPS#status-derivation
 // A deployment scaled to zero wants nothing Ready, and an external service is
 // never observed, so neither can hold the app back from running.

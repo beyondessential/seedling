@@ -7,7 +7,7 @@ use seedling_protocol::names::{
 use super::{
     registry::{ShellSession, StopSignal},
     session::{
-        LiveShell, SessionStreams, StartupFailure, abort_startup, begin_session, reject,
+        LiveShell, SessionIo, SessionStreams, StartupFailure, abort_startup, begin_session, reject,
         run_to_exit,
     },
 };
@@ -55,7 +55,7 @@ fn sanitise_name(s: &str) -> String {
 pub(crate) async fn open_volume_shell_session(
     conn: quinn::Connection,
     mut send: quinn::SendStream,
-    mut recv: quinn::RecvStream,
+    recv: quinn::RecvStream,
     leftover_stdin: Vec<u8>,
     initial_line: Vec<u8>,
     state: Arc<OiState>,
@@ -404,9 +404,11 @@ pub(crate) async fn open_volume_shell_session(
             container_name,
             net_name,
         },
-        &mut recv,
-        &leftover_stdin,
-        streams,
+        SessionIo {
+            recv,
+            leftover_stdin,
+            streams,
+        },
     )
     .await;
 

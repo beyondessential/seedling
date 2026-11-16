@@ -112,7 +112,10 @@ Start with `seedling-ctl apps list` to see which apps are in unexpected
 states. Then `seedling-ctl apps show <app>` for the detailed view. Note:
 
 - **Status values**: `running`, `degraded`, `faulted`, `operating`,
-  `uninstalling`, `not_installed`
+  `uninstalling`, `not_installed`. An app is `faulted` only while a
+  withholding fault (`external_volume_not_mapped`, `crash_loop` or
+  `health_check_replace_failed`) is active; any other active fault, or a
+  resource away from its desired state, makes it `degraded`.
 - **Lifecycle states** (per instance): `Pending`, `Scheduled`, `Running`,
   `Ready`, `Terminating`, `Terminated`, `Unscheduled`
 

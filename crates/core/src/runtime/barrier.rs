@@ -332,7 +332,8 @@ pub enum VolumeWriteTarget {
     NamedVolume { name: String, tmpfs: bool },
     /// An anonymous volume created earlier in the action closure.
     AnonymousVolume { anon_id: String, tmpfs: bool },
-    /// An external volume bound by the operation (`ACN#volume-params`).
+    /// An external volume that resolved to storage, through the operation's
+    /// bindings (`ACN#volume-params`) or the host's mappings.
     ExternalBound { host_path: std::path::PathBuf },
 }
 
@@ -352,6 +353,24 @@ pub trait VolumeWriter: Send + Sync {
         path: &str,
         contents: &[u8],
     ) -> Result<(), String>;
+
+    /// Where the external volume `name` resolves to through the host's external
+    /// volume mappings for `app`: `None` if it resolves to nothing. An error
+    /// is that the mappings could not be read, which is not the same answer.
+    // spec: VOL#external-volumes
+    fn resolve_external(
+        &self,
+        app: &str,
+        name: &str,
+    ) -> Result<Option<ResolvedExternalWrite>, String>;
+}
+
+/// Where an external volume's mapping puts it on the host.
+// spec: RT#volume-writes
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ResolvedExternalWrite {
+    pub host_path: std::path::PathBuf,
+    pub read_only: bool,
 }
 
 /// Synchronous side-effect handle the BSL `rt.exec` call uses to run a

@@ -466,6 +466,14 @@ impl crate::runtime::barrier::VolumeWriter for HostProbe {
         self.effect("write", crate::runtime::barrier::CallKind::Write);
         Ok(())
     }
+
+    fn resolve_external(
+        &self,
+        _app: &str,
+        _name: &str,
+    ) -> Result<Option<crate::runtime::barrier::ResolvedExternalWrite>, String> {
+        Ok(None)
+    }
 }
 
 impl crate::runtime::barrier::Executor for HostProbe {

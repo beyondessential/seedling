@@ -72,11 +72,12 @@ pub fn standings<T: Send + 'static>(
         snapshots
             .into_iter()
             .map(|(snapshot, extra)| {
-                let fault_count = faults::count_active_faults_for_app(db, &snapshot.name)?;
+                let faults = faults::fault_standing(db, &snapshot.name)?;
+                let fault_count = faults.active;
                 let stopped = stopped::load_stopped(db, &snapshot.name)?;
                 let status = match settled(&snapshot, active.as_ref()) {
                     Some(status) => status,
-                    None => steady(db, &snapshot, fault_count > 0, &stopped)?,
+                    None => steady(db, &snapshot, faults, &stopped)?,
                 };
                 let standing = Standing {
                     status,
@@ -179,9 +180,9 @@ fn status_in(
     if let Some(status) = settled(snapshot, active) {
         return Ok(status);
     }
-    let faulted = faults::has_active_faults(db, &snapshot.name)?;
+    let faults = faults::fault_standing(db, &snapshot.name)?;
     let stopped = stopped::load_stopped(db, &snapshot.name)?;
-    steady(db, snapshot, faulted, &stopped)
+    steady(db, snapshot, faults, &stopped)
 }
 
 /// What the status rollup reads of one declared resource.
@@ -215,14 +216,20 @@ fn declared(entry: &AppEntry) -> Vec<Declared> {
 }
 
 /// Faulted, Degraded or Running, for an installed app with no operation.
+///
+/// Only a withholding fault faults the app: any other active fault, like a
+/// resource away from its desired state, only degrades it.
 fn steady(
     db: &Db,
     snapshot: &Snapshot,
-    faulted: bool,
+    faults: faults::FaultStanding,
     stopped: &StoppedSet,
 ) -> rusqlite::Result<AppStatus> {
-    if faulted {
+    if faults.withholding {
         return Ok(AppStatus::Faulted);
+    }
+    if faults.active > 0 {
+        return Ok(AppStatus::Degraded);
     }
     let app_name = &snapshot.name;
     for Declared {

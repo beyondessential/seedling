@@ -746,6 +746,10 @@ pub(super) struct RecordedWrite {
 #[derive(Default)]
 pub(super) struct RecordingVolumeWriter {
     pub writes: parking_lot::Mutex<Vec<RecordedWrite>>,
+    /// What the host's external volume mappings say each name resolves to.
+    pub mappings: parking_lot::Mutex<
+        std::collections::HashMap<String, crate::runtime::barrier::ResolvedExternalWrite>,
+    >,
 }
 
 impl crate::runtime::barrier::VolumeWriter for RecordingVolumeWriter {
@@ -762,6 +766,14 @@ impl crate::runtime::barrier::VolumeWriter for RecordingVolumeWriter {
             contents: contents.to_vec(),
         });
         Ok(())
+    }
+
+    fn resolve_external(
+        &self,
+        _app: &str,
+        name: &str,
+    ) -> Result<Option<crate::runtime::barrier::ResolvedExternalWrite>, String> {
+        Ok(self.mappings.lock().get(name).cloned())
     }
 }
 
@@ -919,6 +931,119 @@ fn rt_write_rejects_path_traversal() {
             );
         }
         other => panic!("expected Failed for path traversal, got {other:?}"),
+    }
+    assert!(writer.writes.lock().is_empty());
+}
+
+/// Runs `script`'s `seed` action against a writer that maps the external
+/// volume `incoming` to `/srv/incoming`, read-only if `read_only`.
+fn seed_with_incoming_mapped(
+    script: &str,
+    mapping: Option<crate::runtime::barrier::ResolvedExternalWrite>,
+) -> (
+    crate::runtime::barrier::replay::OperationResult,
+    Vec<RecordedWrite>,
+) {
+    let writer = Arc::new(RecordingVolumeWriter::default());
+    if let Some(mapping) = mapping {
+        writer
+            .mappings
+            .lock()
+            .insert("incoming".to_owned(), mapping);
+    }
+    let log = crate::runtime::barrier::replay::InMemoryActionLog::new();
+    let result = run_action_with_writer(script, "seed", Arc::clone(&writer), &log);
+    let writes = writer.writes.lock().clone();
+    (result, writes)
+}
+
+const SEED_INTO_INCOMING: &str = r#"
+    let incoming = app.external_volume("incoming");
+    app.on_action("seed", |rt, _param| {
+        rt.write(incoming, "/hello", "world");
+    });
+"#;
+
+// spec: RT#volume-writes
+#[test]
+fn rt_write_accepts_an_external_volume_the_host_maps() {
+    use crate::runtime::barrier::{
+        ResolvedExternalWrite, VolumeWriteTarget, replay::OperationResult,
+    };
+
+    let (result, writes) = seed_with_incoming_mapped(
+        SEED_INTO_INCOMING,
+        Some(ResolvedExternalWrite {
+            host_path: "/srv/incoming".into(),
+            read_only: false,
+        }),
+    );
+    assert!(matches!(result, OperationResult::Completed), "{result:?}");
+    assert_eq!(writes.len(), 1);
+    assert_eq!(writes[0].path, "/hello");
+    assert_eq!(writes[0].contents, b"world");
+    match &writes[0].target {
+        VolumeWriteTarget::ExternalBound { host_path } => {
+            assert_eq!(host_path, std::path::Path::new("/srv/incoming"));
+        }
+        other => panic!("expected ExternalBound, got {other:?}"),
+    }
+}
+
+// spec: RT#volume-writes
+#[test]
+fn rt_write_throws_for_an_external_volume_that_resolves_to_nothing() {
+    use crate::runtime::barrier::replay::OperationResult;
+
+    let (result, writes) = seed_with_incoming_mapped(SEED_INTO_INCOMING, None);
+    match result {
+        OperationResult::Failed(e) => {
+            assert!(e.to_string().contains("resolves to nothing"), "{e}");
+        }
+        other => panic!("expected Failed, got {other:?}"),
+    }
+    assert!(writes.is_empty());
+}
+
+// spec: RT#volume-writes
+#[test]
+fn rt_write_throws_for_a_read_only_external_volume_mapping() {
+    use crate::runtime::barrier::{ResolvedExternalWrite, replay::OperationResult};
+
+    let (result, writes) = seed_with_incoming_mapped(
+        SEED_INTO_INCOMING,
+        Some(ResolvedExternalWrite {
+            host_path: "/srv/incoming".into(),
+            read_only: true,
+        }),
+    );
+    match result {
+        OperationResult::Failed(e) => assert!(e.to_string().contains("read-only"), "{e}"),
+        other => panic!("expected Failed, got {other:?}"),
+    }
+    assert!(writes.is_empty());
+}
+
+// spec: RT#volume-writes
+#[test]
+fn rt_write_throws_for_a_volume_declared_read_only() {
+    use crate::runtime::barrier::replay::{InMemoryActionLog, OperationResult};
+
+    let writer = Arc::new(RecordingVolumeWriter::default());
+    let result = run_action_with_writer(
+        r#"
+        let cfg = app.volume("cfg").readonly();
+        app.on_action("seed", |rt, _param| {
+            rt.write(cfg, "/etc/app.conf", "key=value");
+        });
+        "#,
+        "seed",
+        Arc::clone(&writer),
+        &InMemoryActionLog::new(),
+    );
+    match result {
+        OperationResult::Failed(e) => assert!(e.to_string().contains("read-only"), "{e}"),
+        other => panic!("expected Failed, got {other:?}"),
     }
     assert!(writer.writes.lock().is_empty());
 }

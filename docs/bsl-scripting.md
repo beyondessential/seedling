@@ -328,6 +328,17 @@ app.on_shell("bash", |_rt, shell, _param| {
     description: "Bash shell in the app container",
 });
 
+// `shell.attach` starts the job, connects the operator's terminal to it, and
+// blocks until the attachment ends: the job exits, the operator closes the
+// session or stops it, or the connection is lost. It returns a `ShellExit`
+// with `exited()`, `exit_code()` (`()` if the job did not exit), `success()`
+// and `ensure_success()`. The closure then runs on, with `rt` but without the
+// terminal, and the session ends when the closure returns.
+app.on_shell("check", |rt, shell, _param| {
+    shell.attach(app.job().image(image.call()).command("sh")).ensure_success();
+    rt.start(app.job().image(image.call()).command(["cleanup"])).terminated().ensure_success();
+});
+
 // on_install only runs on first install, and can prompt for secrets. Param
 // keys follow the BSL name rules (lowercase alphanumeric and hyphens), so
 // access them via `param["admin-password"]` rather than `param.admin_password`.
@@ -486,7 +497,8 @@ app.on_action("regenerate-config", |rt, _p| {
 
 Behaviour:
 
-- Target may be a named or anonymous `Volume`, or an `ExternalVolume` resolved from an operation-scoped `kind: "volume"` param.
+- Target may be a named or anonymous `Volume`, or an `ExternalVolume` that resolves to storage, through an operation-scoped `kind: "volume"` param or the host's external volume mappings.
+- The call throws for an `ExternalVolume` that resolves to nothing, for one whose binding or mapping is read-only, and for a `Volume` declared read-only.
 - Path validation matches static `Volume.write`: absolute, no `..`, must not be the volume root.
 - The call is at-most-once across replays.
 - Unlike static `Volume.write`, contents are NOT reapplied on container restart — `rt.write` is point-in-time. For tmpfs volumes the file is wiped at the next container start; that's allowed and is up to the script author to reason about.

@@ -2341,7 +2341,14 @@ fn resolve_volume_write_target(
     use crate::runtime::identity::{InstanceId, InstanceVariant};
 
     if let Some(vol) = target.clone().try_cast::<Volume>() {
-        let tmpfs = vol.def.lock().tmpfs;
+        let (tmpfs, read_only) = {
+            let def = vol.def.lock();
+            (def.tmpfs, def.read_only)
+        };
+        // spec: RT#volume-writes
+        if read_only {
+            return Err("rt.write: the volume is declared read-only".into());
+        }
         if let Some(name) = vol.name.as_deref() {
             let display = crate::runtime::identity::VolumeName::for_app(rt.app_name.as_str(), name);
             let instance =
@@ -2380,20 +2387,53 @@ fn resolve_volume_write_target(
     }
 
     if let Some(ext) = target.try_cast::<ExternalVolume>() {
-        let binding = ext.operation_binding.ok_or_else(|| -> Box<EvalAltResult> {
-            "rt.write: external volume has no operation-scoped binding; rt.write is only supported for operation-bound external volumes".into()
-        })?;
         let instance = ResourceInstance::new_singleton(
             rt.app_name.clone(),
             ResourceKind::ExternalVolume,
             ext.name.as_str(),
         );
-        return Ok((
-            VolumeWriteTarget::ExternalBound {
-                host_path: binding.host_path,
-            },
-            instance,
-        ));
+        // spec: VOL#external-volumes
+        // The operation's binding comes first, then the host's mappings.
+        let (host_path, read_only) = if let Some(binding) = ext.operation_binding {
+            (binding.host_path, binding.read_only)
+        } else if rt.ctx.as_ref().is_some_and(|ctx| ctx.lock().probe_mode()) {
+            // Image discovery never writes.
+            (std::path::PathBuf::new(), false)
+        } else {
+            let writer = rt
+                .ctx
+                .as_ref()
+                .and_then(|ctx| ctx.lock().volume_writer.clone());
+            let resolved = writer
+                .ok_or_else(|| -> Box<EvalAltResult> {
+                    "rt.write: there is nowhere to write external volume files in this context"
+                        .into()
+                })?
+                .resolve_external(rt.app_name.as_str(), ext.name.as_str())
+                .map_err(|e| -> Box<EvalAltResult> {
+                    format!(
+                        "rt.write: cannot tell where external volume {} resolves to: {e}",
+                        ext.name
+                    )
+                    .into()
+                })?
+                .ok_or_else(|| -> Box<EvalAltResult> {
+                    format!(
+                        "rt.write: external volume {} resolves to nothing: it is not bound by \
+                         the operation and not mapped on the host",
+                        ext.name
+                    )
+                    .into()
+                })?;
+            (resolved.host_path, resolved.read_only)
+        };
+        // spec: RT#volume-writes
+        if read_only {
+            return Err(
+                format!("rt.write: external volume {} is mapped read-only", ext.name).into(),
+            );
+        }
+        return Ok((VolumeWriteTarget::ExternalBound { host_path }, instance));
     }
 
     Err("rt.write: target must be a Volume or ExternalVolume".into())
@@ -2979,7 +3019,7 @@ fn exit_code_name(code: i32) -> Option<String> {
 }
 
 /// Format an exit code as `<code>` or `<code>/<NAME>` when known.
-fn format_exit_code(code: i32) -> String {
+pub(super) fn format_exit_code(code: i32) -> String {
     match exit_code_name(code) {
         Some(name) => format!("{code}/{name}"),
         None => code.to_string(),

@@ -408,8 +408,44 @@ pub fn count_active_faults_for_app(
     )
 }
 
-pub fn has_active_faults(db: &crate::runtime::db::Db, app: &AppName) -> rusqlite::Result<bool> {
-    Ok(count_active_faults_for_app(db, app)? > 0)
+/// The kinds of fault under which the runtime stops acting on the fault's
+/// subject until it clears.
+// spec: FLT#withholding-faults
+pub const WITHHOLDING_KINDS: [&str; 3] = [
+    "external_volume_not_mapped",
+    "crash_loop",
+    "health_check_replace_failed",
+];
+
+/// What an app's active faults come to for its status.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FaultStanding {
+    /// How many faults are active against the app.
+    pub active: i64,
+    /// Whether any of them is a [withholding fault](WITHHOLDING_KINDS).
+    pub withholding: bool,
+}
+
+pub fn fault_standing(
+    db: &crate::runtime::db::Db,
+    app: &AppName,
+) -> rusqlite::Result<FaultStanding> {
+    let (active, withholding): (i64, i64) = db.conn.query_row(
+        "SELECT COUNT(*),
+                COALESCE(SUM(kind IN (?2, ?3, ?4)), 0)
+         FROM faults WHERE app = ?1 AND cleared_at IS NULL",
+        rusqlite::params![
+            app,
+            WITHHOLDING_KINDS[0],
+            WITHHOLDING_KINDS[1],
+            WITHHOLDING_KINDS[2]
+        ],
+        |r| Ok((r.get(0)?, r.get(1)?)),
+    )?;
+    Ok(FaultStanding {
+        active,
+        withholding: withholding > 0,
+    })
 }
 
 pub fn count_active_faults(db: &crate::runtime::db::Db) -> rusqlite::Result<i64> {

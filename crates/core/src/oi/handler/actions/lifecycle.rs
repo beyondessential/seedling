@@ -73,9 +73,43 @@ fn make_container_signaler(
 /// the same way the actuator does at container start.
 struct OperationVolumeWriter {
     driver: Arc<crate::system::System>,
+    db: crate::runtime::db::DbHandle,
 }
 
 impl crate::runtime::barrier::VolumeWriter for OperationVolumeWriter {
+    // spec: VOL#external-volumes
+    fn resolve_external(
+        &self,
+        app: &str,
+        name: &str,
+    ) -> Result<Option<crate::runtime::barrier::ResolvedExternalWrite>, String> {
+        use crate::system::types::MountSource;
+
+        let app = app
+            .parse::<AppName>()
+            .map_err(|e| format!("{app} is not an app name: {e}"))?;
+        let mappings = crate::system::actuator::try_resolve_external_volumes(
+            &self.db,
+            &self.driver.volume_store,
+            &app,
+        )
+        .map_err(|e| format!("the external volume mappings cannot be read: {e}"))?;
+        match mappings.get(name) {
+            None => Ok(None),
+            Some(mount) => match &mount.source {
+                MountSource::Bind(host_path) => {
+                    Ok(Some(crate::runtime::barrier::ResolvedExternalWrite {
+                        host_path: host_path.clone(),
+                        read_only: mount.read_only,
+                    }))
+                }
+                MountSource::Volume(_) | MountSource::Tmpfs => Err(format!(
+                    "the mapping of external volume {name} is not a directory on the host"
+                )),
+            },
+        }
+    }
+
     fn write(
         &self,
         app: &str,
@@ -127,9 +161,12 @@ impl crate::runtime::barrier::VolumeWriter for OperationVolumeWriter {
     }
 }
 
-fn make_volume_writer(state: &OiState) -> Option<Arc<dyn crate::runtime::barrier::VolumeWriter>> {
+pub(crate) fn make_volume_writer(
+    state: &OiState,
+) -> Option<Arc<dyn crate::runtime::barrier::VolumeWriter>> {
     Some(Arc::new(OperationVolumeWriter {
         driver: Arc::clone(&state.driver),
+        db: state.db.clone(),
     }))
 }
 

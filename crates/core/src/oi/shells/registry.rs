@@ -146,6 +146,15 @@ impl ShellRegistry {
         true
     }
 
+    /// Takes a session's job away again once its attachment has ended, while
+    /// the session itself goes on: its pty is closed and must not be resized.
+    pub(crate) fn detach(&self, id: &SessionId) {
+        if let Some(session) = self.sessions.lock().get_mut(id) {
+            session.container_name = None;
+            session.pty_master_fd = None;
+        }
+    }
+
     // spec: SHL#resizing-a-terminal
     pub fn resize(&self, id: &SessionId, rows: u16, cols: u16) -> bool {
         let mut sessions = self.sessions.lock();
@@ -321,5 +330,29 @@ mod tests {
         );
         assert!(!registry.stop(&id));
         assert!(!registry.resize(&id, 1, 1));
+    }
+
+    // spec: SHL#session-end
+    #[test]
+    fn a_detached_session_stays_registered_without_a_terminal_to_resize() {
+        let registry = ShellRegistry::new();
+        let (id, _) = starting(&registry, (24, 80));
+
+        let (master, slave) = pty();
+        assert!(registry.attach(&id, "container".to_owned(), master));
+        registry.detach(&id);
+
+        // SAFETY: both fds were opened above and are not used again.
+        unsafe {
+            libc::close(master);
+            libc::close(slave);
+        }
+
+        assert!(
+            registry.resize(&id, 10, 20),
+            "the session is still registered, and the closed pty is left alone"
+        );
+        assert_eq!(registry.list(None).len(), 1);
+        assert!(registry.active_container_names().is_empty());
     }
 }

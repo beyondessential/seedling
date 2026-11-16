@@ -132,6 +132,7 @@ pub fn register(engine: &mut Engine) {
     engine.build_type::<runtime::Executed>();
     engine.build_type::<collection::Collection>();
     engine.build_type::<shell::ShellControl>();
+    engine.build_type::<shell::ShellExit>();
 
     // spec: COL#coercion
     engine.register_fn("col", collection::col);

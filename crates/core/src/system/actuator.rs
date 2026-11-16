@@ -779,17 +779,28 @@ pub fn resolve_external_volumes(
     vol_store: &crate::system::volume_store::VolumeStore,
     app: &AppName,
 ) -> HashMap<ExternalVolumeName, crate::system::types::ResolvedExternalMount> {
+    try_resolve_external_volumes(db, vol_store, app).unwrap_or_else(|e| {
+        tracing::warn!(app = %app, error = %e, "failed to load external volume mappings");
+        HashMap::new()
+    })
+}
+
+/// As [`resolve_external_volumes`], but a failed read is an error rather than
+/// an app with no mappings.
+// spec: VOL#external-volumes
+pub fn try_resolve_external_volumes(
+    db: &DbHandle,
+    vol_store: &crate::system::volume_store::VolumeStore,
+    app: &AppName,
+) -> rusqlite::Result<HashMap<ExternalVolumeName, crate::system::types::ResolvedExternalMount>> {
     use crate::system::types::{MountSource, ResolvedExternalMount};
 
     let app_owned = app.clone();
     let (mappings, site_vols) = db.call(move |db| {
-        let mappings = external_volume_mappings::list_for_app(db, &app_owned).unwrap_or_else(|e| {
-            tracing::warn!(app = %app_owned, error = %e, "failed to load external volume mappings");
-            vec![]
-        });
-        let site_vols = site_volumes::list(db).unwrap_or_default();
-        (mappings, site_vols)
-    });
+        let mappings = external_volume_mappings::list_for_app(db, &app_owned)?;
+        let site_vols = site_volumes::list(db)?;
+        Ok::<_, rusqlite::Error>((mappings, site_vols))
+    })?;
 
     let mut resolved = HashMap::new();
     for mapping in mappings {
@@ -842,7 +853,7 @@ pub fn resolve_external_volumes(
         };
         resolved.insert(mapping.external_name, mount);
     }
-    resolved
+    Ok(resolved)
 }
 
 #[cfg(test)]

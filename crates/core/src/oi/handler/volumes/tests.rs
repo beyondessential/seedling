@@ -1036,3 +1036,48 @@ fn unmapping_begins_a_reconciliation_iteration() {
         .expect("an iteration was asked for")
     });
 }
+
+// spec: RT#volume-writes
+#[test]
+fn the_operation_writer_resolves_external_volumes_through_the_host_mappings() {
+    let oi = TestOi::new();
+    register_app(&oi, "consumer", r#"app.external_volume("backing");"#);
+    make_site_volume(&oi, "store");
+    let writer = crate::oi::handler::actions::lifecycle::make_volume_writer(&oi.state).unwrap();
+
+    assert_eq!(
+        writer.resolve_external("consumer", "backing").unwrap(),
+        None,
+        "unmapped resolves to nothing"
+    );
+
+    let map = |app: &str, read_only: bool| {
+        oi.call(
+            "/volumes/external/map",
+            json!({
+                "app": app,
+                "external_name": "backing",
+                "target": { "kind": "site", "name": "store" },
+                "read_only": read_only,
+            }),
+        )
+        .unwrap();
+    };
+    map("consumer", false);
+    let resolved = writer
+        .resolve_external("consumer", "backing")
+        .unwrap()
+        .expect("the mapping resolves");
+    assert!(!resolved.read_only);
+    assert!(resolved.host_path.ends_with("site-store"), "{resolved:?}");
+
+    register_app(&oi, "reader", r#"app.external_volume("backing");"#);
+    map("reader", true);
+    assert!(
+        writer
+            .resolve_external("reader", "backing")
+            .unwrap()
+            .unwrap()
+            .read_only
+    );
+}

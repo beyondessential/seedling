@@ -128,6 +128,8 @@ The `obj.call(...)` syntax is reserved by the scripting engine for function-poin
 
 Shell actions are not lifecycle operations.
 They are interactive sessions that can run concurrently with a lifecycle operation and with each other.
+A shell's closure calls `shell.attach(job)`, which starts the job and blocks until the attachment ends, then returns a `ShellExit`.
+The closure then runs on, and the session ends when it returns.
 A shell creates temporary (dynamic) resources that are cleaned up when the session ends.
 
 ## Action Closure Suspension and Replay

@@ -27,7 +27,7 @@ Each issue is worked on its own and committed on its own, with a test that fails
 - [x] Batch 5: runtime and fault code
 - [x] Batch 6: collections, validators, CLI, web, uninstall and image pulls
 - [ ] Requirements restored by the fidelity review
-- [ ] Blocking shell.attach, withholding-fault app status, rt.write to mapped external volumes
+- [x] Blocking shell.attach, withholding-fault app status, rt.write to mapped external volumes
 - [ ] Review round 2, part 1
 - [ ] Review round 2, part 2
 - [x] VOLM, SVCM and INGM handlers
@@ -149,3 +149,10 @@ Each is done once, in whichever issue is worked first, and the later issue notes
 - Console controls moved to `dangerous`: cancel CSR, clear TLS policy, clear image pins (global and per app), unmap external service and external volume, stop resource, unset param. Reset-to-default of a required param stays `write`, as it restores rather than removes. Clearing faults is `write` whatever the app's phase (it was `dangerous` outside `not_installed`).
 - `/apps/uninstall` already matched ACN uninstall (the spec's id is ACI); only a test was added. `/images/pull` answers `fetch_failed`, and a pin that cannot be written is now `internal` instead of a logged warning.
 - Wire resource type names come from `ResourceKind::type_name`, which replaced `journal::resource_kind_slug`, `stopped::kind_str`/`parse_kind` and the Debug-lowercase formats. v75 rewrites stored `externalvolume`/`externalservice` in `stopped_resources`, `faults` and `instance_restarts`. Internal storage (history, dynamic resources, container labels) keeps its Rust names.
+- `shell.attach` blocks the closure's own thread: the session hands the closure a `ShellHost` that runs the job on the async runtime (`Handle::block_on`) and returns a `ShellExit`. The attachment's result is recorded in the closure's shared `ShellProgress`, so a rerun of the closure after a later call suspends it gets the same answer instead of attaching again; the per-pass flag in `ShellControl` is what makes a second call in one run throw. A job whose exit status was not observed (its wait failed) counts as an attachment that ended first, never as success.
+- A session's exit code is the job's status once the closure has returned, with a signal exit as 128 plus the signal, so a job ended by the stop reads 143 rather than -1; -1 is kept for a failed session (a failing closure, `shell.error`, no attach, a job that could not be attached, stdin that could not be delivered, or a stop that landed before the job was known).
+- The session's registry entry keeps its place after the attachment ends, but loses its container and pty (`ShellRegistry::detach`), so a late resize never reaches a closed pty.
+- Dynamic resources created by a shell closure are not given to the reconciler: the closure runs with no database and no active progress, as before, so nothing starts them and `rt.start(...).terminated()` after an attach waits until the session is stopped. Nothing in this change tears resources down when the attachment ends. Wiring shell sessions into the reconciler's desired state needs per-session progress beside the app's single operation slot; it is not part of this issue.
+- `faulted` needs a withholding fault (`faults::WITHHOLDING_KINDS`); the CNR mapping of `degraded` to `warning` and `faulted` to `failed` already read the statuses right, so it did not change. `health/faults` still counts every active fault.
+- `rt.write` resolves an unbound ExternalVolume through the writer (`VolumeWriter::resolve_external`) against the host's mappings, so a read that fails is a throw naming the failure rather than "resolves to nothing"; `try_resolve_external_volumes` is the fallible form of the existing resolver. A read-only binding throws too, and so does a Volume declared read-only (RT#volume-writes asks for it and the code did not check).
+
