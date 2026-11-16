@@ -527,28 +527,40 @@ pub struct Reconciler {
     /// reconciler's other per-tick state; a restart re-observes anyway.
     // spec: OBS#failed-observation
     observe_failure_streaks: HashMap<InstanceId, u32>,
+    /// Apps whose uninstall this reconciler has filed
+    /// `uninstall_unidentifiable_units` for. Such a fault that is no longer on
+    /// file was cleared by an operator, who has thereby said to finish the
+    /// teardown; it is not filed again for that uninstall.
+    // spec: TRD#uninstall-scope
+    unidentifiable_units_filed: HashSet<AppName>,
 }
 
-/// Units that could belong to `app`, judged only by the shape of their names.
+/// Workload units that could belong to `app`, as candidates only: judged by
+/// the shape of their names, less each one that exactly matches an identity
+/// recorded for another app.
 ///
-/// This is a candidate enumeration and never a decision — `seedling-{app}-` is
-/// not prefix-free, so `app-db`'s units land here too. It exists for the one
-/// question the recorded identities cannot answer when there are none of them:
+/// `seedling-{app}-` is not prefix-free, so `app-db`'s units land among the
+/// shapes, and `ruled_out` (the unit names of every other app's recorded
+/// instances) is what takes them out again. It exists for the one question the
+/// app's own recorded identities cannot answer when there are none of them:
 /// is there anything at all that might still be this app's?
-// spec: TRD#uninstall-scope
-/// Workload units that could belong to `app`, as candidates only — the caller
-/// decides by matching exactly against recorded identity.
 ///
 /// Restricted to services because the question is whether a *workload* is still
 /// loaded. The runtime also owns slices under this same prefix
 /// (`seedling-{app}-{tier}.slice`), and those outlive every workload in them by
 /// design, so counting one as evidence of a live workload would leave an app
 /// with no recorded instances unable to ever finish tearing down.
-fn units_possibly_of<'a>(units: &'a [UnitSummary], app: &AppName) -> Vec<&'a UnitSummary> {
+// spec: TRD#uninstall-scope
+fn units_possibly_of<'a>(
+    units: &'a [UnitSummary],
+    app: &AppName,
+    ruled_out: &HashSet<String>,
+) -> Vec<&'a UnitSummary> {
     let prefix = format!("seedling-{app}-");
     units
         .iter()
         .filter(|u| u.name.ends_with(".service") && u.name.starts_with(&prefix))
+        .filter(|u| !ruled_out.contains(&u.name))
         .collect()
 }
 
@@ -728,6 +740,7 @@ impl Reconciler {
             resolver_health_fail_count: std::sync::atomic::AtomicU32::new(0),
             site_resolver,
             observe_failure_streaks: HashMap::new(),
+            unidentifiable_units_filed: HashSet::new(),
         }
     }
 
@@ -2258,6 +2271,113 @@ impl Reconciler {
     // Uninstall phase
     // -----------------------------------------------------------------------
 
+    /// Bring the volumes, services and ingresses of an uninstalling app whose
+    /// workloads are gone to `Unscheduled`: volumes are removed, and held where
+    /// that is their removal, and the routes and virtual hosts of the services
+    /// and ingresses are left out of the state applied after this.
+    // spec: TRD#teardown
+    async fn bring_remaining_instances_to_unscheduled(
+        &mut self,
+        app: &AppSnapshot,
+        apps: &[AppSnapshot],
+    ) {
+        let mut observations = Vec::new();
+        for dr in &app.desired.resources {
+            let (removed, cleaned_up) = match &dr.definition {
+                Resource::Service(_) => ("network_removed", "network_cleaned_up"),
+                Resource::Ingress(_) => ("ingress_removed", "ingress_cleaned_up"),
+                _ => continue,
+            };
+            for kind in ["stop_sent", removed, cleaned_up] {
+                observations.push((dr.instance.clone(), kind, serde_json::json!({})));
+            }
+        }
+        self.persist_obs(observations);
+
+        let volumes =
+            volumes::observe_and_actuate(&self.observer, &self.actuator, &self.db, &app.desired)
+                .await;
+        self.ingest_volume_results(apps, vec![(app.name.clone(), volumes)]);
+    }
+
+    /// Hold `app`'s teardown for a unit that may be its own but matches no
+    /// recorded identity, filing `uninstall_unidentifiable_units`.
+    ///
+    /// Returns whether an operator has since cleared that fault, which lets the
+    /// teardown complete. It is filed once for an uninstall; a fault that is
+    /// no longer there was cleared by an operator.
+    // spec: TRD#uninstall-scope
+    fn hold_for_unidentifiable_units(&mut self, app: &AppName) -> bool {
+        const KIND: &str = "uninstall_unidentifiable_units";
+        let key = crate::runtime::faults::FaultKey::new(app, KIND, "");
+        if self.unidentifiable_units_filed.contains(app) {
+            let app_for_read = app.clone();
+            return match self
+                .db
+                .call(move |db| crate::runtime::faults::list_active_faults(db, Some(&app_for_read)))
+            {
+                Ok(active) => !active.iter().any(|f| f.kind == KIND),
+                Err(e) => {
+                    warn!(%app, "uninstall: could not read the app's faults; holding teardown: {e}");
+                    false
+                }
+            };
+        }
+        tracing::error!(
+            %app,
+            "uninstall: units may still be loaded for this app but no recorded \
+             identities remain to match them against; not advancing teardown"
+        );
+        let filed = self.db.call(move |db| {
+            crate::runtime::faults::file_once(
+                db,
+                &key,
+                &crate::runtime::faults::FaultMeta::default(),
+                "units remain under this app's prefix that match no recorded identity of \
+                 this or any other app, so teardown cannot be safely completed; clear this \
+                 fault to complete it and leave those units untouched",
+            )
+        });
+        match filed {
+            Ok(_) => {
+                self.unidentifiable_units_filed.insert(app.clone());
+            }
+            Err(e) => warn!(%app, "uninstall: could not file {KIND}: {e}"),
+        }
+        false
+    }
+
+    /// Hold `teardown_identities_unreadable` for `app` while its recorded
+    /// identities cannot be read.
+    // spec: TRD#uninstall-scope
+    fn hold_teardown_identities_unreadable(&self, app: &AppName, why: &str) {
+        let key = crate::runtime::faults::FaultKey::new(app, "teardown_identities_unreadable", "");
+        let description = format!(
+            "the recorded identities of this app's resources cannot be read, so its \
+             teardown is held until they can be: {why}"
+        );
+        if let Err(e) = self.db.call(move |db| {
+            crate::runtime::faults::file_once(
+                db,
+                &key,
+                &crate::runtime::faults::FaultMeta::default(),
+                &description,
+            )
+        }) {
+            warn!(%app, "uninstall: could not file teardown_identities_unreadable: {e}");
+        }
+    }
+
+    fn clear_app_fault(&self, app: &AppName, kind: &str) {
+        let key = crate::runtime::faults::FaultKey::new(app, kind, "");
+        if let Err(e) = self
+            .db
+            .call(move |db| crate::runtime::faults::clear_fault_by_key(db, &key))
+        {
+            warn!(%app, kind, "could not clear the fault: {e}");
+        }
+    }
+
     async fn run_uninstall_phase(
         &mut self,
         apps: &[AppSnapshot],
@@ -2274,6 +2394,8 @@ impl Reconciler {
             if !running.is_empty() {
                 continue;
             }
+            self.bring_remaining_instances_to_unscheduled(app, apps)
+                .await;
             // spec: TRD#uninstall-scope — match units against the
             // identities the registry recorded, not against a name prefix.
             // `seedling-{app}-` is not prefix-free: uninstalling `app` matched
@@ -2284,10 +2406,13 @@ impl Reconciler {
             let expected: HashSet<String> = match self.db.call(move |db| {
                 crate::runtime::history::display_names_for_app(db, &app_name_for_query)
             }) {
-                Ok(names) => names
-                    .into_iter()
-                    .map(|display_name| format!("seedling-{display_name}.service"))
-                    .collect(),
+                Ok(names) => {
+                    self.clear_app_fault(&app.name, "teardown_identities_unreadable");
+                    names
+                        .into_iter()
+                        .map(|display_name| format!("seedling-{display_name}.service"))
+                        .collect()
+                }
                 // Fail safe: an empty expected set makes every unit invisible,
                 // which would read as "teardown finished" and delete the
                 // registry rows while the units are still loaded. Wait for a
@@ -2298,6 +2423,7 @@ impl Reconciler {
                         "uninstall: could not load recorded instance names; \
                          not advancing teardown this tick: {e}"
                     );
+                    self.hold_teardown_identities_unreadable(&app.name, &e.to_string());
                     continue;
                 }
             };
@@ -2309,32 +2435,40 @@ impl Reconciler {
             // below reads as "teardown finished". Distinguish the two by
             // asking whether anything that could be ours is still loaded.
             // `seedling-{app}-` is not prefix-free, so it may over-match a
-            // sibling; over-matching only makes this refuse to conclude,
-            // which is the safe direction.
+            // sibling; each unit that exactly matches another app's recorded
+            // identity is ruled out, and over-matching past that only makes
+            // this refuse to conclude, which is the safe direction.
             if expected.is_empty() {
-                match self.driver.process.list_units("seedling-").await {
-                    Ok(units) if !units_possibly_of(&units, &app.name).is_empty() => {
-                        tracing::error!(
+                let app_for_others = app.name.clone();
+                let ruled_out: HashSet<String> = match self.db.call(move |db| {
+                    crate::runtime::history::display_names_of_other_apps(db, &app_for_others)
+                }) {
+                    Ok(names) => names
+                        .into_iter()
+                        .map(|display_name| format!("seedling-{display_name}.service"))
+                        .collect(),
+                    Err(e) => {
+                        warn!(
                             app = %app.name,
-                            "uninstall: units may still be loaded for this app but no recorded \
-                             identities remain to match them against; not advancing teardown"
+                            "uninstall: could not load the other apps' recorded identities; \
+                             not advancing teardown this tick: {e}"
                         );
-                        let app_name_owned = app.name.clone();
-                        self.db.call(move |db| {
-                            let _ = crate::runtime::faults::file_once(
-                                db,
-                                &crate::runtime::faults::FaultKey::new(
-                                    &app_name_owned,
-                                    "uninstall_unidentifiable_units",
-                                    "",
-                                ),
-                                &crate::runtime::faults::FaultMeta::default(),
-                                "units remain under this app's prefix but no recorded instance \
-                                 identities remain to match them against, so teardown cannot be \
-                                 safely completed",
-                            );
-                        });
+                        self.hold_teardown_identities_unreadable(&app.name, &e.to_string());
                         continue;
+                    }
+                };
+                match self.driver.process.list_units("seedling-").await {
+                    Ok(units) if !units_possibly_of(&units, &app.name, &ruled_out).is_empty() => {
+                        if !self.hold_for_unidentifiable_units(&app.name) {
+                            continue;
+                        }
+                        // An operator cleared the fault: teardown completes
+                        // and the units that were not ruled out stay as they are.
+                        warn!(
+                            app = %app.name,
+                            "uninstall: completing teardown at an operator's instruction, \
+                             leaving the units that could not be ruled out"
+                        );
                     }
                     Ok(_) => {}
                     Err(e) => {
@@ -2361,9 +2495,43 @@ impl Reconciler {
                         .collect::<Vec<_>>()
                 }) {
                 Ok(units) if units.is_empty() => {
+                    // spec: TRD#teardown
+                    // Teardown completes when every recorded instance is
+                    // `Unscheduled`; no unit being loaded is not the same.
+                    let app_for_check = app.name.clone();
+                    match self.db.call(move |db| {
+                        crate::runtime::history::teardown_complete(db, &app_for_check)
+                    }) {
+                        Ok(true) => {}
+                        Ok(false) => continue,
+                        Err(e) => {
+                            warn!(
+                                app = %app.name,
+                                "uninstall: could not read the lifecycle of the recorded \
+                                 instances; not advancing teardown this tick: {e}"
+                            );
+                            self.hold_teardown_identities_unreadable(&app.name, &e.to_string());
+                            continue;
+                        }
+                    }
                     let app_name_owned = app.name.clone();
                     let phase_handle = Arc::clone(&app.phase_handle);
                     let moved = self.db.call(move |db| {
+                        // spec: TRD#teardown
+                        // The recorded instances go first, and a failure to
+                        // delete them holds the teardown: an app left with
+                        // instances recorded would pass them on to the next
+                        // app registered under its name.
+                        if let Err(e) = crate::runtime::history::delete_instances_for_app(
+                            db,
+                            &app_name_owned,
+                        ) {
+                            error!(
+                                app = %app_name_owned,
+                                "uninstall: could not forget the recorded instances; trying again next tick: {e}"
+                            );
+                            return false;
+                        }
                         if let Err(e) = transition_phase(
                             &phase_handle,
                             AppPhase::NotInstalled,
@@ -2376,25 +2544,25 @@ impl Reconciler {
                             );
                             return false;
                         }
-                        if let Err(e) = crate::runtime::history::delete_instances_for_app(
-                            db,
-                            &app_name_owned,
-                        ) {
-                            warn!(app = %app_name_owned, "failed to clean up resource instances during uninstall: {e}");
-                        }
                         // The other half of `uninstall_unidentifiable_units`:
                         // teardown finishing is the only thing that resolves
                         // it, and it must not outlive the app it describes.
-                        let _ = crate::runtime::faults::clear_faults_by_kind(
-                            db,
-                            &app_name_owned,
+                        for kind in [
                             "uninstall_unidentifiable_units",
-                        );
+                            "teardown_identities_unreadable",
+                        ] {
+                            let _ = crate::runtime::faults::clear_faults_by_kind(
+                                db,
+                                &app_name_owned,
+                                kind,
+                            );
+                        }
                         true
                     });
                     if !moved {
                         continue;
                     }
+                    self.unidentifiable_units_filed.remove(&app.name);
                     // spec: EVT#event-types
                     // Uninstall is reconciler-driven and therefore emits no
                     // OperationCompleted event; this phase change is the only
@@ -2737,7 +2905,7 @@ mod tests {
         ];
         let app = AppName::new_unchecked("app");
         assert!(
-            !units_possibly_of(&units, &app).is_empty(),
+            !units_possibly_of(&units, &app, &HashSet::new()).is_empty(),
             "with no recorded identities left, a loaded unit under the app's own prefix is the \
              only remaining evidence that teardown has not finished; treating the empty record \
              set as completion deletes the rows while the unit is still loaded"
@@ -2750,7 +2918,7 @@ mod tests {
         let units = [unit("seedling-other-web.service")];
         let app = AppName::new_unchecked("app");
         assert!(
-            units_possibly_of(&units, &app).is_empty(),
+            units_possibly_of(&units, &app, &HashSet::new()).is_empty(),
             "an app registered but never scheduled has no rows and no units, and must still be \
              able to finish uninstalling"
         );
@@ -2770,7 +2938,7 @@ mod tests {
         ];
         let app = AppName::new_unchecked("app");
         assert!(
-            units_possibly_of(&units, &app).is_empty(),
+            units_possibly_of(&units, &app, &HashSet::new()).is_empty(),
             "slices are the grouping, not the workload; an app whose units are all gone must \
              still be able to finish uninstalling while its slices are still loaded"
         );
@@ -2782,7 +2950,7 @@ mod tests {
         let units = [unit("seedling-app-db-web.service")];
         let app = AppName::new_unchecked("app");
         assert!(
-            !units_possibly_of(&units, &app).is_empty(),
+            !units_possibly_of(&units, &app, &HashSet::new()).is_empty(),
             "`seedling-app-` also matches `app-db`; over-matching here only withholds a \
              completion, never stops a sibling's unit — the decision itself is still the exact \
              match against recorded identity"
@@ -3472,6 +3640,216 @@ mod tests {
         *oi.state.registry.read().get("demo").unwrap().phase.lock() = AppPhase::Uninstalling;
         oi.block_on(volumes_phase(&mut reconciler));
         assert_eq!(read(&oi, inst), (LifecycleState::Unscheduled, 0));
+    }
+
+    /// An uninstalling app named `name` registered in `oi`, with the recorded
+    /// instances `instances` (kind and name).
+    fn uninstalling(
+        oi: &crate::oi::test_support::TestOi,
+        name: &str,
+        script: &str,
+        instances: &[(crate::defs::resource::ResourceKind, &str)],
+    ) -> Vec<crate::runtime::identity::ResourceInstance> {
+        oi.call(
+            "/apps/create",
+            serde_json::json!({ "app": name, "script": script }),
+        )
+        .unwrap();
+        let app = AppName::new(name).unwrap();
+        let recorded = instances
+            .iter()
+            .map(|(kind, instance_name)| {
+                let (app, kind, instance_name) = (app.clone(), *kind, (*instance_name).to_owned());
+                oi.state.db.call(move |db| {
+                    crate::runtime::history::get_or_create_singleton(
+                        db,
+                        &app,
+                        kind,
+                        Some(&instance_name),
+                    )
+                    .unwrap()
+                })
+            })
+            .collect();
+        *oi.state.registry.read().get(name).unwrap().phase.lock() = AppPhase::Uninstalling;
+        recorded
+    }
+
+    fn uninstall_phase(oi: &crate::oi::test_support::TestOi, reconciler: &mut Reconciler) {
+        let (apps, _) = reconciler.snapshot_all_apps();
+        oi.block_on(reconciler.run_uninstall_phase(&apps, &HashMap::new()));
+    }
+
+    fn phase_of(oi: &crate::oi::test_support::TestOi, name: &str) -> AppPhase {
+        oi.state
+            .registry
+            .read()
+            .get(name)
+            .unwrap()
+            .phase
+            .lock()
+            .clone()
+    }
+
+    fn start_unit(oi: &crate::oi::test_support::TestOi, name: &str) {
+        oi.block_on(oi.state.driver.process.start_unit(name))
+            .unwrap();
+    }
+
+    // spec: TRD#uninstall-scope
+    #[test]
+    fn a_unit_matching_another_apps_recorded_identity_does_not_hold_an_uninstall() {
+        use crate::defs::resource::ResourceKind::Deployment;
+
+        let oi = crate::oi::test_support::TestOi::new();
+        uninstalling(&oi, "app", crate::oi::test_support::MINIMAL_SCRIPT, &[]);
+        uninstalling(
+            &oi,
+            "app-db",
+            crate::oi::test_support::MINIMAL_SCRIPT,
+            &[(Deployment, "web")],
+        );
+        *oi.state.registry.read().get("app-db").unwrap().phase.lock() = AppPhase::Installed;
+        start_unit(&oi, "seedling-app-db-web.service");
+        let mut reconciler = test_reconciler(&oi);
+
+        uninstall_phase(&oi, &mut reconciler);
+
+        assert_eq!(phase_of(&oi, "app"), AppPhase::NotInstalled);
+        let units = oi
+            .block_on(oi.state.driver.process.list_units("seedling-"))
+            .unwrap();
+        assert!(
+            units
+                .iter()
+                .any(|u| u.name == "seedling-app-db-web.service"),
+            "the sibling's unit is left alone"
+        );
+    }
+
+    // spec: TRD#uninstall-scope
+    #[test]
+    fn clearing_the_unidentifiable_units_fault_completes_the_teardown_without_filing_it_again() {
+        let oi = crate::oi::test_support::TestOi::new();
+        uninstalling(&oi, "app", crate::oi::test_support::MINIMAL_SCRIPT, &[]);
+        start_unit(&oi, "seedling-app-orphan.service");
+        let mut reconciler = test_reconciler(&oi);
+        let app = AppName::new("app").unwrap();
+        let active = |oi: &crate::oi::test_support::TestOi| {
+            let app = app.clone();
+            oi.state.db.call(move |db| {
+                crate::runtime::faults::list_active_faults(db, Some(&app))
+                    .unwrap()
+                    .into_iter()
+                    .filter(|f| f.kind == "uninstall_unidentifiable_units")
+                    .count()
+            })
+        };
+
+        uninstall_phase(&oi, &mut reconciler);
+        assert_eq!(phase_of(&oi, "app"), AppPhase::Uninstalling);
+        assert_eq!(active(&oi), 1);
+        uninstall_phase(&oi, &mut reconciler);
+        assert_eq!(phase_of(&oi, "app"), AppPhase::Uninstalling);
+        assert_eq!(active(&oi), 1, "one fault, however many iterations");
+
+        let key = crate::runtime::faults::FaultKey::new(&app, "uninstall_unidentifiable_units", "");
+        oi.state
+            .db
+            .call(move |db| crate::runtime::faults::clear_fault_by_key(db, &key))
+            .unwrap();
+        uninstall_phase(&oi, &mut reconciler);
+
+        assert_eq!(phase_of(&oi, "app"), AppPhase::NotInstalled);
+        assert_eq!(active(&oi), 0, "not filed again for that uninstall");
+        let units = oi
+            .block_on(oi.state.driver.process.list_units("seedling-"))
+            .unwrap();
+        assert!(
+            units
+                .iter()
+                .any(|u| u.name == "seedling-app-orphan.service"),
+            "what was not ruled out is left untouched"
+        );
+    }
+
+    // spec: TRD#teardown
+    #[test]
+    fn teardown_completes_only_once_every_recorded_instance_is_unscheduled() {
+        use crate::defs::resource::ResourceKind::Deployment;
+
+        let oi = crate::oi::test_support::TestOi::new();
+        let recorded = uninstalling(
+            &oi,
+            "app",
+            crate::oi::test_support::MINIMAL_SCRIPT,
+            &[(Deployment, "web")],
+        );
+        let web = recorded[0].clone();
+        let observe = |kind: &'static str| {
+            let web = web.clone();
+            oi.state.db.call(move |db| {
+                crate::runtime::history::insert_observation(db, &web, kind, &serde_json::json!({}))
+                    .unwrap();
+            });
+        };
+        observe("container_running");
+        let mut reconciler = test_reconciler(&oi);
+
+        uninstall_phase(&oi, &mut reconciler);
+        assert_eq!(
+            phase_of(&oi, "app"),
+            AppPhase::Uninstalling,
+            "no unit is loaded, but the instance is still running as far as is recorded"
+        );
+
+        observe("stop_sent");
+        observe("container_exited");
+        observe("container_removed");
+        uninstall_phase(&oi, &mut reconciler);
+        assert_eq!(phase_of(&oi, "app"), AppPhase::NotInstalled);
+        let app = AppName::new("app").unwrap();
+        let remaining = oi
+            .state
+            .db
+            .call(move |db| crate::runtime::history::instances_for_app(db, &app))
+            .unwrap();
+        assert!(remaining.is_empty(), "the recorded instances are forgotten");
+    }
+
+    // spec: TRD#teardown
+    #[test]
+    fn an_uninstall_brings_volumes_services_and_ingresses_to_unscheduled() {
+        use crate::defs::resource::ResourceKind::{Ingress, Service, Volume};
+
+        let oi = crate::oi::test_support::TestOi::new();
+        let recorded = uninstalling(
+            &oi,
+            "app",
+            r#"
+            let svc = app.service("web").http(80);
+            svc.ingress("clinic.example.com", 443).tls(Terminate.Https, Output.Http1);
+            app.volume("data");
+            "#,
+            &[
+                (Service, "web"),
+                (Ingress, "clinic.example.com:443"),
+                (Volume, "data"),
+            ],
+        );
+        let mut reconciler = test_reconciler(&oi);
+
+        uninstall_phase(&oi, &mut reconciler);
+
+        assert_eq!(phase_of(&oi, "app"), AppPhase::NotInstalled);
+        let remaining = oi
+            .state
+            .db
+            .call(move |db| {
+                crate::runtime::history::instances_for_app(db, &AppName::new("app").unwrap())
+            })
+            .unwrap();
+        assert!(remaining.is_empty(), "{recorded:?}");
     }
 
     /// A reconciler over `oi`'s stub backends and database.

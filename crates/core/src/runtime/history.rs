@@ -95,6 +95,75 @@ pub fn display_names_for_app(db: &Db, app: &AppName) -> rusqlite::Result<Vec<Str
     rows.collect()
 }
 
+/// The display names of the resources recorded for every app but `app`: the
+/// identities a unit under `app`'s name prefix is ruled out by.
+// spec: TRD#uninstall-scope
+pub fn display_names_of_other_apps(db: &Db, app: &AppName) -> rusqlite::Result<Vec<String>> {
+    let mut stmt = db
+        .conn
+        .prepare("SELECT DISTINCT display_name FROM resource_instances WHERE app != ?1")?;
+    let rows = stmt.query_map(params![app], |row| row.get::<_, String>(0))?;
+    rows.collect()
+}
+
+/// Every resource instance recorded for `app`.
+// spec: TRD#teardown
+pub fn instances_for_app(db: &Db, app: &AppName) -> rusqlite::Result<Vec<ResourceInstance>> {
+    let mut stmt = db.conn.prepare(
+        "SELECT id, kind, name, is_scaled, display_name
+         FROM resource_instances
+         WHERE app = ?1
+         ORDER BY created_at ASC",
+    )?;
+    let rows = stmt.query_map(params![app], |row| {
+        Ok((
+            row.get::<_, String>(0)?,
+            row.get::<_, String>(1)?,
+            row.get::<_, Option<String>>(2)?,
+            row.get::<_, i64>(3)?,
+            row.get::<_, String>(4)?,
+        ))
+    })?;
+    let mut instances = Vec::new();
+    for row in rows {
+        let (id_hex, kind, name, is_scaled, display_name) = row?;
+        let id = InstanceId::from_hex(&id_hex).ok_or_else(|| {
+            rusqlite::Error::InvalidColumnType(0, "id".to_string(), rusqlite::types::Type::Text)
+        })?;
+        instances.push(ResourceInstance {
+            id,
+            app: app.clone(),
+            kind: parse_resource_kind(&kind)?,
+            name,
+            variant: if is_scaled != 0 {
+                InstanceVariant::Scaled
+            } else {
+                InstanceVariant::Singleton
+            },
+            display_name,
+        });
+    }
+    Ok(instances)
+}
+
+/// Whether every instance recorded for `app` whose kind has a lifecycle is
+/// `Unscheduled`, which is when its teardown has completed.
+///
+/// An instance whose lifecycle cannot be read is an error, never an
+/// instance that is done.
+// spec: TRD#teardown
+pub fn teardown_complete(db: &Db, app: &AppName) -> rusqlite::Result<bool> {
+    for instance in instances_for_app(db, app)? {
+        if !crate::runtime::barrier::oracle::has_lifecycle(instance.kind) {
+            continue;
+        }
+        if read_lifecycle(db, &instance)?.0 != LifecycleState::Unscheduled {
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
+
 // spec: IDN#instance-identity
 pub fn find_instances_for_group(
     db: &Db,
