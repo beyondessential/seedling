@@ -73,6 +73,9 @@ pub struct StubContainerRuntime {
     /// Where stub volumes' mountpoints live. One subdir per volume name; the
     /// runtime owns this dir for the duration of the daemon's lifetime.
     volumes_root: PathBuf,
+    /// Whether removing a volume fails, as a container runtime refusing it
+    /// does.
+    refuse_volume_removal: std::sync::atomic::AtomicBool,
 }
 
 #[derive(Default)]
@@ -114,7 +117,15 @@ impl StubContainerRuntime {
                 ..Default::default()
             }),
             volumes_root,
+            refuse_volume_removal: std::sync::atomic::AtomicBool::new(false),
         }
+    }
+
+    /// Make every later volume removal fail, or succeed again.
+    #[cfg(test)]
+    pub(crate) fn refuse_volume_removal(&self, refuse: bool) {
+        self.refuse_volume_removal
+            .store(refuse, std::sync::atomic::Ordering::SeqCst);
     }
 
     /// Add a running container carrying `labels`, as one left behind by a
@@ -426,6 +437,12 @@ impl ContainerRuntime for StubContainerRuntime {
 
     fn remove_volume<'a>(&'a self, name: &'a str) -> BoxFuture<'a, Result<(), BoxError>> {
         async move {
+            if self
+                .refuse_volume_removal
+                .load(std::sync::atomic::Ordering::SeqCst)
+            {
+                return Err(format!("volume {name} is refused removal").into());
+            }
             self.state.lock().volumes.remove(name);
             let dir = self.volumes_root.join(name);
             if dir.exists() {

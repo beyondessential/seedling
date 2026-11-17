@@ -2529,6 +2529,96 @@ impl Reconciler {
         self.ingest_volume_results(apps, vec![(app.name.clone(), volumes)]);
     }
 
+    /// Remove the storage of every anonymous volume still recorded against an
+    /// instance of `app`, whose pods are all `Unscheduled`, and return
+    /// whether none is left recorded.
+    ///
+    /// A removal that fails is part of its instance's stop failing, so it
+    /// holds `stop_failed` for the instance until a later removal succeeds.
+    // spec: ACTU#deployment-and-job-instances
+    // spec: TRD#teardown
+    async fn remove_recorded_anonymous_volumes(&mut self, app: &AppSnapshot) -> bool {
+        let app_name = app.name.clone();
+        let recorded = match self
+            .db
+            .call(move |db| crate::runtime::anonymous_volumes::instances_of_app(db, &app_name))
+        {
+            Ok(recorded) => recorded,
+            Err(e) => {
+                warn!(
+                    app = %app.name,
+                    "uninstall: could not read the anonymous volumes recorded for the app; \
+                     not advancing teardown this tick: {e}"
+                );
+                self.teardown_identities_unreadable(&app.name, &e.to_string());
+                return false;
+            }
+        };
+        let mut all_removed = true;
+        for id in recorded {
+            let outcome =
+                crate::system::actuator::remove_anonymous_volumes(&self.driver, &self.db, id, &[])
+                    .await;
+            if outcome.is_err() {
+                all_removed = false;
+            }
+            // spec: FLT#workload-faults
+            let Some(instance) = app
+                .desired
+                .resources
+                .iter()
+                .map(|dr| &dr.instance)
+                .chain(&app.desired.undeclared)
+                .find(|instance| instance.id == id)
+            else {
+                if let Err(e) = outcome {
+                    error!(
+                        app = %app.name,
+                        instance = %id.to_hex(),
+                        "uninstall: removing the anonymous volumes of an instance the app does \
+                         not hold failed: {e}"
+                    );
+                }
+                continue;
+            };
+            let key = crate::runtime::faults::FaultKey::new(&app.name, "stop_failed", id.to_hex());
+            let held = match outcome {
+                Ok(()) => self
+                    .db
+                    .call(move |db| crate::runtime::faults::clear_fault_by_key(db, &key))
+                    .map(|_| ()),
+                Err(e) => {
+                    error!(
+                        app = %app.name,
+                        instance = %instance.display_name,
+                        "uninstall: removing the instance's anonymous volumes failed; \
+                         holding teardown: {e}"
+                    );
+                    let meta = crate::runtime::faults::FaultMeta {
+                        resource_type: Some(instance.kind.type_name().to_owned()),
+                        resource_name: instance.name.clone(),
+                        instance_id: Some(id.to_hex()),
+                    };
+                    let description = e.to_string();
+                    self.db
+                        .call(move |db| {
+                            crate::runtime::faults::file_once(db, &key, &meta, &description)
+                        })
+                        .map(|_| ())
+                }
+            };
+            if let Err(e) = held {
+                warn!(
+                    app = %app.name,
+                    instance = %instance.display_name,
+                    "uninstall: could not bring stop_failed in line with the anonymous volume \
+                     removal: {e}"
+                );
+            }
+        }
+        all_removed
+    }
+
     /// Hold `app`'s teardown for a unit that may be its own but matches no
     /// recorded identity, filing `uninstall_unidentifiable_units`.
     ///
@@ -2769,6 +2859,14 @@ impl Reconciler {
                             self.teardown_identities_unreadable(&app.name, &e.to_string());
                             continue;
                         }
+                    }
+                    // spec: ACTU#deployment-and-job-instances
+                    // spec: TRD#teardown
+                    // A pod's anonymous volume whose removal failed is known
+                    // of only by its record, which goes with the recorded
+                    // instances: the teardown waits for its removal.
+                    if !self.remove_recorded_anonymous_volumes(app).await {
+                        continue;
                     }
                     let app_name_owned = app.name.clone();
                     let phase_handle = Arc::clone(&app.phase_handle);
@@ -4609,6 +4707,83 @@ mod tests {
         assert_eq!(phase_of(&oi, "app"), AppPhase::NotInstalled);
         assert!(!container_exists(&oi, &anonymous.display_name));
         assert!(!network_exists(&oi, &network));
+    }
+
+    // spec: ACTU#deployment-and-job-instances
+    // spec: TRD#teardown
+    // spec: FLT#workload-faults
+    // A pod whose container was removed on exit is Unscheduled with its
+    // network gone, so nothing stopped it again; teardown completed and the
+    // anonymous volume's record, the only trace of its storage, went with the
+    // recorded instances.
+    #[test]
+    fn an_uninstall_waits_for_an_anonymous_volume_whose_removal_fails() {
+        use crate::defs::resource::ResourceKind::Job;
+
+        let (oi, containers, _dir) = with_stub_containers();
+        oi.call(
+            "/apps/create",
+            serde_json::json!({ "app": "app", "script": crate::oi::test_support::MINIMAL_SCRIPT }),
+        )
+        .unwrap();
+        oi.install("app");
+        let job = record(&oi, "app", Job, None);
+        let volume = "seedling-anon-0123456789abcdef0123456789abcdef-vol-0";
+        {
+            let job = job.clone();
+            let recorded = crate::runtime::anonymous_volumes::AnonymousVolume {
+                name: volume.to_owned(),
+                tmpfs: false,
+            };
+            oi.state.db.call(move |db| {
+                crate::runtime::anonymous_volumes::record(db, &job, &[recorded]).unwrap();
+                for kind in ["container_running", "container_exited", "container_removed"] {
+                    crate::runtime::history::insert_observation(
+                        db,
+                        &job,
+                        kind,
+                        &serde_json::json!({}),
+                    )
+                    .unwrap();
+                }
+            });
+        }
+        oi.block_on(oi.state.driver.container.create_volume(volume, false))
+            .unwrap();
+        containers.refuse_volume_removal(true);
+
+        oi.call("/apps/uninstall", serde_json::json!({ "app": "app" }))
+            .unwrap();
+        let mut reconciler = test_reconciler(&oi);
+        tear_down(&oi, &mut reconciler, "app");
+
+        assert_eq!(phase_of(&oi, "app"), AppPhase::Uninstalling);
+        assert_eq!(anonymous_volumes_recorded(&oi, &job), vec![volume]);
+        assert!(volume_exists(&oi, volume));
+        assert_eq!(stop_failed_faults(&oi, &job), 1);
+
+        containers.refuse_volume_removal(false);
+        tear_down(&oi, &mut reconciler, "app");
+
+        assert_eq!(phase_of(&oi, "app"), AppPhase::NotInstalled);
+        assert!(!volume_exists(&oi, volume));
+        assert!(anonymous_volumes_recorded(&oi, &job).is_empty());
+        assert_eq!(stop_failed_faults(&oi, &job), 0);
+    }
+
+    /// How many `stop_failed` faults are active for `instance`.
+    fn stop_failed_faults(
+        oi: &crate::oi::test_support::TestOi,
+        instance: &crate::runtime::identity::ResourceInstance,
+    ) -> usize {
+        let hex = instance.id.to_hex();
+        oi.state.db.call(move |db| {
+            crate::runtime::faults::list_active_faults(db, None)
+                .unwrap()
+                .into_iter()
+                .filter(|f| f.kind == "stop_failed" && f.instance_id.as_deref() == Some(&hex))
+                .count()
+        })
     }
 
     /// An anonymous Job mounting an anonymous volume, as an action closure

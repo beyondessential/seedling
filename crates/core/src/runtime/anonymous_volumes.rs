@@ -62,6 +62,30 @@ pub fn recorded_for(db: &Db, instance: InstanceId) -> rusqlite::Result<Vec<Anony
     .collect()
 }
 
+/// The pod instances of `app` with an anonymous volume still recorded, whose
+/// storage is not yet known to be gone.
+///
+/// A recorded instance ID that does not parse is an error, never an
+/// instance with nothing left.
+pub fn instances_of_app(db: &Db, app: &AppName) -> rusqlite::Result<Vec<InstanceId>> {
+    let mut stmt = db.conn.prepare(
+        "SELECT DISTINCT instance_id FROM anonymous_volumes
+         WHERE app = ?1
+         ORDER BY instance_id",
+    )?;
+    stmt.query_map(params![app], |row| {
+        let hex: String = row.get(0)?;
+        InstanceId::from_hex(&hex).ok_or_else(|| {
+            rusqlite::Error::FromSqlConversionFailure(
+                0,
+                rusqlite::types::Type::Text,
+                format!("unparseable instance id {hex:?}").into(),
+            )
+        })
+    })?
+    .collect()
+}
+
 /// Whether a pod instance other than `instance` is recorded as having
 /// `volume` created for it, so that its storage is still that instance's.
 pub fn held_by_another(

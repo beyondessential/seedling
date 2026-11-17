@@ -168,7 +168,10 @@ it. The logic lives in `src/runtime/desired.rs`:
   `anonymous_volumes`), and a volume's storage at both its tmpfs path and its
   volume-store name, holding whichever stands. The uninstall
   completes, and the recorded instances are forgotten, only once every
-  recorded instance whose kind has a lifecycle is `Unscheduled`. While the
+  recorded instance whose kind has a lifecycle is `Unscheduled` and no
+  anonymous volume is still recorded for the app. A recorded anonymous volume
+  whose removal fails is tried again each iteration, with `stop_failed` held
+  on its instance until the removal succeeds. While the
   recorded identities cannot be read it holds a
   `teardown_identities_unreadable` fault; with none recorded, a loaded unit
   under the app's name prefix that exactly matches no other app's recorded
