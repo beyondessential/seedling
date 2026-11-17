@@ -463,7 +463,25 @@ fn with_paused_clock<F: std::future::Future>(body: F) -> F::Output {
 
 const TEN_MINUTES: std::time::Duration = std::time::Duration::from_secs(600);
 
+fn app() -> AppName {
+    AppName::new("app").unwrap()
+}
+
+/// How many `operation_cleanup_stalled` faults are active for `operation_id`.
+fn cleanup_stalled(oi: &crate::oi::test_support::TestOi, operation_id: &str) -> usize {
+    let operation_id = operation_id.to_owned();
+    oi.state.db.call(move |db| {
+        faults::list_active_faults(db, Some(&app()))
+            .unwrap()
+            .into_iter()
+            .filter(|f| f.kind == faults::OPERATION_CLEANUP_STALLED && f.subject == operation_id)
+            .count()
+    })
+}
+
 // spec: APP#dynamic-resource-lifetime
+// spec: OPS#completion
+// spec: FLT#app-faults
 // The records were read with `unwrap_or_default`, so a read that failed was
 // nothing to clean up: the cleanup ended at once and the resources stayed
 // with nothing tearing them down.
@@ -475,9 +493,19 @@ fn a_dynamic_resource_list_that_cannot_be_read_is_not_nothing_to_clean_up() {
     let progress = RwLock::new(None);
     let notify = Notify::new();
 
+    let app = app();
     with_paused_clock(async {
-        let cleanup = super::cleanup_dynamic_resources(&oi.state, "op-1", &progress, &notify);
+        let cleanup = super::cleanup_dynamic_resources(&oi.state, &app, "op-1", &progress, &notify);
         tokio::pin!(cleanup);
+        tokio::select! {
+            () = &mut cleanup => panic!("the cleanup ended without reading its records"),
+            () = tokio::time::sleep(std::time::Duration::from_secs(5)) => {}
+        }
+        assert_eq!(
+            cleanup_stalled(&oi, "op-1"),
+            1,
+            "held while the records cannot be read, a minute or not"
+        );
         tokio::select! {
             () = &mut cleanup => panic!("the cleanup ended without reading its records"),
             () = tokio::time::sleep(TEN_MINUTES) => {}
@@ -489,9 +517,12 @@ fn a_dynamic_resource_list_that_cannot_be_read_is_not_nothing_to_clean_up() {
             .expect("the cleanup ends once its records are read and torn down");
     });
     assert_eq!(dynamic_records(&oi, "op-1"), 0);
+    assert_eq!(cleanup_stalled(&oi, "op-1"), 0, "cleared once torn down");
 }
 
 // spec: APP#dynamic-resource-lifetime
+// spec: OPS#completion
+// spec: FLT#app-faults
 // The cleanup gave up after a minute and forgot the records of resources it
 // had not seen torn down.
 #[test]
@@ -508,13 +539,24 @@ fn the_cleanup_does_not_give_up_on_a_resource_that_is_slow_to_go() {
     let progress = RwLock::new(None);
     let notify = Notify::new();
 
+    let app = app();
     with_paused_clock(async {
-        let cleanup = super::cleanup_dynamic_resources(&oi.state, "op-1", &progress, &notify);
+        let cleanup = super::cleanup_dynamic_resources(&oi.state, &app, "op-1", &progress, &notify);
         tokio::pin!(cleanup);
+        tokio::select! {
+            () = &mut cleanup => panic!("the cleanup gave up while the network stood"),
+            () = tokio::time::sleep(std::time::Duration::from_secs(30)) => {}
+        }
+        assert_eq!(
+            cleanup_stalled(&oi, "op-1"),
+            0,
+            "not within the first minute"
+        );
         tokio::select! {
             () = &mut cleanup => panic!("the cleanup gave up while the network stood"),
             () = tokio::time::sleep(TEN_MINUTES) => {}
         }
+        assert_eq!(cleanup_stalled(&oi, "op-1"), 1, "held past a minute");
         assert_eq!(dynamic_records(&oi, "op-1"), 1, "the record is kept");
         assert!(
             progress
@@ -535,6 +577,7 @@ fn the_cleanup_does_not_give_up_on_a_resource_that_is_slow_to_go() {
             .expect("the cleanup ends once the network is gone");
     });
     assert_eq!(dynamic_records(&oi, "op-1"), 0);
+    assert_eq!(cleanup_stalled(&oi, "op-1"), 0, "cleared once torn down");
 }
 
 // spec: APP#dynamic-resource-lifetime

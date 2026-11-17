@@ -734,37 +734,57 @@ pub(crate) fn dynamic_poll_interval(waited_secs: u64) -> Duration {
 }
 
 /// How long the end-of-operation cleanup waits for its dynamic resources
-/// before it reports, as an error, that they are not yet torn down. It goes
-/// on waiting.
+/// before it holds `operation_cleanup_stalled`. It goes on waiting.
+// spec: OPS#completion
 const CLEANUP_STALL_AFTER: Duration = Duration::from_secs(60);
 
+/// What keeps the end-of-operation cleanup from finishing.
+enum CleanupBlocker {
+    /// The records of the operation's dynamic resources cannot be read.
+    Unreadable(String),
+    /// A dynamic resource is not yet torn down.
+    NotTornDown(String),
+}
+
 /// Pacing for the end-of-operation cleanup's looks at its dynamic resources,
-/// and its report once they have taken too long.
+/// and the fault it holds while they are stalled.
 struct CleanupPace<'a> {
+    state: &'a OiState,
+    app: &'a AppName,
     operation_id: &'a str,
     started: tokio::time::Instant,
-    reported: bool,
 }
 
 impl CleanupPace<'_> {
-    /// Wait before the next look, after one that found `why` in the way.
+    /// Hold `operation_cleanup_stalled` while `blocker` stands, if it is one
+    /// that stalls the cleanup now.
+    // spec: OPS#completion
+    // spec: FLT#app-faults
+    fn note(&self, blocker: &CleanupBlocker) {
+        let why = match blocker {
+            CleanupBlocker::Unreadable(why) => why.clone(),
+            CleanupBlocker::NotTornDown(why) if self.started.elapsed() >= CLEANUP_STALL_AFTER => {
+                why.clone()
+            }
+            CleanupBlocker::NotTornDown(why) => {
+                tracing::debug!(operation_id = %self.operation_id, "dynamic cleanup waiting: {why}");
+                return;
+            }
+        };
+        let (app, operation_id) = (self.app.clone(), self.operation_id.to_owned());
+        self.state.db.call(move |db| {
+            crate::runtime::faults::hold_operation_cleanup_stalled(db, &app, &operation_id, &why);
+        });
+    }
+
+    /// Hold the fault `blocker` calls for, then wait before the next look.
     ///
     /// The back-off is [`dynamic_poll_interval`] over the time spent so far:
     /// two seconds at first, ramping to its cap. Every failure here, a read
     /// or a probe, is taken as transient: nothing gives the cleanup up.
-    async fn wait(&mut self, why: &str) {
-        let waited = self.started.elapsed();
-        if waited >= CLEANUP_STALL_AFTER && !self.reported {
-            tracing::error!(
-                operation_id = %self.operation_id,
-                waited_secs = waited.as_secs(),
-                "the operation's dynamic resources are not yet torn down; still trying: {why}"
-            );
-            self.reported = true;
-        } else {
-            tracing::debug!(operation_id = %self.operation_id, "dynamic cleanup waiting: {why}");
-        }
-        tokio::time::sleep(dynamic_poll_interval(waited.as_secs())).await;
+    async fn wait(&self, blocker: CleanupBlocker) {
+        self.note(&blocker);
+        tokio::time::sleep(dynamic_poll_interval(self.started.elapsed().as_secs())).await;
     }
 }
 
@@ -780,6 +800,7 @@ impl CleanupPace<'_> {
 // spec: OPS#cancellation
 async fn cleanup_dynamic_resources(
     state: &OiState,
+    app_name: &AppName,
     operation_id_str: &str,
     active_progress: &RwLock<Option<OperationProgress>>,
     tick_notify: &Notify,
@@ -792,10 +813,11 @@ async fn cleanup_dynamic_resources(
     use crate::runtime::history::read_lifecycle;
     use crate::runtime::identity::{InstanceId, InstanceVariant, ResourceInstance};
 
-    let mut pace = CleanupPace {
+    let pace = CleanupPace {
+        state,
+        app: app_name,
         operation_id: operation_id_str,
         started: tokio::time::Instant::now(),
-        reported: false,
     };
 
     let dynamic_records = loop {
@@ -810,7 +832,10 @@ async fn cleanup_dynamic_resources(
                     operation_id = %operation_id_str,
                     "could not read the operation's dynamic resources: {e}"
                 );
-                pace.wait(&format!("the records cannot be read: {e}")).await;
+                pace.wait(CleanupBlocker::Unreadable(format!(
+                    "the records cannot be read: {e}"
+                )))
+                .await;
             }
         }
     };
@@ -819,6 +844,9 @@ async fn cleanup_dynamic_resources(
     // The records whose resources this cleanup tears down, or that have
     // nothing to tear down.
     let mut handled: Vec<(AppName, String)> = Vec::new();
+    // A record whose instance cannot be read is kept, and its resource cannot
+    // be torn down from it.
+    let mut unreadable: Option<String> = None;
     for record in &dynamic_records {
         let kind = match record.kind.as_str() {
             "Deployment" => ResourceKind::Deployment,
@@ -836,6 +864,10 @@ async fn cleanup_dynamic_resources(
                 operation_id = %operation_id_str,
                 "dynamic cleanup: the recorded instance id does not parse; keeping its record"
             );
+            unreadable = Some(format!(
+                "the recorded instance id {:?} does not parse",
+                record.instance_id
+            ));
             continue;
         };
         let instance = ResourceInstance {
@@ -905,7 +937,7 @@ async fn cleanup_dynamic_resources(
             let Some(why) = waiting_on else {
                 break;
             };
-            pace.wait(&why).await;
+            pace.wait(CleanupBlocker::NotTornDown(why)).await;
             tick_notify.notify_one();
         }
     }
@@ -915,6 +947,17 @@ async fn cleanup_dynamic_resources(
     // tore down. Without this, faults filed against short-lived Job
     // instances (image_pull_failed, container_start_failed, …) persist
     // forever because the instance id they reference has gone away.
+    // spec: OPS#completion
+    // spec: FLT#app-faults
+    match unreadable {
+        Some(why) => pace.note(&CleanupBlocker::Unreadable(why)),
+        None => {
+            let (app, operation_id) = (app_name.clone(), operation_id_str.to_owned());
+            state.db.call(move |db| {
+                faults::clear_operation_cleanup_stalled(db, &app, &operation_id);
+            });
+        }
+    }
     state.db.call(move |db| {
         for (app, instance_id) in &handled {
             if let Err(e) = faults::clear_faults_for_instance(db, app, instance_id) {
@@ -1188,7 +1231,14 @@ pub fn spawn_accepted_operation(
             .unwrap_or(false)
         };
 
-        cleanup_dynamic_resources(&state, &operation_id_str, &active_progress, &tick_notify).await;
+        cleanup_dynamic_resources(
+            &state,
+            &app_name,
+            &operation_id_str,
+            &active_progress,
+            &tick_notify,
+        )
+        .await;
 
         // spec: RCN#desired-state
         // The start action has ended, however it ended. Released while the

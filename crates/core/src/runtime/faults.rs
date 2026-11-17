@@ -408,6 +408,55 @@ pub fn count_active_faults_for_app(
     )
 }
 
+/// The fault held against an app while an ended operation's dynamic resources
+/// are not all torn down a minute after the cleanup began, or while their
+/// records cannot be read. Its subject is the operation.
+// spec: FLT#app-faults
+pub const OPERATION_CLEANUP_STALLED: &str = "operation_cleanup_stalled";
+
+/// Hold [`OPERATION_CLEANUP_STALLED`] for `operation_id` of `app`, logging an
+/// error when it is newly filed.
+// spec: FLT#app-faults
+// spec: OPS#completion
+pub fn hold_operation_cleanup_stalled(
+    db: &crate::runtime::db::Db,
+    app: &AppName,
+    operation_id: &str,
+    why: &str,
+) {
+    let key = FaultKey::new(app, OPERATION_CLEANUP_STALLED, operation_id);
+    let description =
+        format!("the dynamic resources of operation {operation_id} are not torn down: {why}");
+    match file_once(db, &key, &FaultMeta::default(), &description) {
+        Ok(true) => tracing::error!(
+            %app,
+            operation_id,
+            "the operation's dynamic resources are not torn down; still trying: {why}"
+        ),
+        Ok(false) => {}
+        Err(e) => tracing::error!(
+            %app,
+            operation_id,
+            "could not file {OPERATION_CLEANUP_STALLED} ({why}): {e}"
+        ),
+    }
+}
+
+/// Clear [`OPERATION_CLEANUP_STALLED`] for `operation_id` of `app`, once every
+/// dynamic resource of the operation is torn down.
+// spec: FLT#app-faults
+// spec: OPS#completion
+pub fn clear_operation_cleanup_stalled(
+    db: &crate::runtime::db::Db,
+    app: &AppName,
+    operation_id: &str,
+) {
+    let key = FaultKey::new(app, OPERATION_CLEANUP_STALLED, operation_id);
+    if let Err(e) = clear_fault_by_key(db, &key) {
+        tracing::warn!(%app, operation_id, "could not clear {OPERATION_CLEANUP_STALLED}: {e}");
+    }
+}
+
 /// The kinds of fault under which the runtime stops acting on the fault's
 /// subject until it clears.
 // spec: FLT#withholding-faults

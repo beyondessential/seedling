@@ -195,6 +195,7 @@ Each is done once, in whichever issue is worked first, and the later issue notes
 
 - [x] Anonymous volume names carry the whole operation ID, so no two operations name one alike; the startup sweep that removed every volume by name prefix is gone, since each anonymous volume is recorded before it is created and removed by its instance's stop.
 - [x] Teardown waits while the app still has anonymous-volume records, so a failed removal is retried rather than forgotten.
-- [x] Dynamic-resource cleanup at the end of an operation treats an unreadable list as an error and keeps trying at a capped back-off instead of giving up after a minute; no fault kind in the catalogue fits its stall, so it logs an error (spec decision needed).
+- [x] Dynamic-resource cleanup at the end of an operation treats an unreadable list as an error and keeps trying at a capped back-off instead of giving up after a minute.
 - [x] `rt.start` fails when the dynamic resource cannot be recorded, rather than starting something nothing knows of.
 - [x] The unused `deregistering` error code and app status are removed.
+- [x] `operation_cleanup_stalled` is held while an ended operation's dynamic resources are not torn down a minute on, or their records cannot be read, at the end of an operation and for those startup tears down, which now goes on tearing down in the background.
