@@ -179,11 +179,14 @@ pub(super) fn build_ingress_rules(
         let caddy_v4_addr = caddy_v4.map(|ip| SocketAddr::new(IpAddr::V4(ip), def.port.get()));
 
         // spec: PRX#plaintext-ingresses
-        // Forward only the transports the ingress actually serves. UDP is
-        // needed for DTLS, and for HTTP/3 on an HTTPS ingress; a plaintext
-        // HTTP ingress serves neither, so it forwards TCP only.
+        // spec: INFRA#ingress-redirection
+        // Forward only the transports the ingress actually serves. A DTLS
+        // ingress serves UDP alone; an HTTPS ingress serves HTTP/3 over UDP
+        // as well as TCP; a plaintext HTTP ingress, and any other, TCP alone.
         let serves_quic = def.tls && def.http_terminate.is_some();
-        let proto = if def.dtls || serves_quic {
+        let proto = if def.dtls {
+            ForwardProto::Udp
+        } else if serves_quic {
             ForwardProto::Both
         } else {
             ForwardProto::Tcp
@@ -943,5 +946,17 @@ mod tests {
             vec![ForwardProto::Tcp],
             "a plaintext HTTP ingress serves no UDP, so none should be forwarded"
         );
+    }
+
+    // spec: INFRA#ingress-redirection
+    #[test]
+    fn a_dtls_ingress_redirects_udp_alone() {
+        let def = appdef_from(
+            r#"
+            let svc = app.service("voip");
+            svc.ingress("voip.example.com", 5684).tls(Terminate.Dtls, Output.Udp);
+        "#,
+        );
+        assert_eq!(ingress_protos(&def), vec![ForwardProto::Udp]);
     }
 }
