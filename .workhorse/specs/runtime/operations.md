@@ -79,7 +79,7 @@ The runtime MUST NOT admit another operation for the app after the change is com
 
 ## Completion
 
-When an operation ends, the runtime MUST return the app's [desired state](reconciliation.md#desired-state) to the whole resource graph at the app's current generation, and maintain it without direction.
+When an operation ends, the runtime MUST return the app's [desired state](reconciliation.md#desired-state) to the whole resource graph at the app's current generation, apart from its [held resources](#held-resources), and maintain it without direction.
 
 Where a generation bump initiated the operation, the runtime MUST record the operation's outcome on that generation's [history entry](generation.md#history-entries).
 
@@ -88,6 +88,29 @@ When an operation fails, the runtime MUST file an [`operation_failed`](faults.md
 The runtime MUST keep tearing down an ended operation's [dynamic resources](../language/app.md#dynamic-resource-lifetime), retrying with a growing delay, until every one of them is gone.
 It MUST forget a dynamic resource's record only once that resource is torn down.
 While they are not all gone a minute after the operation ends, or while their records cannot be read, the runtime MUST hold an [`operation_cleanup_stalled`](faults.md#app-faults) fault.
+
+## Held resources
+
+A held resource is one the runtime keeps as an operation left it, apart from the resource graph, because the operation ended other than in success while the resource was under a [guard](../language/rt.md#guarding-resources).
+
+When an operation ends other than in success, the runtime MUST hold every resource under a guard still standing.
+This includes an operation that fails, one that is [cancelled](#cancellation), one whose evaluation reaches an [engine limit](engine-limits.md), and an [interrupted operation](#interrupted-operations) that the runtime does not replay.
+When an operation succeeds, every guard still standing closes, and the runtime MUST NOT hold the resources it guarded.
+
+The runtime MUST persist a guard durably before `rt.guard` returns, and the guard's closing before `guard.release()` returns.
+If the runtime cannot persist a guard or its closing, the call MUST throw.
+
+The runtime MUST hold a resource in the state the operation left it in:
+
+- a resource with no running instance is held `Unscheduled`;
+- a resource with running instances is held at those instances, each keeping the specification it was last started with.
+
+The runtime MUST maintain a held resource in its held state without direction, as for steady-state desired state, and MUST NOT rotate, scale or replace a held instance with another specification.
+The runtime MUST keep a resource held across a runtime restart, starting its held instances again with the specification each holds.
+
+> [!NOTE]
+> An upgrade that fails after stopping the app's workloads leaves them stopped, so the new release does not start against data it was never prepared for.
+> One that fails before stopping them leaves the old release serving, so the new release does not roll out in its place.
 
 ## Persistence
 

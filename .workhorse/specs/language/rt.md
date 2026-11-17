@@ -58,6 +58,17 @@ Every other resource MUST resolve to its one instance.
 If the deadline passes first, `rt.stop` MUST throw.
 While it waits, the action closure is suspended as [suspension](../runtime/suspension.md#rtstop) specifies.
 
+### Guarding resources
+
+`rt.guard(selection)` MUST place every resource of the selection under a guard, and returns a [`Guard`](#guard) over those resources.
+A guard stands from the call until the closure [releases](#guard) it or the operation ends.
+If the operation ends other than in success while a guard stands, the runtime MUST hold the guarded resources as [held resources](../runtime/operations.md#held-resources) specifies.
+`rt.guard` MUST NOT change the app's desired state, and the closure MUST be able to start and stop a guarded resource as any other.
+
+> [!NOTE]
+> A closure guards the resources a risky step could leave unsafe, before that step.
+> If the step throws, the resources stay as the closure left them, instead of returning to the resource graph of a generation the step did not finish preparing for.
+
 ### Querying resources
 
 `rt.query(selection)` returns a `Started` over the selection's resources, and MUST NOT change the desired state.
@@ -210,6 +221,14 @@ A deployment or job instance succeeded if its most recent run exited with status
 If the runtime did not observe that run's exit status, the run succeeded only if the host's process supervisor reported it as succeeded.
 An instance of any other resource succeeded once it reached Terminated or Unscheduled.
 An instance whose outcome the runtime cannot determine MUST count as not having succeeded.
+
+### Guard
+
+A `Guard` is an opaque value standing for one [`rt.guard`](#guarding-resources) call's guard.
+
+`guard.release()` MUST close the guard, and returns no value.
+Releasing a guard that has already closed MUST change nothing.
+Closing a guard MUST NOT change the app's desired state.
 
 ### Executed
 
