@@ -15,7 +15,7 @@ What remains is DTLS, whose datagrams reach the Service still encrypted.
 - Removing `Terminate.Dtls` from the language until a terminator exists.
 
 - Sessions are capped by the proxy's source ports toward one Service (one address, so one port per session). That cap is shared with every L4 ingress already, and sits far above what one site's clients need, so the proxy stays single-address. A wider port range in the proxy's namespace, or more proxy source addresses, are the levers if a host ever needs more.
-- Whether the Service sees the client's address is not this card's: it is left to PROXY protocol work.
+- Whether the Service sees the client's address is not this card's: L6 covers passing it outbound, alongside A2's inbound recovery.
 
 ## Open
 
