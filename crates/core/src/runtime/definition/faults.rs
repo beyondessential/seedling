@@ -94,24 +94,69 @@ pub struct Moved {
 /// unreachable registry shows neither that the tag moved nor that it did not.
 // spec: FLT#app-faults
 pub fn sync_source_moved(db: &Db, app: &AppName, moved: Option<Moved>) {
+    // spec: FLT#app-faults
+    // The fault is the app's, with no subject. A tag moving again keeps the
+    // fault and brings its description up to the digest it now names.
+    let key = FaultKey::app_wide(app, SOURCE_MOVED);
     let mut current = BTreeMap::new();
-    if let Some(m) = moved {
-        let description = format!(
+    let description = moved.map(|m| {
+        format!(
             "{} now selects {}, but the app runs {}",
             m.reference, m.selected, m.running
-        );
-        // The subject is the new digest, so a tag moving again replaces the
-        // fault rather than leaving it describing a digest it no longer names.
-        current.insert(
-            FaultKey::new(app, SOURCE_MOVED, m.selected),
-            (FaultMeta::default(), description),
-        );
+        )
+    });
+    if let Some(description) = &description {
+        current.insert(key.clone(), (FaultMeta::default(), description.clone()));
     }
-    if let Err(e) = faults::sync_faults(
+    let synced = faults::sync_faults(
         db,
         &FaultScope::AppKind(app.clone(), SOURCE_MOVED.into()),
         &current,
-    ) {
+    )
+    .and_then(|_| match &description {
+        Some(description) => faults::update_description(db, &key, description).map(|_| ()),
+        None => Ok(()),
+    });
+    if let Err(e) = synced {
         tracing::error!(app = %app, "could not sync {SOURCE_MOVED} fault: {e}");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn moved(selected: &str) -> Option<Moved> {
+        Some(Moved {
+            reference: "registry.example/app:stable".to_owned(),
+            running: "sha256:aaaa".to_owned(),
+            selected: selected.to_owned(),
+        })
+    }
+
+    fn active(db: &Db, app: &AppName) -> Vec<(String, String)> {
+        faults::list_active_faults(db, Some(app))
+            .unwrap()
+            .into_iter()
+            .filter(|f| f.kind == SOURCE_MOVED)
+            .map(|f| (f.subject, f.description))
+            .collect()
+    }
+
+    // spec: FLT#app-faults
+    #[test]
+    fn a_moved_source_is_one_app_fault_kept_up_to_the_digest_it_selects() {
+        let db = Db::open_in_memory().unwrap();
+        let app = AppName::new_unchecked("demo");
+
+        sync_source_moved(&db, &app, moved("sha256:bbbb"));
+        sync_source_moved(&db, &app, moved("sha256:cccc"));
+        let faults = active(&db, &app);
+        assert_eq!(faults.len(), 1, "{faults:?}");
+        assert_eq!(faults[0].0, "", "the fault has no subject");
+        assert!(faults[0].1.contains("sha256:cccc"), "{faults:?}");
+
+        sync_source_moved(&db, &app, None);
+        assert!(active(&db, &app).is_empty());
     }
 }
