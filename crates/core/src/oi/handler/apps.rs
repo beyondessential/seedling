@@ -1821,8 +1821,8 @@ pub(crate) fn update_app(
         .def
         .load()
         .resources
-        .iter()
-        .map(|(id, _)| (id.kind, id.name.as_str().to_owned()))
+        .keys()
+        .map(|id| (id.kind, id.name.as_str().to_owned()))
         .collect();
     let generation = state
         .db
