@@ -408,15 +408,6 @@ pub fn delete_dynamic_resource(db: &Db, instance_id: &str) -> rusqlite::Result<(
     Ok(())
 }
 
-/// Remove all dynamic resources for an operation.
-pub fn delete_dynamic_resources_for_operation(db: &Db, operation_id: &str) -> rusqlite::Result<()> {
-    db.conn.execute(
-        "DELETE FROM dynamic_resources WHERE operation_id = ?1",
-        [operation_id],
-    )?;
-    Ok(())
-}
-
 /// Load all dynamic resource records (e.g., for startup orphan cleanup).
 pub fn list_dynamic_resources(db: &Db) -> rusqlite::Result<Vec<DynamicResourceRecord>> {
     let mut stmt = db.conn.prepare(

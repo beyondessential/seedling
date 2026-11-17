@@ -1086,6 +1086,7 @@ fn dynamic_resource_records_round_trip_in_db() {
             .is_empty()
     );
 
-    delete_dynamic_resources_for_operation(&db, "op-2").expect("delete op");
-    assert!(list_dynamic_resources(&db).expect("list all").is_empty());
+    let for_op = list_dynamic_resources_for_operation(&db, "op-2").expect("list op");
+    assert_eq!(for_op.len(), 1);
+    assert_eq!(for_op[0].instance_id, inst_b.id.to_hex());
 }

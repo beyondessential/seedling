@@ -405,3 +405,134 @@ fn a_replayed_operation_binds_its_volumes_under_their_persisted_names() {
         "replayed"
     );
 }
+
+/// An operation's anonymous Job, recorded as a dynamic resource of it, whose
+/// container has run and been removed on exit.
+fn recorded_dynamic_job(
+    oi: &crate::oi::test_support::TestOi,
+    operation_id: &str,
+) -> crate::runtime::identity::ResourceInstance {
+    let job = crate::runtime::identity::ResourceInstance::new_anonymous(
+        AppName::new("app").unwrap(),
+        crate::defs::resource::ResourceKind::Job,
+    );
+    let (recorded, operation_id) = (job.clone(), operation_id.to_owned());
+    oi.state.db.call(move |db| {
+        crate::runtime::desired::insert_dynamic_resource(db, &recorded, &operation_id, None)
+            .unwrap();
+        for kind in ["container_running", "container_exited", "container_removed"] {
+            crate::runtime::history::insert_observation(
+                db,
+                &recorded,
+                kind,
+                &serde_json::json!({}),
+            )
+            .unwrap();
+        }
+    });
+    job
+}
+
+fn dynamic_records(oi: &crate::oi::test_support::TestOi, operation_id: &str) -> usize {
+    let operation_id = operation_id.to_owned();
+    oi.state.db.call(move |db| {
+        crate::runtime::desired::list_dynamic_resources_for_operation(db, &operation_id)
+            .unwrap()
+            .len()
+    })
+}
+
+fn rename_table(oi: &crate::oi::test_support::TestOi, from: &'static str, to: &'static str) {
+    oi.state.db.call(move |db| {
+        db.conn
+            .execute(&format!("ALTER TABLE {from} RENAME TO {to}"), [])
+            .unwrap();
+    });
+}
+
+/// Run `body` on a runtime whose clock moves only when every task is idle,
+/// so the cleanup's waits pass at once.
+fn with_paused_clock<F: std::future::Future>(body: F) -> F::Output {
+    tokio::runtime::Builder::new_current_thread()
+        .enable_time()
+        .start_paused(true)
+        .build()
+        .unwrap()
+        .block_on(body)
+}
+
+const TEN_MINUTES: std::time::Duration = std::time::Duration::from_secs(600);
+
+// spec: APP#dynamic-resource-lifetime
+// The records were read with `unwrap_or_default`, so a read that failed was
+// nothing to clean up: the cleanup ended at once and the resources stayed
+// with nothing tearing them down.
+#[test]
+fn a_dynamic_resource_list_that_cannot_be_read_is_not_nothing_to_clean_up() {
+    let oi = crate::oi::test_support::TestOi::new();
+    recorded_dynamic_job(&oi, "op-1");
+    rename_table(&oi, "dynamic_resources", "hidden_dynamic_resources");
+    let progress = RwLock::new(None);
+    let notify = Notify::new();
+
+    with_paused_clock(async {
+        let cleanup = super::cleanup_dynamic_resources(&oi.state, "op-1", &progress, &notify);
+        tokio::pin!(cleanup);
+        tokio::select! {
+            () = &mut cleanup => panic!("the cleanup ended without reading its records"),
+            () = tokio::time::sleep(TEN_MINUTES) => {}
+        }
+
+        rename_table(&oi, "hidden_dynamic_resources", "dynamic_resources");
+        tokio::time::timeout(TEN_MINUTES, cleanup)
+            .await
+            .expect("the cleanup ends once its records are read and torn down");
+    });
+    assert_eq!(dynamic_records(&oi, "op-1"), 0);
+}
+
+// spec: APP#dynamic-resource-lifetime
+// The cleanup gave up after a minute and forgot the records of resources it
+// had not seen torn down.
+#[test]
+fn the_cleanup_does_not_give_up_on_a_resource_that_is_slow_to_go() {
+    let oi = crate::oi::test_support::TestOi::new();
+    let job = recorded_dynamic_job(&oi, "op-1");
+    let network = format!("seedling-{}", job.display_name);
+    oi.block_on(oi.state.driver.container.create_network(
+        &network,
+        "fd00:0:0:1::/64".parse().unwrap(),
+        None,
+    ))
+    .unwrap();
+    let progress = RwLock::new(None);
+    let notify = Notify::new();
+
+    with_paused_clock(async {
+        let cleanup = super::cleanup_dynamic_resources(&oi.state, "op-1", &progress, &notify);
+        tokio::pin!(cleanup);
+        tokio::select! {
+            () = &mut cleanup => panic!("the cleanup gave up while the network stood"),
+            () = tokio::time::sleep(TEN_MINUTES) => {}
+        }
+        assert_eq!(dynamic_records(&oi, "op-1"), 1, "the record is kept");
+        assert!(
+            progress
+                .read()
+                .as_ref()
+                .is_some_and(|p| p.dynamic_defs.contains_key(&job)),
+            "the job is still being torn down"
+        );
+
+        oi.state
+            .driver
+            .container
+            .remove_network(&network)
+            .await
+            .unwrap();
+        tokio::time::timeout(TEN_MINUTES, cleanup)
+            .await
+            .expect("the cleanup ends once the network is gone");
+    });
+    assert_eq!(dynamic_records(&oi, "op-1"), 0);
+}

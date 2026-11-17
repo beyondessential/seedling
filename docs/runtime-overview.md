@@ -112,6 +112,10 @@ Lifecycle operations are initiated by external events:
 
 See the scheduling rules above for how concurrent requests are handled.
 
+When an operation ends, the runtime tears down the dynamic resources its closure created before the app's operation slot is freed.
+It waits for each to be torn down for as long as that takes, looking again at a back-off that ramps from two seconds to five minutes, and logs an error if they are not all gone after a minute.
+A dynamic resource record is forgotten only once its resource is gone; one that cannot be read keeps the cleanup waiting rather than reading as nothing to clean up.
+
 ### Action Composition
 
 An action closure may invoke another action by getting an `Action` handle — either the return of `app.on_action(...)` / `app.on_start(...)` or a fresh lookup via `app.action(name)` in dynamic context — and calling `Action.invoke(params?)` on it. Validation runs against the called action's declared schema before the closure executes, with the same rules an operator-driven invocation gets: required-field enforcement, default application, reserved-key rejection, and `kind: "volume"` resolution.

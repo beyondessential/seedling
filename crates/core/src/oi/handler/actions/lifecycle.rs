@@ -733,6 +733,51 @@ pub(crate) fn dynamic_poll_interval(waited_secs: u64) -> Duration {
     Duration::from_secs(poll)
 }
 
+/// How long the end-of-operation cleanup waits for its dynamic resources
+/// before it reports, as an error, that they are not yet torn down. It goes
+/// on waiting.
+const CLEANUP_STALL_AFTER: Duration = Duration::from_secs(60);
+
+/// Pacing for the end-of-operation cleanup's looks at its dynamic resources,
+/// and its report once they have taken too long.
+struct CleanupPace<'a> {
+    operation_id: &'a str,
+    started: tokio::time::Instant,
+    reported: bool,
+}
+
+impl CleanupPace<'_> {
+    /// Wait before the next look, after one that found `why` in the way.
+    ///
+    /// The back-off is [`dynamic_poll_interval`] over the time spent so far:
+    /// two seconds at first, ramping to its cap. Every failure here, a read
+    /// or a probe, is taken as transient: nothing gives the cleanup up.
+    async fn wait(&mut self, why: &str) {
+        let waited = self.started.elapsed();
+        if waited >= CLEANUP_STALL_AFTER && !self.reported {
+            tracing::error!(
+                operation_id = %self.operation_id,
+                waited_secs = waited.as_secs(),
+                "the operation's dynamic resources are not yet torn down; still trying: {why}"
+            );
+            self.reported = true;
+        } else {
+            tracing::debug!(operation_id = %self.operation_id, "dynamic cleanup waiting: {why}");
+        }
+        tokio::time::sleep(dynamic_poll_interval(waited.as_secs())).await;
+    }
+}
+
+/// Tear down the dynamic resources recorded against an operation that has
+/// ended, and forget their records once they are gone.
+///
+/// The records are the only thing that knows the resources exist, so neither
+/// a record that cannot be read nor a teardown that is taking long ends the
+/// cleanup: it keeps looking at a capped back-off until they are gone. A
+/// record naming no instance that can be torn down is kept, as the startup
+/// teardown keeps it.
+// spec: APP#dynamic-resource-lifetime
+// spec: OPS#cancellation
 async fn cleanup_dynamic_resources(
     state: &OiState,
     operation_id_str: &str,
@@ -742,123 +787,126 @@ async fn cleanup_dynamic_resources(
     use crate::defs::resource::ResourceKind;
     use crate::runtime::LifecycleState;
     use crate::runtime::desired::{
-        delete_dynamic_resources_for_operation, list_dynamic_resources, undeclared_pod,
+        delete_dynamic_resource, list_dynamic_resources_for_operation, undeclared_pod,
     };
     use crate::runtime::history::read_lifecycle;
     use crate::runtime::identity::{InstanceId, InstanceVariant, ResourceInstance};
 
-    let op_id_for_filter = operation_id_str.to_owned();
-    let dynamic_records: Vec<_> = state
-        .db
-        .call(move |db| list_dynamic_resources(db).unwrap_or_default())
-        .into_iter()
-        .filter(|r| r.operation_id == op_id_for_filter)
-        .collect();
+    let mut pace = CleanupPace {
+        operation_id: operation_id_str,
+        started: tokio::time::Instant::now(),
+        reported: false,
+    };
 
-    if !dynamic_records.is_empty() {
-        let mut cleanup = OperationProgress::new();
-
-        for record in &dynamic_records {
-            let uuid = match uuid::Uuid::parse_str(&record.instance_id) {
-                Ok(u) => u,
-                Err(e) => {
-                    tracing::warn!(
-                        instance_id = %record.instance_id,
-                        "dynamic cleanup: bad instance_id: {e}"
-                    );
-                    continue;
-                }
-            };
-
-            let kind = match record.kind.as_str() {
-                "Deployment" => ResourceKind::Deployment,
-                "Job" => ResourceKind::Job,
-                _ => continue,
-            };
-
-            let instance = ResourceInstance {
-                id: InstanceId(uuid),
-                app: record.app.clone(),
-                kind,
-                name: None,
-                variant: InstanceVariant::Singleton,
-                display_name: record.display_name.clone(),
-            };
-
-            let Some(minimal) = undeclared_pod(&instance) else {
-                continue;
-            };
-
-            cleanup.stopped(instance.clone());
-            cleanup.dynamic_defs.insert(instance, minimal);
+    let dynamic_records = loop {
+        let operation_id = operation_id_str.to_owned();
+        match state
+            .db
+            .call(move |db| list_dynamic_resources_for_operation(db, &operation_id))
+        {
+            Ok(records) => break records,
+            Err(e) => {
+                tracing::warn!(
+                    operation_id = %operation_id_str,
+                    "could not read the operation's dynamic resources: {e}"
+                );
+                pace.wait(&format!("the records cannot be read: {e}")).await;
+            }
         }
+    };
 
-        if !cleanup.is_empty() {
-            *active_progress.write() = Some(cleanup);
-            tick_notify.notify_one();
+    let mut cleanup = OperationProgress::new();
+    // The records whose resources this cleanup tears down, or that have
+    // nothing to tear down.
+    let mut handled: Vec<(AppName, String)> = Vec::new();
+    for record in &dynamic_records {
+        let kind = match record.kind.as_str() {
+            "Deployment" => ResourceKind::Deployment,
+            "Job" => ResourceKind::Job,
+            // Not a pod: it stops being served when the operation's desired
+            // state no longer holds it.
+            _ => {
+                handled.push((record.app.clone(), record.instance_id.clone()));
+                continue;
+            }
+        };
+        let Some(id) = InstanceId::from_hex(&record.instance_id) else {
+            tracing::error!(
+                instance_id = %record.instance_id,
+                operation_id = %operation_id_str,
+                "dynamic cleanup: the recorded instance id does not parse; keeping its record"
+            );
+            continue;
+        };
+        let instance = ResourceInstance {
+            id,
+            app: record.app.clone(),
+            kind,
+            name: None,
+            variant: InstanceVariant::Singleton,
+            display_name: record.display_name.clone(),
+        };
+        let Some(minimal) = undeclared_pod(&instance) else {
+            continue;
+        };
+        cleanup.stopped(instance.clone());
+        cleanup.dynamic_defs.insert(instance, minimal);
+        handled.push((record.app.clone(), record.instance_id.clone()));
+    }
 
-            let deadline = tokio::time::Instant::now() + Duration::from_secs(60);
-            loop {
-                if tokio::time::Instant::now() >= deadline {
-                    tracing::warn!(
-                        operation_id = %operation_id_str,
-                        "dynamic resource cleanup timed out"
-                    );
-                    break;
-                }
+    if !cleanup.is_empty() {
+        let cleanup_instances: Vec<ResourceInstance> =
+            cleanup.dynamic_defs.keys().cloned().collect();
+        *active_progress.write() = Some(cleanup);
+        tick_notify.notify_one();
 
-                // Collect the instances the reconciler is tearing down. Both
-                // checks below run against this snapshot so we don't hold
-                // the active_progress lock across .await.
-                let cleanup_instances: Vec<ResourceInstance> = {
-                    let guard = active_progress.read();
-                    guard
-                        .as_ref()
-                        .map(|p| p.dynamic_defs.keys().cloned().collect())
-                        .unwrap_or_default()
-                };
-
-                let lifecycles_terminal = cleanup_instances.iter().all(|inst| {
+        loop {
+            let mut waiting_on = None;
+            for inst in &cleanup_instances {
+                let lifecycle = {
                     let inst = inst.clone();
-                    state.db.call(move |db| {
-                        read_lifecycle(db, &inst)
-                            .is_ok_and(|(s, _)| s.has_reached(LifecycleState::Terminated))
-                    })
-                });
-
+                    state.db.call(move |db| read_lifecycle(db, &inst))
+                };
+                match lifecycle {
+                    Ok((s, _)) if s.has_reached(LifecycleState::Terminated) => {}
+                    Ok((s, _)) => {
+                        waiting_on = Some(format!("{} is {s:?}", inst.display_name));
+                        break;
+                    }
+                    Err(e) => {
+                        waiting_on = Some(format!(
+                            "the lifecycle of {} cannot be read: {e}",
+                            inst.display_name
+                        ));
+                        break;
+                    }
+                }
                 // A container with `podman --rm` can reach the Unscheduled
                 // lifecycle state via `container_removed` before the
                 // reconciler has had a chance to remove the pod network.
-                // Breaking out of cleanup at that point leaks the network
-                // and the next Job on the same app trips over "subnet
-                // already used". Require every pod network to also be gone.
-                let mut networks_all_gone = true;
-                for inst in &cleanup_instances {
-                    let net_name = format!("seedling-{}", inst.display_name);
-                    match state.driver.container.network_exists(&net_name).await {
-                        Ok(false) => {}
-                        Ok(true) => {
-                            networks_all_gone = false;
-                            break;
-                        }
-                        Err(e) => {
-                            tracing::warn!(
-                                instance = %inst.display_name,
-                                "network_exists check failed during cleanup; assuming present: {e}"
-                            );
-                            networks_all_gone = false;
-                            break;
-                        }
+                // Ending the cleanup at that point leaks the network and the
+                // next Job on the same app trips over "subnet already used".
+                // Require every pod network to also be gone.
+                let net_name = format!("seedling-{}", inst.display_name);
+                match state.driver.container.network_exists(&net_name).await {
+                    Ok(false) => {}
+                    Ok(true) => {
+                        waiting_on = Some(format!("network {net_name} still exists"));
+                        break;
+                    }
+                    Err(e) => {
+                        waiting_on = Some(format!(
+                            "whether network {net_name} still exists cannot be told: {e}"
+                        ));
+                        break;
                     }
                 }
-
-                if lifecycles_terminal && networks_all_gone {
-                    break;
-                }
-
-                tokio::time::sleep(Duration::from_secs(2)).await;
-                tick_notify.notify_one();
             }
+            let Some(why) = waiting_on else {
+                break;
+            };
+            pace.wait(&why).await;
+            tick_notify.notify_one();
         }
     }
 
@@ -867,13 +915,8 @@ async fn cleanup_dynamic_resources(
     // tore down. Without this, faults filed against short-lived Job
     // instances (image_pull_failed, container_start_failed, …) persist
     // forever because the instance id they reference has gone away.
-    let instance_ids_to_clear: Vec<(AppName, String)> = dynamic_records
-        .iter()
-        .map(|r| (r.app.clone(), r.instance_id.clone()))
-        .collect();
-    let op_id_owned = operation_id_str.to_owned();
     state.db.call(move |db| {
-        for (app, instance_id) in &instance_ids_to_clear {
+        for (app, instance_id) in &handled {
             if let Err(e) = faults::clear_faults_for_instance(db, app, instance_id) {
                 tracing::warn!(
                     app = %app,
@@ -881,12 +924,12 @@ async fn cleanup_dynamic_resources(
                     "failed to clear per-instance faults during dynamic cleanup: {e}"
                 );
             }
-        }
-        if let Err(e) = delete_dynamic_resources_for_operation(db, &op_id_owned) {
-            tracing::error!(
-                operation_id = %op_id_owned,
-                "failed to delete dynamic resource records: {e}"
-            );
+            if let Err(e) = delete_dynamic_resource(db, instance_id) {
+                tracing::error!(
+                    instance_id = %instance_id,
+                    "failed to delete dynamic resource record: {e}"
+                );
+            }
         }
     });
 }
