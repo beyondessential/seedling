@@ -166,12 +166,39 @@ pub(super) fn build(
             service_ip,
             backends: backends.clone(),
         });
+        // spec: LCY#services
+        // Ready while the routing pool of every port the app's pods mount the
+        // external service at has a backend.
+        let ports = external_mount_ports(snapshot, ext_name);
+        let ready = !backends.is_empty()
+            && ports.iter().all(|port| match target {
+                None => false,
+                Some(ServiceRef::App {
+                    app: target_app,
+                    service: target_svc,
+                }) => running_pods_by_app.get(target_app).is_some_and(|pods| {
+                    pods.iter()
+                        .any(|pod| pod_backs_port(pod, target_svc.as_str(), *port))
+                }),
+                Some(ServiceRef::Site { name: site_name }) => ext_snapshot
+                    .site_endpoints
+                    .get(site_name)
+                    .is_some_and(|eps| {
+                        eps.iter().any(|e| {
+                            e.service_port == *port
+                                && matches!(
+                                    resolve_endpoint(&e.remote_host, resolve_ctx),
+                                    ResolveOutcome::Routable(_)
+                                )
+                        })
+                    }),
+            });
         observations.push((
             svc_instance.clone(),
-            if backends.is_empty() {
-                "backend_lost"
-            } else {
+            if ready {
                 "backend_healthy"
+            } else {
+                "backend_lost"
             },
             serde_json::json!({}),
         ));
@@ -244,6 +271,29 @@ fn service_ports(snapshot: &AppDef, service_name: &str) -> std::collections::BTr
     ports
 }
 
+/// The ports the app's pods mount the external service `name` at.
+// spec: LCY#services
+fn external_mount_ports(snapshot: &AppDef, name: &str) -> std::collections::BTreeSet<u16> {
+    let mut ports = std::collections::BTreeSet::new();
+    let mut collect = |pod: &PodDef| {
+        for sp in &pod.service_mounts {
+            if let crate::defs::service::BoundService::External(ext) = &sp.service
+                && ext.name.as_str() == name
+            {
+                ports.insert(sp.port.get());
+            }
+        }
+    };
+    for resource in snapshot.resources.values() {
+        match resource {
+            Resource::Deployment(dep) => collect(&dep.def.lock().pod.lock()),
+            Resource::Job(job) => collect(&job.def.lock().pod.lock()),
+            _ => {}
+        }
+    }
+    ports
+}
+
 fn collect_ports(pod: &PodDef, service_name: &str, ports: &mut std::collections::BTreeSet<u16>) {
     for b in pod
         .tcp_bindings
@@ -287,4 +337,80 @@ fn pod_def_backs_service(pod: &PodDef, service_name: &str) -> bool {
             .http_bindings
             .iter()
             .any(|b| b.route.http.service.name().as_str() == service_name)
+}
+
+#[cfg(test)]
+mod tests {
+    use seedling_protocol::names::SiteServiceName;
+
+    use super::*;
+    use crate::runtime::site_services::{SiteServiceEndpoint, SiteServiceProtocol};
+
+    fn health(endpoint_ports: &[u16]) -> Vec<&'static str> {
+        let app_name = AppName::new_unchecked("demo");
+        let (app, err) = crate::runtime::apps::evaluate_script(
+            &app_name,
+            r#"
+            let db = app.external_service("database");
+            app.deployment("web").image("docker.io/library/nginx:1")
+                .mount(db.port(5432))
+                .mount(db.port(6379));
+            "#,
+            &std::collections::BTreeMap::new(),
+            &crate::ScriptLimits::default(),
+        );
+        assert!(err.is_none(), "{err:?}");
+        let site = SiteServiceName::new_unchecked("shared-db".to_owned());
+        let mut snapshot = ExternalServiceSnapshot::default();
+        snapshot.mappings.insert(
+            (
+                app_name.clone(),
+                ExternalServiceName::new_unchecked("database".to_owned()),
+            ),
+            ServiceRef::Site { name: site.clone() },
+        );
+        snapshot.site_endpoints.insert(
+            site,
+            endpoint_ports
+                .iter()
+                .map(|port| SiteServiceEndpoint {
+                    service_port: *port,
+                    protocol: SiteServiceProtocol::Tcp,
+                    remote_host: "2001:db8::10".to_owned(),
+                    remote_port: *port,
+                })
+                .collect(),
+        );
+        let lookup = crate::runtime::site_services::resolve::EmptyLookup;
+        let (_, observations) = build(
+            &DesiredState::default(),
+            &app.def.load(),
+            &"fd5e:ed11:9000::/48".parse().unwrap(),
+            &crate::runtime::EphemeralInstanceRegistry::new(),
+            &[],
+            &app_name,
+            &HashMap::new(),
+            &snapshot,
+            &ResolveCtx {
+                nat64_active: false,
+                has_ipv6_egress: true,
+                resolver: &lookup,
+            },
+        )
+        .expect("builds");
+        observations
+            .into_iter()
+            .filter(|(i, k, _)| {
+                i.kind == ResourceKind::ExternalService && k.starts_with("backend_")
+            })
+            .map(|(_, k, _)| k)
+            .collect()
+    }
+
+    // spec: LCY#services
+    #[test]
+    fn an_external_service_is_healthy_only_while_every_mounted_port_has_a_backend() {
+        assert_eq!(health(&[5432]), ["backend_lost"]);
+        assert_eq!(health(&[5432, 6379]), ["backend_healthy"]);
+    }
 }
