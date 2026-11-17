@@ -11,7 +11,9 @@ Applies to the BSL `Ingress` type, through which an app exposes one of its servi
 | term | meaning |
 | --- | --- |
 | TLS | Transport Layer Security, as defined by [RFC 9846](https://www.rfc-editor.org/rfc/rfc9846) |
-| DTLS | Datagram Transport Layer Security, as defined by [RFC 9147](https://www.rfc-editor.org/rfc/rfc9147) |
+| DTLS | Datagram Transport Layer Security, in either DTLS 1.2 or DTLS 1.3 |
+| DTLS 1.2 | as defined by [RFC 6347](https://www.rfc-editor.org/rfc/rfc6347) |
+| DTLS 1.3 | as defined by [RFC 9147](https://www.rfc-editor.org/rfc/rfc9147) |
 | HTTPS | HTTP over TLS, as defined by [RFC 9110](https://www.rfc-editor.org/rfc/rfc9110) §4.2.2 |
 | HTTP/1.1 | as defined by [RFC 9112](https://www.rfc-editor.org/rfc/rfc9112) |
 | HTTP/2 | as defined by [RFC 9113](https://www.rfc-editor.org/rfc/rfc9113); in cleartext, started with prior knowledge as in §3.3 |
@@ -88,6 +90,7 @@ Any other pairing MUST throw.
 The error MUST name the pairing supplied and the four valid pairings.
 A second `tls()` call MUST replace the first.
 
+An ingress terminating DTLS MUST accept both DTLS 1.2 and DTLS 1.3.
 An ingress terminating TLS or DTLS MUST NOT interpret the application protocol inside it.
 An ingress with a termination MUST reject traffic that is not of the protocol it accepts.
 
