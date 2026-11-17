@@ -1916,3 +1916,94 @@ fn the_certificate_status_is_the_first_meaning_that_holds() {
         Some(CertStatus::Blocked)
     );
 }
+
+// spec: TLSM#conventions
+#[test]
+fn a_hostname_that_is_not_one_is_refused() {
+    let oi = TestOi::new();
+    for (method, params) in [
+        (
+            "/tls/certificates/issue-acme-dns",
+            json!({ "hostname": "not a host" }),
+        ),
+        (
+            "/tls/certificates/retry",
+            json!({ "hostname": "-bad.example" }),
+        ),
+        ("/tls/retry-blocks/set", json!({ "hostname": "" })),
+        ("/tls/retry-blocks/clear", json!({ "hostname": "1.2.3.4" })),
+    ] {
+        let (code, _) = oi.call(method, params).unwrap_err();
+        assert_eq!(code, "requirements_invalid", "{method}");
+    }
+}
+
+// spec: TLSM#conventions
+// spec: TLSM#retry-blocks
+#[test]
+fn a_retry_block_names_the_managed_hostname_whatever_its_case() {
+    let oi = TestOi::new();
+    tls_app(&oi, UNTYPED_TLS_APP);
+    oi.call(
+        "/tls/retry-blocks/set",
+        json!({ "hostname": "Shop.Example.COM", "reason": "held" }),
+    )
+    .unwrap();
+    let listed = oi.call("/tls/retry-blocks/list", json!({})).unwrap();
+    assert_eq!(listed["blocks"][0]["hostname"], "shop.example.com");
+    assert_eq!(shop_hostname(&oi)["retry_block"]["reason"], "held");
+
+    let cleared = oi
+        .call(
+            "/tls/retry-blocks/clear",
+            json!({ "hostname": "SHOP.example.com" }),
+        )
+        .unwrap();
+    assert_eq!(cleared["cleared"], true);
+}
+
+// spec: TLSM#operator-driven-issuance
+#[test]
+fn issue_acme_dns_is_refused_for_a_hostname_that_takes_a_tailscale_certificate() {
+    use crate::runtime::site_ingresses::{
+        self, DiscoveryProvider, SiteIngressDef, SiteIngressSource, TlsProvider,
+    };
+
+    let oi = TestOi::new();
+    oi.state.db.call(|db| {
+        site_ingresses::create(
+            db,
+            &SiteIngressDef {
+                name: seedling_protocol::names::SiteIngressName::new("ts-node").unwrap(),
+                hostname: "node.tailnet.ts.net".to_owned(),
+                description: None,
+                source: SiteIngressSource::Discovered {
+                    provider: DiscoveryProvider::Tailscale,
+                    key: "node".to_owned(),
+                },
+                tls_provider: TlsProvider::Tailscale,
+                stale: false,
+                created_at: "2026-01-01T00:00:00Z".to_owned(),
+            },
+        )
+        .unwrap()
+    });
+    let (code, msg) = oi
+        .call(
+            "/tls/certificates/issue-acme-dns",
+            json!({ "hostname": "node.tailnet.ts.net" }),
+        )
+        .unwrap_err();
+    assert_eq!(code, "requirements_invalid");
+    assert!(msg.contains("Tailscale"), "{msg}");
+}
+
+// spec: TLSM#hostname-view
+#[test]
+fn the_hostname_view_of_an_unregistered_app_is_not_found() {
+    let oi = TestOi::new();
+    let (code, _) = oi
+        .call("/tls/hostnames/list", json!({ "app": "ghost" }))
+        .unwrap_err();
+    assert_eq!(code, "not_found");
+}

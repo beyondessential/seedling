@@ -374,7 +374,7 @@ pub(crate) struct IssueAcmeDnsParams {
 // spec: TLSM#operator-driven-issuance
 pub(crate) fn issue_acme_dns(state: &OiState, params: IssueAcmeDnsParams) -> HandlerResult {
     let coord = Arc::clone(&state.tls_coordinator);
-    let hostname = params.hostname;
+    let hostname = request_hostname(state, params.hostname)?;
     let result = tokio::task::block_in_place(|| {
         tokio::runtime::Handle::current().block_on(async move { coord.issue_now(&hostname).await })
     });
@@ -388,9 +388,10 @@ pub(crate) fn issue_acme_dns(state: &OiState, params: IssueAcmeDnsParams) -> Han
             let code = match e {
                 // spec: TLSM#operator-driven-issuance
                 // The request could not proceed as asked; nothing failed.
-                E::NoPolicy { .. } | E::Paused { .. } | E::NoContactEmail => {
-                    ErrorCode::RequirementsInvalid
-                }
+                E::NoPolicy { .. }
+                | E::Paused { .. }
+                | E::NoContactEmail
+                | E::TakesTailscale { .. } => ErrorCode::RequirementsInvalid,
                 // spec: TLS#issuance
                 E::IssuanceRunning { .. } => ErrorCode::OperationInProgress,
                 _ => ErrorCode::Internal,
@@ -957,6 +958,27 @@ pub(crate) fn csr_cancel(state: &OiState, params: CertIdParams) -> HandlerResult
 /// and to an operator retry: without this they would all go on acting on the
 /// world as it was before the write.
 // spec: CHAIN#cycles
+/// The hostname a request names, checked to be a hostname, and spelt as the
+/// managed hostname it matches ignoring ASCII case, where it matches one.
+// spec: TLSM#conventions
+fn request_hostname(state: &OiState, hostname: String) -> Result<String, OiError> {
+    if !super::is_valid_dns_name(&hostname) {
+        return Err(OiError::new(
+            ErrorCode::RequirementsInvalid,
+            format!("{hostname:?} is not a hostname"),
+        ));
+    }
+    let managed = {
+        let reg = state.registry.read();
+        state::managed_ingresses(&reg)
+    };
+    Ok(managed
+        .into_iter()
+        .map(|m| m.hostname)
+        .find(|m| m.eq_ignore_ascii_case(&hostname))
+        .unwrap_or(hostname))
+}
+
 fn decisions_have_moved(state: &OiState) {
     state.tls_coordinator.forget_chain_state();
 }
@@ -978,7 +1000,7 @@ pub(crate) struct RetryParams {
 /// the force-retry row stays in the DB until consumed.
 // spec: TLSM#operator-driven-issuance
 pub(crate) fn retry(state: &OiState, params: RetryParams) -> HandlerResult {
-    let RetryParams { hostname } = params;
+    let hostname = request_hostname(state, params.hostname)?;
     let host_for_db = hostname.clone();
     state
         .db
@@ -1013,6 +1035,11 @@ pub(crate) struct ListHostnamesParams {
 // spec: TLSM#hostname-view
 // spec: TLS#hostname-state
 pub(crate) fn list_hostnames(state: &OiState, params: ListHostnamesParams) -> HandlerResult {
+    if let Some(app) = params.app.as_deref()
+        && !state.registry.read().is_registered(app)
+    {
+        return Err(OiError::not_found(format!("app not found: {app}")));
+    }
     // Use the same managed-ingresses enumeration the issuance
     // coordinator and expiry sweep consume, so the rollup cannot
     // disagree with them about which hostnames the runtime is
@@ -1378,6 +1405,7 @@ pub(crate) struct SetRetryBlockParams {
 // spec: TLSM#retry-blocks
 pub(crate) fn set_retry_block(state: &OiState, params: SetRetryBlockParams) -> HandlerResult {
     let SetRetryBlockParams { hostname, reason } = params;
+    let hostname = request_hostname(state, hostname)?;
     state
         .db
         .call(move |db| {
@@ -1389,7 +1417,7 @@ pub(crate) fn set_retry_block(state: &OiState, params: SetRetryBlockParams) -> H
 
 // spec: TLSM#retry-blocks
 pub(crate) fn clear_retry_block(state: &OiState, params: HostnameParams) -> HandlerResult {
-    let HostnameParams { hostname } = params;
+    let hostname = request_hostname(state, params.hostname)?;
     let cleared = state
         .db
         .call(move |db| store::clear_retry_block(db, &hostname))

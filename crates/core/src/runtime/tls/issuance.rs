@@ -71,6 +71,11 @@ pub enum CoordinatorError {
     #[snafu(display("an issuance for {hostname} is already running"))]
     IssuanceRunning { hostname: String },
 
+    #[snafu(display(
+        "{hostname} takes a Tailscale certificate, which is not issued over ACME DNS-01"
+    ))]
+    TakesTailscale { hostname: String },
+
     #[snafu(display("encryption error: {source}"))]
     Cipher {
         source: crate::runtime::secrets::Error,
@@ -606,6 +611,12 @@ impl Coordinator {
     /// (`manual` vs `on_demand` in the attempt log) and that errors flow
     /// to the caller instead of being swallowed.
     pub async fn issue_now(self: &Arc<Self>, hostname: &str) -> Result<Issued> {
+        // spec: TLSM#operator-driven-issuance
+        if self.dispatch_to_tailscale(hostname)? {
+            return Err(CoordinatorError::TakesTailscale {
+                hostname: hostname.to_owned(),
+            });
+        }
         // spec: TLS#issuance
         // An issuance already running for the hostname, whoever started it, is
         // not joined or queued behind: the operator is told.
