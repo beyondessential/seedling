@@ -606,6 +606,7 @@ mod tests {
         let target = VolumeWriteTarget::NamedVolume {
             name: "config".into(),
             tmpfs: false,
+            writes: Vec::new(),
         };
         assert_eq!(
             BreadcrumbKind::Write {

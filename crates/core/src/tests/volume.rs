@@ -821,7 +821,7 @@ fn rt_write_named_volume_invokes_writer() {
     assert_eq!(w.path, "/etc/app.conf");
     assert_eq!(w.contents, b"key=value");
     match &w.target {
-        VolumeWriteTarget::NamedVolume { name, tmpfs } => {
+        VolumeWriteTarget::NamedVolume { name, tmpfs, .. } => {
             assert_eq!(name, "cfg");
             assert!(!tmpfs);
         }

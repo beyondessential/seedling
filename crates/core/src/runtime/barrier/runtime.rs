@@ -2331,23 +2331,22 @@ fn resolve_volume_write_target(
     use crate::runtime::identity::{InstanceId, InstanceVariant};
 
     if let Some(vol) = target.clone().try_cast::<Volume>() {
-        let (tmpfs, read_only) = {
+        let (tmpfs, read_only, writes) = {
             let def = vol.def.lock();
-            (def.tmpfs, def.read_only)
+            (def.tmpfs, def.read_only, def.writes.clone())
         };
         // spec: RT#volume-writes
         if read_only {
             return Err("rt.write: the volume is declared read-only".into());
         }
         if let Some(name) = vol.name.as_deref() {
-            let display = crate::runtime::identity::VolumeName::for_app(rt.app_name.as_str(), name);
             let instance =
                 ResourceInstance::new_singleton(rt.app_name.clone(), ResourceKind::Volume, name);
-            let _ = display;
             return Ok((
                 VolumeWriteTarget::NamedVolume {
                     name: name.to_owned(),
                     tmpfs,
+                    writes,
                 },
                 instance,
             ));

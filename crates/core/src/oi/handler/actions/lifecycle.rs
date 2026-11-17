@@ -117,10 +117,15 @@ impl crate::runtime::barrier::VolumeWriter for OperationVolumeWriter {
         path: &str,
         contents: &[u8],
     ) -> Result<(), String> {
-        use crate::runtime::barrier::VolumeWriteTarget;
-        use crate::runtime::identity::VolumeName;
-        use crate::system::actuator::{safe_volume_write, tmpfs_volume_path};
         use std::path::PathBuf;
+
+        use crate::{
+            runtime::{barrier::VolumeWriteTarget, identity::VolumeName},
+            system::actuator::{
+                ensure_named_volume_storage, ensure_tmpfs_volume_dir, safe_volume_write,
+                tmpfs_volume_path,
+            },
+        };
 
         let driver = Arc::clone(&self.driver);
         let app = app.to_owned();
@@ -130,13 +135,26 @@ impl crate::runtime::barrier::VolumeWriter for OperationVolumeWriter {
         tokio::task::block_in_place(|| {
             tokio::runtime::Handle::current().block_on(async move {
                 let mountpoint: PathBuf = match target {
-                    VolumeWriteTarget::NamedVolume { name, tmpfs } => {
-                        let vol_name = VolumeName::for_app(&app, &name);
+                    // spec: RT#volume-writes
+                    // Storage that does not exist yet is created and seeded
+                    // first, as starting the volume would.
+                    VolumeWriteTarget::NamedVolume {
+                        name,
+                        tmpfs,
+                        writes,
+                    } => {
                         if tmpfs {
                             // spec: ACTU#volume-storage
-                            tmpfs_volume_path(vol_name.as_str())
+                            let host_path =
+                                tmpfs_volume_path(VolumeName::for_app(&app, &name).as_str());
+                            ensure_tmpfs_volume_dir(&host_path, &writes)
+                                .await
+                                .map_err(|e| format!("rt.write: {e}"))?;
+                            host_path
                         } else {
-                            driver.volume_store.path(&vol_name)
+                            ensure_named_volume_storage(&driver.volume_store, &app, &name, &writes)
+                                .await
+                                .map_err(|e| format!("rt.write: {e}"))?
                         }
                     }
                     VolumeWriteTarget::AnonymousVolume { anon_id, tmpfs } => {

@@ -328,8 +328,13 @@ pub trait ContainerSignaler: Send + Sync {
 // spec: RT#volume-writes
 #[derive(Debug, Clone)]
 pub enum VolumeWriteTarget {
-    /// A named static volume scoped to the current app.
-    NamedVolume { name: String, tmpfs: bool },
+    /// A named static volume scoped to the current app, with its declared
+    /// file writes, which seed its storage if the write has to create it.
+    NamedVolume {
+        name: String,
+        tmpfs: bool,
+        writes: Vec<(String, bytes::Bytes)>,
+    },
     /// An anonymous volume created earlier in the action closure.
     AnonymousVolume { anon_id: String, tmpfs: bool },
     /// An external volume that resolved to storage, through the operation's

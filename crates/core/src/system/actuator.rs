@@ -179,6 +179,88 @@ pub(crate) async fn ensure_named_volume(
     Ok(true)
 }
 
+/// Bring a named volume's storage into being before something writes into
+/// it outside a start, as `rt.write` does: storage that is absent is created
+/// and seeded with the volume's declared writes, as starting the volume
+/// would, and storage that is present is left as it is.
+///
+/// The legacy name is migrated first, so storage under it is found rather
+/// than shadowed by a fresh, seeded copy.
+// spec: ACTU#volume-creation-and-seeding
+pub(crate) async fn ensure_named_volume_storage(
+    vol_store: &crate::system::volume_store::VolumeStore,
+    app: &str,
+    name: &str,
+    writes: &[(String, bytes::Bytes)],
+) -> Result<std::path::PathBuf, ActuateError> {
+    let vol_name = VolumeName::for_app(app, name);
+    let legacy = format!("{app}-{name}");
+    vol_store
+        .migrate_legacy(&legacy, &vol_name, app)
+        .await
+        .map_err(|e| {
+            VolumeWriteSnafu {
+                path: vol_store.path(&vol_name),
+            }
+            .into_error(e)
+        })?;
+    ensure_named_volume(vol_store, &vol_name, writes).await?;
+    Ok(vol_store.path(&vol_name))
+}
+
+/// Create a tmpfs volume's directory if it is absent, and seed it with the
+/// volume's declared writes when this call created it.
+///
+/// A directory already present is left as it is: whoever created it seeded
+/// it, and writes the app made since are its own. A seed that fails takes
+/// the directory back out, so the next attempt creates and seeds it afresh.
+// spec: ACTU#volume-creation-and-seeding
+pub(crate) async fn ensure_tmpfs_volume_dir(
+    host_path: &Path,
+    writes: &[(String, bytes::Bytes)],
+) -> Result<(), ActuateError> {
+    // spec: ACTU#storage-confinement
+    if crate::system::confined::owned_dir_async(host_path)
+        .await
+        .context(VolumeWriteSnafu {
+            path: host_path.to_path_buf(),
+        })?
+    {
+        return Ok(());
+    }
+    if let Some(parent) = host_path.parent() {
+        tokio::fs::create_dir_all(parent)
+            .await
+            .context(VolumeWriteSnafu {
+                path: parent.to_path_buf(),
+            })?;
+    }
+    match tokio::fs::create_dir(host_path).await {
+        Ok(()) => {}
+        // Another part of the runtime created it first, and seeds it.
+        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => return Ok(()),
+        Err(e) => {
+            return Err(VolumeWriteSnafu {
+                path: host_path.to_path_buf(),
+            }
+            .into_error(e));
+        }
+    }
+    for (path, contents) in writes {
+        if let Err(e) = safe_volume_write(host_path, path, contents).await {
+            if let Err(cleanup) = tokio::fs::remove_dir_all(host_path).await {
+                tracing::error!(
+                    path = %host_path.display(),
+                    "seeding failed and the directory it created could not be removed, \
+                     so the volume will stay unseeded: {cleanup}"
+                );
+            }
+            return Err(e);
+        }
+    }
+    Ok(())
+}
+
 // ---------------------------------------------------------------------------
 // Actuator
 // ---------------------------------------------------------------------------
@@ -963,5 +1045,23 @@ mod tests {
 
         assert!(store.create(&name).await.unwrap());
         assert!(!store.create(&name).await.unwrap());
+    }
+
+    // spec: ACTU#volume-creation-and-seeding
+    #[tokio::test]
+    async fn a_tmpfs_directory_is_seeded_only_by_the_call_that_creates_it() {
+        let data = tempfile::tempdir().unwrap();
+        let dir = data.path().join("tmpfs").join("app-volume-scratch");
+        let writes = vec![("note".to_owned(), bytes::Bytes::from("seed"))];
+
+        ensure_tmpfs_volume_dir(&dir, &writes).await.unwrap();
+        assert_eq!(std::fs::read_to_string(dir.join("note")).unwrap(), "seed");
+
+        std::fs::write(dir.join("note"), "the app's own").unwrap();
+        ensure_tmpfs_volume_dir(&dir, &writes).await.unwrap();
+        assert_eq!(
+            std::fs::read_to_string(dir.join("note")).unwrap(),
+            "the app's own"
+        );
     }
 }

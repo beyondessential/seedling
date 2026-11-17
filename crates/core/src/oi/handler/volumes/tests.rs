@@ -1085,3 +1085,69 @@ fn the_operation_writer_resolves_external_volumes_through_the_host_mappings() {
             .read_only
     );
 }
+
+// spec: RT#volume-writes
+// spec: ACTU#volume-creation-and-seeding
+#[test]
+fn the_operation_writer_creates_and_seeds_a_missing_named_volume_before_writing() {
+    use crate::runtime::{barrier::VolumeWriteTarget, identity::VolumeName};
+
+    let oi = TestOi::new();
+    let writer = crate::oi::handler::actions::lifecycle::make_volume_writer(&oi.state).unwrap();
+    let target = VolumeWriteTarget::NamedVolume {
+        name: "cfg".to_owned(),
+        tmpfs: false,
+        writes: vec![("/seeded".to_owned(), bytes::Bytes::from_static(b"declared"))],
+    };
+    oi.block_on(async move {
+        tokio::spawn(async move { writer.write("consumer", target, "/written", b"by the action") })
+            .await
+    })
+    .unwrap()
+    .expect("the write lands");
+
+    let dir = oi
+        .state
+        .driver
+        .volume_store
+        .path(&VolumeName::for_app("consumer", "cfg"));
+    assert_eq!(std::fs::read(dir.join("seeded")).unwrap(), b"declared");
+    assert_eq!(
+        std::fs::read(dir.join("written")).unwrap(),
+        b"by the action"
+    );
+}
+
+// spec: RT#volume-writes
+// spec: ACTU#volume-creation-and-seeding
+#[test]
+fn the_operation_writer_leaves_existing_named_volume_storage_unseeded() {
+    use crate::runtime::{barrier::VolumeWriteTarget, identity::VolumeName};
+
+    let oi = TestOi::new();
+    let name = VolumeName::for_app("consumer", "cfg");
+    oi.block_on(oi.state.driver.volume_store.create(&name))
+        .expect("storage is created");
+    let writer = crate::oi::handler::actions::lifecycle::make_volume_writer(&oi.state).unwrap();
+    let target = VolumeWriteTarget::NamedVolume {
+        name: "cfg".to_owned(),
+        tmpfs: false,
+        writes: vec![("/seeded".to_owned(), bytes::Bytes::from_static(b"declared"))],
+    };
+    oi.block_on(async move {
+        tokio::spawn(async move { writer.write("consumer", target, "/written", b"by the action") })
+            .await
+    })
+    .unwrap()
+    .expect("the write lands");
+
+    let dir = oi.state.driver.volume_store.path(&name);
+    assert!(
+        !dir.join("seeded").exists(),
+        "present storage is not seeded"
+    );
+    assert_eq!(
+        std::fs::read(dir.join("written")).unwrap(),
+        b"by the action"
+    );
+}
