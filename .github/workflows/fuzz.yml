@@ -23,6 +23,11 @@ jobs:
       - uses: taiki-e/install-action@v2.90.3
         with:
           tool: cargo-fuzz
+      - name: Seed the lockfile from the workspace
+        # The fuzz crate's own lockfile is not committed, so without this it
+        # resolves afresh, and the registry's minimum publish age can then
+        # refuse a version the workspace already requires.
+        run: cp Cargo.lock crates/protocol/fuzz/Cargo.lock
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: crates/protocol/fuzz
