@@ -162,14 +162,16 @@ endpoint per tick. Inputs:
 - `has_ipv6_egress` — whether the host has a default IPv6 route plus a
   non-loopback global unicast source. Same probe that decides DNS64
   `translate_all` (see "Forcing translation on IPv4-only hosts" under
-  NAT64).
+  NAT64). While the probe has not determined it, endpoints are routed as
+  for a host without IPv6 egress.
 - A read-only borrow of the resolver cache.
 
 The decision matrix is:
 
 | `remote_host` shape    | `nat64_active` | `has_ipv6_egress` | Outcome                           |
 |------------------------|---------------:|------------------:|-----------------------------------|
-| IPv6 literal           |              — |                 — | use literally                     |
+| IPv6 literal           |              — |              true | use literally                     |
+| IPv6 literal           |              — |             false | unroutable → fault                |
 | IPv4 literal           |           true |                 — | synthesise `64:ff9b::a.b.c.d`     |
 | IPv4 literal           |          false |                 — | unroutable → fault                |
 | DNS, AAAA + IPv6 egress|              — |              true | use AAAA records literally        |
@@ -202,10 +204,10 @@ is unanswered.
 Endpoints that can't be turned into a routable address surface as
 faults on the affected site service:
 
-- `site_service_endpoint_unresolvable` — DNS lookup has failed past
-  the consecutive-failure threshold (currently 5).
+- `site_service_endpoint_unresolvable` — 5 lookups in a row have been
+  unanswered, even while answers kept from before still route the endpoint.
 - `site_service_endpoint_unroutable` — the endpoint requires NAT64 but
-  NAT64 isn't active on this host.
+  NAT64 isn't active on this host, or it needs IPv6 egress the host lacks.
 
 Both auto-clear on the first tick where the condition no longer
 applies. They are non-blocking: a misbehaving endpoint reduces only
