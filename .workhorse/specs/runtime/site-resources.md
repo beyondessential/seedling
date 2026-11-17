@@ -230,7 +230,8 @@ An attachment's protocol is one of:
 
 The runtime MUST serve a redirect target only on an `http` or `http2` attachment.
 
-A forward target's traffic reaches one service port of the target service, its forwarded port.
+An `http` or `http2` forward target's requests are routed to the target service as for any HTTP-terminating ingress, as [route emission](proxy.md#route-emission) specifies.
+A `tcp` or `udp` forward target's traffic reaches one service port of the target service, its forwarded port.
 The forwarded port MUST be the service port of the first binding of the target service that a pod of the target app makes.
 The runtime MUST look for that binding in the app's Deployments and then its Jobs, each in ascending byte order of name.
 Within a pod, the runtime MUST take the pod's [port bindings](../language/pod.md#port-bindings) of the attachment's transport, in the order the script made them, before the pod's HTTP route bindings.
@@ -268,6 +269,8 @@ The runtime MUST raise the `ingress_conflict` fault for the site ingress whose a
 Once the served attachment no longer claims the hostname and port, the runtime MUST serve the other.
 
 A conflict on one port MUST NOT affect the serving of other ports on the same hostname.
+
+In an iteration that cannot compute the ingresses of every contributing app, the runtime MUST NOT file or clear an `ingress_conflict` fault, as for an apply it withholds when [applying absolute state](reconciliation.md#applying-absolute-state).
 
 ### Unreadable site ingresses
 
