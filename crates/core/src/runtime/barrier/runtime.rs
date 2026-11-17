@@ -318,21 +318,29 @@ pub fn next_anon_instance_id(kind: &str) -> crate::runtime::identity::InstanceId
     })
 }
 
-/// Generate a stable anonymous volume name for the current operation.
-/// Returns `None` if not in an action context.
+/// The name of the next anonymous volume the current operation creates.
+///
+/// The operation's whole ID and the order its anonymous volumes are created
+/// in make the name, so a replay pass names each volume as the first pass
+/// did, and no two operations ever name one alike. Returns `None` outside an
+/// action closure, or where the operation has no ID to name volumes after.
+// spec: ACTU#deployment-and-job-instances
+// spec: APP#anonymous-resources
 pub fn next_anon_vol_id() -> Option<String> {
     ANON_VOL_OP_ID.with(|cell| {
         let op_id = cell.borrow();
-        op_id.as_ref().map(|id| {
-            let counter = ANON_VOL_COUNTER.with(|c| {
-                let n = c.get();
-                c.set(n + 1);
-                n
-            });
-            let short = &id[..8.min(id.len())];
-            format!("seedling-anon-{short}-vol-{counter}")
-        })
+        let operation = uuid::Uuid::parse_str(op_id.as_deref()?).ok()?;
+        let counter = ANON_VOL_COUNTER.with(|c| {
+            let n = c.get();
+            c.set(n + 1);
+            n
+        });
+        Some(anon_vol_name(operation, counter))
     })
+}
+
+fn anon_vol_name(operation: uuid::Uuid, counter: u32) -> String {
+    format!("seedling-anon-{}-vol-{counter}", operation.simple())
 }
 
 /// RAII guard that sets the in-action-closure flag on construction and clears
@@ -3080,6 +3088,43 @@ mod tests {
         DEFAULT_SCHEDULED_DEADLINE_SECS, DEFAULT_TERMINATED_DEADLINE_SECS,
         STOP_DEADLINE_MARGIN_SECS, resolve_deadline,
     };
+
+    fn anon_vol_names(op_id: &str, count: usize) -> Vec<Option<String>> {
+        let _guard = super::ActionClosureGuard::new(
+            std::sync::Arc::new(arc_swap::ArcSwap::new(Default::default())),
+            op_id.to_owned(),
+            Default::default(),
+        );
+        (0..count).map(|_| super::next_anon_vol_id()).collect()
+    }
+
+    // spec: ACTU#deployment-and-job-instances
+    // The first eight characters of the operation ID used to make the name,
+    // so two operations whose IDs began alike shared their anonymous volumes.
+    #[test]
+    fn operations_whose_ids_share_a_prefix_name_their_anonymous_volumes_apart() {
+        let first = anon_vol_names("abcdef12-0000-4000-8000-000000000001", 2);
+        let second = anon_vol_names("abcdef12-0000-4000-8000-000000000002", 2);
+        for name in first.iter().chain(&second) {
+            assert!(name.is_some(), "{first:?} {second:?}");
+        }
+        assert_ne!(first[0], first[1]);
+        for name in &first {
+            assert!(!second.contains(name), "{first:?} {second:?}");
+        }
+    }
+
+    // spec: APP#anonymous-resources
+    #[test]
+    fn a_replay_pass_names_the_anonymous_volumes_as_the_first_pass_did() {
+        let op = "abcdef12-0000-4000-8000-000000000001";
+        assert_eq!(anon_vol_names(op, 3), anon_vol_names(op, 3));
+    }
+
+    #[test]
+    fn an_operation_without_an_id_names_no_anonymous_volume() {
+        assert_eq!(anon_vol_names("", 1), vec![None]);
+    }
 
     // spec: RT#barriers
     #[test]

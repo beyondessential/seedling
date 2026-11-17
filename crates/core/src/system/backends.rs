@@ -146,14 +146,6 @@ impl ContainerRuntime for Switchable<dyn ContainerRuntime> {
         async move { inner.remove_volume(name).await }.boxed()
     }
 
-    fn list_volumes_by_prefix<'a>(
-        &'a self,
-        prefix: &'a str,
-    ) -> BoxFuture<'a, Result<Vec<String>, BoxError>> {
-        let inner = self.get();
-        async move { inner.list_volumes_by_prefix(prefix).await }.boxed()
-    }
-
     fn volume_mountpoint<'a>(
         &'a self,
         name: &'a str,

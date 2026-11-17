@@ -465,27 +465,6 @@ impl PodmanRuntime {
         Ok(std::path::PathBuf::from(mountpoint))
     }
 
-    async fn list_volumes_by_prefix_impl(&self, prefix: &str) -> Result<Vec<String>, PodmanError> {
-        let volumes = self
-            .client
-            .v5()
-            .volumes()
-            .volume_list_libpod(None)
-            .await
-            .map_err(map_api_err)?;
-        Ok(volumes
-            .into_iter()
-            .filter_map(|v| {
-                let name = v.name?;
-                if name.starts_with(prefix) {
-                    Some(name)
-                } else {
-                    None
-                }
-            })
-            .collect())
-    }
-
     // spec: RT#signal-delivery
     async fn signal_container_impl(&self, name: &str, signal: &str) -> Result<bool, PodmanError> {
         use podman_rest_client::v5::params::ContainerKillLibpod;
@@ -1044,17 +1023,6 @@ impl ContainerRuntime for PodmanRuntime {
 
     fn remove_volume<'a>(&'a self, name: &'a str) -> BoxFuture<'a, Result<(), BoxError>> {
         Box::pin(async move { self.remove_volume_impl(name).await.map_err(Into::into) })
-    }
-
-    fn list_volumes_by_prefix<'a>(
-        &'a self,
-        prefix: &'a str,
-    ) -> BoxFuture<'a, Result<Vec<String>, BoxError>> {
-        Box::pin(async move {
-            self.list_volumes_by_prefix_impl(prefix)
-                .await
-                .map_err(Into::into)
-        })
     }
 
     fn volume_mountpoint<'a>(

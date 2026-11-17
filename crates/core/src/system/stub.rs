@@ -436,23 +436,6 @@ impl ContainerRuntime for StubContainerRuntime {
         .boxed()
     }
 
-    fn list_volumes_by_prefix<'a>(
-        &'a self,
-        prefix: &'a str,
-    ) -> BoxFuture<'a, Result<Vec<String>, BoxError>> {
-        async move {
-            Ok(self
-                .state
-                .lock()
-                .volumes
-                .iter()
-                .filter(|n| n.starts_with(prefix))
-                .cloned()
-                .collect())
-        }
-        .boxed()
-    }
-
     fn volume_mountpoint<'a>(&'a self, name: &'a str) -> BoxFuture<'a, Result<PathBuf, BoxError>> {
         async move { Ok(self.volumes_root.join(name)) }.boxed()
     }

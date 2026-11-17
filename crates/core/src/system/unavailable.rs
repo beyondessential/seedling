@@ -108,13 +108,6 @@ impl ContainerRuntime for UnavailableContainerRuntime {
         Box::pin(async { Err(unavailable()) })
     }
 
-    fn list_volumes_by_prefix<'a>(
-        &'a self,
-        prefix: &'a str,
-    ) -> BoxFuture<'a, Result<Vec<String>, BoxError>> {
-        Box::pin(async { Err(unavailable()) })
-    }
-
     fn volume_mountpoint<'a>(
         &'a self,
         name: &'a str,
