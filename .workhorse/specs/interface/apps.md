@@ -104,6 +104,7 @@ The result is `{}`.
 | `fault_count` | integer | the number of active faults filed against the app |
 | `priority` | string | the app's [app priority](app-control.md#app-priority) |
 | `has_stopped_resources` | boolean | whether any of the app's resources is [stopped](app-control.md#resource-stop) |
+| `has_held_resources` | boolean | whether any of the app's resources is [held](app-control.md#resource-hold) |
 | `description` | string or null | the [app description](../language/app.md#app-description) its definition declares |
 
 If the server cannot read the state any member reports, it MUST refuse the request with `internal`.
@@ -120,7 +121,7 @@ An app's status is the first of these that applies:
 6. `degraded`: at least one active fault is filed against the app, or at least one of the app's resources is not at its desired [lifecycle state](../overview.md#lifecycle-state).
 7. `running`: none of the above.
 
-A resource's desired lifecycle state is `Ready`, except that a [stopped](app-control.md#resource-stop) resource, and a deployment whose effective scale is zero, are desired at `Unscheduled`.
+A resource's desired lifecycle state is `Ready`, except that a [stopped](app-control.md#resource-stop) resource, a deployment whose effective scale is zero, and a [held resource](../overview.md#held-resource) held `Unscheduled`, are desired at `Unscheduled`.
 
 A resource desired at `Ready` is at its desired state when at least one of its instances is `Ready` and none is `Pending`, `Scheduled` or `Running`.
 A resource desired at `Unscheduled` is at its desired state when none of its instances is `Pending`, `Scheduled`, `Running` or `Ready`.
@@ -128,7 +129,7 @@ A job is at its desired state when none of its instances is `Pending`, `Schedule
 An instance that is `Terminating`, `Terminated` or `Unscheduled` otherwise counts neither for nor against its resource.
 A resource kind without a lifecycle state, such as an external service, is always at its desired state.
 
-If the server cannot read the faults, stops, scaling decisions or observations an app's status rests on, it MUST NOT report a status for the app.
+If the server cannot read the faults, stops, holds, scaling decisions or observations an app's status rests on, it MUST NOT report a status for the app.
 
 ## Description
 
@@ -147,6 +148,7 @@ The server MUST refuse it with `not_found` if the app is not registered.
 | `resources` | array | the app's declared [resources](#resources) |
 | `dynamic_resources` | array | the [dynamic resources](#dynamic-resources) its lifecycle operations created |
 | `stopped_resources` | array | the app's stopped resources, as [resource stop](app-control.md#resource-stop) specifies |
+| `held_resources` | array | the app's held resources, as [resource hold](app-control.md#resource-hold) specifies |
 | `params` | array | the app's declared [parameters](#parameters) |
 | `unknown_params` | array | its [unknown parameters](params.md#unknown-parameter) |
 | `actions` | array | its [actions](#actions) |
@@ -166,6 +168,7 @@ Each entry of `resources` has these members.
 | `instances` | array | the resource's instances, below |
 | `faults` | array | the fault records of the active faults concerning the resource |
 | `stopped` | boolean | whether the resource is stopped |
+| `held` | boolean | whether the resource is held |
 | `scale` | object | for a deployment only, as [scaling](app-control.md#scaling) specifies |
 | `priority` | string | for a deployment only, as [app priority](app-control.md#app-priority) specifies |
 | `export` | object | for an exported volume only: `{ "exported": true }`, with a `description` member where the export declares one |

@@ -27,12 +27,12 @@ Host state that the runtime rebuilds in full on each iteration and applies whole
 
 An app's [desired state](../overview.md#desired-state) is derived from its [resource graph](../overview.md#resource-graph) and, while a lifecycle operation is in progress for it, from that operation's progress.
 
-In steady state, the desired state of an app that is `Installing` or `Installed` MUST be its whole resource graph.
+In steady state, the desired state of an app that is `Installing` or `Installed` MUST be its whole resource graph, with each of its [held resources](../overview.md#held-resource) in its held state, as [held resources](operations.md#held-resources) specifies.
 In steady state, the desired state of an app that is `Uninstalling` MUST hold each of the app's recorded instances `Unscheduled`.
 An app that is `NotInstalled` MUST have no desired state.
 The runtime MUST maintain an app's steady-state desired state without direction from an operator, as [autonomous reconciliation](autonomous.md) specifies.
 
-While a lifecycle operation is in progress for an app, the app's desired state MUST consist of the resources the operation's [action closure](operations.md#operation) has [started](../language/rt.md#starting-resources) or [stopped](../language/rt.md#stopping-resources), each in the state the closure last put it in.
+While a lifecycle operation is in progress for an app, the app's desired state MUST consist of the resources the operation's [action closure](operations.md#operation) has [started](../language/rt.md#starting-resources) or [stopped](../language/rt.md#stopping-resources), each in the state the closure last put it in, together with each held resource the closure has not [guarded](../language/rt.md#guarding-resources), in its held state.
 The runtime MUST act only on resources in the desired state.
 A resource outside the desired state MUST be left as it is until the operation names it or completes.
 Its running instances MUST keep the specification they were last started with, and MUST NOT be rotated.
@@ -40,9 +40,9 @@ Its running instances MUST keep the specification they were last started with, a
 An install operation is a lifecycle operation, and the runtime MUST actuate the resources its closure places in the desired state as for any other.
 
 From the moment the runtime initiates an app's [start action](../language/action.md#start-action) until that start action ends, including while it is queued, the app's desired state MUST be as for an app with a lifecycle operation in progress.
-
 > [!NOTE]
 > Holding the whole resource graph back until the start action has run lets the start action bring an app up in its own order after the host restarts.
+> A held resource is in the desired state throughout, so its held instances come back after a host restart without waiting for the start action.
 
 ## Reconciliation loop
 

@@ -94,7 +94,7 @@ A `health_check_replace_failed` fault MUST identify the failed replacement and t
 
 ### Withholding faults
 
-A withholding fault is one under which the runtime stops acting on its subject until the fault clears: `external_volume_not_mapped`, `crash_loop` ([no automatic restart](autonomous.md#restart-pacing)) and `health_check_replace_failed` ([no further replacements](autonomous.md#replacement-guard)).
+A withholding fault is one under which the runtime stops acting on its subject until the fault clears: `external_volume_not_mapped`, `crash_loop` ([no automatic restart](autonomous.md#restart-pacing)), `health_check_replace_failed` ([no further replacements](autonomous.md#replacement-guard)) and `resource_held` ([held resources](operations.md#held-resources)).
 An app holding one is [`faulted`](../interface/apps.md#status-derivation) rather than `degraded`.
 
 ## Volume faults
@@ -118,6 +118,7 @@ The runtime MUST file and clear the faults below against the app, with an empty 
 | `desired_state_unreadable` | none | the runtime cannot compute the app's [desired state](reconciliation.md#desired-state) from its stored records | the runtime next computes it | condition |
 | `operation_failed` | none | a [lifecycle operation](../overview.md#lifecycle-operation) for the app fails, or its action closure does not compile | a later lifecycle operation for the app completes successfully | event |
 | `operation_cancelled` | none | a lifecycle operation for the app is cancelled | a later lifecycle operation for the app completes successfully | event |
+| `resource_held` | the resource | a lifecycle operation ends other than in success with the resource under a [guard](../language/rt.md#guarding-resources), and the runtime [holds](operations.md#held-resources) it | the hold ends | condition |
 | `operation_cleanup_stalled` | the operation | the [dynamic resources](../language/app.md#dynamic-resource-lifetime) of an ended operation are not all torn down within a minute of its end, or the runtime cannot read their records | every dynamic resource of the operation is torn down | condition |
 | `install_interrupted` | none | at startup, an interrupted install cannot be resumed because its parameter values are missing or cannot be decrypted | a later install of the app completes, or an operator clears it | latched |
 | `teardown_identities_unreadable` | none | the runtime cannot read the app's recorded identities during its [teardown](app-teardown.md#uninstall-scope) | the runtime next reads them | condition |
@@ -130,6 +131,7 @@ The runtime MUST file and clear the faults below against the app, with an empty 
 | `canopy_offer_absent` | none | the app [relies on Canopy](canopy-reporting.md#missing-offers), Canopy access is enabled, and no offer has been live for the period [missing offers](canopy-reporting.md#missing-offers) specifies | an offer is live, Canopy access is disabled, or the app stops relying on Canopy | latched |
 
 An `operation_failed` fault MUST carry the failure.
+A `resource_held` fault MUST identify the operation that left the resource held, and say whether the resource is held with running instances or held `Unscheduled`.
 A `disallowed_registry` fault MUST name each disallowed registry.
 A `canopy_offer_absent` fault MUST say when an offer was last live, or that none ever has been.
 

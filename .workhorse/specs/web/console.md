@@ -24,7 +24,7 @@ It MUST offer log streaming for both app workloads and the host's infrastructure
 
 The console MUST let the operator list apps with their statuses, and see an app's status with its resources, faults, parameters, install requirements and actions.
 It MUST let the operator register an app with a script, update an app's script or fetch its definition from a registry, and deregister an app.
-It MUST let the operator set and unset an app's parameters, scale its deployments, set its priority, view its generation history, and plan a change.
+It MUST let the operator set and unset an app's parameters, scale its deployments, stop and unstop its resources, end holds on its resources, set its priority, view its generation history, and plan a change.
 It MUST let the operator invoke an app's lifecycle actions, and invoke its install action with the install requirements.
 
 The console MUST let the operator list the authorised client keys, authorise a key, and revoke a key.

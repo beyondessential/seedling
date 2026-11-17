@@ -249,6 +249,11 @@ An install moves an app through `Installing` to `Installed`, as [ACI](interface/
 A single run of an action closure directing the runtime through a change to an app.
 Defined in [OPS](runtime/operations.md#operation).
 
+### Held resource
+
+A resource the runtime keeps as a lifecycle operation that ended other than in success left it, apart from the resource graph, until the hold ends.
+Defined in [OPS](runtime/operations.md#held-resources).
+
 ### World observation history
 
 The timeline of facts the runtime has observed about each resource instance.

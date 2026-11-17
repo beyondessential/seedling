@@ -64,6 +64,20 @@ While it waits, the action closure is suspended as [suspension](../runtime/suspe
 A guard stands from the call until the closure [releases](#guard) it or the operation ends.
 If the operation ends other than in success while a guard stands, the runtime MUST hold the guarded resources as [held resources](../runtime/operations.md#held-resources) specifies.
 `rt.guard` MUST NOT change the app's desired state, and the closure MUST be able to start and stop a guarded resource as any other.
+An anonymous resource in the selection MUST make `rt.guard` throw.
+
+`rt.guard` over a [held resource](../overview.md#held-resource) MUST end its hold and place it under the new guard, so that the operation directs it as any other guarded resource.
+The resource's instances MUST stay as they were held until the closure starts or stops it.
+
+### Held resources
+
+A runtime handle method other than `rt.guard` MUST NOT change the desired state of a held resource.
+`rt.start`, `rt.stop` and `rt.query` MUST leave held resources out of the resources they act on, out of the `Started` they return, and out of every barrier they wait on.
+`rt.restart` of a held deployment MUST throw.
+
+> [!NOTE]
+> A start action written to bring every resource up leaves a held resource as it was held, so a host restart after a failed upgrade does not undo the hold.
+> An operation that means to take a held resource over guards it first.
 
 > [!NOTE]
 > A closure guards the resources a risky step could leave unsafe, before that step.

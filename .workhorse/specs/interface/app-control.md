@@ -4,7 +4,7 @@ id: CTL
 
 # App control
 
-Applies to the methods that adjust how a registered app runs without changing its definition: deployment scale, app priority, deployment restarts, and stopping resources.
+Applies to the methods that adjust how a registered app runs without changing its definition: deployment scale, app priority, deployment restarts, stopping resources, and ending holds on resources.
 
 ## Scaling
 
@@ -134,3 +134,39 @@ When an app's definition is updated, the runtime MUST discard every stop recorde
 
 `/apps/show` reports a `stopped` member on each resource, true when the resource is stopped, and a top-level `stopped_resources` array of `{ "kind": <string>, "name": <string> }` naming every stopped resource.
 Each entry of `/apps/list` reports a `has_stopped_resources` member, true when any of the app's resources is stopped.
+
+## Resource hold
+
+`/apps/resource/unhold` ends the hold on one [held resource](../overview.md#held-resource) of an app, returning the resource to the resource graph of the app's current generation.
+
+| parameter | type | required | meaning |
+| --- | --- | --- | --- |
+| `app` | string | yes | the app's name |
+| `kind` | string | yes | `deployment`, `job`, `service` or `ingress` |
+| `name` | string | yes | the resource's name |
+
+The server MUST refuse any other `kind` with `requirements_invalid`.
+The server MUST refuse the request with `not_found` if the app is not registered or its current definition declares no resource of that kind and name.
+The result is `{}`.
+Unholding a resource that is not held MUST change nothing.
+
+`/apps/unhold` takes an `app` parameter and ends every hold on that app's resources.
+The server MUST refuse it with `not_found` if the app is not registered.
+The result is `{}`.
+
+The runtime emits a `ResourceUnheld` event for each hold either method ends, as [held resources](../runtime/operations.md#held-resources) specifies.
+
+The server MUST refuse `/apps/resource/unhold` and `/apps/unhold` with `operation_in_progress` while a [lifecycle operation](../overview.md#lifecycle-operation) is running or queued for the app, or a change to the app is being applied.
+
+> [!NOTE]
+> Ending a hold starts the resource on the current generation's specification at once.
+> After a failed upgrade, that is the release the upgrade did not finish preparing for, so an operator usually ends a hold by running a later operation that guards the resource instead.
+
+The server MUST accept `/apps/resource/stop` for a held resource.
+A held resource that is [stopped](#resource-stop) MUST be desired `Unscheduled`, and stays stopped when its hold ends.
+
+A scaling decision stored for a held deployment MUST take effect only once its hold ends.
+A [restart](#deployment-restart) of a held deployment MUST replace its instances with the specification they hold.
+
+`/apps/show` reports a `held` member on each resource, true when the resource is held, and a top-level `held_resources` array of `{ "kind": <string>, "name": <string> }` naming every held resource.
+Each entry of `/apps/list` reports a `has_held_resources` member, true when any of the app's resources is held.

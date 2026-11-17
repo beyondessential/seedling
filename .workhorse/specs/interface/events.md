@@ -77,6 +77,8 @@ A member marked "optional" is absent where it has no value.
 | `DeploymentRestarted` | `app`, `deployment`, `restart_id` (string) | as [deployment restart](app-control.md#deployment-restart) specifies |
 | `ResourceStopped` | `app`, `kind` (string), `name` | as [stopping a resource](app-control.md#resource-stop) specifies |
 | `ResourceUnstopped` | `app`, `kind` (string), `name` | as [unstopping a resource](app-control.md#resource-stop) specifies |
+| `ResourceHeld` | `app`, `kind` (string), `name` | as [held resources](../runtime/operations.md#held-resources) specifies |
+| `ResourceUnheld` | `app`, `kind` (string), `name` | as [held resources](../runtime/operations.md#held-resources) specifies |
 
 `previous_scale` in `ScaleChanged` is the deployment's effective scale before the change, and `null` where it cannot be read.
 `restart_id` in `DeploymentRestarted` is the restart's identifier, as [deployment restart](app-control.md#deployment-restart) defines it.

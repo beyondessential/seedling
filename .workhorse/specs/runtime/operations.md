@@ -108,6 +108,19 @@ The runtime MUST hold a resource in the state the operation left it in:
 The runtime MUST maintain a held resource in its held state without direction, as for steady-state desired state, and MUST NOT rotate, scale or replace a held instance with another specification.
 The runtime MUST keep a resource held across a runtime restart, starting its held instances again with the specification each holds.
 
+A later operation directs a held resource only by [guarding](../language/rt.md#guarding-resources) it, and every other runtime handle method leaves it as [held resources](../language/rt.md#held-resources) in the runtime handle specifies.
+
+A hold MUST end only when:
+
+- a later operation guards the resource;
+- an operator ends it, as [resource hold](../interface/app-control.md#resource-hold) specifies;
+- the app is uninstalled;
+- the app's definition is updated to one that does not declare the resource.
+
+The runtime MUST store each hold durably, with the state it holds, before it clears the persisted operation.
+While a resource is held, the runtime MUST hold a [`resource_held`](faults.md#app-faults) fault for it.
+The runtime MUST emit a `ResourceHeld` [event](../interface/events.md#app-events) for each resource it holds, and a `ResourceUnheld` event for each hold that ends.
+
 > [!NOTE]
 > An upgrade that fails after stopping the app's workloads leaves them stopped, so the new release does not start against data it was never prepared for.
 > One that fails before stopping them leaves the old release serving, so the new release does not roll out in its place.
