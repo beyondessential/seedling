@@ -395,3 +395,54 @@ fn priority_is_chainable_with_other_builders() {
     assert_eq!(d.priority, Priority::Critical);
     assert_eq!(*d.scale.start(), 2);
 }
+
+fn facts() -> crate::sysconst::SystemFacts {
+    crate::sysconst::SystemFacts {
+        available_threads: Some(4),
+        available_memory: Ok(1 << 30),
+        node_name: Ok("host".to_owned()),
+        ..crate::sysconst::SystemFacts::default()
+    }
+}
+
+// spec: CONST#host-constants
+#[test]
+fn undetermined_memory_fails_the_evaluation() {
+    let undetermined = crate::sysconst::SystemFacts {
+        available_memory: Err("no meminfo".to_owned()),
+        ..facts()
+    };
+    let err = crate::defs::scope_with(&undetermined, Default::default())
+        .err()
+        .expect("the evaluation fails");
+    assert!(err.contains("AVAILABLE_MEMORY"), "{err}");
+}
+
+// spec: CONST#host-constants
+#[test]
+fn an_undetermined_node_name_fails_the_evaluation() {
+    let undetermined = crate::sysconst::SystemFacts {
+        node_name: Err("no hostname".to_owned()),
+        ..facts()
+    };
+    let err = crate::defs::scope_with(&undetermined, Default::default())
+        .err()
+        .expect("the evaluation fails");
+    assert!(err.contains("NODE_NAME"), "{err}");
+}
+
+// spec: CONST#host-constants
+#[test]
+fn undetermined_threads_read_as_one() {
+    let undetermined = crate::sysconst::SystemFacts {
+        available_threads: None,
+        ..facts()
+    };
+    let (scope, _app) =
+        crate::defs::scope_with(&undetermined, Default::default()).expect("the scope builds");
+    assert_eq!(scope.get_value::<i64>("AVAILABLE_THREADS"), Some(1));
+    assert_eq!(
+        scope.get_value::<String>("NODE_NAME").as_deref(),
+        Some("host")
+    );
+}

@@ -368,7 +368,8 @@ fn on_action_closure_accepts_two_args() {
 #[test]
 fn on_schedule_registers_cron_on_action() {
     let (engine, mut scope, app) =
-        crate::setup_language(&crate::ScriptLimits::default(), Default::default());
+        crate::setup_language(&crate::ScriptLimits::default(), Default::default())
+            .expect("the scope builds");
     crate::defs::app::set_appdef_holder(&app.def);
     super::run_script(
         &engine,
@@ -407,7 +408,8 @@ fn schedule_hash_is_pinned() {
 #[test]
 fn on_schedule_chains_multiple_exprs() {
     let (engine, mut scope, app) =
-        crate::setup_language(&crate::ScriptLimits::default(), Default::default());
+        crate::setup_language(&crate::ScriptLimits::default(), Default::default())
+            .expect("the scope builds");
     crate::defs::app::set_appdef_holder(&app.def);
     super::run_script(
         &engine,

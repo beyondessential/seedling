@@ -735,7 +735,15 @@ fn run_definition(
     validate: Option<&BTreeMap<String, String>>,
     limits: &crate::ScriptLimits,
 ) -> (App, Result<Vec<Rejection>, ScriptError>) {
-    let (engine, mut scope, app) = setup_language(limits, Arc::clone(bundle));
+    let (engine, mut scope, app) = match setup_language(limits, Arc::clone(bundle)) {
+        Ok(language) => language,
+        // spec: CONST#host-constants
+        // A host constant the evaluation cannot stand without fails it, so
+        // it declares nothing.
+        Err(e) => {
+            return (App::with_bundle(Arc::clone(bundle)), Err(ScriptError(e)));
+        }
+    };
     let script = match bundle.script() {
         Ok(s) => s,
         // A stored definition that no longer reads as one (only possible

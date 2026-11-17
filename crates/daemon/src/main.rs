@@ -19,7 +19,7 @@ use seedling_core::{
     },
     system::{
         System,
-        host_probes::{Fact, HostProbes, HostSource},
+        host_probes::{Fact, HostConstants, HostProbes, HostSource},
         nat64::should_activate_nat64,
         netinfo::{detect_ipv4_egress, detect_ipv6_egress},
         node_prefix_from_machine_id,
@@ -376,12 +376,17 @@ async fn main() {
     };
     let timezone_fact = Fact::from_result(seedling_core::sysconst::detect_timezone());
     let nat64_detection_fact = nat64_decision.undetermined.clone().map(Fact::Undetermined);
+    // spec: CONST#determining-host-constants
+    // A constant that cannot be determined at start is looked for again by
+    // the reconciler on each iteration, which files a fault until it is.
+    let constants = HostConstants::detect();
     let host_probes = HostProbes::new(
         Arc::new(HostSource),
         nat64_detection_fact,
         ipv4_fact.clone(),
         ipv6_fact.clone(),
         timezone_fact.clone(),
+        constants.clone(),
     );
 
     // spec: CONST#host-constants
@@ -389,8 +394,11 @@ async fn main() {
         ipv4_egress: ipv4_fact.determined().unwrap_or(false),
         ipv6_egress: ipv6_fact.determined().unwrap_or(false),
         nat64_active,
+        available_threads: constants.available_threads.determined(),
+        available_memory: constants.available_memory.clone().into_result(),
+        // Determined at start: the daemon does not run without it.
         has_snapshots: use_btrfs,
-        node_name: whoami::devicename().unwrap_or_default(),
+        node_name: constants.node_name.clone().into_result(),
         timezone: timezone_fact
             .determined()
             .unwrap_or_else(|| "UTC".to_owned()),

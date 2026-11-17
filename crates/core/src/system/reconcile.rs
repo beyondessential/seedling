@@ -629,8 +629,29 @@ impl Reconciler {
                 .timezone
                 .determined()
                 .filter(|_| moved.timezone);
-            if ipv4.is_some() || ipv6.is_some() || timezone.is_some() {
-                crate::sysconst::determined(ipv4, ipv6, timezone);
+            let constants = &self.host_probes.constants;
+            let found = crate::sysconst::Determined {
+                ipv4_egress: ipv4,
+                ipv6_egress: ipv6,
+                timezone,
+                available_threads: constants
+                    .available_threads
+                    .determined()
+                    .filter(|_| moved.available_threads),
+                available_memory: constants
+                    .available_memory
+                    .determined()
+                    .filter(|_| moved.available_memory),
+                node_name: constants.node_name.determined().filter(|_| moved.node_name),
+            };
+            let any_found = found.ipv4_egress.is_some()
+                || found.ipv6_egress.is_some()
+                || found.timezone.is_some()
+                || found.available_threads.is_some()
+                || found.available_memory.is_some()
+                || found.node_name.is_some();
+            if any_found {
+                crate::sysconst::determined(found);
                 self.host_facts_changed = true;
             }
             self.force_dns64_translation = self.force_dns64_for(&self.host_probes);
@@ -665,6 +686,12 @@ impl Reconciler {
                 probes.timezone.undetermined().map(str::to_owned),
             ),
         ];
+        let constants = probes
+            .constants
+            .undetermined()
+            .into_iter()
+            .map(|(name, why)| format!("{name} ({why})"))
+            .collect::<Vec<_>>();
         for (kind, what, why) in undetermined {
             match why {
                 Some(why) => {
@@ -672,6 +699,36 @@ impl Reconciler {
                 }
                 None => self.clear_system_fault(kind),
             }
+        }
+        // spec: CONST#determining-host-constants
+        // One fault naming every constant still undetermined, its description
+        // kept to the ones that still are as the others are found.
+        if constants.is_empty() {
+            self.clear_system_fault("host_constant_undetermined");
+        } else {
+            let description = format!("cannot determine {}", constants.join(", "));
+            tracing::error!("{description}");
+            self.db.call(move |db| {
+                let key = crate::runtime::faults::FaultKey::app_wide(
+                    &AppName::new_unchecked("_system"),
+                    "host_constant_undetermined",
+                );
+                let filed = crate::runtime::faults::file_once(
+                    db,
+                    &key,
+                    &crate::runtime::faults::FaultMeta::default(),
+                    &description,
+                )
+                .and_then(|filed| {
+                    if !filed {
+                        crate::runtime::faults::update_description(db, &key, &description)?;
+                    }
+                    Ok(())
+                });
+                if let Err(e) = filed {
+                    tracing::error!("cannot file host_constant_undetermined: {e}");
+                }
+            });
         }
         self.host_faults_synced = true;
     }
@@ -3588,6 +3645,15 @@ mod tests {
         fn timezone(&self) -> crate::system::BoxFuture<'_, Result<String, String>> {
             Box::pin(async move { self.answer().map(|_| "UTC".to_owned()) })
         }
+        fn available_threads(&self) -> crate::system::BoxFuture<'_, Result<i64, String>> {
+            Box::pin(async move { self.answer().map(|_| 2) })
+        }
+        fn available_memory(&self) -> crate::system::BoxFuture<'_, Result<i64, String>> {
+            Box::pin(async move { self.answer().map(|_| 1 << 30) })
+        }
+        fn node_name(&self) -> crate::system::BoxFuture<'_, Result<String, String>> {
+            Box::pin(async move { self.answer().map(|_| "host".to_owned()) })
+        }
     }
 
     impl ProbesThatSettle {
@@ -3613,6 +3679,7 @@ mod tests {
                 Fact::Determined(true),
                 ipv6,
                 Fact::Determined("UTC".to_owned()),
+                crate::system::host_probes::HostConstants::settled(),
             )
         };
         let undetermined =
@@ -3640,6 +3707,11 @@ mod tests {
             Fact::Undetermined("no routes".into()),
             Fact::Undetermined("no routes".into()),
             Fact::Undetermined("no zone".into()),
+            crate::system::host_probes::HostConstants {
+                available_threads: Fact::Undetermined("no answer".into()),
+                available_memory: Fact::Undetermined("no answer".into()),
+                node_name: Fact::Undetermined("no answer".into()),
+            },
         ));
         let kinds = |oi: &crate::oi::test_support::TestOi| -> Vec<String> {
             let mut kinds: Vec<String> = active_kinds(oi, "_system")
@@ -3649,6 +3721,7 @@ mod tests {
                     k.contains("egress")
                         || k == "nat64_detection_failed"
                         || k == "timezone_undetermined"
+                        || k == "host_constant_undetermined"
                 })
                 .collect();
             kinds.sort();
@@ -3659,12 +3732,25 @@ mod tests {
         assert_eq!(
             kinds(&oi),
             [
+                "host_constant_undetermined",
                 "ipv4_egress_undetermined",
                 "ipv6_egress_undetermined",
                 "nat64_detection_failed",
                 "timezone_undetermined"
             ],
         );
+        let described: Vec<String> = oi.state.db.call(|db| {
+            crate::runtime::faults::list_active_faults(db, Some(&AppName::new_unchecked("_system")))
+                .unwrap()
+                .into_iter()
+                .filter(|f| f.kind == "host_constant_undetermined")
+                .map(|f| f.description)
+                .collect()
+        });
+        assert_eq!(described.len(), 1);
+        for name in ["AVAILABLE_THREADS", "AVAILABLE_MEMORY", "NODE_NAME"] {
+            assert!(described[0].contains(name), "{described:?}");
+        }
         assert!(!reconciler.take_host_facts_changed());
 
         source.0.store(true, std::sync::atomic::Ordering::SeqCst);

@@ -153,7 +153,8 @@ fn stored_param_is_set_returns_true() {
     use std::collections::BTreeMap;
 
     let (engine, mut scope, app) =
-        crate::setup_language(&crate::ScriptLimits::default(), Default::default());
+        crate::setup_language(&crate::ScriptLimits::default(), Default::default())
+            .expect("the scope builds");
     {
         let mut stored = BTreeMap::new();
         stored.insert("hostname".to_owned(), "injected.example.com".to_owned());
@@ -181,7 +182,8 @@ fn stored_param_is_set_returns_true() {
 #[test]
 fn unset_param_value_falls_back_to_default_value() {
     let (engine, mut scope, app) =
-        crate::setup_language(&crate::ScriptLimits::default(), Default::default());
+        crate::setup_language(&crate::ScriptLimits::default(), Default::default())
+            .expect("the scope builds");
     crate::tests::run_script(
         &engine,
         &mut scope,
@@ -204,7 +206,8 @@ fn stored_value_overrides_default_value() {
     use std::collections::BTreeMap;
 
     let (engine, mut scope, app) =
-        crate::setup_language(&crate::ScriptLimits::default(), Default::default());
+        crate::setup_language(&crate::ScriptLimits::default(), Default::default())
+            .expect("the scope builds");
     {
         let mut stored = BTreeMap::new();
         stored.insert("max-connections".to_owned(), "500".to_owned());
@@ -225,7 +228,8 @@ fn stored_value_overrides_default_value() {
 #[test]
 fn unset_param_without_default_still_throws() {
     let (engine, mut scope, _app) =
-        crate::setup_language(&crate::ScriptLimits::default(), Default::default());
+        crate::setup_language(&crate::ScriptLimits::default(), Default::default())
+            .expect("the scope builds");
     let res = crate::tests::run_script(
         &engine,
         &mut scope,
@@ -244,7 +248,8 @@ fn unset_param_without_default_still_throws() {
 #[test]
 fn unset_param_is_set_returns_false() {
     let (engine, mut scope, app) =
-        crate::setup_language(&crate::ScriptLimits::default(), Default::default());
+        crate::setup_language(&crate::ScriptLimits::default(), Default::default())
+            .expect("the scope builds");
     // No stored values pre-populated.
     crate::tests::run_script(
         &engine,
@@ -288,7 +293,8 @@ fn param_used_in_closure_captures_injected_value() {
     stored.insert("version".to_owned(), "2.0".to_owned());
 
     let (engine, mut scope, app) =
-        crate::setup_language(&crate::ScriptLimits::default(), Default::default());
+        crate::setup_language(&crate::ScriptLimits::default(), Default::default())
+            .expect("the scope builds");
     *app.stored.lock() = stored;
 
     let ast = crate::tests::run_script(

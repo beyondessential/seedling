@@ -14,6 +14,9 @@ pub trait ProbeSource: Send + Sync {
     fn ipv4_egress(&self) -> BoxFuture<'_, Result<bool, String>>;
     fn ipv6_egress(&self) -> BoxFuture<'_, Result<bool, String>>;
     fn timezone(&self) -> BoxFuture<'_, Result<String, String>>;
+    fn available_threads(&self) -> BoxFuture<'_, Result<i64, String>>;
+    fn available_memory(&self) -> BoxFuture<'_, Result<i64, String>>;
+    fn node_name(&self) -> BoxFuture<'_, Result<String, String>>;
 }
 
 /// The host's own resolver and routing tables.
@@ -34,6 +37,18 @@ impl ProbeSource for HostSource {
 
     fn timezone(&self) -> BoxFuture<'_, Result<String, String>> {
         Box::pin(async { crate::sysconst::detect_timezone() })
+    }
+
+    fn available_threads(&self) -> BoxFuture<'_, Result<i64, String>> {
+        Box::pin(async { crate::sysconst::detect_available_threads() })
+    }
+
+    fn available_memory(&self) -> BoxFuture<'_, Result<i64, String>> {
+        Box::pin(async { crate::sysconst::detect_available_memory() })
+    }
+
+    fn node_name(&self) -> BoxFuture<'_, Result<String, String>> {
+        Box::pin(async { crate::sysconst::detect_node_name() })
     }
 }
 
@@ -59,6 +74,13 @@ impl<T: Clone> Fact<T> {
         }
     }
 
+    pub fn into_result(self) -> Result<T, String> {
+        match self {
+            Self::Determined(v) => Ok(v),
+            Self::Undetermined(why) => Err(why),
+        }
+    }
+
     /// Why the fact is not determined, if it is not.
     pub fn undetermined(&self) -> Option<&str> {
         match self {
@@ -75,11 +97,62 @@ pub struct Moved {
     pub ipv4_egress: bool,
     pub ipv6_egress: bool,
     pub timezone: bool,
+    pub available_threads: bool,
+    pub available_memory: bool,
+    pub node_name: bool,
 }
 
 impl Moved {
     pub fn any(&self) -> bool {
-        self.nat64_detection || self.ipv4_egress || self.ipv6_egress || self.timezone
+        self.nat64_detection
+            || self.ipv4_egress
+            || self.ipv6_egress
+            || self.timezone
+            || self.available_threads
+            || self.available_memory
+            || self.node_name
+    }
+}
+
+/// The host constants that hold a fault of their own kind while any of them
+/// is undetermined.
+// spec: CONST#determining-host-constants
+#[derive(Debug, Clone)]
+pub struct HostConstants {
+    pub available_threads: Fact<i64>,
+    pub available_memory: Fact<i64>,
+    pub node_name: Fact<String>,
+}
+
+impl HostConstants {
+    /// Every constant as the host gives it now.
+    pub fn detect() -> Self {
+        Self {
+            available_threads: Fact::from_result(crate::sysconst::detect_available_threads()),
+            available_memory: Fact::from_result(crate::sysconst::detect_available_memory()),
+            node_name: Fact::from_result(crate::sysconst::detect_node_name()),
+        }
+    }
+
+    /// Every constant determined, as a host with nothing to look for has.
+    pub fn settled() -> Self {
+        Self {
+            available_threads: Fact::Determined(1),
+            available_memory: Fact::Determined(1 << 30),
+            node_name: Fact::Determined(String::new()),
+        }
+    }
+
+    /// The constants still undetermined, by name, with why.
+    pub fn undetermined(&self) -> Vec<(&'static str, &str)> {
+        [
+            ("AVAILABLE_THREADS", self.available_threads.undetermined()),
+            ("AVAILABLE_MEMORY", self.available_memory.undetermined()),
+            ("NODE_NAME", self.node_name.undetermined()),
+        ]
+        .into_iter()
+        .filter_map(|(name, why)| why.map(|why| (name, why)))
+        .collect()
     }
 }
 
@@ -93,6 +166,7 @@ pub struct HostProbes {
     pub ipv6_egress: Fact,
     /// The host's IANA time zone name.
     pub timezone: Fact<String>,
+    pub constants: HostConstants,
 }
 
 impl HostProbes {
@@ -102,6 +176,7 @@ impl HostProbes {
         ipv4_egress: Fact,
         ipv6_egress: Fact,
         timezone: Fact<String>,
+        constants: HostConstants,
     ) -> Self {
         Self {
             source,
@@ -109,6 +184,7 @@ impl HostProbes {
             ipv4_egress,
             ipv6_egress,
             timezone,
+            constants,
         }
     }
 
@@ -120,6 +196,7 @@ impl HostProbes {
             Fact::Determined(ipv4_egress),
             Fact::Determined(ipv6_egress),
             Fact::Determined("UTC".to_owned()),
+            HostConstants::settled(),
         )
     }
 
@@ -129,6 +206,7 @@ impl HostProbes {
             || matches!(self.ipv4_egress, Fact::Undetermined(_))
             || matches!(self.ipv6_egress, Fact::Undetermined(_))
             || matches!(self.timezone, Fact::Undetermined(_))
+            || !self.constants.undetermined().is_empty()
     }
 
     /// Look again for every undetermined fact, and say which moved, whether
@@ -154,6 +232,22 @@ impl HostProbes {
             let next = Fact::from_result(self.source.timezone().await);
             moved.timezone = next != self.timezone;
             self.timezone = next;
+        }
+        let constants = &mut self.constants;
+        if matches!(constants.available_threads, Fact::Undetermined(_)) {
+            let next = Fact::from_result(self.source.available_threads().await);
+            moved.available_threads = next != constants.available_threads;
+            constants.available_threads = next;
+        }
+        if matches!(constants.available_memory, Fact::Undetermined(_)) {
+            let next = Fact::from_result(self.source.available_memory().await);
+            moved.available_memory = next != constants.available_memory;
+            constants.available_memory = next;
+        }
+        if matches!(constants.node_name, Fact::Undetermined(_)) {
+            let next = Fact::from_result(self.source.node_name().await);
+            moved.node_name = next != constants.node_name;
+            constants.node_name = next;
         }
         moved
     }
@@ -189,6 +283,16 @@ pub(crate) mod tests {
         }
     }
 
+    impl Flaky {
+        fn answer_with<T>(&self, value: T) -> Result<T, String> {
+            if self.answering.load(Ordering::SeqCst) {
+                Ok(value)
+            } else {
+                Err("cannot be read".to_owned())
+            }
+        }
+    }
+
     impl ProbeSource for Flaky {
         fn external_nat64(&self) -> BoxFuture<'_, Result<bool, String>> {
             async move { self.answer(false) }.boxed()
@@ -209,6 +313,15 @@ pub(crate) mod tests {
             }
             .boxed()
         }
+        fn available_threads(&self) -> BoxFuture<'_, Result<i64, String>> {
+            async move { self.answer_with(4) }.boxed()
+        }
+        fn available_memory(&self) -> BoxFuture<'_, Result<i64, String>> {
+            async move { self.answer_with(1 << 30) }.boxed()
+        }
+        fn node_name(&self) -> BoxFuture<'_, Result<String, String>> {
+            async move { self.answer_with("host".to_owned()) }.boxed()
+        }
     }
 
     // spec: NAT64#ipv6-egress
@@ -221,6 +334,11 @@ pub(crate) mod tests {
             Fact::Undetermined("no routes".into()),
             Fact::Undetermined("no routes".into()),
             Fact::Undetermined("no zone".into()),
+            HostConstants {
+                available_threads: Fact::Undetermined("no answer".into()),
+                available_memory: Fact::Undetermined("no answer".into()),
+                node_name: Fact::Undetermined("no answer".into()),
+            },
         );
         assert!(probes.pending());
 
@@ -232,6 +350,11 @@ pub(crate) mod tests {
         source.answering.store(true, Ordering::SeqCst);
         let moved = probes.retry().await;
         assert!(moved.nat64_detection && moved.ipv4_egress && moved.ipv6_egress && moved.timezone);
+        assert!(moved.available_threads && moved.available_memory && moved.node_name);
+        assert_eq!(
+            probes.constants.node_name,
+            Fact::Determined("host".to_owned())
+        );
         assert!(!probes.pending());
         assert_eq!(probes.ipv6_egress, Fact::Determined(false));
         assert_eq!(probes.ipv4_egress, Fact::Determined(true));

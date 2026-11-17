@@ -562,7 +562,20 @@ pub(super) async fn run_app_shell(
     let cancel = stop.cancel_token();
 
     let script = tokio::task::spawn_blocking(move || {
-        let (engine, mut scope, _) = crate::setup_language(&script_limits, Arc::clone(&app.bundle));
+        let (engine, mut scope, _) =
+            match crate::setup_language(&script_limits, Arc::clone(&app.bundle)) {
+                Ok(language) => language,
+                // spec: CONST#host-constants
+                Err(e) => {
+                    tracing::error!(
+                        app = %app_name_for_task, shell = %shell_name_for_task,
+                        "shell script cannot be evaluated: {e}"
+                    );
+                    return ScriptEnd::Failed(format!(
+                        "the shell's script cannot be evaluated: {e}"
+                    ));
+                }
+            };
         let compiled = app
             .bundle
             .script()

@@ -15,7 +15,7 @@ use crate::runtime::barrier::{
 
 /// An engine, scope and app evaluating no particular definition.
 pub fn setup(limits: &crate::ScriptLimits) -> (Engine, Scope<'static>, defs::app::App) {
-    crate::setup_language(limits, Default::default())
+    crate::setup_language(limits, Default::default()).expect("the scope builds")
 }
 
 mod action;
@@ -57,7 +57,8 @@ pub fn run_test_script_in(
     let bundle = std::sync::Arc::new(
         crate::runtime::definition::Bundle::from_files(all).expect("a valid test bundle"),
     );
-    let (engine, mut scope, app) = crate::setup_language(&crate::ScriptLimits::default(), bundle);
+    let (engine, mut scope, app) =
+        crate::setup_language(&crate::ScriptLimits::default(), bundle).expect("the scope builds");
     let ast = run_script(&engine, &mut scope, source)?;
     Ok((engine, scope, app, ast))
 }
@@ -225,7 +226,8 @@ fn exercise_actions(engine: &Engine, scope: &mut Scope, app: &defs::app::App, sc
     // Re-run the script with the TLS capture active to recover FnPtrs,
     // exactly as run_operation does. FnPtrs are never stored persistently.
     let (actions, shells, install, param_changes) = {
-        let (mut fresh_scope, fresh_app) = defs::scope(Default::default());
+        let (mut fresh_scope, fresh_app) =
+            defs::scope(Default::default()).expect("the scope builds");
         fresh_app.def.rcu(|old| {
             let mut new_def = (**old).clone();
             new_def.name = app.def.load().name.clone();

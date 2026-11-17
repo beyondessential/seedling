@@ -19,7 +19,8 @@ fn setup_with_script(
     rhai::AST,
 ) {
     let (engine, mut scope, app) =
-        crate::setup_language(&crate::ScriptLimits::default(), Default::default());
+        crate::setup_language(&crate::ScriptLimits::default(), Default::default())
+            .expect("the scope builds");
     let ast = super::run_script(&engine, &mut scope, script).expect("script should parse");
     (engine, scope, app, ast)
 }

@@ -453,7 +453,16 @@ fn run_operation_loop(
         }
     };
 
-    let (engine, mut scope, _) = crate::setup_language(script_limits, Arc::clone(&app.bundle));
+    let (engine, mut scope, _) = match crate::setup_language(script_limits, Arc::clone(&app.bundle))
+    {
+        Ok(language) => language,
+        // spec: CONST#host-constants
+        Err(e) => {
+            tracing::error!(app = %app_name, action = %action_name, "{action_name} not run: {e}");
+            refuse_to_run(&db, op_ctx, format!("{action_name} not run: {e}"));
+            return false;
+        }
+    };
     // spec: BND#script-formation
     let compiled = app
         .bundle

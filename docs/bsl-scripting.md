@@ -226,14 +226,14 @@ col.select(#{ name_patterns: ["worker-*"] })
 
 | Name | Type | Description |
 |---|---|---|
-| `AVAILABLE_THREADS` | int | Compute threads available |
-| `AVAILABLE_MEMORY` | int | Memory available to the application, in bytes |
+| `AVAILABLE_THREADS` | int | Compute threads available; `1` while undetermined, with a `host_constant_undetermined` fault on `_system` |
+| `AVAILABLE_MEMORY` | int | Memory available to the application, in bytes; while undetermined every evaluation fails, with a `host_constant_undetermined` fault on `_system` |
 | `CPU_ARCHITECTURE` | string | CPU architecture of the node (e.g. `x86_64`, `aarch64`) |
 | `HOST_HAS_IPV4` | bool | Whether the node has working IPv4 egress; `false` while undetermined, with an `ipv4_egress_undetermined` fault on `_system` |
 | `HOST_HAS_IPV6` | bool | Whether the node has working IPv6 egress; `false` while undetermined, with an `ipv6_egress_undetermined` fault on `_system` |
 | `NAT64_ACTIVE` | bool | Whether the node itself is providing NAT64 translation |
 | `HAS_SNAPSHOTS` | bool | Whether volume storage supports copy-on-write snapshots |
-| `NODE_NAME` | string | Identifier of the node running the application |
+| `NODE_NAME` | string | Identifier of the node running the application; while undetermined every evaluation fails, with a `host_constant_undetermined` fault on `_system` |
 | `TIMEZONE` | string | IANA timezone of the host (e.g. `Pacific/Auckland`); `UTC` while undetermined, with a `timezone_undetermined` fault on `_system` |
 | `IDLE_CMD` | array | A no-op long-running command (`["sleep", "infinity"]`) for containers whose only purpose is to host `rt.exec` calls |
 

@@ -425,7 +425,8 @@ pub(crate) fn discover_images(state: &OiState, params: DiscoverParams) -> Handle
 
     let script = bundle.script()?;
     let (engine, _scope, _stub_app) =
-        crate::setup_language(&state.script_limits, std::sync::Arc::clone(&bundle));
+        crate::setup_language(&state.script_limits, std::sync::Arc::clone(&bundle))
+            .map_err(OiError::script_error)?;
     let ast = match engine.compile(script.text()) {
         Ok(a) => a,
         Err(e) => {
@@ -511,8 +512,20 @@ pub(crate) fn reconcile_pins_post_update(state: &OiState, app_name: &AppName) {
         );
         return;
     };
-    let (engine, _scope, _stub) =
-        crate::setup_language(&state.script_limits, std::sync::Arc::clone(&bundle));
+    let (engine, _scope, _stub) = match crate::setup_language(
+        &state.script_limits,
+        std::sync::Arc::clone(&bundle),
+    ) {
+        Ok(language) => language,
+        Err(e) => {
+            tracing::warn!(
+                app = %app_name,
+                error = %e,
+                "post-update pin reconciliation: script cannot be evaluated; leaving pins untouched"
+            );
+            return;
+        }
+    };
     let ast = match engine.compile(script.text()) {
         Ok(a) => a,
         Err(e) => {
